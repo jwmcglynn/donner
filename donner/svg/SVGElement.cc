@@ -296,31 +296,48 @@ SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
 }
 
 void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value) {
+  (void)setAttributeFromXMLMutation(name, value);
+}
+
+std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
+    const xml::XMLQualifiedNameRef& name, std::string_view value) {
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
-    return setId(value);
+    setId(value);
+    return std::nullopt;
   } else if (name == xml::XMLQualifiedNameRef("class")) {
-    return setClassName(value);
+    setClassName(value);
+    return std::nullopt;
   } else if (name == xml::XMLQualifiedNameRef("style")) {
-    return setStyle(value);
+    setStyle(value);
+    return std::nullopt;
   }
 
   // If it's not in the list above, it may be presentation attribute.
   // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
   // Only parse empty namespaces for now.
   if (name.namespacePrefix.empty()) {
-    const auto trySetResult = trySetPresentationAttribute(name.name, value);
-    if (trySetResult.hasResult() && trySetResult.result()) {
+    auto trySetResult = trySetPresentationAttribute(name.name, value);
+    const bool attributeWasSet = trySetResult.hasResult() && trySetResult.result();
+    if (attributeWasSet) {
       // Early-return since if this succeeds, the attribute has already been stored.
-      return;
+      return std::nullopt;
+    }
+
+    if (trySetResult.hasError()) {
+      markNeedsFullStyleRecompute(handle_);
+      handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+          *handle_.registry(), name, RcString(value));
+      return std::move(trySetResult).error();
     }
   }
 
   // Otherwise store as a generic attribute.
   markNeedsFullStyleRecompute(handle_);
-  return handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
       *handle_.registry(), name, RcString(value));
+  return std::nullopt;
 }
 
 void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {

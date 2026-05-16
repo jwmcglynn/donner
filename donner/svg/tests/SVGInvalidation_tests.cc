@@ -289,6 +289,62 @@ TEST_F(SVGInvalidationTests, SourceEditOpeningTagRemovalClearsPresentationAttrib
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
 }
 
+TEST_F(SVGInvalidationTests, SourceEditInvalidPresentationAttributeKeepsLastValidStyle) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" width="10" height="10" fill="red" />
+    </svg>
+  )";
+  const std::size_t fillValueOffset = input.find("red");
+  ASSERT_NE(fillValueOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(
+      target->getComputedStyle().fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0xFF, 0, 0, 0xFF))))));
+  simulateRenderComplete(doc);
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(fillValueOffset), FileOffset::Offset(fillValueOffset + 3)},
+      .replacement = "#12",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_EQ(result.scope, xml::ReparseScope::AttributeValue);
+
+  std::optional<RcString> fill = target->getAttribute("fill");
+  ASSERT_TRUE(fill.has_value());
+  EXPECT_EQ(*fill, RcString("#12"));
+  EXPECT_NE(doc.source().find(R"(fill="#12")"), std::string_view::npos);
+  EXPECT_THAT(
+      target->getComputedStyle().fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0xFF, 0, 0, 0xFF))))));
+
+  const std::size_t invalidValueOffset = doc.source().find("#12");
+  ASSERT_NE(invalidValueOffset, std::string_view::npos);
+  xml::ApplySourceEditResult recoveryResult = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(invalidValueOffset), FileOffset::Offset(invalidValueOffset + 3)},
+      .replacement = "blue",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(recoveryResult);
+  EXPECT_TRUE(recoveryResult.applied);
+  EXPECT_EQ(recoveryResult.scope, xml::ReparseScope::AttributeValue);
+
+  fill = target->getAttribute("fill");
+  ASSERT_TRUE(fill.has_value());
+  EXPECT_EQ(*fill, RcString("blue"));
+  EXPECT_NE(doc.source().find(R"(fill="blue")"), std::string_view::npos);
+  EXPECT_THAT(
+      target->getComputedStyle().fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
+}
+
 // ---------------------------------------------------------------------------
 // appendChild
 // ---------------------------------------------------------------------------

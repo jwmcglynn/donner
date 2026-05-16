@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
@@ -410,6 +411,18 @@ public:
   const PropertyRegistry& getComputedStyle() const;
 
 protected:
+  /**
+   * Set an attribute from an XML mutation and return any SVG semantic parse diagnostic.
+   *
+   * Invalid presentation-attribute values are still stored in the XML attribute projection, but
+   * leave the previous valid SVG semantic component in place.
+   *
+   * @param name Name of the attribute to set.
+   * @param value New value to set.
+   */
+  std::optional<ParseDiagnostic> setAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name,
+                                                             std::string_view value);
+
   /**
    * Create a new Entity within the document ECS, and return a handle to it.
    *

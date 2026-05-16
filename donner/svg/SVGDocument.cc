@@ -16,7 +16,15 @@ namespace donner::svg {
 
 namespace {
 
-SourceRange MutationRange(const xml::XMLMutation& mutation) {
+SourceRange MutationRange(std::string_view source, const xml::XMLMutation& mutation) {
+  if (!mutation.attributeName.name.empty()) {
+    std::optional<SourceRange> attributeRange =
+        mutation.node.getAttributeLocation(source, mutation.attributeName);
+    if (attributeRange.has_value()) {
+      return *attributeRange;
+    }
+  }
+
   return mutation.node.getNodeLocation().value_or(
       SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
 }
@@ -155,7 +163,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
   const EntityHandle handle = mutation.node.entityHandle();
   if (!handle || !handle.all_of<components::ElementTypeComponent>()) {
     return ParseDiagnostic::Error("XML mutation target is not an SVG element",
-                                  MutationRange(mutation));
+                                  MutationRange(source(), mutation));
   }
 
   SVGElement element(handle);
@@ -163,10 +171,15 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
     case xml::XMLMutation::Kind::AttributeSet:
       if (!mutation.value.has_value()) {
         return ParseDiagnostic::Error("XML AttributeSet mutation is missing a value",
-                                      MutationRange(mutation));
+                                      MutationRange(source(), mutation));
       }
 
-      element.setAttribute(mutation.attributeName, *mutation.value);
+      if (std::optional<ParseDiagnostic> diagnostic =
+              element.setAttributeFromXMLMutation(mutation.attributeName, *mutation.value)) {
+        diagnostic->range = MutationRange(source(), mutation);
+        return diagnostic;
+      }
+
       return std::nullopt;
 
     case xml::XMLMutation::Kind::AttributeRemoved:
@@ -180,7 +193,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
     case xml::XMLMutation::Kind::NodeRemoved:
     case xml::XMLMutation::Kind::SubtreeReplaced:
       return ParseDiagnostic::Error("XML mutation kind is not implemented by SVGDocument",
-                                    MutationRange(mutation));
+                                    MutationRange(source(), mutation));
   }
 
   UTILS_UNREACHABLE();

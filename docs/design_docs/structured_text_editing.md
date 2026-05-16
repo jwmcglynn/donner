@@ -811,6 +811,8 @@ the target architecture.
       well-formed but an SVG value is temporarily invalid (`fill="re"`),
       the XML attribute value is current, the SVG semantic component keeps the
       last valid value, and a scoped SVG diagnostic is surfaced to the editor.
+      Current implementation covers presentation-attribute value edits
+      projected through `SVGDocument::applySourceEdit`.
 - [ ] **Renderer invalidation stays in SVG systems.** XML mutation handling
       sets the same dirty flags as parser-originated mutations. The editor
       does not own an invalidation switch.
@@ -820,8 +822,9 @@ the target architecture.
         without `ParseSVG`;
       - edit `d` updates path geometry and dirty flags without `ParseSVG`;
       - delete `values=` from `feColorMatrix` clears the vector component;
-      - invalid value records a diagnostic and preserves the last valid render;
-      - recovered valid value updates the render and clears the diagnostic.
+      - [x] invalid value records a diagnostic and preserves the last valid
+        semantic value;
+      - [x] recovered valid value updates semantics and clears the diagnostic.
 
 ### M5.5: Canvas DOM Mutations Update XML Source
 
