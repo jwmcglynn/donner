@@ -195,6 +195,22 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "editor_layer_stress_tests",
+    srcs = ["EditorLayerStress_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:async_renderer",
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/editor:text_patch",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_perf_cc_test(
     name = "async_renderer_filter_group_perf_tests",
     srcs = [
