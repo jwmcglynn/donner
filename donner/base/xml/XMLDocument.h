@@ -192,6 +192,33 @@ public:
   ApplySourceEditResult applySourceEdit(const XMLEditIntent& intent);
 
   /**
+   * Set an XML attribute through this document and update owned source text.
+   *
+   * This is the DOM-side structured editing entry point for source-backed attribute writes. It
+   * preserves the attribute's existing quote style, escapes \p value for XML, applies the source
+   * change through \ref XMLSourceStore, updates the live DOM attribute, and emits an
+   * \ref XMLMutation::Kind::AttributeSet mutation.
+   *
+   * @param node Element node that owns the attribute.
+   * @param name Attribute name to set.
+   * @param value Raw unescaped attribute value.
+   */
+  ApplySourceEditResult setAttribute(XMLNode node, const XMLQualifiedNameRef& name,
+                                     std::string_view value);
+
+  /**
+   * Remove an XML attribute through this document and update owned source text.
+   *
+   * This is the DOM-side structured editing entry point for source-backed attribute removals. It
+   * removes the serialized attribute through \ref XMLSourceStore, updates the live DOM attribute
+   * set, and emits an \ref XMLMutation::Kind::AttributeRemoved mutation.
+   *
+   * @param node Element node that owns the attribute.
+   * @param name Attribute name to remove.
+   */
+  ApplySourceEditResult removeAttribute(XMLNode node, const XMLQualifiedNameRef& name);
+
+  /**
    * Install owned source text for this document.
    *
    * @param source XML source text to own.

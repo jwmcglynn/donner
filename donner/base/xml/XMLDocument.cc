@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
@@ -42,6 +43,10 @@ struct TextNodeEdit {
 };
 
 using AttributeMap = std::map<XMLQualifiedName, RcString>;
+
+bool IsXmlWhitespace(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
 
 bool ContainsOffset(const SourceRange& range, std::size_t offset) {
   if (!range.start.offset.has_value() || !range.end.offset.has_value()) {
@@ -103,6 +108,46 @@ std::optional<SourceEditRange> ResolveEditRange(const SourceRange& range, std::s
   };
 }
 
+std::optional<AttributeValueEdit> GetAttributeValueSpan(const XMLNode& node,
+                                                        const XMLQualifiedName& name,
+                                                        const SourceRange& attributeLocation,
+                                                        std::string_view source) {
+  std::optional<SourceEditRange> attributeRange = ResolveEditRange(attributeLocation, source);
+  if (!attributeRange.has_value() || attributeRange->end <= attributeRange->start) {
+    return std::nullopt;
+  }
+
+  const std::string_view attributeSource =
+      source.substr(attributeRange->start, attributeRange->end - attributeRange->start);
+  const std::size_t equalsOffset = attributeSource.find('=');
+  if (equalsOffset == std::string_view::npos) {
+    return std::nullopt;
+  }
+
+  std::size_t quoteOffset = equalsOffset + 1;
+  while (quoteOffset < attributeSource.size() && IsXmlWhitespace(attributeSource[quoteOffset])) {
+    ++quoteOffset;
+  }
+
+  if (quoteOffset >= attributeSource.size()) {
+    return std::nullopt;
+  }
+
+  const char quote = attributeSource[quoteOffset];
+  if ((quote != '"' && quote != '\'') || attributeSource.back() != quote) {
+    return std::nullopt;
+  }
+
+  return AttributeValueEdit{
+      .node = node,
+      .name = name,
+      .attributeLocation = attributeLocation,
+      .valueStart = attributeRange->start + quoteOffset + 1,
+      .valueEnd = attributeRange->end - 1,
+      .quote = quote,
+  };
+}
+
 std::optional<XMLNode> FindDeepestNodeAtSourceOffset(const XMLNode& node, std::size_t offset) {
   for (std::optional<XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
@@ -142,43 +187,17 @@ std::optional<AttributeValueEdit> GetAttributeValueEdit(const XMLDocument& docum
     return std::nullopt;
   }
 
-  const std::string_view attributeSource =
-      document.source().substr(attributeStart, attributeEnd - attributeStart);
-  const std::size_t equalsOffset = attributeSource.find('=');
-  if (equalsOffset == std::string_view::npos) {
+  std::optional<AttributeValueEdit> edit = GetAttributeValueSpan(
+      attribute->node, attribute->name, attribute->location, document.source());
+  if (!edit.has_value()) {
     return std::nullopt;
   }
 
-  std::size_t quoteOffset = equalsOffset + 1;
-  while (quoteOffset < attributeSource.size() &&
-         (attributeSource[quoteOffset] == ' ' || attributeSource[quoteOffset] == '\t' ||
-          attributeSource[quoteOffset] == '\n' || attributeSource[quoteOffset] == '\r')) {
-    ++quoteOffset;
-  }
-
-  if (quoteOffset >= attributeSource.size()) {
+  if (range.start < edit->valueStart || range.end > edit->valueEnd) {
     return std::nullopt;
   }
 
-  const char quote = attributeSource[quoteOffset];
-  if ((quote != '"' && quote != '\'') || attributeSource.back() != quote) {
-    return std::nullopt;
-  }
-
-  const std::size_t valueStart = attributeStart + quoteOffset + 1;
-  const std::size_t valueEnd = attributeEnd - 1;
-  if (range.start < valueStart || range.end > valueEnd) {
-    return std::nullopt;
-  }
-
-  return AttributeValueEdit{
-      .node = attribute->node,
-      .name = attribute->name,
-      .attributeLocation = attribute->location,
-      .valueStart = valueStart,
-      .valueEnd = valueEnd,
-      .quote = quote,
-  };
+  return edit;
 }
 
 std::optional<OpeningTagEdit> GetOpeningTagEdit(const XMLDocument& document,
@@ -309,6 +328,49 @@ AttributeMap BuildAttributeMap(const XMLNode& node) {
 
 ParseDiagnostic MakeEditDiagnostic(RcString reason, SourceRange range) {
   return ParseDiagnostic::Error(std::move(reason), range);
+}
+
+SourceRange MakeNodeDiagnosticRange(const XMLNode& node) {
+  return node.getNodeLocation().value_or(
+      SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
+}
+
+XMLQualifiedName MakeOwnedName(const XMLQualifiedNameRef& name) {
+  return XMLQualifiedName(RcString(name.namespacePrefix), RcString(name.name));
+}
+
+bool IsDocumentNode(const XMLDocument& document, const XMLNode& node) {
+  return node.entityHandle().registry() == document.sharedRegistry().get();
+}
+
+std::optional<AttributeValueEdit> GetAttributeValueEditForNode(const XMLDocument& document,
+                                                               const XMLNode& node,
+                                                               const XMLQualifiedName& name) {
+  std::optional<SourceRange> attributeLocation = node.getAttributeLocation(document.source(), name);
+  if (!attributeLocation.has_value()) {
+    return std::nullopt;
+  }
+
+  return GetAttributeValueSpan(node, name, *attributeLocation, document.source());
+}
+
+std::optional<SourceEditRange> GetAttributeRemovalRange(const XMLDocument& document,
+                                                        const XMLNode& node,
+                                                        const XMLQualifiedName& name) {
+  std::optional<SourceRange> attributeLocation = node.getAttributeLocation(document.source(), name);
+  std::optional<SourceEditRange> attributeRange =
+      attributeLocation.has_value() ? ResolveEditRange(*attributeLocation, document.source())
+                                    : std::nullopt;
+  if (!attributeRange.has_value()) {
+    return std::nullopt;
+  }
+
+  SourceEditRange removalRange = *attributeRange;
+  while (removalRange.start > 0 && IsXmlWhitespace(document.source()[removalRange.start - 1])) {
+    --removalRange.start;
+  }
+
+  return removalRange;
 }
 
 ParseResult<XMLDocument> ParseSingleAttributeElement(std::string_view attributeSource) {
@@ -650,6 +712,122 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
       .attributeName = attributeEdit->name,
       .value = *parsedValue,
       .scope = ReparseScope::AttributeValue,
+  });
+  return result;
+}
+
+ApplySourceEditResult XMLDocument::setAttribute(XMLNode node, const XMLQualifiedNameRef& name,
+                                                std::string_view value) {
+  ApplySourceEditResult result;
+  result.scope = ReparseScope::AttributeValue;
+
+  const XMLQualifiedName ownedName = MakeOwnedName(name);
+  const SourceRange diagnosticRange = MakeNodeDiagnosticRange(node);
+  if (!IsDocumentNode(*this, node)) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot set attribute on a node from another document", diagnosticRange);
+    return result;
+  }
+
+  XMLSourceStore* store = sourceStore();
+  if (store == nullptr) {
+    result.diagnostic = MakeEditDiagnostic("Cannot set source-backed attribute without source text",
+                                           diagnosticRange);
+    return result;
+  }
+
+  if (node.type() != XMLNode::Type::Element && node.type() != XMLNode::Type::XMLDeclaration) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Cannot set attribute on a node that does not support attributes", diagnosticRange);
+    return result;
+  }
+
+  std::optional<AttributeValueEdit> edit = GetAttributeValueEditForNode(*this, node, ownedName);
+  if (!edit.has_value()) {
+    result.scope = ReparseScope::OpeningTag;
+    result.diagnostic = MakeEditDiagnostic(
+        "Only existing source-backed attribute writes are implemented", diagnosticRange);
+    return result;
+  }
+
+  std::optional<RcString> escapedValue = EscapeAttributeValue(value, edit->quote);
+  if (!escapedValue.has_value()) {
+    result.diagnostic = MakeEditDiagnostic("Attribute value cannot be represented in XML source",
+                                           edit->attributeLocation);
+    return result;
+  }
+
+  std::optional<XMLSourceDelta> delta =
+      store->replace(edit->valueStart, edit->valueEnd - edit->valueStart, *escapedValue);
+  if (!delta.has_value()) {
+    result.diagnostic = MakeEditDiagnostic("Invalid source replacement for attribute value",
+                                           edit->attributeLocation);
+    return result;
+  }
+
+  result.applied = true;
+  result.sourceDeltas.push_back(*delta);
+
+  const RcString ownedValue(value);
+  node.setAttribute(ownedName, ownedValue);
+  result.mutations.push_back(XMLMutation{
+      .kind = XMLMutation::Kind::AttributeSet,
+      .node = node,
+      .attributeName = ownedName,
+      .value = ownedValue,
+      .scope = ReparseScope::AttributeValue,
+  });
+  return result;
+}
+
+ApplySourceEditResult XMLDocument::removeAttribute(XMLNode node, const XMLQualifiedNameRef& name) {
+  ApplySourceEditResult result;
+  result.scope = ReparseScope::OpeningTag;
+
+  const XMLQualifiedName ownedName = MakeOwnedName(name);
+  const SourceRange diagnosticRange = MakeNodeDiagnosticRange(node);
+  if (!IsDocumentNode(*this, node)) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Cannot remove attribute from a node in another document", diagnosticRange);
+    return result;
+  }
+
+  XMLSourceStore* store = sourceStore();
+  if (store == nullptr) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Cannot remove source-backed attribute without source text", diagnosticRange);
+    return result;
+  }
+
+  if (!node.hasAttribute(ownedName)) {
+    return result;
+  }
+
+  std::optional<SourceEditRange> removalRange = GetAttributeRemovalRange(*this, node, ownedName);
+  if (!removalRange.has_value()) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot remove attribute without a source range", diagnosticRange);
+    return result;
+  }
+
+  std::optional<XMLSourceDelta> delta = store->replace(
+      removalRange->start, removalRange->end - removalRange->start, std::string_view());
+  if (!delta.has_value()) {
+    result.diagnostic =
+        MakeEditDiagnostic("Invalid source replacement for attribute removal", diagnosticRange);
+    return result;
+  }
+
+  result.applied = true;
+  result.sourceDeltas.push_back(*delta);
+
+  node.removeAttribute(ownedName);
+  result.mutations.push_back(XMLMutation{
+      .kind = XMLMutation::Kind::AttributeRemoved,
+      .node = node,
+      .attributeName = ownedName,
+      .value = std::nullopt,
+      .scope = ReparseScope::OpeningTag,
   });
   return result;
 }
