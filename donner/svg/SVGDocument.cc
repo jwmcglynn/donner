@@ -16,6 +16,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
@@ -120,6 +121,12 @@ ElementType ElementTypeForTag(const xml::XMLQualifiedNameRef& tagName) {
   if (tagName.name == "rect") {
     return ElementType::Rect;
   }
+  if (tagName.name == "text") {
+    return ElementType::Text;
+  }
+  if (tagName.name == "tspan") {
+    return ElementType::TSpan;
+  }
 
   return ElementType::Unknown;
 }
@@ -132,7 +139,9 @@ bool UsesNoTraverseChildren(ElementType type) {
     case ElementType::Path:
     case ElementType::Polygon:
     case ElementType::Polyline:
-    case ElementType::Rect: return true;
+    case ElementType::Rect:
+    case ElementType::Text:
+    case ElementType::TSpan: return true;
 
     default: return false;
   }
@@ -140,14 +149,27 @@ bool UsesNoTraverseChildren(ElementType type) {
 
 void EnsureProjectedElementComponents(EntityHandle handle,
                                       const xml::XMLQualifiedNameRef& tagName) {
+  ElementType type = ElementType::Unknown;
   if (!handle.all_of<components::ElementTypeComponent>()) {
-    const ElementType type = ElementTypeForTag(tagName);
+    type = ElementTypeForTag(tagName);
     handle.emplace<components::ElementTypeComponent>(type);
-    handle.emplace<components::TransformComponent>();
-    if (UsesNoTraverseChildren(type)) {
-      handle.emplace<components::RenderingBehaviorComponent>(
-          components::RenderingBehavior::NoTraverseChildren);
-    }
+  } else {
+    type = handle.get<components::ElementTypeComponent>().type();
+  }
+
+  [[maybe_unused]] auto& transform = handle.get_or_emplace<components::TransformComponent>();
+  if (UsesNoTraverseChildren(type) && !handle.all_of<components::RenderingBehaviorComponent>()) {
+    handle.emplace<components::RenderingBehaviorComponent>(
+        components::RenderingBehavior::NoTraverseChildren);
+  }
+
+  if (type == ElementType::Text || type == ElementType::TSpan) {
+    [[maybe_unused]] auto& text = handle.get_or_emplace<components::TextComponent>();
+    [[maybe_unused]] auto& positioning =
+        handle.get_or_emplace<components::TextPositioningComponent>();
+  }
+  if (type == ElementType::Text) {
+    handle.get_or_emplace<components::TextRootComponent>();
   }
 }
 
@@ -183,6 +205,41 @@ void MarkSubtreeReplaced(EntityHandle handle) {
           components::DirtyFlagsComponent::All);
     }
   });
+}
+
+void ProjectTextContents(EntityHandle handle, const xml::XMLNode& node) {
+  if (!handle.all_of<components::TextComponent>()) {
+    return;
+  }
+
+  auto& text = handle.get<components::TextComponent>();
+  text.text = RcString("");
+  text.textChunks.clear();
+
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
+      const RcString value = child->value().value_or(RcString(""));
+      if (text.text.empty()) {
+        text.text = value;
+      } else {
+        text.text = text.text + value;
+      }
+
+      if (text.textChunks.empty()) {
+        text.textChunks.emplace_back(value);
+      } else if (text.textChunks.back().empty()) {
+        text.textChunks.back() = value;
+      } else {
+        text.textChunks.emplace_back(value);
+      }
+    } else if (child->type() == xml::XMLNode::Type::Element) {
+      if (text.textChunks.empty()) {
+        text.textChunks.emplace_back(RcString(""));
+      }
+      text.textChunks.emplace_back(RcString(""));
+    }
+  }
 }
 
 }  // namespace
@@ -387,6 +444,8 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
       return diagnostic;
     }
   }
+
+  ProjectTextContents(handle, node);
 
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
