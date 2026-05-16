@@ -557,6 +557,44 @@ TEST_F(SVGInvalidationTests, SourceEditTextNodeUpdatesTextContent) {
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::RenderInstance));
 }
 
+TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedChildProjectsToSVG) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="layer"><rect id="existing" width="10" height="10" /></g>
+    </svg>
+  )";
+  const std::string inserted = R"(<circle id="inserted" cx="5" cy="6" r="3" fill="blue" />)";
+  const std::size_t insertOffset = input.find("</g>");
+  ASSERT_NE(insertOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  simulateRenderComplete(doc);
+
+  auto layer = doc.querySelector("#layer");
+  ASSERT_TRUE(layer.has_value());
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = inserted,
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_FALSE(result.diagnostic.has_value()) << *result.diagnostic;
+  ASSERT_THAT(result.mutations, testing::SizeIs(1));
+  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::SubtreeReplaced);
+
+  auto insertedElement = doc.querySelector("#inserted");
+  ASSERT_TRUE(insertedElement.has_value());
+  EXPECT_THAT(insertedElement->getAttribute("fill"), testing::Optional(RcString("blue")));
+  EXPECT_TRUE(hasDirtyFlags(*layer, DirtyFlagsComponent::All));
+
+  auto& renderState = doc.registry().ctx().get<RenderTreeState>();
+  EXPECT_TRUE(renderState.needsFullRebuild);
+  EXPECT_TRUE(renderState.needsFullStyleRecompute);
+}
+
 // ---------------------------------------------------------------------------
 // appendChild
 // ---------------------------------------------------------------------------
