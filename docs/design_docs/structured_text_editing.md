@@ -753,9 +753,10 @@ the target architecture.
       `TextEditorCore` now captures `SourceEditIntent`s for core insert,
       replace, delete, undo, and redo paths, and `DocumentSyncController`
       forwards buffered intent batches to `AsyncSVGDocument::applySourceEdit`
-      when structured editing is enabled. The whole-buffer diff remains as a
-      compatibility fallback for programmatic `setText` and shell-composed
-      edit paths that still need direct intent coverage.
+      when structured editing is enabled. Shell-composed cut, paste,
+      autocomplete, and find/replace operations now route through the same
+      core edit primitive, so they emit the same intents. The whole-buffer
+      diff remains as a compatibility fallback for programmatic `setText`.
 - [ ] **Local scope selection.** `XMLDocument::applySourceEdit` maps the edit
       to a live source anchor and chooses the smallest safe reparse scope:
       - `AttributeValue`: edit stays inside one quoted value; reparse XML

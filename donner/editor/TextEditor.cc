@@ -434,23 +434,8 @@ void TextEditor::autocompleteSelect() {
     return;
   }
 
-  UndoRecord undo;
-  undo.before = state_;
-
-  if (hasSelection()) {
-    undo.removed = getSelectedText();
-    undo.removedStart = state_.selectionStart;
-    undo.removedEnd = state_.selectionEnd;
-    deleteSelection();
-  }
-
   const auto& entry = autocompleteSuggestions_[autocompleteIndex_];
-  undo.added = entry.second;
-  undo.addedStart = getActualCursorCoordinates();
   insertText(entry.second, true);
-  undo.addedEnd = getActualCursorCoordinates();
-  undo.after = state_;
-  addUndo(undo);
 
   autocompleteOpened_ = false;
   autocompleteObject_.clear();
@@ -1890,9 +1875,10 @@ void TextEditor::processReplace(const std::string& findWord, const std::string& 
     auto selEnd = curPos;
     selEnd.column += findWord.size();
     setSelection(curPos, selEnd);
-    deleteSelection();
     insertText(replaceWord);
-    setCursorPosition(selEnd);
+    Coordinates replacementEnd = curPos;
+    replacementEnd.column += static_cast<int>(replaceWord.size());
+    setCursorPosition(replacementEnd);
     scrollToCursor_ = true;
 
     if (!replaceAll) {
@@ -2247,17 +2233,8 @@ void TextEditor::cut() {
     return;
   }
 
-  UndoRecord undo;
-  undo.before = state_;
-  undo.removed = getSelectedText();
-  undo.removedStart = state_.selectionStart;
-  undo.removedEnd = state_.selectionEnd;
-
   copy();
-  deleteSelection();
-
-  undo.after = state_;
-  addUndo(undo);
+  insertText("");
 }
 
 void TextEditor::paste() {
@@ -2266,24 +2243,7 @@ void TextEditor::paste() {
     return;
   }
 
-  UndoRecord undo;
-  undo.before = state_;
-
-  if (hasSelection()) {
-    undo.removed = getSelectedText();
-    undo.removedStart = state_.selectionStart;
-    undo.removedEnd = state_.selectionEnd;
-    deleteSelection();
-  }
-
-  undo.added = clipText;
-  undo.addedStart = getActualCursorCoordinates();
-
   insertText(clipText, autoIndentOnPaste_);
-
-  undo.addedEnd = getActualCursorCoordinates();
-  undo.after = state_;
-  addUndo(undo);
 }
 
 bool TextEditor::canUndo() const {
