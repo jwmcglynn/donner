@@ -116,6 +116,13 @@ public:
    */
   XMLDocument();
 
+  /**
+   * Rehydrate an \ref XMLDocument facade from an internal shared registry.
+   *
+   * @param registry Shared XML document registry to wrap.
+   */
+  static XMLDocument CreateFromRegistry(std::shared_ptr<Registry> registry);
+
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() { return *registry_; }
 
@@ -192,6 +199,9 @@ public:
   void setSource(std::string source);
 
 private:
+  /// Internal constructor used to rehydrate an XMLDocument from an existing Registry.
+  explicit XMLDocument(std::shared_ptr<Registry> registry);
+
   /// Owned reference to the registry, which contains all information about the loaded document.
   std::shared_ptr<Registry> registry_;
 };

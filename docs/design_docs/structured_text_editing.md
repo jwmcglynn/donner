@@ -795,13 +795,18 @@ the target architecture.
 - [ ] **XML mutation event stream.** `XMLDocument::applySourceEdit` and DOM
       APIs emit `XMLMutation` records: `AttributeSet`, `AttributeRemoved`,
       `NodeValueChanged`, `NodeInserted`, `NodeRemoved`, `SubtreeReplaced`,
-      and `SourceDiagnosticChanged`.
+      and `SourceDiagnosticChanged`. Current implementation emits
+      `AttributeSet`, `AttributeRemoved`, and `NodeValueChanged` for source
+      edits; DOM-originated XML mutation emission remains.
 - [ ] **`SVGDocument` consumes XML mutations.** The SVG layer maps the
       mutated `XMLNode` identity to the existing `SVGElement`/entity and calls
       the existing attribute/value parsers with a fresh `SVGParserContext`.
       Inline `style=` goes through `StyleSystem::updateStyle`; presentation
       attributes go through the existing property registry path; geometry and
-      filter attributes reset stale component fields on removal.
+      filter attributes reset stale component fields on removal. Current
+      implementation wires `SVGDocument::applySourceEdit` through the XML
+      source-edit layer and projects `AttributeSet` / `AttributeRemoved`
+      mutations through `SVGElement::setAttribute` / `removeAttribute`.
 - [ ] **Invalid SVG values do not roll back XML source.** If XML is
       well-formed but an SVG value is temporarily invalid (`fill="re"`),
       the XML attribute value is current, the SVG semantic component keeps the
@@ -810,7 +815,9 @@ the target architecture.
       sets the same dirty flags as parser-originated mutations. The editor
       does not own an invalidation switch.
 - [ ] Tests:
-      - edit `fill` updates style and dirty flags without `ParseSVG`;
+      - [x] edit `fill` updates style and dirty flags without `ParseSVG`;
+      - [x] delete `fill` clears the presentation attribute and dirty flags
+        without `ParseSVG`;
       - edit `d` updates path geometry and dirty flags without `ParseSVG`;
       - delete `values=` from `feColorMatrix` clears the vector component;
       - invalid value records a diagnostic and preserves the last valid render;

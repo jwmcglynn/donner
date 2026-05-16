@@ -1,11 +1,15 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <functional>
+#include <string_view>
+#include <utility>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/XMLDocument.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/core/ProcessingMode.h"
@@ -97,6 +101,28 @@ public:
     return SVGDocument(std::move(handle));
   }
 
+  /// Return true if the parsed SVG document has owned XML source text.
+  bool hasSourceStore() const;
+
+  /**
+   * Return the current XML source text owned by this parsed SVG document.
+   *
+   * Programmatically-created documents may not have source text; in that case this returns an
+   * empty view.
+   */
+  std::string_view source() const;
+
+  /// Return the current XML source version, or 0 for documents without source text.
+  std::uint64_t sourceVersion() const;
+
+  /**
+   * Apply an incremental source edit through the underlying XML document and update the SVG
+   * semantic projection from emitted XML mutations.
+   *
+   * @param intent Source edit request.
+   */
+  xml::ApplySourceEditResult applySourceEdit(const xml::XMLEditIntent& intent);
+
   /// Get the root ECS Entity of the document, for advanced use.
   EntityHandle rootEntityHandle() const;
 
@@ -179,6 +205,16 @@ public:
   std::optional<SVGElement> querySelector(std::string_view selector);
 
 private:
+  /// Rehydrate the underlying XML document facade from this SVG document's shared registry.
+  xml::XMLDocument xmlDocument() const;
+
+  /**
+   * Apply a single XML mutation to this SVG document's semantic projection.
+   *
+   * @param mutation XML mutation emitted by the source-edit layer.
+   */
+  std::optional<ParseDiagnostic> applyXMLMutation(const xml::XMLMutation& mutation);
+
   /// Owned reference to the registry, which contains all information about the loaded document.
   std::shared_ptr<Registry> registry_;
 };

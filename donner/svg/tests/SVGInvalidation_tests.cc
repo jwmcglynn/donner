@@ -1,6 +1,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -66,6 +68,12 @@ protected:
     auto view = registry.view<DirtyFlagsComponent>();
     for (auto entity : view) {
       registry.remove<DirtyFlagsComponent>(entity);
+    }
+  }
+
+  static void expectNoDiagnostic(const xml::ApplySourceEditResult& result) {
+    if (result.diagnostic.has_value()) {
+      ADD_FAILURE() << *result.diagnostic;
     }
   }
 
@@ -208,6 +216,77 @@ TEST_F(SVGInvalidationTests, SetAttributeGenericRequestsFullStyleRecompute) {
 
   auto& renderState = doc.registry().ctx().get<RenderTreeState>();
   EXPECT_TRUE(renderState.needsFullStyleRecompute);
+}
+
+TEST_F(SVGInvalidationTests, SourceEditAttributeValueUpdatesPresentationAttribute) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" width="10" height="10" fill="red" />
+    </svg>
+  )";
+  const std::size_t fillValueOffset = input.find("red");
+  ASSERT_NE(fillValueOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(fillValueOffset), FileOffset::Offset(fillValueOffset + 3)},
+      .replacement = "green",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::AttributeValue);
+  ASSERT_THAT(result.mutations, testing::SizeIs(1));
+  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::AttributeSet);
+
+  std::optional<RcString> fill = target->getAttribute("fill");
+  ASSERT_TRUE(fill.has_value());
+  EXPECT_EQ(*fill, RcString("green"));
+  EXPECT_NE(doc.source().find(R"(fill="green")"), std::string_view::npos);
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Style));
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
+}
+
+TEST_F(SVGInvalidationTests, SourceEditOpeningTagRemovalClearsPresentationAttribute) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="target" width="10" height="10" fill="red" />
+    </svg>
+  )";
+  const std::string attributeSource = R"( fill="red")";
+  const std::size_t attributeOffset = input.find(attributeSource);
+  ASSERT_NE(attributeOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  simulateRenderComplete(doc);
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(attributeOffset),
+                FileOffset::Offset(attributeOffset + attributeSource.size())},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::OpeningTag);
+  ASSERT_THAT(result.mutations, testing::SizeIs(1));
+  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::AttributeRemoved);
+
+  EXPECT_FALSE(target->getAttribute("fill").has_value());
+  EXPECT_EQ(doc.source().find(R"(fill="red")"), std::string_view::npos);
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Style));
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
 }
 
 // ---------------------------------------------------------------------------

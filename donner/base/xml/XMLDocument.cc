@@ -317,6 +317,15 @@ XMLDocument::XMLDocument() : registry_(std::make_shared<Registry>()) {
   registry_->ctx().emplace<XMLNamespaceContext>(*registry_);
 }
 
+XMLDocument::XMLDocument(std::shared_ptr<Registry> registry) : registry_(std::move(registry)) {}
+
+XMLDocument XMLDocument::CreateFromRegistry(std::shared_ptr<Registry> registry) {
+  UTILS_RELEASE_ASSERT_MSG(registry != nullptr, "Cannot create XMLDocument from null registry");
+  UTILS_RELEASE_ASSERT_MSG(registry->ctx().contains<XMLDocumentContext>(),
+                           "Registry does not contain XMLDocumentContext");
+  return XMLDocument(std::move(registry));
+}
+
 XMLNode XMLDocument::root() const {
   return XMLNode(rootEntityHandle());
 }

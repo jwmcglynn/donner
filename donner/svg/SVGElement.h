@@ -51,6 +51,7 @@ class SVGParserImpl;
  */
 class SVGElement {
   friend class DonnerController;
+  friend class SVGDocument;
 
 protected:
   /**
