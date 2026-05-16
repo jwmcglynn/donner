@@ -510,8 +510,8 @@ ParseResult<XMLDocument> ParseTextNodeElement(std::string_view textSource) {
   return XMLParser::Parse(fragment);
 }
 
-void SetClonedSourceOffsets(XMLNode& node, const XMLNode& parsedNode,
-                            std::size_t sourceOffsetBase) {
+void SetSourceOffsetsFromParsed(XMLNode& node, const XMLNode& parsedNode,
+                                std::size_t sourceOffsetBase) {
   std::optional<SourceRange> location = parsedNode.getNodeLocation();
   if (!location.has_value() || !location->start.offset.has_value() ||
       !location->end.offset.has_value()) {
@@ -522,13 +522,80 @@ void SetClonedSourceOffsets(XMLNode& node, const XMLNode& parsedNode,
   node.setSourceEndOffset(FileOffset::Offset(sourceOffsetBase + *location->end.offset));
 }
 
-void CopyAttributes(const XMLNode& source, XMLNode& target) {
-  for (const XMLQualifiedNameRef& name : source.attributes()) {
-    std::optional<RcString> value = source.getAttribute(name);
-    if (value.has_value()) {
-      target.setAttribute(name, *value);
+void SyncAttributesFromParsed(XMLNode& target, const XMLNode& parsedNode) {
+  const AttributeMap currentAttributes = BuildAttributeMap(target);
+  const AttributeMap parsedAttributes = BuildAttributeMap(parsedNode);
+
+  for (const auto& [name, value] : currentAttributes) {
+    if (!parsedAttributes.contains(name)) {
+      target.removeAttribute(name);
     }
   }
+
+  for (const auto& [name, value] : parsedAttributes) {
+    const auto currentIt = currentAttributes.find(name);
+    if (currentIt == currentAttributes.end() || currentIt->second != value) {
+      target.setAttribute(name, value);
+    }
+  }
+}
+
+void SyncValueFromParsed(XMLNode& target, const XMLNode& parsedNode) {
+  std::optional<RcString> parsedValue = parsedNode.value();
+  if (parsedValue.has_value()) {
+    target.setValue(*parsedValue);
+  } else if (target.entityHandle().all_of<components::XMLValueComponent>()) {
+    target.entityHandle().remove<components::XMLValueComponent>();
+  }
+}
+
+std::optional<RcString> ElementId(const XMLNode& node) {
+  if (node.type() != XMLNode::Type::Element) {
+    return std::nullopt;
+  }
+
+  return node.getAttribute("id");
+}
+
+std::optional<std::size_t> FindReusableChild(const XMLNode& parsedChild,
+                                             const std::vector<XMLNode>& oldChildren,
+                                             const std::vector<bool>& usedChildren) {
+  std::optional<RcString> parsedId = ElementId(parsedChild);
+  if (!parsedId.has_value() || parsedId->empty()) {
+    return std::nullopt;
+  }
+
+  for (std::size_t index = 0; index < oldChildren.size(); ++index) {
+    if (usedChildren[index]) {
+      continue;
+    }
+
+    const XMLNode& oldChild = oldChildren[index];
+    std::optional<RcString> oldId = ElementId(oldChild);
+    if (oldChild.type() == parsedChild.type() && oldChild.tagName() == parsedChild.tagName() &&
+        oldId.has_value() && *oldId == *parsedId) {
+      return index;
+    }
+  }
+
+  return std::nullopt;
+}
+
+XMLNode CloneParsedNodeInto(XMLDocument& document, const XMLNode& parsedNode,
+                            std::size_t sourceOffsetBase);
+
+void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
+                                   const XMLNode& parsedTarget, std::size_t sourceOffsetBase);
+
+void SyncNodeFromParsed(XMLDocument& document, XMLNode& target, const XMLNode& parsedNode,
+                        std::size_t sourceOffsetBase) {
+  if (target.type() == XMLNode::Type::Element || target.type() == XMLNode::Type::XMLDeclaration) {
+    SyncAttributesFromParsed(target, parsedNode);
+    ReplaceChildrenFromParsedNode(document, target, parsedNode, sourceOffsetBase);
+  }
+
+  SyncValueFromParsed(target, parsedNode);
+  SetSourceOffsetsFromParsed(target, parsedNode, sourceOffsetBase);
 }
 
 XMLNode CloneParsedNodeInto(XMLDocument& document, const XMLNode& parsedNode,
@@ -555,18 +622,7 @@ XMLNode CloneParsedNodeInto(XMLDocument& document, const XMLNode& parsedNode,
     UTILS_UNREACHABLE();
   }();
 
-  if (parsedNode.type() == XMLNode::Type::Element ||
-      parsedNode.type() == XMLNode::Type::XMLDeclaration) {
-    CopyAttributes(parsedNode, clone);
-  }
-
-  for (std::optional<XMLNode> child = parsedNode.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    XMLNode clonedChild = CloneParsedNodeInto(document, *child, sourceOffsetBase);
-    clone.appendChild(clonedChild);
-  }
-
-  SetClonedSourceOffsets(clone, parsedNode, sourceOffsetBase);
+  SyncNodeFromParsed(document, clone, parsedNode, sourceOffsetBase);
   return clone;
 }
 
@@ -582,18 +638,23 @@ void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
     target.removeChild(child);
   }
 
+  std::vector<bool> usedChildren(oldChildren.size(), false);
   for (std::optional<XMLNode> child = parsedTarget.firstChild(); child.has_value();
        child = child->nextSibling()) {
-    XMLNode clonedChild = CloneParsedNodeInto(document, *child, sourceOffsetBase);
-    target.appendChild(clonedChild);
+    std::optional<XMLNode> nodeToAppend;
+    if (std::optional<std::size_t> oldIndex =
+            FindReusableChild(*child, oldChildren, usedChildren)) {
+      usedChildren[*oldIndex] = true;
+      nodeToAppend = oldChildren[*oldIndex];
+      SyncNodeFromParsed(document, *nodeToAppend, *child, sourceOffsetBase);
+    } else {
+      nodeToAppend = CloneParsedNodeInto(document, *child, sourceOffsetBase);
+    }
+
+    target.appendChild(*nodeToAppend);
   }
 
-  std::optional<RcString> parsedValue = parsedTarget.value();
-  if (parsedValue.has_value()) {
-    target.setValue(*parsedValue);
-  } else if (target.entityHandle().all_of<components::XMLValueComponent>()) {
-    target.entityHandle().remove<components::XMLValueComponent>();
-  }
+  SyncValueFromParsed(target, parsedTarget);
 }
 
 void AppendAttributeMutations(XMLNode& node, const AttributeMap& currentAttributes,
