@@ -657,6 +657,40 @@ TEST(EditorSyncTest, StructuredMalformedOpeningTagEditDoesNotQueueReplaceDocumen
   EXPECT_EQ(*fill, RcString("red"));
 }
 
+TEST(EditorSyncTest, StructuredOpeningTagRecoveryClearsDiagnosticWithoutCommand) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";
+  constexpr std::string_view kDirtySvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red/></svg>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  std::string previousSourceText(kSvg);
+  std::optional<std::string> lastWritebackSourceText;
+  ASSERT_TRUE(
+      DispatchSourceTextChange(app, kDirtySvg, &previousSourceText, &lastWritebackSourceText)
+          .dispatchedMutation);
+  ASSERT_TRUE(app.document().lastParseError().has_value());
+
+  const auto dispatch =
+      DispatchSourceTextChange(app, kSvg, &previousSourceText, &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), kSvg);
+  EXPECT_EQ(app.document().lastParseError(), std::nullopt);
+
+  auto rect = app.document().document().querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+  std::optional<RcString> fill = rect->getAttribute("fill");
+  ASSERT_TRUE(fill.has_value());
+  EXPECT_EQ(*fill, RcString("red"));
+}
+
 TEST(EditorSyncTest, SelfInitiatedWritebackDoesNotDispatchDuplicateReplaceDocument) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kCircleSvg));

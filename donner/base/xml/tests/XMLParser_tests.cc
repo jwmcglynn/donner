@@ -430,6 +430,44 @@ TEST_F(XMLParserTests, ApplySourceEditMarksOpeningTagDirtyWhenDeletingAttributeQ
   EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
 }
 
+TEST_F(XMLParserTests, ApplySourceEditRestoresDirtyOpeningTagWithoutDocumentFallback) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t quoteOffset = document.source().find(R"("/>)");
+  ASSERT_NE(quoteOffset, std::string_view::npos);
+
+  ApplySourceEditResult dirtyResult = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(quoteOffset), FileOffset::Offset(quoteOffset + 1)},
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(dirtyResult.applied);
+  ASSERT_TRUE(dirtyResult.diagnostic.has_value());
+  ASSERT_EQ(document.source(), R"(<svg><rect fill="red/></svg>)");
+
+  const std::size_t restoreOffset = document.source().find("/>");
+  ASSERT_NE(restoreOffset, std::string_view::npos);
+
+  ApplySourceEditResult recoveryResult = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(restoreOffset), FileOffset::Offset(restoreOffset)},
+      .replacement = R"(")",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(recoveryResult.applied);
+  EXPECT_EQ(recoveryResult.scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(recoveryResult.diagnostic, std::nullopt);
+  EXPECT_TRUE(recoveryResult.mutations.empty());
+  EXPECT_EQ(document.source(), kXml);
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
+}
+
 TEST_F(XMLParserTests, ApplySourceEditOpeningTagAddsAttribute) {
   constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
 
