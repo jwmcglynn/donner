@@ -11,6 +11,7 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/shape/PathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -384,6 +385,48 @@ TEST_F(SVGInvalidationTests, SourceEditPathDataUpdatesGeometryAttribute) {
   EXPECT_NE(doc.source().find(R"(d="M 1 2 L 3 4")"), std::string_view::npos);
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Style));
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
+}
+
+TEST_F(SVGInvalidationTests, SourceEditFeColorMatrixValuesRemovalClearsParsedValues) {
+  const std::string input = R"SVG(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="filter">
+          <feColorMatrix id="target" type="saturate" values="0.5" />
+        </filter>
+      </defs>
+      <rect width="10" height="10" filter="url(#filter)" />
+    </svg>
+  )SVG";
+  const std::string attributeSource = R"( values="0.5")";
+  const std::size_t attributeOffset = input.find(attributeSource);
+  ASSERT_NE(attributeOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  simulateRenderComplete(doc);
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const auto* colorMatrix = target->entityHandle().try_get<components::FEColorMatrixComponent>();
+  ASSERT_NE(colorMatrix, nullptr);
+  EXPECT_THAT(colorMatrix->values, testing::ElementsAre(0.5));
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(attributeOffset),
+                FileOffset::Offset(attributeOffset + attributeSource.size())},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::OpeningTag);
+
+  EXPECT_FALSE(target->getAttribute("values").has_value());
+  EXPECT_TRUE(colorMatrix->values.empty());
+  EXPECT_EQ(doc.source().find(R"(values="0.5")"), std::string_view::npos);
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Filter));
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::RenderInstance));
 }
 
 // ---------------------------------------------------------------------------
