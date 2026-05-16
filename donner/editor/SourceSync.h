@@ -7,8 +7,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/SourceEditIntent.h"
 
 namespace donner::editor {
 
@@ -52,5 +54,10 @@ void QueueSourceWritebackReparse(EditorApp& app, std::string_view newSource,
 DispatchSourceTextChangeResult DispatchSourceTextChange(
     EditorApp& app, std::string_view newSource, std::string* previousSourceText,
     std::optional<std::string>* lastWritebackSourceText);
+
+/// Route source-pane edit intents through XML structured editing or full reparse.
+DispatchSourceTextChangeResult DispatchSourceEditIntents(
+    EditorApp& app, const std::vector<SourceEditIntent>& intents, std::string_view newSource,
+    std::string* previousSourceText, std::optional<std::string>* lastWritebackSourceText);
 
 }  // namespace donner::editor

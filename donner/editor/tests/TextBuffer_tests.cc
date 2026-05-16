@@ -159,4 +159,19 @@ TEST(TextBuffer, LineColumnHelpers) {
   EXPECT_EQ(buffer.getTotalLines(), 3);
 }
 
+TEST(TextBuffer, GetByteOffsetResolvesMultilineCoordinates) {
+  TextBuffer buffer;
+  buffer.setText(
+      "abc\n"
+      "defg\n"
+      "hi");
+
+  EXPECT_EQ(buffer.getByteOffset({0, 0}), 0u);
+  EXPECT_EQ(buffer.getByteOffset({0, 2}), 2u);
+  EXPECT_EQ(buffer.getByteOffset({1, 0}), 4u);
+  EXPECT_EQ(buffer.getByteOffset({1, 3}), 7u);
+  EXPECT_EQ(buffer.getByteOffset({2, 2}), 11u);
+  EXPECT_EQ(buffer.getByteOffset({3, 0}), buffer.getText().size());
+}
+
 }  // namespace donner::editor

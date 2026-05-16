@@ -1,5 +1,7 @@
 #include "donner/editor/DocumentSyncController.h"
 
+#include <iterator>
+
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
@@ -38,6 +40,7 @@ void DocumentSyncController::resetForLoadedDocument(const std::string& source) {
   lastWritebackSourceText_.reset();
   pendingTransformWritebacks_.clear();
   pendingElementRemoveWritebacks_.clear();
+  pendingSourceEditIntents_.clear();
   lastShownErrorLine_ = kNoErrorLine;
   lastShownErrorReason_.clear();
   textChangePending_ = false;
@@ -67,11 +70,23 @@ void DocumentSyncController::syncParseErrorMarkers(EditorApp& app, TextEditor& t
 void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEditor,
                                              float deltaSeconds) {
   const auto dispatchTextChange = [&](std::string_view newSource) {
-    (void)DispatchSourceTextChange(app, newSource, &previousSourceText_, &lastWritebackSourceText_);
+    if (pendingSourceEditIntents_.empty()) {
+      (void)DispatchSourceTextChange(app, newSource, &previousSourceText_,
+                                     &lastWritebackSourceText_);
+      return;
+    }
+
+    (void)DispatchSourceEditIntents(app, pendingSourceEditIntents_, newSource, &previousSourceText_,
+                                    &lastWritebackSourceText_);
+    pendingSourceEditIntents_.clear();
   };
 
   if (textEditor.isTextChanged()) {
     const std::string newSource = textEditor.getText();
+    std::vector<SourceEditIntent> editIntents = textEditor.takePendingSourceEditIntents();
+    pendingSourceEditIntents_.insert(pendingSourceEditIntents_.end(),
+                                     std::make_move_iterator(editIntents.begin()),
+                                     std::make_move_iterator(editIntents.end()));
     app.syncDirtyFromSource(newSource);
     textEditor.resetTextChanged();
 

@@ -750,9 +750,12 @@ the target architecture.
       source-pane mutation. `DocumentSyncController` forwards that intent to
       `XMLDocument::applySourceEdit`; it does not diff old/new full strings.
       The XML-side `XMLEditIntent` / `applySourceEdit` transaction exists;
-      `SourceSync` now routes a single contiguous text change to
-      `AsyncSVGDocument::applySourceEdit` when structured editing is enabled,
-      but `TextEditor` still needs to emit the original edit intent directly.
+      `TextEditorCore` now captures `SourceEditIntent`s for core insert,
+      replace, delete, undo, and redo paths, and `DocumentSyncController`
+      forwards buffered intent batches to `AsyncSVGDocument::applySourceEdit`
+      when structured editing is enabled. The whole-buffer diff remains as a
+      compatibility fallback for programmatic `setText` and shell-composed
+      edit paths that still need direct intent coverage.
 - [ ] **Local scope selection.** `XMLDocument::applySourceEdit` maps the edit
       to a live source anchor and chooses the smallest safe reparse scope:
       - `AttributeValue`: edit stays inside one quoted value; reparse XML
@@ -788,7 +791,7 @@ the target architecture.
       - [x] typing one character in `fill="red"` reparses only the attribute;
       - [x] inserting ` transform="..."` before `/>` reparses only the opening tag;
       - [x] deleting a quote creates a scoped dirty region and keeps tree identity;
-      - restoring the quote clears the diagnostic without full document parse;
+      - [x] restoring the quote clears the diagnostic without full document parse;
       - [x] editing inside text content updates only that text node;
       - structural edit inside one group reparses only that group.
 

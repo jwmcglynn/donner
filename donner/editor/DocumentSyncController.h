@@ -8,6 +8,7 @@
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/SourceEditIntent.h"
 #include "donner/editor/TextEditor.h"
 
 namespace donner::editor {
@@ -35,6 +36,7 @@ private:
   /// source-less fallbacks still use legacy text patches.
   std::vector<EditorApp::CompletedTransformWriteback> pendingTransformWritebacks_;
   std::vector<EditorApp::CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
+  std::vector<SourceEditIntent> pendingSourceEditIntents_;
 
   int lastShownErrorLine_ = -1;
   std::string lastShownErrorReason_;

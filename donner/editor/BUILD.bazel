@@ -243,6 +243,7 @@ donner_cc_library(
         ":editor_app",
         ":imgui_headers",
         ":select_tool",
+        ":source_edit_intent",
         ":source_sync",
         ":text_editor",
         ":text_patch",
@@ -392,12 +393,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "source_edit_intent",
+    hdrs = ["SourceEditIntent.h"],
+)
+
+donner_cc_library(
     name = "source_sync",
     srcs = ["SourceSync.cc"],
     hdrs = ["SourceSync.h"],
     deps = [
         ":change_classifier",
         ":editor_app",
+        ":source_edit_intent",
         "//donner/base",
         "//donner/svg",
     ],
@@ -599,6 +606,7 @@ donner_cc_library(
     srcs = ["TextEditorCore.cc"],
     hdrs = ["TextEditorCore.h"],
     deps = [
+        ":source_edit_intent",
         ":text_buffer",
         "//donner/base",
     ],
@@ -610,6 +618,7 @@ donner_cc_library(
     hdrs = ["TextEditor.h"],
     deps = [
         ":imgui_headers",
+        ":source_edit_intent",
         ":text_buffer",
         ":text_editor_core",
         "//donner/base",

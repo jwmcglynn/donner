@@ -10,6 +10,7 @@
 #include <regex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/Utf8.h"
@@ -118,6 +119,59 @@ std::string TextEditorCore::getText(const Coordinates& start, const Coordinates&
 
 std::string TextEditorCore::getSelectedText() const {
   return getText(state_.selectionStart, state_.selectionEnd);
+}
+
+std::vector<SourceEditIntent> TextEditorCore::takePendingSourceEditIntents() {
+  std::vector<SourceEditIntent> result;
+  result.swap(pendingSourceEditIntents_);
+  return result;
+}
+
+void TextEditorCore::appendSourceEditIntent(SourceEditIntent intent) {
+  if (intent.removedLength == 0 && intent.replacement.empty()) {
+    return;
+  }
+
+  if (!pendingSourceEditIntents_.empty()) {
+    const SourceEditIntent& previous = pendingSourceEditIntents_.back();
+    if (previous.offset == intent.offset && previous.removedLength == intent.removedLength &&
+        previous.replacement == intent.replacement && previous.kind == intent.kind) {
+      return;
+    }
+  }
+
+  intent.bufferVersion = ++sourceEditIntentVersion_;
+  pendingSourceEditIntents_.push_back(std::move(intent));
+}
+
+void TextEditorCore::recordSourceEditIntent(const UndoRecord& record, SourceEditIntentKind kind) {
+  std::string_view removed = record.removed;
+  std::string_view replacement = record.added;
+  Coordinates start = !record.removed.empty() ? record.removedStart : record.addedStart;
+
+  if (kind == SourceEditIntentKind::Undo) {
+    removed = record.added;
+    replacement = record.removed;
+    start = !record.added.empty() ? record.addedStart : record.removedStart;
+  }
+
+  SourceEditIntentKind classifiedKind = kind;
+  if (classifiedKind == SourceEditIntentKind::Unknown) {
+    if (removed.empty()) {
+      classifiedKind = SourceEditIntentKind::Insert;
+    } else if (replacement.empty()) {
+      classifiedKind = SourceEditIntentKind::Delete;
+    } else {
+      classifiedKind = SourceEditIntentKind::Replace;
+    }
+  }
+
+  appendSourceEditIntent(SourceEditIntent{
+      .offset = text_.getByteOffset(start),
+      .removedLength = removed.size(),
+      .replacement = std::string(replacement),
+      .kind = classifiedKind,
+  });
 }
 
 Coordinates TextEditorCore::getActualCursorCoordinates() const {
@@ -451,13 +505,21 @@ bool TextEditorCore::canRedo() const {
 
 void TextEditorCore::undo(int steps) {
   while (canUndo() && steps-- > 0) {
-    undoBuffer_[--undoIndex_].undo(this);
+    UndoRecord& record = undoBuffer_[--undoIndex_];
+    record.undo(this);
+    recordSourceEditIntent(record, SourceEditIntentKind::Undo);
+    textChanged_ = true;
+    fireContentUpdate();
   }
 }
 
 void TextEditorCore::redo(int steps) {
   while (canRedo() && steps-- > 0) {
-    undoBuffer_[undoIndex_++].redo(this);
+    UndoRecord& record = undoBuffer_[undoIndex_++];
+    record.redo(this);
+    recordSourceEditIntent(record, SourceEditIntentKind::Redo);
+    textChanged_ = true;
+    fireContentUpdate();
   }
 }
 
@@ -841,6 +903,7 @@ void TextEditorCore::insertText(std::string_view text, bool indent) {
   }
 
   record.after = state_;
+  recordSourceEditIntent(record, SourceEditIntentKind::Unknown);
   addUndo(record);
   textChanged_ = true;
   fireContentUpdate();
@@ -984,6 +1047,7 @@ void TextEditorCore::enterCharacter(char32_t character, bool shift) {
 
   state.record.addedEnd = getActualCursorCoordinates();
   state.record.after = state_;
+  recordSourceEditIntent(state.record, SourceEditIntentKind::Unknown);
   addUndo(state.record);
 
   colorize(state.insertPos.line - 1, 3);
@@ -1370,6 +1434,7 @@ void TextEditorCore::delete_() {
   }
 
   undo.after = state_;
+  recordSourceEditIntent(undo, SourceEditIntentKind::Unknown);
   addUndo(undo);
 }
 
@@ -1497,6 +1562,7 @@ void TextEditorCore::backspace() {
   }
 
   undo.after = state_;
+  recordSourceEditIntent(undo, SourceEditIntentKind::Unknown);
   addUndo(undo);
 
   if (activeAutocomplete_) {
@@ -1515,6 +1581,7 @@ void TextEditorCore::setText(std::string_view text, bool preserveScroll) {
   foldSorted_ = false;
   undoBuffer_.clear();
   undoIndex_ = 0;
+  pendingSourceEditIntents_.clear();
 
   text_.setText(text);
 

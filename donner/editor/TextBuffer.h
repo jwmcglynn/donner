@@ -580,6 +580,31 @@ public:
   }
 
   /**
+   * Resolve a coordinate to a byte offset in the full buffer text.
+   *
+   * @param coords Coordinate to resolve.
+   */
+  std::size_t getByteOffset(const Coordinates& coords) const {
+    if (lines_.empty()) {
+      return 0;
+    }
+
+    if (coords.line >= static_cast<int>(lines_.size())) {
+      return estimatedSize() == 0 ? 0 : estimatedSize() - 1;
+    }
+
+    const int lineNumber = std::max(0, coords.line);
+    std::size_t offset = 0;
+    for (int line = 0; line < lineNumber; ++line) {
+      offset += lines_[line].size() + 1;
+    }
+
+    const int charIndex = getCharacterIndex(Coordinates(lineNumber, std::max(0, coords.column)));
+    return offset +
+           std::min<std::size_t>(static_cast<std::size_t>(charIndex), lines_[lineNumber].size());
+  }
+
+  /**
    * The total number of lines in the buffer.
    */
   int getTotalLines() const { return (int)lines_.size(); }

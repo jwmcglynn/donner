@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
+#include "donner/editor/SourceEditIntent.h"
 #include "donner/editor/TextBuffer.h"
 
 namespace donner::editor {
@@ -193,6 +194,10 @@ public:
     textChanged_ = false;
     changedLines_.clear();
   }
+  /// True if user-facing edits have pending byte-level source intents.
+  bool hasPendingSourceEditIntents() const { return !pendingSourceEditIntents_.empty(); }
+  /// Consume pending byte-level source intents captured from user-facing edits.
+  std::vector<SourceEditIntent> takePendingSourceEditIntents();
 
   // ---------------------------------------------------------------------
   // Cursor / selection
@@ -398,6 +403,8 @@ public:
   void handleMidLineDelete(Coordinates pos, UndoRecord& undo);
   void handleStartOfLineDelete(const Coordinates& pos, UndoRecord& undo);
   void handleMidLineBackspace(const Coordinates& pos, UndoRecord& undo);
+  void recordSourceEditIntent(const UndoRecord& record, SourceEditIntentKind kind);
+  void appendSourceEditIntent(SourceEditIntent intent);
   void handleMultiLineTab(UndoState& state, bool shift);
 
   void updateChangeTracking();
@@ -431,6 +438,8 @@ private:
   EditorState state_;
   UndoBuffer undoBuffer_;
   int undoIndex_ = 0;
+  std::vector<SourceEditIntent> pendingSourceEditIntents_;
+  std::uint64_t sourceEditIntentVersion_ = 0;
   int replaceIndex_ = 0;
 
   Coordinates interactiveStart_;

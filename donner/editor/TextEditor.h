@@ -266,6 +266,12 @@ public:
   bool isTextChanged() const { return core_.isTextChanged(); }
   bool isCursorPositionChanged() const { return cursorPositionChanged_; }
   void resetTextChanged() { core_.resetTextChanged(); }
+  /// True if user-facing edits have pending byte-level source intents.
+  bool hasPendingSourceEditIntents() const { return core_.hasPendingSourceEditIntents(); }
+  /// Consume pending byte-level source intents captured from user-facing edits.
+  std::vector<SourceEditIntent> takePendingSourceEditIntents() {
+    return core_.takePendingSourceEditIntents();
+  }
 
   // Accessors
   const LanguageDefinition& getLanguageDefinition() const { return core_.getLanguageDefinition(); }

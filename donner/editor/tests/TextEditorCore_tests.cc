@@ -79,4 +79,33 @@ TEST_F(TextEditorCoreTests, DragDownThenUpSameDistanceInvertsVisibleSelectionCor
   EXPECT_EQ(editor_.getSelectedText(), "56789\n0123456789\n01234");
 }
 
+TEST_F(TextEditorCoreTests, InsertTextCapturesSourceEditIntent) {
+  editor_.resetTextChanged();
+  editor_.setCursorPosition(Coordinates(1, 3));
+
+  editor_.insertText("abc");
+
+  std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].offset, 14u);
+  EXPECT_EQ(intents[0].removedLength, 0u);
+  EXPECT_EQ(intents[0].replacement, "abc");
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Insert);
+  EXPECT_NE(intents[0].bufferVersion, 0u);
+}
+
+TEST_F(TextEditorCoreTests, ReplaceSelectionCapturesSourceEditIntent) {
+  editor_.resetTextChanged();
+  editor_.setSelection(Coordinates(1, 2), Coordinates(2, 4));
+
+  editor_.insertText("replacement");
+
+  std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].offset, 13u);
+  EXPECT_EQ(intents[0].removedLength, 13u);
+  EXPECT_EQ(intents[0].replacement, "replacement");
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Replace);
+}
+
 }  // namespace donner::editor
