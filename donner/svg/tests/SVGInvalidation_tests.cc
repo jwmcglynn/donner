@@ -660,6 +660,41 @@ TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedStyleProjectsStyles
       testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
 }
 
+TEST_F(SVGInvalidationTests, SourceEditStyleTextNodeUpdatesStylesheet) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>rect { fill: red; }</style>
+      <rect id="target" width="10" height="10" />
+    </svg>
+  )";
+  const std::size_t colorOffset = input.find("red");
+  ASSERT_NE(colorOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(
+      target->getComputedStyle().fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0xFF, 0, 0, 0xFF))))));
+  simulateRenderComplete(doc);
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(colorOffset), FileOffset::Offset(colorOffset + 3)},
+      .replacement = "blue",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
+  ASSERT_THAT(result.mutations, testing::SizeIs(1));
+  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::NodeValueChanged);
+
+  EXPECT_THAT(
+      target->getComputedStyle().fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
+}
+
 // ---------------------------------------------------------------------------
 // appendChild
 // ---------------------------------------------------------------------------
