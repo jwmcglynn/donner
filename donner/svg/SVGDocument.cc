@@ -1,5 +1,7 @@
 #include "donner/svg/SVGDocument.h"
 
+#include <string>
+
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
@@ -11,6 +13,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -121,6 +124,9 @@ ElementType ElementTypeForTag(const xml::XMLQualifiedNameRef& tagName) {
   if (tagName.name == "rect") {
     return ElementType::Rect;
   }
+  if (tagName.name == "style") {
+    return ElementType::Style;
+  }
   if (tagName.name == "text") {
     return ElementType::Text;
   }
@@ -170,6 +176,9 @@ void EnsureProjectedElementComponents(EntityHandle handle,
   }
   if (type == ElementType::Text) {
     handle.get_or_emplace<components::TextRootComponent>();
+  }
+  if (type == ElementType::Style) {
+    [[maybe_unused]] auto& stylesheet = handle.get_or_emplace<components::StylesheetComponent>();
   }
 }
 
@@ -240,6 +249,36 @@ void ProjectTextContents(EntityHandle handle, const xml::XMLNode& node) {
       text.textChunks.emplace_back(RcString(""));
     }
   }
+}
+
+std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node) {
+  if (!handle.all_of<components::ElementTypeComponent>() ||
+      handle.get<components::ElementTypeComponent>().type() != ElementType::Style) {
+    return std::nullopt;
+  }
+
+  auto* stylesheet = handle.try_get<components::StylesheetComponent>();
+  if (stylesheet == nullptr || !stylesheet->isCssType()) {
+    return std::nullopt;
+  }
+
+  std::string combined;
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
+      if (std::optional<RcString> value = child->value()) {
+        combined += *value;
+      }
+    } else {
+      return ParseDiagnostic::Error(
+          "Unexpected <style> element contents",
+          child->getNodeLocation().value_or(node.getNodeLocation().value_or(
+              SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)})));
+    }
+  }
+
+  stylesheet->parseStylesheet(std::string_view(combined));
+  return std::nullopt;
 }
 
 }  // namespace
@@ -446,6 +485,9 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
   }
 
   ProjectTextContents(handle, node);
+  if (std::optional<ParseDiagnostic> diagnostic = ProjectStyleContents(handle, node)) {
+    return diagnostic;
+  }
 
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
