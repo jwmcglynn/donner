@@ -1,7 +1,9 @@
 #include "donner/editor/DialogPresenter.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <cstring>
+#include <utility>
 
 #include "donner/editor/ImGuiIncludes.h"
 
@@ -20,12 +22,24 @@ void DialogPresenter::requestOpenFile(const std::optional<std::string>& currentF
   openFileModalRequested_ = true;
 }
 
+void DialogPresenter::requestSaveFile(const std::optional<std::string>& currentFilePath,
+                                      std::string error) {
+  std::fill(saveFilePathBuffer_.begin(), saveFilePathBuffer_.end(), '\0');
+  if (currentFilePath.has_value()) {
+    std::strncpy(saveFilePathBuffer_.data(), currentFilePath->c_str(),
+                 saveFilePathBuffer_.size() - 1);
+  }
+  saveFileError_ = std::move(error);
+  saveFileModalRequested_ = true;
+}
+
 void DialogPresenter::requestAbout() {
   openAboutPopup_ = true;
 }
 
 void DialogPresenter::render(
-    const std::function<bool(std::string_view, std::string*)>& tryOpenFile) {
+    const std::function<bool(std::string_view, std::string*)>& tryOpenFile,
+    const std::function<bool(std::string_view, std::string*)>& trySaveFile) {
   if (openAboutPopup_) {
     ImGui::OpenPopup("About Donner SVG Editor");
     openAboutPopup_ = false;
@@ -33,6 +47,10 @@ void DialogPresenter::render(
   if (openFileModalRequested_) {
     ImGui::OpenPopup("Open SVG");
     openFileModalRequested_ = false;
+  }
+  if (saveFileModalRequested_) {
+    ImGui::OpenPopup("Save SVG");
+    saveFileModalRequested_ = false;
   }
   if (openLicensesPopup_) {
     ImGui::OpenPopup("Third-Party Licenses");
@@ -62,6 +80,34 @@ void DialogPresenter::render(
     ImGui::SameLine();
     if (ImGui::Button("Cancel")) {
       openFileError_.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+
+  if (ImGui::BeginPopupModal("Save SVG", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Save SVG");
+    ImGui::Separator();
+    ImGui::SetNextItemWidth(520.0f);
+    const bool submitted =
+        ImGui::InputText("Path", saveFilePathBuffer_.data(), saveFilePathBuffer_.size(),
+                         ImGuiInputTextFlags_EnterReturnsTrue);
+    if (!saveFileError_.empty()) {
+      ImGui::TextColored(ImVec4(0.92f, 0.42f, 0.38f, 1.0f), "%s", saveFileError_.c_str());
+    }
+
+    if (submitted || ImGui::Button("Save")) {
+      std::string error;
+      if (trySaveFile(std::string_view(saveFilePathBuffer_.data()), &error)) {
+        saveFileError_.clear();
+        ImGui::CloseCurrentPopup();
+      } else {
+        saveFileError_ = std::move(error);
+      }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+      saveFileError_.clear();
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -120,6 +166,14 @@ void DialogPresenter::setOpenFileError(std::string error) {
 
 void DialogPresenter::clearOpenFileError() {
   openFileError_.clear();
+}
+
+void DialogPresenter::setSaveFileError(std::string error) {
+  saveFileError_ = std::move(error);
+}
+
+void DialogPresenter::clearSaveFileError() {
+  saveFileError_.clear();
 }
 
 }  // namespace donner::editor

@@ -35,6 +35,12 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Open...", "Cmd+O")) {
       actions.openFile = true;
     }
+    if (ImGui::MenuItem("Save", "Cmd+S", false, state.canSave)) {
+      actions.saveFile = true;
+    }
+    if (ImGui::MenuItem("Save As...", "Cmd+Shift+S", false, state.canSave)) {
+      actions.saveFileAs = true;
+    }
     ImGui::EndMenu();
   }
 

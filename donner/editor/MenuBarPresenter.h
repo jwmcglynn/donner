@@ -7,6 +7,7 @@ namespace donner::editor {
 
 struct MenuBarState {
   bool sourcePaneFocused = false;
+  bool canSave = false;
   bool canUndo = false;
   bool canRedo = false;
 };
@@ -14,6 +15,8 @@ struct MenuBarState {
 struct MenuBarActions {
   bool openAbout = false;
   bool openFile = false;
+  bool saveFile = false;
+  bool saveFileAs = false;
   bool quit = false;
   bool undo = false;
   bool redo = false;

@@ -247,6 +247,13 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "document_save",
+    srcs = ["DocumentSave.cc"],
+    hdrs = ["DocumentSave.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "document_sync_controller",
     srcs = ["DocumentSyncController.cc"],
     hdrs = ["DocumentSyncController.h"],
@@ -411,6 +418,7 @@ donner_cc_library(
     hdrs = ["EditorShell.h"],
     deps = [
         ":dialog_presenter",
+        ":document_save",
         ":document_sync_controller",
         ":drag_coalesce",
         ":editor_app",

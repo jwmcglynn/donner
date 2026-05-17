@@ -627,6 +627,53 @@ TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand
   EXPECT_EQ(*fill, RcString("blue"));
 }
 
+TEST(EditorSyncTest, StructuredSourceEditingIsDefaultForNewEditorApps) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";
+  constexpr std::string_view kEditedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="blue"/></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.structuredEditingEnabled());
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  std::string previousSourceText(kSvg);
+  std::optional<std::string> lastWritebackSourceText;
+
+  const auto dispatch =
+      DispatchSourceTextChange(app, kEditedSvg, &previousSourceText, &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), kEditedSvg);
+}
+
+TEST(EditorSyncTest, StructuredSourceEditingRuntimeOptOutUsesDocumentReplace) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";
+  constexpr std::string_view kEditedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="blue"/></svg>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(false);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  std::string previousSourceText(kSvg);
+  std::optional<std::string> lastWritebackSourceText;
+
+  const auto dispatch =
+      DispatchSourceTextChange(app, kEditedSvg, &previousSourceText, &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_FALSE(app.document().queue().empty());
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.document().lastFlushResult().replacedDocument);
+  EXPECT_EQ(app.document().document().source(), kEditedSvg);
+}
+
 TEST(EditorSyncTest, StructuredMalformedOpeningTagEditDoesNotQueueReplaceDocument) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";

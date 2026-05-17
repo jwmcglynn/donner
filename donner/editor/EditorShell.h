@@ -77,6 +77,10 @@ public:
 
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
+  bool trySavePath(std::string_view path, std::string* error);
+  void requestSave();
+  void requestSaveAs(std::string error = std::string());
+  bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
   void handleGlobalShortcuts();
   void renderSourcePane(float paneOriginY, float paneHeight, ImFont* codeFont);

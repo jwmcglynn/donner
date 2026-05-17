@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "GLFW/glfw3.h"
+#include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SourceSelection.h"
@@ -37,6 +38,7 @@ constexpr float kMinInspectorPaneHeight = 96.0f;
 constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
+constexpr int kMaxSaveSyncFlushPasses = 4;
 
 std::optional<std::string> LoadFile(const std::string& filename) {
   std::ifstream file(filename, std::ios::binary);
@@ -104,7 +106,6 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
       static_cast<float>(14.0 * displayScale), &fontCfg);
 
-  app_.setStructuredEditingEnabled(true);
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
@@ -217,7 +218,81 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   textures_.clearOverlay();
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   dialogPresenter_.clearOpenFileError();
+  dialogPresenter_.clearSaveFileError();
   return true;
+}
+
+bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
+  documentSyncController_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/1.0f);
+
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    *error = "Cannot save while the renderer is applying pending edits.";
+    return false;
+  }
+
+  for (int pass = 0; pass < kMaxSaveSyncFlushPasses; ++pass) {
+    if (!app_.flushFrame()) {
+      break;
+    }
+    renderCoordinator_.refreshSelectionBoundsCache(app_);
+    documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
+    documentSyncController_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/1.0f);
+  }
+
+  if (!app_.document().queue().empty()) {
+    *error = "Cannot save while document edits are still pending.";
+    return false;
+  }
+
+  return true;
+}
+
+bool EditorShell::trySavePath(std::string_view path, std::string* error) {
+  if (path.empty()) {
+    *error = "Choose a file path.";
+    return false;
+  }
+  if (!app_.hasDocument()) {
+    *error = "No SVG document is loaded.";
+    return false;
+  }
+  if (!synchronizeSourceBeforeSave(error)) {
+    return false;
+  }
+  if (!app_.document().document().hasSourceStore()) {
+    *error = "The current document has no XML source store.";
+    return false;
+  }
+
+  const DocumentSaveResult result = SaveSourceToPath(std::filesystem::path(std::string(path)),
+                                                     app_.document().document().source());
+  if (!result.ok()) {
+    *error = result.message;
+    return false;
+  }
+
+  app_.setCurrentFilePath(std::string(path));
+  app_.setCleanSourceText(textEditor_.getText());
+  documentSyncController_.resetForLoadedDocument(textEditor_.getText());
+  dialogPresenter_.clearSaveFileError();
+  updateWindowTitle();
+  return true;
+}
+
+void EditorShell::requestSaveAs(std::string error) {
+  dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
+}
+
+void EditorShell::requestSave() {
+  if (!app_.currentFilePath().has_value()) {
+    requestSaveAs();
+    return;
+  }
+
+  std::string error;
+  if (!trySavePath(*app_.currentFilePath(), &error)) {
+    requestSaveAs(std::move(error));
+  }
 }
 
 void EditorShell::updateWindowTitle() {
@@ -250,6 +325,14 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_Q, /*repeat=*/false)) {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
+  }
+
+  if (!anyPopupOpen && cmd && ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false)) {
+    if (shift) {
+      requestSaveAs();
+    } else {
+      requestSave();
+    }
   }
 
   if (!sourcePaneFocused) {
@@ -810,6 +893,7 @@ void EditorShell::runFrame() {
 
   MenuBarState menuState{
       .sourcePaneFocused = textEditor_.isFocused(),
+      .canSave = app_.hasDocument(),
       .canUndo = app_.canUndo(),
       .canRedo = app_.undoTimeline().entryCount() > 0,
   };
@@ -819,6 +903,12 @@ void EditorShell::runFrame() {
   }
   if (menuActions.openFile) {
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+  if (menuActions.saveFile) {
+    requestSave();
+  }
+  if (menuActions.saveFileAs) {
+    requestSaveAs();
   }
   if (menuActions.quit) {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
@@ -854,7 +944,8 @@ void EditorShell::runFrame() {
   }
 
   dialogPresenter_.render(
-      [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); });
+      [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
+      [this](std::string_view path, std::string* error) { return trySavePath(path, error); });
 
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;

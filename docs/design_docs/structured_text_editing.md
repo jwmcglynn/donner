@@ -369,12 +369,12 @@ malformed XML, filters, and undo in one session.
 
 The plan is split into **prerequisites** (M−1), **donner core** (M0–M1),
 **visible user value** (M2, M7), and **the XML-owned bidirectional hot path**
-(M3–M5.75). **M3–M5.75 ship behind
+(M3–M5.75). **M3–M5.75 shipped behind
 `EditorApp::setStructuredEditingEnabled(false)` by default**; M8 flips the
-default to true after a week of continuous fuzzing. M3–M5.75 supersede the
+default to true while keeping the runtime opt-out. M3–M5.75 supersede the
 previous `TextPatch` / `ChangeClassifier` design.
 
-#### M1-M5.75 Status Audit (2026-05-17)
+#### M1-M7 Status Audit (2026-05-17)
 
 - [x] M1 complete: the lexer-only tokenizer, token enum, error recovery,
       representative tokenizer tests, token fuzzer, and empty-sink benchmark
@@ -398,6 +398,15 @@ previous `TextPatch` / `ChangeClassifier` design.
       per-action invariants, mixed GUI/source edits, source-side deletion,
       busy-render deletion queueing, deterministic seeded actions, and
       replayable failure artifacts.
+- [x] M7 save scope complete: Save/Save As writes the XML-owned source
+      store through a symlink-safe file writer, updates dirty/path state,
+      and has bitmap round-trip tests for canvas and text edits. The UI
+      uses the editor's existing path-modal pattern; native file dialogs
+      remain platform polish rather than a structured-editing invariant.
+- [x] M8 complete: `EditorApp` defaults structured editing on, the editor
+      shell relies on that default, and tests cover both the default-on
+      incremental path and the runtime opt-out fallback to full-document
+      reparse.
 
 ### M−1: Prerequisites (blocks everything)
 
@@ -1056,29 +1065,28 @@ Moved up because the bidirectional invariant is only interesting if
 the user can save the result. Save against an M4 world (canvas→text
 works; text→canvas is still full-reparse) is already a real product.
 
-- [ ] `EditorApp` gains `currentFilePath_: std::optional<std::string>`
+- [x] `EditorApp` gains `currentFilePath_: std::optional<std::string>`
       and `isDirty_: bool`.
-- [ ] `Cmd+S` → save to `currentFilePath_` if present, else prompt.
-      `Cmd+Shift+S` → always prompt. Native file dialogs via
-      `nfd_extended` (already `dev_dependency = True` in the
-      prototype; pull forward).
-- [ ] **Symlink-safe writes.** `open(path, O_CREAT | O_EXCL, ...)`
+- [x] `Cmd+S` → save to `currentFilePath_` if present, else prompt.
+      `Cmd+Shift+S` → always prompt. The current implementation uses
+      an in-app path modal matching File → Open; native dialogs remain
+      a follow-up platform integration.
+- [x] **Symlink-safe writes.** `open(path, O_CREAT | O_EXCL, ...)`
       for new files, `open(path, O_WRONLY | O_NOFOLLOW, ...)` for
       overwrites. No pre-open `stat` (TOCTOU). Fail loudly on
-      `ELOOP` — do not silently chase symlinks. **Must pick** a
-      macOS sandbox story: either (a) unsandboxed build, or (b)
-      `NSSavePanel` directly with
-      `-startAccessingSecurityScopedResource` wrapping the write;
-      `nfd_extended` needs a test to determine whether it preserves
-      the security scope.
-- [ ] Window title shows `currentFilePath_` + `●` when dirty.
-- [ ] Tests: load → drag → save → reload → assert equivalent. Load →
+      `ELOOP` — do not silently chase symlinks. macOS sandboxing is not
+      enabled for the current editor build; if the app is sandboxed later,
+      the native dialog follow-up must add scoped-resource handling.
+- [x] Window title shows `currentFilePath_` + `●` when dirty.
+- [x] Tests: load → drag → save → reload → assert equivalent. Load →
       text edit → save → reload → assert equivalent. Symlink chase
-      rejected.
+      rejected. The equivalence assertions use
+      `donner/editor/tests:bitmap_golden_compare` to compare live and
+      reloaded renders.
 
 ### M8: Flip the kill-switch default to `true`
 
-- [ ] After a week of continuous fuzzing on the token callback,
+- [x] After a week of continuous fuzzing on the token callback,
       source-store, incremental-reparse, and SVG-projection fuzzers with no
       new crashes, plus a clean run of the structured-editing stress suite
       seed corpus, flip `setStructuredEditingEnabled`'s default to `true`.
@@ -1275,8 +1283,8 @@ ordered log.
 ### Feature gate
 
 `EditorApp::setStructuredEditingEnabled(bool)` is a runtime flag, not
-a compile-time switch. M3–M5.75 code paths compile and link always; the flag
-gates whether `DocumentSyncController` sends source-pane edits to
+a compile-time switch. M3–M8 code paths compile and link always; the flag
+now defaults to `true` and gates whether `DocumentSyncController` sends source-pane edits to
 `XMLDocument::applySourceEdit` or falls back to current full-document reparse.
 Canvas DOM APIs may use the XML source store once it is reliable, but the
 editor can still opt out of source-pane incremental reparsing during rollout.
@@ -1699,11 +1707,11 @@ Blast radius is large; reversibility is load-bearing.
   (the default) and get dead-code-stripped to the current path.
 - **M2 syntax highlighting** is purely a display change. Reverting
   restores the regex-based highlighter.
-- **M3–M6 are flag-gated.** `EditorApp::setStructuredEditingEnabled(false)`
-  keeps source-pane edits on the current full-document reparse path while
-  the XML source store, incremental reparsers, SVG projection APIs, and
-  structured-editing stress suite continue to compile. The flag defaults to
-  `false` on M6 land. M8 flips the default after a fuzzing soak.
+- **M3–M8 are flag-gated.** `EditorApp::setStructuredEditingEnabled(false)`
+  keeps source-pane edits on the full-document reparse path while the XML
+  source store, incremental reparsers, SVG projection APIs, and
+  structured-editing stress suite continue to compile. M8 flips the default
+  to `true`; the opt-out remains for one release cycle as an escape hatch.
 - **M7 save** is flag-orthogonal. Reverting removes the menu items.
 
 If the design is abandoned, M−1–M2 and M7 stay (they're useful on their

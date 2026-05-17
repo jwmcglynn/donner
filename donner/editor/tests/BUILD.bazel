@@ -68,6 +68,23 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "document_save_tests",
+    srcs = ["DocumentSave_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base",
+        "//donner/editor:document_save",
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/editor:text_editor",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "document_sync_controller_tests",
     srcs = ["DocumentSyncController_tests.cc"],
     deps = [
