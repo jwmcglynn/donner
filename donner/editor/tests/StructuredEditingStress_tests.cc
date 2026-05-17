@@ -7,6 +7,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Transform.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
@@ -43,6 +44,20 @@ Coordinates CoordinatesForOffset(std::string_view text, std::size_t offset) {
   return result;
 }
 
+std::string SourceSlice(std::string_view source, const SourceRange& range) {
+  if (!range.start.offset.has_value() || !range.end.offset.has_value()) {
+    return {};
+  }
+
+  const std::size_t start = range.start.offset.value();
+  const std::size_t end = range.end.offset.value();
+  if (start > end || end > source.size()) {
+    return {};
+  }
+
+  return std::string(source.substr(start, end - start));
+}
+
 svg::RendererBitmap RenderReference(std::string_view source, const Vector2i& canvasSize) {
   EditorApp referenceApp;
   EXPECT_TRUE(referenceApp.loadFromString(source));
@@ -66,6 +81,7 @@ protected:
     ASSERT_TRUE(app_.loadFromString(kStructuredStressSvg));
     app_.document().document().setCanvasSize(canvasSize_.x, canvasSize_.y);
     app_.setCleanSourceText(kStructuredStressSvg);
+    expectedDocumentGeneration_ = app_.document().documentGeneration();
 
     textEditor_.setText(kStructuredStressSvg);
     controller_ = std::make_optional<DocumentSyncController>(std::string(kStructuredStressSvg));
@@ -89,6 +105,9 @@ protected:
     EXPECT_EQ(textEditor_.getText(), app_.document().document().source()) << phase;
     EXPECT_FALSE(textEditor_.isTextChanged()) << phase;
     EXPECT_TRUE(app_.document().queue().empty()) << phase;
+    EXPECT_EQ(app_.document().documentGeneration(), expectedDocumentGeneration_)
+        << phase << ": localized structured edit replaced the SVG document";
+    ExpectLiveSourceLocations(phase);
 
     svg::Renderer liveRenderer;
     liveRenderer.draw(app_.document().document());
@@ -96,6 +115,61 @@ protected:
     svg::RendererBitmap referenceBitmap =
         RenderReference(app_.document().document().source(), canvasSize_);
     tests::CompareBitmapToBitmap(liveBitmap, referenceBitmap, phase);
+  }
+
+  void ExpectLiveSourceLocations(std::string_view phase) {
+    ExpectElementSourceLocations(phase, "#plain", "plain");
+    ExpectElementSourceLocations(phase, "#filtered", "filtered");
+    ExpectElementSourceLocations(phase, "#after", "after");
+  }
+
+  void ExpectElementSourceLocations(std::string_view phase, std::string_view selector,
+                                    std::string_view id) {
+    std::optional<svg::SVGElement> element = app_.document().document().querySelector(selector);
+    if (!element.has_value()) {
+      return;
+    }
+
+    const std::string source(app_.document().document().source());
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element->entityHandle());
+    ASSERT_TRUE(xmlNode.has_value()) << phase << ": " << id << " is not backed by XML";
+
+    std::optional<SourceRange> nodeLocation = xmlNode->getNodeLocation();
+    ASSERT_TRUE(nodeLocation.has_value()) << phase << ": " << id << " has no node source range";
+    const std::string nodeSource = SourceSlice(source, *nodeLocation);
+    ASSERT_FALSE(nodeSource.empty()) << phase << ": " << id << " node range resolved empty";
+    EXPECT_NE(nodeSource.find(std::string("id=\"") + std::string(id) + "\""), std::string::npos)
+        << phase << ": " << id << " node source range points at wrong bytes: " << nodeSource;
+
+    ExpectAttributeSourceLocation(phase, *xmlNode, *element, "id");
+    ExpectAttributeSourceLocation(phase, *xmlNode, *element, "fill");
+    ExpectAttributeSourceLocation(phase, *xmlNode, *element, "filter");
+    ExpectAttributeSourceLocation(phase, *xmlNode, *element, "transform");
+  }
+
+  void ExpectAttributeSourceLocation(std::string_view phase, const xml::XMLNode& xmlNode,
+                                     const svg::SVGElement& element, std::string_view attrName) {
+    if (!element.hasAttribute(attrName)) {
+      return;
+    }
+
+    const std::string source(app_.document().document().source());
+    std::optional<SourceRange> attributeLocation =
+        xmlNode.getAttributeLocation(source, xml::XMLQualifiedNameRef(attrName));
+    ASSERT_TRUE(attributeLocation.has_value())
+        << phase << ": missing source range for " << element.id() << " @" << attrName;
+
+    const std::string attributeSource = SourceSlice(source, *attributeLocation);
+    ASSERT_FALSE(attributeSource.empty())
+        << phase << ": empty source range for " << element.id() << " @" << attrName;
+    EXPECT_NE(attributeSource.find(attrName), std::string::npos)
+        << phase << ": attribute range points at wrong name: " << attributeSource;
+
+    std::optional<RcString> value = element.getAttribute(attrName);
+    ASSERT_TRUE(value.has_value())
+        << phase << ": missing live value for " << element.id() << " @" << attrName;
+    EXPECT_NE(attributeSource.find(std::string(*value)), std::string::npos)
+        << phase << ": attribute range points at stale value: " << attributeSource;
   }
 
   void ClickDocumentPoint(std::string_view phase, const Vector2d& documentPoint,
@@ -166,6 +240,8 @@ protected:
     }
 
     ASSERT_TRUE(app_.flushFrame()) << phase;
+    EXPECT_EQ(app_.document().lastFlushResult().sourceDeltas.size(), selected.size())
+        << phase << ": delete did not emit one XML source delta per removed element";
     controller_->applyPendingWritebacks(app_, selectTool_, textEditor_);
     ExpectInSync(phase);
   }
@@ -177,6 +253,7 @@ protected:
   SelectTool selectTool_;
   ViewportState viewport_;
   Vector2i canvasSize_ = Vector2i(180, 80);
+  std::uint64_t expectedDocumentGeneration_ = 0;
 };
 
 TEST_F(StructuredEditingStressTest, MixedGuiTextZoomDeleteAndFilteredMoveStayInSync) {

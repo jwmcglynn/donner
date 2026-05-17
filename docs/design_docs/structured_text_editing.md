@@ -905,6 +905,10 @@ same scenarios should also run through headless `.donner-repro` playback.
       - the async renderer reaches idle within the timeout and the next click
         can still select the expected element;
       - settled bitmaps match a reference render from the current XML source.
+      Current coverage asserts text/source equality, command queue emptiness,
+      stable document generation, live node/attribute source-range
+      reconstruction for touched elements, delete `XMLSourceDelta`s, and
+      live render equality against reload after every scripted action.
 - [ ] **Canvas → source scenarios.**
       - Drag an unfiltered rect through zoom and pan; assert `transform=`
         changes in source, anchors move, and final render matches reload.
