@@ -892,7 +892,8 @@ same scenarios should also run through headless `.donner-repro` playback.
       `pan(delta)`, `typeSource(offset, text)`, `replaceSource(range, text)`,
       `deleteSelection()`, and `settleFrame()`. Initial target landed with
       `EditorApp`, `SelectTool`, `ViewportState`, `TextEditor`, and
-      `DocumentSyncController`; async-renderer and artifact capture remain.
+      `DocumentSyncController`; `AsyncRenderer` is now wired into every
+      invariant checkpoint. Artifact capture remains.
 - [ ] **Assert after every action, not only at the end.** Required invariants:
       - `TextEditor::getText()` equals `XMLDocument::source()`;
       - all touched node/attribute source anchors resolve inside the current
@@ -908,7 +909,8 @@ same scenarios should also run through headless `.donner-repro` playback.
       Current coverage asserts text/source equality, command queue emptiness,
       stable document generation, live node/attribute source-range
       reconstruction for touched elements, delete `XMLSourceDelta`s, and
-      live render equality against reload after every scripted action.
+      live plus async render equality against reload after every scripted
+      action.
 - [ ] **Canvas → source scenarios.**
       - Drag an unfiltered rect through zoom and pan; assert `transform=`
         changes in source, anchors move, and final render matches reload.

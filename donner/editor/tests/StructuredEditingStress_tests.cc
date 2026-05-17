@@ -1,13 +1,16 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include "donner/base/Box.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Transform.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
@@ -115,6 +118,10 @@ protected:
     svg::RendererBitmap referenceBitmap =
         RenderReference(app_.document().document().source(), canvasSize_);
     tests::CompareBitmapToBitmap(liveBitmap, referenceBitmap, phase);
+
+    RenderResult asyncResult = RenderAsyncPhase(phase);
+    EXPECT_EQ(asyncResult.stage, RenderResult::Stage::Final) << phase;
+    tests::CompareBitmapToBitmap(asyncResult.bitmap, referenceBitmap, phase);
   }
 
   void ExpectLiveSourceLocations(std::string_view phase) {
@@ -174,6 +181,7 @@ protected:
 
   void ClickDocumentPoint(std::string_view phase, const Vector2d& documentPoint,
                           std::string_view expectedId) {
+    ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": click while async renderer is busy";
     selectTool_.onMouseDown(app_, documentPoint, MouseModifiers{});
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
     EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase;
@@ -183,6 +191,7 @@ protected:
 
   void DragDocumentPoints(std::string_view phase, const Vector2d& startDocumentPoint,
                           const Vector2d& endDocumentPoint, std::string_view expectedId) {
+    ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": drag while async renderer is busy";
     selectTool_.onMouseDown(app_, startDocumentPoint, MouseModifiers{});
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
     EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase;
@@ -225,6 +234,7 @@ protected:
   }
 
   void DeleteSelection(std::string_view phase) {
+    ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": delete while async renderer is busy";
     const std::vector<svg::SVGElement> selected = app_.selectedElements();
     ASSERT_FALSE(selected.empty()) << phase;
 
@@ -246,14 +256,61 @@ protected:
     ExpectInSync(phase);
   }
 
+  RenderRequest BuildRenderRequest(std::uint64_t version) {
+    RenderRequest request;
+    request.renderer = &asyncRendererBackend_;
+    request.document = &app_.document().document();
+    request.version = version;
+    request.documentGeneration = app_.document().documentGeneration();
+    request.structuralRemap = app_.document().consumePendingStructuralRemap();
+    request.selection = app_.selectedElement();
+    if (app_.selectedElement().has_value() &&
+        app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
+      request.selectedEntity = app_.selectedElement()->entityHandle().entity();
+    }
+    if (std::optional<SelectTool::ActiveDragPreview> preview = selectTool_.activeDragPreview();
+        preview.has_value()) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = preview->entity,
+          .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      };
+    }
+    return request;
+  }
+
+  RenderResult RenderAsyncPhase(std::string_view phase) {
+    asyncRenderer_.requestRender(BuildRenderRequest(++asyncVersion_));
+
+    std::optional<RenderResult> lastResult;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      std::optional<RenderResult> result = asyncRenderer_.pollResult();
+      if (result.has_value()) {
+        lastResult = std::move(result);
+        if (lastResult->stage == RenderResult::Stage::Final) {
+          EXPECT_FALSE(asyncRenderer_.isBusy()) << phase << ": async renderer stayed busy";
+          return std::move(*lastResult);
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    ADD_FAILURE() << phase << ": async render timed out";
+    EXPECT_FALSE(asyncRenderer_.isBusy()) << phase << ": async renderer stayed busy after timeout";
+    return lastResult.value_or(RenderResult());
+  }
+
   ImGuiContext* imguiContext_ = nullptr;
   EditorApp app_;
   TextEditor textEditor_;
   std::optional<DocumentSyncController> controller_;
   SelectTool selectTool_;
+  AsyncRenderer asyncRenderer_;
+  svg::Renderer asyncRendererBackend_;
   ViewportState viewport_;
   Vector2i canvasSize_ = Vector2i(180, 80);
   std::uint64_t expectedDocumentGeneration_ = 0;
+  std::uint64_t asyncVersion_ = 0;
 };
 
 TEST_F(StructuredEditingStressTest, MixedGuiTextZoomDeleteAndFilteredMoveStayInSync) {

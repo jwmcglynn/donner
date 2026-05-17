@@ -218,6 +218,7 @@ donner_cc_test(
     srcs = ["StructuredEditingStress_tests.cc"],
     deps = [
         ":bitmap_golden_compare",
+        "//donner/editor:async_renderer",
         "//donner/editor:attribute_writeback",
         "//donner/editor:command_queue",
         "//donner/editor:document_sync_controller",
