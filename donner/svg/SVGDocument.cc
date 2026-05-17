@@ -253,6 +253,14 @@ void MarkSubtreeReplaced(EntityHandle handle) {
   });
 }
 
+void MarkChildRemoved(EntityHandle parentHandle) {
+  components::RenderTreeState& renderState = GetRenderTreeState(parentHandle);
+  renderState.needsFullRebuild = true;
+
+  parentHandle.get_or_emplace<components::DirtyFlagsComponent>().mark(
+      components::DirtyFlagsComponent::All);
+}
+
 void ProjectTextContents(EntityHandle handle, const xml::XMLNode& node) {
   if (!handle.all_of<components::TextComponent>()) {
     return;
@@ -428,6 +436,74 @@ xml::ApplySourceEditResult SVGDocument::applySourceEdit(const xml::XMLEditIntent
   }
 
   return result;
+}
+
+xml::ApplySourceEditResult SVGDocument::setElementAttribute(const SVGElement& element,
+                                                            const xml::XMLQualifiedNameRef& name,
+                                                            std::string_view value) {
+  if (hasSourceStore()) {
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
+    if (xmlNode.has_value()) {
+      xml::ApplySourceEditResult result = xmlDocument().setAttribute(*xmlNode, name, value);
+      for (const xml::XMLMutation& mutation : result.mutations) {
+        std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
+        if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
+          result.diagnostic = std::move(projectionDiagnostic);
+        }
+      }
+      return result;
+    }
+  }
+
+  xml::ApplySourceEditResult result;
+  SVGElement mutableElement(element.handle_);
+  if (std::optional<ParseDiagnostic> diagnostic =
+          mutableElement.setAttributeFromXMLMutation(name, value)) {
+    result.diagnostic = std::move(diagnostic);
+  }
+  return result;
+}
+
+xml::ApplySourceEditResult SVGDocument::removeElementAttribute(
+    const SVGElement& element, const xml::XMLQualifiedNameRef& name) {
+  if (hasSourceStore()) {
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
+    if (xmlNode.has_value()) {
+      xml::ApplySourceEditResult result = xmlDocument().removeAttribute(*xmlNode, name);
+      for (const xml::XMLMutation& mutation : result.mutations) {
+        std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
+        if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
+          result.diagnostic = std::move(projectionDiagnostic);
+        }
+      }
+      return result;
+    }
+  }
+
+  SVGElement mutableElement(element.handle_);
+  mutableElement.removeAttributeFromXMLMutation(name);
+  return xml::ApplySourceEditResult();
+}
+
+xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element) {
+  const std::optional<SVGElement> parent = element.parentElement();
+
+  if (hasSourceStore()) {
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
+    if (xmlNode.has_value()) {
+      xml::ApplySourceEditResult result = xmlDocument().removeNode(*xmlNode);
+      if (result.applied && parent.has_value()) {
+        MarkChildRemoved(parent->entityHandle());
+      }
+      return result;
+    }
+  }
+
+  if (parent.has_value()) {
+    MarkChildRemoved(parent->entityHandle());
+  }
+  element.handle_.get<donner::components::TreeComponent>().remove(registry());
+  return xml::ApplySourceEditResult();
 }
 
 std::optional<SVGElement> SVGDocument::querySelector(std::string_view str) {

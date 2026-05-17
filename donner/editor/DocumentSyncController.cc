@@ -4,6 +4,7 @@
 #include <iterator>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SourceSync.h"
@@ -57,6 +58,14 @@ std::string CanonicalizeForTextEditor(std::string_view source) {
   return result;
 }
 
+void MarkMirroredDocumentSource(EditorApp& app, std::string_view source,
+                                std::string* previousSourceText,
+                                std::optional<std::string>* lastWritebackSourceText) {
+  previousSourceText->assign(source);
+  *lastWritebackSourceText = *previousSourceText;
+  app.syncDirtyFromSource(source);
+}
+
 bool MirrorDocumentSourceIntoTextEditor(EditorApp& app, TextEditor& textEditor,
                                         std::string* previousSourceText,
                                         std::optional<std::string>* lastWritebackSourceText) {
@@ -76,9 +85,53 @@ bool MirrorDocumentSourceIntoTextEditor(EditorApp& app, TextEditor& textEditor,
       textEditor.resetTextChanged();
     }
   }
-  *previousSourceText = source;
-  *lastWritebackSourceText = source;
-  app.syncDirtyFromSource(source);
+  MarkMirroredDocumentSource(app, source, previousSourceText, lastWritebackSourceText);
+  return true;
+}
+
+bool CanApplySourceDeltasPrecisely(const std::vector<xml::XMLSourceDelta>& sourceDeltas) {
+  if (sourceDeltas.size() <= 1) {
+    return true;
+  }
+
+  return std::ranges::all_of(
+      sourceDeltas, [](const xml::XMLSourceDelta& delta) { return delta.insertedLength == 0; });
+}
+
+bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
+                                        const std::vector<xml::XMLSourceDelta>& sourceDeltas,
+                                        std::string* previousSourceText,
+                                        std::optional<std::string>* lastWritebackSourceText) {
+  if (!app.hasDocument() || !app.document().document().hasSourceStore() || sourceDeltas.empty()) {
+    return false;
+  }
+
+  if (!CanApplySourceDeltasPrecisely(sourceDeltas)) {
+    return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                              lastWritebackSourceText);
+  }
+
+  const std::string source = CanonicalizeForTextEditor(app.document().document().source());
+  for (const xml::XMLSourceDelta& delta : sourceDeltas) {
+    const std::string currentText = textEditor.getText();
+    if (delta.offset > currentText.size() ||
+        delta.removedLength > currentText.size() - delta.offset || delta.offset > source.size() ||
+        delta.insertedLength > source.size() - delta.offset) {
+      return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                                lastWritebackSourceText);
+    }
+
+    textEditor.applyExternalSourceEdit(
+        delta.offset, delta.removedLength,
+        std::string_view(source).substr(delta.offset, delta.insertedLength));
+  }
+
+  if (textEditor.getText() != source) {
+    return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                              lastWritebackSourceText);
+  }
+
+  MarkMirroredDocumentSource(app, source, previousSourceText, lastWritebackSourceText);
   return true;
 }
 
@@ -189,7 +242,10 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   }
 
   if (!pendingElementRemoveWritebacks_.empty()) {
-    if (MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+    if (ApplyXMLSourceDeltasIntoTextEditor(app, textEditor,
+                                           app.document().lastFlushResult().sourceDeltas,
+                                           &previousSourceText_, &lastWritebackSourceText_) ||
+        MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
                                            &lastWritebackSourceText_)) {
       pendingElementRemoveWritebacks_.clear();
     } else {
@@ -219,6 +275,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
 
   if (app.hasDocument() && app.document().document().hasSourceStore()) {
     svg::SVGDocument& document = app.document().document();
+    bool mirroredSourceDeltas = false;
     for (const auto& writeback : pendingTransformWritebacks_) {
       std::optional<svg::SVGElement> element =
           resolveAttributeWritebackTarget(document, writeback.target);
@@ -226,25 +283,34 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
         continue;
       }
 
+      xml::ApplySourceEditResult result;
       if (writeback.restoreSourceTransformAttributeValue) {
         if (writeback.sourceTransformAttributeValue.has_value()) {
-          element->setAttribute("transform", *writeback.sourceTransformAttributeValue);
+          result = document.setElementAttribute(*element, "transform",
+                                                *writeback.sourceTransformAttributeValue);
         } else {
-          element->removeAttribute("transform");
+          result = document.removeElementAttribute(*element, "transform");
         }
       } else {
         const RcString serialized = toSVGTransformString(writeback.transform);
         if (std::string_view(serialized).empty()) {
-          element->removeAttribute("transform");
+          result = document.removeElementAttribute(*element, "transform");
         } else {
-          element->setAttribute("transform", serialized);
+          result = document.setElementAttribute(*element, "transform", serialized);
         }
       }
+
+      mirroredSourceDeltas =
+          ApplyXMLSourceDeltasIntoTextEditor(app, textEditor, result.sourceDeltas,
+                                             &previousSourceText_, &lastWritebackSourceText_) ||
+          mirroredSourceDeltas;
     }
 
     pendingTransformWritebacks_.clear();
-    (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
-                                             &lastWritebackSourceText_);
+    if (!mirroredSourceDeltas) {
+      (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+                                               &lastWritebackSourceText_);
+    }
     return;
   }
 

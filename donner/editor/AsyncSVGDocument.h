@@ -17,6 +17,7 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -37,6 +38,7 @@ public:
     bool appliedCommands = false;
     bool replacedDocument = false;
     bool preserveUndoOnReparse = false;
+    std::vector<xml::XMLSourceDelta> sourceDeltas;
   };
 
   AsyncSVGDocument();

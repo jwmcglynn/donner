@@ -865,8 +865,10 @@ the target architecture.
       `XMLSourceDelta`s from the XML document to `TextEditor` with change
       suppression so source-pane echo does not become a user edit. This is a
       view update, not a separate source-of-truth splice. The current
-      implementation mirrors the XML-owned full source string with echo
-      suppression; precise delta application remains.
+      implementation applies single XML source deltas directly for
+      source-backed transform and delete writebacks, records command-flush
+      delete deltas in `AsyncSVGDocument`, and keeps full-source mirroring as
+      the fallback for unsupported delta batches.
 - [ ] Tests:
       - drag inserts/replaces `transform` via XML DOM and source store;
       - delete removes the XML node span and selection remaps/clears;

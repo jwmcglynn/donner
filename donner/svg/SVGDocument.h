@@ -123,6 +123,37 @@ public:
    */
   xml::ApplySourceEditResult applySourceEdit(const xml::XMLEditIntent& intent);
 
+  /**
+   * Set an element attribute and return any XML-owned source edit result.
+   *
+   * Source-backed documents mutate through the underlying XML document, then project emitted XML
+   * mutations back into SVG semantics. Programmatic documents without source text still mutate the
+   * SVG element and return an unapplied result.
+   *
+   * @param element Element whose attribute should be set.
+   * @param name Attribute name to set.
+   * @param value Raw unescaped attribute value.
+   */
+  xml::ApplySourceEditResult setElementAttribute(const SVGElement& element,
+                                                 const xml::XMLQualifiedNameRef& name,
+                                                 std::string_view value);
+
+  /**
+   * Remove an element attribute and return any XML-owned source edit result.
+   *
+   * @param element Element whose attribute should be removed.
+   * @param name Attribute name to remove.
+   */
+  xml::ApplySourceEditResult removeElementAttribute(const SVGElement& element,
+                                                    const xml::XMLQualifiedNameRef& name);
+
+  /**
+   * Remove an element from the document tree and return any XML-owned source edit result.
+   *
+   * @param element Element to remove.
+   */
+  xml::ApplySourceEditResult removeElement(const SVGElement& element);
+
   /// Get the root ECS Entity of the document, for advanced use.
   EntityHandle rootEntityHandle() const;
 

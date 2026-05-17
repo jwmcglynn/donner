@@ -2,7 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorCommand.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextEditor.h"
@@ -109,6 +111,30 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackMirrorsWithoutTextCh
   EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
   EXPECT_FALSE(textEditor_.isTextChanged());
   EXPECT_TRUE(app_.document().queue().empty());
+}
+
+TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaWithoutTextEcho) {
+  SelectTool tool;
+
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.isTextChanged());
+
+  std::optional<svg::SVGElement> rect = app_.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(*rect);
+  ASSERT_TRUE(target.has_value());
+
+  app_.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{.target = *target});
+  app_.applyMutation(EditorCommand::DeleteElementCommand(*rect));
+  ASSERT_TRUE(app_.flushFrame());
+  ASSERT_EQ(app_.document().lastFlushResult().sourceDeltas.size(), 1u);
+
+  controller_.applyPendingWritebacks(app_, tool, textEditor_);
+
+  EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
+  EXPECT_FALSE(textEditor_.isTextChanged());
+  EXPECT_TRUE(app_.document().queue().empty());
+  EXPECT_FALSE(app_.document().document().querySelector("#r1").has_value());
 }
 
 TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTrailingNewline) {

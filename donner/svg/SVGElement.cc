@@ -297,19 +297,7 @@ SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
 
 void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value) {
   SVGDocument document = ownerDocument();
-  if (document.hasSourceStore()) {
-    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(handle_);
-    if (xmlNode.has_value()) {
-      xml::ApplySourceEditResult result =
-          document.xmlDocument().setAttribute(*xmlNode, name, value);
-      for (const xml::XMLMutation& mutation : result.mutations) {
-        (void)document.applyXMLMutation(mutation);
-      }
-      return;
-    }
-  }
-
-  (void)setAttributeFromXMLMutation(name, value);
+  (void)document.setElementAttribute(*this, name, value);
 }
 
 std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
@@ -355,18 +343,7 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
 
 void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {
   SVGDocument document = ownerDocument();
-  if (document.hasSourceStore()) {
-    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(handle_);
-    if (xmlNode.has_value()) {
-      xml::ApplySourceEditResult result = document.xmlDocument().removeAttribute(*xmlNode, name);
-      for (const xml::XMLMutation& mutation : result.mutations) {
-        (void)document.applyXMLMutation(mutation);
-      }
-      return;
-    }
-  }
-
-  removeAttributeFromXMLMutation(name);
+  (void)document.removeElementAttribute(*this, name);
 }
 
 void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name) {
@@ -478,29 +455,8 @@ void SVGElement::removeChild(const SVGElement& child) {
 }
 
 void SVGElement::remove() {
-  // Mark parent dirty before removing from tree (after remove, parent link is gone).
-  std::optional<SVGElement> parent = parentElement();
-
   SVGDocument document = ownerDocument();
-  if (document.hasSourceStore()) {
-    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(handle_);
-    if (xmlNode.has_value()) {
-      xml::ApplySourceEditResult result = document.xmlDocument().removeNode(*xmlNode);
-      if (result.applied) {
-        if (parent.has_value()) {
-          markNeedsFullRebuild(parent->handle_);
-          markDirty(parent->handle_, components::DirtyFlagsComponent::All);
-        }
-      }
-      return;
-    }
-  }
-
-  if (parent.has_value()) {
-    markNeedsFullRebuild(parent->handle_);
-    markDirty(parent->handle_, components::DirtyFlagsComponent::All);
-  }
-  handle_.get<donner::components::TreeComponent>().remove(registry());
+  (void)document.removeElement(*this);
 }
 
 std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {

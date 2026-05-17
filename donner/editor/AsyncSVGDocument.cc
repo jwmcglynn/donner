@@ -64,15 +64,16 @@ bool AsyncSVGDocument::flushFrame() {
     return false;
   }
 
-  for (const auto& cmd : queueFlush.effectiveCommands) {
-    applyOne(cmd);
-  }
-
   lastFlushResult_ = FlushResult{
       .appliedCommands = true,
       .replacedDocument = queueFlush.hadReplaceDocument,
       .preserveUndoOnReparse = queueFlush.preserveUndoOnReparse,
   };
+
+  for (const auto& cmd : queueFlush.effectiveCommands) {
+    applyOne(cmd);
+  }
+
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;
 }
@@ -177,7 +178,10 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // AttributeParser::ParseAndSetAttribute call, but for M3 the
       // public setAttribute is correct and sufficient.
       svg::SVGElement element = *command.element;
-      element.setAttribute(xml::XMLQualifiedNameRef(command.attributeName), command.attributeValue);
+      xml::ApplySourceEditResult result = document_->setElementAttribute(
+          element, xml::XMLQualifiedNameRef(command.attributeName), command.attributeValue);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
       break;
     }
 
@@ -192,7 +196,9 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // walk stops at the detach point. We copy to a local because
       // `remove()` is non-const and `command` is `const&`.
       svg::SVGElement element = *command.element;
-      element.remove();
+      xml::ApplySourceEditResult result = document_->removeElement(element);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
       break;
     }
   }
