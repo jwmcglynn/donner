@@ -407,6 +407,16 @@ SourceRange MakeNodeDiagnosticRange(const XMLNode& node) {
       SourceRange{FileOffset::EndOfString(), FileOffset::EndOfString()});
 }
 
+void ClearSourceLocationsRecursive(XMLNode node) {
+  for (std::optional<XMLNode> child = node.firstChild(); child.has_value();) {
+    XMLNode currentChild = *child;
+    child = currentChild.nextSibling();
+    ClearSourceLocationsRecursive(currentChild);
+  }
+
+  node.clearSourceLocation();
+}
+
 XMLQualifiedName MakeOwnedName(const XMLQualifiedNameRef& name) {
   return XMLQualifiedName(RcString(name.namespacePrefix), RcString(name.name));
 }
@@ -1215,6 +1225,7 @@ ApplySourceEditResult XMLDocument::removeNode(XMLNode node) {
   result.applied = true;
   result.sourceDeltas.push_back(*delta);
 
+  ClearSourceLocationsRecursive(node);
   node.remove();
   result.mutations.push_back(XMLMutation{
       .kind = XMLMutation::Kind::NodeRemoved,

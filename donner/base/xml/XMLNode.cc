@@ -370,6 +370,20 @@ void XMLNode::setSourceEndOffset(FileOffset offset) {
   UpdateSourceAnchorSpan(handle_, sourceOffset);
 }
 
+void XMLNode::clearSourceLocation() {
+  auto* sourceOffset = handle_.try_get<SourceOffsetComponent>();
+  if (sourceOffset == nullptr) {
+    return;
+  }
+
+  XMLSourceStore* sourceStore = GetSourceStore(handle_);
+  if (sourceStore != nullptr && sourceOffset->anchorSpan.has_value()) {
+    InvalidateAnchors(*sourceStore, *sourceOffset->anchorSpan);
+  }
+
+  handle_.remove<SourceOffsetComponent>();
+}
+
 RcString XMLNode::serializeToString(int indentLevel) const {
   std::string indent(static_cast<size_t>(indentLevel) * 2, ' ');
   std::string out;

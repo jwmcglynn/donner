@@ -427,6 +427,14 @@ public:
   void setSourceEndOffset(FileOffset offset);
 
   /**
+   * Clear this node's source location and invalidate any backing source anchors.
+   *
+   * This is used when a source-backed node is detached from the document so stale callers cannot
+   * resolve the removed node to a collapsed range at the deletion point.
+   */
+  void clearSourceLocation();
+
+  /**
    * Serialize this node to an XML string.
    *
    * Produces a normalized XML representation suitable for programmatically-created nodes
