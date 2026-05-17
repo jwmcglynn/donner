@@ -740,7 +740,7 @@ the target architecture.
       - [x] insertion at a span boundary respects anchor bias;
       - [x] repeated edits before unidentified siblings do not retarget a later
         sibling;
-      - [ ] removed nodes invalidate their anchors;
+      - [x] removed nodes invalidate their anchors;
       - [x] resolved ranges reconstruct the current `SourceStore` bytes.
 
 ### M4: XML Incremental Reparsing
@@ -794,7 +794,7 @@ the target architecture.
       - [x] deleting a quote creates a scoped dirty region and keeps tree identity;
       - [x] restoring the quote clears the diagnostic without full document parse;
       - [x] editing inside text content updates only that text node;
-      - structural edit inside one group reparses only that group.
+      - [x] structural edit inside one group reparses only that group.
 
 ### M5: XML → SVG Semantic Projection
 
@@ -814,6 +814,8 @@ the target architecture.
       implementation wires `SVGDocument::applySourceEdit` through the XML
       source-edit layer and projects `AttributeSet` / `AttributeRemoved`
       mutations through `SVGElement::setAttribute` / `removeAttribute`.
+      `SubtreeReplaced` projection now initializes simple shape, text/tspan,
+      and style elements from the updated XML subtree.
 - [ ] **Invalid SVG values do not roll back XML source.** If XML is
       well-formed but an SVG value is temporarily invalid (`fill="re"`),
       the XML attribute value is current, the SVG semantic component keeps the
@@ -831,6 +833,10 @@ the target architecture.
       - [x] delete `values=` from `feColorMatrix` clears the vector component;
       - [x] edit simple text content updates `TextComponent` and dirty flags
         without `ParseSVG`;
+      - [x] insert `<style>` in a local subtree and project its stylesheet into
+        SVG semantics without `ParseSVG`;
+      - [x] edit `<style>` text content and update computed styles without
+        `ParseSVG`;
       - [x] invalid value records a diagnostic and preserves the last valid
         semantic value;
       - [x] recovered valid value updates semantics and clears the diagnostic.
@@ -853,7 +859,8 @@ the target architecture.
       removes the node span from `SourceStore`, invalidates anchors for the
       subtree, detaches the DOM node, and emits one `NodeRemoved` mutation.
       `XMLDocument::removeNode` and source-backed `SVGElement::remove` cover
-      the first version; explicit subtree anchor invalidation still remains.
+      the first version, including recursive source-location invalidation for
+      removed subtrees.
 - [ ] **Editor mirrors XML source deltas.** `DocumentSyncController` applies
       `XMLSourceDelta`s from the XML document to `TextEditor` with change
       suppression so source-pane echo does not become a user edit. This is a
