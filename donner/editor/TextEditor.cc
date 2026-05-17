@@ -2063,6 +2063,11 @@ void TextEditor::setText(std::string_view text, bool preserveScroll) {
   core_.setText(text, preserveScroll);
 }
 
+void TextEditor::applyExternalSourceEdit(std::size_t offset, std::size_t removedLength,
+                                         std::string_view replacement) {
+  core_.applyExternalSourceEdit(offset, removedLength, replacement);
+}
+
 void TextEditor::enterCharacter(ImWchar character, bool shift) {
   core_.enterCharacter(static_cast<char32_t>(character), shift);
 }

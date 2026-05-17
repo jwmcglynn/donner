@@ -1599,6 +1599,33 @@ void TextEditorCore::setText(std::string_view text, bool preserveScroll) {
   colorize();
 }
 
+void TextEditorCore::applyExternalSourceEdit(std::size_t offset, std::size_t removedLength,
+                                             std::string_view replacement) {
+  const std::string currentText = text_.getText();
+  UTILS_RELEASE_ASSERT(offset <= currentText.size());
+  UTILS_RELEASE_ASSERT(removedLength <= currentText.size() - offset);
+
+  const Coordinates editStart = text_.getCoordinatesAtByteOffset(offset);
+  const Coordinates editEnd = text_.getCoordinatesAtByteOffset(offset + removedLength);
+  deleteRange(editStart, editEnd);
+
+  Coordinates insertEnd = editStart;
+  int insertedLines = 0;
+  if (!replacement.empty()) {
+    insertedLines = insertTextAt(insertEnd, replacement, /*indent=*/false);
+  }
+
+  colorize(editStart.line - 1, insertedLines + 2);
+  state_.cursorPosition = sanitizeCoordinates(state_.cursorPosition);
+  state_.selectionStart = sanitizeCoordinates(state_.selectionStart);
+  state_.selectionEnd = sanitizeCoordinates(state_.selectionEnd);
+  cursorPositionChanged_ = true;
+
+  textChanged_ = false;
+  changedLines_.clear();
+  pendingSourceEditIntents_.clear();
+}
+
 // ---------------------------------------------------------------------------
 // Tab size
 // ---------------------------------------------------------------------------

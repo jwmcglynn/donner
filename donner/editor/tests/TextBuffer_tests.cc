@@ -174,4 +174,20 @@ TEST(TextBuffer, GetByteOffsetResolvesMultilineCoordinates) {
   EXPECT_EQ(buffer.getByteOffset({3, 0}), buffer.getText().size());
 }
 
+TEST(TextBuffer, GetCoordinatesAtByteOffsetResolvesMultilineBoundaries) {
+  TextBuffer buffer;
+  buffer.setText(
+      "abc\n"
+      "\tde\n"
+      "fg");
+
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(0), Coordinates(0, 0));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(3), Coordinates(0, 3));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(4), Coordinates(1, 0));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(5), Coordinates(1, 2));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(7), Coordinates(1, 4));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(8), Coordinates(2, 0));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(buffer.getText().size()), Coordinates(2, 2));
+}
+
 }  // namespace donner::editor

@@ -1,6 +1,9 @@
 #include "donner/editor/DocumentSyncController.h"
 
+#include <algorithm>
 #include <iterator>
+#include <optional>
+#include <string_view>
 
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SourceSync.h"
@@ -13,6 +16,47 @@ namespace {
 constexpr float kTextChangeDebounceSeconds = 0.15f;
 constexpr int kNoErrorLine = -1;
 
+struct SourceMirrorEdit {
+  std::size_t offset = 0;
+  std::size_t removedLength = 0;
+  std::string_view replacement;
+};
+
+std::optional<SourceMirrorEdit> BuildSingleSourceMirrorEdit(std::string_view oldSource,
+                                                            std::string_view newSource) {
+  if (oldSource == newSource) {
+    return std::nullopt;
+  }
+
+  std::size_t prefixLength = 0;
+  const std::size_t commonLimit = std::min(oldSource.size(), newSource.size());
+  while (prefixLength < commonLimit && oldSource[prefixLength] == newSource[prefixLength]) {
+    ++prefixLength;
+  }
+
+  std::size_t suffixLength = 0;
+  while (suffixLength < oldSource.size() - prefixLength &&
+         suffixLength < newSource.size() - prefixLength &&
+         oldSource[oldSource.size() - suffixLength - 1] ==
+             newSource[newSource.size() - suffixLength - 1]) {
+    ++suffixLength;
+  }
+
+  return SourceMirrorEdit{
+      .offset = prefixLength,
+      .removedLength = oldSource.size() - prefixLength - suffixLength,
+      .replacement = newSource.substr(prefixLength, newSource.size() - prefixLength - suffixLength),
+  };
+}
+
+std::string CanonicalizeForTextEditor(std::string_view source) {
+  std::string result(source);
+  if (!result.empty() && result.back() == '\n') {
+    result.pop_back();
+  }
+  return result;
+}
+
 bool MirrorDocumentSourceIntoTextEditor(EditorApp& app, TextEditor& textEditor,
                                         std::string* previousSourceText,
                                         std::optional<std::string>* lastWritebackSourceText) {
@@ -20,9 +64,17 @@ bool MirrorDocumentSourceIntoTextEditor(EditorApp& app, TextEditor& textEditor,
     return false;
   }
 
-  std::string source(app.document().document().source());
-  if (textEditor.getText() != source) {
-    textEditor.setText(source, /*preserveScroll=*/true);
+  std::string source = CanonicalizeForTextEditor(app.document().document().source());
+  const std::string currentText = textEditor.getText();
+  if (currentText != source) {
+    if (std::optional<SourceMirrorEdit> edit = BuildSingleSourceMirrorEdit(currentText, source)) {
+      textEditor.applyExternalSourceEdit(edit->offset, edit->removedLength, edit->replacement);
+    }
+
+    if (textEditor.getText() != source) {
+      textEditor.setText(source, /*preserveScroll=*/true);
+      textEditor.resetTextChanged();
+    }
   }
   *previousSourceText = source;
   *lastWritebackSourceText = source;

@@ -186,6 +186,21 @@ public:
   /// writeback after a transform drag) so the user's scroll position
   /// isn't yanked out from under them.
   void setText(std::string_view text, bool preserveScroll = false);
+
+  /**
+   * Apply a source-view update that originated outside the text editor.
+   *
+   * This mutates the visible buffer and recolorizes the affected region, but it does not append an
+   * undo record, does not create a pending \ref SourceEditIntent, and leaves \ref isTextChanged
+   * false. Use this for XML-owned canvas writebacks that are being mirrored into the source pane.
+   *
+   * @param offset Byte offset in the current buffer.
+   * @param removedLength Number of bytes to remove at \p offset.
+   * @param replacement Replacement bytes to insert at \p offset.
+   */
+  void applyExternalSourceEdit(std::size_t offset, std::size_t removedLength,
+                               std::string_view replacement);
+
   std::string getText() const;
   std::string getText(const Coordinates& start, const Coordinates& end) const;
 

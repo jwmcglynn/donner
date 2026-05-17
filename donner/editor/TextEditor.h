@@ -246,6 +246,16 @@ public:
    */
   void setText(std::string_view text, bool preserveScroll = false);
 
+  /**
+   * Apply source bytes that changed outside the editor without recording a user edit.
+   *
+   * @param offset Byte offset in the current buffer.
+   * @param removedLength Number of bytes to remove.
+   * @param replacement Replacement bytes to insert.
+   */
+  void applyExternalSourceEdit(std::size_t offset, std::size_t removedLength,
+                               std::string_view replacement);
+
   /// True if the editor needs to be re-rendered.
   bool needsRerender() const { return scrollToTop_; }
 
