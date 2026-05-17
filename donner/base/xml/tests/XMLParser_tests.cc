@@ -676,6 +676,40 @@ TEST_F(XMLParserTests, ApplySourceEditElementSubtreePreservesMatchedChildIdentit
   EXPECT_THAT(updatedRect.getAttribute("id"), testing::Optional(RcString("r")));
 }
 
+TEST_F(XMLParserTests, ApplySourceEditElementSubtreeDeletionInvalidatesRemovedChildLocation) {
+  constexpr std::string_view kXml =
+      R"(<svg><g id="layer"><rect id="r"/><circle id="c"/></g></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode group = document.root().firstChild()->firstChild().value();
+  XMLNode rect = group.firstChild().value();
+  XMLNode circle = rect.nextSibling().value();
+
+  std::optional<SourceRange> rectLocation = rect.getNodeLocation();
+  ASSERT_TRUE(rectLocation.has_value());
+  ASSERT_TRUE(rectLocation->start.offset.has_value());
+  ASSERT_TRUE(rectLocation->end.offset.has_value());
+  ASSERT_TRUE(circle.getNodeLocation().has_value());
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = *rectLocation,
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  EXPECT_EQ(rect.parentElement(), std::nullopt);
+  EXPECT_EQ(rect.getNodeLocation(), std::nullopt);
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(*group.firstChild(), circle);
+  EXPECT_TRUE(circle.getNodeLocation().has_value());
+}
+
 TEST_F(XMLParserTests, ApplySourceEditOpeningTagRenamesAttribute) {
   constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
 
