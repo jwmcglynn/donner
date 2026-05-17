@@ -251,6 +251,10 @@ std::optional<OpeningTagEdit> GetOpeningTagEdit(const XMLDocument& document,
   if (!tagEnd.has_value() && nodeLocation->end.offset.has_value()) {
     tagEnd = FindDirtyOpeningTagEnd(document.source(), tagStart, *nodeLocation->end.offset);
   }
+  if (tagEnd.has_value() && nodeLocation->end.offset.has_value() && range.start == tagStart &&
+      range.end == *nodeLocation->end.offset && *tagEnd == *nodeLocation->end.offset) {
+    return std::nullopt;
+  }
   if (!tagEnd.has_value() || range.start < tagStart || range.end > *tagEnd) {
     return std::nullopt;
   }
@@ -662,6 +666,12 @@ void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
     }
 
     target.appendChild(*nodeToAppend);
+  }
+
+  for (std::size_t index = 0; index < oldChildren.size(); ++index) {
+    if (!usedChildren[index]) {
+      ClearSourceLocationsRecursive(oldChildren[index]);
+    }
   }
 
   SyncValueFromParsed(target, parsedTarget);
