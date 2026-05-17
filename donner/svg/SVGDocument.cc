@@ -17,6 +17,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
@@ -26,6 +27,9 @@
 namespace donner::svg {
 
 namespace {
+
+void MarkStylesheetChanged(EntityHandle handle);
+std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node);
 
 SourceRange MutationRange(std::string_view source, const xml::XMLMutation& mutation) {
   if (!mutation.attributeName.name.empty()) {
@@ -84,19 +88,43 @@ std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
                                   MutationRange(source, mutation));
   }
 
-  std::optional<EntityHandle> targetHandle = TextElementHandleForNodeValueMutation(mutation);
-  if (!targetHandle.has_value() || !*targetHandle ||
-      !targetHandle->all_of<components::TextComponent>()) {
-    return ParseDiagnostic::Error("XML NodeValueChanged mutation target is not SVG text content",
-                                  MutationRange(source, mutation));
+  std::optional<xml::XMLNode> targetNode;
+  if (mutation.node.type() == xml::XMLNode::Type::Element) {
+    targetNode = mutation.node;
+  } else if (mutation.node.type() == xml::XMLNode::Type::Data ||
+             mutation.node.type() == xml::XMLNode::Type::CData) {
+    targetNode = mutation.node.parentElement();
   }
 
-  auto& text = targetHandle->get<components::TextComponent>();
-  text.text = *mutation.value;
-  text.textChunks.clear();
-  text.textChunks.emplace_back(*mutation.value);
-  InvalidateTextGeometry(*targetHandle);
-  return std::nullopt;
+  std::optional<EntityHandle> targetHandle = TextElementHandleForNodeValueMutation(mutation);
+  if (!targetHandle.has_value() || !*targetHandle) {
+    return ParseDiagnostic::Error(
+        "XML NodeValueChanged mutation target is not SVG text or style content",
+        MutationRange(source, mutation));
+  }
+
+  if (targetHandle->all_of<components::TextComponent>()) {
+    auto& text = targetHandle->get<components::TextComponent>();
+    text.text = *mutation.value;
+    text.textChunks.clear();
+    text.textChunks.emplace_back(*mutation.value);
+    InvalidateTextGeometry(*targetHandle);
+    return std::nullopt;
+  }
+
+  if (targetHandle->all_of<components::StylesheetComponent>() && targetNode.has_value()) {
+    if (std::optional<ParseDiagnostic> diagnostic =
+            ProjectStyleContents(*targetHandle, *targetNode)) {
+      return diagnostic;
+    }
+
+    MarkStylesheetChanged(*targetHandle);
+    return std::nullopt;
+  }
+
+  return ParseDiagnostic::Error(
+      "XML NodeValueChanged mutation target is not SVG text or style content",
+      MutationRange(source, mutation));
 }
 
 ElementType ElementTypeForTag(const xml::XMLQualifiedNameRef& tagName) {
@@ -197,6 +225,15 @@ components::RenderTreeState& GetRenderTreeState(EntityHandle handle) {
   return registry.ctx().get<components::RenderTreeState>();
 }
 
+void MarkStylesheetChanged(EntityHandle handle) {
+  Registry& registry = *handle.registry();
+  registry.clear<components::ComputedStyleComponent>();
+
+  components::RenderTreeState& renderState = GetRenderTreeState(handle);
+  renderState.needsFullRebuild = true;
+  renderState.needsFullStyleRecompute = true;
+}
+
 void MarkSubtreeReplaced(EntityHandle handle) {
   components::RenderTreeState& renderState = GetRenderTreeState(handle);
   renderState.needsFullRebuild = true;
@@ -263,9 +300,11 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   }
 
   std::string combined;
+  bool foundTextChild = false;
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
+      foundTextChild = true;
       if (std::optional<RcString> value = child->value()) {
         combined += *value;
       }
@@ -275,6 +314,10 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
           child->getNodeLocation().value_or(node.getNodeLocation().value_or(
               SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)})));
     }
+  }
+
+  if (!foundTextChild) {
+    combined = node.value().value_or(RcString(""));
   }
 
   stylesheet->parseStylesheet(std::string_view(combined));
