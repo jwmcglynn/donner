@@ -1,0 +1,207 @@
+#include <gtest/gtest.h>
+
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include "donner/base/Box.h"
+#include "donner/base/RcString.h"
+#include "donner/base/Transform.h"
+#include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/DocumentSyncController.h"
+#include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorCommand.h"
+#include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/SelectTool.h"
+#include "donner/editor/TextEditor.h"
+#include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/renderer/Renderer.h"
+
+namespace donner::editor {
+namespace {
+
+constexpr std::string_view kStructuredStressSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="180" height="80" viewBox="0 0 180 80">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="2"/></filter></defs>
+  <rect id="plain" x="10" y="12" width="32" height="26" fill="red"/>
+  <rect id="filtered" x="76" y="18" width="34" height="28" fill="blue" filter="url(#blur)" transform="translate(0 0)"/>
+  <rect id="after" x="132" y="24" width="26" height="22" fill="green"/>
+</svg>)svg";
+
+Coordinates CoordinatesForOffset(std::string_view text, std::size_t offset) {
+  Coordinates result(0, 0);
+  for (std::size_t i = 0; i < offset && i < text.size(); ++i) {
+    if (text[i] == '\n') {
+      ++result.line;
+      result.column = 0;
+    } else {
+      ++result.column;
+    }
+  }
+  return result;
+}
+
+svg::RendererBitmap RenderReference(std::string_view source, const Vector2i& canvasSize) {
+  EditorApp referenceApp;
+  EXPECT_TRUE(referenceApp.loadFromString(source));
+  referenceApp.document().document().setCanvasSize(canvasSize.x, canvasSize.y);
+
+  svg::Renderer renderer;
+  renderer.draw(referenceApp.document().document());
+  return renderer.takeSnapshot();
+}
+
+class StructuredEditingStressTest : public ::testing::Test {
+protected:
+  void SetUp() override {
+    IMGUI_CHECKVERSION();
+    imguiContext_ = ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800, 600);
+    io.Fonts->Build();
+
+    app_.setStructuredEditingEnabled(true);
+    ASSERT_TRUE(app_.loadFromString(kStructuredStressSvg));
+    app_.document().document().setCanvasSize(canvasSize_.x, canvasSize_.y);
+    app_.setCleanSourceText(kStructuredStressSvg);
+
+    textEditor_.setText(kStructuredStressSvg);
+    controller_ = std::make_optional<DocumentSyncController>(std::string(kStructuredStressSvg));
+    controller_->handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+    viewport_.paneOrigin = Vector2d(0.0, 0.0);
+    viewport_.paneSize = Vector2d(360.0, 160.0);
+    viewport_.documentViewBox = Box2d(Vector2d(0.0, 0.0), Vector2d(180.0, 80.0));
+    viewport_.resetTo100Percent();
+  }
+
+  void TearDown() override {
+    if (imguiContext_ != nullptr) {
+      ImGui::DestroyContext(imguiContext_);
+      imguiContext_ = nullptr;
+    }
+  }
+
+  void ExpectInSync(std::string_view phase) {
+    ASSERT_TRUE(app_.hasDocument()) << phase;
+    EXPECT_EQ(textEditor_.getText(), app_.document().document().source()) << phase;
+    EXPECT_FALSE(textEditor_.isTextChanged()) << phase;
+    EXPECT_TRUE(app_.document().queue().empty()) << phase;
+
+    svg::Renderer liveRenderer;
+    liveRenderer.draw(app_.document().document());
+    svg::RendererBitmap liveBitmap = liveRenderer.takeSnapshot();
+    svg::RendererBitmap referenceBitmap =
+        RenderReference(app_.document().document().source(), canvasSize_);
+    tests::CompareBitmapToBitmap(liveBitmap, referenceBitmap, phase);
+  }
+
+  void ClickDocumentPoint(std::string_view phase, const Vector2d& documentPoint,
+                          std::string_view expectedId) {
+    selectTool_.onMouseDown(app_, documentPoint, MouseModifiers{});
+    ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
+    EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase;
+    selectTool_.onMouseUp(app_, documentPoint);
+    ExpectInSync(phase);
+  }
+
+  void DragDocumentPoints(std::string_view phase, const Vector2d& startDocumentPoint,
+                          const Vector2d& endDocumentPoint, std::string_view expectedId) {
+    selectTool_.onMouseDown(app_, startDocumentPoint, MouseModifiers{});
+    ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
+    EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase;
+
+    selectTool_.onMouseMove(app_, endDocumentPoint, /*buttonHeld=*/true);
+    ASSERT_TRUE(app_.flushFrame()) << phase;
+    selectTool_.onMouseUp(app_, endDocumentPoint);
+    controller_->applyPendingWritebacks(app_, selectTool_, textEditor_);
+    ExpectInSync(phase);
+  }
+
+  void DragScreenPoints(std::string_view phase, const Vector2d& startScreenPoint,
+                        const Vector2d& endScreenPoint, std::string_view expectedId) {
+    DragDocumentPoints(phase, viewport_.screenToDocument(startScreenPoint),
+                       viewport_.screenToDocument(endScreenPoint), expectedId);
+  }
+
+  void ReplaceSourceText(std::string_view phase, std::string_view oldText,
+                         std::string_view newText) {
+    const std::string currentText = textEditor_.getText();
+    const std::size_t offset = currentText.find(oldText);
+    ASSERT_NE(offset, std::string::npos) << phase;
+
+    textEditor_.setSelection(CoordinatesForOffset(currentText, offset),
+                             CoordinatesForOffset(currentText, offset + oldText.size()));
+    textEditor_.insertText(newText);
+    controller_->handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+    controller_->handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
+    ExpectInSync(phase);
+  }
+
+  void ZoomAndPanAroundDocumentPoint(std::string_view phase, const Vector2d& documentPoint) {
+    const Vector2d screenPoint = viewport_.documentToScreen(documentPoint);
+    const Vector2d before = viewport_.screenToDocument(screenPoint);
+    viewport_.zoomAround(viewport_.zoom * 1.7, screenPoint);
+    viewport_.panBy(Vector2d(17.0, -9.0));
+    EXPECT_NEAR(before.x, documentPoint.x, 1e-6) << phase;
+    EXPECT_NEAR(before.y, documentPoint.y, 1e-6) << phase;
+    ExpectInSync(phase);
+  }
+
+  void DeleteSelection(std::string_view phase) {
+    const std::vector<svg::SVGElement> selected = app_.selectedElements();
+    ASSERT_FALSE(selected.empty()) << phase;
+
+    app_.setSelection(std::nullopt);
+    for (const svg::SVGElement& element : selected) {
+      if (std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(element);
+          target.has_value()) {
+        app_.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{
+            .target = *target,
+        });
+      }
+      app_.applyMutation(EditorCommand::DeleteElementCommand(element));
+    }
+
+    ASSERT_TRUE(app_.flushFrame()) << phase;
+    controller_->applyPendingWritebacks(app_, selectTool_, textEditor_);
+    ExpectInSync(phase);
+  }
+
+  ImGuiContext* imguiContext_ = nullptr;
+  EditorApp app_;
+  TextEditor textEditor_;
+  std::optional<DocumentSyncController> controller_;
+  SelectTool selectTool_;
+  ViewportState viewport_;
+  Vector2i canvasSize_ = Vector2i(180, 80);
+};
+
+TEST_F(StructuredEditingStressTest, MixedGuiTextZoomDeleteAndFilteredMoveStayInSync) {
+  ExpectInSync("initial");
+
+  DragScreenPoints("plain drag after zoom-ready click", viewport_.documentToScreen({20.0, 20.0}),
+                   viewport_.documentToScreen({32.0, 24.0}), "plain");
+  ZoomAndPanAroundDocumentPoint("zoom and pan after plain drag", Vector2d(32.0, 24.0));
+
+  ReplaceSourceText("source fill edit", R"(fill="red")", R"(fill="orange")");
+  ReplaceSourceText("source filtered transform edit", "transform=\"translate(0 0)\"",
+                    "transform=\"translate(14 0)\"");
+
+  std::optional<svg::SVGElement> filtered = app_.document().document().querySelector("#filtered");
+  ASSERT_TRUE(filtered.has_value());
+  const Transform2d sourceEditedTransform = filtered->cast<svg::SVGGraphicsElement>().transform();
+  EXPECT_DOUBLE_EQ(sourceEditedTransform.data[4], 14.0);
+
+  DragScreenPoints("filtered drag after source move", viewport_.documentToScreen({104.0, 32.0}),
+                   viewport_.documentToScreen({116.0, 38.0}), "filtered");
+  DeleteSelection("delete filtered after mixed edits");
+
+  EXPECT_FALSE(app_.document().document().querySelector("#filtered").has_value());
+  ClickDocumentPoint("click after delete still selects", Vector2d(140.0, 32.0), "after");
+}
+
+}  // namespace
+}  // namespace donner::editor

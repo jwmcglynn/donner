@@ -153,13 +153,13 @@ donner_perf_cc_test(
         "FilterDragReproTestUtils.h",
     ],
     correctness_srcs = ["FilterDragReproCorrectness_tests.cc"],
-    wallclock_srcs = ["FilterDragReproWallclock_tests.cc"],
     data = [
         ":filter_drag_repro.rnr",
         "//:donner_splash.svg",
     ],
+    wallclock_srcs = ["FilterDragReproWallclock_tests.cc"],
     deps = [
-        "//donner/base:base",
+        "//donner/base",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:editor_app",
@@ -213,6 +213,25 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "structured_editing_stress_tests",
+    srcs = ["StructuredEditingStress_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:command_queue",
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/editor:text_editor",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
 donner_perf_cc_test(
     name = "async_renderer_filter_group_perf_tests",
     srcs = [
@@ -220,10 +239,10 @@ donner_perf_cc_test(
         "AsyncRendererFilterGroupPerfTestUtils.h",
     ],
     correctness_srcs = ["AsyncRendererFilterGroupCorrectness_tests.cc"],
-    wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
     data = [
         "//:donner_splash.svg",
     ],
+    wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
     deps = [
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
@@ -382,13 +401,13 @@ donner_cc_test(
 filegroup(
     name = "rnr_replay_testdata",
     srcs = [
+        "drag_start_hang_repro.rnr",
         "filter_elm_disappear-2.rnr",
         "filter_elm_disappear-3.rnr",
         "filter_elm_disappear-4.rnr",
         "filter_elm_disappear-5.rnr",
         "filter_elm_disappear-6.rnr",
         "filter_elm_disappear-7.rnr",
-        "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
         "filter_snapback_repro.rnr",
         "testdata/filter_disappear_rnr3_after_mup2.png",
@@ -405,8 +424,8 @@ donner_cc_test(
     ],
     deps = [
         ":bitmap_golden_compare",
-        "//donner/editor:attribute_writeback",
         "//donner/editor:async_renderer",
+        "//donner/editor:attribute_writeback",
         "//donner/editor:editor_app",
         "//donner/editor:experimental_drag_presentation",
         "//donner/editor:imgui_headers",

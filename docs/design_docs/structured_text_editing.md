@@ -890,7 +890,9 @@ same scenarios should also run through headless `.donner-repro` playback.
       viewport, select tool, and async renderer. It exposes high-level actions:
       `click(id/docPoint)`, `drag(screenDelta)`, `zoomAround(cursor, factor)`,
       `pan(delta)`, `typeSource(offset, text)`, `replaceSource(range, text)`,
-      `deleteSelection()`, and `settleFrame()`.
+      `deleteSelection()`, and `settleFrame()`. Initial target landed with
+      `EditorApp`, `SelectTool`, `ViewportState`, `TextEditor`, and
+      `DocumentSyncController`; async-renderer and artifact capture remain.
 - [ ] **Assert after every action, not only at the end.** Required invariants:
       - `TextEditor::getText()` equals `XMLDocument::source()`;
       - all touched node/attribute source anchors resolve inside the current
@@ -931,6 +933,10 @@ same scenarios should also run through headless `.donner-repro` playback.
       - Delete an element in source, then click/drag around its old screen
         location. Assert hit testing targets the new visual contents, not stale
         entity/source metadata.
+      - Current coverage: one deterministic mixed scenario drags a plain
+        element, zooms/pans, edits source attributes, moves and drags a
+        filtered element, deletes it, then verifies a post-delete click still
+        selects the remaining element.
 - [ ] **Deterministic randomized pass.** Run a short seeded sequence that
       mixes clicks, drags, zooms, pans, text replacements, deletes, and
       malformed-then-restored edits. Store the seed in the failure message and
