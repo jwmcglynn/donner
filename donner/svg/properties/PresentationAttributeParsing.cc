@@ -13,6 +13,7 @@
 #include "donner/svg/components/shape/EllipseComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/parser/Number2dParser.h"
 
 namespace donner::svg::parser {
 
@@ -93,6 +94,32 @@ ParseResult<bool> ParseFeColorMatrixPresentationAttribute(EntityHandle handle,
   return false;
 }
 
+ParseResult<bool> ParseFeGaussianBlurPresentationAttribute(EntityHandle handle,
+                                                           std::string_view name,
+                                                           const PropertyParseFnParams& params) {
+  if (name != "stdDeviation") {
+    return false;
+  }
+
+  auto& component = handle.get<components::FEGaussianBlurComponent>();
+  if (params.explicitState != PropertyState::NotSet) {
+    component.stdDeviationX = 0.0;
+    component.stdDeviationY = 0.0;
+    return true;
+  }
+
+  const std::string_view value = ValueString(params);
+  const auto maybeNumber2d = parser::Number2dParser::Parse(value);
+  if (!maybeNumber2d.hasResult() || maybeNumber2d.result().consumedChars != value.size()) {
+    return InvalidAttributeValue(name, value);
+  }
+
+  const parser::Number2dParser::Result number2d = maybeNumber2d.result();
+  component.stdDeviationX = number2d.numberX;
+  component.stdDeviationY = number2d.numberY;
+  return true;
+}
+
 }  // namespace
 
 ParseResult<bool> ParsePresentationAttribute(ElementType type, EntityHandle handle,
@@ -117,6 +144,8 @@ ParseResult<bool> ParsePresentationAttribute(ElementType type, EntityHandle hand
       return components::ParseFeFloodPresentationAttribute(handle, name, params);
     case ElementType::FeColorMatrix:
       return ParseFeColorMatrixPresentationAttribute(handle, name, params);
+    case ElementType::FeGaussianBlur:
+      return ParseFeGaussianBlurPresentationAttribute(handle, name, params);
     case ElementType::FeDropShadow:
       return components::ParseFeDropShadowPresentationAttribute(handle, name, params);
     case ElementType::FeDiffuseLighting:

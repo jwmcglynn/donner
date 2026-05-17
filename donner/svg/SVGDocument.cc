@@ -14,8 +14,11 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
+#include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
@@ -131,8 +134,20 @@ ElementType ElementTypeForTag(const xml::XMLQualifiedNameRef& tagName) {
   if (tagName.name == "circle") {
     return ElementType::Circle;
   }
+  if (tagName.name == "clipPath") {
+    return ElementType::ClipPath;
+  }
+  if (tagName.name == "defs") {
+    return ElementType::Defs;
+  }
   if (tagName.name == "ellipse") {
     return ElementType::Ellipse;
+  }
+  if (tagName.name == "feGaussianBlur") {
+    return ElementType::FeGaussianBlur;
+  }
+  if (tagName.name == "filter") {
+    return ElementType::Filter;
   }
   if (tagName.name == "g") {
     return ElementType::G;
@@ -183,15 +198,46 @@ bool UsesNoTraverseChildren(ElementType type) {
 
 void EnsureProjectedElementComponents(EntityHandle handle,
                                       const xml::XMLQualifiedNameRef& tagName) {
-  ElementType type = ElementType::Unknown;
+  const ElementType projectedType = ElementTypeForTag(tagName);
+  ElementType type = projectedType;
   if (!handle.all_of<components::ElementTypeComponent>()) {
-    type = ElementTypeForTag(tagName);
     handle.emplace<components::ElementTypeComponent>(type);
   } else {
     type = handle.get<components::ElementTypeComponent>().type();
+    if (type == ElementType::Unknown && projectedType != ElementType::Unknown) {
+      type = projectedType;
+      handle.emplace_or_replace<components::ElementTypeComponent>(type);
+    }
   }
 
   [[maybe_unused]] auto& transform = handle.get_or_emplace<components::TransformComponent>();
+  if (type == ElementType::Defs) {
+    auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
+        components::RenderingBehavior::Nonrenderable);
+    behavior.behavior = components::RenderingBehavior::Nonrenderable;
+  }
+  if (type == ElementType::Filter) {
+    auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
+        components::RenderingBehavior::Nonrenderable);
+    behavior.behavior = components::RenderingBehavior::Nonrenderable;
+    [[maybe_unused]] auto& filter = handle.get_or_emplace<components::FilterComponent>();
+  }
+  if (type == ElementType::ClipPath) {
+    [[maybe_unused]] auto& clipPath = handle.get_or_emplace<components::ClipPathComponent>();
+    auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
+        components::RenderingBehavior::Nonrenderable);
+    behavior.behavior = components::RenderingBehavior::Nonrenderable;
+    behavior.inheritsParentTransform = false;
+  }
+  if (type == ElementType::FeGaussianBlur) {
+    [[maybe_unused]] auto& primitive =
+        handle.get_or_emplace<components::FilterPrimitiveComponent>();
+    [[maybe_unused]] auto& gaussianBlur =
+        handle.get_or_emplace<components::FEGaussianBlurComponent>();
+    auto& behavior = handle.get_or_emplace<components::RenderingBehaviorComponent>(
+        components::RenderingBehavior::Nonrenderable);
+    behavior.behavior = components::RenderingBehavior::Nonrenderable;
+  }
   if (UsesNoTraverseChildren(type) && !handle.all_of<components::RenderingBehaviorComponent>()) {
     handle.emplace<components::RenderingBehaviorComponent>(
         components::RenderingBehavior::NoTraverseChildren);
@@ -626,6 +672,7 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeRemoved) {
+    MarkSubtreeReplaced(rootEntityHandle());
     return std::nullopt;
   }
 

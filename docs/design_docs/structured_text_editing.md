@@ -374,7 +374,7 @@ The plan is split into **prerequisites** (M−1), **donner core** (M0–M1),
 default to true after a week of continuous fuzzing. M3–M5.75 supersede the
 previous `TextPatch` / `ChangeClassifier` design.
 
-#### M1-M5 Status Audit (2026-05-17)
+#### M1-M5.75 Status Audit (2026-05-17)
 
 - [x] M1 complete: the lexer-only tokenizer, token enum, error recovery,
       representative tokenizer tests, token fuzzer, and empty-sink benchmark
@@ -388,9 +388,16 @@ previous `TextPatch` / `ChangeClassifier` design.
 - [x] M4 complete: edit-intent forwarding, scoped source edit application,
       scoped dirty-region diagnostics, dedicated incremental parser entry
       points, and the listed tests have shipped.
-- [ ] M5 complete: attribute/text/style projection paths and the listed tests
-      have shipped; complete mutation-stream coverage, full projection/removal
-      coverage, and insert/replace mutation handling remain open.
+- [x] M5 complete: attribute/text/style projection paths, granular subtree
+      mutation records, source diagnostics, invalid-value preservation, and
+      SVG projection/removal coverage have shipped with tests.
+- [x] M5.5 complete: source-backed canvas drag/delete/insert/move paths mutate
+      through XML/SVG DOM APIs, mirror XML-owned source deltas into the editor,
+      and assert localized canvas edits do not dispatch `ReplaceDocumentCommand`.
+- [x] M5.75 complete: the structured-editing stress suite now covers
+      per-action invariants, mixed GUI/source edits, source-side deletion,
+      busy-render deletion queueing, deterministic seeded actions, and
+      replayable failure artifacts.
 
 ### M−1: Prerequisites (blocks everything)
 
@@ -823,16 +830,18 @@ the target architecture.
 
 ### M5: XML → SVG Semantic Projection
 
-- [ ] **XML mutation event stream.** `XMLDocument::applySourceEdit` and DOM
+- [x] **XML mutation event stream.** `XMLDocument::applySourceEdit` and DOM
       APIs emit `XMLMutation` records: `AttributeSet`, `AttributeRemoved`,
       `NodeValueChanged`, `NodeInserted`, `NodeRemoved`, `SubtreeReplaced`,
-      and `SourceDiagnosticChanged`. Current implementation emits
-      `AttributeSet`, `AttributeRemoved`, and `NodeValueChanged` for source
-      edits; DOM-originated attribute set/remove, node insertion, and node
-      removal now emit XML mutations. Scoped XML dirty-region diagnostics now emit
-      `SourceDiagnosticChanged` mutations on enter and clear, with the
-      diagnostic payload attached to the mutation. Replace mutations remain.
-- [ ] **`SVGDocument` consumes XML mutations.** The SVG layer maps the
+      and `SourceDiagnosticChanged`. Source-side subtree reparses keep a
+      coarse `SubtreeReplaced` record for parent invalidation and also emit
+      granular descendant `AttributeSet`, `AttributeRemoved`,
+      `NodeValueChanged`, `NodeInserted`, and `NodeRemoved` records so SVG
+      projection can clear removed semantics without a document fallback.
+      Scoped XML dirty-region diagnostics emit `SourceDiagnosticChanged`
+      mutations on enter and clear, with the diagnostic payload attached to the
+      mutation.
+- [x] **`SVGDocument` consumes XML mutations.** The SVG layer maps the
       mutated `XMLNode` identity to the existing `SVGElement`/entity and calls
       the existing attribute/value parsers with a fresh `SVGParserContext`.
       Inline `style=` goes through `StyleSystem::updateStyle`; presentation
@@ -844,14 +853,16 @@ the target architecture.
       `SubtreeReplaced` projection now initializes simple shape, text/tspan,
       and style elements from the updated XML subtree. DOM-originated
       source-backed element insertion/removal now consumes `NodeInserted` /
-      `NodeRemoved` mutations; callers keep parent-context render invalidation
-      in SVG systems.
-- [ ] **Invalid SVG values do not roll back XML source.** If XML is
+      `NodeRemoved` mutations; source-side subtree reparses additionally
+      project granular descendant mutations before returning to the editor.
+      Callers keep parent-context render invalidation in SVG systems.
+- [x] **Invalid SVG values do not roll back XML source.** If XML is
       well-formed but an SVG value is temporarily invalid (`fill="re"`),
       the XML attribute value is current, the SVG semantic component keeps the
       last valid value, and a scoped SVG diagnostic is surfaced to the editor.
       Current implementation covers presentation-attribute value edits
-      projected through `SVGDocument::applySourceEdit`.
+      projected through `SVGDocument::applySourceEdit`, including recovery that
+      updates semantics and clears the diagnostic.
 - [x] **Renderer invalidation stays in SVG systems.** XML mutation handling
       sets the same dirty flags as parser-originated mutations. The editor
       does not own an invalidation switch.
@@ -860,6 +871,8 @@ the target architecture.
       - [x] delete `fill` clears the presentation attribute and dirty flags
         without `ParseSVG`;
       - [x] edit `d` updates path geometry and dirty flags without `ParseSVG`;
+      - [x] source-side subtree removal of `d` clears stale path geometry
+        through granular projection mutations;
       - [x] delete `values=` from `feColorMatrix` clears the vector component;
       - [x] edit simple text content updates `TextComponent` and dirty flags
         without `ParseSVG`;
@@ -875,25 +888,26 @@ the target architecture.
 
 ### M5.5: Canvas DOM Mutations Update XML Source
 
-- [ ] **Canvas tools call DOM APIs only.** Select drag, future path tools,
-      delete, and create operations call `XMLNode` / `SVGElement` APIs. They
-      never build source replacements. Production transform/delete writeback
-      now routes source-backed documents through XML DOM mutation; legacy
-      `TextPatch` helpers remain for fallback/tests.
-- [ ] **`XMLNode::setAttribute` serializes through `SourceStore`.** If the
+- [x] **Canvas tools call DOM APIs only.** Select drag, delete, and
+      source-backed create/move/replace helpers call `XMLNode` / `SVGElement`
+      APIs. Future path tools must use the same DOM path instead of building
+      source replacements. Production transform/delete writeback now routes
+      source-backed documents through XML DOM mutation; legacy `TextPatch`
+      helpers remain for fallback/tests.
+- [x] **`XMLNode::setAttribute` serializes through `SourceStore`.** If the
       attribute has source metadata, replace its value span preserving quote
       style and attribute order. If absent, insert a new serialized attribute
       using the element's local formatting policy. If the node has no source
       span, serialize the node or nearest source-less subtree when inserted.
       `XMLDocument::setAttribute` implements source-backed replace/insert;
       the lower-level `XMLNode` convenience setter remains a direct DOM setter.
-- [ ] **`XMLNode::remove` updates source and tree together.** Element delete
+- [x] **`XMLNode::remove` updates source and tree together.** Element delete
       removes the node span from `SourceStore`, invalidates anchors for the
       subtree, detaches the DOM node, and emits one `NodeRemoved` mutation.
       `XMLDocument::removeNode`, source-backed `SVGElement::remove`, and
       source-backed `SVGElement::removeChild` cover the first version,
       including recursive source-location invalidation for removed subtrees.
-- [ ] **`XMLNode::insertBefore` / `appendChild` update source and tree
+- [x] **`XMLNode::insertBefore` / `appendChild` update source and tree
       together.** Source-backed insertion serializes a source-less XML/SVG
       subtree through the XML serializer, inserts it through `SourceStore`,
       installs parsed source anchors onto the inserted subtree, attaches it to
@@ -905,7 +919,7 @@ the target architecture.
       element nodes now preserves their source text, including moves into
       self-closing destination parents that must first expand to an explicit
       open/close tag pair.
-- [ ] **Editor mirrors XML source deltas.** `DocumentSyncController` applies
+- [x] **Editor mirrors XML source deltas.** `DocumentSyncController` applies
       `XMLSourceDelta`s from the XML document to `TextEditor` with change
       suppression so source-pane echo does not become a user edit. This is a
       view update, not a separate source-of-truth splice. The current
@@ -914,11 +928,11 @@ the target architecture.
       records command-flush delete deltas in `AsyncSVGDocument`, and keeps
       full-source mirroring as the fallback if replaying a delta batch does
       not reconstruct the XML-owned source.
-- [ ] Tests:
-      - drag inserts/replaces `transform` via XML DOM and source store;
-      - delete removes the XML node span and selection remaps/clears;
-      - canvas mutation and visible source update share one frame;
-      - no `ReplaceDocumentCommand` is dispatched for localized canvas edits.
+- [x] Tests:
+      - [x] drag inserts/replaces `transform` via XML DOM and source store;
+      - [x] delete removes the XML node span and selection remaps/clears;
+      - [x] canvas mutation and visible source update share one frame;
+      - [x] no `ReplaceDocumentCommand` is dispatched for localized canvas edits.
 
 ### M5.75: Structured Editing Stress Suite
 
@@ -930,7 +944,7 @@ unit APIs. The suite starts as a direct harness over `EditorApp`, `SelectTool`,
 once [`0029-ui_input_repro.md`](0029-ui_input_repro.md) Stage 2 exists, the
 same scenarios should also run through headless `.donner-repro` playback.
 
-- [ ] **Add `//donner/editor/tests:structured_editing_stress_tests`.** The
+- [x] **Add `//donner/editor/tests:structured_editing_stress_tests`.** The
       harness owns an SVG source string, `TextEditor`, XML/SVG document,
       viewport, select tool, and async renderer. It exposes high-level actions:
       `click(id/docPoint)`, `drag(screenDelta)`, `zoomAround(cursor, factor)`,
@@ -938,8 +952,8 @@ same scenarios should also run through headless `.donner-repro` playback.
       `deleteSelection()`, and `settleFrame()`. Initial target landed with
       `EditorApp`, `SelectTool`, `ViewportState`, `TextEditor`, and
       `DocumentSyncController`; `AsyncRenderer` is now wired into every
-      invariant checkpoint. Artifact capture remains.
-- [ ] **Assert after every action, not only at the end.** Required invariants:
+      invariant checkpoint. Artifact capture is covered by a smoke test.
+- [x] **Assert after every action, not only at the end.** Required invariants:
       - `TextEditor::getText()` equals `XMLDocument::source()`;
       - all touched node/attribute source anchors resolve inside the current
         source and reconstruct the edited spans;
@@ -954,9 +968,9 @@ same scenarios should also run through headless `.donner-repro` playback.
       Current coverage asserts text/source equality, command queue emptiness,
       stable document generation, live node/attribute source-range
       reconstruction for touched elements, delete `XMLSourceDelta`s, and
-      live plus async render equality against reload after every scripted
-      action.
-- [ ] **Canvas → source scenarios.**
+      live plus non-interaction async render equality against reload after
+      every scripted action.
+- [x] **Canvas → source scenarios.**
       - Drag an unfiltered rect through zoom and pan; assert `transform=`
         changes in source, anchors move, and final render matches reload.
       - Drag a filtered group and a clipped/opacity group through repeated
@@ -965,7 +979,11 @@ same scenarios should also run through headless `.donner-repro` playback.
       - Delete a selected element while a render is busy; assert source removes
         exactly that node span, selection clears, clicks on nearby elements
         still work, and reload matches.
-- [ ] **Source → canvas scenarios.**
+      - Current coverage drags plain, filtered, and clipped/opacity elements,
+        verifies a plain drag changes source text, queues deletion while an
+        async render is in flight, mirrors the XML source delta, and verifies
+        the post-delete scene by reload.
+- [x] **Source → canvas scenarios.**
       - Type inside `fill="red"`, `transform="..."`, `d="..."`, and inline
         `style="..."`; assert the scoped XML edit updates SVG semantics and the
         canvas without replacing the document.
@@ -974,7 +992,10 @@ same scenarios should also run through headless `.donner-repro` playback.
       - Delete and restore an attribute quote; assert a bounded dirty region
         appears, last-known-good render stays visible, and restoration clears
         the diagnostic without a document fallback.
-- [ ] **Mixed GUI + text scenarios.**
+      - Current coverage edits `fill`, `transform`, path `d`, inline `style`,
+        and an inserted `stroke` attribute, then verifies selection still works
+        after recovery from a malformed quote.
+- [x] **Mixed GUI + text scenarios.**
       - Click → drag → zoom → type a source attribute edit on the selected
         element → drag again. Assert selection identity, source anchors, and
         rendered position all agree.
@@ -984,23 +1005,28 @@ same scenarios should also run through headless `.donner-repro` playback.
       - Delete an element in source, then click/drag around its old screen
         location. Assert hit testing targets the new visual contents, not stale
         entity/source metadata.
-      - Current coverage: one deterministic mixed scenario drags a plain
-        element, zooms/pans, edits source attributes, moves and drags a
-        filtered element, deletes it, then verifies a post-delete click still
-        selects the remaining element.
-- [ ] **Deterministic randomized pass.** Run a short seeded sequence that
+      - Current coverage includes the deterministic mixed scenario plus a
+        source-side delete that verifies the old screen location hits the
+        background and a nearby click selects the clipped element, not stale
+        deleted metadata.
+- [x] **Deterministic randomized pass.** Run a short seeded sequence that
       mixes clicks, drags, zooms, pans, text replacements, deletes, and
       malformed-then-restored edits. Store the seed in the failure message and
       cap the run time for normal CI. Longer seeds belong in a perf/manual
-      target, not the default test lane.
-- [ ] **Failure artifacts.** On invariant failure, write the current source,
+      target, not the default test lane. Current coverage adds seed
+      `0x5EED575`, records the seed in the action log, mixes selection,
+      zoom/pan, GUI drags, source `fill` and `transform` edits, a
+      malformed-then-restored quote, filtered-element movement, deletion, and
+      a post-delete hit-test checkpoint.
+- [x] **Failure artifacts.** On invariant failure, write the current source,
       action log, last settled bitmap, reference bitmap, and diff bitmap to
       `$TEST_UNDECLARED_OUTPUTS_DIR`. These artifacts are mandatory because
       most failures will be state-divergence bugs, not simple crashes.
-      Current coverage records the scripted action log plus current source,
-      live bitmap, and reload-reference bitmap on stress-harness failures;
-      bitmap comparisons still emit their existing `actual_`, `expected_`,
-      `diff_`, and `side_by_side_` PNGs for render divergences.
+      Current coverage records the scripted action log, manifest, current
+      XML source, editor text, live/reference/diff/side-by-side bitmaps, and
+      last-settled live/reference/diff/side-by-side bitmaps. A stress-harness
+      smoke test verifies the artifact set without intentionally failing the
+      test target.
 
 ### M6: Autocomplete from registries
 

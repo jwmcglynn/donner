@@ -1187,10 +1187,12 @@ TEST_F(XMLParserTests, ApplySourceEditElementSubtreeInsertsChildWithoutDocumentF
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
   EXPECT_EQ(result.diagnostic, std::nullopt);
-  ASSERT_EQ(result.mutations.size(), 1u);
+  ASSERT_EQ(result.mutations.size(), 2u);
   EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SubtreeReplaced);
   EXPECT_EQ(result.mutations[0].node, group);
   EXPECT_EQ(result.mutations[0].scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_EQ(result.mutations[1].scope, ReparseScope::ElementSubtree);
   EXPECT_EQ(document.source(), kExpected);
   EXPECT_EQ(group.entityHandle().entity(), groupEntity);
 
@@ -1268,6 +1270,11 @@ TEST_F(XMLParserTests, ApplySourceEditElementSubtreeDeletionInvalidatesRemovedCh
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
   EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SubtreeReplaced);
+  EXPECT_EQ(result.mutations[0].node, group);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeRemoved);
+  EXPECT_EQ(result.mutations[1].node, rect);
   EXPECT_EQ(rect.parentElement(), std::nullopt);
   EXPECT_EQ(rect.getNodeLocation(), std::nullopt);
   ASSERT_TRUE(group.firstChild().has_value());

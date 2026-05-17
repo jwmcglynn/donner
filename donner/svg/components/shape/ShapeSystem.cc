@@ -91,6 +91,11 @@ ParseResult<RcString> ParseD(std::span<const css::ComponentValue> components) {
 
 std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
                                                     const parser::PropertyParseFnParams& params) {
+  if (params.explicitState != PropertyState::NotSet) {
+    properties.d.set(params.explicitState, params.specificity);
+    return std::nullopt;
+  }
+
   if (const std::string_view* str = std::get_if<std::string_view>(&params.valueOrComponents)) {
     properties.d.set(RcString(*str), params.specificity);
   } else {

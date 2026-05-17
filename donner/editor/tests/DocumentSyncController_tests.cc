@@ -102,11 +102,14 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackMirrorsWithoutTextCh
 
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
   ASSERT_FALSE(textEditor_.isTextChanged());
+  const std::uint64_t documentGeneration = app_.document().documentGeneration();
 
   tool.onMouseDown(app_, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app_, Vector2d(25.0, 15.0), /*buttonHeld=*/true);
   tool.onMouseUp(app_, Vector2d(25.0, 15.0));
   ASSERT_TRUE(app_.flushFrame());
+  EXPECT_FALSE(app_.document().lastFlushResult().replacedDocument);
+  EXPECT_EQ(app_.document().documentGeneration(), documentGeneration);
 
   controller_.applyPendingWritebacks(app_, tool, textEditor_);
 
@@ -120,6 +123,7 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaW
 
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
   ASSERT_FALSE(textEditor_.isTextChanged());
+  const std::uint64_t documentGeneration = app_.document().documentGeneration();
 
   std::optional<svg::SVGElement> rect = app_.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
@@ -129,6 +133,8 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaW
   app_.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{.target = *target});
   app_.applyMutation(EditorCommand::DeleteElementCommand(*rect));
   ASSERT_TRUE(app_.flushFrame());
+  EXPECT_FALSE(app_.document().lastFlushResult().replacedDocument);
+  EXPECT_EQ(app_.document().documentGeneration(), documentGeneration);
   ASSERT_EQ(app_.document().lastFlushResult().sourceDeltas.size(), 1u);
 
   controller_.applyPendingWritebacks(app_, tool, textEditor_);

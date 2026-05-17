@@ -892,13 +892,24 @@ void SyncAttributeSourceLocationsFromParsed(XMLNode& target, const XMLNode& pars
   }
 }
 
-void SyncAttributesFromParsed(XMLNode& target, const XMLNode& parsedNode) {
+void SyncAttributesFromParsed(XMLNode& target, const XMLNode& parsedNode,
+                              std::vector<XMLMutation>* mutations = nullptr,
+                              ReparseScope mutationScope = ReparseScope::Document) {
   const AttributeMap currentAttributes = BuildAttributeMap(target);
   const AttributeMap parsedAttributes = BuildAttributeMap(parsedNode);
 
   for (const auto& [name, value] : currentAttributes) {
     if (!parsedAttributes.contains(name)) {
       target.removeAttribute(name);
+      if (mutations != nullptr) {
+        mutations->push_back(XMLMutation{
+            .kind = XMLMutation::Kind::AttributeRemoved,
+            .node = target,
+            .attributeName = name,
+            .value = std::nullopt,
+            .scope = mutationScope,
+        });
+      }
     }
   }
 
@@ -906,16 +917,39 @@ void SyncAttributesFromParsed(XMLNode& target, const XMLNode& parsedNode) {
     const auto currentIt = currentAttributes.find(name);
     if (currentIt == currentAttributes.end() || currentIt->second != value) {
       target.setAttribute(name, value);
+      if (mutations != nullptr) {
+        mutations->push_back(XMLMutation{
+            .kind = XMLMutation::Kind::AttributeSet,
+            .node = target,
+            .attributeName = name,
+            .value = value,
+            .scope = mutationScope,
+        });
+      }
     }
   }
 }
 
-void SyncValueFromParsed(XMLNode& target, const XMLNode& parsedNode) {
+void SyncValueFromParsed(XMLNode& target, const XMLNode& parsedNode,
+                         std::vector<XMLMutation>* mutations = nullptr,
+                         ReparseScope mutationScope = ReparseScope::Document) {
+  const std::optional<RcString> previousValue = target.value();
   std::optional<RcString> parsedValue = parsedNode.value();
   if (parsedValue.has_value()) {
     target.setValue(*parsedValue);
   } else if (target.entityHandle().all_of<components::XMLValueComponent>()) {
     target.entityHandle().remove<components::XMLValueComponent>();
+  }
+
+  const std::optional<RcString> updatedValue = target.value();
+  if (mutations != nullptr && previousValue != updatedValue) {
+    mutations->push_back(XMLMutation{
+        .kind = XMLMutation::Kind::NodeValueChanged,
+        .node = target,
+        .attributeName = XMLQualifiedName(""),
+        .value = updatedValue.value_or(RcString("")),
+        .scope = mutationScope,
+    });
   }
 }
 
@@ -955,17 +989,21 @@ XMLNode CloneParsedNodeInto(XMLDocument& document, const XMLNode& parsedNode,
                             std::size_t sourceOffsetBase);
 
 void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
-                                   const XMLNode& parsedTarget, std::size_t sourceOffsetBase);
+                                   const XMLNode& parsedTarget, std::size_t sourceOffsetBase,
+                                   std::vector<XMLMutation>* mutations = nullptr,
+                                   ReparseScope mutationScope = ReparseScope::Document);
 
 void SyncNodeFromParsed(XMLDocument& document, XMLNode& target, const XMLNode& parsedNode,
-                        std::size_t sourceOffsetBase) {
+                        std::size_t sourceOffsetBase, std::vector<XMLMutation>* mutations = nullptr,
+                        ReparseScope mutationScope = ReparseScope::Document) {
   if (target.type() == XMLNode::Type::Element || target.type() == XMLNode::Type::XMLDeclaration) {
-    SyncAttributesFromParsed(target, parsedNode);
+    SyncAttributesFromParsed(target, parsedNode, mutations, mutationScope);
     SyncAttributeSourceLocationsFromParsed(target, parsedNode, sourceOffsetBase);
-    ReplaceChildrenFromParsedNode(document, target, parsedNode, sourceOffsetBase);
+    ReplaceChildrenFromParsedNode(document, target, parsedNode, sourceOffsetBase, mutations,
+                                  mutationScope);
   }
 
-  SyncValueFromParsed(target, parsedNode);
+  SyncValueFromParsed(target, parsedNode, mutations, mutationScope);
   SetSourceOffsetsFromParsed(target, parsedNode, sourceOffsetBase);
 }
 
@@ -1058,7 +1096,9 @@ XMLNode CloneParsedNodeInto(XMLDocument& document, const XMLNode& parsedNode,
 }
 
 void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
-                                   const XMLNode& parsedTarget, std::size_t sourceOffsetBase) {
+                                   const XMLNode& parsedTarget, std::size_t sourceOffsetBase,
+                                   std::vector<XMLMutation>* mutations,
+                                   ReparseScope mutationScope) {
   std::vector<XMLNode> oldChildren;
   for (std::optional<XMLNode> child = target.firstChild(); child.has_value();
        child = child->nextSibling()) {
@@ -1073,25 +1113,46 @@ void ReplaceChildrenFromParsedNode(XMLDocument& document, XMLNode& target,
   for (std::optional<XMLNode> child = parsedTarget.firstChild(); child.has_value();
        child = child->nextSibling()) {
     std::optional<XMLNode> nodeToAppend;
+    bool reusedExistingChild = false;
     if (std::optional<std::size_t> oldIndex =
             FindReusableChild(*child, oldChildren, usedChildren)) {
       usedChildren[*oldIndex] = true;
       nodeToAppend = oldChildren[*oldIndex];
-      SyncNodeFromParsed(document, *nodeToAppend, *child, sourceOffsetBase);
+      reusedExistingChild = true;
+      SyncNodeFromParsed(document, *nodeToAppend, *child, sourceOffsetBase, mutations,
+                         mutationScope);
     } else {
       nodeToAppend = CloneParsedNodeInto(document, *child, sourceOffsetBase);
     }
 
     target.appendChild(*nodeToAppend);
+    if (mutations != nullptr && !reusedExistingChild) {
+      mutations->push_back(XMLMutation{
+          .kind = XMLMutation::Kind::NodeInserted,
+          .node = *nodeToAppend,
+          .attributeName = XMLQualifiedName(""),
+          .value = std::nullopt,
+          .scope = mutationScope,
+      });
+    }
   }
 
   for (std::size_t index = 0; index < oldChildren.size(); ++index) {
     if (!usedChildren[index]) {
       ClearSourceLocationsRecursive(oldChildren[index]);
+      if (mutations != nullptr) {
+        mutations->push_back(XMLMutation{
+            .kind = XMLMutation::Kind::NodeRemoved,
+            .node = oldChildren[index],
+            .attributeName = XMLQualifiedName(""),
+            .value = std::nullopt,
+            .scope = mutationScope,
+        });
+      }
     }
   }
 
-  SyncValueFromParsed(target, parsedTarget);
+  SyncValueFromParsed(target, parsedTarget, mutations, mutationScope);
 }
 
 void AppendAttributeMutations(XMLNode& node, const AttributeMap& currentAttributes,
@@ -1491,7 +1552,9 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
             elementSubtreeEdit->node);
       }
 
-      ReplaceChildrenFromParsedNode(*this, elementSubtreeEdit->node, *parsedNode, nodeStart);
+      std::vector<XMLMutation> subtreeMutations;
+      ReplaceChildrenFromParsedNode(*this, elementSubtreeEdit->node, *parsedNode, nodeStart,
+                                    &subtreeMutations, ReparseScope::ElementSubtree);
       result.mutations.push_back(XMLMutation{
           .kind = XMLMutation::Kind::SubtreeReplaced,
           .node = elementSubtreeEdit->node,
@@ -1499,6 +1562,8 @@ ApplySourceEditResult XMLDocument::applySourceEdit(const XMLEditIntent& intent) 
           .value = std::nullopt,
           .scope = ReparseScope::ElementSubtree,
       });
+      result.mutations.insert(result.mutations.end(), subtreeMutations.begin(),
+                              subtreeMutations.end());
       return finishSuccess(elementSubtreeEdit->node);
     }
 

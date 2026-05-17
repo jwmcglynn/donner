@@ -514,6 +514,51 @@ TEST_F(SVGInvalidationTests, SourceEditPathDataUpdatesGeometryAttribute) {
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
 }
 
+TEST_F(SVGInvalidationTests, SourceEditElementSubtreeAttributeRemovalClearsPathProjection) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="layer"><path id="target" d="M 0 0 L 10 10" /></g>
+    </svg>
+  )";
+  const std::string replacement = R"(<path id="target" />)";
+  const std::size_t pathOffset = input.find(R"(<path id="target")");
+  ASSERT_NE(pathOffset, std::string::npos);
+  const std::size_t pathEnd = input.find("/>", pathOffset);
+  ASSERT_NE(pathEnd, std::string::npos);
+
+  auto doc = parseSVG(input);
+  simulateRenderComplete(doc);
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const auto* path = target->entityHandle().try_get<components::PathComponent>();
+  ASSERT_NE(path, nullptr);
+  EXPECT_EQ(path->d.getRequired(), RcString("M 0 0 L 10 10"));
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(pathOffset), FileOffset::Offset(pathEnd + 2)},
+      .replacement = replacement,
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_GE(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::SubtreeReplaced);
+  bool sawPathDataRemoved = false;
+  for (const xml::XMLMutation& mutation : result.mutations) {
+    sawPathDataRemoved |= mutation.kind == xml::XMLMutation::Kind::AttributeRemoved &&
+                          mutation.attributeName == xml::XMLQualifiedName("d");
+  }
+  EXPECT_TRUE(sawPathDataRemoved);
+
+  EXPECT_FALSE(target->getAttribute("d").has_value());
+  EXPECT_TRUE(path->d.getRequired().empty());
+  EXPECT_EQ(doc.source().find(R"(d="M 0 0 L 10 10")"), std::string_view::npos);
+  EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
+}
+
 TEST_F(SVGInvalidationTests, SourceEditFeColorMatrixValuesRemovalClearsParsedValues) {
   const std::string input = R"SVG(
     <svg xmlns="http://www.w3.org/2000/svg">
@@ -659,8 +704,9 @@ TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedChildProjectsToSVG)
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
   ASSERT_FALSE(result.diagnostic.has_value()) << *result.diagnostic;
-  ASSERT_THAT(result.mutations, testing::SizeIs(1));
+  ASSERT_THAT(result.mutations, testing::SizeIs(2));
   EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::SubtreeReplaced);
+  EXPECT_EQ(result.mutations[1].kind, xml::XMLMutation::Kind::NodeInserted);
 
   auto insertedElement = doc.querySelector("#inserted");
   ASSERT_TRUE(insertedElement.has_value());
