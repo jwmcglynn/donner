@@ -9,6 +9,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -623,6 +624,40 @@ TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedTextProjectsTextCon
   ASSERT_TRUE(label->isa<SVGTextElement>());
   EXPECT_EQ(label->cast<SVGTextElement>().textContent(), RcString("hello"));
   EXPECT_TRUE(hasDirtyFlags(*label, DirtyFlagsComponent::All));
+}
+
+TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedStyleProjectsStylesheet) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="layer"><rect id="target" width="10" height="10" /></g>
+    </svg>
+  )";
+  const std::string inserted = R"(<style>rect { fill: blue; }</style>)";
+  const std::size_t insertOffset = input.find(R"(<g id="layer">)");
+  ASSERT_NE(insertOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  simulateRenderComplete(doc);
+
+  xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = inserted,
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+
+  std::optional<SVGElement> style = doc.querySelector("style");
+  ASSERT_TRUE(style.has_value());
+  EXPECT_TRUE(style->isa<SVGStyleElement>());
+
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(
+      target->getComputedStyle().fill.get(),
+      testing::Optional(PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))))));
 }
 
 // ---------------------------------------------------------------------------
