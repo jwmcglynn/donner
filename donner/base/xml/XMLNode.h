@@ -15,6 +15,13 @@ namespace donner::xml {
 // Forward declaration, #include "donner/base/xml/XMLDocument.h"
 class XMLDocument;
 
+/// Resolved source metadata for one serialized XML attribute.
+struct XMLAttributeSourceLocation {
+  SourceRange fullRange;   ///< Full serialized attribute range, e.g. `fill="red"`.
+  SourceRange valueRange;  ///< Unquoted value range, e.g. `red`.
+  char quote = '"';        ///< Quote delimiter used for the value.
+};
+
 /**
  * Represents an XML element belonging to an \ref donner::xml::XMLDocument.
  *
@@ -112,6 +119,20 @@ public:
    * @param tagName Node tag name, such as "xml" or "svg".
    */
   static XMLNode CreateElementNode(XMLDocument& document, const XMLQualifiedNameRef& tagName);
+
+  /**
+   * Create an XML element node facade on an existing entity in \p document.
+   *
+   * This is used by upper layers that create SVG entities programmatically and later need to
+   * insert them into an XML source-backed document. If \p handle already has a TreeComponent, its
+   * tag name must match \p tagName.
+   *
+   * @param document Containing document.
+   * @param handle Existing entity to attach XML element identity to.
+   * @param tagName Node tag name, such as "xml" or "svg".
+   */
+  static XMLNode CreateElementNodeOn(XMLDocument& document, EntityHandle handle,
+                                     const XMLQualifiedNameRef& tagName);
 
   /**
    * Create a new XML node for an element bound to \p document, with a given \p value. Note that
@@ -261,6 +282,36 @@ public:
   std::optional<SourceRange> getNodeLocation() const;
 
   /**
+   * Get this node's opening tag/source prefix location.
+   *
+   * For an element this is the opening tag, e.g. `<rect fill="red">` or `<rect/>`.
+   * For text-like nodes this is the fixed source prefix, e.g. `<!--` for comments.
+   *
+   * @return Resolved source range, or \c std::nullopt if unavailable.
+   */
+  std::optional<SourceRange> getOpeningTagLocation() const;
+
+  /**
+   * Get this node's closing tag/source suffix location.
+   *
+   * For an element this is the closing tag, e.g. `</text>`. For text-like nodes this is the fixed
+   * source suffix, e.g. `-->` for comments.
+   *
+   * @return Resolved source range, or \c std::nullopt if unavailable.
+   */
+  std::optional<SourceRange> getClosingTagLocation() const;
+
+  /**
+   * Get this node's value source location.
+   *
+   * For a data node this is the raw PCDATA span. For comments, CDATA, doctype, and processing
+   * instructions this excludes the XML delimiters.
+   *
+   * @return Resolved source range, or \c std::nullopt if unavailable.
+   */
+  std::optional<SourceRange> getValueLocation() const;
+
+  /**
    * Get the location of an attribute in the input string.
    *
    * For example, for the following XML:
@@ -280,6 +331,35 @@ public:
    */
   std::optional<SourceRange> getAttributeLocation(std::string_view xmlInput,
                                                   const XMLQualifiedNameRef& name) const;
+
+  /**
+   * Get resolved source metadata for an attribute.
+   *
+   * @param name Name of the attribute to locate.
+   * @return Resolved source metadata, or \c std::nullopt if unavailable.
+   */
+  std::optional<XMLAttributeSourceLocation> getAttributeSourceLocation(
+      const XMLQualifiedNameRef& name) const;
+
+  /**
+   * Store source metadata for an attribute using the document source store.
+   *
+   * If the node is not source-backed, any existing attribute metadata for \p name is cleared.
+   *
+   * @param name Name of the attribute to update.
+   * @param fullRange Full serialized attribute range.
+   * @param valueRange Unquoted value range.
+   * @param quote Quote delimiter used for the value.
+   */
+  void setAttributeSourceLocation(const XMLQualifiedNameRef& name, SourceRange fullRange,
+                                  SourceRange valueRange, char quote);
+
+  /**
+   * Clear source metadata for an attribute.
+   *
+   * @param name Name of the attribute to clear.
+   */
+  void clearAttributeSourceLocation(const XMLQualifiedNameRef& name);
 
   /// Get the list of attributes for this element.
   SmallVector<XMLQualifiedNameRef, 10> attributes() const;
@@ -427,6 +507,36 @@ public:
   void setSourceEndOffset(FileOffset offset);
 
   /**
+   * Store this node's opening tag/source prefix location.
+   *
+   * @param range Opening tag/source prefix range.
+   */
+  void setOpeningTagLocation(SourceRange range);
+
+  /// Clear this node's opening tag/source prefix location.
+  void clearOpeningTagLocation();
+
+  /**
+   * Store this node's closing tag/source suffix location.
+   *
+   * @param range Closing tag/source suffix range.
+   */
+  void setClosingTagLocation(SourceRange range);
+
+  /// Clear this node's closing tag/source suffix location.
+  void clearClosingTagLocation();
+
+  /**
+   * Store this node's value source location.
+   *
+   * @param range Value source range.
+   */
+  void setValueLocation(SourceRange range);
+
+  /// Clear this node's value source location.
+  void clearValueLocation();
+
+  /**
    * Clear this node's source location and invalidate any backing source anchors.
    *
    * This is used when a source-backed node is detached from the document so stale callers cannot
@@ -459,9 +569,10 @@ public:
    * extra indentation.
    *
    * @param indentLevel Current indentation depth; each level adds 2 spaces of leading whitespace.
+   * @param prettyPrint Whether to insert indentation whitespace between child elements.
    * @return The serialized XML string.
    */
-  RcString serializeToString(int indentLevel = 0) const;
+  RcString serializeToString(int indentLevel = 0, bool prettyPrint = true) const;
 
   /**
    * Returns true if the two XMLNode handles reference the same underlying document.

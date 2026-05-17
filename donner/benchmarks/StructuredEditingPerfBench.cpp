@@ -27,6 +27,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/base/xml/XMLParser.h"
+#include "donner/base/xml/XMLTokenizer.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -42,7 +43,13 @@ using donner::Transform2d;
 using donner::Vector2d;
 using donner::svg::SVGDocument;
 using donner::svg::parser::SVGParser;
+using donner::xml::Tokenize;
 using donner::xml::XMLParser;
+using donner::xml::XMLToken;
+
+struct NoTokenSink {
+  void operator()(XMLToken) const noexcept {}
+};
 
 // ---------------------------------------------------------------------------
 // Representative SVG inputs
@@ -148,6 +155,18 @@ static void BM_XMLParse_Large(benchmark::State& state) {
   state.SetItemsProcessed(state.iterations());
 }
 BENCHMARK(BM_XMLParse_Large);
+
+// ---------------------------------------------------------------------------
+// BM_XMLTokenizer: lexer-only token callback path used by syntax highlighting
+// ---------------------------------------------------------------------------
+
+static void BM_XMLTokenizer_EmptySink(benchmark::State& state) {
+  for (auto _ : state) {
+    Tokenize(kTrivialSvg, NoTokenSink{});
+  }
+  state.SetBytesProcessed(static_cast<int64_t>(state.iterations() * kTrivialSvg.size()));
+}
+BENCHMARK(BM_XMLTokenizer_EmptySink);
 
 // ---------------------------------------------------------------------------
 // BM_GetAttributeLocation: the lookup the writeback path uses

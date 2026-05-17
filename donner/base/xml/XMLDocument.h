@@ -20,9 +20,11 @@ namespace donner::xml {
 
 /// Result of locating an attribute at a source offset.
 struct XMLAttributeAtSourceOffset {
-  XMLNode node;           ///< Element node that owns the attribute.
-  XMLQualifiedName name;  ///< Attribute name.
-  SourceRange location;   ///< Current full source range of the attribute.
+  XMLNode node;               ///< Element node that owns the attribute.
+  XMLQualifiedName name;      ///< Attribute name.
+  SourceRange location;       ///< Current full source range of the attribute.
+  SourceRange valueLocation;  ///< Current unquoted value source range.
+  char quote = '"';           ///< Quote delimiter used for the value.
 };
 
 /// Local XML reparse scope chosen for a source edit.
@@ -76,6 +78,7 @@ struct XMLMutation {
   XMLNode node;                                 ///< Mutated node.
   XMLQualifiedName attributeName;               ///< Attribute name for attribute mutations.
   std::optional<RcString> value;                ///< New value when relevant.
+  std::optional<ParseDiagnostic> diagnostic;    ///< Source diagnostic for diagnostic mutations.
   ReparseScope scope = ReparseScope::Document;  ///< Scope that produced the mutation.
 };
 
@@ -184,8 +187,9 @@ public:
    * the source change through \ref XMLSourceStore, chooses the smallest implemented reparse scope,
    * and emits XML mutations for scopes that can update the live tree.
    *
-   * The first implementation handles `AttributeValue` edits. Wider scopes keep the source bytes
-   * current and return a diagnostic so callers can preserve the last valid semantic projection.
+   * Implemented local scopes keep source bytes current and either update the live tree or return a
+   * scoped diagnostic so callers can preserve the last valid semantic projection while the edited
+   * XML is temporarily malformed.
    *
    * @param intent Source edit request.
    */
@@ -217,6 +221,21 @@ public:
    * @param name Attribute name to remove.
    */
   ApplySourceEditResult removeAttribute(XMLNode node, const XMLQualifiedNameRef& name);
+
+  /**
+   * Insert a source-less XML node under a source-backed parent and update owned source text.
+   *
+   * The first implementation supports inserting an unparented node into an element that has a
+   * parsed closing tag. If \p referenceNode is set, it must be an existing child of \p parent and
+   * the new node is inserted immediately before it; otherwise the new node is appended before
+   * \p parent 's closing tag.
+   *
+   * @param parent Element node to receive the inserted child.
+   * @param node Source-less node to insert.
+   * @param referenceNode Optional existing child to insert before.
+   */
+  ApplySourceEditResult insertNode(XMLNode parent, XMLNode node,
+                                   std::optional<XMLNode> referenceNode = std::nullopt);
 
   /**
    * Remove a source-backed XML node through this document.

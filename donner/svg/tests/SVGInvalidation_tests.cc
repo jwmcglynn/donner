@@ -386,6 +386,38 @@ TEST_F(SVGInvalidationTests, RemoveElementUpdatesSourceThroughXMLDocument) {
   EXPECT_TRUE(hasDirtyFlags(*parent, DirtyFlagsComponent::All));
 }
 
+TEST_F(SVGInvalidationTests, RemoveElementConsumesNodeRemovedMutation) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent"><rect id="target" width="10" height="10" /><circle id="sibling" /></g>
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto parent = doc.querySelector("#parent");
+  ASSERT_TRUE(parent.has_value());
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  xml::ApplySourceEditResult result = doc.removeElement(*target);
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_THAT(result.mutations, testing::SizeIs(1));
+  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::NodeRemoved);
+
+  EXPECT_EQ(doc.source().find(R"(<rect id="target")"), std::string_view::npos);
+  EXPECT_FALSE(doc.querySelector("#target").has_value());
+  ASSERT_TRUE(parent->firstChild().has_value());
+  EXPECT_THAT(parent->firstChild()->getAttribute("id"), testing::Optional(RcString("sibling")));
+  EXPECT_EQ(target->parentElement(), std::nullopt);
+  EXPECT_TRUE(hasDirtyFlags(*parent, DirtyFlagsComponent::All));
+}
+
 TEST_F(SVGInvalidationTests, SourceEditInvalidPresentationAttributeKeepsLastValidStyle) {
   const std::string input = R"(
     <svg xmlns="http://www.w3.org/2000/svg">
@@ -556,6 +588,50 @@ TEST_F(SVGInvalidationTests, SourceEditTextNodeUpdatesTextContent) {
   EXPECT_NE(doc.source().find(">world<"), std::string_view::npos);
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::TextGeometry));
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::RenderInstance));
+}
+
+TEST_F(SVGInvalidationTests, SourceEditTextDirtyDiagnosticClearsThroughMutation) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="target">a&#65;b</text>
+    </svg>
+  )";
+  const std::size_t entityOffset = input.find("&#65;");
+  ASSERT_NE(entityOffset, std::string::npos);
+
+  auto doc = parseSVG(input);
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EXPECT_EQ(target->cast<SVGTextElement>().textContent(), RcString("aAb"));
+
+  xml::ApplySourceEditResult dirtyResult = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(entityOffset + 4), FileOffset::Offset(entityOffset + 5)},
+      .replacement = "",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  EXPECT_TRUE(dirtyResult.applied);
+  EXPECT_EQ(dirtyResult.scope, xml::ReparseScope::TextNode);
+  ASSERT_TRUE(dirtyResult.diagnostic.has_value());
+  ASSERT_THAT(dirtyResult.mutations, testing::SizeIs(1));
+  EXPECT_EQ(dirtyResult.mutations[0].kind, xml::XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_TRUE(dirtyResult.mutations[0].diagnostic.has_value());
+  EXPECT_EQ(target->cast<SVGTextElement>().textContent(), RcString("aAb"));
+
+  xml::ApplySourceEditResult recoveryResult = doc.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(entityOffset + 4), FileOffset::Offset(entityOffset + 4)},
+      .replacement = ";",
+      .sourceVersion = doc.sourceVersion(),
+  });
+
+  expectNoDiagnostic(recoveryResult);
+  EXPECT_TRUE(recoveryResult.applied);
+  EXPECT_EQ(recoveryResult.scope, xml::ReparseScope::TextNode);
+  ASSERT_THAT(recoveryResult.mutations, testing::SizeIs(2));
+  EXPECT_EQ(recoveryResult.mutations[0].kind, xml::XMLMutation::Kind::NodeValueChanged);
+  EXPECT_EQ(recoveryResult.mutations[1].kind, xml::XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(recoveryResult.mutations[1].diagnostic, std::nullopt);
+  EXPECT_EQ(target->cast<SVGTextElement>().textContent(), RcString("aAb"));
 }
 
 TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedChildProjectsToSVG) {
@@ -735,6 +811,101 @@ TEST_F(SVGInvalidationTests, AppendChildSetsNeedsFullRebuild) {
   EXPECT_TRUE(renderState.needsFullRebuild);
 }
 
+TEST_F(SVGInvalidationTests, InsertElementAppendsSourceBackedProgrammaticChild) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent"></g>
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto parent = doc.querySelector("#parent");
+  ASSERT_TRUE(parent.has_value());
+  auto newChild = SVGRectElement::Create(doc);
+  newChild.setAttribute("id", "inserted");
+  newChild.setAttribute("width", "10");
+
+  xml::ApplySourceEditResult result = doc.insertElement(*parent, newChild);
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_THAT(result.mutations, testing::SizeIs(1));
+  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::NodeInserted);
+
+  EXPECT_NE(doc.source().find(R"(<rect id="inserted" width="10"/>)"), std::string_view::npos);
+  auto inserted = doc.querySelector("#inserted");
+  ASSERT_TRUE(inserted.has_value());
+  EXPECT_EQ(*inserted, newChild);
+  EXPECT_EQ(parent->firstChild(), inserted);
+  EXPECT_TRUE(hasDirtyFlags(*parent, DirtyFlagsComponent::All));
+  EXPECT_TRUE(hasDirtyFlags(newChild, DirtyFlagsComponent::All));
+}
+
+TEST_F(SVGInvalidationTests, AppendChildUpdatesSourceThroughXMLDocument) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent"></g>
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto parent = doc.querySelector("#parent");
+  ASSERT_TRUE(parent.has_value());
+  auto newChild = SVGRectElement::Create(doc);
+  newChild.setAttribute("id", "inserted");
+
+  parent->appendChild(newChild);
+
+  EXPECT_NE(doc.source().find(R"(<rect id="inserted"/>)"), std::string_view::npos);
+  auto inserted = doc.querySelector("#inserted");
+  ASSERT_TRUE(inserted.has_value());
+  EXPECT_EQ(*inserted, newChild);
+  EXPECT_EQ(parent->firstChild(), inserted);
+  EXPECT_TRUE(hasDirtyFlags(*parent, DirtyFlagsComponent::All));
+  EXPECT_TRUE(hasDirtyFlags(newChild, DirtyFlagsComponent::All));
+}
+
+TEST_F(SVGInvalidationTests, InsertBeforeUpdatesSourceThroughXMLDocument) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent"><circle id="sibling" /></g>
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto parent = doc.querySelector("#parent");
+  ASSERT_TRUE(parent.has_value());
+  auto sibling = doc.querySelector("#sibling");
+  ASSERT_TRUE(sibling.has_value());
+  auto newChild = SVGRectElement::Create(doc);
+  newChild.setAttribute("id", "inserted");
+
+  parent->insertBefore(newChild, sibling);
+
+  const std::size_t insertedOffset = doc.source().find(R"(<rect id="inserted"/>)");
+  const std::size_t siblingOffset = doc.source().find(R"(<circle id="sibling")");
+  ASSERT_NE(insertedOffset, std::string_view::npos);
+  ASSERT_NE(siblingOffset, std::string_view::npos);
+  EXPECT_LT(insertedOffset, siblingOffset);
+
+  auto inserted = doc.querySelector("#inserted");
+  ASSERT_TRUE(inserted.has_value());
+  EXPECT_EQ(*inserted, newChild);
+  EXPECT_EQ(parent->firstChild(), inserted);
+  ASSERT_TRUE(inserted->nextSibling().has_value());
+  EXPECT_EQ(*inserted->nextSibling(), *sibling);
+}
+
 // ---------------------------------------------------------------------------
 // removeChild
 // ---------------------------------------------------------------------------
@@ -778,6 +949,32 @@ TEST_F(SVGInvalidationTests, RemoveChildSetsNeedsFullRebuild) {
 
   auto& renderState = doc.registry().ctx().get<RenderTreeState>();
   EXPECT_TRUE(renderState.needsFullRebuild);
+}
+
+TEST_F(SVGInvalidationTests, RemoveChildUpdatesSourceThroughXMLDocument) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <g id="parent"><rect id="target" width="10" height="10" /><circle id="sibling" /></g>
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto parent = doc.querySelector("#parent");
+  ASSERT_TRUE(parent.has_value());
+  auto target = doc.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  parent->removeChild(*target);
+
+  EXPECT_EQ(doc.source().find(R"(<rect id="target")"), std::string_view::npos);
+  EXPECT_FALSE(doc.querySelector("#target").has_value());
+  ASSERT_TRUE(parent->firstChild().has_value());
+  EXPECT_THAT(parent->firstChild()->getAttribute("id"), testing::Optional(RcString("sibling")));
+  EXPECT_EQ(target->parentElement(), std::nullopt);
+  EXPECT_TRUE(hasDirtyFlags(*parent, DirtyFlagsComponent::All));
 }
 
 // ---------------------------------------------------------------------------

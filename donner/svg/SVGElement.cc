@@ -422,6 +422,12 @@ std::optional<SVGElement> SVGElement::nextSibling() const {
 }
 
 void SVGElement::insertBefore(const SVGElement& newNode, std::optional<SVGElement> referenceNode) {
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
+    (void)document.insertElement(*this, newNode, referenceNode);
+    return;
+  }
+
   handle_.get<donner::components::TreeComponent>().insertBefore(
       registry(), newNode.handle_.entity(),
       referenceNode ? referenceNode->handle_.entity() : entt::null);
@@ -432,6 +438,12 @@ void SVGElement::insertBefore(const SVGElement& newNode, std::optional<SVGElemen
 }
 
 void SVGElement::appendChild(const SVGElement& child) {
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
+    (void)document.insertElement(*this, child, std::nullopt);
+    return;
+  }
+
   handle_.get<donner::components::TreeComponent>().appendChild(registry(),
                                                                child.entityHandle().entity());
   markNeedsFullRebuild(handle_);
@@ -448,6 +460,15 @@ void SVGElement::replaceChild(const SVGElement& newChild, const SVGElement& oldC
 }
 
 void SVGElement::removeChild(const SVGElement& child) {
+  const std::optional<SVGElement> childParent = child.parentElement();
+  if (childParent.has_value() && *childParent == *this) {
+    SVGDocument document = ownerDocument();
+    if (document.hasSourceStore()) {
+      (void)document.removeElement(child);
+      return;
+    }
+  }
+
   handle_.get<donner::components::TreeComponent>().removeChild(registry(),
                                                                child.entityHandle().entity());
   markNeedsFullRebuild(handle_);

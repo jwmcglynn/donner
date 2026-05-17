@@ -148,6 +148,17 @@ public:
                                                     const xml::XMLQualifiedNameRef& name);
 
   /**
+   * Insert an element into the document tree and return any XML-owned source edit result.
+   *
+   * @param parent Element that receives \p element as a child.
+   * @param element Element to insert.
+   * @param referenceElement Optional existing child to insert before.
+   */
+  xml::ApplySourceEditResult insertElement(
+      const SVGElement& parent, const SVGElement& element,
+      std::optional<SVGElement> referenceElement = std::nullopt);
+
+  /**
    * Remove an element from the document tree and return any XML-owned source edit result.
    *
    * @param element Element to remove.

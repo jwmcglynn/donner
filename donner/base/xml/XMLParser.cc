@@ -85,7 +85,26 @@ static size_t FindEntityDeclEnd(const ChunkedString& text, size_t start) {
 struct ParsedAttribute {
   XMLQualifiedNameRef name;
   RcStringOrRef value;
+  SourceRange fullRange;
+  SourceRange valueRange;
+  char quote = '"';
 };
+
+std::optional<SourceRange> MakeTrimmedRange(FileOffset start, FileOffset end,
+                                            std::size_t trimStart = 0, std::size_t trimEnd = 0) {
+  if (!start.offset.has_value() || !end.offset.has_value() || *end.offset < trimEnd ||
+      *end.offset < *start.offset + trimStart || *end.offset - trimEnd < *start.offset) {
+    return std::nullopt;
+  }
+
+  const std::size_t rangeStart = *start.offset + trimStart;
+  const std::size_t rangeEnd = *end.offset - trimEnd;
+  if (rangeEnd < rangeStart) {
+    return std::nullopt;
+  }
+
+  return SourceRange{FileOffset::Offset(rangeStart), FileOffset::Offset(rangeEnd)};
+}
 
 /// Returns true if the Unicode codepoint is a valid NameStartChar per XML 1.0 production [4].
 /// @see https://www.w3.org/TR/xml/#NT-NameStartChar
@@ -379,14 +398,11 @@ public:
 
     // Now parse attributes until we reach `>` or `/>` or we run out
     while (true) {
-      const FileOffset attributeStartOffset = currentOffsetWithLineNumber(remaining_);
-
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
       if (maybeAttribute.hasError()) {
         return std::nullopt;
       }
 
-      const FileOffset attributeEndOffset = currentOffsetWithLineNumber(remaining_);
       skipWhitespace(remaining_);
 
       if (!maybeAttribute.result().has_value()) {
@@ -395,7 +411,7 @@ public:
 
       const ParsedAttribute& attribute = maybeAttribute.result().value();
       if (attribute.name == name) {
-        return SourceRange{attributeStartOffset, attributeEndOffset};
+        return attribute.fullRange;
       }
     }
 
@@ -986,12 +1002,15 @@ private:
       return createParseError("XML declaration missing closing '?>'");
     }
 
-    declaration.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+    const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+    declaration.setSourceEndOffset(endOffset);
+    declaration.setOpeningTagLocation(SourceRange{startOffset, endOffset});
     return declaration;
   }
 
   // Parse XML comment (<!--...)
   ParseResult<std::optional<XMLNode>> parseComment(FileOffset startOffset) {
+    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
     const auto maybeComment = consumeContentsUntilEndString("-->");
     if (!maybeComment) {
       return createParseError("Comment node does not end with '-->'");
@@ -1006,7 +1025,29 @@ private:
       }
       XMLNode commentNode = XMLNode::CreateCommentNode(document_, commentStr.toSingleRcString());
       commentNode.setSourceStartOffset(startOffset);
-      commentNode.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+      const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+      commentNode.setSourceEndOffset(endOffset);
+      if (std::optional<SourceRange> openingRange = MakeTrimmedRange(startOffset, endOffset, 0, 3);
+          openingRange.has_value() && openingRange->start.offset.has_value() &&
+          openingRange->end.offset.has_value() &&
+          *openingRange->end.offset >= *openingRange->start.offset + 4) {
+        commentNode.setOpeningTagLocation(SourceRange{
+            openingRange->start,
+            FileOffset::Offset(*openingRange->start.offset + 4),
+        });
+      }
+      if (std::optional<SourceRange> closingRange = MakeTrimmedRange(startOffset, endOffset, 4, 0);
+          closingRange.has_value() && closingRange->end.offset.has_value() &&
+          *closingRange->end.offset >= 3) {
+        commentNode.setClosingTagLocation(SourceRange{
+            FileOffset::Offset(*closingRange->end.offset - 3),
+            closingRange->end,
+        });
+      }
+      if (std::optional<SourceRange> valueRange =
+              MakeTrimmedRange(valueStartOffset, endOffset, 0, 3)) {
+        commentNode.setValueLocation(*valueRange);
+      }
       return std::make_optional(commentNode);
     } else {
       return std::optional<XMLNode>(std::nullopt);
@@ -1020,6 +1061,8 @@ private:
    * detect `<!ENTITY>` declarations in the internal subset and record them.
    */
   ParseResult<std::optional<XMLNode>> parseDoctype(FileOffset startOffset) {
+    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
+
     // We read until the first '>' at nesting level 0, while also handling the internal subset
     // `[...]`
     int bracketLevel = 0;
@@ -1087,7 +1130,13 @@ private:
       }
       XMLNode docNode = XMLNode::CreateDocTypeNode(document_, doctypeStr.toSingleRcString());
       docNode.setSourceStartOffset(startOffset);
-      docNode.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+      const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+      docNode.setSourceEndOffset(endOffset);
+      docNode.setOpeningTagLocation(SourceRange{startOffset, endOffset});
+      if (std::optional<SourceRange> valueRange =
+              MakeTrimmedRange(valueStartOffset, endOffset, 0, 1)) {
+        docNode.setValueLocation(*valueRange);
+      }
       return std::optional<XMLNode>(docNode);
     } else {
       return std::optional<XMLNode>(std::nullopt);
@@ -1104,6 +1153,7 @@ private:
 
     // Skip whitespace after the PI name.
     skipWhitespace(remaining_);
+    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
 
     // Consume contents until finding a '?>'
     const auto maybePiValue = consumeContentsUntilEndString("?>");
@@ -1120,7 +1170,13 @@ private:
       XMLNode pi = XMLNode::CreateProcessingInstructionNode(document_, piName.toSingleRcString(),
                                                             piValue.toSingleRcString());
       pi.setSourceStartOffset(startOffset);
-      pi.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+      const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+      pi.setSourceEndOffset(endOffset);
+      pi.setOpeningTagLocation(SourceRange{startOffset, endOffset});
+      if (std::optional<SourceRange> valueRange =
+              MakeTrimmedRange(valueStartOffset, endOffset, 0, 2)) {
+        pi.setValueLocation(*valueRange);
+      }
       return std::make_optional(pi);
     } else {
       return std::optional<XMLNode>(std::nullopt);
@@ -1147,11 +1203,14 @@ private:
       // Create new data node
       XMLNode data = XMLNode::CreateDataNode(document_, dataStrAllocated);
       data.setSourceStartOffset(startOffset);
-      data.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+      const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+      data.setSourceEndOffset(endOffset);
+      data.setValueLocation(SourceRange{startOffset, endOffset});
       node.appendChild(data);
 
       // Add data to parent node as well
       node.setValue(dataStrAllocated);
+      node.setValueLocation(SourceRange{startOffset, endOffset});
     }
 
     // Return character that ends data
@@ -1175,7 +1234,28 @@ private:
 
     XMLNode cdata = XMLNode::CreateCDataNode(document_, cdataStr.toSingleRcString());
     cdata.setSourceStartOffset(startOffset);
-    cdata.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+    const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+    cdata.setSourceEndOffset(endOffset);
+    if (std::optional<SourceRange> openingRange = MakeTrimmedRange(startOffset, endOffset, 0, 3);
+        openingRange.has_value() && openingRange->start.offset.has_value() &&
+        openingRange->end.offset.has_value() &&
+        *openingRange->end.offset >= *openingRange->start.offset + 9) {
+      cdata.setOpeningTagLocation(SourceRange{
+          openingRange->start,
+          FileOffset::Offset(*openingRange->start.offset + 9),
+      });
+    }
+    if (std::optional<SourceRange> closingRange = MakeTrimmedRange(startOffset, endOffset, 9, 0);
+        closingRange.has_value() && closingRange->end.offset.has_value() &&
+        *closingRange->end.offset >= 3) {
+      cdata.setClosingTagLocation(SourceRange{
+          FileOffset::Offset(*closingRange->end.offset - 3),
+          closingRange->end,
+      });
+    }
+    if (std::optional<SourceRange> valueRange = MakeTrimmedRange(startOffset, endOffset, 9, 3)) {
+      cdata.setValueLocation(*valueRange);
+    }
     return cdata;
   }
 
@@ -1307,6 +1387,8 @@ private:
 
     // Determine ending type
     if (tryConsume(remaining_, ">")) {
+      element.setOpeningTagLocation(
+          SourceRange{startOffset, currentOffsetWithLineNumber(remaining_)});
       // Enter the element — bump nesting depth before recursing, restore on exit.
       if (nestingDepth_ >= maxNestingDepth_) {
         return createParseError("Maximum element nesting depth exceeded", startOffset);
@@ -1320,6 +1402,8 @@ private:
 
     } else if (tryConsume(remaining_, "/>")) {
       // Self-closing tag
+      element.setOpeningTagLocation(
+          SourceRange{startOffset, currentOffsetWithLineNumber(remaining_)});
     } else {
       return createParseError("Node not closed with '>' or '/>'");
     }
@@ -1441,6 +1525,7 @@ private:
         }
 
         if (tryConsume(remaining_, "</")) {  // Node closing
+          const FileOffset closingTagOpenStart = currentOffsetWithLineNumber(contentsStart);
           const FileOffset closingTagStart = currentOffsetWithLineNumber(remaining_);
 
           auto maybeClosingName = consumeQualifiedName();
@@ -1460,6 +1545,8 @@ private:
             return createParseError("Expected '>' for closing tag");
           }
 
+          node.setClosingTagLocation(
+              SourceRange{closingTagOpenStart, currentOffsetWithLineNumber(remaining_)});
           return std::nullopt;  // Node closed, finished parsing contents
         } else {
           FileOffset startOffset = currentOffsetWithLineNumber(remaining_);
@@ -1494,6 +1581,7 @@ private:
    * @returns nullopt if none found.
    */
   ParseResult<std::optional<ParsedAttribute>> parseNextAttribute() {
+    const FileOffset attributeStartOffset = currentOffsetWithLineNumber(remaining_);
     {
       const char nextCh = peek(remaining_).value_or('\0');
       const uint8_t ub = static_cast<uint8_t>(nextCh);
@@ -1534,6 +1622,7 @@ private:
 
     const char quote = maybeQuote.value();
     remaining_.remove_prefix(1);
+    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
 
     // Extract attribute value and expand char refs in it
     auto maybeValue = quote == '\'' ? consumeAttributeExpandEntities<'\''>()
@@ -1541,6 +1630,7 @@ private:
     if (maybeValue.hasError()) {
       return std::move(maybeValue.error());
     }
+    const FileOffset valueEndOffset = currentOffsetWithLineNumber(remaining_);
 
     // Make sure that end quote is present
     if (!tryConsume(remaining_, std::string_view(&quote, 1))) {
@@ -1550,8 +1640,15 @@ private:
         return createParseError("Attribute value not closed with '\"'");
       }
     }
+    const FileOffset attributeEndOffset = currentOffsetWithLineNumber(remaining_);
 
-    ParsedAttribute result{name, maybeValue.result().toSingleRcString()};
+    ParsedAttribute result{
+        .name = name,
+        .value = maybeValue.result().toSingleRcString(),
+        .fullRange = SourceRange{attributeStartOffset, attributeEndOffset},
+        .valueRange = SourceRange{valueStartOffset, valueEndOffset},
+        .quote = quote,
+    };
     return std::make_optional(result);
   }
 
@@ -1577,6 +1674,8 @@ private:
         ++attributeCount;
         const ParsedAttribute& attribute = maybeAttribute.result().value();
         node.setAttribute(attribute.name, attribute.value);
+        node.setAttributeSourceLocation(attribute.name, attribute.fullRange, attribute.valueRange,
+                                        attribute.quote);
       } else {
         break;
       }

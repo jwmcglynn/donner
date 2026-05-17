@@ -19,6 +19,7 @@ donner_cc_library(
     srcs = [
         "XMLDocument.cc",
         "XMLEscape.cc",
+        "XMLIncrementalParser.cc",
         "XMLNode.cc",
         "XMLParser.cc",
         "XMLSourceStore.cc",
@@ -26,6 +27,7 @@ donner_cc_library(
     hdrs = [
         "XMLDocument.h",
         "XMLEscape.h",
+        "XMLIncrementalParser.h",
         "XMLNode.h",
         "XMLParser.h",
         "XMLSourceStore.h",
@@ -95,6 +97,17 @@ donner_cc_fuzzer(
         "tests/XMLParser_structured_fuzzer.cc",
     ],
     corpus = "tests/xml_parser_structured_corpus",
+    deps = [
+        ":xml",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "xml_tokenizer_fuzzer",
+    srcs = [
+        "tests/XMLTokenizer_fuzzer.cc",
+    ],
+    corpus = "tests/xml_tokenizer_corpus",
     deps = [
         ":xml",
     ],

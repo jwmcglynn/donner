@@ -261,6 +261,42 @@ void MarkChildRemoved(EntityHandle parentHandle) {
       components::DirtyFlagsComponent::All);
 }
 
+void MarkDirtySubtree(EntityHandle handle, uint16_t flags) {
+  handle.get_or_emplace<components::DirtyFlagsComponent>().mark(flags);
+
+  donner::components::ForAllChildrenRecursive(handle, [flags](EntityHandle descendant) {
+    descendant.get_or_emplace<components::DirtyFlagsComponent>().mark(flags);
+  });
+}
+
+void MarkChildInserted(EntityHandle parentHandle, EntityHandle childHandle) {
+  components::RenderTreeState& renderState = GetRenderTreeState(parentHandle);
+  renderState.needsFullRebuild = true;
+  renderState.needsFullStyleRecompute = true;
+
+  parentHandle.get_or_emplace<components::DirtyFlagsComponent>().mark(
+      components::DirtyFlagsComponent::All);
+  MarkDirtySubtree(childHandle, components::DirtyFlagsComponent::All);
+}
+
+SourceRange FallbackRange() {
+  return SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)};
+}
+
+xml::XMLNode EnsureXMLSubtreeForSVGElement(xml::XMLDocument& document, const SVGElement& element) {
+  std::optional<xml::XMLNode> node = xml::XMLNode::TryCast(element.entityHandle());
+  if (!node.has_value()) {
+    node = xml::XMLNode::CreateElementNodeOn(document, element.entityHandle(), element.tagName());
+  }
+
+  for (std::optional<SVGElement> child = element.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    (void)EnsureXMLSubtreeForSVGElement(document, *child);
+  }
+
+  return *node;
+}
+
 void ProjectTextContents(EntityHandle handle, const xml::XMLNode& node) {
   if (!handle.all_of<components::TextComponent>()) {
     return;
@@ -485,6 +521,46 @@ xml::ApplySourceEditResult SVGDocument::removeElementAttribute(
   return xml::ApplySourceEditResult();
 }
 
+xml::ApplySourceEditResult SVGDocument::insertElement(const SVGElement& parent,
+                                                      const SVGElement& element,
+                                                      std::optional<SVGElement> referenceElement) {
+  if (hasSourceStore()) {
+    std::optional<xml::XMLNode> parentNode = xml::XMLNode::TryCast(parent.handle_);
+    if (parentNode.has_value()) {
+      xml::ApplySourceEditResult result;
+      std::optional<xml::XMLNode> referenceNode;
+      if (referenceElement.has_value()) {
+        referenceNode = xml::XMLNode::TryCast(referenceElement->handle_);
+        if (!referenceNode.has_value()) {
+          result.scope = xml::ReparseScope::ElementSubtree;
+          result.diagnostic =
+              ParseDiagnostic::Error("Cannot insert before an element without XML source identity",
+                                     parentNode->getNodeLocation().value_or(FallbackRange()));
+          return result;
+        }
+      }
+
+      xml::XMLDocument document = xmlDocument();
+      xml::XMLNode insertedNode = EnsureXMLSubtreeForSVGElement(document, element);
+      result = document.insertNode(*parentNode, insertedNode, referenceNode);
+      for (const xml::XMLMutation& mutation : result.mutations) {
+        std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
+        if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
+          result.diagnostic = std::move(projectionDiagnostic);
+        }
+      }
+
+      if (result.applied) {
+        MarkChildInserted(parent.entityHandle(), element.entityHandle());
+      }
+
+      return result;
+    }
+  }
+
+  return xml::ApplySourceEditResult();
+}
+
 xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element) {
   const std::optional<SVGElement> parent = element.parentElement();
 
@@ -492,6 +568,12 @@ xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element)
     std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
     if (xmlNode.has_value()) {
       xml::ApplySourceEditResult result = xmlDocument().removeNode(*xmlNode);
+      for (const xml::XMLMutation& mutation : result.mutations) {
+        std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
+        if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
+          result.diagnostic = std::move(projectionDiagnostic);
+        }
+      }
       if (result.applied && parent.has_value()) {
         MarkChildRemoved(parent->entityHandle());
       }
@@ -531,8 +613,24 @@ xml::XMLDocument SVGDocument::xmlDocument() const {
 }
 
 std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutation& mutation) {
+  if (mutation.kind == xml::XMLMutation::Kind::SourceDiagnosticChanged) {
+    return mutation.diagnostic;
+  }
+
   if (mutation.kind == xml::XMLMutation::Kind::NodeValueChanged) {
     return ApplyNodeValueChanged(source(), mutation);
+  }
+
+  if (mutation.kind == xml::XMLMutation::Kind::NodeRemoved) {
+    return std::nullopt;
+  }
+
+  if (mutation.kind == xml::XMLMutation::Kind::NodeInserted) {
+    if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(mutation.node)) {
+      return diagnostic;
+    }
+    MarkSubtreeReplaced(mutation.node.entityHandle());
+    return std::nullopt;
   }
 
   const EntityHandle handle = mutation.node.entityHandle();
@@ -561,9 +659,13 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
       element.removeAttributeFromXMLMutation(mutation.attributeName);
       return std::nullopt;
 
-    case xml::XMLMutation::Kind::SourceDiagnosticChanged: return std::nullopt;
+    case xml::XMLMutation::Kind::SourceDiagnosticChanged: UTILS_UNREACHABLE();
 
     case xml::XMLMutation::Kind::NodeValueChanged: UTILS_UNREACHABLE();
+
+    case xml::XMLMutation::Kind::NodeInserted: UTILS_UNREACHABLE();
+
+    case xml::XMLMutation::Kind::NodeRemoved: UTILS_UNREACHABLE();
 
     case xml::XMLMutation::Kind::SubtreeReplaced:
       if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(mutation.node)) {
@@ -571,11 +673,6 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
       }
       MarkSubtreeReplaced(handle);
       return std::nullopt;
-
-    case xml::XMLMutation::Kind::NodeInserted:
-    case xml::XMLMutation::Kind::NodeRemoved:
-      return ParseDiagnostic::Error("XML mutation kind is not implemented by SVGDocument",
-                                    MutationRange(source(), mutation));
   }
 
   UTILS_UNREACHABLE();

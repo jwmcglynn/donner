@@ -374,6 +374,24 @@ The plan is split into **prerequisites** (M−1), **donner core** (M0–M1),
 default to true after a week of continuous fuzzing. M3–M5.75 supersede the
 previous `TextPatch` / `ChangeClassifier` design.
 
+#### M1-M5 Status Audit (2026-05-17)
+
+- [x] M1 complete: the lexer-only tokenizer, token enum, error recovery,
+      representative tokenizer tests, token fuzzer, and empty-sink benchmark
+      have shipped. `ParseWithSink` is explicitly removed from M1 scope until a
+      real single-pass DOM-plus-token use case appears.
+- [x] M2 release scope: XML-aware syntax highlighting has shipped. The
+      unchecked M2 items below are follow-up refinements, not current release
+      blockers.
+- [x] M3 complete: `XMLSourceStore`, source anchors, per-node source metadata,
+      source interval lookup, and the anchor/source-location tests have shipped.
+- [x] M4 complete: edit-intent forwarding, scoped source edit application,
+      scoped dirty-region diagnostics, dedicated incremental parser entry
+      points, and the listed tests have shipped.
+- [ ] M5 complete: attribute/text/style projection paths and the listed tests
+      have shipped; complete mutation-stream coverage, full projection/removal
+      coverage, and insert/replace mutation handling remain open.
+
 ### M−1: Prerequisites (blocks everything)
 
 These are fixes to in-tree code that the rest of this design assumes are
@@ -634,22 +652,20 @@ land as standalone PRs in this order.
       invalid element names all recover rather than aborting. The
       token stream below the error continues normally — a
       highlighter built on this path stays lit below the cursor.
-- [ ] **`XMLParser::ParseWithSink` (tree-building + token emission):**
-      deferred — the lexer-only `Tokenize` entry point is what M2
-      (highlighting) consumes. Incremental reparsing should use XML tree
-      anchors and scoped parser entry points, not a separate token-stream
-      classifier. The tree-building variant will be added when a use case
-      arises that needs both tokens and a DOM tree in a single pass.
-- [ ] **Token-callback fuzzer.** Dedicated harness
-      `XMLParser_token_callback_fuzzer.cc`: splits the input into
+- [x] **`XMLParser::ParseWithSink` removed from M1 scope.** The lexer-only
+      `Tokenize` entry point is what M2 (highlighting) consumes. Incremental
+      reparsing should use XML tree anchors and scoped parser entry points, not
+      a separate token-stream classifier. A tree-building variant should only
+      be added when a concrete use case needs both tokens and a DOM tree in a
+      single pass.
+- [x] **Token-callback fuzzer.** Dedicated harness
+      `XMLTokenizer_fuzzer.cc`: splits the input into
       source bytes + a bitstream; the sink consumes bits to decide
       whether to (a) record the token, (b) call
       `GetAttributeLocation` on a prior element (exercises re-entry),
       or (c) no-op. Asserts tokens are monotonic in offset and
-      non-overlapping. Extends the existing structured fuzzer with
-      a `bool enable_token_callback` protobuf field. Runs on Linux
-      CI per the continuous-fuzzing budget.
-- [ ] Tests: token offsets reconstruct the input byte-for-byte for
+      non-overlapping. Runs on Linux CI per the continuous-fuzzing budget.
+- [x] Tests: token offsets reconstruct the input byte-for-byte for
       a representative corpus; malformed-input tokens match the well-
       formed prefix plus an `ErrorRecovery` marker; empty-sink
       instantiation is zero-overhead (compile-time check via
@@ -715,19 +731,18 @@ the target architecture.
       anchor ids. The first implementation keeps original `FileOffset`
       line-info for unedited parses and resolves source anchors after the
       source store version changes.
-- [ ] **Per-node source metadata.** Each parsed node stores anchor spans for:
+- [x] **Per-node source metadata.** Each parsed node stores anchor spans for:
       opening tag, closing tag (if any), text value span, and each attribute's
-      full span + value span + quote style. Whole-node spans are implemented.
-      Attribute source metadata belongs next to `AttributesComponent`, not in
-      editor helper code.
-- [ ] **Offset lookup index.** `XMLDocument::nodeAtSourceOffset(offset)` and
+      full span + value span + quote style. Whole-node spans, node subspans,
+      and attribute source anchors are implemented.
+- [x] **Offset lookup index.** `XMLDocument::nodeAtSourceOffset(offset)` and
       `XMLDocument::attributeAtSourceOffset(offset)` use a source interval
       index over resolved anchors. This is the authoritative replacement for
-      `ChangeClassifier` scanning. A first linear `nodeAtSourceOffset` DOM walk
-      exists for whole-node anchors, and `attributeAtSourceOffset` reparses the
-      containing node's current opening tag on demand; the interval index and
-      long-lived attribute anchors remain.
-- [ ] **Absolute vs. relative span decision.** Do **not** switch the public
+      `ChangeClassifier` scanning. `nodeAtSourceOffset` builds a resolved
+      source interval index, and `attributeAtSourceOffset` uses long-lived
+      attribute source anchors with a compatibility fallback for source-less
+      attributes.
+- [x] **Absolute vs. relative span decision.** Do **not** switch the public
       model to relative-only spans. Relative child spans reduce some ancestor
       updates but do not solve edits before siblings or repeated insertions in
       earlier text. The primary mutable representation should be source
@@ -735,17 +750,19 @@ the target architecture.
       for lookup and invalidated by `SourceStore` deltas. Reparsed fragments
       may use parent-relative offsets internally while being installed, then
       convert them to anchors.
-- [ ] Tests:
+- [x] Tests:
       - [x] source edit before a node moves that node's resolved `SourceRange`;
       - [x] insertion at a span boundary respects anchor bias;
       - [x] repeated edits before unidentified siblings do not retarget a later
         sibling;
       - [x] removed nodes invalidate their anchors;
-      - [x] resolved ranges reconstruct the current `SourceStore` bytes.
+      - [x] resolved ranges reconstruct the current `SourceStore` bytes;
+      - [x] opening-tag, closing-tag, text-value, and attribute source spans
+        resolve to the current `SourceStore` bytes.
 
 ### M4: XML Incremental Reparsing
 
-- [ ] **Edit-intent capture, not post-hoc whole-buffer diff.** `TextEditor`
+- [x] **Edit-intent capture, not post-hoc whole-buffer diff.** `TextEditor`
       emits `EditIntent {range, replacement, kind, bufferVersion}` for each
       source-pane mutation. `DocumentSyncController` forwards that intent to
       `XMLDocument::applySourceEdit`; it does not diff old/new full strings.
@@ -757,7 +774,7 @@ the target architecture.
       autocomplete, and find/replace operations now route through the same
       core edit primitive, so they emit the same intents. The whole-buffer
       diff remains as a compatibility fallback for programmatic `setText`.
-- [ ] **Local scope selection.** `XMLDocument::applySourceEdit` maps the edit
+- [x] **Local scope selection.** `XMLDocument::applySourceEdit` maps the edit
       to a live source anchor and chooses the smallest safe reparse scope:
       - `AttributeValue`: edit stays inside one quoted value; reparse XML
         attribute value/entity decoding, then emit one attribute mutation.
@@ -769,31 +786,39 @@ the target architecture.
         and return a scoped diagnostic.
       - `TextNode`: edit stays inside a data/CDATA/comment/PI value; reparse
         that node's value and emit one value mutation. Implemented for parsed
-        PCDATA nodes; CDATA/comment/PI value-span handling remains.
+        PCDATA, CDATA, comment, and processing-instruction nodes.
       - `ElementSubtree`: edit changes child structure inside one element;
         reparse the element's source span, then structurally remap children
         by tag/id/path where possible.
       - `Document`: fallback for edits that cross multiple top-level scopes,
         malformed recovery beyond a bounded dirty region, or resource-limit
         failures.
-- [ ] **Dirty scoped regions for malformed XML.** If local reparsing fails
+- [x] **Dirty scoped regions for malformed XML.** If local reparsing fails
       because the user is mid-edit (deleted quote, partial tag, unfinished
       entity), keep the source bytes, preserve the last valid XML/SVG
       projection for that scope, attach a diagnostic to the dirty region, and
       retry local reparsing on subsequent edits before escalating to document
-      fallback.
-- [ ] **Incremental reparse APIs in `donner/base/xml`.** Add local parser
+      fallback. Implemented for local opening-tag, attribute-value, text-node,
+      raw text-like node, and element-subtree reparses; parse failures are
+      reported against the bounded source dirty region while the prior DOM
+      projection remains intact.
+- [x] **Incremental reparse APIs in `donner/base/xml`.** Add local parser
       entry points for attribute values, opening tags, text-like nodes, and
       element fragments. These parsers produce source anchors relative to the
-      replacement fragment and install them through `SourceStore`. Attribute
-      value, opening-tag, and PCDATA reparsing exist via scoped XML fragment
-      parses; dedicated CDATA/comment/PI/subtree parser entry points remain.
-- [ ] Tests:
+      replacement fragment and install them through `SourceStore`.
+      `XMLIncrementalParser` now exposes dedicated entry points for attribute,
+      opening-tag, PCDATA, raw text-like node, and element-subtree fragments,
+      and `XMLDocument::applySourceEdit` uses those entry points for every
+      local source-edit scope.
+- [x] Tests:
       - [x] typing one character in `fill="red"` reparses only the attribute;
       - [x] inserting ` transform="..."` before `/>` reparses only the opening tag;
       - [x] deleting a quote creates a scoped dirty region and keeps tree identity;
+      - [x] deleting an opening-tag close creates a bounded dirty region;
+      - [x] unfinished attribute/text entities keep tree identity and recover locally;
       - [x] restoring the quote clears the diagnostic without full document parse;
       - [x] editing inside text content updates only that text node;
+      - [x] editing inside CDATA/comment/PI values updates only that text-like node;
       - [x] structural edit inside one group reparses only that group.
 
 ### M5: XML → SVG Semantic Projection
@@ -803,8 +828,10 @@ the target architecture.
       `NodeValueChanged`, `NodeInserted`, `NodeRemoved`, `SubtreeReplaced`,
       and `SourceDiagnosticChanged`. Current implementation emits
       `AttributeSet`, `AttributeRemoved`, and `NodeValueChanged` for source
-      edits; DOM-originated attribute set/remove and node removal now emit
-      XML mutations. Insert/replace/diagnostic mutations remain.
+      edits; DOM-originated attribute set/remove, node insertion, and node
+      removal now emit XML mutations. Scoped XML dirty-region diagnostics now emit
+      `SourceDiagnosticChanged` mutations on enter and clear, with the
+      diagnostic payload attached to the mutation. Replace mutations remain.
 - [ ] **`SVGDocument` consumes XML mutations.** The SVG layer maps the
       mutated `XMLNode` identity to the existing `SVGElement`/entity and calls
       the existing attribute/value parsers with a fresh `SVGParserContext`.
@@ -815,17 +842,20 @@ the target architecture.
       source-edit layer and projects `AttributeSet` / `AttributeRemoved`
       mutations through `SVGElement::setAttribute` / `removeAttribute`.
       `SubtreeReplaced` projection now initializes simple shape, text/tspan,
-      and style elements from the updated XML subtree.
+      and style elements from the updated XML subtree. DOM-originated
+      source-backed element insertion/removal now consumes `NodeInserted` /
+      `NodeRemoved` mutations; callers keep parent-context render invalidation
+      in SVG systems.
 - [ ] **Invalid SVG values do not roll back XML source.** If XML is
       well-formed but an SVG value is temporarily invalid (`fill="re"`),
       the XML attribute value is current, the SVG semantic component keeps the
       last valid value, and a scoped SVG diagnostic is surfaced to the editor.
       Current implementation covers presentation-attribute value edits
       projected through `SVGDocument::applySourceEdit`.
-- [ ] **Renderer invalidation stays in SVG systems.** XML mutation handling
+- [x] **Renderer invalidation stays in SVG systems.** XML mutation handling
       sets the same dirty flags as parser-originated mutations. The editor
       does not own an invalidation switch.
-- [ ] Tests:
+- [x] Tests:
       - [x] edit `fill` updates style and dirty flags without `ParseSVG`;
       - [x] delete `fill` clears the presentation attribute and dirty flags
         without `ParseSVG`;
@@ -840,6 +870,8 @@ the target architecture.
       - [x] invalid value records a diagnostic and preserves the last valid
         semantic value;
       - [x] recovered valid value updates semantics and clears the diagnostic.
+      - [x] malformed XML source diagnostics emit through XML mutations and
+        clear through SVG projection without document replacement.
 
 ### M5.5: Canvas DOM Mutations Update XML Source
 
@@ -858,9 +890,17 @@ the target architecture.
 - [ ] **`XMLNode::remove` updates source and tree together.** Element delete
       removes the node span from `SourceStore`, invalidates anchors for the
       subtree, detaches the DOM node, and emits one `NodeRemoved` mutation.
-      `XMLDocument::removeNode` and source-backed `SVGElement::remove` cover
-      the first version, including recursive source-location invalidation for
-      removed subtrees.
+      `XMLDocument::removeNode`, source-backed `SVGElement::remove`, and
+      source-backed `SVGElement::removeChild` cover the first version,
+      including recursive source-location invalidation for removed subtrees.
+- [ ] **`XMLNode::insertBefore` / `appendChild` update source and tree
+      together.** Source-backed insertion serializes a source-less XML/SVG
+      subtree through the XML serializer, inserts it through `SourceStore`,
+      installs parsed source anchors onto the inserted subtree, attaches it to
+      the live tree, and emits one `NodeInserted` mutation. The first version
+      supports unparented element subtrees inserted before an existing child or
+      before a parent element's closing tag; moving existing source-backed
+      nodes and expanding self-closing parents remain.
 - [ ] **Editor mirrors XML source deltas.** `DocumentSyncController` applies
       `XMLSourceDelta`s from the XML document to `TextEditor` with change
       suppression so source-pane echo does not become a user edit. This is a
