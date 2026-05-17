@@ -899,16 +899,21 @@ the target architecture.
       installs parsed source anchors onto the inserted subtree, attaches it to
       the live tree, and emits one `NodeInserted` mutation. The first version
       supports unparented element subtrees inserted before an existing child or
-      before a parent element's closing tag; moving existing source-backed
-      nodes and expanding self-closing parents remain.
+      before a parent element's closing tag, and expands self-closing parents
+      when appending a child. Source-backed `SVGElement::replaceChild` composes
+      insert/remove for source-less replacements. Moving existing source-backed
+      element nodes now preserves their source text, including moves into
+      self-closing destination parents that must first expand to an explicit
+      open/close tag pair.
 - [ ] **Editor mirrors XML source deltas.** `DocumentSyncController` applies
       `XMLSourceDelta`s from the XML document to `TextEditor` with change
       suppression so source-pane echo does not become a user edit. This is a
       view update, not a separate source-of-truth splice. The current
-      implementation applies single XML source deltas directly for
-      source-backed transform and delete writebacks, records command-flush
-      delete deltas in `AsyncSVGDocument`, and keeps full-source mirroring as
-      the fallback for unsupported delta batches.
+      implementation applies XML source delta sequences directly for
+      source-backed transform, delete, and existing-node move writebacks,
+      records command-flush delete deltas in `AsyncSVGDocument`, and keeps
+      full-source mirroring as the fallback if replaying a delta batch does
+      not reconstruct the XML-owned source.
 - [ ] Tests:
       - drag inserts/replaces `transform` via XML DOM and source store;
       - delete removes the XML node span and selection remaps/clears;
@@ -992,6 +997,10 @@ same scenarios should also run through headless `.donner-repro` playback.
       action log, last settled bitmap, reference bitmap, and diff bitmap to
       `$TEST_UNDECLARED_OUTPUTS_DIR`. These artifacts are mandatory because
       most failures will be state-divergence bugs, not simple crashes.
+      Current coverage records the scripted action log plus current source,
+      live bitmap, and reload-reference bitmap on stress-harness failures;
+      bitmap comparisons still emit their existing `actual_`, `expected_`,
+      `diff_`, and `side_by_side_` PNGs for render divergences.
 
 ### M6: Autocomplete from registries
 

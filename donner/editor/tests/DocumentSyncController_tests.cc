@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
@@ -289,6 +291,44 @@ TEST(DocumentSyncControllerStructuredTest, ElementSubtreeSourceInsertStaysLocal)
   auto inserted = app.document().document().querySelector("#b");
   ASSERT_TRUE(inserted.has_value());
   EXPECT_EQ(inserted->getAttribute("fill"), RcString("blue"));
+}
+
+TEST(DocumentSyncControllerStructuredTest, MultiDeltaMoveMirrorsIntoTextPane) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="moved" fill="red" /><g id="target" /></svg>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.setCleanSourceText(kSvg);
+  const std::uint64_t documentGeneration = app.document().documentGeneration();
+
+  TextEditor textEditor;
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kSvg)};
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto moved = app.document().document().querySelector("#moved");
+  ASSERT_TRUE(moved.has_value());
+
+  xml::ApplySourceEditResult result = app.document().document().insertElement(*target, *moved);
+  ASSERT_TRUE(result.applied);
+  ASSERT_EQ(result.sourceDeltas.size(), 2u);
+  EXPECT_TRUE(std::ranges::any_of(result.sourceDeltas, [](const xml::XMLSourceDelta& delta) {
+    return delta.insertedLength > 0;
+  }));
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_FALSE(textEditor.isTextChanged());
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().documentGeneration(), documentGeneration);
+  EXPECT_NE(textEditor.getText().find(R"(<g id="target"><rect id="moved")"), std::string::npos);
+  EXPECT_TRUE(app.isDirty());
 }
 
 }  // namespace

@@ -452,6 +452,15 @@ void SVGElement::appendChild(const SVGElement& child) {
 }
 
 void SVGElement::replaceChild(const SVGElement& newChild, const SVGElement& oldChild) {
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
+    xml::ApplySourceEditResult insertResult = document.insertElement(*this, newChild, oldChild);
+    if (!insertResult.diagnostic.has_value()) {
+      (void)document.removeElement(oldChild);
+    }
+    return;
+  }
+
   handle_.get<donner::components::TreeComponent>().replaceChild(
       registry(), newChild.handle_.entity(), oldChild.entityHandle().entity());
   markNeedsFullRebuild(handle_);

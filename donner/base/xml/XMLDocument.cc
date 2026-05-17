@@ -567,6 +567,17 @@ bool IsDocumentNode(const XMLDocument& document, const XMLNode& node) {
   return node.entityHandle().registry() == document.sharedRegistry().get();
 }
 
+bool IsAncestorOf(const XMLNode& ancestor, const XMLNode& node) {
+  for (std::optional<XMLNode> current = node.parentElement(); current.has_value();
+       current = current->parentElement()) {
+    if (*current == ancestor) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 std::optional<AttributeValueEdit> GetAttributeValueEditForNode(const XMLDocument& document,
                                                                const XMLNode& node,
                                                                const XMLQualifiedName& name) {
@@ -669,9 +680,80 @@ std::optional<SourceEditRange> GetAttributeRemovalRange(const XMLDocument& docum
   return removalRange;
 }
 
-std::optional<std::size_t> GetNodeInsertionOffset(const XMLDocument& document,
-                                                  const XMLNode& parent,
-                                                  const std::optional<XMLNode>& referenceNode) {
+struct NodeInsertionPlan {
+  std::size_t replacementOffset = 0;
+  std::size_t replacementLength = 0;
+  std::string prefix;
+  std::string suffix;
+  std::size_t insertedNodeOffset = 0;
+  std::optional<SourceRange> parentOpeningTagLocation;
+  std::optional<SourceRange> parentClosingTagLocation;
+  std::optional<FileOffset> parentEndOffset;
+};
+
+std::optional<SourceRange> ShiftRangeLeft(SourceRange range, std::size_t amount) {
+  if (!range.start.offset.has_value() || !range.end.offset.has_value() ||
+      *range.start.offset < amount || *range.end.offset < amount) {
+    return std::nullopt;
+  }
+
+  return SourceRange{
+      FileOffset::Offset(*range.start.offset - amount),
+      FileOffset::Offset(*range.end.offset - amount),
+  };
+}
+
+bool ShiftPlanLeft(NodeInsertionPlan& plan, std::size_t amount) {
+  if (plan.replacementOffset < amount || plan.insertedNodeOffset < amount) {
+    return false;
+  }
+
+  plan.replacementOffset -= amount;
+  plan.insertedNodeOffset -= amount;
+
+  if (plan.parentOpeningTagLocation.has_value()) {
+    std::optional<SourceRange> shifted = ShiftRangeLeft(*plan.parentOpeningTagLocation, amount);
+    if (!shifted.has_value()) {
+      return false;
+    }
+    plan.parentOpeningTagLocation = *shifted;
+  }
+
+  if (plan.parentClosingTagLocation.has_value()) {
+    std::optional<SourceRange> shifted = ShiftRangeLeft(*plan.parentClosingTagLocation, amount);
+    if (!shifted.has_value()) {
+      return false;
+    }
+    plan.parentClosingTagLocation = *shifted;
+  }
+
+  if (plan.parentEndOffset.has_value()) {
+    if (!plan.parentEndOffset->offset.has_value() || *plan.parentEndOffset->offset < amount) {
+      return false;
+    }
+    plan.parentEndOffset = FileOffset::Offset(*plan.parentEndOffset->offset - amount);
+  }
+
+  return true;
+}
+
+bool IsXmlSpace(char ch) {
+  return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
+void ApplyParentInsertionPlan(XMLNode& parent, const NodeInsertionPlan& plan) {
+  if (plan.parentOpeningTagLocation.has_value() && plan.parentClosingTagLocation.has_value() &&
+      plan.parentEndOffset.has_value()) {
+    parent.setOpeningTagLocation(*plan.parentOpeningTagLocation);
+    parent.setClosingTagLocation(*plan.parentClosingTagLocation);
+    parent.setSourceEndOffset(*plan.parentEndOffset);
+  }
+}
+
+std::optional<NodeInsertionPlan> GetNodeInsertionPlan(const XMLDocument& document,
+                                                      const XMLNode& parent,
+                                                      const std::optional<XMLNode>& referenceNode,
+                                                      std::string_view serializedNode) {
   if (referenceNode.has_value()) {
     std::optional<XMLNode> referenceParent = referenceNode->parentElement();
     if (!referenceParent.has_value() || *referenceParent != parent) {
@@ -683,19 +765,66 @@ std::optional<std::size_t> GetNodeInsertionOffset(const XMLDocument& document,
       return std::nullopt;
     }
 
-    return *referenceLocation->start.offset;
+    const std::size_t offset = *referenceLocation->start.offset;
+    return NodeInsertionPlan{
+        .replacementOffset = offset,
+        .replacementLength = 0,
+        .insertedNodeOffset = offset,
+    };
   }
 
   std::optional<SourceRange> closingTagLocation = parent.getClosingTagLocation();
-  if (!closingTagLocation.has_value() || !closingTagLocation->start.offset.has_value()) {
+  if (closingTagLocation.has_value() && closingTagLocation->start.offset.has_value()) {
+    if (*closingTagLocation->start.offset > document.source().size()) {
+      return std::nullopt;
+    }
+
+    const std::size_t offset = *closingTagLocation->start.offset;
+    return NodeInsertionPlan{
+        .replacementOffset = offset,
+        .replacementLength = 0,
+        .insertedNodeOffset = offset,
+    };
+  }
+
+  std::optional<SourceRange> nodeLocation = parent.getNodeLocation();
+  if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value() ||
+      !nodeLocation->end.offset.has_value() || *nodeLocation->end.offset < 2 ||
+      *nodeLocation->end.offset > document.source().size()) {
     return std::nullopt;
   }
 
-  if (*closingTagLocation->start.offset > document.source().size()) {
+  const std::size_t selfCloseStart = *nodeLocation->end.offset - 2;
+  if (document.source().substr(selfCloseStart, 2) != "/>") {
     return std::nullopt;
   }
 
-  return *closingTagLocation->start.offset;
+  std::size_t replacementStart = selfCloseStart;
+  while (replacementStart > *nodeLocation->start.offset &&
+         IsXmlSpace(document.source()[replacementStart - 1])) {
+    --replacementStart;
+  }
+
+  std::string closingTag;
+  closingTag.append("</");
+  AppendQualifiedName(closingTag, parent.tagName());
+  closingTag.push_back('>');
+
+  const std::size_t insertedOffset = replacementStart + 1;
+  const std::size_t closingTagStart = insertedOffset + serializedNode.size();
+  return NodeInsertionPlan{
+      .replacementOffset = replacementStart,
+      .replacementLength = *nodeLocation->end.offset - replacementStart,
+      .prefix = ">",
+      .suffix = closingTag,
+      .insertedNodeOffset = insertedOffset,
+      .parentOpeningTagLocation = SourceRange{FileOffset::Offset(*nodeLocation->start.offset),
+                                              FileOffset::Offset(insertedOffset)},
+      .parentClosingTagLocation =
+          SourceRange{FileOffset::Offset(closingTagStart),
+                      FileOffset::Offset(closingTagStart + closingTag.size())},
+      .parentEndOffset = FileOffset::Offset(closingTagStart + closingTag.size()),
+  };
 }
 
 SourceRange OffsetRange(SourceRange range, std::size_t sourceOffsetBase);
@@ -1643,32 +1772,169 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
     return result;
   }
 
-  if (node.parentElement().has_value()) {
-    result.diagnostic = MakeEditDiagnostic("Moving source-backed nodes is not implemented",
-                                           MakeNodeDiagnosticRange(node));
+  std::optional<XMLNode> currentParent = node.parentElement();
+  std::optional<SourceRange> existingNodeLocation = node.getNodeLocation();
+  if (currentParent.has_value() || existingNodeLocation.has_value()) {
+    if (!currentParent.has_value() || !existingNodeLocation.has_value()) {
+      result.diagnostic = MakeEditDiagnostic("Cannot move a partially source-backed node",
+                                             MakeNodeDiagnosticRange(node));
+      return result;
+    }
+
+    if (node.type() != XMLNode::Type::Element) {
+      result.diagnostic = MakeEditDiagnostic("Moving non-element nodes is not implemented",
+                                             MakeNodeDiagnosticRange(node));
+      return result;
+    }
+
+    if (referenceNode.has_value() && *referenceNode == node) {
+      return result;
+    }
+
+    std::optional<XMLNode> nextSibling = node.nextSibling();
+    if (*currentParent == parent && ((!referenceNode.has_value() && !nextSibling.has_value()) ||
+                                     (referenceNode.has_value() && nextSibling.has_value() &&
+                                      *nextSibling == *referenceNode))) {
+      return result;
+    }
+
+    if (IsAncestorOf(node, parent)) {
+      result.diagnostic = MakeEditDiagnostic("Cannot move a node into its descendant",
+                                             MakeNodeDiagnosticRange(node));
+      return result;
+    }
+
+    std::optional<SourceEditRange> removalRange = ResolveEditRange(*existingNodeLocation, source());
+    if (!removalRange.has_value()) {
+      result.diagnostic = MakeEditDiagnostic("Cannot move node without a source range",
+                                             MakeNodeDiagnosticRange(node));
+      return result;
+    }
+
+    const std::string serialized(
+        source().substr(removalRange->start, removalRange->end - removalRange->start));
+    std::optional<NodeInsertionPlan> insertionPlan =
+        GetNodeInsertionPlan(*this, parent, referenceNode, serialized);
+    if (!insertionPlan.has_value()) {
+      result.diagnostic =
+          MakeEditDiagnostic("Cannot move node without a source insertion point", diagnosticRange);
+      return result;
+    }
+
+    if (removalRange->start < insertionPlan->replacementOffset &&
+        insertionPlan->replacementOffset < removalRange->end) {
+      result.diagnostic =
+          MakeEditDiagnostic("Cannot move a node inside its own source range", diagnosticRange);
+      return result;
+    }
+
+    ParseResult<XMLDocument> parsedMoved = XMLIncrementalParser::ParseElement(serialized);
+    if (parsedMoved.hasError()) {
+      result.diagnostic =
+          RebaseDiagnosticToDirtyRange(std::move(parsedMoved).error(), *removalRange);
+      return result;
+    }
+
+    std::optional<XMLNode> parsedNode = parsedMoved.result().root().firstChild();
+    if (!parsedNode.has_value()) {
+      result.diagnostic = MakeEditDiagnostic("Moved source did not produce an element",
+                                             MakeNodeDiagnosticRange(node));
+      return result;
+    }
+
+    NodeInsertionPlan appliedInsertionPlan = *insertionPlan;
+    const std::string replacement =
+        appliedInsertionPlan.prefix + serialized + appliedInsertionPlan.suffix;
+    if (insertionPlan->replacementOffset < removalRange->start) {
+      std::optional<XMLSourceDelta> insertDelta =
+          store->replace(appliedInsertionPlan.replacementOffset,
+                         appliedInsertionPlan.replacementLength, replacement);
+      if (!insertDelta.has_value()) {
+        result.diagnostic =
+            MakeEditDiagnostic("Invalid source replacement for node move", diagnosticRange);
+        return result;
+      }
+      result.sourceDeltas.push_back(*insertDelta);
+
+      const std::size_t replacementNetLength =
+          replacement.size() - appliedInsertionPlan.replacementLength;
+      std::optional<XMLSourceDelta> removeDelta =
+          store->replace(removalRange->start + replacementNetLength,
+                         removalRange->end - removalRange->start, std::string_view());
+      if (!removeDelta.has_value()) {
+        result.diagnostic =
+            MakeEditDiagnostic("Invalid source removal for node move", diagnosticRange);
+        return result;
+      }
+      result.sourceDeltas.push_back(*removeDelta);
+    } else {
+      std::optional<XMLSourceDelta> removeDelta = store->replace(
+          removalRange->start, removalRange->end - removalRange->start, std::string_view());
+      if (!removeDelta.has_value()) {
+        result.diagnostic =
+            MakeEditDiagnostic("Invalid source removal for node move", diagnosticRange);
+        return result;
+      }
+      result.sourceDeltas.push_back(*removeDelta);
+
+      const std::size_t removalLength = removalRange->end - removalRange->start;
+      if (!ShiftPlanLeft(appliedInsertionPlan, removalLength)) {
+        result.diagnostic =
+            MakeEditDiagnostic("Invalid source insertion plan for node move", diagnosticRange);
+        return result;
+      }
+
+      std::optional<XMLSourceDelta> insertDelta =
+          store->replace(appliedInsertionPlan.replacementOffset,
+                         appliedInsertionPlan.replacementLength, replacement);
+      if (!insertDelta.has_value()) {
+        result.diagnostic =
+            MakeEditDiagnostic("Invalid source replacement for node move", diagnosticRange);
+        return result;
+      }
+      result.sourceDeltas.push_back(*insertDelta);
+    }
+
+    result.applied = true;
+    ClearSourceLocationsRecursive(node);
+    ApplyParentInsertionPlan(parent, appliedInsertionPlan);
+    if (!SyncSourceLocationsFromParsedByPosition(node, *parsedNode,
+                                                 appliedInsertionPlan.insertedNodeOffset)) {
+      SyncNodeFromParsed(*this, node, *parsedNode, appliedInsertionPlan.insertedNodeOffset);
+    }
+    parent.insertBefore(node, referenceNode);
+    result.mutations.push_back(XMLMutation{
+        .kind = XMLMutation::Kind::NodeRemoved,
+        .node = node,
+        .attributeName = XMLQualifiedName(""),
+        .value = std::nullopt,
+        .scope = ReparseScope::ElementSubtree,
+    });
+    result.mutations.push_back(XMLMutation{
+        .kind = XMLMutation::Kind::NodeInserted,
+        .node = node,
+        .attributeName = XMLQualifiedName(""),
+        .value = std::nullopt,
+        .scope = ReparseScope::ElementSubtree,
+    });
     return result;
   }
 
-  if (node.getNodeLocation().has_value()) {
-    result.diagnostic = MakeEditDiagnostic("Cannot insert a node that already has source text",
-                                           MakeNodeDiagnosticRange(node));
-    return result;
-  }
-
-  std::optional<std::size_t> insertionOffset = GetNodeInsertionOffset(*this, parent, referenceNode);
-  if (!insertionOffset.has_value()) {
+  const std::string serialized(std::string_view(node.serializeToString(0, false)));
+  std::optional<NodeInsertionPlan> insertionPlan =
+      GetNodeInsertionPlan(*this, parent, referenceNode, serialized);
+  if (!insertionPlan.has_value()) {
     result.diagnostic =
         MakeEditDiagnostic("Cannot insert node without a source insertion point", diagnosticRange);
     return result;
   }
 
-  const std::string serialized(std::string_view(node.serializeToString(0, false)));
   ParseResult<XMLDocument> parsedInserted = XMLIncrementalParser::ParseElement(serialized);
   if (parsedInserted.hasError()) {
     result.diagnostic = RebaseDiagnosticToDirtyRange(std::move(parsedInserted).error(),
                                                      SourceEditRange{
-                                                         .start = *insertionOffset,
-                                                         .end = *insertionOffset,
+                                                         .start = insertionPlan->insertedNodeOffset,
+                                                         .end = insertionPlan->insertedNodeOffset,
                                                      });
     return result;
   }
@@ -1680,7 +1946,9 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
     return result;
   }
 
-  std::optional<XMLSourceDelta> delta = store->replace(*insertionOffset, 0, serialized);
+  const std::string replacement = insertionPlan->prefix + serialized + insertionPlan->suffix;
+  std::optional<XMLSourceDelta> delta = store->replace(
+      insertionPlan->replacementOffset, insertionPlan->replacementLength, replacement);
   if (!delta.has_value()) {
     result.diagnostic =
         MakeEditDiagnostic("Invalid source replacement for node insertion", diagnosticRange);
@@ -1690,8 +1958,11 @@ ApplySourceEditResult XMLDocument::insertNode(XMLNode parent, XMLNode node,
   result.applied = true;
   result.sourceDeltas.push_back(*delta);
 
-  if (!SyncSourceLocationsFromParsedByPosition(node, *parsedNode, *insertionOffset)) {
-    SyncNodeFromParsed(*this, node, *parsedNode, *insertionOffset);
+  ApplyParentInsertionPlan(parent, *insertionPlan);
+
+  if (!SyncSourceLocationsFromParsedByPosition(node, *parsedNode,
+                                               insertionPlan->insertedNodeOffset)) {
+    SyncNodeFromParsed(*this, node, *parsedNode, insertionPlan->insertedNodeOffset);
   }
   parent.insertBefore(node, referenceNode);
   result.mutations.push_back(XMLMutation{

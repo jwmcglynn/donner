@@ -89,26 +89,12 @@ bool MirrorDocumentSourceIntoTextEditor(EditorApp& app, TextEditor& textEditor,
   return true;
 }
 
-bool CanApplySourceDeltasPrecisely(const std::vector<xml::XMLSourceDelta>& sourceDeltas) {
-  if (sourceDeltas.size() <= 1) {
-    return true;
-  }
-
-  return std::ranges::all_of(
-      sourceDeltas, [](const xml::XMLSourceDelta& delta) { return delta.insertedLength == 0; });
-}
-
 bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
                                         const std::vector<xml::XMLSourceDelta>& sourceDeltas,
                                         std::string* previousSourceText,
                                         std::optional<std::string>* lastWritebackSourceText) {
   if (!app.hasDocument() || !app.document().document().hasSourceStore() || sourceDeltas.empty()) {
     return false;
-  }
-
-  if (!CanApplySourceDeltasPrecisely(sourceDeltas)) {
-    return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
-                                              lastWritebackSourceText);
   }
 
   const std::string source = CanonicalizeForTextEditor(app.document().document().source());
@@ -170,6 +156,12 @@ void DocumentSyncController::syncParseErrorMarkers(EditorApp& app, TextEditor& t
     lastShownErrorLine_ = kNoErrorLine;
     lastShownErrorReason_.clear();
   }
+}
+
+bool DocumentSyncController::mirrorSourceDeltas(
+    EditorApp& app, TextEditor& textEditor, const std::vector<xml::XMLSourceDelta>& sourceDeltas) {
+  return ApplyXMLSourceDeltasIntoTextEditor(app, textEditor, sourceDeltas, &previousSourceText_,
+                                            &lastWritebackSourceText_);
 }
 
 void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEditor,
@@ -242,9 +234,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   }
 
   if (!pendingElementRemoveWritebacks_.empty()) {
-    if (ApplyXMLSourceDeltasIntoTextEditor(app, textEditor,
-                                           app.document().lastFlushResult().sourceDeltas,
-                                           &previousSourceText_, &lastWritebackSourceText_) ||
+    if (mirrorSourceDeltas(app, textEditor, app.document().lastFlushResult().sourceDeltas) ||
         MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
                                            &lastWritebackSourceText_)) {
       pendingElementRemoveWritebacks_.clear();
@@ -301,9 +291,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
       }
 
       mirroredSourceDeltas =
-          ApplyXMLSourceDeltasIntoTextEditor(app, textEditor, result.sourceDeltas,
-                                             &previousSourceText_, &lastWritebackSourceText_) ||
-          mirroredSourceDeltas;
+          mirrorSourceDeltas(app, textEditor, result.sourceDeltas) || mirroredSourceDeltas;
     }
 
     pendingTransformWritebacks_.clear();

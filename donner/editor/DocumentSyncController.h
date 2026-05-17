@@ -23,6 +23,21 @@ public:
   void resetForLoadedDocument(const std::string& source);
 
   void syncParseErrorMarkers(EditorApp& app, TextEditor& textEditor);
+  /**
+   * Mirror XML-owned source deltas into the source pane.
+   *
+   * Use this when a canvas/DOM operation already mutated the XML document and returned
+   * \ref xml::XMLSourceDelta records. The controller replays the deltas into \p textEditor with
+   * source-change suppression and falls back to mirroring the document source if the delta sequence
+   * cannot be applied precisely.
+   *
+   * @param app Editor app containing the source-backed document.
+   * @param textEditor Source pane to update.
+   * @param sourceDeltas Source deltas emitted by the XML document.
+   * @return True if the source pane was updated from the deltas or fallback mirror.
+   */
+  bool mirrorSourceDeltas(EditorApp& app, TextEditor& textEditor,
+                          const std::vector<xml::XMLSourceDelta>& sourceDeltas);
   void handleTextEdits(EditorApp& app, TextEditor& textEditor, float deltaSeconds);
   void applyPendingWritebacks(EditorApp& app, SelectTool& selectTool, TextEditor& textEditor);
 

@@ -542,6 +542,7 @@ xml::ApplySourceEditResult SVGDocument::insertElement(const SVGElement& parent,
 
       xml::XMLDocument document = xmlDocument();
       xml::XMLNode insertedNode = EnsureXMLSubtreeForSVGElement(document, element);
+      const std::optional<SVGElement> oldParent = element.parentElement();
       result = document.insertNode(*parentNode, insertedNode, referenceNode);
       for (const xml::XMLMutation& mutation : result.mutations) {
         std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
@@ -551,6 +552,9 @@ xml::ApplySourceEditResult SVGDocument::insertElement(const SVGElement& parent,
       }
 
       if (result.applied) {
+        if (oldParent.has_value() && *oldParent != parent) {
+          MarkChildRemoved(oldParent->entityHandle());
+        }
         MarkChildInserted(parent.entityHandle(), element.entityHandle());
       }
 

@@ -1,10 +1,15 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/RcString.h"
@@ -22,6 +27,7 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererImageIO.h"
 
 namespace donner::editor {
 namespace {
@@ -59,6 +65,41 @@ std::string SourceSlice(std::string_view source, const SourceRange& range) {
   }
 
   return std::string(source.substr(start, end - start));
+}
+
+std::filesystem::path ArtifactOutputDir() {
+  if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    return outputDir;
+  }
+
+  return std::filesystem::temp_directory_path();
+}
+
+std::string SanitizeArtifactName(std::string_view value) {
+  std::string result;
+  result.reserve(value.size());
+  for (char ch : value) {
+    const bool keep = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                      (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+    result.push_back(keep ? ch : '_');
+  }
+
+  return result.empty() ? "checkpoint" : result;
+}
+
+void WriteTextArtifact(const std::filesystem::path& path, std::string_view contents) {
+  std::ofstream out(path);
+  out << contents;
+}
+
+void WriteBitmapArtifact(const std::filesystem::path& path, const svg::RendererBitmap& bitmap) {
+  if (bitmap.empty()) {
+    return;
+  }
+
+  svg::RendererImageIO::writeRgbaPixelsToPngFile(path.string().c_str(), bitmap.pixels,
+                                                 bitmap.dimensions.x, bitmap.dimensions.y,
+                                                 bitmap.rowBytes);
 }
 
 svg::RendererBitmap RenderReference(std::string_view source, const Vector2i& canvasSize) {
@@ -103,7 +144,70 @@ protected:
     }
   }
 
+  class FailureArtifactScope {
+  public:
+    FailureArtifactScope(StructuredEditingStressTest& owner, std::string_view phase)
+        : owner_(owner), phase_(phase), hadFailureAtStart_(::testing::Test::HasFailure()) {}
+
+    ~FailureArtifactScope() {
+      if (!hadFailureAtStart_ && ::testing::Test::HasFailure()) {
+        owner_.WriteFailureArtifacts(phase_);
+      }
+    }
+
+  private:
+    StructuredEditingStressTest& owner_;
+    std::string phase_;
+    bool hadFailureAtStart_ = false;
+  };
+
+  void RecordAction(std::string_view phase) { actionLog_.emplace_back(phase); }
+
+  void WriteFailureArtifacts(std::string_view phase) {
+    if (failureArtifactsWritten_) {
+      return;
+    }
+    failureArtifactsWritten_ = true;
+
+    const std::filesystem::path outputDir = ArtifactOutputDir();
+    const std::string label = SanitizeArtifactName(phase);
+
+    std::string source;
+    if (app_.hasDocument()) {
+      source = std::string(app_.document().document().source());
+      WriteTextArtifact(outputDir / ("structured_editing_" + label + "_source.svg"), source);
+    }
+
+    std::ostringstream actions;
+    for (std::size_t i = 0; i < actionLog_.size(); ++i) {
+      actions << i << ": " << actionLog_[i] << '\n';
+    }
+    WriteTextArtifact(outputDir / ("structured_editing_" + label + "_actions.txt"), actions.str());
+
+    if (!app_.hasDocument()) {
+      return;
+    }
+
+    svg::Renderer liveRenderer;
+    liveRenderer.draw(app_.document().document());
+    WriteBitmapArtifact(outputDir / ("structured_editing_" + label + "_live.png"),
+                        liveRenderer.takeSnapshot());
+
+    if (!source.empty()) {
+      EditorApp referenceApp;
+      if (referenceApp.loadFromString(source)) {
+        referenceApp.document().document().setCanvasSize(canvasSize_.x, canvasSize_.y);
+        svg::Renderer referenceRenderer;
+        referenceRenderer.draw(referenceApp.document().document());
+        WriteBitmapArtifact(outputDir / ("structured_editing_" + label + "_reference.png"),
+                            referenceRenderer.takeSnapshot());
+      }
+    }
+  }
+
   void ExpectInSync(std::string_view phase) {
+    FailureArtifactScope artifacts(*this, phase);
+
     ASSERT_TRUE(app_.hasDocument()) << phase;
     EXPECT_EQ(textEditor_.getText(), app_.document().document().source()) << phase;
     EXPECT_FALSE(textEditor_.isTextChanged()) << phase;
@@ -180,6 +284,7 @@ protected:
 
   void ClickDocumentPoint(std::string_view phase, const Vector2d& documentPoint,
                           std::string_view expectedId) {
+    RecordAction(phase);
     ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": click while async renderer is busy";
     selectTool_.onMouseDown(app_, documentPoint, MouseModifiers{});
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
@@ -190,6 +295,7 @@ protected:
 
   void DragDocumentPoints(std::string_view phase, const Vector2d& startDocumentPoint,
                           const Vector2d& endDocumentPoint, std::string_view expectedId) {
+    RecordAction(phase);
     ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": drag while async renderer is busy";
     selectTool_.onMouseDown(app_, startDocumentPoint, MouseModifiers{});
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
@@ -210,6 +316,7 @@ protected:
 
   void ReplaceSourceText(std::string_view phase, std::string_view oldText,
                          std::string_view newText) {
+    RecordAction(phase);
     const std::string currentText = textEditor_.getText();
     const std::size_t offset = currentText.find(oldText);
     ASSERT_NE(offset, std::string::npos) << phase;
@@ -223,6 +330,7 @@ protected:
   }
 
   void ZoomAndPanAroundDocumentPoint(std::string_view phase, const Vector2d& documentPoint) {
+    RecordAction(phase);
     const Vector2d screenPoint = viewport_.documentToScreen(documentPoint);
     const Vector2d before = viewport_.screenToDocument(screenPoint);
     viewport_.zoomAround(viewport_.zoom * 1.7, screenPoint);
@@ -233,6 +341,7 @@ protected:
   }
 
   void DeleteSelection(std::string_view phase) {
+    RecordAction(phase);
     ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": delete while async renderer is busy";
     const std::vector<svg::SVGElement> selected = app_.selectedElements();
     ASSERT_FALSE(selected.empty()) << phase;
@@ -304,9 +413,13 @@ protected:
   Vector2i canvasSize_ = Vector2i(180, 80);
   std::uint64_t expectedDocumentGeneration_ = 0;
   std::uint64_t asyncVersion_ = 0;
+  std::vector<std::string> actionLog_;
+  bool failureArtifactsWritten_ = false;
 };
 
 TEST_F(StructuredEditingStressTest, MixedGuiTextZoomDeleteAndFilteredMoveStayInSync) {
+  FailureArtifactScope artifacts(*this, "mixed scenario");
+
   ExpectInSync("initial");
 
   DragScreenPoints("plain drag after zoom-ready click", viewport_.documentToScreen({20.0, 20.0}),
