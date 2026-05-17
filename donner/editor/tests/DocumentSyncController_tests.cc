@@ -93,6 +93,24 @@ TEST_F(DocumentSyncControllerTest, UndoingDragWritebackBackToBaselineClearsDirty
   EXPECT_FALSE(app_.isDirty());
 }
 
+TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackMirrorsWithoutTextChangeEcho) {
+  SelectTool tool;
+
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.isTextChanged());
+
+  tool.onMouseDown(app_, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app_, Vector2d(25.0, 15.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app_, Vector2d(25.0, 15.0));
+  ASSERT_TRUE(app_.flushFrame());
+
+  controller_.applyPendingWritebacks(app_, tool, textEditor_);
+
+  EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
+  EXPECT_FALSE(textEditor_.isTextChanged());
+  EXPECT_TRUE(app_.document().queue().empty());
+}
+
 TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTrailingNewline) {
   // Regression: donner_splash.svg ships with a trailing '\n'. `TextBuffer`
   // canonicalizes lines when text is round-tripped through it, dropping that
