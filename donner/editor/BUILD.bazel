@@ -336,9 +336,9 @@ donner_cc_library(
     srcs = ["RenderPanePresenter.cc"],
     hdrs = ["RenderPanePresenter.h"],
     deps = [
-        ":experimental_drag_presentation",
         ":gl_texture_cache",
         ":imgui_headers",
+        ":select_tool",
         ":selection_aabb",
         ":viewport_interaction_controller",
         "//donner/base",
@@ -352,7 +352,7 @@ donner_cc_library(
     hdrs = ["RenderCoordinator.h"],
     deps = [
         ":async_renderer",
-        ":experimental_drag_presentation",
+        ":composited_presentation",
         ":gl_texture_cache",
         ":overlay_renderer",
         ":select_tool",
@@ -454,8 +454,8 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "experimental_drag_presentation",
-    hdrs = ["ExperimentalDragPresentation.h"],
+    name = "composited_presentation",
+    hdrs = ["CompositedPresentation.h"],
     deps = [
         ":select_tool",
         "//donner/base",

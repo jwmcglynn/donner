@@ -280,7 +280,6 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
                                 .initialSource = source,
                                 .initialPath = svgPath.string(),
                                 .editorNoticeText = "",
-                                .experimentalMode = repro->metadata.experimentalMode,
                             });
   if (!shell.valid()) {
     return SetError(error, "failed to initialize editor shell");

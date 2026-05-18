@@ -161,9 +161,8 @@ Vector2d ResolveCompositedTileDragTranslation(
 }
 
 void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
-  const bool hasFlat = state.textures.flatWidth() > 0 && state.textures.flatHeight() > 0;
   const bool hasTiles = !state.textures.tiles().empty();
-  if (!hasFlat && !state.experimentalDragPresentation.hasCachedTextures && !hasTiles) {
+  if (!hasTiles) {
     ImGui::TextUnformatted("(no rendered image)");
     return;
   }
@@ -176,45 +175,27 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   ImDrawList* paneDrawList = ImGui::GetWindowDrawList();
   DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
 
-  // M2C: when the worker has published a composited tile list and the
-  // editor is in the experimental drag-presentation mode, blit the
-  // tiles directly in paint order. Each tile carries its own canvas
-  // offset (in doc units) and intrinsic dimensions, so the bitmap
-  // tracks pinch-zoom changes via the live `pixelsPerDocUnit` (same
-  // §M2B property the old single-promoted-bitmap path had, applied
-  // uniformly now to every tile).
-  const bool useTiles =
-      state.experimentalMode && hasTiles &&
-      state.experimentalDragPresentation.shouldDisplayCompositedLayers(state.activeDragPreview) &&
-      state.displayedDragPreview.has_value();
-  if (useTiles) {
-    const double pxPerDoc = state.viewport.pixelsPerDocUnit();
-    for (const auto& tile : state.textures.tiles()) {
-      if (tile.texture == 0) {
-        continue;
-      }
-      const Vector2d originDoc =
-          tile.canvasOffsetDoc + ResolveCompositedTileDragTranslation(tile, state.activeDragPreview,
-                                                                      state.displayedDragPreview);
-      Vector2d sizeScreen = tile.bitmapDimsDoc * pxPerDoc;
-      if (sizeScreen.x <= 0.0 || sizeScreen.y <= 0.0) {
-        // Defensive fallback for canvas-sized tiles that pre-date
-        // M2's intrinsic-size rasterize — stretch across the full
-        // pane, matching the old bg/fg behavior.
-        sizeScreen.x = static_cast<double>(imageBottomRight.x - imageOrigin.x);
-        sizeScreen.y = static_cast<double>(imageBottomRight.y - imageOrigin.y);
-      }
-      const ImVec2 tileOrigin(imageOrigin.x + static_cast<float>(originDoc.x * pxPerDoc),
-                              imageOrigin.y + static_cast<float>(originDoc.y * pxPerDoc));
-      const ImVec2 tileBottomRight(tileOrigin.x + static_cast<float>(sizeScreen.x),
-                                   tileOrigin.y + static_cast<float>(sizeScreen.y));
-      paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tile.texture)),
-                             tileOrigin, tileBottomRight);
+  const double pxPerDoc = state.viewport.pixelsPerDocUnit();
+  for (const auto& tile : state.textures.tiles()) {
+    if (tile.texture == 0) {
+      continue;
     }
-  } else if (hasFlat) {
-    paneDrawList->AddImage(
-        static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.flatTexture())),
-        imageOrigin, imageBottomRight);
+    const Vector2d originDoc =
+        tile.canvasOffsetDoc + ResolveCompositedTileDragTranslation(tile, state.activeDragPreview,
+                                                                    state.displayedDragPreview);
+    Vector2d sizeScreen = tile.bitmapDimsDoc * pxPerDoc;
+    if (sizeScreen.x <= 0.0 || sizeScreen.y <= 0.0) {
+      // Defensive fallback for canvas-sized tiles that pre-date M2's
+      // intrinsic-size rasterize.
+      sizeScreen.x = static_cast<double>(imageBottomRight.x - imageOrigin.x);
+      sizeScreen.y = static_cast<double>(imageBottomRight.y - imageOrigin.y);
+    }
+    const ImVec2 tileOrigin(imageOrigin.x + static_cast<float>(originDoc.x * pxPerDoc),
+                            imageOrigin.y + static_cast<float>(originDoc.y * pxPerDoc));
+    const ImVec2 tileBottomRight(tileOrigin.x + static_cast<float>(sizeScreen.x),
+                                 tileOrigin.y + static_cast<float>(sizeScreen.y));
+    paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tile.texture)),
+                           tileOrigin, tileBottomRight);
   }
 
   // All editor chrome — path outlines, selection AABBs, and the

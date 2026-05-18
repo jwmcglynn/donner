@@ -240,7 +240,6 @@ protected:
   void SetUp() override {
     ASSERT_TRUE(app_.loadFromString(kLayerStressSvg));
     source_ = std::string(kLayerStressSvg);
-    selectTool_.setCompositedDragPreviewEnabled(true);
     viewport_.paneOrigin = Vector2d(560.0, 20.0);
     viewport_.paneSize = Vector2d(900.0, 540.0);
     viewport_.devicePixelRatio = 1.0;

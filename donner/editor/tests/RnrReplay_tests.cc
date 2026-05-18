@@ -23,9 +23,9 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
-#include "donner/editor/ExperimentalDragPresentation.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextPatch.h"
@@ -368,7 +368,6 @@ protected:
     }
 
     SelectTool selectTool;
-    selectTool.setCompositedDragPreviewEnabled(replay->metadata.experimentalMode);
 
     AsyncRenderer asyncRenderer;
     svg::Renderer renderer;
@@ -487,7 +486,7 @@ protected:
   ///
   /// The harness mirrors production's request-posting policy
   /// (selection prewarm + active drag + canvas/version invalidation)
-  /// against a simplified `ExperimentalDragPresentation` state
+  /// against a simplified `CompositedPresentation` state
   /// machine. GL upload is skipped — the bug lives in worker
   /// scheduling, not GL.
   void ReplayRecordingAsync(const std::filesystem::path& reproPath, AsyncReplaySnapshot* out) {
@@ -522,7 +521,6 @@ protected:
     }
 
     SelectTool selectTool;
-    selectTool.setCompositedDragPreviewEnabled(replay->metadata.experimentalMode);
 
     AsyncRenderer asyncRenderer;
     svg::Renderer renderer;
@@ -530,7 +528,7 @@ protected:
     SyncCanvasSize(app, viewport);
 
     // Production-style state shadowed in the harness.
-    ExperimentalDragPresentation experimentalDragPresentation;
+    CompositedPresentation compositedPresentation;
     Vector2i lastRenderedCanvasSize = Vector2i::Zero();
     std::uint64_t lastRenderedVersion = 0;
     Entity lastRenderedSelectedEntity = entt::null;
@@ -598,9 +596,9 @@ protected:
       // Update prewarm-cache state on landed result so future frames
       // don't re-fire the same render.
       if (result->compositedPreview.has_value()) {
-        experimentalDragPresentation.noteCachedTextures(result->compositedPreview->entity,
-                                                        result->version,
-                                                        app.document().document().canvasSize());
+        compositedPresentation.noteCachedTextures(result->compositedPreview->entity,
+                                                  result->version,
+                                                  app.document().document().canvasSize());
       }
     };
 
@@ -624,8 +622,8 @@ protected:
 
       // Drop stale settling state on selection change. (Lighter than
       // production's full handling — sufficient for the bug.)
-      experimentalDragPresentation.clearSettlingIfSelectionChanged(prewarmEntity,
-                                                                   dragPreview.has_value());
+      compositedPresentation.clearSettlingIfSelectionChanged(prewarmEntity,
+                                                             dragPreview.has_value());
 
       const bool selectionChanged = prewarmEntity != lastRenderedSelectedEntity;
       const bool canvasChanged = currentCanvasSize != lastRenderedCanvasSize;
@@ -633,10 +631,10 @@ protected:
       const bool dragChanged = dragPreview.has_value() != lastRenderedHadDrag;
 
       const bool needsRegularRender = canvasChanged || versionChanged;
-      const bool needsExperimentalPrewarm = experimentalDragPresentation.shouldPrewarm(
+      const bool needsCompositedPrewarm = compositedPresentation.shouldPrewarm(
           prewarmEntity, currentVersion, currentCanvasSize, /*dragActive=*/false);
 
-      if (!needsRegularRender && !needsExperimentalPrewarm && !dragChanged && !selectionChanged) {
+      if (!needsRegularRender && !needsCompositedPrewarm && !dragChanged && !selectionChanged) {
         return;
       }
 
@@ -654,13 +652,11 @@ protected:
             .entity = dragPreview->entity,
             .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
         };
-      } else if (needsExperimentalPrewarm && prewarmEntity != entt::null) {
+      } else if (needsCompositedPrewarm && prewarmEntity != entt::null) {
         req.dragPreview = RenderRequest::DragPreview{
             .entity = prewarmEntity,
             .interactionKind = svg::compositor::InteractionHint::Selection,
         };
-        experimentalDragPresentation.notePrewarmAttempted(prewarmEntity, currentVersion,
-                                                          currentCanvasSize);
       }
       asyncRenderer.requestRender(req);
 
@@ -865,7 +861,7 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
 // Drives `drag_start_hang_repro.rnr` through the production-faithful
 // async replay harness: per-frame `maybeRequestRender`-equivalent
 // with `isBusy()` gating, prewarm-on-canvas-change driven by
-// `ExperimentalDragPresentation::shouldPrewarm`, 120 ms debounced
+// `CompositedPresentation::shouldPrewarm`, 120 ms debounced
 // canvas-size commit, source-text writeback drain +
 // `ReplaceDocumentCommand` reparse, slow-path mouseDown gated on
 // `!isBusy()`, deferred-click `cancelInFlight`, and (design doc
@@ -875,8 +871,8 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
 // The recording's second mouse-down lands while a post-pinch
 // selection prewarm is in flight at ~3× canvas. With progressive
 // rendering enabled, the worker ships an `Intermediate` result
-// carrying the freshly-rasterized drag-target layer + the prior
-// frame's flat baseline as soon as the layer rasterize completes —
+// carrying the freshly-rasterized drag-target layer while existing
+// composited tiles remain visible as soon as the layer rasterize completes —
 // the user sees their drag target move at the new position within
 // ~100 ms, even though the full canvas-sized refinement takes
 // seconds.
@@ -922,7 +918,7 @@ TEST_F(RnrReplayTest, DragStartAfterZoomAsyncHarnessDoesNotHang) {
       << snapshot.latencies[1].clickToSlowPathMs
       << " ms was the click sitting deferred on `isBusy()`). Budget " << kPostZoomFirstPixelBudgetMs
       << " ms. Progressive rendering (design doc 0034) must ship an `Intermediate` result with "
-         "the drag-target layer + prior flat baseline before the canvas-sized refinement begins.";
+         "the drag-target layer before the canvas-sized refinement begins.";
 }
 
 TEST_F(RnrReplayTest, FilterSnapbackReproPreservesCompositorAcrossWriteback) {
@@ -1147,7 +1143,7 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
 // compares the final bitmap against a fresh-load ground-truth render
 // of the same end-state source.
 //
-// Regression coverage for the stale flat fallback after a preserved
+// Regression coverage for stale presented pixels after a preserved
 // structural-remap drag session. Investigation log:
 //   * resetAllLayers fallback (return false from
 //     remapAfterStructuralReplace when any parser-dirty entity is
@@ -1157,7 +1153,7 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
 //     both of which require the preservation optimization.
 //   * Fine-grained `consumeDirtyFlags(parserDirtyEntities)` on the
 //     captured pre-prepare dirty set marked 8/8 layers dirty but did
-//     not refresh the flat bitmap because `composeLayers` was skipped
+//     not refresh the CPU snapshot because `composeLayers` was skipped
 //     after mouse-up by a sticky ActiveDrag hint.
 //
 // The `.rnr` + ground-truth pipeline writes diff PNGs under

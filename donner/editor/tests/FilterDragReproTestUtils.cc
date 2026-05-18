@@ -187,14 +187,6 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
   [&]() { ASSERT_TRUE(app.loadFromString(svgSource)) << "loadFromString on splash failed"; }();
 
   SelectTool selectTool;
-  // The recording was captured with `--experimental`, which in the live
-  // shell flips `SelectTool::setCompositedDragPreviewEnabled(true)` so
-  // `activeDragPreview()` returns a valid payload and the drag path
-  // flows through the compositor. Replay has to mirror that or the
-  // drag requests arrive with only a Selection-kind hint (not
-  // ActiveDrag), which disables the `skipMainCompose` fast path in
-  // `composeLayers` and forces a full canvas compose every frame.
-  selectTool.setCompositedDragPreviewEnabled(repro.metadata.experimentalMode);
 
   RenderCoordinator renderCoordinator;
 

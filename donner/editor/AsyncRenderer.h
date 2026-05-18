@@ -180,8 +180,8 @@ struct RenderResult {
   /// Design doc 0034 progressive rendering: a single `renderFrame`
   /// request may emit TWO results — one `Intermediate` after the
   /// drag-target's intrinsic-sized layer has been rasterized but
-  /// before the canvas-sized segments / flat baseline finish, then a
-  /// `Final` once the canvas-sized work completes. Callers that don't
+  /// before the canvas-sized segments finish, then a `Final` once the
+  /// canvas-sized work completes. Callers that don't
   /// opt in to progressive rendering see only `Final`.
   enum class Stage : std::uint8_t { Intermediate, Final };
 

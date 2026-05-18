@@ -497,8 +497,8 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
   EXPECT_TRUE(result->compositedPreview->valid());
-  // The flat fallback bitmap is always produced (even for composited renders) so the main loop can
-  // keep its flat texture current.
+  // A CPU snapshot is still produced for diagnostics and for seeding the
+  // full-canvas composited tile when the splitter has no finer-grained tiles.
   EXPECT_FALSE(result->bitmap.empty());
   EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity());
   // M2C: promoted bitmap now lives inside the `tiles` paint-order
@@ -611,17 +611,15 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     // After a version change, the compositor should still produce valid composited output.
     ASSERT_TRUE(result->compositedPreview.has_value());
     EXPECT_TRUE(result->compositedPreview->valid());
-    // The flat bitmap is also always produced.
+    // The CPU snapshot is also always produced for diagnostics.
     EXPECT_FALSE(result->bitmap.empty());
   }
 }
 
-// A request with `selectedEntity` set and no `dragPreview` must still
-// produce a valid flat bitmap. This is the "compositor stays warm against
-// the selection while no drag is happening" path — exercised when the user
-// has just selected an element, or when a drag has released and the
-// selection is being held ready for the next drag.
-TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesFlatBitmap) {
+// A request with `selectedEntity` set and no `dragPreview` must still produce
+// a valid composited preview. If the compositor cannot split the selection yet,
+// the final CPU snapshot is wrapped as one full-canvas tile.
+TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPreview) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect id="target" x="0" y="0" width="16" height="16" fill="red" />
   )svg");
@@ -653,10 +651,108 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesFlatBitmap) {
 
   ASSERT_TRUE(result.has_value());
   EXPECT_FALSE(result->bitmap.empty());
-  // compositedPreview is only exposed when the editor is actively dragging
-  // (it's what drives the GPU-textures overlay). Pre-warm without drag just
-  // produces the flat bitmap.
-  EXPECT_FALSE(result->compositedPreview.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  EXPECT_TRUE(result->compositedPreview->valid());
+}
+
+TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTile) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="64" height="64" fill="red" />
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request;
+  request.renderer = &renderer;
+  request.document = &document;
+  request.version = 1;
+
+  asyncRenderer.requestRender(request);
+
+  std::optional<RenderResult> result;
+  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_EQ(result->compositedPreview->tiles.size(), 1u);
+  const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
+  EXPECT_EQ(tile.kind, RenderResult::CompositedTile::Kind::Segment);
+  EXPECT_EQ(tile.id, "full-canvas");
+  EXPECT_FALSE(tile.bitmap.empty());
+  EXPECT_EQ(tile.bitmap.dimensions, Vector2i(64, 64));
+  EXPECT_EQ(tile.canvasOffsetDoc, Vector2d::Zero());
+  EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(64.0, 64.0));
+  EXPECT_TRUE(result->compositedPreview->entity == entt::null);
+}
+
+TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasCompositedPreview) {
+  const std::array<std::string_view, 3> cases = {
+      R"svg(
+        <defs><filter id="blur"><feGaussianBlur stdDeviation="4"/></filter></defs>
+        <g filter="url(#blur)">
+          <rect id="target" x="20" y="20" width="30" height="30" fill="red"/>
+        </g>
+      )svg",
+      R"svg(
+        <defs><clipPath id="clip"><rect x="0" y="0" width="40" height="80"/></clipPath></defs>
+        <g clip-path="url(#clip)">
+          <rect id="target" x="20" y="20" width="30" height="30" fill="red"/>
+        </g>
+      )svg",
+      R"svg(
+        <defs><mask id="mask"><rect x="0" y="0" width="40" height="80" fill="white"/></mask></defs>
+        <g mask="url(#mask)">
+          <rect id="target" x="20" y="20" width="30" height="30" fill="red"/>
+        </g>
+      )svg",
+  };
+
+  for (std::string_view svgBody : cases) {
+    svg::SVGDocument document = svg::instantiateSubtree(std::string(svgBody));
+    document.setCanvasSize(80, 80);
+    auto target = document.querySelector("#target");
+    ASSERT_TRUE(target.has_value());
+
+    svg::Renderer renderer;
+    AsyncRenderer asyncRenderer;
+
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &document;
+    request.version = 1;
+    request.selectedEntity = target->entityHandle().entity();
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = target->entityHandle().entity(),
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+
+    asyncRenderer.requestRender(request);
+
+    std::optional<RenderResult> result;
+    for (int i = 0; i < 200 && !result.has_value(); ++i) {
+      result = asyncRenderer.pollResult();
+      if (!result.has_value()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->compositedPreview.has_value()) << svgBody;
+    ASSERT_EQ(result->compositedPreview->tiles.size(), 1u) << svgBody;
+    const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
+    EXPECT_EQ(tile.id, "full-canvas") << svgBody;
+    EXPECT_FALSE(tile.bitmap.empty()) << svgBody;
+    EXPECT_EQ(tile.bitmap.dimensions, result->bitmap.dimensions) << svgBody;
+    EXPECT_EQ(tile.bitmap.pixels, result->bitmap.pixels) << svgBody;
+    EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity()) << svgBody;
+  }
 }
 
 // After a drag → release → drag-again sequence on the same entity, the
@@ -727,7 +823,9 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   }
   auto held = waitForResult();
   ASSERT_TRUE(held.has_value());
-  EXPECT_FALSE(held->compositedPreview.has_value());
+  ASSERT_TRUE(held->compositedPreview.has_value());
+  ASSERT_EQ(held->compositedPreview->tiles.size(), 1u);
+  EXPECT_EQ(held->compositedPreview->tiles.front().id, "full-canvas");
 
   // Drag frame 2: same entity, same DOM transform (4, 0). If the compositor
   // were torn down between the release and this drag, it would re-rasterize
@@ -861,7 +959,7 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
     ASSERT_TRUE(result.has_value()) << "drag frame " << i << " did not complete";
     ASSERT_TRUE(result->compositedPreview.has_value())
         << "drag frame " << i << " produced no composited preview — the split-layer path "
-        << "broke and the editor would fall back to the flat texture. This is the perf "
+        << "broke and the editor would lose the composited presentation path. This is the perf "
         << "regression shape behind the user's ~200ms drag updates.";
   }
 
@@ -1392,7 +1490,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
 
 TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnSplashShape) {
   AsyncSVGDocument asyncDoc;
-  asyncDoc.loadFromString(R"svg(
+  ASSERT_TRUE(asyncDoc.loadFromString(R"svg(
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">
   <defs>
@@ -1414,7 +1512,7 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnSplashShape) {
     </g>
   </g>
 </svg>
-  )svg");
+  )svg"));
   asyncDoc.document().setCanvasSize(892, 512);
 
   auto target = asyncDoc.document().querySelector("#letter_2");
@@ -1742,24 +1840,20 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
          "that the fix was meant to prevent.";
 }
 
-// Regression: clicking a different element mid-session (D → release →
-// O) used to produce a one-frame transparent-canvas flash in the
-// editor. Root cause was `CompositorController::composeLayers` calling
-// `renderer_->beginFrame()` (which recreates the main renderer's
-// pixmap as fully transparent) and then skipping the actual compose
-// because `skipMainComposeDuringSplit_` was on. The main renderer's
-// `takeSnapshot` then returned a transparent bitmap, which got
-// uploaded as the editor's flat fallback texture. When the presenter
-// fell back to flat during the drag-target swap (before the new
-// composited result landed), the user saw the transparent buffer.
+// Regression: clicking a different element mid-session (D → release → O) used
+// to produce a one-frame transparent-canvas flash in the editor. Root cause was
+// `CompositorController::composeLayers` calling `renderer_->beginFrame()` (which
+// recreates the main renderer's pixmap as fully transparent) and then skipping
+// the actual compose because `skipMainComposeDuringSplit_` was on. The main
+// renderer's `takeSnapshot` then returned a transparent bitmap, which is now
+// used to seed the full-canvas composited tile whenever split tiles are not
+// available.
 //
-// The fix preserves the main renderer's framebuffer across skip-
-// compose frames so the flat fallback always holds the last valid
-// non-split render. This test locks that in by polling the render
-// result after each phase of the click-D → drag-D → release-D →
-// click-O sequence and asserting the flat bitmap is non-empty AND
-// contains at least some non-fully-transparent pixels.
-TEST(AsyncRendererE2ETest, FlatBitmapStaysNonTransparentAcrossDragTargetSwap) {
+// The fix preserves the main renderer's framebuffer across skip-compose frames.
+// This test locks that in by polling the render result after each phase of the
+// click-D → drag-D → release-D → click-O sequence and asserting the CPU snapshot
+// is non-empty and contains at least some non-fully-transparent pixels.
+TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -1825,29 +1919,26 @@ TEST(AsyncRendererE2ETest, FlatBitmapStaysNonTransparentAcrossDragTargetSwap) {
   auto checkResult = [&](std::string_view phase) {
     auto result = waitForResult();
     ASSERT_TRUE(result.has_value()) << "no result for " << phase;
-    EXPECT_FALSE(result->bitmap.empty()) << phase << ": flat bitmap empty";
+    EXPECT_FALSE(result->bitmap.empty()) << phase << ": CPU snapshot empty";
     EXPECT_FALSE(isBitmapMostlyTransparent(result->bitmap))
         << phase
-        << ": flat bitmap is ≥99% transparent — the fallback "
-           "texture the editor uploads would show as a "
-           "transparent flash to the user when the presenter "
-           "switches display modes.";
+        << ": CPU snapshot is ≥99% transparent — a full-canvas composited tile seeded from it "
+           "would show as a transparent flash to the user.";
   };
 
   // Phase 0 — cold render. Flat must contain real document content.
   post(1, entt::null, entt::null);
   checkResult("cold");
 
-  // Phase 1 — click-drag on D. Even though the editor displays the
-  // composited triple for this frame, the flat fallback must retain
-  // the cold render's pixels.
+  // Phase 1 — click-drag on D. Even though the editor displays composited
+  // tiles for this frame, the CPU snapshot must retain the cold render's pixels.
   donnerPath->cast<svg::SVGGraphicsElement>().setTransform(
       Transform2d::Translate(Vector2d(4.0, 0.0)));
   post(2, donnerEntity, donnerEntity);
   checkResult("click-D");
 
-  // Phase 2 — drag frames. Flat must still hold cold pixels (skip-
-  // main-compose is active, main renderer's pixmap preserved).
+  // Phase 2 — drag frames. The CPU snapshot must still hold cold pixels
+  // (skip-main-compose is active, main renderer's pixmap preserved).
   for (int i = 0; i < 3; ++i) {
     donnerPath->cast<svg::SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 4.0, 0.0)));
@@ -1985,7 +2076,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   ASSERT_TRUE(postReplaceResult.has_value());
 
   const svg::RendererBitmap& postReplaceBitmap = postReplaceResult->bitmap;
-  ASSERT_FALSE(postReplaceBitmap.empty()) << "post-replace flat bitmap must refresh";
+  ASSERT_FALSE(postReplaceBitmap.empty()) << "post-replace CPU snapshot must refresh";
   const auto pixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
     const size_t offset =
         static_cast<size_t>(y) * postReplaceBitmap.rowBytes + static_cast<size_t>(x) * 4u;
@@ -1995,11 +2086,11 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   const auto movedOnlyPixel = pixelAt(150, 90);
   const auto originalOnlyPixel = pixelAt(60, 90);
   EXPECT_GT(static_cast<int>(movedOnlyPixel[0]), 200)
-      << "post-release flat fallback must show #target at its writeback transform";
+      << "post-release CPU snapshot must show #target at its writeback transform";
   EXPECT_LT(static_cast<int>(movedOnlyPixel[1]), 80);
   EXPECT_LT(static_cast<int>(movedOnlyPixel[2]), 80);
   EXPECT_GT(static_cast<int>(originalOnlyPixel[0]), 200)
-      << "post-release flat fallback should have the white background at the old position";
+      << "post-release CPU snapshot should have the white background at the old position";
   EXPECT_GT(static_cast<int>(originalOnlyPixel[1]), 200);
   EXPECT_GT(static_cast<int>(originalOnlyPixel[2]), 200);
 

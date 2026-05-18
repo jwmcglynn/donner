@@ -16,8 +16,8 @@ cc_library(
     deps = [
         "//donner/base",
         "//donner/editor:async_renderer",
+        "//donner/editor:composited_presentation",
         "//donner/editor:editor_app",
-        "//donner/editor:experimental_drag_presentation",
         "//donner/editor:select_tool",
         "//donner/editor:viewport_state",
         "//donner/editor/repro:gl_rnr_replay",
@@ -27,6 +27,7 @@ cc_library(
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
         "@nlohmann_json//:json",
+        "@pixelmatch-cpp17",
     ],
 )
 

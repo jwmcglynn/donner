@@ -80,22 +80,6 @@ TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   EXPECT_TRUE(tool.isDragging());
 }
 
-TEST_F(SelectToolTest, CompositedRenderingToggleAllowedOnlyWithoutActiveGesture) {
-  EXPECT_TRUE(CanToggleCompositedRendering(tool));
-
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  EXPECT_FALSE(CanToggleCompositedRendering(tool));
-
-  tool.onMouseUp(app, Vector2d(15.0, 15.0));
-  EXPECT_TRUE(CanToggleCompositedRendering(tool));
-
-  tool.onMouseDown(app, Vector2d(180.0, 180.0), MouseModifiers{});
-  EXPECT_FALSE(CanToggleCompositedRendering(tool));
-
-  tool.onMouseUp(app, Vector2d(180.0, 180.0));
-  EXPECT_TRUE(CanToggleCompositedRendering(tool));
-}
-
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
   app.setSelection(elementById("#r1"));
   EXPECT_TRUE(app.hasSelection());
@@ -177,7 +161,6 @@ TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
 }
 
 TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
-  tool.setCompositedDragPreviewEnabled(true);
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
 
@@ -673,7 +656,6 @@ TEST_F(SelectToolTest, MultiSelectDragDoesNotUseCompositedPreview) {
   // When compositing is enabled but the drag is multi-element, the preview
   // path falls back to DOM mutation — the drag-preview transport models only
   // a single moving layer.
-  tool.setCompositedDragPreviewEnabled(true);
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
 
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
@@ -691,7 +673,6 @@ TEST_F(SelectToolTest, MultiSelectDragDoesNotUseCompositedPreview) {
 
 TEST_F(SelectToolTest, SingleSelectDragWithCompositingUsesPreview) {
   // Regression guard for the flow that USES the composited preview.
-  tool.setCompositedDragPreviewEnabled(true);
   app.setSelection(elementById("#r1"));
 
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});

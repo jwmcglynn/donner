@@ -170,7 +170,6 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderHighDpr) {
   v.zoomAround(2.0, v.paneCenter());
 
   SelectTool tool;
-  tool.setCompositedDragPreviewEnabled(true);
   const Vector2d startScreen = v.documentToScreen(Vector2d(40.0, 40.0));
   tool.onMouseDown(app, v.screenToDocument(startScreen), MouseModifiers{});
   ASSERT_TRUE(app.hasSelection());
@@ -207,7 +206,6 @@ TEST(RenderPaneClickTest, DragMovesElementByCursorDelta) {
 
   // Click on r1's center to start the drag.
   SelectTool tool;
-  tool.setCompositedDragPreviewEnabled(true);
   const Vector2d startScreen = v.documentToScreen(Vector2d(40.0, 40.0));
   tool.onMouseDown(app, v.screenToDocument(startScreen), MouseModifiers{});
   ASSERT_TRUE(app.hasSelection());
@@ -302,7 +300,6 @@ TEST(RenderPaneClickTest, MainLoopClickDragSequenceMovesElement) {
   ViewportState v = MakeViewportFor(app, Vector2d::Zero(), Vector2d(800.0, 600.0));
 
   SelectTool tool;
-  tool.setCompositedDragPreviewEnabled(true);
   const Vector2d r1ScreenStart = v.documentToScreen(Vector2d(40.0, 40.0));
 
   // ---- Frame N: IsMouseClicked = true, IsMouseDown = true ----
@@ -393,7 +390,6 @@ TEST(RenderPaneClickTest, DragMovesElementByDocDeltaUnderZoom) {
   v.zoomAround(2.0, v.paneCenter());
 
   SelectTool tool;
-  tool.setCompositedDragPreviewEnabled(true);
   const Vector2d startScreen = v.documentToScreen(Vector2d(40.0, 40.0));
   tool.onMouseDown(app, v.screenToDocument(startScreen), MouseModifiers{});
   ASSERT_TRUE(app.hasSelection());

@@ -30,6 +30,10 @@ bazel run //donner/editor:editor -- \
     path/to/input.svg
 ```
 
+The editor also accepts legacy `--experimental` as a compatibility no-op.
+It is part of the developer CLI contract and does not change composited
+presentation behavior.
+
 Do whatever produces the bug: click, drag, scroll, type, toggle menu
 items, resize the window. Every ImGui frame captures the full input
 state plus any discrete events that fired during that frame.
@@ -128,7 +132,7 @@ Suggested template:
 
 ```
 SVG: donner_splash.svg
-Editor args: --experimental (if applicable)
+Editor args: donner_splash.svg
 Window size at start: 1784x1024
 OS/platform: macOS 14.2 (ARM64)
 Bug: dragging #Clouds_with_gradients leaves a crescent-shaped
@@ -183,8 +187,8 @@ discrete events as hints — the next frame's state wins regardless.
   digits, function keys, modifiers, nav, arrow keys, common symbols)
 - Character input (everything typed into an `InputText` widget)
 - Window resize / focus
-- Starting SVG path, window size, display scale, `--experimental`
-  flag
+- Starting SVG path, window size, display scale, and legacy composited-mode flag
+  (new recordings default this to `false`)
 
 **IS NOT recorded:**
 - The actual rendered output. A `.donner-repro` is a script of your

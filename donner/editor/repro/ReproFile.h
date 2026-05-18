@@ -182,7 +182,7 @@ struct ReproMetadata {
   int windowHeight = 0;
   /// HiDPI display scale at start (`io.DisplayFramebufferScale.x`).
   double displayScale = 1.0;
-  /// Whether the editor was started with `--experimental`.
+  /// Legacy composited-mode metadata kept for old `.rnr` compatibility.
   bool experimentalMode = false;
   /// Absolute wall-clock timestamp when recording started, ISO-8601.
   /// Informational only; not used by the player.

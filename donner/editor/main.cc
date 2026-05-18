@@ -44,14 +44,6 @@ int main(int argc, char** argv) {
     std::filesystem::current_path(bwd);
   }
 
-  // Experimental mode used to gate the compositor's split bg/promoted/fg
-  // display path. After the tier3 work that made the path correct at
-  // arbitrary zoom (see promotedTranslationDoc unit conversion in
-  // AsyncRenderer), the path is the default — drag at any zoom skips the
-  // main GPU compose, dropping per-frame cost from ~150ms to ~10ms at
-  // moderate zoom on the splash. `--experimental` and `--no-experimental`
-  // remain available as escape hatches.
-  bool experimentalMode = true;
   std::optional<std::string> svgPath;
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
@@ -61,17 +53,16 @@ int main(int argc, char** argv) {
   initialPath = std::string("donner_icon.svg");
 #else
   constexpr std::string_view kUsage =
-      "Usage: donner-editor [--no-experimental] [--save-repro <path>] <filename>\n";
+      "Usage: donner-editor [--experimental] [--save-repro <path>] <filename>\n";
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg == "--experimental") {
-      experimentalMode = true;
+      // Developer CLI contract: keep accepting this flag even when it is a
+      // no-op. Old repro scripts and launch aliases pass it, and removing it
+      // breaks callers.
       continue;
     }
-    if (arg == "--no-experimental") {
-      experimentalMode = false;
-      continue;
-    }
+
     if (arg == "--save-repro") {
       if (i + 1 >= argc) {
         std::cerr << "--save-repro requires a filename argument\n" << kUsage;
@@ -79,6 +70,11 @@ int main(int argc, char** argv) {
       }
       reproOutputPath = std::string(argv[++i]);
       continue;
+    }
+
+    if (arg.starts_with("--")) {
+      std::cerr << "Unknown option " << arg << "\n" << kUsage;
+      return 1;
     }
 
     if (svgPath.has_value()) {
@@ -108,7 +104,6 @@ int main(int argc, char** argv) {
                .initialSource = initialSource,
                .initialPath = initialPath,
                .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
-               .experimentalMode = experimentalMode,
                .reproOutputPath = reproOutputPath});
   if (!shell.valid()) {
     if (svgPath.has_value()) {

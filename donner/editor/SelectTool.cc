@@ -461,7 +461,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
 }
 
 std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() const {
-  if (!compositedDragPreviewEnabled_ || !dragState_.has_value()) {
+  if (!dragState_.has_value()) {
     return std::nullopt;
   }
   // Multi-element drags run through the mutation path (not compositor)

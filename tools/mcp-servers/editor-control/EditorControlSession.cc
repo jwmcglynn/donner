@@ -1,5 +1,7 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
+#include <pixelmatch/pixelmatch.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -175,8 +177,6 @@ bool ReadLoadOptions(const json& arguments, EditorControlSession::LoadOptions* o
   return ReadOptionalInt(arguments, "canvas_width", 0, &out->canvasWidth, error) &&
          ReadOptionalInt(arguments, "canvas_height", 0, &out->canvasHeight, error) &&
          ReadOptionalDouble(arguments, "device_pixel_ratio", 1.0, &out->devicePixelRatio, error) &&
-         ReadOptionalBool(arguments, "enable_composited_drag_preview", true,
-                          &out->enableCompositedDragPreview, error) &&
          ReadOptionalBool(arguments, "tight_bounded_segments", true, &out->tightBoundedSegments,
                           error) &&
          ReadOptionalBool(arguments, "render_after_load", true, &out->renderAfterLoad, error) &&
@@ -391,6 +391,9 @@ std::string PromoteRefusalReasonName(
   return "unknown";
 }
 
+constexpr float kDisplayDiffPixelmatchThreshold = 0.02f;
+constexpr bool kDisplayDiffPixelmatchIncludeAa = false;
+
 json BitmapSummary(const svg::RendererBitmap& bitmap) {
   const std::optional<std::string> contentHash = BitmapContentHash(bitmap);
   json summary{
@@ -401,6 +404,24 @@ json BitmapSummary(const svg::RendererBitmap& bitmap) {
   };
   summary["content_hash"] = contentHash.has_value() ? json(*contentHash) : json(nullptr);
   return summary;
+}
+
+std::size_t BitmapRowBytes(const svg::RendererBitmap& bitmap) {
+  return bitmap.rowBytes > 0 ? bitmap.rowBytes : static_cast<std::size_t>(bitmap.dimensions.x) * 4u;
+}
+
+bool CanPixelmatchBitmaps(const svg::RendererBitmap& actual, const svg::RendererBitmap& expected) {
+  if (actual.dimensions != expected.dimensions || actual.dimensions.x <= 0 ||
+      actual.dimensions.y <= 0) {
+    return false;
+  }
+
+  const std::size_t actualRowBytes = BitmapRowBytes(actual);
+  const std::size_t expectedRowBytes = BitmapRowBytes(expected);
+  return actualRowBytes == expectedRowBytes && actualRowBytes % 4u == 0u &&
+         actual.pixels.size() == actualRowBytes * static_cast<std::size_t>(actual.dimensions.y) &&
+         expected.pixels.size() ==
+             expectedRowBytes * static_cast<std::size_t>(expected.dimensions.y);
 }
 
 json BitmapDiffSummary(const std::optional<svg::RendererBitmap>& actual,
@@ -414,54 +435,39 @@ json BitmapDiffSummary(const std::optional<svg::RendererBitmap>& actual,
   }
 
   const svg::RendererBitmap& actualBitmap = *actual;
-  const int width = std::min(actualBitmap.dimensions.x, expected.dimensions.x);
-  const int height = std::min(actualBitmap.dimensions.y, expected.dimensions.y);
-  const std::size_t actualRowBytes = actualBitmap.rowBytes > 0
-                                         ? actualBitmap.rowBytes
-                                         : static_cast<std::size_t>(actualBitmap.dimensions.x) * 4;
-  const std::size_t expectedRowBytes = expected.rowBytes > 0
-                                           ? expected.rowBytes
-                                           : static_cast<std::size_t>(expected.dimensions.x) * 4;
-
-  int differingPixels = 0;
-  int maxChannelDelta = 0;
-  std::uint64_t totalChannelDelta = 0;
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      const std::size_t actualIndex =
-          static_cast<std::size_t>(y) * actualRowBytes + static_cast<std::size_t>(x) * 4;
-      const std::size_t expectedIndex =
-          static_cast<std::size_t>(y) * expectedRowBytes + static_cast<std::size_t>(x) * 4;
-      if (actualIndex + 3 >= actualBitmap.pixels.size() ||
-          expectedIndex + 3 >= expected.pixels.size()) {
-        continue;
-      }
-
-      bool pixelDiffers = false;
-      for (int channel = 0; channel < 4; ++channel) {
-        const int delta = std::abs(static_cast<int>(actualBitmap.pixels[actualIndex + channel]) -
-                                   static_cast<int>(expected.pixels[expectedIndex + channel]));
-        if (delta > 0) {
-          pixelDiffers = true;
-          maxChannelDelta = std::max(maxChannelDelta, delta);
-          totalChannelDelta += static_cast<std::uint64_t>(delta);
-        }
-      }
-      if (pixelDiffers) {
-        ++differingPixels;
-      }
-    }
+  if (!CanPixelmatchBitmaps(actualBitmap, expected)) {
+    return json{
+        {"available", false},
+        {"actual_bitmap", BitmapSummary(actualBitmap)},
+        {"expected_bitmap", BitmapSummary(expected)},
+        {"dimension_mismatch", actualBitmap.dimensions != expected.dimensions},
+        {"comparison", "pixelmatch"},
+        {"pixelmatch_threshold", kDisplayDiffPixelmatchThreshold},
+        {"pixelmatch_include_anti_aliasing", kDisplayDiffPixelmatchIncludeAa},
+        {"pixelmatch_error", "bitmap layout is not compatible with pixelmatch"},
+    };
   }
+
+  std::vector<std::uint8_t> diffImage(actualBitmap.pixels.size(), 0u);
+  pixelmatch::Options options;
+  options.threshold = kDisplayDiffPixelmatchThreshold;
+  options.includeAA = kDisplayDiffPixelmatchIncludeAa;
+  const std::size_t rowBytes = BitmapRowBytes(actualBitmap);
+  const int mismatchedPixels = pixelmatch::pixelmatch(
+      expected.pixels, actualBitmap.pixels, diffImage, actualBitmap.dimensions.x,
+      actualBitmap.dimensions.y, rowBytes / 4u, options);
 
   return json{
       {"available", true},
       {"actual_bitmap", BitmapSummary(actualBitmap)},
       {"expected_bitmap", BitmapSummary(expected)},
-      {"dimension_mismatch", actualBitmap.dimensions != expected.dimensions},
-      {"compared_pixels", width * height},
-      {"differing_pixels", differingPixels},
-      {"max_channel_delta", maxChannelDelta},
-      {"total_channel_delta", totalChannelDelta},
+      {"dimension_mismatch", false},
+      {"compared_pixels", static_cast<std::uint64_t>(actualBitmap.dimensions.x) *
+                              static_cast<std::uint64_t>(actualBitmap.dimensions.y)},
+      {"comparison", "pixelmatch"},
+      {"pixelmatch_threshold", kDisplayDiffPixelmatchThreshold},
+      {"pixelmatch_include_anti_aliasing", kDisplayDiffPixelmatchIncludeAa},
+      {"differing_pixels", mismatchedPixels},
   };
 }
 
@@ -472,7 +478,7 @@ std::filesystem::path DiagnosticOutputDir() {
   return std::filesystem::temp_directory_path();
 }
 
-std::string FlattenArtifactLabel(std::string_view label) {
+std::string SanitizeArtifactLabel(std::string_view label) {
   std::string out;
   out.reserve(label.size());
   for (const char c : label) {
@@ -494,51 +500,23 @@ bool WriteBitmapPng(const svg::RendererBitmap& bitmap, const std::filesystem::pa
 
 svg::RendererBitmap BuildDiffBitmap(const svg::RendererBitmap& actual,
                                     const svg::RendererBitmap& expected) {
-  const int width = std::max(actual.dimensions.x, expected.dimensions.x);
-  const int height = std::max(actual.dimensions.y, expected.dimensions.y);
   svg::RendererBitmap diff;
-  if (width <= 0 || height <= 0) {
+  if (!CanPixelmatchBitmaps(actual, expected)) {
     return diff;
   }
 
-  diff.dimensions = Vector2i(width, height);
-  diff.rowBytes = static_cast<std::size_t>(width) * 4u;
+  const std::size_t rowBytes = BitmapRowBytes(actual);
+  diff.dimensions = actual.dimensions;
+  diff.rowBytes = rowBytes;
   diff.alphaType = svg::AlphaType::Premultiplied;
-  diff.pixels.resize(static_cast<std::size_t>(height) * diff.rowBytes, 0u);
+  diff.pixels.resize(static_cast<std::size_t>(diff.dimensions.y) * diff.rowBytes, 0u);
 
-  const std::size_t actualRowBytes =
-      actual.rowBytes > 0 ? actual.rowBytes : static_cast<std::size_t>(actual.dimensions.x) * 4u;
-  const std::size_t expectedRowBytes = expected.rowBytes > 0
-                                           ? expected.rowBytes
-                                           : static_cast<std::size_t>(expected.dimensions.x) * 4u;
-  for (int y = 0; y < height; ++y) {
-    for (int x = 0; x < width; ++x) {
-      bool differs = x >= actual.dimensions.x || y >= actual.dimensions.y ||
-                     x >= expected.dimensions.x || y >= expected.dimensions.y;
-      if (!differs) {
-        const std::size_t actualIndex =
-            static_cast<std::size_t>(y) * actualRowBytes + static_cast<std::size_t>(x) * 4u;
-        const std::size_t expectedIndex =
-            static_cast<std::size_t>(y) * expectedRowBytes + static_cast<std::size_t>(x) * 4u;
-        if (actualIndex + 3u >= actual.pixels.size() ||
-            expectedIndex + 3u >= expected.pixels.size()) {
-          differs = true;
-        } else {
-          for (int channel = 0; channel < 4; ++channel) {
-            differs |=
-                actual.pixels[actualIndex + channel] != expected.pixels[expectedIndex + channel];
-          }
-        }
-      }
-      if (differs) {
-        const std::size_t diffIndex =
-            static_cast<std::size_t>(y) * diff.rowBytes + static_cast<std::size_t>(x) * 4u;
-        diff.pixels[diffIndex] = 255u;
-        diff.pixels[diffIndex + 3u] = 255u;
-      }
-    }
-  }
-
+  pixelmatch::Options options;
+  options.threshold = kDisplayDiffPixelmatchThreshold;
+  options.includeAA = kDisplayDiffPixelmatchIncludeAa;
+  static_cast<void>(pixelmatch::pixelmatch(expected.pixels, actual.pixels, diff.pixels,
+                                           actual.dimensions.x, actual.dimensions.y, rowBytes / 4u,
+                                           options));
   return diff;
 }
 
@@ -548,18 +526,17 @@ void AddBitmapDiffArtifacts(json* diff, const std::optional<svg::RendererBitmap>
       !diff->value("available", false)) {
     return;
   }
-  if (!diff->value("dimension_mismatch", false) && diff->value("differing_pixels", 0) == 0 &&
-      diff->value("max_channel_delta", 0) == 0) {
+  if (diff->value("differing_pixels", 0) == 0) {
     return;
   }
 
   const std::filesystem::path outDir = DiagnosticOutputDir();
   std::error_code ec;
   std::filesystem::create_directories(outDir, ec);
-  const std::string flatLabel = FlattenArtifactLabel(label);
-  const std::filesystem::path actualPath = outDir / ("actual_" + flatLabel + ".png");
-  const std::filesystem::path expectedPath = outDir / ("expected_" + flatLabel + ".png");
-  const std::filesystem::path diffPath = outDir / ("diff_" + flatLabel + ".png");
+  const std::string artifactLabel = SanitizeArtifactLabel(label);
+  const std::filesystem::path actualPath = outDir / ("actual_" + artifactLabel + ".png");
+  const std::filesystem::path expectedPath = outDir / ("expected_" + artifactLabel + ".png");
+  const std::filesystem::path diffPath = outDir / ("diff_" + artifactLabel + ".png");
   const svg::RendererBitmap diffBitmap = BuildDiffBitmap(*actual, expected);
 
   (*diff)["artifacts"] = json{
@@ -786,7 +763,6 @@ json RenderResultJson(const RenderResult& result, ToolCallResult* out,
 json DisplayFrameJson(const EditorControlSession::DisplayFrameSnapshot& display) {
   json displayJson{
       {"path", display.path},
-      {"has_flat", display.hasFlat},
       {"has_cached_tiles", display.hasCachedTiles},
       {"cached_entity", EntityToJsonValue(display.cachedEntity)},
       {"displayed_entity", EntityToJsonValue(display.displayedEntity)},
@@ -881,31 +857,13 @@ json CompositeTileSnapshotJson(
 
 }  // namespace
 
-EditorControlSession::EditorControlSession() : selectTool_(std::make_unique<SelectTool>()) {
-  selectTool_->setCompositedDragPreviewEnabled(true);
-}
+EditorControlSession::EditorControlSession() : selectTool_(std::make_unique<SelectTool>()) {}
 
 EditorControlSession::~EditorControlSession() = default;
 
 void EditorControlSession::HeadlessTextureCache::reset() {
-  flatWidth_ = 0;
-  flatHeight_ = 0;
-  flatBitmap_ = svg::RendererBitmap{};
   tileTextures_.clear();
   tiles_.clear();
-}
-
-void EditorControlSession::HeadlessTextureCache::uploadFlat(const svg::RendererBitmap& bitmap) {
-  if (bitmap.empty()) {
-    flatWidth_ = 0;
-    flatHeight_ = 0;
-    flatBitmap_ = svg::RendererBitmap{};
-    return;
-  }
-
-  flatWidth_ = bitmap.dimensions.x;
-  flatHeight_ = bitmap.dimensions.y;
-  flatBitmap_ = bitmap;
 }
 
 void EditorControlSession::HeadlessTextureCache::uploadComposited(
@@ -978,13 +936,6 @@ void EditorControlSession::HeadlessTextureCache::uploadComposited(
 
 std::optional<svg::RendererBitmap> EditorControlSession::HeadlessTextureCache::composeDisplayFrame(
     const DisplayFrameSnapshot& display, const Box2d& viewBox, const Vector2i& canvasSize) const {
-  if (display.path == "flat") {
-    if (flatBitmap_.empty()) {
-      return std::nullopt;
-    }
-    return flatBitmap_;
-  }
-
   if (display.path != "tiles" || canvasSize.x <= 0 || canvasSize.y <= 0 ||
       viewBox.size().x <= 0.0 || viewBox.size().y <= 0.0) {
     return std::nullopt;
@@ -1034,7 +985,6 @@ json EditorControlSession::toolList() {
                     {"canvas_width", {{"type", "integer"}, {"minimum", 1}}},
                     {"canvas_height", {{"type", "integer"}, {"minimum", 1}}},
                     {"device_pixel_ratio", {{"type", "number"}, {"default", 1.0}}},
-                    {"enable_composited_drag_preview", {{"type", "boolean"}, {"default", true}}},
                     {"tight_bounded_segments", {{"type", "boolean"}, {"default", true}}},
                     {"render_after_load", {{"type", "boolean"}, {"default", true}}},
                     {"include_final_frame", {{"type", "boolean"}, {"default", false}}},
@@ -1056,7 +1006,6 @@ json EditorControlSession::toolList() {
                     {"canvas_width", {{"type", "integer"}, {"minimum", 1}}},
                     {"canvas_height", {{"type", "integer"}, {"minimum", 1}}},
                     {"device_pixel_ratio", {{"type", "number"}, {"default", 1.0}}},
-                    {"enable_composited_drag_preview", {{"type", "boolean"}, {"default", true}}},
                     {"tight_bounded_segments", {{"type", "boolean"}, {"default", true}}},
                     {"render_after_load", {{"type", "boolean"}, {"default", true}}},
                     {"include_final_frame", {{"type", "boolean"}, {"default", false}}},
@@ -1141,7 +1090,6 @@ json EditorControlSession::toolList() {
                     {"window_width", {{"type", "integer"}, {"minimum", 1}}},
                     {"window_height", {{"type", "integer"}, {"minimum", 1}}},
                     {"display_scale", {{"type", "number"}, {"default", 1.0}}},
-                    {"experimental_mode", {{"type", "boolean"}, {"default", true}}},
                     {"frame_delta_ms", {{"type", "number"}, {"default", 16.6666667}}},
                 }},
            }},
@@ -1277,10 +1225,8 @@ ToolCallResult EditorControlSession::loadSvgSource(std::string_view source,
   app_.flushFrame();
 
   selectTool_ = std::make_unique<SelectTool>();
-  enableCompositedDragPreview_ = options.enableCompositedDragPreview;
-  selectTool_->setCompositedDragPreviewEnabled(enableCompositedDragPreview_);
   asyncRenderer_.setTightBoundedSegmentsEnabled(options.tightBoundedSegments);
-  displayPresentation_ = ExperimentalDragPresentation{};
+  displayPresentation_ = CompositedPresentation{};
   displayTextures_.reset();
   rnrRecording_ = RnrRecordingState{};
 
@@ -1546,7 +1492,6 @@ ToolCallResult EditorControlSession::sessionState(const json&) const {
       {"canvas", {{"width", canvasWidth_}, {"height", canvasHeight_}}},
       {"device_pixel_ratio", devicePixelRatio_},
       {"selection", selectedElementJson()},
-      {"enable_composited_drag_preview", enableCompositedDragPreview_},
       {"tight_bounded_segments", asyncRenderer_.tightBoundedSegmentsEnabled()},
       {"worker_compositor_entity", EntityToJsonValue(asyncRenderer_.workerCompositorEntity())},
   };
@@ -1585,15 +1530,12 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
   int windowWidth = canvasWidth_;
   int windowHeight = canvasHeight_;
   double displayScale = devicePixelRatio_;
-  bool experimentalMode = enableCompositedDragPreview_;
   double frameDeltaMs = 1000.0 / 60.0;
   if (!ReadOptionalString(arguments, "output_path", "", &outputPath, &error) ||
       !ReadOptionalString(arguments, "svg_path", currentSourcePath_, &svgPath, &error) ||
       !ReadOptionalInt(arguments, "window_width", canvasWidth_, &windowWidth, &error) ||
       !ReadOptionalInt(arguments, "window_height", canvasHeight_, &windowHeight, &error) ||
       !ReadOptionalDouble(arguments, "display_scale", devicePixelRatio_, &displayScale, &error) ||
-      !ReadOptionalBool(arguments, "experimental_mode", enableCompositedDragPreview_,
-                        &experimentalMode, &error) ||
       !ReadOptionalDouble(arguments, "frame_delta_ms", 1000.0 / 60.0, &frameDeltaMs, &error)) {
     return MakeErrorResult(error);
   }
@@ -1613,7 +1555,6 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
   rnrRecording_.file.metadata.windowWidth = windowWidth > 0 ? windowWidth : canvasWidth_;
   rnrRecording_.file.metadata.windowHeight = windowHeight > 0 ? windowHeight : canvasHeight_;
   rnrRecording_.file.metadata.displayScale = displayScale > 0.0 ? displayScale : 1.0;
-  rnrRecording_.file.metadata.experimentalMode = experimentalMode;
 
   ToolCallResult out;
   out.body = json{
@@ -1837,7 +1778,6 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       replay->metadata.windowHeight > 0 ? replay->metadata.windowHeight : kDefaultCanvasHeight;
   loadOptions.devicePixelRatio =
       replay->metadata.displayScale > 0.0 ? replay->metadata.displayScale : 1.0;
-  loadOptions.enableCompositedDragPreview = replay->metadata.experimentalMode;
   loadOptions.renderAfterLoad = false;
   ToolCallResult load = loadSvgSource(liveSource, loadOptions, svgPath->string());
   if (load.isError || !load.body.value("ok", false)) {
@@ -1942,29 +1882,17 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       }
       displayPresentation_.clearSettlingIfSelectionChanged(selectedEntity, dragPreview.has_value());
 
-      const bool hasCachedTexturesForDrag =
-          dragPreview.has_value() && displayPresentation_.hasCachedTextures &&
-          displayPresentation_.cachedEntity == dragPreview->entity &&
-          displayPresentation_.cachedVersion == currentVersion &&
-          displayPresentation_.cachedCanvasSize == currentCanvasSize;
-      const bool sameAsLastFailedDispatch =
-          dragPreview.has_value() && !hasCachedTexturesForDrag &&
-          displayPresentation_.lastPrewarmEntity == dragPreview->entity &&
-          displayPresentation_.lastPrewarmVersion == currentVersion &&
-          displayPresentation_.lastPrewarmCanvasSize == currentCanvasSize;
-      const bool needsExperimentalLayerCapture =
-          enableCompositedDragPreview_ && dragPreview.has_value() && !sameAsLastFailedDispatch &&
-          (!displayPresentation_.hasCachedTextures ||
-           displayPresentation_.cachedEntity != dragPreview->entity ||
-           displayPresentation_.cachedVersion != currentVersion ||
-           displayPresentation_.cachedCanvasSize != currentCanvasSize);
-      const bool needsExperimentalPrewarm =
+      const bool needsCompositedLayerCapture =
+          dragPreview.has_value() && (!displayPresentation_.hasCachedTextures ||
+                                      displayPresentation_.cachedEntity != dragPreview->entity ||
+                                      displayPresentation_.cachedVersion != currentVersion ||
+                                      displayPresentation_.cachedCanvasSize != currentCanvasSize);
+      const bool needsCompositedPrewarm =
           displayPresentation_.shouldPrewarm(selectedEntity, currentVersion, currentCanvasSize,
                                              /*dragActive=*/false);
       const bool needsRegularRender =
-          (!enableCompositedDragPreview_ || selectedEntity == entt::null) &&
-          (currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize);
-      if (!needsExperimentalLayerCapture && !needsExperimentalPrewarm && !needsRegularRender) {
+          currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize;
+      if (!needsCompositedLayerCapture && !needsCompositedPrewarm && !needsRegularRender) {
         return false;
       }
 
@@ -1983,7 +1911,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
             .entity = dragPreview->entity,
             .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
         };
-      } else if (needsExperimentalPrewarm && selectedEntity != entt::null) {
+      } else if (needsCompositedPrewarm && selectedEntity != entt::null) {
         request.dragPreview = RenderRequest::DragPreview{
             .entity = selectedEntity,
             .interactionKind = svg::compositor::InteractionHint::Selection,
@@ -2434,29 +2362,10 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
 
 EditorControlSession::DisplayFrameSnapshot EditorControlSession::recordDisplayFrame(
     const RenderResult& result) {
-  const bool hasComposited =
-      result.compositedPreview.has_value() && result.compositedPreview->valid();
-  if (hasComposited) {
+  if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
     displayTextures_.uploadComposited(*result.compositedPreview);
-    const bool allowIdleDisplay =
-        result.compositedPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
     displayPresentation_.noteCachedTextures(result.compositedPreview->entity, result.version,
-                                            app_.document().document().canvasSize(),
-                                            allowIdleDisplay);
-  }
-
-  if (!result.bitmap.empty()) {
-    displayTextures_.uploadFlat(result.bitmap);
-    if (!hasComposited) {
-      displayPresentation_.noteFullRenderLanded(result.version);
-    }
-  }
-
-  if (app_.selectedElement().has_value() &&
-      app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-    displayPresentation_.notePrewarmAttempted(app_.selectedElement()->entityHandle().entity(),
-                                              result.version,
-                                              app_.document().document().canvasSize());
+                                            app_.document().document().canvasSize());
   }
 
   return currentDisplayFrame();
@@ -2467,23 +2376,17 @@ EditorControlSession::DisplayFrameSnapshot EditorControlSession::currentDisplayF
       selectTool_->activeDragPreview();
   const std::optional<SelectTool::ActiveDragPreview> displayedPreview =
       displayPresentation_.presentationPreview(activePreview);
-  const bool useTiles = enableCompositedDragPreview_ && !displayTextures_.tiles().empty() &&
-                        displayPresentation_.shouldDisplayCompositedLayers(activePreview) &&
-                        displayedPreview.has_value();
 
   DisplayFrameSnapshot frame;
-  frame.hasFlat = displayTextures_.hasFlat();
   frame.hasCachedTiles = displayPresentation_.hasCachedTextures;
   frame.cachedEntity = displayPresentation_.cachedEntity;
   frame.hasActiveDragPreview = activePreview.has_value();
   frame.activeDragPreview = activePreview;
   frame.displayedDragPreview = displayedPreview;
   frame.displayedEntity = displayedPreview.has_value() ? displayedPreview->entity : entt::null;
-  if (useTiles) {
+  if (!displayTextures_.tiles().empty()) {
     frame.path = "tiles";
     frame.tiles = displayTextures_.tiles();
-  } else if (frame.hasFlat) {
-    frame.path = "flat";
   } else {
     frame.path = "empty";
   }

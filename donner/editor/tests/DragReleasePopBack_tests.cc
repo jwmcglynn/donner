@@ -3,7 +3,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
-#include "donner/editor/ExperimentalDragPresentation.h"
+#include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -225,12 +225,11 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
   const Entity entityOld{42};
   const Entity entityNew{99};
 
-  ExperimentalDragPresentation state;
+  CompositedPresentation state;
   const Vector2i canvasSize(200, 100);
 
-  // Record which image each frame would display. The "image" is abstracted as
-  // a pair: {entity for composited textures, screen offset}.  If the display
-  // falls to the flat path, we record {entity=null, offset=Zero()}.
+  // Record which composited image each frame would display. The "image" is
+  // abstracted as a pair: {cached entity, screen offset}.
   struct FrameSnapshot {
     bool composited = false;
     Entity entity = entt::null;
@@ -241,7 +240,7 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
   const auto recordDisplay = [&](const std::optional<SelectTool::ActiveDragPreview>& activeDrag,
                                  const char* label) -> FrameSnapshot {
     const auto preview = state.presentationPreview(activeDrag);
-    const bool useComposited = state.shouldDisplayCompositedLayers(activeDrag);
+    const bool useComposited = state.hasCachedTextures;
     FrameSnapshot snap;
     snap.composited = useComposited;
     if (useComposited && preview.has_value()) {
@@ -303,14 +302,12 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
   state.clearSettlingIfSelectionChanged(entityNew, /*dragActive=*/false);
   {
     auto snap = recordDisplay(std::nullopt, "Frame 4: after ReplaceDocument");
-    // THIS IS THE CRITICAL FRAME. The display must not keep showing composited tiles for the old
-    // entity after the selection remaps. Falling to flat is acceptable here; the flat texture was
-    // refreshed after the drag settled and avoids drawing stale tile paint order for the old
-    // target.
-    EXPECT_FALSE(snap.composited)
-        << "Frame 4 (CRITICAL): stale composited display must not stay active after entity handle "
-        << "change.";
-    EXPECT_DOUBLE_EQ(snap.offset.x, 0.0) << "Frame 4: flat fallback records zero display offset";
+    // THIS IS THE CRITICAL FRAME. The display keeps the last settled composited
+    // image live at zero offset until the prewarm for the replacement entity
+    // atomically replaces it.
+    EXPECT_TRUE(snap.composited) << "Frame 4: composited display stays active";
+    EXPECT_EQ(snap.entity, entityOld);
+    EXPECT_DOUBLE_EQ(snap.offset.x, 0.0) << "Frame 4: cached image uses zero display offset";
   }
 
   // Verify prewarm is triggered for the new entity.
@@ -349,8 +346,8 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
       // The test verifies offset is never such that visual = original position.
       // That would require offset = -100 after the drag, which we never set.
     }
-    // For flat display: the flat bitmap must show element at moved position.
-    // (Verified in CompositorProducesCorrectOutputAtEveryPhase above.)
+    // The non-composited CPU snapshot is still verified in the lower-level
+    // renderer checks; presentation itself stays composited.
   }
 }
 
@@ -358,7 +355,7 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
 // Regression: if noteFullRenderLanded fires (composited render fails to produce
 // split layers), the display must not show pre-drag composited textures.
 // ─────────────────────────────────────────────────────────────────────────────
-TEST(DragReleasePopBackTest, FlatFallbackShowsCorrectImageAfterSettling) {
+TEST(DragReleasePopBackTest, CpuSnapshotShowsCorrectImageAfterSettling) {
   auto document = ParseDocument(kBaseSvg);
   svg::Renderer renderer;
 
@@ -372,7 +369,7 @@ TEST(DragReleasePopBackTest, FlatFallbackShowsCorrectImageAfterSettling) {
   viewport.size = Vector2d(200, 100);
   viewport.devicePixelRatio = 1.0;
 
-  // Pre-drag: render without compositor promotion (flat only).
+  // Pre-drag: render without compositor promotion.
   {
     svg::RendererDriver driver(renderer);
     driver.draw(document);
@@ -384,7 +381,7 @@ TEST(DragReleasePopBackTest, FlatFallbackShowsCorrectImageAfterSettling) {
   // Apply the transform (simulating SetTransformCommand).
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(100, 0));
 
-  // Settling render: render flat (no compositor promotion).
+  // Settling render: render without compositor promotion.
   {
     svg::RendererDriver driver(renderer);
     driver.draw(document);
@@ -392,22 +389,22 @@ TEST(DragReleasePopBackTest, FlatFallbackShowsCorrectImageAfterSettling) {
   const auto settlingFlat = renderer.takeSnapshot();
   ASSERT_FALSE(settlingFlat.empty());
 
-  // The flat bitmap MUST show the element at its new position.
+  // The CPU snapshot must show the element at its new position.
   EXPECT_THAT(getPixel(settlingFlat, kMovedCenterX, kMovedCenterY), IsRed())
-      << "Flat fallback after settling must show element at new position";
+      << "CPU snapshot after settling must show element at new position";
   EXPECT_THAT(getPixel(settlingFlat, kOrigCenterX, kOrigCenterY), IsWhite())
-      << "Flat fallback must NOT show element at original position";
+      << "CPU snapshot must NOT show element at original position";
 
   // Simulate state machine: noteFullRenderLanded no longer clears
   // cached textures (the cache-clear here was the root cause of a
   // mid-drag "snap back to start" regression — see fix notes on
-  // `ExperimentalDragPresentation::noteFullRenderLanded`). The
+  // `CompositedPresentation::noteFullRenderLanded`). The
   // settling state itself is still ended, but the cached entity
   // survives so the editor keeps blitting the tiles at zero offset.
-  // Both the flat texture (asserted above) AND the cached tiles
-  // show the element at its new position, so the test's "no pop
-  // back" intent holds via the tile path now.
-  ExperimentalDragPresentation state;
+  // Both the CPU snapshot (asserted above) and the cached tiles show the
+  // element at its new position, so the test's "no pop back" intent holds via
+  // the tile path.
+  CompositedPresentation state;
   state.noteCachedTextures(entity, 1, Vector2i(200, 100));
   state.beginSettling(SelectTool::ActiveDragPreview{entity, Vector2d(100, 0)}, 2);
   state.noteFullRenderLanded(/*landedVersion=*/2);
@@ -459,8 +456,8 @@ TEST(DragReleasePopBackTest, ResetAndRePromoteProducesSplitLayers) {
 // End-to-end: simulate the EXACT main loop sequence for a drag + release
 // cycle, verifying every display frame's pixel content.
 //
-// Each "frame" records whether it uses the composited or flat path and
-// checks the pixel at the moved center vs original center.
+// Each "frame" records composited display state and checks the pixel at the
+// moved center vs original center.
 // ─────────────────────────────────────────────────────────────────────────────
 TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   auto document = ParseDocument(kBaseSvg);
@@ -477,18 +474,18 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   viewport.size = Vector2d(200, 100);
   viewport.devicePixelRatio = 1.0;
 
-  ExperimentalDragPresentation state;
+  CompositedPresentation state;
 
   // Track bitmaps that would be "uploaded to GL" in the real main loop.
   // Post-§M2C the editor uploads N tile textures (segments + layers) rather
   // than a bg/promoted/fg trio; for this test we still capture the live
   // promoted-layer bitmap directly off the compositor since that's what
   // `snapshotTilesForUpload` would copy into the corresponding tile.
-  svg::RendererBitmap uploadedFlat;
+  svg::RendererBitmap uploadedSnapshot;
   svg::RendererBitmap uploadedPromoted;
   bool hasUploadedComposited = false;
 
-  // Helper: synchronous render → produces compositor output + flat bitmap.
+  // Helper: synchronous render → produces compositor output + CPU snapshot.
   // Uses `currentEntity` which tracks which entity is currently promoted. The
   // DOM carries position; the compositor picks up the current transform on
   // each `renderFrame` and derives its internal compose offset.
@@ -496,7 +493,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   const auto doRender = [&]() {
     compositor.renderFrame(viewport);
 
-    uploadedFlat = renderer.takeSnapshot();
+    uploadedSnapshot = renderer.takeSnapshot();
     if (compositor.hasSplitStaticLayers()) {
       uploadedPromoted = compositor.layerBitmapOf(currentEntity);
       hasUploadedComposited = true;
@@ -506,7 +503,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   // Helper: check "what the user sees" based on state machine.
   const auto verifyDisplay = [&](const std::optional<SelectTool::ActiveDragPreview>& activeDrag,
                                  const char* label) {
-    const bool useComposited = state.shouldDisplayCompositedLayers(activeDrag);
+    const bool useComposited = state.hasCachedTextures;
     const auto preview = state.presentationPreview(activeDrag);
 
     if (useComposited && hasUploadedComposited && preview.has_value()) {
@@ -515,12 +512,12 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
       // We verify the promoted (drag-target) tile has cached pixels.
       EXPECT_FALSE(uploadedPromoted.empty()) << label << ": promoted bitmap should exist";
     } else {
-      // Flat path: the flat bitmap is used directly.
-      ASSERT_FALSE(uploadedFlat.empty()) << label << ": flat bitmap must exist";
-      // After any post-drag render, the flat bitmap must show the element at the
-      // moved position. If it shows the original position, that's the pop.
-      EXPECT_THAT(getPixel(uploadedFlat, kOrigCenterX, kOrigCenterY), IsNotRed())
-          << label << ": flat bitmap must NOT show element at original position";
+      // No composited texture yet: the CPU snapshot should still contain valid pixels.
+      ASSERT_FALSE(uploadedSnapshot.empty()) << label << ": CPU snapshot must exist";
+      // After any post-drag render, the snapshot must show the element at the moved position. If it
+      // shows the original position, that's the pop.
+      EXPECT_THAT(getPixel(uploadedSnapshot, kOrigCenterX, kOrigCenterY), IsNotRed())
+          << label << ": CPU snapshot must NOT show element at original position";
     }
   };
 
@@ -532,7 +529,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   verifyDisplay(std::nullopt, "Frame 0 (prewarm)");
 
   // Sanity: element at original position.
-  EXPECT_THAT(getPixel(uploadedFlat, kOrigCenterX, kOrigCenterY), IsRed());
+  EXPECT_THAT(getPixel(uploadedSnapshot, kOrigCenterX, kOrigCenterY), IsRed());
 
   // ══════════════════════════════════════════════════════════════════════
   // Frame 1: Drag — DOM mutated to translate(100, 0).
@@ -544,9 +541,9 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   SelectTool::ActiveDragPreview drag{.entity = entity, .translation = Vector2d(100, 0)};
   verifyDisplay(drag, "Frame 1 (drag)");
 
-  // The flat bitmap from the compositor compose should show element at moved pos.
-  EXPECT_THAT(getPixel(uploadedFlat, kMovedCenterX, kMovedCenterY), IsRed())
-      << "Frame 1: flat bitmap (composed) shows element at visual position";
+  // The CPU snapshot from the compositor compose should show element at moved pos.
+  EXPECT_THAT(getPixel(uploadedSnapshot, kMovedCenterX, kMovedCenterY), IsRed())
+      << "Frame 1: CPU snapshot (composed) shows element at visual position";
 
   // ══════════════════════════════════════════════════════════════════════
   // Frame 2: Release — SetTransformCommand + beginSettling.
@@ -567,11 +564,11 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   state.noteChromeRefreshCompleted(/*refreshedVersion=*/2);
   verifyDisplay(std::nullopt, "Frame 3 (settling landed)");
 
-  // The flat bitmap must show element at new position.
-  EXPECT_THAT(getPixel(uploadedFlat, kMovedCenterX, kMovedCenterY), IsRed())
-      << "Frame 3: settling flat at new position";
-  EXPECT_THAT(getPixel(uploadedFlat, kOrigCenterX, kOrigCenterY), IsWhite())
-      << "Frame 3: settling flat original position vacated";
+  // The CPU snapshot must show element at new position.
+  EXPECT_THAT(getPixel(uploadedSnapshot, kMovedCenterX, kMovedCenterY), IsRed())
+      << "Frame 3: settling snapshot at new position";
+  EXPECT_THAT(getPixel(uploadedSnapshot, kOrigCenterX, kOrigCenterY), IsWhite())
+      << "Frame 3: settling snapshot original position vacated";
 
   // ══════════════════════════════════════════════════════════════════════
   // Frame 4: ReplaceDocument (simulated).
@@ -590,10 +587,8 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   const Entity simulatedNewEntity{999};
   state.clearSettlingIfSelectionChanged(simulatedNewEntity, /*dragActive=*/false);
 
-  // CRITICAL: verifyDisplay must not show pre-drag state.
-  // The display should either:
-  //   (a) Stay on composited path with settling textures at zero offset, OR
-  //   (b) Fall to flat path — but the flat texture is from Frame 3 (correct).
+  // CRITICAL: verifyDisplay must not show pre-drag state. The display stays on
+  // the composited path with the settled textures at zero offset.
   verifyDisplay(std::nullopt, "Frame 4 (CRITICAL: after ReplaceDocument)");
 
   // Prewarm should be triggered.
@@ -611,9 +606,9 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   state.noteCachedTextures(simulatedNewEntity, /*version=*/3, Vector2i(200, 100));
   verifyDisplay(std::nullopt, "Frame 5 (prewarm landed)");
 
-  EXPECT_THAT(getPixel(uploadedFlat, kMovedCenterX, kMovedCenterY), IsRed())
-      << "Frame 5: prewarm flat at correct position";
-  EXPECT_THAT(getPixel(uploadedFlat, kOrigCenterX, kOrigCenterY), IsWhite())
+  EXPECT_THAT(getPixel(uploadedSnapshot, kMovedCenterX, kMovedCenterY), IsRed())
+      << "Frame 5: prewarm snapshot at correct position";
+  EXPECT_THAT(getPixel(uploadedSnapshot, kOrigCenterX, kOrigCenterY), IsWhite())
       << "Frame 5: original position vacated";
 }
 

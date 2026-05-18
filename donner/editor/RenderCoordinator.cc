@@ -25,7 +25,7 @@ constexpr std::chrono::milliseconds kCanvasSizeCommitDelay{120};
 }  // namespace
 
 void RenderCoordinator::resetForLoadedDocument() {
-  experimentalDragPresentation_ = ExperimentalDragPresentation{};
+  compositedPresentation_ = CompositedPresentation{};
   selectionBoundsCache_ = SelectionBoundsCache{};
   pendingOverlayBitmap_.reset();
   pendingOverlayVersion_ = 0;
@@ -72,12 +72,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayRenderer_.beginFrame(overlayViewport);
   const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
   const auto& overlaySelection = app.selectedElements();
-  // Bounds are now computed inline by `OverlayRenderer::drawChromeWithTransform`
-  // from the live `overlaySelection`, so the AABB and the path outline share a
-  // single DOM snapshot. The `selectionBoundsCache_` is still maintained for
-  // main-loop selection-change detection elsewhere, but no longer gates the
-  // overlay's AABBs — that was the source of the drag-time shear where the
-  // cached bounds lagged the live path outline by a frame or two.
+  // Overlay AABBs are computed from the same live DOM snapshot as the path
+  // outlines. `selectionBoundsCache_` is maintained only for main-loop
+  // selection-change detection and does not gate overlay geometry.
   OverlayRenderer::drawChromeWithTransform(overlayRenderer_,
                                            std::span<const svg::SVGElement>(overlaySelection),
                                            marqueeRectDoc, canvasFromDoc);
@@ -120,62 +117,26 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   if (frameHistory != nullptr) {
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
-  const bool hasComposited =
-      result.compositedPreview.has_value() && result.compositedPreview->valid();
-  if (hasComposited) {
+  if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
     textures.uploadComposited(*result.compositedPreview);
-    const bool allowIdleDisplay =
-        result.compositedPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
-    // Pass the document's actual canvas size, NOT the promoted
-    // bitmap's intrinsic dimensions. Pre-M2 the promoted bitmap was
-    // canvas-sized so the two were equivalent, but after M2A/M2B the
-    // bitmap covers only the entity bbox + filter halo. Using the
-    // bitmap dims here permanently mismatches `cachedCanvasSize !=
-    // currentCanvasSize` in `shouldPrewarm` / `needsExperimentalLayer
-    // Capture`, which dispatches a render every UI frame. The
-    // resulting busy state blocks `onMouseMove` (gated on `!isBusy()`
-    // via `ShouldPostDragMove`) → drag of any successfully-promoted
-    // entity produces zero motion. Symptom the user observed:
-    // promoted letters can't drag, but letters whose promotion was
-    // rejected work via the slow path.
-    experimentalDragPresentation_.noteCachedTextures(
-        result.compositedPreview->entity, result.version, app.document().document().canvasSize(),
-        allowIdleDisplay);
-  }
-
-  if (!result.bitmap.empty()) {
-    textures.uploadFlat(result.bitmap);
-    if (!hasComposited) {
-      experimentalDragPresentation_.noteFullRenderLanded(result.version);
-    }
-  }
-
-  // Mark this `(entity, version, canvasSize)` as "prewarm attempted"
-  // even when the result didn't carry a composited preview. Closes
-  // the prewarm dispatch loop that would otherwise fire every frame
-  // when the selected entity is refused by
-  // `CompositorController::promoteEntity` (e.g.
-  // `HasCompositingBreakingAncestor`): without this, the worker stays
-  // continuously busy and the editor's click handler can never
-  // process a new selection. See `ExperimentalDragPresentation::
-  // shouldPrewarm` for the matching guard.
-  if (app.hasDocument() && app.selectedElement().has_value()) {
-    const auto& selected = *app.selectedElement();
-    if (selected.isa<svg::SVGGraphicsElement>()) {
-      experimentalDragPresentation_.notePrewarmAttempted(
-          selected.entityHandle().entity(), result.version, app.document().document().canvasSize());
-    }
+    // Cache identity is keyed to the document canvas size, not the promoted
+    // tile's intrinsic dimensions. Bounded layer tiles can be smaller than the
+    // canvas, and using their dimensions here would make the cache appear stale
+    // on every UI frame.
+    compositedPresentation_.noteCachedTextures(result.compositedPreview->entity, result.version,
+                                               app.document().document().canvasSize());
   }
 
   displayedDocVersion_ = result.version;
-  if (hasComposited && experimentalDragPresentation_.waitingForChromeRefresh && app.hasDocument()) {
+  if (result.compositedPreview.has_value() && result.compositedPreview->valid() &&
+      compositedPresentation_.waitingForChromeRefresh && app.hasDocument()) {
     refreshSelectionBoundsCache(app);
     // Preserve the last-known marquee rect across this internal
     // chrome-refresh path. Composited drag lands here; SelectTool isn't
     // reachable, so we reuse whatever the most recent main-thread
     // rasterize baked in.
     rasterizeOverlayForCurrentSelection(app, viewport, textures, lastOverlayMarqueeRectDoc_);
-    experimentalDragPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
+    compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
   if (pendingOverlayBitmap_.has_value() && pendingOverlayVersion_ == displayedDocVersion_) {
     if (!pendingOverlayBitmap_->empty()) {
@@ -190,7 +151,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 }
 
 void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
-                                           const ViewportState& viewport, bool experimentalMode,
+                                           const ViewportState& viewport,
                                            GlTextureCache& textures) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (asyncRenderer_.isBusy() || !app.hasDocument() || viewport.paneSize.x <= 0.0 ||
@@ -200,22 +161,9 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 
   const Vector2i desiredCanvasSize = viewport.desiredCanvasSize();
   const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
-  // Compare desired against what the document *actually reports* now,
-  // not against a separate `lastSetCanvasSize_` tracker:
-  //   - Avoids the "document forgot the canvas size" bug where a
-  //     `ReplaceDocument` (drag-release writeback → source-pane
-  //     reparse → `setDocumentMaybeStructural` → fresh SVGDocument
-  //     with `canvasSize = nullopt`) leaves the registry reading
-  //     `canvasSize()` as viewBox-sized while our cached `lastSet`
-  //     still holds the old big value. Symptom: "after a drag the
-  //     view goes low-res and stays" (panel shows
-  //     `viewport: zoom=… → desired 3954×2269`,
-  //     `document canvas: 892×512 ← commit stalled vs desired`).
-  //   - 1-pixel tolerance absorbs the aspect-preserving min-scale
-  //     rounding `LayoutSystem::calculateCanvasScaledDocumentSize`
-  //     applies on read-back; without it, setting `(3954, 2269)`
-  //     reads back as `(3953, 2269)` and the next commit refires
-  //     with the same value forever at the 120 ms throttle rate.
+  // Compare desired size against the live document size. Document replacement
+  // can reset the stored canvas size, and LayoutSystem readback can round by a
+  // pixel, so a separate last-set tracker is not authoritative here.
   pendingCanvasSize_ = desiredCanvasSize;
   const auto now = std::chrono::steady_clock::now();
   const bool throttleElapsed = (now - pendingCanvasSizeSince_) >= kCanvasSizeCommitDelay;
@@ -225,20 +173,17 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool wouldChange = !closeEnough;
   if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && (firstCommit || throttleElapsed)) {
     app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
-    lastSetCanvasSize_ = app.document().document().canvasSize();
     pendingCanvasSizeSince_ = now;
   }
 
   const Vector2i currentCanvasSize = app.document().document().canvasSize();
   const auto currentVersion = app.document().currentFrameVersion();
   const auto dragPreview = selectTool.activeDragPreview();
-  const Entity prewarmEntity = selectedExperimentalEntity(app, experimentalMode);
-  experimentalDragPresentation_.clearSettlingIfSelectionChanged(prewarmEntity,
-                                                                dragPreview.has_value());
+  const Entity prewarmEntity = selectedCompositedEntity(app);
+  compositedPresentation_.clearSettlingIfSelectionChanged(prewarmEntity, dragPreview.has_value());
 
   const bool selectionBoundsChanged = app.selectedElements() != selectionBoundsCache_.lastSelection;
-  if (!experimentalMode || !experimentalDragPresentation_.waitingForFullRender ||
-      dragPreview.has_value()) {
+  if (!compositedPresentation_.waitingForFullRender || dragPreview.has_value()) {
     if (selectionBoundsChanged || currentVersion != selectionBoundsCache_.lastRefreshVersion) {
       refreshSelectionBoundsCache(app);
     }
@@ -252,57 +197,32 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // its own invalidation check. Comparing via `!=` on the optional<Box2d>
   // covers "marquee appeared", "marquee moved", and "marquee ended".
   const bool marqueeDiffers = marqueeRectDoc != lastOverlayMarqueeRectDoc_;
-  if ((!experimentalMode || !experimentalDragPresentation_.waitingForFullRender ||
-       dragPreview.has_value() || marqueeRectDoc.has_value()) &&
+  if ((!compositedPresentation_.waitingForFullRender || dragPreview.has_value() ||
+       marqueeRectDoc.has_value()) &&
       (selectionDiffers || marqueeDiffers || currentCanvasSize != lastOverlayCanvasSize_ ||
        currentVersion != lastOverlayVersion_)) {
     rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc);
   }
 
-  // A prior dispatch for this exact `(entity, version, canvasSize)`
-  // combination that landed *without* a composited preview means the
-  // compositor can't produce one — typically because the entity has
-  // a compositing-breaking ancestor and `promoteEntity` is refusing.
-  // Re-dispatching for the same combo would just reproduce the same
-  // empty result, holding the worker busy and starving the editor's
-  // mouse-move handler (which is gated on `!isBusy()`) — symptom:
-  // dragging a letter inside a `<g filter>` produces no visible
-  // motion, even though the click selects the element correctly.
-  // Same guard as the prewarm path, applied to the drag path. See
-  // `ExperimentalDragPresentation::shouldPrewarm` for the prewarm
-  // mirror.
-  const bool hasCachedTexturesForDrag =
-      dragPreview.has_value() && experimentalDragPresentation_.hasCachedTextures &&
-      experimentalDragPresentation_.cachedEntity == dragPreview->entity &&
-      experimentalDragPresentation_.cachedVersion == currentVersion &&
-      experimentalDragPresentation_.cachedCanvasSize == currentCanvasSize;
-  const bool sameAsLastFailedDispatch =
-      dragPreview.has_value() && !hasCachedTexturesForDrag &&
-      experimentalDragPresentation_.lastPrewarmEntity == dragPreview->entity &&
-      experimentalDragPresentation_.lastPrewarmVersion == currentVersion &&
-      experimentalDragPresentation_.lastPrewarmCanvasSize == currentCanvasSize;
-
-  const bool needsExperimentalLayerCapture =
-      experimentalMode && dragPreview.has_value() && !sameAsLastFailedDispatch &&
-      (!experimentalDragPresentation_.hasCachedTextures ||
-       experimentalDragPresentation_.cachedEntity != dragPreview->entity ||
-       experimentalDragPresentation_.cachedVersion != currentVersion ||
-       experimentalDragPresentation_.cachedCanvasSize != currentCanvasSize);
+  const bool needsCompositedLayerCapture =
+      dragPreview.has_value() && (!compositedPresentation_.hasCachedTextures ||
+                                  compositedPresentation_.cachedEntity != dragPreview->entity ||
+                                  compositedPresentation_.cachedVersion != currentVersion ||
+                                  compositedPresentation_.cachedCanvasSize != currentCanvasSize);
   const bool needsSettledSelectionRefresh =
-      experimentalMode && !dragPreview.has_value() && prewarmEntity != entt::null &&
-      experimentalDragPresentation_.waitingForFullRender &&
-      experimentalDragPresentation_.settlingPreview.has_value() &&
-      experimentalDragPresentation_.settlingPreview->entity == prewarmEntity &&
-      currentVersion >= experimentalDragPresentation_.settlingTargetVersion;
-  const bool needsExperimentalPrewarm =
+      !dragPreview.has_value() && prewarmEntity != entt::null &&
+      compositedPresentation_.waitingForFullRender &&
+      compositedPresentation_.settlingPreview.has_value() &&
+      compositedPresentation_.settlingPreview->entity == prewarmEntity &&
+      currentVersion >= compositedPresentation_.settlingTargetVersion;
+  const bool needsCompositedPrewarm =
       needsSettledSelectionRefresh ||
-      experimentalDragPresentation_.shouldPrewarm(prewarmEntity, currentVersion, currentCanvasSize,
-                                                  /*dragActive=*/false);
+      compositedPresentation_.shouldPrewarm(prewarmEntity, currentVersion, currentCanvasSize,
+                                            /*dragActive=*/false);
   const bool needsRegularRender =
-      (!experimentalMode || prewarmEntity == entt::null) &&
-      (currentVersion != lastRenderedVersion_ || currentCanvasSize != lastRenderedCanvasSize_);
+      currentVersion != lastRenderedVersion_ || currentCanvasSize != lastRenderedCanvasSize_;
 
-  if (!needsExperimentalLayerCapture && !needsExperimentalPrewarm && !needsRegularRender) {
+  if (!needsCompositedLayerCapture && !needsCompositedPrewarm && !needsRegularRender) {
     return;
   }
 
@@ -321,10 +241,9 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   req.selection = std::nullopt;
   // Carry the current selection on every render so the compositor can keep
   // the selected entity promoted across drag → idle → drag transitions.
-  // Deliberately not gated on experimental mode: the compositor stays
-  // warmed against the selection, but only promotes when the entity is
-  // actually drag-capable. The pre-warm render that first triggers
-  // promotion is still gated separately below.
+  // The compositor stays warmed against the selection, but only promotes when
+  // the entity is actually drag-capable. The pre-warm render that first
+  // triggers promotion is still gated separately below.
   if (app.selectedElement().has_value()) {
     const auto& selected = *app.selectedElement();
     if (selected.isa<svg::SVGGraphicsElement>()) {
@@ -336,7 +255,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
         .entity = dragPreview->entity,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
     };
-  } else if (needsExperimentalPrewarm) {
+  } else if (needsCompositedPrewarm) {
     req.dragPreview = RenderRequest::DragPreview{
         .entity = prewarmEntity,
         .interactionKind = svg::compositor::InteractionHint::Selection,
@@ -350,8 +269,8 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   }
 }
 
-Entity RenderCoordinator::selectedExperimentalEntity(EditorApp& app, bool experimentalMode) const {
-  if (!experimentalMode || !app.selectedElement().has_value()) {
+Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
+  if (!app.selectedElement().has_value()) {
     return entt::null;
   }
 

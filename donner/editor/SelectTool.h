@@ -84,9 +84,6 @@ public:
                                               MouseModifiers modifiers,
                                               std::span<const Box2d> selectionBoundsDoc);
 
-  /// Enable the experimental compositor-backed drag preview path.
-  void setCompositedDragPreviewEnabled(bool enabled) { compositedDragPreviewEnabled_ = enabled; }
-
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).
   [[nodiscard]] bool isDragging() const { return dragState_.has_value(); }
@@ -168,12 +165,6 @@ private:
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
-  bool compositedDragPreviewEnabled_ = false;
 };
-
-/// Render-mode toggles are safe whenever there is no in-progress drag or marquee gesture.
-[[nodiscard]] inline bool CanToggleCompositedRendering(const SelectTool& tool) {
-  return !tool.isDragging() && !tool.isMarqueeing();
-}
 
 }  // namespace donner::editor

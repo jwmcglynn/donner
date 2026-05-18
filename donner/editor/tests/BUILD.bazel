@@ -155,10 +155,10 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "experimental_drag_presentation_tests",
-    srcs = ["ExperimentalDragPresentation_tests.cc"],
+    name = "composited_presentation_tests",
+    srcs = ["CompositedPresentation_tests.cc"],
     deps = [
-        "//donner/editor:experimental_drag_presentation",
+        "//donner/editor:composited_presentation",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -427,7 +427,7 @@ donner_cc_test(
     name = "drag_release_pop_back_tests",
     srcs = ["DragReleasePopBack_tests.cc"],
     deps = [
-        "//donner/editor:experimental_drag_presentation",
+        "//donner/editor:composited_presentation",
         "//donner/editor:select_tool",
         "//donner/svg",
         "//donner/svg/compositor",
@@ -460,6 +460,29 @@ donner_cc_binary(
     ],
 )
 
+donner_cc_test(
+    name = "gl_rnr_replay_tests",
+    size = "large",
+    timeout = "moderate",
+    srcs = ["GlRnrReplay_tests.cc"],
+    data = [
+        ":filtered_element_flash_after_drags_2_rnr",
+        "//:donner_splash.svg",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor/repro:gl_rnr_replay",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:renderer_image_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 filegroup(
     name = "rnr_replay_testdata",
     srcs = [
@@ -489,8 +512,8 @@ donner_cc_test(
         ":bitmap_golden_compare",
         "//donner/editor:async_renderer",
         "//donner/editor:attribute_writeback",
+        "//donner/editor:composited_presentation",
         "//donner/editor:editor_app",
-        "//donner/editor:experimental_drag_presentation",
         "//donner/editor:imgui_headers",
         "//donner/editor:select_tool",
         "//donner/editor:viewport_state",

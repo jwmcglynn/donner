@@ -10,6 +10,34 @@
 
 namespace donner::editor {
 
+namespace {
+
+RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
+    svg::SVGDocument& document, const svg::RendererBitmap& bitmap, std::uint64_t generation,
+    Entity entity, svg::compositor::InteractionHint interactionKind) {
+  RenderResult::CompositedTile tile;
+  tile.kind = RenderResult::CompositedTile::Kind::Segment;
+  tile.id = "full-canvas";
+  tile.generation = generation;
+  tile.bitmap = bitmap;
+  tile.canvasOffsetDoc = Vector2d::Zero();
+  if (const std::optional<Box2d> viewBox = document.svgElement().viewBox();
+      viewBox.has_value() && viewBox->size().x > 0.0 && viewBox->size().y > 0.0) {
+    tile.bitmapDimsDoc = viewBox->size();
+  } else {
+    tile.bitmapDimsDoc = Vector2d(static_cast<double>(bitmap.dimensions.x),
+                                  static_cast<double>(bitmap.dimensions.y));
+  }
+
+  return RenderResult::CompositedPreview{
+      .tiles = {std::move(tile)},
+      .entity = entity,
+      .interactionKind = interactionKind,
+  };
+}
+
+}  // namespace
+
 AsyncRenderer::AsyncRenderer() {
   thread_ = std::thread([this] { workerLoop(); });
 }
@@ -270,20 +298,10 @@ void AsyncRenderer::workerLoop() {
       // tripped the descendant-segment dirty cascade every drag frame
       // post-zoom — sustained > 1 s/frame on the splash.
       const bool entityChanged = compositorEntity_ != desiredEntity;
-      // Only re-promote when the entity changes or the user is starting
-      // a new drag on the currently-selected entity (Selection →
-      // ActiveDrag upgrade). Do NOT downgrade ActiveDrag → Selection
-      // on mouse-up: keep the compositor in ActiveDrag mode for the
-      // rest of the selection lifecycle so `composeLayers`'s
-      // `skipMainCompose` gate (`compositor.cc:2267`) stays engaged —
-      // it checks `hasActiveDrag` (walks `activeHints_` for an
-      // `ActiveDrag`-kind hint). Without this carve-out every mouse-up
-      // runs the full `composeLayers` (~370 ms at 3× canvas on the
-      // splash) before the next drag-start can engage the fast path —
-      // the operator-visible "drag-release ⇄ drag-again hitch" from
-      // design doc 0034. The kind downgrades naturally when the
-      // selection itself changes (entityChanged ⇒ demote + re-promote
-      // with whatever kind the new request says).
+      // Keep a selected entity in ActiveDrag mode after mouse-up so the
+      // layer/segment caches stay hot for release-to-drag cycles. The
+      // interaction kind changes back to Selection only when a different
+      // entity is promoted.
       const bool kindUpgrade =
           desiredEntity != entt::null &&
           compositorInteractionKind_ == svg::compositor::InteractionHint::Selection &&
@@ -323,18 +341,13 @@ void AsyncRenderer::workerLoop() {
       // layer/segment caches survive quick release->drag-again cycles, but
       // only skip the main-renderer compose while an actual drag request is
       // in flight. Post-release and Selection-prewarm renders must refresh
-      // the flat fallback bitmap; otherwise `takeSnapshot()` returns the
-      // pre-drag baseline while the DOM and tile metadata have moved on.
+      // the final CPU snapshot so the full-canvas composited tile, when
+      // needed, matches the DOM and tile metadata.
       const bool activeDragRequest =
           request.dragPreview.has_value() &&
           request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
       compositor_->setSkipMainComposeDuringSplit(activeDragRequest);
 
-      // Build a CompositedPreview from the compositor's current tile
-      // state. Used for both the intermediate stage (fresh drag-
-      // target layer + stale segments) AND the final stage (all
-      // tiles fresh). Returns nullopt when there's no active drag
-      // preview to compose or the compositor has no layers.
       // Build a CompositedPreview from the compositor's current tile
       // state. Used for both stages (design doc 0034):
       //   * `Final` (skipNonDragTargetBitmaps=false): every tile
@@ -370,6 +383,7 @@ void AsyncRenderer::workerLoop() {
         const auto compositorTiles = compositor_->snapshotTilesForUpload();
         std::vector<RenderResult::CompositedTile> previewTiles;
         previewTiles.reserve(compositorTiles.size());
+        bool hasCurrentDragTargetBitmap = false;
         for (const auto& ct : compositorTiles) {
           if (ct.bitmap == nullptr || ct.bitmap->empty()) continue;
           using OutKind = RenderResult::CompositedTile::Kind;
@@ -386,10 +400,21 @@ void AsyncRenderer::workerLoop() {
           tile.isDragTarget = ct.isDragTarget;
           if (!skipNonDragTargetBitmaps || tile.isDragTarget) {
             tile.bitmap = *ct.bitmap;
+            if (skipNonDragTargetBitmaps && tile.isDragTarget &&
+                ct.layerEntity == compositorEntity_) {
+              hasCurrentDragTargetBitmap = true;
+            }
           }
           previewTiles.push_back(std::move(tile));
         }
-        if (previewTiles.empty()) {
+        // A progressive intermediate is only valid if it carries fresh
+        // pixels for the CURRENT drag target. During a target switch,
+        // `promoteEntity(new)` has already changed `compositorEntity_`,
+        // but `renderFrame` has not yet resynced the split target; the
+        // early snapshot can otherwise contain only empty metadata for
+        // the previous tile set. Publishing that relabels stale GL
+        // textures as the new drag entity and causes a one-frame flash.
+        if (previewTiles.empty() || (skipNonDragTargetBitmaps && !hasCurrentDragTargetBitmap)) {
           return std::nullopt;
         }
         return RenderResult::CompositedPreview{
@@ -402,16 +427,10 @@ void AsyncRenderer::workerLoop() {
       double workerMs = 0.0;
       bool renderCompleted = true;
       const auto renderStart = std::chrono::steady_clock::now();
-      // Design doc 0034 progressive rendering: the compositor fires
-      // this callback once after the drag-target layer rasterize +
-      // before canvas-sized segment work. Stage an intermediate
-      // result so the UI thread can upload the partial preview
-      // without waiting for the slow canvas-sized refinement below.
-      // Bitmap field gets a snapshot of the renderer's CURRENT
-      // surface contents — that's the PRIOR frame's flat baseline,
-      // since this frame's `driver.draw` hasn't run yet. Editor
-      // displays it stretched at the new viewport while the canvas-
-      // sized work catches up.
+      // The compositor fires this callback after the drag-target layer
+      // rasterizes and before canvas-sized segment work. The intermediate
+      // result carries only tile updates; the editor keeps existing tiles
+      // visible while the final refinement catches up.
       //
       // Only meaningful when an ActiveDrag is in flight — the user
       // is waiting for visible feedback from their click-and-drag.
@@ -431,14 +450,13 @@ void AsyncRenderer::workerLoop() {
         const auto t = std::chrono::steady_clock::now();
         const double partialMs = std::chrono::duration<double, std::milli>(t - renderStart).count();
         // Design doc 0034: the intermediate result intentionally
-        // ships WITHOUT a fresh flat-baseline bitmap. Copying the
+        // ships WITHOUT a fresh full-canvas snapshot. Copying the
         // renderer surface at high zoom (5228×3000 = 60 MB at 3×
         // canvas) takes ~30–50 ms — significant on the critical
-        // path. Editor's prior-frame flat-baseline GL texture
-        // remains valid and gets stretched at the new viewport
-        // scale; the intermediate's compositedPreview tiles
-        // overlay the drag-target layer (intrinsic-sized in doc
-        // units; valid at any viewport scale) on top.
+        // path. The editor keeps the previous composited tiles live;
+        // the intermediate's compositedPreview tiles overlay the
+        // drag-target layer (intrinsic-sized in doc units; valid at
+        // any viewport scale) on top.
         auto intermediatePreview = buildCompositedPreview(/*skipNonDragTargetBitmaps=*/true);
         if (!intermediatePreview.has_value()) {
           return;
@@ -511,12 +529,10 @@ void AsyncRenderer::workerLoop() {
         continue;
       }
 
-      // Build the final-stage CompositedPreview. Same helper as the
-      // intermediate above, but invoked AFTER `renderFrame` finishes
-      // its canvas-sized work — so segment tiles are now at the
-      // current canvas size rather than the prior frame's. Design
-      // doc 0033 §M2C explains the per-tile blit shape; design doc
-      // 0034 explains why we use the same builder for both stages.
+      // Build the final-stage CompositedPreview from the compositor tile set
+      // when available. If the splitter cannot provide tiles for this frame,
+      // the final snapshot below is wrapped as a single full-canvas tile so
+      // presentation still goes through the compositor path.
       compositedPreview = buildCompositedPreview(/*skipNonDragTargetBitmaps=*/false);
 
       // Selection chrome is no longer baked into the bitmap — main.cc
@@ -524,14 +540,19 @@ void AsyncRenderer::workerLoop() {
       // pay the SVG re-rasterize cost. The `request.selection` field
       // is left in place for back-compat callers but ignored here.
       (void)request.selection;
-      // Always take a snapshot so the flat fallback texture stays current even
-      // during composited renders.  This prevents a visual "pop" when the display
-      // transitions from composited layers to the flat texture (e.g. during
-      // settling after a drag release).
       svg::RendererBitmap bitmap;
       {
         ZoneScopedN("Renderer::takeSnapshot");
         bitmap = request.renderer->takeSnapshot();
+      }
+      if (!compositedPreview.has_value() && !bitmap.empty()) {
+        const Entity previewEntity =
+            request.dragPreview.has_value() ? request.dragPreview->entity : request.selectedEntity;
+        const svg::compositor::InteractionHint interactionKind =
+            request.dragPreview.has_value() ? request.dragPreview->interactionKind
+                                            : svg::compositor::InteractionHint::Selection;
+        compositedPreview = BuildFullCanvasCompositedPreview(
+            *request.document, bitmap, request.version, previewEntity, interactionKind);
       }
 
       std::function<void()> wake;

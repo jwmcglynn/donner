@@ -20,7 +20,7 @@
 namespace donner::editor {
 
 /**
- * Owns the GL textures the advanced editor uses for flat, overlay, and composited presentation.
+ * Owns the GL textures the advanced editor uses for overlay and composited presentation.
  *
  * The cache is intentionally dumb: callers decide *when* textures should update; this class only
  * owns the texture names, uploads pixel buffers, and tracks the currently-valid dimensions.
@@ -41,7 +41,6 @@ public:
 
   void initialize();
 
-  void uploadFlat(const svg::RendererBitmap& bitmap);
   void uploadOverlay(const svg::RendererBitmap& bitmap);
   /// Upload the worker's tile snapshot into per-tile GL textures.
   /// Allocates/reuses one texture per tile id; bumps a per-tile
@@ -52,11 +51,8 @@ public:
   void clearOverlay();
   void resetComposited();
 
-  [[nodiscard]] GLuint flatTexture() const { return flatTexture_; }
   [[nodiscard]] GLuint overlayTexture() const { return overlayTexture_; }
 
-  [[nodiscard]] int flatWidth() const { return flatWidth_; }
-  [[nodiscard]] int flatHeight() const { return flatHeight_; }
   [[nodiscard]] int overlayWidth() const { return overlayWidth_; }
   [[nodiscard]] int overlayHeight() const { return overlayHeight_; }
 
@@ -88,11 +84,8 @@ private:
     int height = 0;
   };
 
-  GLuint flatTexture_ = 0;
   GLuint overlayTexture_ = 0;
 
-  int flatWidth_ = 0;
-  int flatHeight_ = 0;
   int overlayWidth_ = 0;
   int overlayHeight_ = 0;
 

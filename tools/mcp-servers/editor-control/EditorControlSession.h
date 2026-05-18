@@ -11,8 +11,8 @@
 #include <vector>
 
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/EditorApp.h"
-#include "donner/editor/ExperimentalDragPresentation.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -60,7 +60,7 @@ public:
 
   /// Image capture switches shared by render-oriented MCP tools.
   struct CaptureOptions {
-    /// Attach the final flat frame as an MCP PNG image.
+    /// Attach the final frame as an MCP PNG image.
     bool includeFinalFrame = false;
     /// Attach each split compositor tile as an MCP PNG image.
     bool includeTileImages = false;
@@ -76,8 +76,6 @@ public:
     int canvasHeight = 0;
     /// Device pixel ratio recorded in the session diagnostics.
     double devicePixelRatio = 1.0;
-    /// Whether `SelectTool::activeDragPreview()` should drive compositor previews.
-    bool enableCompositedDragPreview = true;
     /// Whether tight-bounded compositor segments are enabled.
     bool tightBoundedSegments = true;
     /// Whether to render an initial frame after load.
@@ -101,7 +99,6 @@ public:
 
   struct DisplayFrameSnapshot {
     std::string path;
-    bool hasFlat = false;
     bool hasCachedTiles = false;
     Entity cachedEntity = entt::null;
     Entity displayedEntity = entt::null;
@@ -134,10 +131,8 @@ private:
   class HeadlessTextureCache {
   public:
     void reset();
-    void uploadFlat(const svg::RendererBitmap& bitmap);
     void uploadComposited(const RenderResult::CompositedPreview& preview);
 
-    [[nodiscard]] bool hasFlat() const { return flatWidth_ > 0 && flatHeight_ > 0; }
     [[nodiscard]] const std::vector<DisplayTileView>& tiles() const { return tiles_; }
     [[nodiscard]] std::optional<svg::RendererBitmap> composeDisplayFrame(
         const DisplayFrameSnapshot& display, const Box2d& viewBox,
@@ -152,9 +147,6 @@ private:
       svg::RendererBitmap bitmap;
     };
 
-    int flatWidth_ = 0;
-    int flatHeight_ = 0;
-    svg::RendererBitmap flatBitmap_;
     std::unordered_map<std::string, CachedTextureEntry> tileTextures_;
     std::vector<DisplayTileView> tiles_;
   };
@@ -182,7 +174,7 @@ private:
   std::unique_ptr<SelectTool> selectTool_;
   svg::Renderer renderer_;
   AsyncRenderer asyncRenderer_;
-  ExperimentalDragPresentation displayPresentation_;
+  CompositedPresentation displayPresentation_;
   HeadlessTextureCache displayTextures_;
   struct RnrRecordingState {
     bool active = false;
@@ -199,7 +191,6 @@ private:
   int canvasWidth_ = 0;
   int canvasHeight_ = 0;
   double devicePixelRatio_ = 1.0;
-  bool enableCompositedDragPreview_ = true;
 };
 
 }  // namespace donner::editor::mcp

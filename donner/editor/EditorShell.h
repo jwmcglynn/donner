@@ -36,7 +36,6 @@ struct EditorShellOptions {
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
   std::string editorNoticeText;
-  bool experimentalMode = false;
   /// Optional destination path for a `.donner-repro` recording of the
   /// user's UI interactions. When set, the shell constructs a
   /// `ReproRecorder` and snapshots ImGui input state at the start of
@@ -61,7 +60,6 @@ public:
 
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
-  void applyExperimentalModeChange(bool enabled);
   void updateWindowTitle();
   void handleGlobalShortcuts();
   void renderSourcePane(float paneOriginY, float paneHeight, ImFont* codeFont);

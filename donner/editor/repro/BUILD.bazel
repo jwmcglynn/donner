@@ -54,6 +54,7 @@ donner_cc_test(
     srcs = ["ReproFile_tests.cc"],
     deps = [
         ":repro_file",
+        ":repro_recorder",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -5,9 +5,6 @@
 namespace donner::editor {
 
 GlTextureCache::~GlTextureCache() {
-  if (flatTexture_ != 0) {
-    glDeleteTextures(1, &flatTexture_);
-  }
   if (overlayTexture_ != 0) {
     glDeleteTextures(1, &overlayTexture_);
   }
@@ -19,19 +16,10 @@ GlTextureCache::~GlTextureCache() {
 }
 
 void GlTextureCache::initialize() {
-  if (flatTexture_ == 0) {
-    glGenTextures(1, &flatTexture_);
-    InitializeTexture(flatTexture_);
-  }
   if (overlayTexture_ == 0) {
     glGenTextures(1, &overlayTexture_);
     InitializeTexture(overlayTexture_);
   }
-}
-
-void GlTextureCache::uploadFlat(const svg::RendererBitmap& bitmap) {
-  ZoneScopedN("GlTextureCache::uploadFlat");
-  UploadBitmap(flatTexture_, bitmap, &flatWidth_, &flatHeight_);
 }
 
 void GlTextureCache::uploadOverlay(const svg::RendererBitmap& bitmap) {

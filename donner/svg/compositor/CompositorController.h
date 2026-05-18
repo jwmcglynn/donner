@@ -333,11 +333,11 @@ public:
   /// Design doc 0034 progressive rendering: same semantics as the
   /// cancellable overload above, but `onIntermediate` fires once
   /// between the drag-target's intrinsic-sized layer rasterize and
-  /// the canvas-sized segment + flat-baseline work. The callback's
+  /// the canvas-sized segment work. The callback's
   /// caller (typically `AsyncRenderer`) uses this window to snapshot
   /// the compositor's current tile state — drag-target layer is
-  /// fresh; segments + flat baseline still reflect the PRIOR canvas
-  /// size — and ship an `Intermediate` result to the editor for
+  /// fresh; segments still reflect the PRIOR canvas size — and ship an
+  /// `Intermediate` result to the editor for
   /// immediate display. The final canvas-sized rasterize continues
   /// after the callback returns; cancellation between the callback
   /// and final return drops the final result but leaves the
@@ -984,7 +984,7 @@ private:
 
   /// Design doc 0034 progressive rendering: optional callback fired
   /// after the drag-target's intrinsic-sized layer rasterize but
-  /// before canvas-sized segment + flat-baseline work. Set by the
+  /// before canvas-sized segment work. Set by the
   /// 3-arg `renderFrame` overload at entry and cleared at exit;
   /// `nullptr` for the 1- and 2-arg overloads so they incur zero
   /// overhead.
@@ -993,12 +993,10 @@ private:
   /// True after `composeLayers` has completed a full (non-skipped)
   /// main-renderer compose. Used to gate the skip-compose fast path:
   /// on the first renderFrame of a session the main renderer still
-  /// has an empty pixmap, and callers that read `takeSnapshot()` (e.g.
-  /// the editor's flat-texture upload, or unit tests that assert the
-  /// bitmap is non-empty) expect a real render at least once. We flip
-  /// this to true after the first full compose and only skip on
-  /// subsequent drag frames, preserving the cached non-split frame as
-  /// the flat fallback without ever producing a transparent bitmap.
+  /// has an empty pixmap, and callers that read `takeSnapshot()` expect a
+  /// real render at least once. We flip this to true after the first full
+  /// compose and only skip on subsequent drag frames, preserving the cached
+  /// non-split frame without ever producing a transparent bitmap.
   bool mainRendererHasCachedFrame_ = false;
 
   FastPathCounters fastPathCounters_;

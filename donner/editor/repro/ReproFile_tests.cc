@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <fstream>
 
+#include "donner/editor/repro/ReproRecorder.h"
+
 namespace donner::editor::repro {
 
 namespace {
@@ -61,6 +63,14 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, NewRecordingsDefaultLegacyExperimentalModeToFalse) {
+  ReproFile file;
+  EXPECT_FALSE(file.metadata.experimentalMode);
+
+  ReproRecorderOptions options;
+  EXPECT_FALSE(options.experimentalMode);
 }
 
 TEST(ReproFileTest, RoundTripWithAllEventKindsAndV2Fields) {

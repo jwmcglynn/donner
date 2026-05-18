@@ -82,8 +82,6 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     return;
   }
 
-  selectTool_.setCompositedDragPreviewEnabled(options_.experimentalMode);
-
   textEditor_.setLanguageDefinition(TextEditor::LanguageDefinition::SVG());
   textEditor_.setText(*initialSource);
   textEditor_.resetTextChanged();
@@ -139,7 +137,6 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     recorderOptions.windowWidth = winSize.x;
     recorderOptions.windowHeight = winSize.y;
     recorderOptions.displayScale = window_.displayScale();
-    recorderOptions.experimentalMode = options_.experimentalMode;
     reproRecorder_ = std::make_unique<repro::ReproRecorder>(std::move(recorderOptions));
     std::fprintf(stderr, "[repro] recording UI inputs to %s\n", options_.reproOutputPath->c_str());
   }
@@ -180,14 +177,6 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   dialogPresenter_.clearOpenFileError();
   return true;
-}
-
-void EditorShell::applyExperimentalModeChange(bool enabled) {
-  options_.experimentalMode = enabled;
-  selectTool_.setCompositedDragPreviewEnabled(enabled);
-  lastPostedScreenPoint_.reset();
-  renderCoordinator_.experimentalDragPresentation() = ExperimentalDragPresentation{};
-  textures_.resetComposited();
 }
 
 void EditorShell::updateWindowTitle() {
@@ -308,7 +297,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
 
   renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                        options_.experimentalMode, textures_);
+                                        textures_);
 
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
@@ -377,7 +366,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
       renderCoordinator_.refreshSelectionBoundsCache(app_);
       renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                            options_.experimentalMode, textures_);
+                                            textures_);
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
           app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
       interactionController_.clearPendingClick();
@@ -419,7 +408,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
       lastPostedScreenPoint_.reset();
-      if (options_.experimentalMode && previewBeforeRelease.has_value()) {
+      if (previewBeforeRelease.has_value()) {
         // The DOM was already updated every drag frame via
         // `SelectTool::onMouseMove` → `applyMutation`, so drag release
         // needs to do nothing beyond recording undo history (already done
@@ -441,24 +430,21 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
   }
 
-  if (options_.experimentalMode && !renderCoordinator_.asyncRenderer().isBusy() &&
-      app_.hasDocument()) {
+  if (!renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument()) {
     renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                          options_.experimentalMode, textures_);
+                                          textures_);
   }
 
   const auto activeDragPreview = selectTool_.activeDragPreview();
   const auto displayedDragPreview =
-      renderCoordinator_.experimentalDragPresentation().presentationPreview(activeDragPreview);
+      renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .frameHistory = interactionController_.frameHistory(),
       .textures = textures_,
-      .experimentalDragPresentation = renderCoordinator_.experimentalDragPresentation(),
       .activeDragPreview = activeDragPreview,
       .displayedDragPreview = displayedDragPreview,
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
-      .experimentalMode = options_.experimentalMode,
   };
   renderPanePresenter_.render(paneState);
 
@@ -782,8 +768,6 @@ void EditorShell::runFrame() {
       .sourcePaneFocused = textEditor_.isFocused(),
       .canUndo = app_.canUndo(),
       .canRedo = app_.undoTimeline().entryCount() > 0,
-      .experimentalMode = options_.experimentalMode,
-      .canToggleCompositedRendering = CanToggleCompositedRendering(selectTool_),
       .tightBoundedSegmentsEnabled =
           renderCoordinator_.asyncRenderer().tightBoundedSegmentsEnabled(),
   };
@@ -825,9 +809,6 @@ void EditorShell::runFrame() {
   }
   if (menuActions.actualSize) {
     interactionController_.resetToActualSize();
-  }
-  if (menuActions.toggleCompositedRendering) {
-    applyExperimentalModeChange(!options_.experimentalMode);
   }
   if (menuActions.toggleTightBoundedSegments) {
     auto& asyncRenderer = renderCoordinator_.asyncRenderer();

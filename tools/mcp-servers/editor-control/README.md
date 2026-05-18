@@ -38,7 +38,7 @@ build before the first proxied request after startup.
 - `drag_selector`: Find an element by CSS selector, synthesize click/drag frames
   through `SelectTool`, and return per-frame compositor and presentation tile
   metadata.
-- `render_frame`: Render the current editor state and return the final flat frame
+- `render_frame`: Render the current editor state and return the final frame
   plus split compositor and presentation tile metadata.
 - `session_state`: Inspect selection, canvas, and compositor diagnostic state.
 - `start_rnr_recording`: Start recording subsequent MCP-driven gestures to the
@@ -67,13 +67,15 @@ Each render stage includes both:
 
 - `composited_preview`: the worker-side split tile list from `AsyncRenderer`.
 - `display_preview`: the headless presentation view after the editor-side tile
-  cache and drag-presentation gates decide whether the UI would blit tiles or
-  fall back to the flat frame.
+  cache decides which composited tiles the UI would blit.
 
 Drag frames also include `display_before_render`, which captures the
 presentation state immediately after the synthetic input event and before the
 next async render result lands. This is the frame that catches stale cached-tile
 handoff bugs during drag-target switches.
+When `include_display_diff` is enabled, `differing_pixels` is the
+pixelmatch mismatch count. Any emitted `diff_*` PNG is the pixelmatch visual
+diff for the same comparison.
 
 The headless recorder writes v2 `.rnr` frames with document-space coordinates
 and viewport snapshots. It records MCP-synthesized gestures, not OS-level mouse

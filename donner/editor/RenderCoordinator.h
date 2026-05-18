@@ -9,7 +9,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/editor/AsyncRenderer.h"
-#include "donner/editor/ExperimentalDragPresentation.h"
+#include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/SelectionAabb.h"
@@ -31,11 +31,9 @@ public:
   [[nodiscard]] const SelectionBoundsCache& selectionBoundsCache() const {
     return selectionBoundsCache_;
   }
-  [[nodiscard]] ExperimentalDragPresentation& experimentalDragPresentation() {
-    return experimentalDragPresentation_;
-  }
-  [[nodiscard]] const ExperimentalDragPresentation& experimentalDragPresentation() const {
-    return experimentalDragPresentation_;
+  [[nodiscard]] CompositedPresentation& compositedPresentation() { return compositedPresentation_; }
+  [[nodiscard]] const CompositedPresentation& compositedPresentation() const {
+    return compositedPresentation_;
   }
   [[nodiscard]] std::uint64_t displayedDocVersion() const { return displayedDocVersion_; }
 
@@ -58,23 +56,17 @@ public:
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          bool experimentalMode, GlTextureCache& textures);
+                          GlTextureCache& textures);
 
 private:
-  [[nodiscard]] Entity selectedExperimentalEntity(EditorApp& app, bool experimentalMode) const;
+  [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
 
-  // `renderer_` must be declared before `asyncRenderer_`. The `AsyncRenderer`
-  // worker holds a `RendererInterface*` to this `renderer_` for the whole
-  // drag session (via `CompositorController::renderer_`), and its destructor
-  // joins the worker thread. C++ destroys non-static members in reverse
-  // declaration order, so declaring `asyncRenderer_` LAST guarantees it is
-  // destroyed FIRST — joining the worker while `renderer_` is still alive.
-  // The reverse ordering caused exit-time SIGSEGVs inside
-  // `CompositorController::composeLayers`' `drawBitmap` lambda when the
-  // worker was mid-render while `renderer_` was torn down first.
+  // `asyncRenderer_` is declared last so it is destroyed first. Its destructor
+  // joins the worker thread while `renderer_`, which the compositor references
+  // during active renders, is still alive.
   svg::Renderer renderer_;
   svg::Renderer overlayRenderer_;
-  ExperimentalDragPresentation experimentalDragPresentation_;
+  CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
 
   std::optional<svg::RendererBitmap> pendingOverlayBitmap_;
@@ -91,25 +83,13 @@ private:
 
   std::uint64_t lastRenderedVersion_ = 0;
   Vector2i lastRenderedCanvasSize_ = Vector2i::Zero();
-  /// Most recent canvas size we passed into `SVGDocument::setCanvasSize`.
-  /// Used to skip the call when the viewport's desired size hasn't
-  /// changed — the alternative (comparing against
-  /// `document().canvasSize()`) reads back through
-  /// `LayoutSystem::calculateCanvasScaledDocumentSize` which can
-  /// normalize and produce a mismatch even at stable zoom, causing a
-  /// full `invalidateRenderTree` every frame.
-  Vector2i lastSetCanvasSize_ = Vector2i::Zero();
   /// Most recent desired canvas size requested by `maybeRequestRender`.
-  /// Used to debounce continuous pinch-zoom: while
-  /// `pendingCanvasSize_` differs from `lastSetCanvasSize_` we wait
-  /// `kCanvasSizeCommitDelay` of stability before committing through
-  /// `SVGDocument::setCanvasSize`. See the call site for the rationale.
+  /// Used to debounce continuous pinch-zoom before committing through
+  /// `SVGDocument::setCanvasSize`.
   Vector2i pendingCanvasSize_ = Vector2i::Zero();
   std::chrono::steady_clock::time_point pendingCanvasSizeSince_{};
 
-  // Declared last so it is destroyed first — see the comment on
-  // `renderer_` above. Its destructor joins the worker thread, which
-  // must happen while `renderer_` is still alive.
+  // Declared last so it is destroyed first; see the `renderer_` comment.
   AsyncRenderer asyncRenderer_;
 };
 
