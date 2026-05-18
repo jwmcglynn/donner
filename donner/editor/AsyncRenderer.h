@@ -171,6 +171,8 @@ struct RenderResult {
     /// Active drag-target entity (for selection chrome routing). May
     /// be `entt::null` if no entity is currently being dragged.
     Entity entity = entt::null;
+    /// Interaction phase that produced this composited preview.
+    svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::Selection;
 
     [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };
@@ -424,6 +426,12 @@ private:
 
   RenderRequest pendingRequest_;
   RenderResult result_;
+  /// Structural remaps retained by document generation until the worker has
+  /// actually advanced the compositor to that generation. A request can be
+  /// canceled before the worker consumes its remap; without this cache, the
+  /// next request for the same replacement document would see an empty remap
+  /// and fall back to `resetAllLayers(documentReplaced=true)`.
+  std::unordered_map<std::uint64_t, std::unordered_map<Entity, Entity>> retainedStructuralRemaps_;
   /// Design doc 0034 progressive rendering: staged intermediate result
   /// produced mid-`renderFrame` by the compositor's intermediate
   /// callback. Drained ahead of `result_` by `pollResult` so the UI

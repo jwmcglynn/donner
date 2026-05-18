@@ -16,6 +16,7 @@ struct ExperimentalDragPresentation {
   Entity cachedEntity = entt::null;
   std::uint64_t cachedVersion = 0;
   Vector2i cachedCanvasSize = Vector2i::Zero();
+  bool allowIdleCompositedDisplay = false;
   std::optional<SelectTool::ActiveDragPreview> settlingPreview;
   bool waitingForFullRender = false;
   std::uint64_t settlingTargetVersion = 0;
@@ -74,11 +75,13 @@ struct ExperimentalDragPresentation {
   }
 
   /// Mark cached composited textures as available for the given entity/version/canvas size.
-  void noteCachedTextures(Entity entity, std::uint64_t version, const Vector2i& canvasSize) {
+  void noteCachedTextures(Entity entity, std::uint64_t version, const Vector2i& canvasSize,
+                          bool allowIdleDisplay = true) {
     hasCachedTextures = true;
     cachedEntity = entity;
     cachedVersion = version;
     cachedCanvasSize = canvasSize;
+    allowIdleCompositedDisplay = allowIdleDisplay;
 
     if (waitingForFullRender && settlingPreview.has_value() && settlingPreview->entity == entity &&
         version >= settlingTargetVersion) {
@@ -163,19 +166,15 @@ struct ExperimentalDragPresentation {
         settlingPreview->entity == cachedEntity) {
       return settlingPreview;
     }
-    // Drag-target swap: the user just clicked a DIFFERENT entity, so
-    // `activePreview` is for the new entity, but `cachedEntity` still
-    // holds the old entity's composited triple. Keep displaying the
-    // cached triple (positioned at zero offset against the old entity's
-    // current DOM transform) until the new render lands — otherwise
-    // the presenter falls back to the stale flat texture and the user
-    // sees a one-frame flash of the pre-drag document state.
-    //
-    // This path also handles the post-drag settling and the "selected
-    // but not dragging" fallback where `activePreview` is nullopt —
-    // covered by the same "have cached textures, keep showing them"
-    // intent.
-    if (hasCachedTextures && cachedEntity != entt::null) {
+    if (activePreview.has_value()) {
+      return activePreview;
+    }
+    // Idle cached display is only safe when the render that produced
+    // the tiles explicitly allowed it. Selection prewarms and stale
+    // tiles from a previous drag should remain available as a cache,
+    // but they must not replace the flat texture while idle on a
+    // different selection.
+    if (hasCachedTextures && cachedEntity != entt::null && allowIdleCompositedDisplay) {
       return SelectTool::ActiveDragPreview{
           .entity = cachedEntity,
           .translation = Vector2d::Zero(),
@@ -197,11 +196,9 @@ struct ExperimentalDragPresentation {
   /// Drop stale settling state when the selected entity changes away from the drag target.
   ///
   /// After ReplaceDocument, entity handles are invalidated and the selection is remapped to new
-  /// entities.  This detects the mismatch and clears the settling preview.  However, the cached
-  /// composited textures are deliberately kept alive: at zero composition offset they are visually
-  /// identical to the flat texture, so keeping them avoids a visible pop during the
-  /// settling → prewarm transition.  The prewarm render for the new entity will atomically update
-  /// the textures via noteCachedTextures().
+  /// entities. This detects the mismatch and clears the settling preview. Cached composited
+  /// textures are deliberately kept alive as cache entries so the prewarm render for the new entity
+  /// can atomically replace them via noteCachedTextures(), but idle display is disabled until then.
   ///
   /// Cached textures are only cleared on explicit deselection (selectedEntity == entt::null).
   void clearSettlingIfSelectionChanged(Entity selectedEntity, bool dragActive) {
@@ -215,13 +212,18 @@ struct ExperimentalDragPresentation {
       settlingTargetVersion = 0;
     }
 
-    // Only clear cached textures on explicit deselection.  When the entity handle changes
-    // (e.g., after ReplaceDocument) but an element is still selected, the composited textures
-    // remain valid at zero offset and shouldPrewarm() will dispatch a prewarm render for the
-    // new entity.  Clearing here would cause a one-frame pop to the flat texture.
+    if (!dragActive && hasCachedTextures && selectedEntity != entt::null &&
+        selectedEntity != cachedEntity) {
+      allowIdleCompositedDisplay = false;
+    }
+
+    // Only clear cached textures on explicit deselection. When the entity handle changes
+    // (e.g., after ReplaceDocument) but an element is still selected, shouldPrewarm() will
+    // dispatch a prewarm render for the new entity and replace the cache atomically.
     if (!dragActive && hasCachedTextures && selectedEntity == entt::null) {
       hasCachedTextures = false;
       cachedEntity = entt::null;
+      allowIdleCompositedDisplay = false;
     }
   }
 };

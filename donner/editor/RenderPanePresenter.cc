@@ -148,6 +148,18 @@ void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2&
 
 }  // namespace
 
+Vector2d ResolveCompositedTileDragTranslation(
+    const GlTextureCache::TileView& tile,
+    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview) {
+  if (tile.isDragTarget && activeDragPreview.has_value() && displayedDragPreview.has_value() &&
+      displayedDragPreview->entity == activeDragPreview->entity) {
+    return activeDragPreview->translation;
+  }
+
+  return tile.dragTranslationDoc;
+}
+
 void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   const bool hasFlat = state.textures.flatWidth() > 0 && state.textures.flatHeight() > 0;
   const bool hasTiles = !state.textures.tiles().empty();
@@ -181,7 +193,9 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       if (tile.texture == 0) {
         continue;
       }
-      const Vector2d originDoc = tile.canvasOffsetDoc + tile.dragTranslationDoc;
+      const Vector2d originDoc =
+          tile.canvasOffsetDoc + ResolveCompositedTileDragTranslation(tile, state.activeDragPreview,
+                                                                      state.displayedDragPreview);
       Vector2d sizeScreen = tile.bitmapDimsDoc * pxPerDoc;
       if (sizeScreen.x <= 0.0 || sizeScreen.y <= 0.0) {
         // Defensive fallback for canvas-sized tiles that pre-date

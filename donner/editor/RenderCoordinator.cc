@@ -124,6 +124,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
       result.compositedPreview.has_value() && result.compositedPreview->valid();
   if (hasComposited) {
     textures.uploadComposited(*result.compositedPreview);
+    const bool allowIdleDisplay =
+        result.compositedPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
     // Pass the document's actual canvas size, NOT the promoted
     // bitmap's intrinsic dimensions. Pre-M2 the promoted bitmap was
     // canvas-sized so the two were equivalent, but after M2A/M2B the
@@ -137,7 +139,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     // promoted letters can't drag, but letters whose promotion was
     // rejected work via the slow path.
     experimentalDragPresentation_.noteCachedTextures(
-        result.compositedPreview->entity, result.version, app.document().document().canvasSize());
+        result.compositedPreview->entity, result.version, app.document().document().canvasSize(),
+        allowIdleDisplay);
   }
 
   if (!result.bitmap.empty()) {
@@ -268,8 +271,13 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // Same guard as the prewarm path, applied to the drag path. See
   // `ExperimentalDragPresentation::shouldPrewarm` for the prewarm
   // mirror.
+  const bool hasCachedTexturesForDrag =
+      dragPreview.has_value() && experimentalDragPresentation_.hasCachedTextures &&
+      experimentalDragPresentation_.cachedEntity == dragPreview->entity &&
+      experimentalDragPresentation_.cachedVersion == currentVersion &&
+      experimentalDragPresentation_.cachedCanvasSize == currentCanvasSize;
   const bool sameAsLastFailedDispatch =
-      !experimentalDragPresentation_.hasCachedTextures && dragPreview.has_value() &&
+      dragPreview.has_value() && !hasCachedTexturesForDrag &&
       experimentalDragPresentation_.lastPrewarmEntity == dragPreview->entity &&
       experimentalDragPresentation_.lastPrewarmVersion == currentVersion &&
       experimentalDragPresentation_.lastPrewarmCanvasSize == currentCanvasSize;

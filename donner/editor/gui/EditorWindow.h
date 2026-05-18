@@ -20,6 +20,7 @@
 /// `beginFrame()` and `endFrame()` on the caller's side — this class
 /// doesn't own the widget tree, just the hosting surface.
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -52,9 +53,30 @@ struct EditorWindowOptions {
   std::string title = "Donner SVG Editor";
   int initialWidth = 1280;
   int initialHeight = 720;
+  /// Whether the native desktop window should be shown. Hidden windows still
+  /// create a real OpenGL context and are useful for framebuffer replay tests.
+  bool visible = true;
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
   /// when the document doesn't fill the whole window.
   float clearColor[4] = {0.11f, 0.11f, 0.13f, 1.0f};
+};
+
+/// ImGui input state to inject for deterministic editor replay.
+struct EditorWindowInputOverride {
+  /// Seconds advanced by this frame.
+  double deltaSeconds = 1.0 / 60.0;
+  /// Mouse position in logical window coordinates.
+  Vector2d mousePosition = Vector2d::Zero();
+  /// Mouse-button state, indexed like ImGui mouse buttons.
+  std::array<bool, 5> mouseDown = {};
+  bool keyCtrl = false;   //!< Ctrl modifier state.
+  bool keyShift = false;  //!< Shift modifier state.
+  bool keyAlt = false;    //!< Alt modifier state.
+  bool keySuper = false;  //!< Super/Command modifier state.
+  /// Horizontal mouse-wheel delta for this frame.
+  float mouseWheelH = 0.0f;
+  /// Vertical mouse-wheel delta for this frame.
+  float mouseWheel = 0.0f;
 };
 
 /// Initializes GLFW + GL + ImGui when constructed, tears everything down
@@ -104,9 +126,16 @@ public:
   /// after this returns.
   void beginFrame();
 
+  /// Starts a new ImGui frame after injecting deterministic replay input.
+  void beginFrameWithInput(const EditorWindowInputOverride& inputOverride);
+
   /// Flushes the current ImGui frame to the backbuffer, clears with the
   /// configured color, and swaps. Must be called once per `beginFrame()`.
   void endFrame();
+
+  /// Flushes the current ImGui frame, reads the GL backbuffer before swap,
+  /// then swaps. Must be called once per `beginFrame()`.
+  [[nodiscard]] svg::RendererBitmap endFrameAndReadPixels();
 
   /// Uploads `bitmap` to the GL texture owned by this window. The
   /// texture is reused across calls — later calls replace the contents.
@@ -146,6 +175,9 @@ public:
   [[nodiscard]] GLFWwindow* rawHandle() const { return window_; }
 
 private:
+  void beginFrameImpl(const EditorWindowInputOverride* inputOverride);
+  void endFrameImpl(svg::RendererBitmap* readback);
+
   EditorWindowOptions options_;
   GLFWwindow* window_ = nullptr;
   uint32_t textureId_ = 0;

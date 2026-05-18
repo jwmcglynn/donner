@@ -9,6 +9,7 @@
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorInputBridge.h"
+#include "donner/editor/EditorShellLayout.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorPanel.h"
@@ -52,6 +53,12 @@ public:
   [[nodiscard]] bool valid() const { return valid_; }
   void runFrame();
 
+  /// Current render-pane viewport. Exposed for replay/readback harnesses
+  /// that need to crop the presented framebuffer to the canvas region.
+  [[nodiscard]] const ViewportState& viewportForReadback() const {
+    return interactionController_.viewport();
+  }
+
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
   void applyExperimentalModeChange(bool enabled);
@@ -61,9 +68,13 @@ private:
   void renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
                         ImGuiWindowFlags paneFlags);
   void renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
-                      float treePaneHeight, float inspectorPaneY, float inspectorPaneHeight,
-                      float layerPanelPaneY, float layerPanelHeight, ImGuiWindowFlags paneFlags);
+                      const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags);
   void renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight);
+  void renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
+                                const RightSidebarLayout& layout);
+  void renderDockedLayerPanelDragHandle();
+  void renderFloatingLayerPanel();
+  void renderLayerPanelContents();
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
 
   gui::EditorWindow& window_;
@@ -91,6 +102,21 @@ private:
   /// drag-to-resize splitter rendered between the render pane and the
   /// right column.
   float rightPaneWidth_ = 420.0f;
+  /// Fraction of the lower right column assigned to the compositor tile
+  /// panel. Mutated by the horizontal splitter between Inspector and
+  /// Layers.
+  float layerPanelHeightFraction_ = 0.5f;
+  /// Whether the compositor tile panel is detached from the right column.
+  bool layerPanelDetached_ = false;
+  /// Set while the mouse drag that detached the panel is still in progress.
+  bool layerPanelDetachDragActive_ = false;
+  /// Force the floating Layers window to use \ref layerPanelFloatingPos_
+  /// and \ref layerPanelFloatingSize_ on its next frame.
+  bool layerPanelFloatingNeedsPlacement_ = false;
+  /// Last floating Layers window position in screen pixels.
+  ImVec2 layerPanelFloatingPos_ = ImVec2(0.0f, 0.0f);
+  /// Last floating Layers window size in screen pixels.
+  ImVec2 layerPanelFloatingSize_ = ImVec2(420.0f, 360.0f);
   std::optional<svg::SVGElement> lastHighlightedSelection_;
   std::optional<svg::SVGElement> lastTreeSelection_;
   std::optional<ImVec2> lastPostedScreenPoint_;

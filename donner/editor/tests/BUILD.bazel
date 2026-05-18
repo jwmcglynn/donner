@@ -1,4 +1,10 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_perf_cc_test")
+load(
+    "//build_defs:rules.bzl",
+    "donner_cc_binary",
+    "donner_cc_library",
+    "donner_cc_test",
+    "donner_perf_cc_test",
+)
 
 donner_cc_library(
     name = "bitmap_golden_compare",
@@ -30,6 +36,15 @@ donner_cc_test(
     srcs = ["ViewportGeometry_tests.cc"],
     deps = [
         "//donner/editor:viewport_geometry",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_shell_layout_tests",
+    srcs = ["EditorShellLayout_tests.cc"],
+    deps = [
+        "//donner/editor:editor_shell_layout",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -126,6 +141,15 @@ donner_cc_test(
     deps = [
         "//donner/editor:pinch_event_monitor",
         "//donner/editor:render_pane_gesture",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_pane_presenter_tests",
+    srcs = ["RenderPanePresenter_tests.cc"],
+    deps = [
+        "//donner/editor:render_pane_presenter",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -414,6 +438,29 @@ donner_cc_test(
 )
 
 filegroup(
+    name = "filtered_element_flash_after_drags_2_rnr",
+    srcs = ["filtered-element-flash-after-drags-2.rnr"],
+    visibility = ["//tools/mcp-servers/editor-control:__pkg__"],
+)
+
+donner_cc_binary(
+    name = "editor_rnr_gl_replay",
+    srcs = ["EditorRnrGlReplay.cc"],
+    data = [
+        ":filtered_element_flash_after_drags_2_rnr",
+        "//:donner_splash.svg",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/editor/repro:gl_rnr_replay",
+    ],
+)
+
+filegroup(
     name = "rnr_replay_testdata",
     srcs = [
         "drag_start_hang_repro.rnr",
@@ -425,6 +472,7 @@ filegroup(
         "filter_elm_disappear-7.rnr",
         "filter_post_drag_jump.rnr",
         "filter_snapback_repro.rnr",
+        "filtered-element-flash-after-drags-2.rnr",
         "testdata/filter_disappear_rnr3_after_mup2.png",
         "testdata/filter_disappear_single_drag_lgd_post.png",
     ],

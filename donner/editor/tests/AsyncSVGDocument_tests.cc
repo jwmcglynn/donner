@@ -111,6 +111,24 @@ TEST(AsyncSVGDocumentTest, PreserveUndoMetadataSurvivesWritebackReplaceDocument)
   EXPECT_TRUE(doc.lastFlushResult().preserveUndoOnReparse);
 }
 
+TEST(AsyncSVGDocumentTest, StructuralWritebackPreservesCanvasSize) {
+  constexpr std::string_view kMovedSameTreeSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <rect id="r1" x="0" y="0" width="10" height="10" fill="red" transform="translate(7,0)"/>
+         </svg>)svg";
+
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
+  doc.document().setCanvasSize(200, 200);
+
+  doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kMovedSameTreeSvg),
+                                                          /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(doc.flushFrame());
+
+  EXPECT_EQ(doc.document().canvasSize(), Vector2i(200, 200));
+  EXPECT_FALSE(doc.consumePendingStructuralRemap().empty());
+}
+
 TEST(AsyncSVGDocumentTest, MixedReplaceDocumentBatchClearsPreserveUndoMetadata) {
   AsyncSVGDocument doc;
   ASSERT_TRUE(doc.loadFromString(kTrivialSvg));

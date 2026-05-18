@@ -15,7 +15,9 @@
 #endif
 
 #include <cstdio>
+#include <cstring>
 #include <string_view>
+#include <vector>
 
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
@@ -35,6 +37,35 @@ void GlfwErrorCallback(int error, const char* description) {
   }
 #endif
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
+}
+
+void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DeltaTime = static_cast<float>(std::max(0.001, inputOverride.deltaSeconds));
+  const float mouseX = static_cast<float>(inputOverride.mousePosition.x);
+  const float mouseY = static_cast<float>(inputOverride.mousePosition.y);
+  io.MousePos = ImVec2(mouseX, mouseY);
+  io.AddMousePosEvent(mouseX, mouseY);
+  io.AddFocusEvent(true);
+  for (int i = 0;
+       i < static_cast<int>(inputOverride.mouseDown.size()) && i < IM_ARRAYSIZE(io.MouseDown);
+       ++i) {
+    io.MouseDown[i] = inputOverride.mouseDown[i];
+    io.AddMouseButtonEvent(i, inputOverride.mouseDown[i]);
+  }
+  io.KeyCtrl = inputOverride.keyCtrl;
+  io.KeyShift = inputOverride.keyShift;
+  io.KeyAlt = inputOverride.keyAlt;
+  io.KeySuper = inputOverride.keySuper;
+  io.AddKeyEvent(ImGuiKey_LeftCtrl, inputOverride.keyCtrl);
+  io.AddKeyEvent(ImGuiKey_LeftShift, inputOverride.keyShift);
+  io.AddKeyEvent(ImGuiKey_LeftAlt, inputOverride.keyAlt);
+  io.AddKeyEvent(ImGuiKey_LeftSuper, inputOverride.keySuper);
+  io.MouseWheelH = inputOverride.mouseWheelH;
+  io.MouseWheel = inputOverride.mouseWheel;
+  if (inputOverride.mouseWheelH != 0.0f || inputOverride.mouseWheel != 0.0f) {
+    io.AddMouseWheelEvent(inputOverride.mouseWheelH, inputOverride.mouseWheel);
+  }
 }
 
 #ifdef __EMSCRIPTEN__
@@ -105,6 +136,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #else
   // OpenGL 3.3 core is plenty — matches what imgui_impl_opengl3 targets
   // by default and what glad was generated for.
+  glfwWindowHint(GLFW_VISIBLE, options_.visible ? GLFW_TRUE : GLFW_FALSE);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -289,13 +321,34 @@ void EditorWindow::wakeEventLoop() {
 }
 
 void EditorWindow::beginFrame() {
+  beginFrameImpl(nullptr);
+}
+
+void EditorWindow::beginFrameWithInput(const EditorWindowInputOverride& inputOverride) {
+  beginFrameImpl(&inputOverride);
+}
+
+void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride) {
   ZoneScopedN("EditorWindow::beginFrame");
   ImGui_ImplOpenGL3_NewFrame();
   ImGui_ImplGlfw_NewFrame();
+  if (inputOverride != nullptr) {
+    ApplyInputOverride(*inputOverride);
+  }
   ImGui::NewFrame();
 }
 
 void EditorWindow::endFrame() {
+  endFrameImpl(nullptr);
+}
+
+svg::RendererBitmap EditorWindow::endFrameAndReadPixels() {
+  svg::RendererBitmap readback;
+  endFrameImpl(&readback);
+  return readback;
+}
+
+void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   ZoneScopedN("EditorWindow::endFrame");
   {
     ZoneScopedN("ImGui::Render");
@@ -316,6 +369,26 @@ void EditorWindow::endFrame() {
   {
     ZoneScopedN("ImGui_ImplOpenGL3_RenderDrawData");
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+  }
+  if (readback != nullptr && displayW > 0 && displayH > 0) {
+    ZoneScopedN("glReadPixels");
+    constexpr int kChannels = 4;
+    const std::size_t rowBytes = static_cast<std::size_t>(displayW) * kChannels;
+    std::vector<uint8_t> bottomUp(rowBytes * static_cast<std::size_t>(displayH));
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+#ifndef __EMSCRIPTEN__
+    glReadBuffer(GL_BACK);
+#endif
+    glReadPixels(0, 0, displayW, displayH, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
+    readback->dimensions = Vector2i(displayW, displayH);
+    readback->rowBytes = rowBytes;
+    readback->alphaType = svg::AlphaType::Premultiplied;
+    readback->pixels.resize(bottomUp.size());
+    for (int y = 0; y < displayH; ++y) {
+      const uint8_t* src = bottomUp.data() + static_cast<std::size_t>(displayH - 1 - y) * rowBytes;
+      uint8_t* dst = readback->pixels.data() + static_cast<std::size_t>(y) * rowBytes;
+      std::memcpy(dst, src, rowBytes);
+    }
   }
 #ifndef __EMSCRIPTEN__
   // emscripten-glfw intentionally doesn't implement `glfwSwapBuffers`;

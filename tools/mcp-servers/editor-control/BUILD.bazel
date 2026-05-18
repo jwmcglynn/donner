@@ -1,0 +1,66 @@
+load("@rules_python//python:defs.bzl", "py_test")
+
+package(default_visibility = ["//visibility:public"])
+
+EDITOR_CONTROL_COMPATIBLE_WITH = select({
+    "@platforms//os:macos": [],
+    "@platforms//os:linux": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+cc_library(
+    name = "editor_control_session",
+    srcs = ["EditorControlSession.cc"],
+    hdrs = ["EditorControlSession.h"],
+    target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
+    deps = [
+        "//donner/base",
+        "//donner/editor:async_renderer",
+        "//donner/editor:editor_app",
+        "//donner/editor:experimental_drag_presentation",
+        "//donner/editor:select_tool",
+        "//donner/editor:viewport_state",
+        "//donner/editor/repro:gl_rnr_replay",
+        "//donner/editor/repro:repro_file",
+        "//donner/svg",
+        "//donner/svg/compositor",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_image_io",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_binary(
+    name = "editor_control_mcp_server",
+    srcs = ["EditorControlMcpServer.cc"],
+    target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
+    deps = [
+        ":editor_control_session",
+        "@nlohmann_json//:json",
+    ],
+)
+
+cc_test(
+    name = "editor_control_session_tests",
+    srcs = ["EditorControlSession_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+        "//donner/editor/tests:filtered_element_flash_after_drags_2_rnr",
+    ],
+    target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
+    deps = [
+        ":editor_control_session",
+        "//donner/editor/repro:repro_file",
+        "@com_google_gtest//:gtest_main",
+        "@nlohmann_json//:json",
+    ],
+)
+
+py_test(
+    name = "editor_control_wrapper_tests",
+    srcs = [
+        "editor_control_wrapper.py",
+        "editor_control_wrapper_tests.py",
+    ],
+    main = "editor_control_wrapper_tests.py",
+)

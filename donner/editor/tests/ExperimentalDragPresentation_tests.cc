@@ -30,6 +30,40 @@ TEST(ExperimentalDragPresentationTest, CachedTexturesDisplayZeroTranslationWitho
   EXPECT_TRUE(state.shouldDisplayCompositedLayers(std::nullopt));
 }
 
+TEST(ExperimentalDragPresentationTest, SelectionPrewarmDoesNotDisplayCachedTilesAtIdle) {
+  ExperimentalDragPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100),
+                           /*allowIdleDisplay=*/false);
+
+  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value());
+  EXPECT_FALSE(state.shouldDisplayCompositedLayers(std::nullopt));
+
+  SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(4.0, 0.0),
+  };
+  ASSERT_TRUE(state.presentationPreview(active).has_value());
+  EXPECT_EQ(state.presentationPreview(active)->entity, Entity(7));
+  EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 4.0);
+  EXPECT_TRUE(state.shouldDisplayCompositedLayers(active));
+}
+
+TEST(ExperimentalDragPresentationTest, ActiveDragForDifferentEntityDoesNotDisplayPreviousTiles) {
+  ExperimentalDragPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+
+  SelectTool::ActiveDragPreview active{
+      .entity = Entity(8),
+      .translation = Vector2d(4.0, 0.0),
+  };
+  ASSERT_TRUE(state.presentationPreview(active).has_value());
+  EXPECT_EQ(state.presentationPreview(active)->entity, Entity(8));
+  EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 4.0);
+  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_EQ(state.cachedEntity, Entity(7));
+  EXPECT_FALSE(state.shouldDisplayCompositedLayers(active));
+}
+
 TEST(ExperimentalDragPresentationTest, MouseUpKeepsSettlingPreviewUntilFullRenderLands) {
   ExperimentalDragPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
@@ -79,18 +113,11 @@ TEST(ExperimentalDragPresentationTest, SelectionChangeClearsSettlingState) {
   state.clearSettlingIfSelectionChanged(Entity(8), /*dragActive=*/false);
   // Settling state itself is cleared (settling preview, waiting flag).
   EXPECT_FALSE(state.waitingForFullRender);
-  // The cached textures stay alive — covers the M2C drag-target-swap
-  // window where the editor keeps blitting the old entity's tiles
-  // (at zero offset, drawn against the old entity's current DOM
-  // transform) until the new entity's render lands. Pre-fix, the
-  // cache was cleared here and the editor fell back to the stale
-  // flat texture for one frame. See `presentationPreview`'s
-  // "Drag-target swap" branch.
+  // The cached textures stay alive as a cache, but changing selection disables idle display of the
+  // old entity's tile list. The next prewarm render for the new entity will atomically replace it.
   EXPECT_TRUE(state.hasCachedTextures);
-  ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
-  EXPECT_TRUE(state.presentationPreview(std::nullopt)->entity == Entity(7));
-  EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 0.0)
-      << "Post-settling cached path drops the settling translation.";
+  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value());
+  EXPECT_FALSE(state.shouldDisplayCompositedLayers(std::nullopt));
 }
 
 TEST(ExperimentalDragPresentationTest,
@@ -249,8 +276,7 @@ TEST(ExperimentalDragPresentationTest, EntityChangeAfterSettlingClearsCachedText
 
 // Regression test: After settling resolves via composited render, if the entity changes (e.g., from
 // ReplaceDocument), clearSettlingIfSelectionChanged clears the settling preview but keeps cached
-// textures alive.  The composited textures at zero offset are visually correct, and the prewarm
-// render for the new entity will atomically update them — no pop to flat.
+// textures alive as cache entries. They should not drive idle display for the old entity.
 TEST(ExperimentalDragPresentationTest,
      ClearSettlingIfSelectionChangedKeepsTexturesAfterComposedSettle) {
   ExperimentalDragPresentation state;
@@ -271,15 +297,12 @@ TEST(ExperimentalDragPresentationTest,
   // Entity changes (ReplaceDocument): selection is remapped to Entity(9).
   state.clearSettlingIfSelectionChanged(Entity(9), /*dragActive=*/false);
 
-  // Settling preview is cleared, but cached textures are kept alive for seamless display.
+  // Settling preview is cleared, but cached textures are kept alive as cache entries.
   EXPECT_FALSE(state.settlingPreview.has_value());
   EXPECT_TRUE(state.hasCachedTextures);
   EXPECT_EQ(state.cachedEntity, Entity(7));
-  // presentationPreview falls to third branch: cached textures with zero offset.
-  EXPECT_TRUE(state.shouldDisplayCompositedLayers(std::nullopt));
-  ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
-  EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
-  EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 0.0);
+  EXPECT_FALSE(state.shouldDisplayCompositedLayers(std::nullopt));
+  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value());
 }
 
 // Verify that cached textures are kept after entity handle change (ReplaceDocument scenario).
@@ -293,10 +316,11 @@ TEST(ExperimentalDragPresentationTest, ClearSettlingIfSelectionChangedKeepsTextu
   // Entity changes without any settling phase (e.g., ReplaceDocument after writeback).
   state.clearSettlingIfSelectionChanged(Entity(9), /*dragActive=*/false);
 
-  // Cached textures stay alive — shouldPrewarm will trigger for the new entity.
+  // Cached textures stay alive as cache entries, but they no longer drive idle display for the
+  // old entity after selection changes.
   EXPECT_TRUE(state.hasCachedTextures);
   EXPECT_EQ(state.cachedEntity, Entity(7));
-  EXPECT_TRUE(state.shouldDisplayCompositedLayers(std::nullopt));
+  EXPECT_FALSE(state.shouldDisplayCompositedLayers(std::nullopt));
 
   // Prewarm is triggered for the new entity (entity mismatch).
   EXPECT_TRUE(state.shouldPrewarm(Entity(9), /*currentVersion=*/3, Vector2i(100, 100),

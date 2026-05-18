@@ -27,11 +27,14 @@ namespace {
 
 constexpr float kSourcePaneWidth = 560.0f;
 constexpr float kTreeViewHeightFraction = 0.33f;
-constexpr float kLayerInspectorHeightFraction = 0.33f;
 constexpr float kKeyboardZoomStep = 1.5f;
 constexpr float kRightPaneSplitterThickness = 6.0f;
+constexpr float kLayerPanelSplitterThickness = 6.0f;
+constexpr float kLayerPanelDragHandleHeight = 26.0f;
 constexpr float kMinRightPaneWidth = 220.0f;
 constexpr float kMaxRightPaneWidth = 900.0f;
+constexpr float kMinInspectorPaneHeight = 96.0f;
+constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
 
@@ -325,22 +328,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   interactionController_.consumeScrollEvents(inputBridge_.events(), paneRect, modalCapturingInput,
                                              kWheelZoomStep, kTrackpadPanPixelsPerScrollUnit);
 
-  const auto activeDragPreview = selectTool_.activeDragPreview();
-  const auto displayedDragPreview =
-      renderCoordinator_.experimentalDragPresentation().presentationPreview(activeDragPreview);
-
-  RenderPanePresenterState paneState{
-      .viewport = interactionController_.viewport(),
-      .frameHistory = interactionController_.frameHistory(),
-      .textures = textures_,
-      .experimentalDragPresentation = renderCoordinator_.experimentalDragPresentation(),
-      .activeDragPreview = activeDragPreview,
-      .displayedDragPreview = displayedDragPreview,
-      .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
-      .experimentalMode = options_.experimentalMode,
-  };
-  renderPanePresenter_.render(paneState);
-
   const auto screenToDocument = [&](const ImVec2& screenPoint) -> Vector2d {
     return interactionController_.viewport().screenToDocument(
         Vector2d(screenPoint.x, screenPoint.y));
@@ -460,13 +447,26 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                           options_.experimentalMode, textures_);
   }
 
+  const auto activeDragPreview = selectTool_.activeDragPreview();
+  const auto displayedDragPreview =
+      renderCoordinator_.experimentalDragPresentation().presentationPreview(activeDragPreview);
+  RenderPanePresenterState paneState{
+      .viewport = interactionController_.viewport(),
+      .frameHistory = interactionController_.frameHistory(),
+      .textures = textures_,
+      .experimentalDragPresentation = renderCoordinator_.experimentalDragPresentation(),
+      .activeDragPreview = activeDragPreview,
+      .displayedDragPreview = displayedDragPreview,
+      .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
+      .experimentalMode = options_.experimentalMode,
+  };
+  renderPanePresenter_.render(paneState);
+
   ImGui::End();
 }
 
 void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
-                                 float treePaneHeight, float inspectorPaneY,
-                                 float inspectorPaneHeight, float layerPanelPaneY,
-                                 float layerPanelHeight, ImGuiWindowFlags paneFlags) {
+                                 const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags) {
   const auto& selectionBeforeTree = app_.selectedElement();
   if (selectionBeforeTree != lastTreeSelection_) {
     treeviewPendingScroll_ = selectionBeforeTree.has_value() && !treeSelectionOriginatedInTree_;
@@ -485,7 +485,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, treePaneHeight), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.treePaneHeight), ImGuiCond_Always);
   ImGui::Begin("Tree View", nullptr, paneFlags);
   TreeViewState treeState{
       .scrollTarget = selectionBeforeTree,
@@ -500,15 +500,27 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::End();
   lastTreeSelection_ = app_.selectedElement();
 
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, inspectorPaneY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, inspectorPaneHeight), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.inspectorPaneY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.inspectorPaneHeight), ImGuiCond_Always);
   ImGui::Begin("Inspector", nullptr, paneFlags);
   sidebarPresenter_.renderInspector(interactionController_.viewport());
   ImGui::End();
 
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layerPanelPaneY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layerPanelHeight), ImGuiCond_Always);
-  ImGui::Begin("Layers", nullptr, paneFlags);
+  if (layerPanelDetached_) {
+    return;
+  }
+
+  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelPaneY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.layerPanelHeight), ImGuiCond_Always);
+  ImGui::Begin("Layers##docked_layers", nullptr, paneFlags);
+  renderDockedLayerPanelDragHandle();
+  if (!layerPanelDetached_) {
+    renderLayerPanelContents();
+  }
+  ImGui::End();
+}
+
+void EditorShell::renderLayerPanelContents() {
   const auto compositeTiles = renderCoordinator_.asyncRenderer().compositorCompositeTiles();
   const auto compositorState = renderCoordinator_.asyncRenderer().compositorState();
   const auto workerCompositorEntity = renderCoordinator_.asyncRenderer().workerCompositorEntity();
@@ -529,7 +541,6 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
                               viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
                               documentCanvas, fastPath);
-  ImGui::End();
 }
 
 void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight) {
@@ -557,6 +568,116 @@ void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, 
   }
   ImGui::End();
   ImGui::PopStyleVar(2);
+}
+
+void EditorShell::renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
+                                           const RightSidebarLayout& layout) {
+  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelSplitterY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, kLayerPanelSplitterThickness), ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  constexpr ImGuiWindowFlags kSplitterFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
+  ImGui::Begin("##layer_panel_splitter", nullptr, kSplitterFlags);
+  ImGui::InvisibleButton("##layer_panel_splitter_handle",
+                         ImVec2(rightPaneWidth, kLayerPanelSplitterThickness));
+  if (ImGui::IsItemActive()) {
+    layerPanelHeightFraction_ = ResizeLayerPanelHeightFraction(
+        layerPanelHeightFraction_, layout.lowerPaneHeight, layout.minLayerPanelHeight,
+        layout.maxLayerPanelHeight, ImGui::GetIO().MouseDelta.y);
+  }
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+  }
+
+  const bool splitterActive = ImGui::IsItemActive();
+  const bool splitterHovered = ImGui::IsItemHovered();
+  const ImU32 color = ImGui::GetColorU32(splitterActive    ? ImGuiCol_SeparatorActive
+                                         : splitterHovered ? ImGuiCol_SeparatorHovered
+                                                           : ImGuiCol_Separator);
+  ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                            color);
+  ImGui::End();
+  ImGui::PopStyleVar(2);
+}
+
+void EditorShell::renderDockedLayerPanelDragHandle() {
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const ImVec2 start = ImGui::GetCursorScreenPos();
+  const ImVec2 size(ImGui::GetContentRegionAvail().x, kLayerPanelDragHandleHeight);
+  ImGui::InvisibleButton("##layer_panel_detach_handle", size);
+
+  const bool handleActive = ImGui::IsItemActive();
+  const bool handleHovered = ImGui::IsItemHovered();
+  if (handleHovered || handleActive) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+  }
+
+  const ImU32 background = ImGui::GetColorU32(handleActive    ? ImGuiCol_HeaderActive
+                                              : handleHovered ? ImGuiCol_HeaderHovered
+                                                              : ImGuiCol_Header);
+  const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+  const ImVec2 end(start.x + size.x, start.y + size.y);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(start, end, background);
+  drawList->AddText(ImVec2(start.x + style.FramePadding.x, start.y + style.FramePadding.y),
+                    textColor, "Layers");
+
+  const char* handleText = "::";
+  const ImVec2 handleTextSize = ImGui::CalcTextSize(handleText);
+  drawList->AddText(
+      ImVec2(end.x - handleTextSize.x - style.FramePadding.x, start.y + style.FramePadding.y),
+      textColor, handleText);
+
+  if (handleActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
+    layerPanelDetached_ = true;
+    layerPanelDetachDragActive_ = true;
+    layerPanelFloatingNeedsPlacement_ = true;
+    layerPanelFloatingPos_ = ImGui::GetWindowPos();
+    layerPanelFloatingSize_ = ImGui::GetWindowSize();
+  }
+}
+
+void EditorShell::renderFloatingLayerPanel() {
+  if (!layerPanelDetached_) {
+    return;
+  }
+
+  if (layerPanelDetachDragActive_) {
+    const ImGuiIO& io = ImGui::GetIO();
+    layerPanelFloatingPos_.x += io.MouseDelta.x;
+    layerPanelFloatingPos_.y += io.MouseDelta.y;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      layerPanelDetachDragActive_ = false;
+    }
+  }
+
+  if (layerPanelFloatingNeedsPlacement_ || layerPanelDetachDragActive_) {
+    ImGui::SetNextWindowPos(layerPanelFloatingPos_, ImGuiCond_Always);
+  }
+  if (layerPanelFloatingNeedsPlacement_) {
+    ImGui::SetNextWindowSize(layerPanelFloatingSize_, ImGuiCond_Always);
+  }
+
+  bool layerPanelOpen = true;
+  constexpr ImGuiWindowFlags kFloatingFlags = ImGuiWindowFlags_NoCollapse;
+  ImGui::Begin("Layers##floating_layers", &layerPanelOpen, kFloatingFlags);
+  layerPanelFloatingNeedsPlacement_ = false;
+  layerPanelFloatingPos_ = ImGui::GetWindowPos();
+  layerPanelFloatingSize_ = ImGui::GetWindowSize();
+
+  if (!layerPanelOpen || ImGui::Button("Dock")) {
+    layerPanelDetached_ = false;
+    layerPanelDetachDragActive_ = false;
+    layerPanelFloatingNeedsPlacement_ = false;
+    ImGui::End();
+    return;
+  }
+
+  renderLayerPanelContents();
+  ImGui::End();
 }
 
 bool EditorShell::highlightSelectionSourceIfNeeded() {
@@ -635,13 +756,18 @@ void EditorShell::runFrame() {
       std::max(0.0f, static_cast<float>(windowSize.x) - kSourcePaneWidth - rightPaneWidth_);
   const float rightPaneX = static_cast<float>(windowSize.x) - rightPaneWidth_;
   const float rightPaneGap = ImGui::GetStyle().ItemSpacing.y;
-  const float rightPaneContentHeight = std::max(0.0f, paneHeight - 2.0f * rightPaneGap);
-  const float treePaneHeight = rightPaneContentHeight * kTreeViewHeightFraction;
-  const float layerPanelHeight = rightPaneContentHeight * kLayerInspectorHeightFraction;
-  const float inspectorPaneY = paneOriginY + treePaneHeight + rightPaneGap;
-  const float inspectorPaneHeight =
-      std::max(0.0f, rightPaneContentHeight - treePaneHeight - layerPanelHeight);
-  const float layerPanelPaneY = inspectorPaneY + inspectorPaneHeight + rightPaneGap;
+  const RightSidebarLayout rightSidebarLayout = ComputeRightSidebarLayout({
+      .paneOriginY = paneOriginY,
+      .paneHeight = paneHeight,
+      .rightPaneGap = rightPaneGap,
+      .treeViewHeightFraction = kTreeViewHeightFraction,
+      .layerPanelHeightFraction = layerPanelHeightFraction_,
+      .layerPanelDetached = layerPanelDetached_,
+      .layerPanelSplitterThickness = kLayerPanelSplitterThickness,
+      .minLayerPanelHeight = kMinLayerPanelHeight,
+      .minInspectorPaneHeight = kMinInspectorPaneHeight,
+  });
+  layerPanelHeightFraction_ = rightSidebarLayout.layerPanelHeightFraction;
   const Vector2d renderPaneOrigin(kSourcePaneWidth, paneOriginY);
   const Vector2d renderPaneSize(renderPaneWidth, paneHeight);
 
@@ -716,12 +842,15 @@ void EditorShell::runFrame() {
   std::ignore = highlightSelectionSourceIfNeeded();
   renderSourcePane(paneOriginY, paneHeight, codeFont_);
   renderRenderPane(renderPaneOrigin, renderPaneSize, kPaneFlags);
-  renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, treePaneHeight, inspectorPaneY,
-                 inspectorPaneHeight, layerPanelPaneY, layerPanelHeight, kPaneFlags);
+  renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, rightSidebarLayout, kPaneFlags);
   if (highlightSelectionSourceIfNeeded()) {
     window_.wakeEventLoop();
   }
   renderRightPaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight);
+  if (!layerPanelDetached_) {
+    renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
+  }
+  renderFloatingLayerPanel();
 }
 
 }  // namespace donner::editor

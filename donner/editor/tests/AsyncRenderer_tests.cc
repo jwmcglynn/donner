@@ -2008,6 +2008,202 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
          "Option B regressed";
 }
 
+TEST(AsyncRendererE2ETest, StructuralRemapSurvivesSupersededWritebackRequest) {
+  const char* kSvgSource = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="400" height="200" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="300" cy="100" r="30" fill="yellow"/></g>
+  <rect id="target" x="50" y="50" width="80" height="80" fill="red"/>
+</svg>
+  )svg";
+  const char* kSvgAfterWriteback = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="400" height="200" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="300" cy="100" r="30" fill="yellow"/></g>
+  <rect id="target" x="50" y="50" width="80" height="80" fill="red" transform="translate(30,0)"/>
+</svg>
+  )svg";
+
+  AsyncSVGDocument asyncDoc;
+  ASSERT_TRUE(asyncDoc.loadFromString(kSvgSource));
+  asyncDoc.document().setCanvasSize(400, 200);
+
+  auto target = asyncDoc.document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  using Clock = std::chrono::steady_clock;
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    const auto deadline = Clock::now() + std::chrono::seconds(10);
+    while (Clock::now() < deadline) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return std::nullopt;
+  };
+  const auto waitUntilIdle = [&]() -> bool {
+    const auto deadline = Clock::now() + std::chrono::seconds(10);
+    while (Clock::now() < deadline) {
+      (void)asyncRenderer.pollResult();
+      if (!asyncRenderer.isBusy()) return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  };
+
+  RenderRequest initialRequest;
+  initialRequest.renderer = &renderer;
+  initialRequest.document = &asyncDoc.document();
+  initialRequest.version = 1;
+  initialRequest.documentGeneration = asyncDoc.documentGeneration();
+  initialRequest.selectedEntity = target->entityHandle().entity();
+  initialRequest.dragPreview = RenderRequest::DragPreview{
+      .entity = target->entityHandle().entity(),
+      .interactionKind = svg::compositor::InteractionHint::Selection,
+  };
+  asyncRenderer.requestRender(initialRequest);
+  ASSERT_TRUE(waitForResult().has_value());
+  ASSERT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
+
+  asyncDoc.applyMutation(
+      EditorCommand::ReplaceDocumentCommand(kSvgAfterWriteback, /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(asyncDoc.flushFrame());
+  auto targetAfterWriteback = asyncDoc.document().querySelector("#target");
+  ASSERT_TRUE(targetAfterWriteback.has_value());
+
+  RenderRequest supersededRequest;
+  supersededRequest.version = 2;
+  supersededRequest.documentGeneration = asyncDoc.documentGeneration();
+  supersededRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
+  ASSERT_FALSE(supersededRequest.structuralRemap.empty());
+  // Simulate a writeback render request that got superseded before the worker
+  // advanced its compositor to the replacement document generation. The remap
+  // must remain available for the next real request.
+  asyncRenderer.requestRender(supersededRequest);
+  ASSERT_TRUE(waitUntilIdle());
+
+  RenderRequest followupRequest;
+  followupRequest.renderer = &renderer;
+  followupRequest.document = &asyncDoc.document();
+  followupRequest.version = 3;
+  followupRequest.documentGeneration = asyncDoc.documentGeneration();
+  followupRequest.selectedEntity = targetAfterWriteback->entityHandle().entity();
+  followupRequest.dragPreview = RenderRequest::DragPreview{
+      .entity = targetAfterWriteback->entityHandle().entity(),
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+  };
+  ASSERT_TRUE(followupRequest.structuralRemap.empty());
+  asyncRenderer.requestRender(followupRequest);
+  ASSERT_TRUE(waitForResult().has_value());
+
+  EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u)
+      << "A superseded writeback request consumed the only structural remap, so the follow-up "
+         "drag request reset every compositor layer.";
+}
+
+TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilterLayers) {
+  const char* kSvgSource = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="200" height="100" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="150" cy="50" r="20" fill="yellow"/></g>
+  <rect id="target" x="20" y="20" width="40" height="40" fill="red"/>
+</svg>
+  )svg";
+  const char* kSvgAfterWriteback = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="200" height="100" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="150" cy="50" r="20" fill="yellow"/></g>
+  <rect id="target" x="20" y="20" width="40" height="40" fill="red" transform="translate(10,0)"/>
+</svg>
+  )svg";
+
+  AsyncSVGDocument asyncDoc;
+  ASSERT_TRUE(asyncDoc.loadFromString(kSvgSource));
+  const Vector2i editorCanvasSize(400, 200);
+  asyncDoc.document().setCanvasSize(editorCanvasSize.x, editorCanvasSize.y);
+
+  auto target = asyncDoc.document().querySelector("#target");
+  auto glow = asyncDoc.document().querySelector("#glow");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(glow.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  using Clock = std::chrono::steady_clock;
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    const auto deadline = Clock::now() + std::chrono::seconds(10);
+    while (Clock::now() < deadline) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return std::nullopt;
+  };
+  const auto postRequest = [&](uint64_t version, Entity selectedEntity) {
+    RenderRequest request;
+    request.renderer = &renderer;
+    request.document = &asyncDoc.document();
+    request.version = version;
+    request.documentGeneration = asyncDoc.documentGeneration();
+    request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
+    request.selectedEntity = selectedEntity;
+    if (selectedEntity != entt::null) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = selectedEntity,
+          .interactionKind = svg::compositor::InteractionHint::Selection,
+      };
+    }
+    asyncRenderer.requestRender(request);
+  };
+  const auto layerGeneration = [&](Entity entity) -> std::optional<uint64_t> {
+    for (const auto& row : asyncRenderer.compositorLayerInspectorRows()) {
+      if (row.entity == entity) {
+        return row.generation;
+      }
+    }
+    return std::nullopt;
+  };
+
+  postRequest(1, target->entityHandle().entity());
+  ASSERT_TRUE(waitForResult().has_value());
+  const auto glowGenerationBefore = layerGeneration(glow->entityHandle().entity());
+  ASSERT_TRUE(glowGenerationBefore.has_value()) << "#glow should be a mandatory filter layer";
+
+  asyncDoc.applyMutation(
+      EditorCommand::ReplaceDocumentCommand(kSvgAfterWriteback, /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(asyncDoc.flushFrame());
+  // Mirrors RenderCoordinator's canvas maintenance. Before the fix, the
+  // structural reparse dropped back to 200x100 here, this branch called
+  // setCanvasSize(400,200), and the compositor took the needsFullRebuild
+  // path that rerasterized every preserved filter layer.
+  if (asyncDoc.document().canvasSize() != editorCanvasSize) {
+    asyncDoc.document().setCanvasSize(editorCanvasSize.x, editorCanvasSize.y);
+  }
+
+  auto targetAfterWriteback = asyncDoc.document().querySelector("#target");
+  auto glowAfterWriteback = asyncDoc.document().querySelector("#glow");
+  ASSERT_TRUE(targetAfterWriteback.has_value());
+  ASSERT_TRUE(glowAfterWriteback.has_value());
+
+  postRequest(2, targetAfterWriteback->entityHandle().entity());
+  ASSERT_TRUE(waitForResult().has_value());
+
+  EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
+  const auto glowGenerationAfter = layerGeneration(glowAfterWriteback->entityHandle().entity());
+  ASSERT_TRUE(glowGenerationAfter.has_value());
+  EXPECT_EQ(*glowGenerationAfter, *glowGenerationBefore)
+      << "Unchanged mandatory filter layer rerasterized across structural writeback; "
+         "the editor canvas size must be preserved before the remap reaches the worker.";
+}
+
 // Completes the Option B coverage matrix: a user-typed source-pane
 // edit that produces a `ReplaceDocumentCommand` whose new tree is
 // structurally equivalent to the old one (same tags, same ids) should

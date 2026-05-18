@@ -30,12 +30,21 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     wasBusy = (state_ == State::Busy);
+    RenderRequest stagedRequest = request;
+    if (!request.structuralRemap.empty()) {
+      retainedStructuralRemaps_[request.documentGeneration] = request.structuralRemap;
+    } else {
+      const auto retainedIt = retainedStructuralRemaps_.find(request.documentGeneration);
+      if (retainedIt != retainedStructuralRemaps_.end()) {
+        stagedRequest.structuralRemap = retainedIt->second;
+      }
+    }
     // The new request always wins the pending slot. If the worker was
     // mid-render the cancel signal below makes it bail at the next safe
     // point and the inner loop picks up `pendingRequest_` for the
     // restart. If the worker was Done (a prior result the caller never
     // drained), we drop that result — the new request supersedes it.
-    pendingRequest_ = request;
+    pendingRequest_ = std::move(stagedRequest);
     state_ = State::Busy;
   }
   if (wasBusy) {
@@ -199,6 +208,10 @@ void AsyncRenderer::workerLoop() {
         compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
         compositorDocumentGeneration_ = request.documentGeneration;
         compositorReconstructCount_.fetch_add(1, std::memory_order_release);
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          retainedStructuralRemaps_.erase(request.documentGeneration);
+        }
       }
 
       const bool documentSwapDetected =
@@ -231,6 +244,10 @@ void AsyncRenderer::workerLoop() {
         }
         compositorDocument_ = *request.document;
         compositorDocumentGeneration_ = request.documentGeneration;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          retainedStructuralRemaps_.erase(request.documentGeneration);
+        }
       }
 
       // Resolve what the compositor should be promoted on this render.
@@ -378,6 +395,7 @@ void AsyncRenderer::workerLoop() {
         return RenderResult::CompositedPreview{
             .tiles = std::move(previewTiles),
             .entity = compositorEntity_,
+            .interactionKind = request.dragPreview->interactionKind,
         };
       };
 

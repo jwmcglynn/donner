@@ -14,6 +14,8 @@ Modern C++20 SVG project. Source lives in `donner/`.
 - Use `enum class` with `operator<<` for debugging. Prefer `operator<=>` with explicit `operator==` (gtest bug workaround).
 - Use `auto` sparingly — only when type is obvious or for standard patterns (iterators, `ParseResult`).
 - Assert with `UTILS_RELEASE_ASSERT` / `UTILS_RELEASE_ASSERT_MSG` (release) or `assert(cond && "msg")` (debug).
+- **No C++ exceptions** — do not use `throw`, `try`, `catch`, or target-specific
+  `-fexceptions`; return explicit error/status values instead.
 - **No `std::any`** — use concrete types, `std::variant`, forward declarations, or existing handle/value wrappers.
 
 ## Architecture

@@ -365,6 +365,13 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "editor_shell_layout",
+    srcs = ["EditorShellLayout.cc"],
+    hdrs = ["EditorShellLayout.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "editor_shell",
     srcs = ["EditorShell.cc"],
     hdrs = ["EditorShell.h"],
@@ -374,6 +381,7 @@ donner_cc_library(
         ":drag_coalesce",
         ":editor_app",
         ":editor_input_bridge",
+        ":editor_shell_layout",
         ":gl_texture_cache",
         ":imgui_headers",
         ":keyboard_shortcut_policy",

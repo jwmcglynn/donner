@@ -68,7 +68,10 @@ public:
   /// `Structural` — the next `RenderRequest` carries the remap so the
   /// compositor can call `remapAfterStructuralReplace` instead of
   /// `resetAllLayers(documentReplaced=true)`, preserving cached layer
-  /// bitmaps and segments across the swap. If the trees differ (user
+  /// bitmaps and segments across the swap. The current editor canvas
+  /// size is also carried forward for structural replacements so the
+  /// next render does not dirty every cache with a redundant resize.
+  /// If the trees differ (user
   /// edited the source pane to change shape, etc.) the remap is empty
   /// and we fall back to the standard `setDocument` path.
   ReplaceKind setDocumentMaybeStructural(svg::SVGDocument newDocument);
