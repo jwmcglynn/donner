@@ -14,7 +14,10 @@ donner_cc_library(
         "PropertyRegistry.h",
         "RxRyProperties.h",
     ],
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = [
+        "//donner/editor:__pkg__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         ":property",
         "//donner/base",

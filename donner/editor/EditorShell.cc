@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string_view>
 
@@ -17,6 +18,7 @@
 #include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "embed_resources/FiraCodeFont.h"
@@ -88,6 +90,25 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   textEditor_.setText(*initialSource);
   textEditor_.resetTextChanged();
   textEditor_.setActiveAutocomplete(true);
+  textEditor_.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+                                          -> std::optional<TextEditor::AutocompleteResponse> {
+    XmlAutocompleteContext context =
+        DetectXmlAutocompleteContext(request.source, request.cursorOffset);
+    if (context.kind == XmlAutocompleteContextKind::Unknown) {
+      return std::nullopt;
+    }
+
+    TextEditor::AutocompleteResponse response;
+    response.replaceStartOffset = context.replaceStartOffset;
+    response.replaceEndOffset = context.replaceEndOffset;
+    for (const XmlAutocompleteSuggestion& suggestion : BuildXmlAutocompleteSuggestions(context)) {
+      response.suggestions.push_back(TextEditor::AutocompleteSuggestion{
+          .displayText = RcString(suggestion.displayText),
+          .insertText = RcString(suggestion.insertText),
+      });
+    }
+    return response;
+  });
 
   ImGuiIO& io = ImGui::GetIO();
   ImFontConfig fontCfg;

@@ -417,6 +417,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "xml_autocomplete_tests",
+    srcs = ["XmlAutocomplete_tests.cc"],
+    deps = [
+        "//donner/editor:xml_autocomplete",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "change_classifier_tests",
     srcs = ["ChangeClassifier_tests.cc"],
     deps = [

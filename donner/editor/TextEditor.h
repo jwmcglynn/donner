@@ -5,10 +5,12 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <optional>
 #include <regex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -594,6 +596,34 @@ public:
   void colorizeInternal();
 
   // Autocomplete
+  /// Request payload for structured autocomplete providers.
+  struct AutocompleteRequest {
+    std::string_view source;       //!< Full editor source text.
+    std::size_t cursorOffset = 0;  //!< Cursor byte offset in \ref source.
+  };
+
+  /// A single autocomplete suggestion.
+  struct AutocompleteSuggestion {
+    RcString displayText;  //!< Text shown in the autocomplete popup.
+    RcString insertText;   //!< Text inserted when selected.
+  };
+
+  /// Response from a structured autocomplete provider.
+  struct AutocompleteResponse {
+    std::size_t replaceStartOffset = 0;  //!< Inclusive source byte offset to replace.
+    std::size_t replaceEndOffset = 0;    //!< Exclusive source byte offset to replace.
+    std::vector<AutocompleteSuggestion> suggestions;
+  };
+
+  /**
+   * Provider callback for syntax-aware autocomplete.
+   *
+   * Return `std::nullopt` when the provider does not handle the current source. Return an empty
+   * response to suppress generic word autocomplete for handled contexts that have no suggestions.
+   */
+  using AutocompleteProvider =
+      std::function<std::optional<AutocompleteResponse>(const AutocompleteRequest&)>;
+
   void clearAutocompleteData() {}
   void clearAutocompleteEntries() {
     autocompleteEntries_.clear();
@@ -611,6 +641,15 @@ public:
                             std::string_view insertText) {
     autocompleteSearchTerms_.emplace_back(searchTerm);
     autocompleteEntries_.emplace_back(displayText, insertText);
+  }
+
+  /**
+   * Install a structured autocomplete provider.
+   *
+   * @param provider Provider callback, or empty to use only generic word autocomplete.
+   */
+  void setAutocompleteProvider(AutocompleteProvider provider) {
+    autocompleteProvider_ = std::move(provider);
   }
 
   // Static utilities
@@ -913,11 +952,15 @@ private:
   bool autocomplete_ = true;           //!< Autocomplete enabled
   std::string autocompleteWord_;       //!< Current word being completed
   std::vector<std::pair<RcString, RcString>> autocompleteSuggestions_;  //!< Current suggestions
-  int autocompleteIndex_;             //!< Selected suggestion index
-  bool autocompleteOpened_ = false;   //!< Autocomplete popup is open
-  bool autocompleteSwitched_;         //!< Allow enter to select
-  std::string autocompleteObject_;    //!< Object for member completion
-  Coordinates autocompletePosition_;  //!< Position of completion
+  int autocompleteIndex_;                       //!< Selected suggestion index
+  bool autocompleteOpened_ = false;             //!< Autocomplete popup is open
+  bool autocompleteSwitched_;                   //!< Allow enter to select
+  std::string autocompleteObject_;              //!< Object for member completion
+  Coordinates autocompletePosition_;            //!< Position of completion
+  AutocompleteProvider autocompleteProvider_;   //!< Syntax-aware autocomplete source
+  bool autocompleteReplacementActive_ = false;  //!< Provider supplied an explicit replace range
+  std::size_t autocompleteReplacementStartOffset_ = 0;  //!< Provider replacement start
+  std::size_t autocompleteReplacementEndOffset_ = 0;    //!< Provider replacement end
 
   // Keyboard shortcuts
   std::vector<Shortcut> shortcuts_;  //!< Configured shortcuts

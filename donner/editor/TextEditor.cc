@@ -435,6 +435,13 @@ void TextEditor::autocompleteSelect() {
   }
 
   const auto& entry = autocompleteSuggestions_[autocompleteIndex_];
+  if (autocompleteReplacementActive_) {
+    const Coordinates start = text_.getCoordinatesAtByteOffset(autocompleteReplacementStartOffset_);
+    const Coordinates end = text_.getCoordinatesAtByteOffset(autocompleteReplacementEndOffset_);
+    setSelection(start, end);
+    autocompleteReplacementActive_ = false;
+  }
+
   insertText(entry.second, true);
 
   autocompleteOpened_ = false;
@@ -1673,6 +1680,41 @@ void TextEditor::buildMemberSuggestions(bool* keepAutocompleteOpen) {
 }
 
 void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
+  autocompleteReplacementActive_ = false;
+
+  if (autocompleteProvider_) {
+    const std::string source = getText();
+    const std::size_t cursorOffset = text_.getByteOffset(getCursorPosition());
+    std::optional<AutocompleteResponse> response =
+        autocompleteProvider_(AutocompleteRequest{source, cursorOffset});
+    if (response.has_value()) {
+      autocompleteSuggestions_.clear();
+      autocompleteIndex_ = 0;
+      autocompleteSwitched_ = false;
+
+      for (const AutocompleteSuggestion& suggestion : response->suggestions) {
+        autocompleteSuggestions_.emplace_back(suggestion.displayText, suggestion.insertText);
+      }
+
+      if (!autocompleteSuggestions_.empty()) {
+        autocompleteOpened_ = true;
+        autocompleteReplacementActive_ = true;
+        autocompleteReplacementStartOffset_ = std::min(response->replaceStartOffset, source.size());
+        autocompleteReplacementEndOffset_ = std::min(response->replaceEndOffset, source.size());
+        autocompletePosition_ =
+            text_.getCoordinatesAtByteOffset(autocompleteReplacementStartOffset_);
+
+        if (keepAutocompleteOpen != nullptr) {
+          *keepAutocompleteOpen = true;
+        }
+      } else {
+        autocompleteOpened_ = false;
+      }
+
+      return;
+    }
+  }
+
   autocompleteWord_ = getWordUnderCursor().str();
 
   if (!isValidAutocompleteWord(autocompleteWord_)) {

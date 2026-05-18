@@ -219,6 +219,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
+        "//donner/svg/properties:property_parsing",
     ],
 )
 
@@ -251,6 +252,18 @@ donner_cc_library(
     srcs = ["DocumentSave.cc"],
     hdrs = ["DocumentSave.h"],
     deps = [],
+)
+
+donner_cc_library(
+    name = "xml_autocomplete",
+    srcs = ["XmlAutocomplete.cc"],
+    hdrs = ["XmlAutocomplete.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+        "//donner/svg/properties:property_parsing",
+    ],
 )
 
 donner_cc_library(
@@ -438,6 +451,7 @@ donner_cc_library(
         ":text_editor",
         ":tracy_wrapper",
         ":viewport_interaction_controller",
+        ":xml_autocomplete",
         "//donner/base",
         "//donner/base/xml",
         "//donner/editor/gui:editor_window",

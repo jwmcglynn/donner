@@ -1895,6 +1895,14 @@ PropertyRegistry::PropertyRegistry(PropertyRegistry&&) noexcept = default;
 PropertyRegistry& PropertyRegistry::operator=(const PropertyRegistry&) = default;
 PropertyRegistry& PropertyRegistry::operator=(PropertyRegistry&&) noexcept = default;
 
+std::span<const std::string_view> PropertyRegistry::propertyNames() {
+  return kProperties.keys();
+}
+
+bool PropertyRegistry::isPresentationAttributeName(std::string_view name) {
+  return kValidPresentationAttributes.contains(name);
+}
+
 size_t PropertyRegistry::numPropertiesSet() const {
   const auto selfProperties = allProperties();
 

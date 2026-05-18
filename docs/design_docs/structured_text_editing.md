@@ -1039,13 +1039,14 @@ same scenarios should also run through headless `.donner-repro` playback.
 
 ### M6: Autocomplete from registries
 
-- [ ] `detectXmlContext(source, cursorOffset) → XmlContext` with
+- [x] `DetectXmlAutocompleteContext(source, cursorOffset) → XmlAutocompleteContext` with
       variants `ElementName`, `AttributeName`, `StyleValue`,
       `TextContent`, `Unknown`. **Pull, not push** — only invoked
       when the user triggers autocomplete, not on every keystroke.
-      Implemented via the existing `XMLParser::Tokenize` token
-      stream, not regex.
-- [ ] Suggestion sources:
+      Implemented via the existing `donner::xml::Tokenize` token
+      stream, not regex. The `TextEditor` shell exposes a pull-based
+      provider hook, and `EditorShell` installs the SVG/XML provider.
+- [x] Suggestion sources:
       - Element names: `kSVGElementNames` (iterate via a new
         compile-time key-array helper next to `kProperties`)
       - Attribute names: `kSVGPresentationAttributeNames` + static
@@ -1054,7 +1055,7 @@ same scenarios should also run through headless `.donner-repro` playback.
         `kProperties`, with a flag "also a presentation attribute"
         derived from `kValidPresentationAttributes`. Trailing `: `
         auto-inserted on selection.
-- [ ] Tests: cursor right after `<` → element suggestions; cursor
+- [x] Tests: cursor right after `<` → element suggestions; cursor
       inside an open tag → attribute suggestions; cursor inside
       `style="…"` → CSS property suggestions; cursor in text →
       nothing.
