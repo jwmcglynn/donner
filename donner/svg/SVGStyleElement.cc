@@ -2,6 +2,7 @@
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
 
@@ -11,19 +12,26 @@ SVGStyleElement SVGStyleElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGStyleElement::setType(const RcStringOrRef& type) {
+  DocumentWriteAccess access = handle_.writeAccess();
   auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
   stylesheetComponent.type = RcString(type);
+  components::RenderingContext(*handle_.registry()).invalidateRenderTree();
+  access.bumpMutationRevision();
 }
 
 void SVGStyleElement::setContents(std::string_view style) {
-  if (isCssType()) {
-    auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
+  if (stylesheetComponent.isCssType()) {
     stylesheetComponent.parseStylesheet(style);
+    components::RenderingContext(*handle_.registry()).invalidateRenderTree();
+    access.bumpMutationRevision();
   }
 }
 
 bool SVGStyleElement::isCssType() const {
-  auto* stylesheetComponent = handle_.try_get<components::StylesheetComponent>();
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* stylesheetComponent = handle_.try_get<components::StylesheetComponent>();
   if (stylesheetComponent) {
     return stylesheetComponent->isCssType();
   } else {

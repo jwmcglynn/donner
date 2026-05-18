@@ -246,13 +246,15 @@ class SVGParserImpl {
 private:
   SVGParserContext& context_;
   std::optional<SVGDocument> document_;
-  std::shared_ptr<Registry> registry_;
+  SVGDocumentHandle documentState_;
   SVGDocument::Settings settings_;
 
 public:
   explicit SVGParserImpl(SVGParserContext& context, std::shared_ptr<Registry> registry,
                          SVGDocument::Settings settings)
-      : context_(context), registry_(std::move(registry)), settings_(std::move(settings)) {}
+      : context_(context),
+        documentState_(std::make_shared<DocumentState>(std::move(registry))),
+        settings_(std::move(settings)) {}
 
   std::optional<SVGDocument> document() const { return document_; }
 
@@ -362,7 +364,7 @@ public:
             }
           }
 
-          document_ = SVGDocument(registry_, std::move(settings_), child->entityHandle());
+          document_ = SVGDocument(documentState_, std::move(settings_), child->entityHandle());
 
           auto maybeSvgElement = ParseAttributes(context_, document_->svgElement(), child.value());
           if (maybeSvgElement.hasError()) {

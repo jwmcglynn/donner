@@ -19,37 +19,52 @@ SVGStopElement SVGStopElement::CreateOn(EntityHandle handle) {
 void SVGStopElement::setOffset(float value) {
   assert(value >= 0.0f && value <= 1.0f);
 
+  DocumentWriteAccess access = handle_.writeAccess();
   invalidate();
   handle_.get_or_emplace<components::StopComponent>().properties.offset = value;
+  access.bumpMutationRevision();
 }
 
 void SVGStopElement::setStopColor(css::Color value) {
+  DocumentWriteAccess access = handle_.writeAccess();
   invalidate();
   handle_.get_or_emplace<components::StopComponent>().properties.stopColor.set(
       value, css::Specificity::Override());
+  access.bumpMutationRevision();
 }
 
 void SVGStopElement::setStopOpacity(double value) {
   assert(value >= 0.0 && value <= 1.0);
 
+  DocumentWriteAccess access = handle_.writeAccess();
   invalidate();
   handle_.get_or_emplace<components::StopComponent>().properties.stopOpacity.set(
       value, css::Specificity::Override());
+  access.bumpMutationRevision();
 }
 
 float SVGStopElement::offset() const {
-  return handle_.get_or_emplace<components::StopComponent>().properties.offset;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::StopComponent>();
+  return component ? component->properties.offset : components::StopProperties().offset;
 }
 
 css::Color SVGStopElement::stopColor() const {
-  return handle_.get_or_emplace<components::StopComponent>().properties.stopColor.getRequired();
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::StopComponent>();
+  return component ? component->properties.stopColor.getRequired()
+                   : components::StopProperties().stopColor.getRequired();
 }
 
 double SVGStopElement::stopOpacity() const {
-  return handle_.get_or_emplace<components::StopComponent>().properties.stopOpacity.getRequired();
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::StopComponent>();
+  return component ? component->properties.stopOpacity.getRequired()
+                   : components::StopProperties().stopOpacity.getRequired();
 }
 
 css::Color SVGStopElement::computedStopColor() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
       handle_, handle_.get_or_emplace<components::StopComponent>(), disabledSink);
@@ -57,6 +72,7 @@ css::Color SVGStopElement::computedStopColor() const {
 }
 
 double SVGStopElement::computedStopOpacity() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
       handle_, handle_.get_or_emplace<components::StopComponent>(), disabledSink);
@@ -64,6 +80,7 @@ double SVGStopElement::computedStopOpacity() const {
 }
 
 void SVGStopElement::invalidate() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   handle_.remove<components::ComputedStopComponent>();
   components::RenderingContext(*handle_.registry()).invalidateRenderTree();
 }

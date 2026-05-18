@@ -3,11 +3,21 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/SymbolComponent.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
+namespace {
+
+void InvalidateSymbol(EntityHandle handle) {
+  components::LayoutSystem().invalidate(handle);
+  components::RenderingContext(*handle.registry()).invalidateRenderTree();
+}
+
+}  // namespace
 
 SVGSymbolElement SVGSymbolElement::CreateOn(EntityHandle handle) {
   CreateEntityOn(handle, Tag, Type);
@@ -22,72 +32,114 @@ SVGSymbolElement SVGSymbolElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGSymbolElement::setViewBox(OptionalRef<Box2d> viewBox) {
-  handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::ViewBoxComponent>().viewBox = viewBox;
+  InvalidateSymbol(handle_);
+  access.bumpMutationRevision();
 }
 
 std::optional<Box2d> SVGSymbolElement::viewBox() const {
-  return handle_.get<components::ViewBoxComponent>().viewBox;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::ViewBoxComponent>();
+  return component ? component->viewBox : std::nullopt;
 }
 
 void SVGSymbolElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
+  DocumentWriteAccess access = handle_.writeAccess();
   handle_.get_or_emplace<components::PreserveAspectRatioComponent>().preserveAspectRatio =
       preserveAspectRatio;
+  InvalidateSymbol(handle_);
+  access.bumpMutationRevision();
 }
 
 PreserveAspectRatio SVGSymbolElement::preserveAspectRatio() const {
-  return handle_.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::PreserveAspectRatioComponent>();
+  return component ? component->preserveAspectRatio : PreserveAspectRatio();
 }
 
 void SVGSymbolElement::setX(Lengthd value) {
-  handle_.get<components::SizedElementComponent>().properties.x.set(value,
-                                                                    css::Specificity::Override());
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::SizedElementComponent>().properties.x.set(
+      value, css::Specificity::Override());
+  InvalidateSymbol(handle_);
+  access.bumpMutationRevision();
 }
 
 Lengthd SVGSymbolElement::x() const {
-  return handle_.get<components::SizedElementComponent>().properties.x.getRequired();
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::SizedElementComponent>();
+  return component ? component->properties.x.getRequired()
+                   : components::SizedElementComponent().properties.x.getRequired();
 }
 
 void SVGSymbolElement::setY(Lengthd value) {
-  handle_.get<components::SizedElementComponent>().properties.y.set(value,
-                                                                    css::Specificity::Override());
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::SizedElementComponent>().properties.y.set(
+      value, css::Specificity::Override());
+  InvalidateSymbol(handle_);
+  access.bumpMutationRevision();
 }
 
 Lengthd SVGSymbolElement::y() const {
-  return handle_.get<components::SizedElementComponent>().properties.y.getRequired();
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::SizedElementComponent>();
+  return component ? component->properties.y.getRequired()
+                   : components::SizedElementComponent().properties.y.getRequired();
 }
 
 void SVGSymbolElement::setWidth(std::optional<Lengthd> value) {
-  handle_.get<components::SizedElementComponent>().properties.width.set(
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::SizedElementComponent>().properties.width.set(
       value, css::Specificity::Override());
+  InvalidateSymbol(handle_);
+  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGSymbolElement::width() const {
-  return handle_.get<components::SizedElementComponent>().properties.width.get();
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::SizedElementComponent>();
+  return component ? component->properties.width.get() : std::nullopt;
 }
 
 void SVGSymbolElement::setHeight(std::optional<Lengthd> value) {
-  handle_.get<components::SizedElementComponent>().properties.height.set(
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::SizedElementComponent>().properties.height.set(
       value, css::Specificity::Override());
+  InvalidateSymbol(handle_);
+  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGSymbolElement::height() const {
-  return handle_.get<components::SizedElementComponent>().properties.height.get();
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::SizedElementComponent>();
+  return component ? component->properties.height.get() : std::nullopt;
 }
 
 void SVGSymbolElement::setRefX(double value) {
+  DocumentWriteAccess access = handle_.writeAccess();
   handle_.get_or_emplace<components::SymbolComponent>().refX = value;
+  InvalidateSymbol(handle_);
+  access.bumpMutationRevision();
 }
 
 double SVGSymbolElement::refX() const {
-  return handle_.get<components::SymbolComponent>().refX;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::SymbolComponent>();
+  return component ? component->refX : components::SymbolComponent().refX;
 }
 
 void SVGSymbolElement::setRefY(double value) {
+  DocumentWriteAccess access = handle_.writeAccess();
   handle_.get_or_emplace<components::SymbolComponent>().refY = value;
+  InvalidateSymbol(handle_);
+  access.bumpMutationRevision();
 }
 
 double SVGSymbolElement::refY() const {
-  return handle_.get<components::SymbolComponent>().refY;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::SymbolComponent>();
+  return component ? component->refY : components::SymbolComponent().refY;
 }
 
 }  // namespace donner::svg

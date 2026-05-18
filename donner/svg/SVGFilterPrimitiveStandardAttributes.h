@@ -20,6 +20,9 @@ protected:
   /// SVGFilterPrimitiveStandardAttributes cannot be instantiated directly.
   explicit SVGFilterPrimitiveStandardAttributes(EntityHandle handle);
 
+  /// Invalidates computed filter state after a primitive mutation.
+  void invalidateFilter() const;
+
   /**
    * Internal constructor to create the element on an existing \ref Entity.
    *

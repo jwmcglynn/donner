@@ -217,7 +217,10 @@ public:
    * @param document Containing document.
    */
   static SVGRadialGradientElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    SVGRadialGradientElement result = CreateOn(CreateEmptyEntity(access));
+    access.bumpMutationRevision();
+    return result;
   }
 
   /**

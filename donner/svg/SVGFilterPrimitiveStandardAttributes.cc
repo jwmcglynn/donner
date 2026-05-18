@@ -1,9 +1,30 @@
 #include "donner/svg/SVGFilterPrimitiveStandardAttributes.h"
 
 #include "donner/svg/components/RenderingBehaviorComponent.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
+namespace {
+
+Lengthd DefaultFilterPrimitiveX() {
+  return Lengthd(-10.0, Lengthd::Unit::Percent);
+}
+
+Lengthd DefaultFilterPrimitiveY() {
+  return Lengthd(-10.0, Lengthd::Unit::Percent);
+}
+
+Lengthd DefaultFilterPrimitiveWidth() {
+  return Lengthd(120.0, Lengthd::Unit::Percent);
+}
+
+Lengthd DefaultFilterPrimitiveHeight() {
+  return Lengthd(120.0, Lengthd::Unit::Percent);
+}
+
+}  // namespace
 
 SVGFilterPrimitiveStandardAttributes::SVGFilterPrimitiveStandardAttributes(EntityHandle handle)
     : SVGElement(handle) {
@@ -12,48 +33,78 @@ SVGFilterPrimitiveStandardAttributes::SVGFilterPrimitiveStandardAttributes(Entit
       components::RenderingBehavior::Nonrenderable);
 }
 
+void SVGFilterPrimitiveStandardAttributes::invalidateFilter() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  Registry& registry = *handle_.registry();
+  registry.clear<components::ComputedFilterComponent>();
+  components::RenderingContext(registry).invalidateRenderTree();
+}
+
 Lengthd SVGFilterPrimitiveStandardAttributes::x() const {
-  return handle_.get<components::FilterPrimitiveComponent>().x.value_or(
-      Lengthd(-10.0, Lengthd::Unit::Percent));
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
+  return component ? component->x.value_or(DefaultFilterPrimitiveX()) : DefaultFilterPrimitiveX();
 }
 
 Lengthd SVGFilterPrimitiveStandardAttributes::y() const {
-  return handle_.get<components::FilterPrimitiveComponent>().y.value_or(
-      Lengthd(-10.0, Lengthd::Unit::Percent));
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
+  return component ? component->y.value_or(DefaultFilterPrimitiveY()) : DefaultFilterPrimitiveY();
 }
 
 Lengthd SVGFilterPrimitiveStandardAttributes::width() const {
-  return handle_.get<components::FilterPrimitiveComponent>().width.value_or(
-      Lengthd(120.0, Lengthd::Unit::Percent));
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
+  return component ? component->width.value_or(DefaultFilterPrimitiveWidth())
+                   : DefaultFilterPrimitiveWidth();
 }
 
 Lengthd SVGFilterPrimitiveStandardAttributes::height() const {
-  return handle_.get<components::FilterPrimitiveComponent>().height.value_or(
-      Lengthd(120.0, Lengthd::Unit::Percent));
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
+  return component ? component->height.value_or(DefaultFilterPrimitiveHeight())
+                   : DefaultFilterPrimitiveHeight();
 }
 
 void SVGFilterPrimitiveStandardAttributes::setX(const Lengthd& value) {
-  handle_.get<components::FilterPrimitiveComponent>().x = value;
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::FilterPrimitiveComponent>().x = value;
+  invalidateFilter();
+  access.bumpMutationRevision();
 }
 
 void SVGFilterPrimitiveStandardAttributes::setY(const Lengthd& value) {
-  handle_.get<components::FilterPrimitiveComponent>().y = value;
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::FilterPrimitiveComponent>().y = value;
+  invalidateFilter();
+  access.bumpMutationRevision();
 }
 
 void SVGFilterPrimitiveStandardAttributes::setWidth(const Lengthd& value) {
-  handle_.get<components::FilterPrimitiveComponent>().width = value;
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::FilterPrimitiveComponent>().width = value;
+  invalidateFilter();
+  access.bumpMutationRevision();
 }
 
 void SVGFilterPrimitiveStandardAttributes::setHeight(const Lengthd& value) {
-  handle_.get<components::FilterPrimitiveComponent>().height = value;
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::FilterPrimitiveComponent>().height = value;
+  invalidateFilter();
+  access.bumpMutationRevision();
 }
 
 std::optional<RcString> SVGFilterPrimitiveStandardAttributes::result() const {
-  return handle_.get<components::FilterPrimitiveComponent>().result;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
+  return component ? component->result : std::nullopt;
 }
 
 void SVGFilterPrimitiveStandardAttributes::setResult(const RcStringOrRef& value) {
-  handle_.get<components::FilterPrimitiveComponent>().result = value;
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.get_or_emplace<components::FilterPrimitiveComponent>().result = value;
+  invalidateFilter();
+  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

@@ -2,6 +2,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGFEBlendElement.h"
 #include "donner/svg/SVGFEColorMatrixElement.h"
 #include "donner/svg/SVGFEComponentTransferElement.h"
@@ -27,6 +28,8 @@
 #include "donner/svg/SVGFESpotLightElement.h"
 #include "donner/svg/SVGFETileElement.h"
 #include "donner/svg/SVGFETurbulenceElement.h"
+#include "donner/svg/SVGFilterElement.h"
+#include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 namespace donner::svg {
@@ -102,6 +105,27 @@ TEST(SVGFilterPrimitiveWrapperTests, FilterPrimitiveStandardAttributes) {
   EXPECT_THAT(offset->width(), LengthIs(3.0, Lengthd::Unit::Px));
   EXPECT_THAT(offset->height(), LengthIs(4.0, Lengthd::Unit::Px));
   EXPECT_THAT(offset->result(), testing::Optional(testing::Eq("out")));
+}
+
+TEST(SVGFilterPrimitiveWrapperTests, PrimitiveSettersInvalidateComputedFilter) {
+  SVGDocument document;
+  SVGFilterElement filter = SVGFilterElement::Create(document);
+  SVGFEGaussianBlurElement blur = SVGFEGaussianBlurElement::Create(document);
+  SVGFEOffsetElement offset = SVGFEOffsetElement::Create(document);
+  filter.appendChild(blur);
+  filter.appendChild(offset);
+
+  filter.entityHandle().emplace<components::ComputedFilterComponent>();
+  offset.setOffset(1.0, 2.0);
+  EXPECT_FALSE(filter.entityHandle().all_of<components::ComputedFilterComponent>());
+
+  filter.entityHandle().emplace<components::ComputedFilterComponent>();
+  offset.setResult("offsetOut");
+  EXPECT_FALSE(filter.entityHandle().all_of<components::ComputedFilterComponent>());
+
+  filter.entityHandle().emplace<components::ComputedFilterComponent>();
+  blur.setStdDeviation(3.0, 4.0);
+  EXPECT_FALSE(filter.entityHandle().all_of<components::ComputedFilterComponent>());
 }
 
 }  // namespace

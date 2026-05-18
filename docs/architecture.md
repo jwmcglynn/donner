@@ -94,11 +94,30 @@ The Document Model is built on top of the [EnTT](https://github.com/skypjack/ent
 - See \ref EcsArchitecture for more details.
 - See \ref ecs_systems for a list of systems.
 
+The public DOM facade (`SVGDocument`, `SVGElement`, and concrete SVG element
+types) is lifetime-aware. Public element handles retain detached nodes so a
+caller can remove, inspect, edit, and reinsert an element without use-after-free
+or leaked detached subtrees. Detached entities are collected after they are no
+longer attached to the document, retained by public handles, or needed by an
+active snapshot/observer epoch.
+
+`SVGDocument` defaults to `ThreadingMode::SingleThreaded`. Multi-threaded DOM
+mutation is opt-in through `ThreadingMode::ConcurrentDom`, which serializes
+writes with document access guards while allowing public facade APIs to be used
+from multiple threads. Direct ECS access remains an advanced escape hatch and
+must be scoped through document read/write access in concurrent mode.
+
 ### Rendering Backend
 
 The rendering backend traverses the internal ECS document model and instantiates rendering components such as \ref donner::svg::components::RenderingInstanceComponent "RenderingInstanceComponent", which are then consumed by the selected renderer (tiny-skia by default, or Geode with `--config=geode`).
 
 Rendering components are attached to the same entities as the document model components, allowing for easy synchronization between the document model and the rendering backend. When the document model is modified, the associated rendering components are invalidated.
+
+For normal `SVGDocument` rendering, `RendererDriver` first captures a
+`RenderSnapshot`: an immutable renderer command stream with snapshot-owned
+resource references. Backend replay uses the snapshot rather than the live ECS
+registry, so DOM mutations made during backend drawing are serialized for the
+next captured frame.
 
 ## Base Library
 

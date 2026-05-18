@@ -122,7 +122,10 @@ public:
    * @param document Containing document.
    */
   static SVGPathElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    SVGPathElement result = CreateOn(CreateEmptyEntity(access));
+    access.bumpMutationRevision();
+    return result;
   }
 
   /**

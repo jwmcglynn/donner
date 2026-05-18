@@ -92,7 +92,10 @@ public:
    * @param document Containing document.
    */
   static SVGClipPathElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    SVGClipPathElement result = CreateOn(CreateEmptyEntity(access));
+    access.bumpMutationRevision();
+    return result;
   }
 
   /**

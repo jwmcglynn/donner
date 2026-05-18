@@ -1,15 +1,19 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
+#include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/components/IdComponent.h"
 
 namespace donner::svg {
 
 // Forward declarations
+class ElementAnchor;
 class SVGDocument;
 class SVGElement;
 
@@ -31,6 +35,8 @@ class SVGElement;
  */
 namespace donner::svg::components {
 
+class TreeMutation;
+
 /**
  * Holds global state of an SVG document, such as the root element, id-to-element mapping, and the
  * document size.
@@ -45,6 +51,7 @@ namespace donner::svg::components {
  */
 class SVGDocumentContext {
 private:
+  friend class ::donner::svg::ElementAnchor;
   friend class ::donner::svg::SVGDocument;
   friend class ::donner::svg::SVGElement;
 
@@ -61,9 +68,9 @@ public:
    * ```
    *
    * @param ctorTag Internal tag to allow construction.
-   * @param registry Underlying registry for the document.
+   * @param documentState Shared state for the document.
    */
-  explicit SVGDocumentContext(InternalCtorTag ctorTag, const std::shared_ptr<Registry>& registry);
+  explicit SVGDocumentContext(InternalCtorTag ctorTag, SVGDocumentHandle documentState);
 
   /// Current canvas size, if set. Equivalent to the window size, which controls how the SVG
   /// contents are rendered.
@@ -84,15 +91,46 @@ public:
     return (it != idToEntity_.end()) ? it->second : entt::null;
   }
 
+  /// Mark the backing document state as mutated.
+  void bumpMutationRevision() const { getSharedDocumentState()->bumpMutationRevision(); }
+
+  /// Returns true if the current thread holds write access to the backing document.
+  bool currentThreadHasWriteAccess() const {
+    return getSharedDocumentState()->currentThreadHasWriteAccess();
+  }
+
+  /// Acquire write access to the backing document.
+  DocumentWriteAccess writeAccess() const { return getSharedDocumentState()->write(); }
+
+  /// Get detached-node collection state for the backing document.
+  DetachedNodeState& detachedNodeState() const {
+    return getSharedDocumentState()->detachedNodeState();
+  }
+
+  /// Returns true when detached-node collection is deferred for a snapshot or observer epoch.
+  bool hasActiveDetachedNodeCollectionDeferral() const {
+    return getSharedDocumentState()->hasActiveDetachedNodeCollectionDeferral();
+  }
+
+  /// Current detached-node collection epoch high-water.
+  std::uint64_t activeDetachedNodeCollectionEpoch() const {
+    return getSharedDocumentState()->activeDetachedNodeCollectionEpoch();
+  }
+
 private:
-  /// Rehydrate the shared_ptr for the Registry. Asserts if the registry has already been destroyed,
-  /// which means that this object is likely invalid too.
-  std::shared_ptr<Registry> getSharedRegistry() const {
-    if (auto registry = registry_.lock()) {
-      return registry;
+  /// Rehydrate the shared document state. Asserts if it has already been destroyed, which means
+  /// that this object is likely invalid too.
+  SVGDocumentHandle getSharedDocumentState() const {
+    if (auto documentState = documentState_.lock()) {
+      return documentState;
     } else {
       UTILS_RELEASE_ASSERT_MSG(false, "SVGDocument has already been destroyed");
     }
+  }
+
+  /// Rehydrate the shared_ptr for the Registry.
+  std::shared_ptr<Registry> getSharedRegistry() const {
+    return getSharedDocumentState()->sharedRegistry();
   }
 
   /// Called when an ID is added to an element.
@@ -107,9 +145,8 @@ private:
     idToEntity_.erase(idComponent.id());
   }
 
-  /// ECS registry reference, which is owned by SVGDocument. This is used to recreate an
-  /// SVGDocument when requested, and will fail if all references have been destroyed.
-  std::weak_ptr<Registry> registry_;
+  /// Shared document state reference, owned by SVGDocument and retained public DOM handles.
+  std::weak_ptr<DocumentState> documentState_;
 
   /// Mapping from ID to entity.
   std::unordered_map<RcString, Entity> idToEntity_;

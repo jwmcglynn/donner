@@ -95,7 +95,10 @@ public:
    * @param document Containing document.
    */
   static SVGMarkerElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    SVGMarkerElement result = CreateOn(CreateEmptyEntity(access));
+    access.bumpMutationRevision();
+    return result;
   }
 
   /**

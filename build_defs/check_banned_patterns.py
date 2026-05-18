@@ -13,6 +13,7 @@ Rules enforced:
   - No `std::aligned_union`: same reason
   - No user-defined literal operators (operator"" _foo): use named helpers
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
+  - No direct TreeComponent structural mutation outside approved low-level code
 
 Usage:
   python3 tools/check_banned_patterns.py            # Check all files
@@ -132,6 +133,26 @@ _RULES: List[_Rule] = [
             "donner/svg/renderer/geode/GeodeFilterEngine.cc",
             "donner/svg/renderer/geode/tests/GeoEncoder_tests.cc",
             "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc",
+        ),
+    ),
+    _Rule(
+        pattern=re.compile(
+            r"\.(?:insertBefore|appendChild|replaceChild|removeChild|remove)\s*\(\s*"
+            r"[^;\n)]*registry"
+        ),
+        description="direct TreeComponent structural mutation outside TreeMutation",
+        remediation=(
+            "Use donner::svg::components::TreeMutation for SVG DOM tree edits so dirty flags, "
+            "detached-node lifetime, collection, and mutation revisions stay coherent. "
+            "TreeComponent remains only the low-level link container for XML internals, "
+            "TreeMutation, and audited shadow-tree internals."
+        ),
+        exempt_path_prefixes=(
+            "donner/base/xml/",
+            "donner/svg/components/TreeMutation.cc",
+            "donner/svg/components/shadow/ShadowTreeSystem.cc",
+            "_tests.",
+            "tests/",
         ),
     ),
 ]

@@ -3,6 +3,7 @@ load("//build_defs:rules.bzl", "donner_cc_library")
 donner_cc_library(
     name = "svg_document_handle",
     hdrs = [
+        "DocumentState.h",
         "SVGDocumentHandle.h",
     ],
     visibility = [
@@ -63,6 +64,7 @@ donner_cc_library(
         "SVGPatternElement.cc",
         "SVGPolygonElement.cc",
         "SVGPolylineElement.cc",
+        "SVGQuerySelector.cc",
         "SVGRadialGradientElement.cc",
         "SVGRectElement.cc",
         "SVGSVGElement.cc",
@@ -80,6 +82,7 @@ donner_cc_library(
     ],
     hdrs = [
         "AllSVGElements.h",
+        "DocumentState.h",
         "DonnerController.h",
         "SVGCircleElement.h",
         "SVGClipPathElement.h",
@@ -129,6 +132,7 @@ donner_cc_library(
         "SVGPatternElement.h",
         "SVGPolygonElement.h",
         "SVGPolylineElement.h",
+        "SVGQuerySelector.h",
         "SVGRadialGradientElement.h",
         "SVGRectElement.h",
         "SVGSVGElement.h",
@@ -152,6 +156,7 @@ donner_cc_library(
         "//donner/svg/tests:__pkg__",
     ],
     deps = [
+        ":svg_document_handle",
         "//donner/svg/components",
         "//donner/svg/core",
         "//donner/svg/parser:parser_core",

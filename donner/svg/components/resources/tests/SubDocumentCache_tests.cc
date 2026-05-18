@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -228,8 +229,17 @@ TEST(SubDocumentCacheTest, IndirectRecursionDetection) {
 
 class TestResourceLoader : public ResourceLoaderInterface {
 public:
+  using FetchCallback = std::function<void()>;
+
+  explicit TestResourceLoader(FetchCallback fetchCallback = {})
+      : fetchCallback_(std::move(fetchCallback)) {}
+
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
+    if (fetchCallback_) {
+      fetchCallback_();
+    }
+
     auto it = files_.find(std::string(url));
     if (it != files_.end()) {
       return it->second;
@@ -242,6 +252,7 @@ public:
   }
 
 private:
+  FetchCallback fetchCallback_;
   std::unordered_map<std::string, std::vector<uint8_t>> files_;
 };
 
@@ -342,6 +353,54 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGSuccess) {
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(SVGDocument::CreateFromHandle(*result).canvasSize(), Vector2i(705, 705));
   EXPECT_FALSE(warnings.hasWarnings());
+}
+
+TEST_F(ResourceManagerContextTest, UserCallbacksRunOutsideDocumentWriteAccess) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  auto& resourceManager = document.unsafeRegistry().ctx().get<ResourceManagerContext>();
+
+  bool loaderSawWriteAccess = true;
+  auto loader = std::make_unique<TestResourceLoader>([&document, &loaderSawWriteAccess]() {
+    loaderSawWriteAccess = document.handle()->currentThreadHasWriteAccess();
+  });
+  loader->addFile("test.svg", {'<', 's', 'v', 'g', '>'});
+  resourceManager.setResourceLoader(std::move(loader));
+
+  bool parseCallbackSawWriteAccess = true;
+  resourceManager.setSvgParseCallback(
+      [&document, &parseCallbackSawWriteAccess](
+          const std::vector<uint8_t>& data, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        parseCallbackSawWriteAccess = document.handle()->currentThreadHasWriteAccess();
+        return MakeDocumentWithCanvas(static_cast<int>(data.size()) + 900).handle();
+      });
+
+  ParseWarningSink warnings;
+  auto result = resourceManager.loadExternalSVG("test.svg", warnings);
+
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(loaderSawWriteAccess);
+  EXPECT_FALSE(parseCallbackSawWriteAccess);
+  EXPECT_FALSE(warnings.hasWarnings());
+}
+
+TEST_F(ResourceManagerContextTest, ResourceLoaderRejectedDuringDocumentWriteAccess) {
+  SVGDocument document;
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+  auto& resourceManager = document.unsafeRegistry().ctx().get<ResourceManagerContext>();
+
+  auto loader = std::make_unique<TestResourceLoader>();
+  loader->addFile("test.svg", {'<', 's', 'v', 'g', '>'});
+  resourceManager.setResourceLoader(std::move(loader));
+  resourceManager.setSvgParseCallback(MakeDocumentCallback(910));
+
+  EXPECT_DEATH(
+      {
+        DocumentWriteAccess access = document.writeAccess();
+        ParseWarningSink warnings;
+        (void)resourceManager.loadExternalSVG("test.svg", warnings);
+      },
+      "currentThreadHasWriteAccess");
 }
 
 TEST_F(ResourceManagerContextTest, LoadExternalSVGCachesResult) {

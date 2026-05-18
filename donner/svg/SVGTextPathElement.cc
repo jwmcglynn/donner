@@ -15,11 +15,14 @@ SVGTextPathElement SVGTextPathElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGTextPathElement::setHref(const RcStringOrRef& href) {
+  DocumentWriteAccess access = handle_.writeAccess();
   handle_.get_or_emplace<components::TextPathComponent>().href = RcString(href);
   invalidateTextGeometry();
+  access.bumpMutationRevision();
 }
 
 std::optional<RcString> SVGTextPathElement::href() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* comp = handle_.try_get<components::TextPathComponent>()) {
     if (!comp->href.empty()) {
       return comp->href;
@@ -29,11 +32,14 @@ std::optional<RcString> SVGTextPathElement::href() const {
 }
 
 void SVGTextPathElement::setStartOffset(std::optional<Lengthd> offset) {
+  DocumentWriteAccess access = handle_.writeAccess();
   handle_.get_or_emplace<components::TextPathComponent>().startOffset = offset;
   invalidateTextGeometry();
+  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGTextPathElement::startOffset() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* comp = handle_.try_get<components::TextPathComponent>()) {
     return comp->startOffset;
   }

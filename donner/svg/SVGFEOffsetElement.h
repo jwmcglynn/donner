@@ -74,6 +74,18 @@ public:
   /// XML tag name, \ref xml_feOffset.
   static constexpr std::string_view Tag{"feOffset"};
 
+  /**
+   * Create a new \ref xml_feOffset element.
+   *
+   * @param document Containing document.
+   */
+  static SVGFEOffsetElement Create(SVGDocument& document) {
+    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    SVGFEOffsetElement result = CreateOn(CreateEmptyEntity(access));
+    access.bumpMutationRevision();
+    return result;
+  }
+
   /// Get the horizontal offset.
   double dx() const;
 

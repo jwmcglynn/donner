@@ -10,6 +10,7 @@ donner_cc_library(
         "AttributesComponent.h",
         "EntityDeclarationsContext.h",
         "TreeComponent.h",
+        "TreeMutationContext.h",
         "XMLDocumentContext.h",
         "XMLNamespaceContext.h",
         "XMLValueComponent.h",

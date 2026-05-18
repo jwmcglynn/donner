@@ -147,6 +147,28 @@ donner_cc_library(
 )
 
 donner_perf_sensitive_cc_library(
+    name = "render_snapshot",
+    srcs = ["RenderSnapshot.cc"],
+    hdrs = ["RenderSnapshot.h"],
+    defines = select({
+        ":text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
+    visibility = ["//visibility:public"],
+    deps = [
+        ":renderer_interface",
+        "//donner/base",
+        "//donner/svg/components",
+    ] + select({
+        ":text_enabled": [
+            "//donner/svg/resources:font_manager",
+            "//donner/svg/text:text_engine",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+donner_perf_sensitive_cc_library(
     name = "renderer_driver",
     srcs = ["RendererDriver.cc"],
     hdrs = ["RendererDriver.h"],
@@ -156,11 +178,13 @@ donner_perf_sensitive_cc_library(
     }),
     visibility = ["//visibility:public"],
     deps = [
+        ":render_snapshot",
         ":renderer_interface",
         ":renderer_utils",
         ":rendering_context",
         "//donner/base",
         "//donner/svg",
+        "//donner/svg/components:attached_id_lookup",
         "//donner/svg/renderer/common",
     ] + select({
         ":text_enabled": ["//donner/svg/text:text_engine"],
@@ -209,10 +233,10 @@ donner_perf_sensitive_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":pixel_format_utils",
-        "//donner/base",
-        "//donner/svg",
         ":tiny_skia_deps",
         ":tiny_skia_filter_deps",
+        "//donner/base",
+        "//donner/svg",
     ],
 )
 

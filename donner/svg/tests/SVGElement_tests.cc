@@ -110,6 +110,54 @@ TEST_F(SVGElementTests, Assign) {
   EXPECT_NE(element2, element3);  // element2 should be invalid.
 }
 
+TEST_F(SVGElementTests, ScopedAccessExposesResolvedHandle) {
+  document_.setThreadingMode(ThreadingMode::ConcurrentDom);
+  SVGRectElement rect = createRect();
+
+  const Entity rectEntity =
+      rect.withReadAccess([](DocumentReadAccess& access, EntityHandle handle) {
+        EXPECT_EQ(&access.registry(), handle.registry());
+        return handle.entity();
+      });
+
+  const std::uint64_t initialRevision = document_.handle()->revision();
+  rect.withWriteAccess([rect](DocumentWriteAccess&, EntityHandle handle) mutable {
+    EXPECT_EQ(handle.entity(), rect.entityHandle().entity());
+    rect.setX(Lengthd(10));
+    rect.setY(Lengthd(20));
+  });
+
+  EXPECT_EQ(document_.handle()->revision(), initialRevision + 1);
+  EXPECT_EQ(rect.unsafeEntityHandle().entity(), rectEntity);
+  EXPECT_EQ(rect.x(), Lengthd(10));
+  EXPECT_EQ(rect.y(), Lengthd(20));
+}
+
+TEST_F(SVGElementTests, UnsafeEntityHandleNamesRawEscapeHatch) {
+  SVGRectElement rect = createRect();
+
+  EXPECT_EQ(rect.unsafeEntityHandle(), rect.entityHandle());
+  EXPECT_EQ(rect.unsafeEntityHandle().registry(), &document_.unsafeRegistry());
+}
+
+TEST_F(SVGElementTests, ScopedWriteAccessAllowsExplicitRawMutationRevision) {
+  SVGRectElement rect = createRect();
+
+  const std::uint64_t initialRevision = document_.handle()->revision();
+  rect.withWriteAccess([](DocumentWriteAccess& access, EntityHandle handle) {
+    handle.get_or_emplace<components::DirtyFlagsComponent>().mark(
+        components::DirtyFlagsComponent::RenderInstance);
+    access.bumpMutationRevision();
+  });
+
+  EXPECT_EQ(document_.handle()->revision(), initialRevision + 1);
+  const bool isDirty = rect.withReadAccess([](DocumentReadAccess&, EntityHandle handle) {
+    const auto* dirty = handle.try_get<components::DirtyFlagsComponent>();
+    return dirty != nullptr && dirty->test(components::DirtyFlagsComponent::RenderInstance);
+  });
+  EXPECT_TRUE(isDirty);
+}
+
 TEST_F(SVGElementTests, CastRect) {
   // Parse a simple SVG with a single rect
   auto doc = parseSVG(R"(

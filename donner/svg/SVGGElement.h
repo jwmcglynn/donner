@@ -71,7 +71,12 @@ public:
    *
    * @param document Containing document.
    */
-  static SVGGElement Create(SVGDocument& document) { return CreateOn(CreateEmptyEntity(document)); }
+  static SVGGElement Create(SVGDocument& document) {
+    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    SVGGElement result = CreateOn(CreateEmptyEntity(access));
+    access.bumpMutationRevision();
+    return result;
+  }
 };
 
 }  // namespace donner::svg

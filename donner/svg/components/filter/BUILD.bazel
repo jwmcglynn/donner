@@ -19,6 +19,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/css",
         "//donner/css/parser",
+        "//donner/svg:svg_document_handle",
         "//donner/svg/core",
         "//donner/svg/properties:property_parsing",
     ],
@@ -66,15 +67,15 @@ donner_cc_library(
 
 donner_cc_test(
     name = "filter_system_tests",
+    srcs = [
+        "tests/FilterSystem_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/FilterSystem_tests.cc",
     ],
     deps = [
         ":filter_system",
@@ -87,15 +88,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "filter_component_tests",
+    srcs = [
+        "tests/FilterComponent_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/FilterComponent_tests.cc",
     ],
     deps = [
         ":components",

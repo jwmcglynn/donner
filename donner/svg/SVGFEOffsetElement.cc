@@ -12,17 +12,24 @@ SVGFEOffsetElement SVGFEOffsetElement::CreateOn(EntityHandle handle) {
 }
 
 double SVGFEOffsetElement::dx() const {
-  return handle_.get<components::FEOffsetComponent>().dx;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FEOffsetComponent>();
+  return component ? component->dx : components::FEOffsetComponent().dx;
 }
 
 double SVGFEOffsetElement::dy() const {
-  return handle_.get<components::FEOffsetComponent>().dy;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FEOffsetComponent>();
+  return component ? component->dy : components::FEOffsetComponent().dy;
 }
 
 void SVGFEOffsetElement::setOffset(double dx, double dy) {
-  auto& component = handle_.get<components::FEOffsetComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  auto& component = handle_.get_or_emplace<components::FEOffsetComponent>();
   component.dx = dx;
   component.dy = dy;
+  invalidateFilter();
+  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

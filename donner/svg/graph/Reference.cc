@@ -1,6 +1,6 @@
 #include "donner/svg/graph/Reference.h"
 
-#include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/AttachedIdLookup.h"
 
 namespace donner::svg {
 
@@ -15,6 +15,15 @@ size_t findFragmentDelimiter(std::string_view href) {
   }
 
   return href.find('#');
+}
+
+std::optional<ResolvedReference> ResolveAttachedEntityById(Registry& registry, const RcString& id) {
+  const Entity entity = components::FindAttachedEntityById(registry, id);
+  if (entity == entt::null) {
+    return std::nullopt;
+  }
+
+  return ResolvedReference{EntityHandle(registry, entity)};
 }
 
 }  // namespace
@@ -79,11 +88,7 @@ std::string_view Reference::fragment() const {
 
 std::optional<ResolvedReference> Reference::resolve(Registry& registry) const {
   if (StringUtils::StartsWith(href, std::string_view("#"))) {
-    if (auto entity = registry.ctx().get<const components::SVGDocumentContext>().getEntityById(
-            href.substr(1));
-        entity != entt::null) {
-      return ResolvedReference{EntityHandle(registry, entity)};
-    }
+    return ResolveAttachedEntityById(registry, href.substr(1));
   }
 
   return std::nullopt;
@@ -95,13 +100,7 @@ std::optional<ResolvedReference> Reference::resolveFragment(Registry& registry) 
     return std::nullopt;
   }
 
-  if (auto entity =
-          registry.ctx().get<const components::SVGDocumentContext>().getEntityById(RcString(frag));
-      entity != entt::null) {
-    return ResolvedReference{EntityHandle(registry, entity)};
-  }
-
-  return std::nullopt;
+  return ResolveAttachedEntityById(registry, RcString(frag));
 }
 
 }  // namespace donner::svg

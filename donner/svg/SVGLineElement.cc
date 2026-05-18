@@ -15,39 +15,55 @@ SVGLineElement SVGLineElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGLineElement::setX1(Lengthd value) {
+  DocumentWriteAccess access = handle_.writeAccess();
   invalidate();
   handle_.get_or_emplace<components::LineComponent>().x1 = value;
+  access.bumpMutationRevision();
 }
 
 void SVGLineElement::setY1(Lengthd value) {
+  DocumentWriteAccess access = handle_.writeAccess();
   invalidate();
   handle_.get_or_emplace<components::LineComponent>().y1 = value;
+  access.bumpMutationRevision();
 }
 
 void SVGLineElement::setX2(Lengthd value) {
+  DocumentWriteAccess access = handle_.writeAccess();
   invalidate();
   handle_.get_or_emplace<components::LineComponent>().x2 = value;
+  access.bumpMutationRevision();
 }
 
 void SVGLineElement::setY2(Lengthd value) {
+  DocumentWriteAccess access = handle_.writeAccess();
   invalidate();
   handle_.get_or_emplace<components::LineComponent>().y2 = value;
+  access.bumpMutationRevision();
 }
 
 Lengthd SVGLineElement::x1() const {
-  return handle_.get_or_emplace<components::LineComponent>().x1;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::LineComponent>();
+  return component ? component->x1 : Lengthd();
 }
 
 Lengthd SVGLineElement::y1() const {
-  return handle_.get_or_emplace<components::LineComponent>().y1;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::LineComponent>();
+  return component ? component->y1 : Lengthd();
 }
 
 Lengthd SVGLineElement::x2() const {
-  return handle_.get_or_emplace<components::LineComponent>().x2;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::LineComponent>();
+  return component ? component->x2 : Lengthd();
 }
 
 Lengthd SVGLineElement::y2() const {
-  return handle_.get_or_emplace<components::LineComponent>().y2;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::LineComponent>();
+  return component ? component->y2 : Lengthd();
 }
 
 void SVGLineElement::invalidate() const {

@@ -1,8 +1,12 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -10,6 +14,7 @@
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner {
@@ -28,6 +33,12 @@ class SVGDocument;
 // Forward declaration, #include "donner/svg/DonnerController.h"
 class DonnerController;
 
+namespace components {
+
+struct NodeExternalRefState;
+
+}  // namespace components
+
 namespace parser {
 
 // Forward declaration, for parser-only attribute projection.
@@ -37,6 +48,154 @@ class AttributeParser;
 class SVGParserImpl;
 
 }  // namespace parser
+
+/**
+ * Lifetime-aware reference to an SVG element entity.
+ *
+ * `ElementAnchor` retains the owning document storage and records the entity generation observed
+ * when the public DOM wrapper was created. Callers resolve it to an \ref EntityHandle only when
+ * they need to touch ECS storage.
+ */
+class ElementAnchor {
+public:
+  /// Construct an empty anchor.
+  ElementAnchor() = default;
+
+  /**
+   * Construct an anchor from an entity handle.
+   *
+   * @param handle Entity handle to retain.
+   */
+  explicit ElementAnchor(EntityHandle handle);
+
+  /// Copy constructor, retaining another public reference.
+  ElementAnchor(const ElementAnchor& other);
+
+  /// Move constructor, transferring the public reference.
+  ElementAnchor(ElementAnchor&& other) noexcept;
+
+  /// Destructor, releasing the public reference.
+  ~ElementAnchor() noexcept;
+
+  /// Copy assignment, retaining another public reference.
+  ElementAnchor& operator=(const ElementAnchor& other);
+
+  /// Move assignment, transferring the public reference.
+  ElementAnchor& operator=(ElementAnchor&& other) noexcept;
+
+  /// Resolve this anchor to an \ref EntityHandle.
+  EntityHandle resolve() const;
+
+  /// Resolve this anchor without checking for a scoped document access guard.
+  EntityHandle unsafeResolve() const;
+
+  /// Resolve this anchor for existing internal APIs that still accept \ref EntityHandle.
+  operator EntityHandle() const { return resolve(); }
+
+  /// Returns true if this anchor currently resolves to a live entity.
+  bool valid() const { return resolve().valid(); }
+
+  /// Returns true if this anchor is non-empty.
+  explicit operator bool() const { return documentHandle_ && entity_ != entt::null; }
+
+  /// Get the retained document registry.
+  Registry* registry() const {
+    assertScopedEntityHandleAccessAllowed();
+    return unsafeRegistry();
+  }
+
+  /// Get the retained document registry without checking for a scoped access guard.
+  Registry* unsafeRegistry() const {
+    return documentHandle_ ? &documentHandle_->registry() : nullptr;
+  }
+
+  /// Acquire read access to this anchor's document.
+  DocumentReadAccess readAccess() const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_, "SVGElement has no document state");
+    return documentHandle_->read();
+  }
+
+  /// Acquire write access to this anchor's document.
+  DocumentWriteAccess writeAccess() const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_, "SVGElement has no document state");
+    return documentHandle_->write();
+  }
+
+  /// Acquire batched write access to this anchor's document.
+  DocumentMutationBatch mutationBatch() const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_, "SVGElement has no document state");
+    return DocumentMutationBatch(*documentHandle_);
+  }
+
+  /// Assert that legacy raw ECS access is scoped when required by the document mode.
+  void assertScopedEntityHandleAccessAllowed() const;
+
+  /// Get the referenced entity id.
+  Entity entity() const { return entity_; }
+
+  /// Get the entity generation observed when this anchor was created.
+  std::uint32_t generation() const { return generation_; }
+
+  /// Test whether the resolved entity has all requested components.
+  template <typename... Type>
+  bool all_of() const {
+    return resolve().all_of<Type...>();
+  }
+
+  /// Get a component from the resolved entity.
+  template <typename Type>
+  decltype(auto) get() const {
+    return resolve().get<Type>();
+  }
+
+  /// Get a component pointer from the resolved entity, or null if it is absent.
+  template <typename Type>
+  decltype(auto) try_get() const {
+    return resolve().try_get<Type>();
+  }
+
+  /// Emplace a component on the resolved entity.
+  template <typename Type, typename... Args>
+  decltype(auto) emplace(Args&&... args) const {
+    return resolve().emplace<Type>(std::forward<Args>(args)...);
+  }
+
+  /// Get or emplace a component on the resolved entity.
+  template <typename Type, typename... Args>
+  decltype(auto) get_or_emplace(Args&&... args) const {
+    return resolve().get_or_emplace<Type>(std::forward<Args>(args)...);
+  }
+
+  /// Emplace or replace a component on the resolved entity.
+  template <typename Type, typename... Args>
+  decltype(auto) emplace_or_replace(Args&&... args) const {
+    return resolve().emplace_or_replace<Type>(std::forward<Args>(args)...);
+  }
+
+  /// Remove components from the resolved entity.
+  template <typename... Type>
+  decltype(auto) remove() const {
+    return resolve().remove<Type...>();
+  }
+
+  /// Compare two anchors by document storage and entity id.
+  friend bool operator==(const ElementAnchor& lhs, const ElementAnchor& rhs) {
+    return lhs.documentHandle_ == rhs.documentHandle_ && lhs.entity_ == rhs.entity_;
+  }
+
+  /// Compare two anchors by document storage and entity id.
+  friend bool operator!=(const ElementAnchor& lhs, const ElementAnchor& rhs) {
+    return !(lhs == rhs);
+  }
+
+private:
+  void release() noexcept;
+
+  SVGDocumentHandle documentHandle_;
+  std::shared_ptr<components::NodeExternalRefState> externalRefs_;
+  Entity entity_ = entt::null;
+  std::uint32_t generation_ = 0;
+};
 
 /**
  * Represents a single SVG element (e.g., `<rect>`, `<circle>`, `<g>`, `<text>`, etc.) within an
@@ -78,7 +237,7 @@ public:
   SVGElement(SVGElement&& other) noexcept;
 
   /// Destructor.
-  ~SVGElement() noexcept = default;
+  ~SVGElement() noexcept;
 
   /// Create another reference to the same SVGElement.
   SVGElement& operator=(const SVGElement& other);
@@ -102,9 +261,61 @@ public:
   /// \ref donner::svg::SVGUnknownElement.
   bool isKnownType() const;
 
+  /**
+   * Get the underlying \ref donner::EntityHandle.
+   *
+   * This is an unsafe advanced escape hatch. In \ref ThreadingMode::ConcurrentDom, callers must
+   * hold an explicit document access guard while reading or mutating the returned handle.
+   */
+  EntityHandle unsafeEntityHandle() const { return handle_.unsafeResolve(); }
+
   /// Get the underlying \ref donner::EntityHandle, for advanced use-cases that require direct
   /// access to the ECS.
-  EntityHandle entityHandle() const { return handle_; }
+  EntityHandle entityHandle() const {
+    handle_.assertScopedEntityHandleAccessAllowed();
+    return unsafeEntityHandle();
+  }
+
+  /**
+   * Run a callback with scoped read access to this element's document and resolved entity handle.
+   *
+   * In \ref ThreadingMode::ConcurrentDom, use this to batch repeated reads such as sibling
+   * traversal or descendant scans under one document read lock.
+   *
+   * @param callback Callable invoked as `callback(DocumentReadAccess&, EntityHandle)`.
+   */
+  template <typename Callback>
+  decltype(auto) withReadAccess(Callback&& callback) const {
+    DocumentReadAccess access = handle_.readAccess();
+    EntityHandle handle = handle_.resolve();
+    using Result = std::invoke_result_t<Callback, DocumentReadAccess&, EntityHandle>;
+    if constexpr (std::is_void_v<Result>) {
+      std::forward<Callback>(callback)(access, handle);
+    } else {
+      return std::forward<Callback>(callback)(access, handle);
+    }
+  }
+
+  /**
+   * Run a callback with scoped write access to this element's document and resolved entity handle.
+   *
+   * Nested DOM setters called by the callback reuse this write access and coalesce their mutation
+   * revision bumps. Raw ECS mutations made through the handle should call
+   * `DocumentWriteAccess::bumpMutationRevision()`.
+   *
+   * @param callback Callable invoked as `callback(DocumentWriteAccess&, EntityHandle)`.
+   */
+  template <typename Callback>
+  decltype(auto) withWriteAccess(Callback&& callback) const {
+    DocumentMutationBatch batch = handle_.mutationBatch();
+    EntityHandle handle = handle_.resolve();
+    using Result = std::invoke_result_t<Callback, DocumentWriteAccess&, EntityHandle>;
+    if constexpr (std::is_void_v<Result>) {
+      std::forward<Callback>(callback)(batch.access(), handle);
+    } else {
+      return std::forward<Callback>(callback)(batch.access(), handle);
+    }
+  }
 
   /// Get the element id, the value of the "id" attribute.
   RcString id() const;
@@ -244,6 +455,9 @@ public:
 
   /**
    * Get the next sibling of this element, if it exists.
+   *
+   * For tight traversal loops in \ref ThreadingMode::ConcurrentDom, wrap the loop in
+   * \ref withReadAccess so each step can reuse the same read access.
    *
    * @return The next sibling element, or \c std::nullopt if the element has no next sibling.
    */
@@ -399,6 +613,10 @@ public:
   /**
    * Find the first element in the tree that matches the given CSS selector.
    *
+   * This method performs its own scoped read. For repeated DOM reads in
+   * \ref ThreadingMode::ConcurrentDom, wrap the surrounding scan in \ref withReadAccess so nested
+   * reads reuse the same document access.
+   *
    * ```
    * auto element = document.svgElement().querySelector("#elementId");
    * ```
@@ -442,11 +660,25 @@ protected:
   void removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name);
 
   /**
+   * Acquire write access for creating an element in a document.
+   *
+   * @param document Containing document.
+   */
+  static DocumentWriteAccess CreateElementWriteAccess(SVGDocument& document);
+
+  /**
    * Create a new Entity within the document ECS, and return a handle to it.
    *
    * @param document Containing document.
    */
   static EntityHandle CreateEmptyEntity(SVGDocument& document);
+
+  /**
+   * Create a new Entity within a guarded document ECS, and return a handle to it.
+   *
+   * @param access Active write access for the containing document.
+   */
+  static EntityHandle CreateEmptyEntity(DocumentWriteAccess& access);
 
   /**
    * Create a new SVG element instance on a given \ref donner::Entity.
@@ -459,6 +691,9 @@ protected:
                              ElementType Type);
 
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
+  Registry& unsafeRegistry() const { return *handle_.unsafeRegistry(); }
+
+  /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
   Registry& registry() const { return *handle_.registry(); }
 
   /**
@@ -468,8 +703,8 @@ protected:
    */
   EntityHandle toHandle(Entity entity) const { return EntityHandle(registry(), entity); }
 
-  /// The underlying ECS Entity for this element, which holds all data.
-  EntityHandle handle_;
+  /// The lifetime-aware ECS entity anchor for this element.
+  ElementAnchor handle_;
 };
 
 }  // namespace donner::svg

@@ -513,7 +513,7 @@ TEST_F(FilterSystemTest, FeImageUsesLoadedSvgSubDocument) {
 
   auto imageElement = document.querySelector("#img");
   ASSERT_TRUE(imageElement.has_value());
-  imageElement->entityHandle().emplace<LoadedSVGImageComponent>(std::make_shared<Registry>());
+  imageElement->entityHandle().emplace<LoadedSVGImageComponent>(SVGDocument().handle());
 
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   StyleSystem().computeAllStyles(document.registry(), disabledSink);

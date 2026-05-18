@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "description": "Permissive budget used only to validate budget-check plumbing during smoke runs.",
+  "checks": [
+    {
+      "name": "Smoke copy/destroy ratio is finite",
+      "type": "ratio",
+      "numerator": "BM_SVGElementHandle_CopyDestroy_ConcurrentDom/100",
+      "denominator": "BM_SVGElementHandle_CopyDestroy_SingleThreaded/100",
+      "max": 100
+    },
+    {
+      "name": "Smoke copy/destroy write locks recorded",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_CopyDestroy_ConcurrentDom/100",
+      "counter": "write_locks_per_iter",
+      "max": 1000
+    },
+    {
+      "name": "Smoke snapshot capture command storage recorded",
+      "type": "counter",
+      "benchmark": "BM_RenderSnapshot_Capture/1000",
+      "counter": "snapshot_command_storage_bytes",
+      "max": 10000000
+    }
+  ]
+}

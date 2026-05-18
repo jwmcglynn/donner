@@ -12,17 +12,24 @@ SVGFEGaussianBlurElement SVGFEGaussianBlurElement::CreateOn(EntityHandle handle)
 }
 
 double SVGFEGaussianBlurElement::stdDeviationX() const {
-  return handle_.get<components::FEGaussianBlurComponent>().stdDeviationX;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FEGaussianBlurComponent>();
+  return component ? component->stdDeviationX : components::FEGaussianBlurComponent().stdDeviationX;
 }
 
 double SVGFEGaussianBlurElement::stdDeviationY() const {
-  return handle_.get<components::FEGaussianBlurComponent>().stdDeviationY;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::FEGaussianBlurComponent>();
+  return component ? component->stdDeviationY : components::FEGaussianBlurComponent().stdDeviationY;
 }
 
 void SVGFEGaussianBlurElement::setStdDeviation(double valueX, double valueY) {
-  auto& feComponent = handle_.get<components::FEGaussianBlurComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  auto& feComponent = handle_.get_or_emplace<components::FEGaussianBlurComponent>();
   feComponent.stdDeviationX = valueX;
   feComponent.stdDeviationY = valueY;
+  invalidateFilter();
+  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

@@ -39,6 +39,12 @@ TEST(SVGDocument, Create) {
   EXPECT_EQ(document.svgElement().ownerDocument(), document);
 }
 
+TEST(SVGDocument, UnsafeRegistryNamesRawEscapeHatch) {
+  SVGDocument document;
+
+  EXPECT_EQ(&document.unsafeRegistry(), &document.registry());
+}
+
 TEST(SVGDocument, CanvasSize) {
   SVGDocument document;
   EXPECT_EQ(document.canvasSize(), Vector2i(512, 512));

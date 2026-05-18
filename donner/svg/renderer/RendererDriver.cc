@@ -1,6 +1,6 @@
 #include "donner/svg/renderer/RendererDriver.h"
 
-#include <any>
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <optional>
@@ -15,6 +15,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/AttachedIdLookup.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
@@ -808,6 +809,14 @@ RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose)
     : renderer_(renderer), verbose_(verbose) {}
 
 void RendererDriver::draw(SVGDocument& document) {
+  RenderSnapshot snapshot = captureRenderSnapshot(document);
+  draw(snapshot);
+}
+
+RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
+  RenderSnapshot snapshot;
+  DocumentWriteAccess access = document.writeAccess();
+
   ParseWarningSink warnings;
   RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
 
@@ -817,6 +826,21 @@ void RendererDriver::draw(SVGDocument& document) {
     }
   }
 
+  snapshot.setSourceRevision(document.handle()->revision());
+
+  RenderSnapshotRecorder recorder(snapshot, renderer_);
+  RendererDriver snapshotDriver(recorder, verbose_);
+  snapshotDriver.drawPreparedDocument(document);
+  return snapshot;
+}
+
+void RendererDriver::draw(const RenderSnapshot& snapshot) {
+  snapshot.replay(renderer_);
+  preparedFilterGraphs_.clear();
+  preparedFilterRegions_.clear();
+}
+
+void RendererDriver::drawPreparedDocument(SVGDocument& document) {
   renderingSize_ = document.canvasSize();
   RenderViewport viewport;
   viewport.size = Vector2d(renderingSize_.x, renderingSize_.y);
@@ -2242,8 +2266,8 @@ void RendererDriver::drawSubDocumentElement(SVGDocument& subDocument, std::strin
   RendererUtils::prepareDocumentForRendering(subDocument, verbose_, disabledSink);
 
   // Find the referenced element by ID.
-  auto& docCtx = subDocument.registry().ctx().get<const components::SVGDocumentContext>();
-  const Entity targetEntity = docCtx.getEntityById(RcString(fragmentId));
+  const Entity targetEntity =
+      components::FindAttachedEntityById(subDocument.registry(), RcString(fragmentId));
   if (targetEntity == entt::null) {
     if (verbose_) {
       std::cerr << "[drawSubDocumentElement] Fragment '" << fragmentId << "' not found\n";
@@ -2387,8 +2411,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     }
 
     // Look up the referenced element by ID.
-    const auto& docCtx = registry.ctx().get<const components::SVGDocumentContext>();
-    const Entity targetEntity = docCtx.getEntityById(imageNode->fragmentId);
+    const Entity targetEntity = components::FindAttachedEntityById(registry, imageNode->fragmentId);
     if (targetEntity == entt::null) {
       if (verbose_) {
         std::cerr << "[preRenderFeImageFragments] Fragment '" << imageNode->fragmentId

@@ -134,8 +134,8 @@ public:
   /// remapAfterStructuralReplace` to preserve the hint graph across a
   /// structurally-equivalent `setDocument`.
   ///
-  /// `SVGDocument::registry_` is a `shared_ptr<Registry>` — a
-  /// `setDocument` frees the old Registry outright, making any raw
+  /// `SVGDocument` owns shared document state — a `setDocument` frees the old Registry
+  /// outright, making any raw
   /// `Registry*` the hint was holding a dangling pointer. The caller
   /// must supply the NEW registry's address (the one backing the
   /// freshly-swapped document) so we re-seat the pointer before

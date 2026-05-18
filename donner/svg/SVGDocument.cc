@@ -4,16 +4,20 @@
 
 #include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeMutationContext.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/NodeLifetimeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/TreeMutation.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -430,36 +434,96 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
 
 }  // namespace
 
-SVGDocument::SVGDocument(std::shared_ptr<Registry> registry, Settings settings,
+SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
                          EntityHandle ontoEntityHandle)
-    : registry_(std::move(registry)) {
-  auto& ctx = registry_->ctx().emplace<components::SVGDocumentContext>(
-      components::SVGDocumentContext::InternalCtorTag{}, registry_);
+    : documentState_(std::move(documentState)) {
+  Registry& registry = documentState_->registry();
+  auto* existingTreeMutations = registry.ctx().find<donner::components::TreeMutationContext>();
+  auto& treeMutations = existingTreeMutations != nullptr
+                            ? *existingTreeMutations
+                            : registry.ctx().emplace<donner::components::TreeMutationContext>();
+  treeMutations.insertBefore = components::TreeMutation::InsertBefore;
+  treeMutations.appendChild = components::TreeMutation::AppendChild;
+  treeMutations.replaceChild = components::TreeMutation::ReplaceChild;
+  treeMutations.removeChild = components::TreeMutation::RemoveChild;
+  treeMutations.remove = components::TreeMutation::Remove;
+
+  auto& ctx = registry.ctx().emplace<components::SVGDocumentContext>(
+      components::SVGDocumentContext::InternalCtorTag{}, documentState_);
   if (ontoEntityHandle) {
     ctx.rootEntity = SVGSVGElement::CreateOn(ontoEntityHandle).entityHandle().entity();
   } else {
     ctx.rootEntity = SVGSVGElement::Create(*this).entityHandle().entity();
   }
+  registry.get_or_emplace<components::NodeLifetimeComponent>(ctx.rootEntity).markAttached();
 
   components::ResourceManagerContext& resourceCtx =
-      registry_->ctx().emplace<components::ResourceManagerContext>(*registry_);
+      registry.ctx().emplace<components::ResourceManagerContext>(registry);
   resourceCtx.setResourceLoader(std::move(settings.resourceLoader));
   resourceCtx.setProcessingMode(settings.processingMode);
   if (settings.svgParseCallback) {
     resourceCtx.setSvgParseCallback(std::move(settings.svgParseCallback));
   }
 
-  registry_->ctx().emplace<xml::components::XMLNamespaceContext>(*registry_);
+  registry.ctx().emplace<xml::components::XMLNamespaceContext>(registry);
 }
 
 SVGDocument::SVGDocument() : SVGDocument(Settings()) {}
 
 SVGDocument::SVGDocument(Settings settings)
-    : SVGDocument(std::make_shared<Registry>(), std::move(settings), EntityHandle()) {}
+    : SVGDocument(std::make_shared<DocumentState>(), std::move(settings), EntityHandle()) {}
+
+SVGDocumentMutation::SVGDocumentMutation(SVGDocument document, DocumentWriteAccess& access)
+    : document_(std::move(document)), access_(&access) {}
+
+DocumentWriteAccess& SVGDocumentMutation::access() const {
+  return *access_;
+}
+
+void SVGDocumentMutation::setCanvasSize(int width, int height) {
+  document_.setCanvasSize(width, height);
+}
+
+void SVGDocumentMutation::useAutomaticCanvasSize() {
+  document_.useAutomaticCanvasSize();
+}
+
+void SVGDocumentMutation::setAttribute(SVGElement element, const xml::XMLQualifiedNameRef& name,
+                                       std::string_view value) {
+  element.setAttribute(name, value);
+}
+
+void SVGDocumentMutation::removeAttribute(SVGElement element,
+                                          const xml::XMLQualifiedNameRef& name) {
+  element.removeAttribute(name);
+}
+
+void SVGDocumentMutation::insertBefore(SVGElement parent, const SVGElement& newNode,
+                                       std::optional<SVGElement> referenceNode) {
+  parent.insertBefore(newNode, std::move(referenceNode));
+}
+
+void SVGDocumentMutation::appendChild(SVGElement parent, const SVGElement& child) {
+  parent.appendChild(child);
+}
+
+void SVGDocumentMutation::replaceChild(SVGElement parent, const SVGElement& newChild,
+                                       const SVGElement& oldChild) {
+  parent.replaceChild(newChild, oldChild);
+}
+
+void SVGDocumentMutation::removeChild(SVGElement parent, const SVGElement& child) {
+  parent.removeChild(child);
+}
+
+void SVGDocumentMutation::remove(SVGElement element) {
+  element.remove();
+}
 
 EntityHandle SVGDocument::rootEntityHandle() const {
-  return EntityHandle(*registry_,
-                      registry_->ctx().get<components::SVGDocumentContext>().rootEntity);
+  DocumentReadAccess access = documentState_->read();
+  Registry& registry = access.registry();
+  return EntityHandle(registry, registry.ctx().get<components::SVGDocumentContext>().rootEntity);
 }
 
 SVGSVGElement SVGDocument::svgElement() const {
@@ -468,31 +532,38 @@ SVGSVGElement SVGDocument::svgElement() const {
 
 void SVGDocument::setCanvasSize(int width, int height) {
   assert(width > 0 && height > 0);
-  components::RenderingContext(*registry_).invalidateRenderTree();
-  registry_->ctx().get<components::SVGDocumentContext>().canvasSize = Vector2i(width, height);
+  DocumentWriteAccess access = documentState_->write();
+  Registry& registry = access.registry();
+  components::RenderingContext(registry).invalidateRenderTree();
+  registry.ctx().get<components::SVGDocumentContext>().canvasSize = Vector2i(width, height);
+  access.bumpMutationRevision();
 }
 
 Transform2d SVGDocument::canvasFromDocumentTransform() const {
-  return components::LayoutSystem().getCanvasFromDocumentTransform(*registry_);
+  DocumentReadAccess access = documentState_->read();
+  return components::LayoutSystem().getCanvasFromDocumentTransform(access.registry());
 }
 
 void SVGDocument::useAutomaticCanvasSize() {
-  components::RenderingContext(*registry_).invalidateRenderTree();
-  registry_->ctx().get<components::SVGDocumentContext>().canvasSize = std::nullopt;
+  DocumentWriteAccess access = documentState_->write();
+  Registry& registry = access.registry();
+  components::RenderingContext(registry).invalidateRenderTree();
+  registry.ctx().get<components::SVGDocumentContext>().canvasSize = std::nullopt;
+  access.bumpMutationRevision();
 }
 
 Vector2i SVGDocument::canvasSize() const {
+  DocumentReadAccess access = documentState_->read();
   return components::LayoutSystem().calculateCanvasScaledDocumentSize(
-      *registry_, components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+      access.registry(), components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
 }
 
 bool SVGDocument::operator==(const SVGDocument& other) const {
-  return &registry_->ctx().get<const components::SVGDocumentContext>() ==
-         &other.registry_->ctx().get<const components::SVGDocumentContext>();
+  return documentState_ == other.documentState_;
 }
 
 bool SVGDocument::hasSourceStore() const {
-  if (!registry_->ctx().contains<xml::components::XMLDocumentContext>()) {
+  if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
     return false;
   }
 
@@ -500,7 +571,7 @@ bool SVGDocument::hasSourceStore() const {
 }
 
 std::string_view SVGDocument::source() const {
-  if (!registry_->ctx().contains<xml::components::XMLDocumentContext>()) {
+  if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
     return std::string_view();
   }
 
@@ -508,7 +579,7 @@ std::string_view SVGDocument::source() const {
 }
 
 std::uint64_t SVGDocument::sourceVersion() const {
-  if (!registry_->ctx().contains<xml::components::XMLDocumentContext>()) {
+  if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
     return 0;
   }
 
@@ -516,7 +587,7 @@ std::uint64_t SVGDocument::sourceVersion() const {
 }
 
 xml::ApplySourceEditResult SVGDocument::applySourceEdit(const xml::XMLEditIntent& intent) {
-  if (!registry_->ctx().contains<xml::components::XMLDocumentContext>()) {
+  if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
     xml::ApplySourceEditResult result;
     result.diagnostic = ParseDiagnostic::Error(
         "Cannot apply source edit to SVGDocument without XML source text", intent.range);
@@ -659,21 +730,14 @@ std::optional<SVGElement> SVGDocument::querySelector(std::string_view str) {
   }
 
   const css::Selector& selector = selectorResult.result();
-
-  ElementTraversalGenerator<SVGElement> elements =
-      allChildrenRecursiveGenerator<SVGElement>(svgElement());
-  while (elements.next()) {
-    SVGElement childElement = elements.getValue();
-    if (selector.matches(childElement).matched) {
-      return childElement;
-    }
-  }
-
-  return std::nullopt;
+  DocumentReadAccess access = documentState_->read();
+  Registry& registry = access.registry();
+  EntityHandle root(registry, registry.ctx().get<components::SVGDocumentContext>().rootEntity);
+  return details::QuerySelectorSearch(selector, root);
 }
 
 xml::XMLDocument SVGDocument::xmlDocument() const {
-  return xml::XMLDocument::CreateFromRegistry(registry_);
+  return xml::XMLDocument::CreateFromRegistry(documentState_->sharedRegistry());
 }
 
 std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutation& mutation) {

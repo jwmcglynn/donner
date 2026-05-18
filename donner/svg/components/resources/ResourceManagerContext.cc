@@ -3,7 +3,9 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Utils.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/resources/FontLoader.h"
@@ -11,6 +13,45 @@
 #include "donner/svg/resources/NullResourceLoader.h"
 
 namespace donner::svg::components {
+namespace {
+
+void AssertNoDocumentWriteAccessForUserCallback(Registry& registry, const char* callbackName) {
+  const auto* context = registry.ctx().find<SVGDocumentContext>();
+  if (context == nullptr) {
+    return;
+  }
+
+  UTILS_RELEASE_ASSERT_MSG(!context->currentThreadHasWriteAccess(), callbackName);
+}
+
+class WriteAccessGuardedResourceLoader : public ResourceLoaderInterface {
+public:
+  WriteAccessGuardedResourceLoader(Registry& registry, ResourceLoaderInterface& loader)
+      : registry_(registry), loader_(loader) {}
+
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    AssertNoDocumentWriteAccessForUserCallback(
+        registry_, "ResourceLoader must not run while document write access is held");
+    return loader_.fetchExternalResource(url);
+  }
+
+private:
+  Registry& registry_;
+  ResourceLoaderInterface& loader_;
+};
+
+SubDocumentCache::ParseCallback GuardSvgParseCallback(
+    Registry& registry, const SubDocumentCache::ParseCallback& callback) {
+  return [&registry, &callback](const std::vector<uint8_t>& svgContent,
+                                ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
+    AssertNoDocumentWriteAccessForUserCallback(
+        registry, "SVG parse callback must not run while document write access is held");
+    return callback(svgContent, warningSink);
+  };
+}
+
+}  // namespace
 
 ResourceManagerContext::ResourceManagerContext(Registry& registry) : registry_(registry) {}
 
@@ -24,8 +65,10 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   auto imageView = registry_.view<ImageComponent>();
 
   NullResourceLoader nullLoader;
-  ResourceLoaderInterface& loader =
-      loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader);
+  WriteAccessGuardedResourceLoader guardedLoader(
+      registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
+  ResourceLoaderInterface& loader = loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
+                                            : static_cast<ResourceLoaderInterface&>(nullLoader);
 
   // Only warn about a missing loader if we actually have something that
   // would need one. `data:` URLs are decoded inline in `UrlLoader::fromUri`
@@ -101,7 +144,10 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
       }
       auto& cache = registry_.ctx().get<SubDocumentCache>();
 
-      auto subDoc = cache.getOrParse(image.href, svgContent.data, svgParseCallback_, warningSink);
+      SubDocumentCache::ParseCallback guardedParseCallback =
+          GuardSvgParseCallback(registry_, svgParseCallback_);
+      auto subDoc =
+          cache.getOrParse(image.href, svgContent.data, guardedParseCallback, warningSink);
       if (subDoc) {
         registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*subDoc));
       } else {
@@ -184,7 +230,8 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   }
 
   // Fetch the file content.
-  auto fetchResult = loader_->fetchExternalResource(std::string_view(url));
+  WriteAccessGuardedResourceLoader guardedLoader(registry_, *loader_);
+  auto fetchResult = guardedLoader.fetchExternalResource(std::string_view(url));
   if (std::holds_alternative<ResourceLoaderError>(fetchResult)) {
     ParseDiagnostic err;
     const auto loaderError = std::get<ResourceLoaderError>(fetchResult);
@@ -195,7 +242,9 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   }
 
   auto& data = std::get<std::vector<uint8_t>>(fetchResult);
-  return cache.getOrParse(url, data, svgParseCallback_, warningSink);
+  SubDocumentCache::ParseCallback guardedParseCallback =
+      GuardSvgParseCallback(registry_, svgParseCallback_);
+  return cache.getOrParse(url, data, guardedParseCallback, warningSink);
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
@@ -224,8 +273,10 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
   }
 
   NullResourceLoader nullLoader;
-  ResourceLoaderInterface& loader =
-      loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader);
+  WriteAccessGuardedResourceLoader guardedLoader(
+      registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
+  ResourceLoaderInterface& loader = loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
+                                            : static_cast<ResourceLoaderInterface&>(nullLoader);
   ImageLoader imageLoader(loader);
 
   auto imageResult = imageLoader.fromUri(image->href);

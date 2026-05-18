@@ -69,6 +69,28 @@ def llvm21_macos_workaround_linkopts():
         "//conditions:default": [],
     })
 
+def llvm21_macos_runtime_rpath_linkopts():
+    """
+    Returns rpaths needed by LLVM 21 sanitizer runtime dylibs on macOS.
+    """
+    runtime_dir = "toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin"
+    return select({
+        "//build_defs:llvm_latest_macos": [
+            # Add rpaths for execroot (from bazel-bin/<package> to external/).
+            # The needed depth varies with package path depth.
+            "-Wl,-rpath,@loader_path/../../../../../../external/" + runtime_dir,
+            "-Wl,-rpath,@loader_path/../../../../../../../external/" + runtime_dir,
+            "-Wl,-rpath,@loader_path/../../../../../../../../external/" + runtime_dir,
+            "-Wl,-rpath,@loader_path/../../../../../../../../../external/" + runtime_dir,
+            # Add rpaths for runfiles directory (without the external/ prefix).
+            "-Wl,-rpath,@loader_path/../../../../" + runtime_dir,
+            "-Wl,-rpath,@loader_path/../../../../../" + runtime_dir,
+            "-Wl,-rpath,@loader_path/../../../../../../" + runtime_dir,
+            "-Wl,-rpath,@loader_path/../../../../../../../" + runtime_dir,
+        ],
+        "//conditions:default": [],
+    })
+
 def libc_compat_deps():
     """
     Returns extra deps needed when linking against the hermetic LLVM toolchain
@@ -333,10 +355,15 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
       tags: Tags.
       **kwargs: Additional arguments, matching the implementation of cc_binary.
     """
+    donner_linkopts = (
+        linkopts +
+        llvm21_macos_workaround_linkopts() +
+        llvm21_macos_runtime_rpath_linkopts()
+    )
     cc_binary(
         name = name,
         srcs = srcs,
-        linkopts = linkopts + llvm21_macos_workaround_linkopts(),
+        linkopts = donner_linkopts,
         deps = deps + libc_compat_deps(),
         tags = tags,
         **kwargs
@@ -404,10 +431,15 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variant
         without per-test `--config=` flags. See doc 0031 M2.3.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
+    donner_linkopts = (
+        linkopts +
+        llvm21_macos_workaround_linkopts() +
+        llvm21_macos_runtime_rpath_linkopts()
+    )
     cc_test(
         name = name,
         srcs = srcs,
-        linkopts = linkopts + llvm21_macos_workaround_linkopts(),
+        linkopts = donner_linkopts,
         deps = deps + libc_compat_deps(),
         tags = tags,
         **kwargs
@@ -560,21 +592,11 @@ def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
         corpus_name = corpus
 
     # Build linkopts for fuzzer, including LLVM 21 workaround and runtime paths
-    fuzzer_linkopts = ["-fsanitize=fuzzer"] + llvm21_macos_workaround_linkopts() + select({
-        "@platforms//os:macos": [
-            # Add rpaths for execroot (from bazel-out/.../bin/<package> to external/).
-            # Fuzzers live at different package depths, so include the depths used
-            # today rather than baking in //donner/editor/tests only.
-            "-Wl,-rpath,@loader_path/../../../../../external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
-            "-Wl,-rpath,@loader_path/../../../../../../external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
-            "-Wl,-rpath,@loader_path/../../../../../../../external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
-            # Add rpaths for runfiles directory (without 'external/' prefix).
-            "-Wl,-rpath,@loader_path/../../../toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
-            "-Wl,-rpath,@loader_path/../../../../toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
-            "-Wl,-rpath,@loader_path/../../../../../toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
-        ],
-        "//conditions:default": [],
-    })
+    fuzzer_linkopts = (
+        ["-fsanitize=fuzzer"] +
+        llvm21_macos_workaround_linkopts() +
+        llvm21_macos_runtime_rpath_linkopts()
+    )
 
     cc_binary(
         name = name + "_bin",
