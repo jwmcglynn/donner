@@ -809,8 +809,24 @@ RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose)
     : renderer_(renderer), verbose_(verbose) {}
 
 void RendererDriver::draw(SVGDocument& document) {
-  RenderSnapshot snapshot = captureRenderSnapshot(document);
-  draw(snapshot);
+  if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
+    RenderSnapshot snapshot = captureRenderSnapshot(document);
+    draw(snapshot);
+    return;
+  }
+
+  DocumentWriteAccess access = document.writeAccess();
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+
+  if (warnings.hasWarnings()) {
+    for (const ParseDiagnostic& warning : warnings.warnings()) {
+      std::cerr << warning << '\n';
+    }
+  }
+
+  drawPreparedDocument(document);
 }
 
 RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {

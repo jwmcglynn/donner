@@ -16,7 +16,6 @@
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGSVGElement.h"
-#include "donner/svg/components/NodeLifetimeCollector.h"
 
 namespace {
 
@@ -63,8 +62,10 @@ void BM_DetachedSubtreeCollection_RetainedByDescendant(benchmark::State& state) 
     state.ResumeTiming();
 
     scene.retainedDescendant.reset();
-    benchmark::DoNotOptimize(
-        donner::svg::components::NodeLifetimeCollector::Diagnostics(scene.document.registry()));
+
+    state.PauseTiming();
+    benchmark::DoNotOptimize(scene.document.querySelector("#group"));
+    state.ResumeTiming();
   }
 
   state.SetItemsProcessed(state.iterations() * descendantCount);

@@ -49,6 +49,23 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
   };
 }
 
+/// Restores a document's threading mode to SingleThreaded when a worker iteration exits.
+///
+/// The async worker flips the (UI-owned, normally SingleThreaded) document into ConcurrentDom for
+/// the duration of a render so it can hold an explicit \ref donner::svg::DocumentWriteAccess guard.
+/// This restores the prior mode on every exit path. Declare it *before* the write-access optional
+/// so the write access is released first.
+struct ScopedThreadingModeRestore {
+  svg::SVGDocument* document = nullptr;
+  bool restore = false;
+
+  ~ScopedThreadingModeRestore() {
+    if (restore && document != nullptr) {
+      document->setThreadingMode(svg::ThreadingMode::SingleThreaded);
+    }
+  }
+};
+
 }  // namespace
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
@@ -260,6 +277,32 @@ void AsyncRenderer::workerLoop() {
     ZoneScopedN("AsyncRenderer::workerIteration");
     const auto workerStart = std::chrono::steady_clock::now();
     std::optional<RenderResult::CompositedPreview> compositedPreview;
+
+    // §concurrent-dom: serialize this worker render against UI-thread DOM reads. The lease shares
+    // the live registry (it does not snapshot), and the worker cannot touch the document in
+    // SingleThreaded mode (owner-thread assert), so flip the normally-UI-owned document into
+    // ConcurrentDom and hold a write-access guard across the document-reading render work. The
+    // access is released via `releaseDocumentAccess()` *before* every `mutex_` section below to
+    // avoid a lock-order inversion against UI threads that read the DOM while holding `mutex_`.
+    // `restoreThreadingMode` is declared before `documentAccess` so the write access is released
+    // first, and restores the prior mode on any remaining exit path.
+    const bool restoreSingleThreadedMode =
+        requestDocument.threadingMode() == svg::ThreadingMode::SingleThreaded;
+    if (restoreSingleThreadedMode) {
+      requestDocument.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+    }
+    const ScopedThreadingModeRestore restoreThreadingMode{&requestDocument,
+                                                          restoreSingleThreadedMode};
+    std::optional<svg::DocumentWriteAccess> documentAccess;
+    if (requestDocument.threadingMode() == svg::ThreadingMode::ConcurrentDom) {
+      documentAccess.emplace(requestDocument.writeAccess());
+    }
+    const auto releaseDocumentAccess = [&]() {
+      documentAccess.reset();
+      if (restoreSingleThreadedMode) {
+        requestDocument.setThreadingMode(svg::ThreadingMode::SingleThreaded);
+      }
+    };
 
     // Compositor lifecycle is split into two independent decisions:
     //
@@ -559,6 +602,8 @@ void AsyncRenderer::workerLoop() {
     // pass. Do not publish a partial result; either loop into the superseding
     // request or park after a cancel-without-replacement.
     if (!renderCompleted) {
+      // Release document access before taking `mutex_` to avoid a lock-order inversion.
+      releaseDocumentAccess();
       cancelledRenderCount_.fetch_add(1, std::memory_order_release);
       std::function<void()> wake;
       {
@@ -611,6 +656,10 @@ void AsyncRenderer::workerLoop() {
           requestDocument, bitmap, std::move(fullCanvasTexture), request.version, previewEntity,
           interactionKind, request.dragPreview);
     }
+
+    // All document reads for this iteration are done; release write access before taking `mutex_`
+    // to avoid a lock-order inversion against UI-thread DOM reads.
+    releaseDocumentAccess();
 
     std::function<void()> wake;
     {
