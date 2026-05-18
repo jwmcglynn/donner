@@ -64,7 +64,7 @@ private:
                       float treePaneHeight, float inspectorPaneY, float inspectorPaneHeight,
                       float layerPanelPaneY, float layerPanelHeight, ImGuiWindowFlags paneFlags);
   void renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight);
-  void highlightSelectionSourceIfNeeded();
+  [[nodiscard]] bool highlightSelectionSourceIfNeeded();
 
   gui::EditorWindow& window_;
   EditorShellOptions options_;

@@ -59,6 +59,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "source_selection",
+    srcs = ["SourceSelection.cc"],
+    hdrs = ["SourceSelection.h"],
+    deps = [
+        ":text_editor",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "render_pane_gesture",
     srcs = ["RenderPaneGesture.cc"],
     hdrs = ["RenderPaneGesture.h"],
@@ -151,7 +163,7 @@ donner_cc_library(
         ":tracy_wrapper",
         "//donner/base",
         "//donner/svg",
-        "//donner/svg/compositor:compositor",
+        "//donner/svg/compositor",
         "//donner/svg/renderer",
     ],
 )
@@ -258,8 +270,8 @@ donner_cc_library(
     deps = [
         ":imgui_headers",
         ":render_pane_gesture",
-        ":viewport_state",
         ":tool",
+        ":viewport_state",
         "//donner/base",
         "@imgui",
     ],
@@ -357,20 +369,21 @@ donner_cc_library(
     srcs = ["EditorShell.cc"],
     hdrs = ["EditorShell.h"],
     deps = [
-        ":drag_coalesce",
         ":dialog_presenter",
         ":document_sync_controller",
+        ":drag_coalesce",
         ":editor_app",
         ":editor_input_bridge",
         ":gl_texture_cache",
-        ":keyboard_shortcut_policy",
         ":imgui_headers",
+        ":keyboard_shortcut_policy",
         ":layer_inspector_panel",
         ":menu_bar_presenter",
         ":render_coordinator",
         ":render_pane_presenter",
         ":select_tool",
         ":sidebar_presenter",
+        ":source_selection",
         ":text_editor",
         ":tracy_wrapper",
         ":viewport_interaction_controller",
@@ -539,12 +552,12 @@ donner_cc_binary(
     }),
     deps = [
         ":editor_icon",
-        ":notice",
         ":editor_shell",
+        ":notice",
         ":tracy_wrapper",
-        "//donner/editor/gui:editor_window",
         "//donner/base",
         "//donner/base:failure_signal_handler",
+        "//donner/editor/gui:editor_window",
     ],
 )
 

@@ -176,6 +176,11 @@ constexpr bool ForEachShape(const F& f) {
   return ForEachShapeImpl<TypeList>(f, std::make_index_sequence<TypeList::size>{});
 }
 
+bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
+  const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
+  return style.properties && style.properties->display.getRequired() == Display::None;
+}
+
 }  // namespace
 
 ComputedPathComponent* ShapeSystem::createComputedPathIfShape(EntityHandle handle,
@@ -256,13 +261,11 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
                                                             const Transform2d& worldFromTarget) {
   std::optional<Box2d> overallBounds;
 
-  if (const ComputedStyleComponent* style = handle.try_get<ComputedStyleComponent>()) {
-    if (style->properties->display.getRequired() == Display::None) {
-      return std::nullopt;
-    }
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  if (IsDisplayNone(handle, disabledSink)) {
+    return std::nullopt;
   }
 
-  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   if (ComputedPathComponent* computedPath =
           createComputedPathIfShape(handle, FontMetrics(), disabledSink)) {
     overallBounds = computedPath->transformedBounds(
@@ -271,14 +274,11 @@ std::optional<Box2d> ShapeSystem::getTransformedShapeBounds(EntityHandle handle,
 
   // Iterate over all children and accumulate their bounds.
   donner::components::ForAllChildrenRecursive(
-      handle, [this, &overallBounds, &worldFromTarget](EntityHandle child) {
-        if (const ComputedStyleComponent* style = child.try_get<ComputedStyleComponent>()) {
-          if (style->properties->display.getRequired() == Display::None) {
-            return;
-          }
+      handle, [this, &disabledSink, &overallBounds, &worldFromTarget](EntityHandle child) {
+        if (IsDisplayNone(child, disabledSink)) {
+          return;
         }
 
-        ParseWarningSink disabledSink = ParseWarningSink::Disabled();
         if (ComputedPathComponent* computedPath =
                 createComputedPathIfShape(child, FontMetrics(), disabledSink)) {
           const Box2d bounds = computedPath->transformedBounds(

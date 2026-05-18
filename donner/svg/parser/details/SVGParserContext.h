@@ -102,7 +102,7 @@ public:
    */
   std::optional<SourceRange> getAttributeLocation(
       const xml::XMLNode& node, const xml::XMLQualifiedNameRef& attributeName) const {
-    return node.getAttributeLocation(input_, attributeName);
+    return addLineInfo(node.getAttributeLocation(input_, attributeName));
   }
 
   /**
@@ -117,7 +117,7 @@ public:
     // Convert the SVGElement into an XMLNode.
     if (auto maybeNode = xml::XMLNode::TryCast(EntityHandle(element.entityHandle()))) {
       xml::XMLNode node = maybeNode.value();
-      return node.getAttributeLocation(input_, attributeName);
+      return addLineInfo(node.getAttributeLocation(input_, attributeName));
     }
     return std::nullopt;
   }
@@ -156,6 +156,29 @@ public:
   size_t lineOffset(size_t line) const { return lineOffsets_.lineOffset(line); }
 
 private:
+  SourceRange addLineInfo(SourceRange range) const {
+    return SourceRange{
+        addLineInfo(range.start),
+        addLineInfo(range.end),
+    };
+  }
+
+  std::optional<SourceRange> addLineInfo(std::optional<SourceRange> range) const {
+    if (!range.has_value()) {
+      return std::nullopt;
+    }
+
+    return addLineInfo(*range);
+  }
+
+  FileOffset addLineInfo(FileOffset offset) const {
+    if (!offset.offset.has_value()) {
+      return offset;
+    }
+
+    return lineOffsets_.fileOffset(*offset.offset);
+  }
+
   /// Original string containing the XML text, used for remapping errors.
   std::string_view input_;
 

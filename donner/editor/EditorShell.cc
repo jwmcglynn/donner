@@ -11,10 +11,9 @@
 #include <string_view>
 
 #include "GLFW/glfw3.h"
-#include "donner/base/FileOffset.h"
-#include "donner/base/xml/XMLNode.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/gui/EditorWindow.h"
@@ -56,27 +55,6 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
                            static_cast<double>(intrinsic.y));
   }
   return Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
-}
-
-Coordinates FileOffsetToEditorCoordinates(const FileOffset& offset) {
-  if (!offset.lineInfo.has_value()) {
-    return Coordinates(0, 0);
-  }
-  return Coordinates(static_cast<int>(offset.lineInfo->line) - 1,
-                     static_cast<int>(offset.lineInfo->offsetOnLine));
-}
-
-void HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& element) {
-  auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
-  if (!xmlNode.has_value()) {
-    return;
-  }
-  auto range = xmlNode->getNodeLocation();
-  if (!range.has_value()) {
-    return;
-  }
-  textEditor.selectAndFocus(FileOffsetToEditorCoordinates(range->start),
-                            FileOffsetToEditorCoordinates(range->end));
 }
 
 }  // namespace
@@ -482,7 +460,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                           options_.experimentalMode, textures_);
   }
 
-  highlightSelectionSourceIfNeeded();
   ImGui::End();
 }
 
@@ -582,14 +559,17 @@ void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, 
   ImGui::PopStyleVar(2);
 }
 
-void EditorShell::highlightSelectionSourceIfNeeded() {
+bool EditorShell::highlightSelectionSourceIfNeeded() {
   const auto& selectionNow = app_.selectedElement();
   if (selectionNow != lastHighlightedSelection_) {
     if (selectionNow.has_value()) {
-      HighlightElementSource(textEditor_, *selectionNow);
+      std::ignore = HighlightElementSource(textEditor_, *selectionNow);
     }
     lastHighlightedSelection_ = selectionNow;
+    return true;
   }
+
+  return false;
 }
 
 void EditorShell::runFrame() {
@@ -733,10 +713,14 @@ void EditorShell::runFrame() {
 
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
+  std::ignore = highlightSelectionSourceIfNeeded();
   renderSourcePane(paneOriginY, paneHeight, codeFont_);
   renderRenderPane(renderPaneOrigin, renderPaneSize, kPaneFlags);
   renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, treePaneHeight, inspectorPaneY,
                  inspectorPaneHeight, layerPanelPaneY, layerPanelHeight, kPaneFlags);
+  if (highlightSelectionSourceIfNeeded()) {
+    window_.wakeEventLoop();
+  }
   renderRightPaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight);
 }
 

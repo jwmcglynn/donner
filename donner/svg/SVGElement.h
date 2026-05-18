@@ -29,6 +29,9 @@ class DonnerController;
 
 namespace parser {
 
+// Forward declaration, for parser-only attribute projection.
+class AttributeParser;
+
 // Forward declaration, for friend internal data access.
 class SVGParserImpl;
 
@@ -51,6 +54,7 @@ class SVGParserImpl;
  * @see \ref SVGDocument
  */
 class SVGElement {
+  friend class parser::AttributeParser;
   friend class DonnerController;
   friend class SVGDocument;
 

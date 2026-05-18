@@ -86,6 +86,20 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "source_selection_tests",
+    srcs = ["SourceSelection_tests.cc"],
+    data = ["//:donner_splash.svg"],
+    deps = [
+        "//donner/base/xml",
+        "//donner/editor:editor_app",
+        "//donner/editor:source_selection",
+        "//donner/editor:text_editor",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "render_pane_viewport_tests",
     srcs = ["RenderPaneViewport_tests.cc"],
     deps = [

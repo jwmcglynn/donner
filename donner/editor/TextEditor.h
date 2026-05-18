@@ -266,6 +266,15 @@ public:
   std::string getText() const;
 
   /**
+   * Resolve a full-buffer byte offset to editor coordinates.
+   *
+   * @param offset Byte offset in \ref getText().
+   */
+  Coordinates getCoordinatesAtByteOffset(std::size_t offset) const {
+    return core_.getCoordinatesAtByteOffset(offset);
+  }
+
+  /**
    * Get currently selected text.
    * @return String containing selected text, or empty if no selection
    */
