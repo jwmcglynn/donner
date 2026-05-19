@@ -1080,13 +1080,17 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
   // Advance the view past an entity's subtree (used when a filter
   // consumes its children — their individual bounds are absorbed into
   // the filter region).
-  const auto skipSubtree = [&view](Entity lastRenderedEntity) {
+  const auto skipSubtree = [&view](Entity lastRenderedEntity, Entity rangeLastEntity) {
+    bool skippedRangeLast = false;
     while (!view.done() && view.currentEntity() != lastRenderedEntity) {
+      skippedRangeLast = skippedRangeLast || view.currentEntity() == rangeLastEntity;
       view.advance();
     }
     if (!view.done()) {
+      skippedRangeLast = skippedRangeLast || view.currentEntity() == rangeLastEntity;
       view.advance();  // skip past lastRenderedEntity itself
     }
+    return skippedRangeLast;
   };
 
   bool reachedLast = false;
@@ -1141,7 +1145,8 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
       if (instance.subtreeInfo.has_value()) {
         // The filter consumed its subtree; skip the descendant entities.
         if (currentEntity != instance.subtreeInfo->lastRenderedEntity) {
-          skipSubtree(instance.subtreeInfo->lastRenderedEntity);
+          reachedLast =
+              reachedLast || skipSubtree(instance.subtreeInfo->lastRenderedEntity, lastEntity);
         }
       }
       continue;

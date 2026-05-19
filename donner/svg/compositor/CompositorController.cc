@@ -165,23 +165,16 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
   }
 
   // Snap to integer pixels and pad for AA. The padding matters: filter
-  // primitives (gaussian blur in particular) produce a soft falloff
-  // outside the entity's geometric bbox. `computeEntityRangeBounds`
-  // returns the filter region (per spec, a hard clip), but the AA at
-  // its edge still has sub-pixel contributions that need a 1-2 px halo
-  // on either side to stay pixel-identical with the canvas-size
-  // rasterize. 2 px is the smallest value that survived
-  // `TightBoundedSegmentsSurviveExplicitDragTargetPromote` (a tightly
-  // packed scene with two large gaussian blurs); 1 px left a ~0.001
-  // alpha tail clipped at the bitmap edge, producing maxDiff=1 in
-  // ~174 boundary pixels. Threshold against canvas area: if the tight
-  // rect covers most of the canvas, the intrinsic-size win is
-  // negligible and the bitmap-management overhead isn't worth it.
-  constexpr double kTightBoundsCoverageThreshold = 0.75;
+  // primitives (gaussian blur in particular) produce a soft falloff outside the entity's
+  // geometric bbox. `computeEntityRangeBounds` returns the filter region (per spec, a hard clip),
+  // but the AA at its edge still has sub-pixel contributions that need a 1-2 px halo on either
+  // side to stay pixel-identical with the canvas-size rasterize. 2 px is the smallest value that
+  // survived `TightBoundedSegmentsSurviveExplicitDragTargetPromote` (a tightly packed scene with
+  // two large gaussian blurs); 1 px left a ~0.001 alpha tail clipped at the bitmap edge, producing
+  // maxDiff=1 in ~174 boundary pixels.
   constexpr double kEdgePaddingPx = 2.0;
   Box2d tightBoundsSnapped;
-  const double canvasArea = viewport.size.x * viewport.size.y;
-  if (tightBoundsCanvas.has_value() && canvasArea > 0.0) {
+  if (tightBoundsCanvas.has_value()) {
     const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
     Box2d padded(tightBoundsCanvas->topLeft - padding, tightBoundsCanvas->bottomRight + padding);
     const Vector2d snapTL(std::floor(std::max(0.0, padded.topLeft.x)),
@@ -190,10 +183,8 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
                           std::ceil(std::min(viewport.size.y, padded.bottomRight.y)));
     if (snapBR.x > snapTL.x && snapBR.y > snapTL.y) {
       tightBoundsSnapped = Box2d(snapTL, snapBR);
-      const double tightArea = tightBoundsSnapped.width() * tightBoundsSnapped.height();
-      if (tightArea < canvasArea * kTightBoundsCoverageThreshold) {
-        result.tight = true;
-      }
+      result.tight = tightBoundsSnapped.width() < viewport.size.x ||
+                     tightBoundsSnapped.height() < viewport.size.y;
     }
   }
 
@@ -557,6 +548,19 @@ void BuildThumbnail(const RendererBitmap& bitmap, Vector2i* outDims,
   }
 }
 
+bool IsTransparentPlaceholderBitmap(const RendererBitmap& bitmap) {
+  return bitmap.dimensions == Vector2i(1, 1) && bitmap.pixels.size() == 4u &&
+         std::all_of(bitmap.pixels.begin(), bitmap.pixels.end(),
+                     [](uint8_t channel) { return channel == 0u; });
+}
+
+// Empty paint-order gaps are cached internally as transparent 1x1 bitmaps so
+// `RendererBitmap::empty()` can keep meaning "not rasterized yet". Public tile
+// snapshots and composition should ignore those bookkeeping placeholders.
+bool HasPublicTileBitmap(const RendererBitmap& bitmap) {
+  return !bitmap.empty() && !IsTransparentPlaceholderBitmap(bitmap);
+}
+
 }  // namespace
 
 std::vector<CompositorController::CompositeTileSnapshot>
@@ -592,7 +596,7 @@ CompositorController::snapshotCompositeTiles() const {
   // bg/fg below as auxiliary views.
   const size_t layerCount = layers_.size();
   for (size_t i = 0; i <= layerCount; ++i) {
-    if (i < staticSegments_.size()) {
+    if (i < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[i])) {
       char label[32];
       std::snprintf(label, sizeof(label), "segment %zu", i);
       char id[32];
@@ -1868,7 +1872,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     // layer i (exclusive on both ends). Edge cases: segment 0 starts
     // at the document's first paint-ordered entity; segment N ends at
     // the last. If the computed range is empty (two layers back-to-
-    // back in paint order), produce an empty canvas-sized bitmap.
+    // back in paint order), keep only an internal placeholder.
     const size_t startIdx = (i == 0) ? 0u : (layerRanges[i - 1].lastIdx + 1u);
     const size_t endIdx = (i == layerCount)
                               ? (paintOrder.empty() ? 0u : paintOrder.size() - 1u)
@@ -1880,7 +1884,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     if (segmentIsEmpty) {
       // No entities in this segment's paint-order range. Use a 1×1
       // transparent placeholder so `.empty()` still means "not yet
-      // rasterized".
+      // rasterized"; public tile snapshots prune the placeholder.
       ZoneScopedN("Compositor::segment::emptyBitmap");
       RendererBitmap placeholder;
       placeholder.dimensions = Vector2i(1, 1);
@@ -2126,19 +2130,23 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
                                : std::pair<Entity, Entity>{entt::null, entt::null};
     const uint64_t segGen = (i < staticSegmentGeneration_.size()) ? staticSegmentGeneration_[i] : 0;
     const RendererBitmap* segBitmap =
-        (i < staticSegments_.size() && !staticSegments_[i].empty()) ? &staticSegments_[i] : nullptr;
-    const bool includeSegBitmap = includeBitmap(segBitmap, /*isDragTarget=*/false);
-    tiles.push_back(CompositorTile{
-        .tileId = SegmentTileId(boundary.first, boundary.second),
-        .generation = segGen,
-        .paintOrderIndex = paintIdx++,
-        .bitmap = includeSegBitmap ? *segBitmap : RendererBitmap{},
-        .bitmapDims = segBitmap != nullptr ? segBitmap->dimensions : Vector2i::Zero(),
-        .layerEntity = entt::null,
-        .canvasOffsetPx = segmentOffsetAt(i),
-        .canvasFromBitmap = Transform2d(),
-        .isDragTarget = false,
-    });
+        (i < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[i]))
+            ? &staticSegments_[i]
+            : nullptr;
+    if (segBitmap != nullptr) {
+      const bool includeSegBitmap = includeBitmap(segBitmap, /*isDragTarget=*/false);
+      tiles.push_back(CompositorTile{
+          .tileId = SegmentTileId(boundary.first, boundary.second),
+          .generation = segGen,
+          .paintOrderIndex = paintIdx++,
+          .bitmap = includeSegBitmap ? *segBitmap : RendererBitmap{},
+          .bitmapDims = segBitmap->dimensions,
+          .layerEntity = entt::null,
+          .canvasOffsetPx = segmentOffsetAt(i),
+          .canvasFromBitmap = Transform2d(),
+          .isDragTarget = false,
+      });
+    }
     // Layer tile.
     const auto& layer = layers_[i];
     const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
@@ -2164,21 +2172,23 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
   const uint64_t tailGen =
       (tailIdx < staticSegmentGeneration_.size()) ? staticSegmentGeneration_[tailIdx] : 0;
   const RendererBitmap* tailBitmap =
-      (tailIdx < staticSegments_.size() && !staticSegments_[tailIdx].empty())
+      (tailIdx < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[tailIdx]))
           ? &staticSegments_[tailIdx]
           : nullptr;
-  const bool includeTailBitmap = includeBitmap(tailBitmap, /*isDragTarget=*/false);
-  tiles.push_back(CompositorTile{
-      .tileId = SegmentTileId(tailBoundary.first, tailBoundary.second),
-      .generation = tailGen,
-      .paintOrderIndex = paintIdx,
-      .bitmap = includeTailBitmap ? *tailBitmap : RendererBitmap{},
-      .bitmapDims = tailBitmap != nullptr ? tailBitmap->dimensions : Vector2i::Zero(),
-      .layerEntity = entt::null,
-      .canvasOffsetPx = segmentOffsetAt(tailIdx),
-      .canvasFromBitmap = Transform2d(),
-      .isDragTarget = false,
-  });
+  if (tailBitmap != nullptr) {
+    const bool includeTailBitmap = includeBitmap(tailBitmap, /*isDragTarget=*/false);
+    tiles.push_back(CompositorTile{
+        .tileId = SegmentTileId(tailBoundary.first, tailBoundary.second),
+        .generation = tailGen,
+        .paintOrderIndex = paintIdx,
+        .bitmap = includeTailBitmap ? *tailBitmap : RendererBitmap{},
+        .bitmapDims = tailBitmap->dimensions,
+        .layerEntity = entt::null,
+        .canvasOffsetPx = segmentOffsetAt(tailIdx),
+        .canvasFromBitmap = Transform2d(),
+        .isDragTarget = false,
+    });
+  }
   return tiles;
 }
 
@@ -2267,7 +2277,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
   renderer().beginFrame(viewport);
 
   const auto drawBitmap = [this](const RendererBitmap& bitmap, const Transform2d& transform) {
-    if (bitmap.empty()) {
+    if (!HasPublicTileBitmap(bitmap)) {
       return;
     }
     ImageResource image = BuildImageResource(bitmap);

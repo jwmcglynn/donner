@@ -567,6 +567,121 @@ TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {
   EXPECT_LE(glowBitmap.dimensions.y, 100);
 }
 
+TEST_F(CompositorGoldenTest, FilteredLayerBoundsStopAtLayerSubtree) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000">
+      <defs>
+        <filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/></filter>
+      </defs>
+      <rect width="1000" height="1000" fill="#101018"/>
+      <g id="glow" filter="url(#blur)">
+        <circle cx="100" cy="100" r="20" fill="#ffd84d"/>
+      </g>
+      <rect x="900" y="900" width="80" height="80" fill="#4bc3ff"/>
+    </svg>
+  )svg");
+
+  auto glow = document.querySelector("#glow");
+  ASSERT_TRUE(glow.has_value());
+  const Entity glowEntity = glow->entityHandle().entity();
+
+  RenderViewport largeViewport;
+  largeViewport.size = Vector2d(1000, 1000);
+  largeViewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(glowEntity));
+  compositor.renderFrame(largeViewport);
+
+  const RendererBitmap& glowBitmap = compositor.layerBitmapOf(glowEntity);
+  ASSERT_FALSE(glowBitmap.empty());
+  EXPECT_EQ(glowBitmap.dimensions.x, 52);
+  EXPECT_EQ(glowBitmap.dimensions.y, 52);
+
+  const Vector2d glowOffset = compositor.layerCanvasOffsetOf(glowEntity);
+  EXPECT_DOUBLE_EQ(glowOffset.x, 74.0);
+  EXPECT_DOUBLE_EQ(glowOffset.y, 74.0);
+}
+
+TEST_F(CompositorGoldenTest, RealSplashLightningBlurLayerUsesFilterBounds) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty());
+
+  SVGDocument document = parseDocument(splashSource);
+  auto glow = document.querySelector("#Lightning_glow_dark");
+  ASSERT_TRUE(glow.has_value());
+  const Entity glowEntity = glow->entityHandle().entity();
+
+  RenderViewport splashViewport;
+  splashViewport.size = Vector2d(892, 512);
+  splashViewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(splashViewport);
+
+  const RendererBitmap& glowBitmap = compositor.layerBitmapOf(glowEntity);
+  ASSERT_FALSE(glowBitmap.empty());
+  EXPECT_LT(glowBitmap.dimensions.x * glowBitmap.dimensions.y, (892 * 512) / 10);
+  EXPECT_LT(glowBitmap.dimensions.x, 160);
+  EXPECT_LT(glowBitmap.dimensions.y, 160);
+}
+
+TEST_F(CompositorGoldenTest, EmptyStaticSegmentsArePrunedFromPublicTileSnapshots) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect id="before" x="0" y="0" width="20" height="20" fill="green"/>
+      <rect id="a" x="30" y="0" width="20" height="20" fill="red"/>
+      <rect id="b" x="60" y="0" width="20" height="20" fill="blue"/>
+      <rect id="after" x="90" y="0" width="20" height="20" fill="yellow"/>
+    </svg>
+  )svg");
+
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->entityHandle().entity()));
+  compositor.renderFrame(viewport_);
+
+  const auto uploadTiles = compositor.snapshotTilesForUpload();
+  size_t uploadSegmentCount = 0;
+  size_t uploadLayerCount = 0;
+  for (const CompositorTile& tile : uploadTiles) {
+    if (tile.layerEntity == entt::null) {
+      ++uploadSegmentCount;
+      EXPECT_NE(tile.bitmapDims, Vector2i(1, 1));
+    } else {
+      ++uploadLayerCount;
+    }
+  }
+  EXPECT_EQ(uploadSegmentCount, 2u);
+  EXPECT_EQ(uploadLayerCount, 2u);
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  size_t inspectorSegmentCount = 0;
+  size_t inspectorLayerCount = 0;
+  for (const auto& tile : inspectorTiles) {
+    if (tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment) {
+      ++inspectorSegmentCount;
+      EXPECT_NE(tile.bitmapDims, Vector2i(1, 1));
+    } else if (tile.kind == CompositorController::CompositeTileSnapshot::Kind::Layer) {
+      ++inspectorLayerCount;
+    }
+  }
+  EXPECT_EQ(inspectorSegmentCount, 2u);
+  EXPECT_EQ(inspectorLayerCount, 2u);
+}
+
 TEST_F(CompositorGoldenTest, OpacityLessThanOneAutoPromotionMatchesFullRender) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
