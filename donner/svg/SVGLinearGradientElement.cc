@@ -15,31 +15,31 @@ SVGLinearGradientElement SVGLinearGradientElement::CreateOn(EntityHandle handle)
 }
 
 void SVGLinearGradientElement::setX1(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::LinearGradientComponent>().x1 = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::LinearGradientComponent>(access).x1 = value;
 }
 
 void SVGLinearGradientElement::setY1(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::LinearGradientComponent>().y1 = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::LinearGradientComponent>(access).y1 = value;
 }
 
 void SVGLinearGradientElement::setX2(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::LinearGradientComponent>().x2 = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::LinearGradientComponent>(access).x2 = value;
 }
 
 void SVGLinearGradientElement::setY2(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::LinearGradientComponent>().y2 = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::LinearGradientComponent>(access).y2 = value;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::x1() const {

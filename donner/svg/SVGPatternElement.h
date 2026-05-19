@@ -200,9 +200,9 @@ public:
    * @param document Containing document.
    */
   static SVGPatternElement Create(SVGDocument& document) {
-    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
     SVGPatternElement result = CreateOn(CreateEmptyEntity(access));
-    access.bumpMutationRevision();
     return result;
   }
 

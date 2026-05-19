@@ -149,9 +149,9 @@ public:
    * @param document Containing document.
    */
   static SVGRectElement Create(SVGDocument& document) {
-    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
     SVGRectElement result = CreateOn(CreateEmptyEntity(access));
-    access.bumpMutationRevision();
     return result;
   }
 

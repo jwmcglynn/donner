@@ -117,7 +117,9 @@ std::optional<QuotedRange> findEnclosingQuotedValue(std::string_view source, std
 std::optional<svg::SVGElement> findSvgElementAtOffset(const svg::SVGElement& root,
                                                       std::size_t offset) {
   for (auto child = root.firstChild(); child.has_value(); child = child->nextSibling()) {
-    auto xmlNode = xml::XMLNode::TryCast(child->entityHandle());
+    auto xmlNode = child->withReadAccess([](svg::DocumentReadAccess&, EntityHandle handle) {
+      return xml::XMLNode::TryCast(handle);
+    });
     if (!xmlNode.has_value()) continue;
 
     auto location = xmlNode->getNodeLocation();

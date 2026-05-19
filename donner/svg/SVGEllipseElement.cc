@@ -17,39 +17,39 @@ SVGEllipseElement SVGEllipseElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGEllipseElement::setCx(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::EllipseComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::EllipseComponent>(access).properties;
   properties.cx.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGEllipseElement::setCy(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::EllipseComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::EllipseComponent>(access).properties;
   properties.cy.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGEllipseElement::setRx(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::EllipseComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::EllipseComponent>(access).properties;
   properties.rx.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGEllipseElement::setRy(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::EllipseComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::EllipseComponent>(access).properties;
   properties.ry.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 Lengthd SVGEllipseElement::cx() const {
@@ -105,13 +105,14 @@ Lengthd SVGEllipseElement::computedRy() const {
 }
 
 void SVGEllipseElement::invalidate() const {
-  handle_.remove<components::ComputedEllipseComponent>();
-  handle_.remove<components::ComputedPathComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.remove<components::ComputedEllipseComponent>(access);
+  handle_.remove<components::ComputedPathComponent>(access);
 }
 
 void SVGEllipseElement::compute() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
-  auto& ellipse = handle_.get_or_emplace<components::EllipseComponent>();
+  auto& ellipse = handle_.get_or_emplace<components::EllipseComponent>(access);
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   components::ShapeSystem().createComputedPath(handle_, ellipse, FontMetrics(), disabledSink);
 }

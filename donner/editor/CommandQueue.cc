@@ -51,7 +51,7 @@ CommandQueue::FlushResult CommandQueue::flush() {
     EditorCommand& cmd = pending_[i];
 
     if (cmd.kind == EditorCommand::Kind::SetTransform && cmd.element.has_value()) {
-      const Entity key = cmd.element->entityHandle().entity();
+      const Entity key = cmd.element->unsafeEntityHandle().entity();
       auto [it, inserted] = setTransformSlot.try_emplace(key, result.effectiveCommands.size());
       if (inserted) {
         result.effectiveCommands.push_back(std::move(cmd));
@@ -59,7 +59,8 @@ CommandQueue::FlushResult CommandQueue::flush() {
         result.effectiveCommands[it->second] = std::move(cmd);
       }
     } else if (cmd.kind == EditorCommand::Kind::SetAttribute && cmd.element.has_value()) {
-      const auto key = std::make_pair(cmd.element->entityHandle().entity(), cmd.attributeName);
+      const auto key =
+          std::make_pair(cmd.element->unsafeEntityHandle().entity(), cmd.attributeName);
       auto [it, inserted] = setAttributeSlot.try_emplace(key, result.effectiveCommands.size());
       if (inserted) {
         result.effectiveCommands.push_back(std::move(cmd));

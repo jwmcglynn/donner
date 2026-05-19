@@ -402,7 +402,8 @@ std::optional<TextPatch> buildElementRemoveWritebackForNode(std::string_view sou
 
 std::optional<AttributeWritebackTarget> captureAttributeWritebackTarget(
     const svg::SVGElement& element) {
-  const auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+  const auto xmlNode = element.withReadAccess(
+      [](svg::DocumentReadAccess&, EntityHandle handle) { return xml::XMLNode::TryCast(handle); });
   if (!xmlNode.has_value()) {
     return std::nullopt;
   }
@@ -480,7 +481,8 @@ std::optional<TextPatch> buildAttributeWriteback(std::string_view source,
                                                  const svg::SVGElement& element,
                                                  std::string_view attrName,
                                                  std::string_view newValue) {
-  const auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+  const auto xmlNode = element.withReadAccess(
+      [](svg::DocumentReadAccess&, EntityHandle handle) { return xml::XMLNode::TryCast(handle); });
   if (!xmlNode.has_value()) {
     return std::nullopt;
   }

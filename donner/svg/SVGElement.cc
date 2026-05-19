@@ -33,12 +33,6 @@ void markDirty(EntityHandle handle, uint16_t flags) {
   handle.get_or_emplace<components::DirtyFlagsComponent>().mark(flags);
 }
 
-void bumpMutationRevision(EntityHandle handle) {
-  if (auto* context = handle.registry()->ctx().find<components::SVGDocumentContext>()) {
-    context->bumpMutationRevision();
-  }
-}
-
 void invalidateComputedStyle(EntityHandle handle) {
   components::StyleSystem().invalidateComputed(handle);
 }
@@ -334,18 +328,18 @@ RcString SVGElement::id() const {
 }
 
 void SVGElement::setId(std::string_view id) {
-  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   // Explicitly remove and re-create, so that SVGDocumentContext can update its
   // id-to-entity map.
-  handle_.remove<components::IdComponent>();
+  handle_.remove<components::IdComponent>(access);
   if (!id.empty()) {
-    handle_.emplace<components::IdComponent>(RcString(id));
+    handle_.emplace<components::IdComponent>(access, RcString(id));
   }
 
-  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("id"), RcString(id));
   markNeedsFullStyleRecompute(handle_);
-  bumpMutationRevision(handle_);
 }
 
 RcString SVGElement::className() const {
@@ -358,15 +352,16 @@ RcString SVGElement::className() const {
 }
 
 void SVGElement::setClassName(std::string_view name) {
-  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   if (!name.empty()) {
-    auto& component = handle_.get_or_emplace<components::ClassComponent>();
+    auto& component = handle_.get_or_emplace<components::ClassComponent>(access);
     component.className = name;
   } else {
-    handle_.remove<components::ClassComponent>();
+    handle_.remove<components::ClassComponent>(access);
   }
 
-  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("class"), RcString(name));
 
   // Class changes affect CSS selector matching, which can change any inherited property.
@@ -375,14 +370,14 @@ void SVGElement::setClassName(std::string_view name) {
   invalidateComputedStyleForDescendants(handle_);
   markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
   propagateStyleDirtyToDescendants(handle_);
-  bumpMutationRevision(handle_);
 }
 
 void SVGElement::setStyle(std::string_view style) {
-  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::StyleComponent>().setStyle(style);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::StyleComponent>(access).setStyle(style);
 
-  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
 
   components::StyleSystem().invalidateAll(handle_);
@@ -391,15 +386,14 @@ void SVGElement::setStyle(std::string_view style) {
 
   markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
   propagateStyleDirtyToDescendants(handle_);
-  bumpMutationRevision(handle_);
 }
 
 void SVGElement::updateStyle(std::string_view style) {
-  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
   components::StyleSystem().updateStyle(handle_, style);
 
   // TODO(jwmcglynn): Update the style attribute too
-  // handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  // handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
   //     *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
 
   markNeedsFullStyleRecompute(handle_);
@@ -408,12 +402,12 @@ void SVGElement::updateStyle(std::string_view style) {
 
   markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
   propagateStyleDirtyToDescendants(handle_);
-  bumpMutationRevision(handle_);
 }
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
                                                           std::string_view value) {
-  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   std::string_view actualName = name;
 
   // gradientTransform and patternTransform are special, since they map to the
@@ -428,10 +422,11 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
   // Try common CSS properties first (fill, stroke, opacity, transform, etc.).
   auto trySetResult =
-      handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
+      handle_.get_or_emplace<components::StyleComponent>(access).trySetPresentationAttribute(
           handle_, actualName, value);
 
   if (trySetResult.hasError()) {
+    mutation.cancel();
     return trySetResult;
   }
 
@@ -443,7 +438,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
   if (trySetResult.hasResult() && trySetResult.result()) {
     // Set succeeded, so store the attribute value.
-    handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+    handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
         *handle_.registry(), xml::XMLQualifiedName(RcString(name)), RcString(value));
 
     // Mark dirty flags based on the attribute type.
@@ -463,10 +458,10 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
         propagateStyleDirtyToDescendants(handle_);
       }
     }
-    bumpMutationRevision(handle_);
     return true;
   }
 
+  mutation.cancel();
   return trySetResult;
 }
 
@@ -497,7 +492,8 @@ void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_
 
 std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
     const xml::XMLQualifiedNameRef& name, std::string_view value) {
-  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -531,7 +527,7 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
 
     if (trySetResult.hasError()) {
       markNeedsFullStyleRecompute(handle_);
-      handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+      handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
           *handle_.registry(), name, RcString(value));
       return std::move(trySetResult).error();
     }
@@ -539,9 +535,8 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
 
   // Otherwise store as a generic attribute.
   markNeedsFullStyleRecompute(handle_);
-  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), name, RcString(value));
-  bumpMutationRevision(handle_);
   return std::nullopt;
 }
 
@@ -551,7 +546,8 @@ void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {
 }
 
 void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name) {
-  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -571,9 +567,8 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
   }
 
   // Remove any storage for this attribute.
-  handle_.get_or_emplace<donner::components::AttributesComponent>().removeAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).removeAttribute(
       *handle_.registry(), name);
-  bumpMutationRevision(handle_);
 }
 
 SVGDocument SVGElement::ownerDocument() {
@@ -714,10 +709,14 @@ DocumentWriteAccess SVGElement::CreateElementWriteAccess(SVGDocument& document) 
   return document.writeAccess();
 }
 
+DocumentMutationBatch SVGElement::CreateElementMutationBatch(SVGDocument& document) {
+  return DocumentMutationBatch(*document.handle(), true);
+}
+
 EntityHandle SVGElement::CreateEmptyEntity(SVGDocument& document) {
-  DocumentWriteAccess access = document.writeAccess();
+  DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+  DocumentWriteAccess& access = mutation.access();
   EntityHandle handle = CreateEmptyEntity(access);
-  access.bumpMutationRevision();
   return handle;
 }
 

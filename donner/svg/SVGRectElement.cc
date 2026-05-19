@@ -18,57 +18,57 @@ SVGRectElement SVGRectElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGRectElement::setX(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::RectComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::RectComponent>(access).properties;
   properties.x.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGRectElement::setY(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::RectComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::RectComponent>(access).properties;
   properties.y.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGRectElement::setWidth(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::RectComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::RectComponent>(access).properties;
   properties.width.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGRectElement::setHeight(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::RectComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::RectComponent>(access).properties;
   properties.height.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGRectElement::setRx(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::RectComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::RectComponent>(access).properties;
   properties.rx.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGRectElement::setRy(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::RectComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::RectComponent>(access).properties;
   properties.ry.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 Lengthd SVGRectElement::x() const {
@@ -158,13 +158,14 @@ std::optional<Path> SVGRectElement::computedSpline() const {
 }
 
 void SVGRectElement::invalidate() const {
-  handle_.remove<components::ComputedRectComponent>();
-  handle_.remove<components::ComputedPathComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.remove<components::ComputedRectComponent>(access);
+  handle_.remove<components::ComputedPathComponent>(access);
 }
 
 void SVGRectElement::compute() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
-  auto& rect = handle_.get_or_emplace<components::RectComponent>();
+  auto& rect = handle_.get_or_emplace<components::RectComponent>(access);
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   components::ShapeSystem().createComputedPath(handle_, rect, FontMetrics(), disabledSink);
 }

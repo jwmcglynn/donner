@@ -30,13 +30,13 @@ std::optional<double> SVGGeometryElement::pathLength() const {
 }
 
 void SVGGeometryElement::setPathLength(std::optional<double> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   if (value) {
-    handle_.emplace_or_replace<components::PathLengthComponent>(value.value());
+    handle_.emplace_or_replace<components::PathLengthComponent>(access, value.value());
   } else {
-    handle_.remove<components::PathLengthComponent>();
+    handle_.remove<components::PathLengthComponent>(access);
   }
-  access.bumpMutationRevision();
 }
 
 std::optional<Path> SVGGeometryElement::computedSpline() const {
@@ -58,8 +58,8 @@ std::optional<Box2d> SVGGeometryElement::worldBounds() const {
 
 void SVGGeometryElement::invalidate() {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
-  handle_.remove<components::ComputedPathComponent>();
-  handle_.get_or_emplace<components::DirtyFlagsComponent>().mark(
+  handle_.remove<components::ComputedPathComponent>(access);
+  handle_.get_or_emplace<components::DirtyFlagsComponent>(access).mark(
       components::DirtyFlagsComponent::Shape | components::DirtyFlagsComponent::RenderInstance);
 }
 

@@ -24,12 +24,12 @@ double SVGFEGaussianBlurElement::stdDeviationY() const {
 }
 
 void SVGFEGaussianBlurElement::setStdDeviation(double valueX, double valueY) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  auto& feComponent = handle_.get_or_emplace<components::FEGaussianBlurComponent>();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& feComponent = handle_.get_or_emplace<components::FEGaussianBlurComponent>(access);
   feComponent.stdDeviationX = valueX;
   feComponent.stdDeviationY = valueY;
   invalidateFilter();
-  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

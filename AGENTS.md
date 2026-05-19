@@ -22,6 +22,19 @@ Modern C++20 SVG project. Source lives in `donner/`.
 
 Donner is a dynamic SVG engine (browser-like, not a static renderer). It builds an in-memory DOM that can be inspected, modified, styled, and re-rendered.
 
+### Public API Boundary
+
+- The ECS is an internal implementation detail. It may be discussed in developer docs, design docs,
+  and internal architecture notes, but public-facing docs should describe Donner in terms of the
+  SVG DOM, documents, elements, styles, resources, and rendering.
+- Do not expose new public APIs whose names or required concepts depend on ECS internals, including
+  entities, components, registries, systems, raw entity handles, or EnTT types, unless explicitly
+  approved as an advanced escape hatch. Prefer DOM-shaped wrappers and typed value handles.
+- Public Doxygen for user-facing APIs must not require users to understand the ECS. If a public
+  method touches internal storage for legacy or advanced use, document it as an advanced/internal
+  escape hatch and keep it out of general API guides, getting-started docs, examples, and release
+  notes.
+
 ### Core Components
 
 - **Parser Suite**: Layered parsers — `donner::xml` (XML/document tree), `donner::svg::parser` (SVG structure/attributes), `donner::css::parser` (stylesheets/selectors/values), `donner::parser` (shared types: numbers, lengths).

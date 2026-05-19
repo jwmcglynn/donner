@@ -97,9 +97,9 @@ public:
    * @param document Containing document.
    */
   static SVGCircleElement Create(SVGDocument& document) {
-    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
     SVGCircleElement result = CreateOn(CreateEmptyEntity(access));
-    access.bumpMutationRevision();
     return result;
   }
 

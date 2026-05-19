@@ -100,9 +100,9 @@ public:
    * @param document Containing document.
    */
   static SVGLineElement Create(SVGDocument& document) {
-    DocumentWriteAccess access = CreateElementWriteAccess(document);
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
     SVGLineElement result = CreateOn(CreateEmptyEntity(access));
-    access.bumpMutationRevision();
     return result;
   }
 

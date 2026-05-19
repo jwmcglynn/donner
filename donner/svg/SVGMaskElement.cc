@@ -33,10 +33,10 @@ MaskUnits SVGMaskElement::maskUnits() const {
 }
 
 void SVGMaskElement::setMaskUnits(MaskUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MaskComponent>().maskUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).maskUnits = value;
   InvalidateMask(handle_);
-  access.bumpMutationRevision();
 }
 
 MaskContentUnits SVGMaskElement::maskContentUnits() const {
@@ -46,38 +46,38 @@ MaskContentUnits SVGMaskElement::maskContentUnits() const {
 }
 
 void SVGMaskElement::setMaskContentUnits(MaskContentUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MaskComponent>().maskContentUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).maskContentUnits = value;
   InvalidateMask(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGMaskElement::setX(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MaskComponent>().x = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).x = value;
   InvalidateMask(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGMaskElement::setY(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MaskComponent>().y = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).y = value;
   InvalidateMask(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGMaskElement::setWidth(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MaskComponent>().width = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).width = value;
   InvalidateMask(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGMaskElement::setHeight(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MaskComponent>().height = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).height = value;
   InvalidateMask(handle_);
-  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGMaskElement::x() const {

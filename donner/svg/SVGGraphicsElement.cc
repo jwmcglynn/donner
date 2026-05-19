@@ -12,9 +12,8 @@ Transform2d SVGGraphicsElement::transform() const {
 }
 
 void SVGGraphicsElement::setTransform(const Transform2d& transform) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
   components::LayoutSystem().setRawEntityFromParentTransform(handle_, transform);
-  access.bumpMutationRevision();
 }
 
 Transform2d SVGGraphicsElement::elementFromWorld() const {

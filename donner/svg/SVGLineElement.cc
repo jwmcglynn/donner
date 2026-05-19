@@ -15,31 +15,31 @@ SVGLineElement SVGLineElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGLineElement::setX1(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::LineComponent>().x1 = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::LineComponent>(access).x1 = value;
 }
 
 void SVGLineElement::setY1(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::LineComponent>().y1 = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::LineComponent>(access).y1 = value;
 }
 
 void SVGLineElement::setX2(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::LineComponent>().x2 = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::LineComponent>(access).x2 = value;
 }
 
 void SVGLineElement::setY2(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::LineComponent>().y2 = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::LineComponent>(access).y2 = value;
 }
 
 Lengthd SVGLineElement::x1() const {
@@ -67,7 +67,8 @@ Lengthd SVGLineElement::y2() const {
 }
 
 void SVGLineElement::invalidate() const {
-  handle_.remove<components::ComputedPathComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.remove<components::ComputedPathComponent>(access);
 }
 
 }  // namespace donner::svg

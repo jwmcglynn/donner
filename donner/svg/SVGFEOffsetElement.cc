@@ -24,12 +24,12 @@ double SVGFEOffsetElement::dy() const {
 }
 
 void SVGFEOffsetElement::setOffset(double dx, double dy) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  auto& component = handle_.get_or_emplace<components::FEOffsetComponent>();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& component = handle_.get_or_emplace<components::FEOffsetComponent>(access);
   component.dx = dx;
   component.dy = dy;
   invalidateFilter();
-  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

@@ -28,11 +28,13 @@ SVGPolylineElement SVGPolylineElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGPolylineElement::setPoints(std::vector<Vector2d> points) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.emplace_or_replace<components::PolyComponent>(components::PolyComponent::Type::Polyline)
+  handle_
+      .emplace_or_replace<components::PolyComponent>(access,
+                                                     components::PolyComponent::Type::Polyline)
       .points = std::move(points);
-  access.bumpMutationRevision();
 }
 
 const std::vector<Vector2d>& SVGPolylineElement::points() const {
@@ -44,7 +46,8 @@ const std::vector<Vector2d>& SVGPolylineElement::points() const {
 }
 
 void SVGPolylineElement::invalidate() const {
-  handle_.remove<components::ComputedPathComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.remove<components::ComputedPathComponent>(access);
 }
 
 }  // namespace donner::svg

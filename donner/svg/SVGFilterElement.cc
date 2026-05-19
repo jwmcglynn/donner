@@ -76,43 +76,44 @@ std::optional<RcString> SVGFilterElement::href() const {
 }
 
 void SVGFilterElement::setX(const Lengthd& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::FilterComponent>().x = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::FilterComponent>(access).x = value;
   InvalidateComputedFilters(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGFilterElement::setY(const Lengthd& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::FilterComponent>().y = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::FilterComponent>(access).y = value;
   InvalidateComputedFilters(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGFilterElement::setWidth(const Lengthd& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::FilterComponent>().width = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::FilterComponent>(access).width = value;
   InvalidateComputedFilters(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGFilterElement::setHeight(const Lengthd& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::FilterComponent>().height = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::FilterComponent>(access).height = value;
   InvalidateComputedFilters(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGFilterElement::setHref(OptionalRef<RcStringOrRef> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   if (value) {
-    handle_.get_or_emplace<components::FilterComponent>().href = Reference(RcString(value.value()));
+    handle_.get_or_emplace<components::FilterComponent>(access).href =
+        Reference(RcString(value.value()));
   } else {
-    handle_.get_or_emplace<components::FilterComponent>().href = std::nullopt;
+    handle_.get_or_emplace<components::FilterComponent>(access).href = std::nullopt;
   }
 
   InvalidateComputedFilters(handle_);
-  access.bumpMutationRevision();
 }
 
 FilterUnits SVGFilterElement::filterUnits() const {
@@ -122,10 +123,10 @@ FilterUnits SVGFilterElement::filterUnits() const {
 }
 
 void SVGFilterElement::setFilterUnits(FilterUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::FilterComponent>().filterUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::FilterComponent>(access).filterUnits = value;
   InvalidateComputedFilters(handle_);
-  access.bumpMutationRevision();
 }
 
 PrimitiveUnits SVGFilterElement::primitiveUnits() const {
@@ -136,10 +137,10 @@ PrimitiveUnits SVGFilterElement::primitiveUnits() const {
 }
 
 void SVGFilterElement::setPrimitiveUnits(PrimitiveUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::FilterComponent>().primitiveUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::FilterComponent>(access).primitiveUnits = value;
   InvalidateComputedFilters(handle_);
-  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

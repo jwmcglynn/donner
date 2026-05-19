@@ -216,7 +216,7 @@ void SidebarPresenter::renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot
     nodeFlags |= ImGuiTreeNodeFlags_Selected;
   }
 
-  const donner::Entity entity = node.element->entityHandle().entity();
+  const donner::Entity entity = node.element->unsafeEntityHandle().entity();
   ImGui::PushID(static_cast<int>(static_cast<std::uint32_t>(entity)));
   const bool nodeOpen = ImGui::TreeNodeEx(node.label.c_str(), nodeFlags);
 

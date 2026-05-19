@@ -8,7 +8,7 @@
 namespace donner::svg {
 
 SVGGradientElement::SVGGradientElement(EntityHandle handle) : SVGElement(handle) {
-  handle_.emplace<components::GradientComponent>();
+  handle.emplace<components::GradientComponent>();
 }
 
 std::optional<RcString> SVGGradientElement::href() const {
@@ -42,33 +42,32 @@ GradientSpreadMethod SVGGradientElement::spreadMethod() const {
 }
 
 void SVGGradientElement::setHref(const std::optional<RcString>& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::GradientComponent>().href = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::GradientComponent>(access).href = value;
   // Force the shadow tree to be regenerated.
-  handle_.remove<components::ComputedShadowTreeComponent>();
+  handle_.remove<components::ComputedShadowTreeComponent>(access);
   invalidate();
-  access.bumpMutationRevision();
 }
 
 void SVGGradientElement::setGradientUnits(GradientUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::GradientComponent>().gradientUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::GradientComponent>(access).gradientUnits = value;
   invalidate();
-  access.bumpMutationRevision();
 }
 
 void SVGGradientElement::setGradientTransform(const Transform2d& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
   components::LayoutSystem().setRawEntityFromParentTransform(handle_, value);
   invalidate();
-  access.bumpMutationRevision();
 }
 
 void SVGGradientElement::setSpreadMethod(GradientSpreadMethod value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::GradientComponent>().spreadMethod = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::GradientComponent>(access).spreadMethod = value;
   invalidate();
-  access.bumpMutationRevision();
 }
 
 void SVGGradientElement::invalidate() const {

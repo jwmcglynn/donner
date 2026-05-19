@@ -24,10 +24,10 @@ ClipPathUnits SVGClipPathElement::clipPathUnits() const {
 }
 
 void SVGClipPathElement::setClipPathUnits(ClipPathUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::ClipPathComponent>().clipPathUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::ClipPathComponent>(access).clipPathUnits = value;
   components::RenderingContext(*handle_.registry()).invalidateRenderTree();
-  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

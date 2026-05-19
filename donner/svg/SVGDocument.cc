@@ -438,10 +438,7 @@ SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
                          EntityHandle ontoEntityHandle)
     : documentState_(std::move(documentState)) {
   Registry& registry = documentState_->registry();
-  auto* existingTreeMutations = registry.ctx().find<donner::components::TreeMutationContext>();
-  auto& treeMutations = existingTreeMutations != nullptr
-                            ? *existingTreeMutations
-                            : registry.ctx().emplace<donner::components::TreeMutationContext>();
+  auto& treeMutations = registry.ctx().emplace<donner::components::TreeMutationContext>();
   treeMutations.insertBefore = components::TreeMutation::InsertBefore;
   treeMutations.appendChild = components::TreeMutation::AppendChild;
   treeMutations.replaceChild = components::TreeMutation::ReplaceChild;
@@ -532,11 +529,11 @@ SVGSVGElement SVGDocument::svgElement() const {
 
 void SVGDocument::setCanvasSize(int width, int height) {
   assert(width > 0 && height > 0);
-  DocumentWriteAccess access = documentState_->write();
+  DocumentMutationBatch mutation(*documentState_, true);
+  DocumentWriteAccess& access = mutation.access();
   Registry& registry = access.registry();
   components::RenderingContext(registry).invalidateRenderTree();
   registry.ctx().get<components::SVGDocumentContext>().canvasSize = Vector2i(width, height);
-  access.bumpMutationRevision();
 }
 
 Transform2d SVGDocument::canvasFromDocumentTransform() const {
@@ -545,11 +542,11 @@ Transform2d SVGDocument::canvasFromDocumentTransform() const {
 }
 
 void SVGDocument::useAutomaticCanvasSize() {
-  DocumentWriteAccess access = documentState_->write();
+  DocumentMutationBatch mutation(*documentState_, true);
+  DocumentWriteAccess& access = mutation.access();
   Registry& registry = access.registry();
   components::RenderingContext(registry).invalidateRenderTree();
   registry.ctx().get<components::SVGDocumentContext>().canvasSize = std::nullopt;
-  access.bumpMutationRevision();
 }
 
 Vector2i SVGDocument::canvasSize() const {
@@ -719,7 +716,7 @@ xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element)
   if (parent.has_value()) {
     MarkChildRemoved(parent->entityHandle());
   }
-  element.handle_.get<donner::components::TreeComponent>().remove(registry());
+  components::TreeMutation::Remove(element.handle_);
   return xml::ApplySourceEditResult();
 }
 

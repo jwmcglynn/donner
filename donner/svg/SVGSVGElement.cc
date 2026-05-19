@@ -54,43 +54,44 @@ std::optional<Lengthd> SVGSVGElement::height() const {
 }
 
 void SVGSVGElement::setViewBox(std::optional<Box2d> viewBox) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
-  access.bumpMutationRevision();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::ViewBoxComponent>(access).viewBox = viewBox;
 }
 
 void SVGSVGElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get<components::PreserveAspectRatioComponent>().preserveAspectRatio = preserveAspectRatio;
-  access.bumpMutationRevision();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::PreserveAspectRatioComponent>(access).preserveAspectRatio =
+      preserveAspectRatio;
 }
 
 void SVGSVGElement::setX(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get<components::SizedElementComponent>().properties.x.set(value,
-                                                                    css::Specificity::Override());
-  access.bumpMutationRevision();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::SizedElementComponent>(access).properties.x.set(
+      value, css::Specificity::Override());
 }
 
 void SVGSVGElement::setY(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get<components::SizedElementComponent>().properties.y.set(value,
-                                                                    css::Specificity::Override());
-  access.bumpMutationRevision();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::SizedElementComponent>(access).properties.y.set(
+      value, css::Specificity::Override());
 }
 
 void SVGSVGElement::setWidth(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get<components::SizedElementComponent>().properties.width.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::SizedElementComponent>(access).properties.width.set(
       value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGSVGElement::setHeight(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get<components::SizedElementComponent>().properties.height.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::SizedElementComponent>(access).properties.height.set(
       value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

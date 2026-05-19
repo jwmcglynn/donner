@@ -26,13 +26,13 @@ SVGUseElement SVGUseElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGUseElement::setHref(const RcString& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  auto& shadowTree = handle_.emplace_or_replace<components::ShadowTreeComponent>();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& shadowTree = handle_.emplace_or_replace<components::ShadowTreeComponent>(access);
   shadowTree.setMainHref(value);
   shadowTree.setsContextColors = true;
 
   InvalidateUse(handle_);
-  access.bumpMutationRevision();
 }
 
 RcString SVGUseElement::href() const {
@@ -47,35 +47,35 @@ RcString SVGUseElement::href() const {
 }
 
 void SVGUseElement::setX(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.x.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.x.set(
       value, css::Specificity::Override());
   InvalidateUse(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGUseElement::setY(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.y.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.y.set(
       value, css::Specificity::Override());
   InvalidateUse(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGUseElement::setWidth(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.width.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.width.set(
       value, css::Specificity::Override());
   InvalidateUse(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGUseElement::setHeight(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.height.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.height.set(
       value, css::Specificity::Override());
   InvalidateUse(handle_);
-  access.bumpMutationRevision();
 }
 
 Lengthd SVGUseElement::x() const {

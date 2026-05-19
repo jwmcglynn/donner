@@ -16,30 +16,30 @@ SVGCircleElement SVGCircleElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGCircleElement::setCx(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::CircleComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::CircleComponent>(access).properties;
   properties.cx.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGCircleElement::setCy(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::CircleComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::CircleComponent>(access).properties;
   properties.cy.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGCircleElement::setR(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& properties = handle_.get_or_emplace<components::CircleComponent>().properties;
+  auto& properties = handle_.get_or_emplace<components::CircleComponent>(access).properties;
   properties.r.set(value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 Lengthd SVGCircleElement::cx() const {
@@ -79,13 +79,14 @@ Lengthd SVGCircleElement::computedR() const {
 }
 
 void SVGCircleElement::invalidate() const {
-  handle_.remove<components::ComputedCircleComponent>();
-  handle_.remove<components::ComputedPathComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.remove<components::ComputedCircleComponent>(access);
+  handle_.remove<components::ComputedPathComponent>(access);
 }
 
 void SVGCircleElement::compute() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
-  auto& circle = handle_.get_or_emplace<components::CircleComponent>();
+  auto& circle = handle_.get_or_emplace<components::CircleComponent>(access);
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   components::ShapeSystem().createComputedPath(handle_, circle, FontMetrics(), disabledSink);
 }

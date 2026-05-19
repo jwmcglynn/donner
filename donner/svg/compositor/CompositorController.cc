@@ -826,7 +826,7 @@ std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(const SVGDocument&
       }
       // Record this mapping (even for elements without compositor state
       // — they may be ancestors of layer ranges).
-      remap[oldEl.entityHandle().entity()] = newEl.entityHandle().entity();
+      remap[oldEl.unsafeEntityHandle().entity()] = newEl.unsafeEntityHandle().entity();
 
       // Walk children in lockstep.
       auto oldChild = oldEl.firstChild();

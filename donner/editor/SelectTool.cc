@@ -644,7 +644,7 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
   }
 
   return ActiveDragPreview{
-      .entity = dragState_->primary.element.entityHandle().entity(),
+      .entity = dragState_->primary.element.unsafeEntityHandle().entity(),
       .translation = dragState_->currentDocumentDelta,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
       .dragGeneration = dragState_->generation};

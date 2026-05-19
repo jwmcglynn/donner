@@ -28,11 +28,13 @@ SVGPolygonElement SVGPolygonElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGPolygonElement::setPoints(std::vector<Vector2d> points) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.emplace_or_replace<components::PolyComponent>(components::PolyComponent::Type::Polygon)
+  handle_
+      .emplace_or_replace<components::PolyComponent>(access,
+                                                     components::PolyComponent::Type::Polygon)
       .points = std::move(points);
-  access.bumpMutationRevision();
 }
 
 const std::vector<Vector2d>& SVGPolygonElement::points() const {
@@ -44,7 +46,8 @@ const std::vector<Vector2d>& SVGPolygonElement::points() const {
 }
 
 void SVGPolygonElement::invalidate() const {
-  handle_.remove<components::ComputedPathComponent>();
+  DocumentWriteAccess access = handle_.writeAccess();
+  handle_.remove<components::ComputedPathComponent>(access);
 }
 
 }  // namespace donner::svg

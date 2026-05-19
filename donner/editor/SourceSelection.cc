@@ -97,7 +97,8 @@ bool ElementTagEndsAt(const svg::SVGElement& element, std::string_view source, s
 }  // namespace
 
 bool HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& element) {
-  auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+  auto xmlNode = element.withReadAccess(
+      [](svg::DocumentReadAccess&, EntityHandle handle) { return xml::XMLNode::TryCast(handle); });
   if (!xmlNode.has_value()) {
     return false;
   }

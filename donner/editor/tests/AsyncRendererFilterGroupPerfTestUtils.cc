@@ -59,7 +59,7 @@ void RunFilterGroupSubtreeDragPerfScenario(FilterGroupSubtreeDragPerfResult* res
 
   auto targetElement = document.querySelector("#Big_lightning_glow");
   ASSERT_TRUE(targetElement.has_value());
-  const Entity targetEntity = targetElement->entityHandle().entity();
+  const Entity targetEntity = targetElement->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;

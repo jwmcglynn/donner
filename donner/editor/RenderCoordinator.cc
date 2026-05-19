@@ -474,7 +474,7 @@ Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
     return entt::null;
   }
 
-  return selected->entityHandle().entity();
+  return selected->unsafeEntityHandle().entity();
 }
 
 Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
@@ -484,7 +484,7 @@ Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
   }
 
   if (!IsDisplayNone(*selected)) {
-    const Entity selectedEntity = selected->entityHandle().entity();
+    const Entity selectedEntity = selected->unsafeEntityHandle().entity();
     if (selectedEntity == displayNoneSuppressedSelectionEntity_ ||
         selectedEntity == displayNoneSuppressedLayerEntity_) {
       displayNoneSuppressedSelectionEntity_ = entt::null;
@@ -495,7 +495,7 @@ Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
     return displayNoneSuppressedLayerEntity_;
   }
 
-  const Entity selectedEntity = selected->entityHandle().entity();
+  const Entity selectedEntity = selected->unsafeEntityHandle().entity();
   const CompositedPresentation::DiagnosticsSnapshot diagnostics =
       compositedPresentation_.diagnostics();
   if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null) {

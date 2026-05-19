@@ -663,9 +663,12 @@ public:
    * Create a mutation batch for a document.
    *
    * @param documentState Document state being mutated.
+   * @param commitOnScopeExit If true, commit one mutation revision when this scope exits.
    */
-  explicit DocumentMutationBatch(DocumentState& documentState)
-      : access_(documentState), documentState_(&documentState) {
+  explicit DocumentMutationBatch(DocumentState& documentState, bool commitOnScopeExit = false)
+      : access_(documentState),
+        documentState_(&documentState),
+        commitOnScopeExit_(commitOnScopeExit) {
     coalescesRevisions_ = documentState_->beginMutationBatch();
   }
 
@@ -674,15 +677,21 @@ public:
 
   /// Moving mutation batches transfers the held batch.
   DocumentMutationBatch(DocumentMutationBatch&& other) noexcept
-      : access_(std::move(other.access_)), documentState_(other.documentState_) {
+      : access_(std::move(other.access_)),
+        documentState_(other.documentState_),
+        commitOnScopeExit_(other.commitOnScopeExit_) {
     other.documentState_ = nullptr;
+    other.commitOnScopeExit_ = false;
     coalescesRevisions_ = other.coalescesRevisions_;
     other.coalescesRevisions_ = false;
   }
 
   /// Destructor, flushing a single revision bump if the batch mutated the document.
   ~DocumentMutationBatch() {
-    if (documentState_ && coalescesRevisions_) {
+    if (documentState_ != nullptr && commitOnScopeExit_) {
+      documentState_->bumpMutationRevision();
+    }
+    if (documentState_ != nullptr && coalescesRevisions_) {
       documentState_->endMutationBatch();
     }
   }
@@ -699,9 +708,13 @@ public:
   /// Get the underlying write access.
   const DocumentWriteAccess& access() const { return access_; }
 
+  /// Cancel the automatic revision commit for this mutation scope.
+  void cancel() { commitOnScopeExit_ = false; }
+
 private:
   DocumentWriteAccess access_;
   DocumentState* documentState_;
+  bool commitOnScopeExit_ = false;
   bool coalescesRevisions_ = false;
 };
 

@@ -15,45 +15,45 @@ SVGRadialGradientElement SVGRadialGradientElement::CreateOn(EntityHandle handle)
 }
 
 void SVGRadialGradientElement::setCx(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::RadialGradientComponent>().cx = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).cx = value;
 }
 
 void SVGRadialGradientElement::setCy(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::RadialGradientComponent>().cy = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).cy = value;
 }
 
 void SVGRadialGradientElement::setR(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::RadialGradientComponent>().r = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).r = value;
 }
 
 void SVGRadialGradientElement::setFx(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::RadialGradientComponent>().fx = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).fx = value;
 }
 
 void SVGRadialGradientElement::setFy(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::RadialGradientComponent>().fy = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).fy = value;
 }
 
 void SVGRadialGradientElement::setFr(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::RadialGradientComponent>().fr = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).fr = value;
 }
 
 std::optional<Lengthd> SVGRadialGradientElement::cx() const {

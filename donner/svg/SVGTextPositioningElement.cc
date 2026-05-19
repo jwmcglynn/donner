@@ -20,26 +20,27 @@ const SmallVector<T, 1>& SnapshotTextPositionList(const SmallVector<T, 1>* value
 
 SVGTextPositioningElement::SVGTextPositioningElement(EntityHandle handle)
     : SVGTextContentElement(handle) {
-  handle_.emplace<components::TextPositioningComponent>();
+  handle.emplace<components::TextPositioningComponent>();
 }
 
 void SVGTextPositioningElement::setX(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  SmallVector<Lengthd, 1>& x = handle_.get_or_emplace<components::TextPositioningComponent>().x;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  SmallVector<Lengthd, 1>& x =
+      handle_.get_or_emplace<components::TextPositioningComponent>(access).x;
   if (value) {
     x = {*value};
   } else {
     x.clear();
   }
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 void SVGTextPositioningElement::setXList(SmallVector<Lengthd, 1>&& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::TextPositioningComponent>().x = std::move(value);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextPositioningComponent>(access).x = std::move(value);
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::x() const {
@@ -61,22 +62,23 @@ const SmallVector<Lengthd, 1>& SVGTextPositioningElement::xList() const {
 }
 
 void SVGTextPositioningElement::setY(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  SmallVector<Lengthd, 1>& y = handle_.get_or_emplace<components::TextPositioningComponent>().y;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  SmallVector<Lengthd, 1>& y =
+      handle_.get_or_emplace<components::TextPositioningComponent>(access).y;
   if (value) {
     y = {*value};
   } else {
     y.clear();
   }
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 void SVGTextPositioningElement::setYList(SmallVector<Lengthd, 1>&& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::TextPositioningComponent>().y = std::move(value);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextPositioningComponent>(access).y = std::move(value);
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::y() const {
@@ -98,22 +100,23 @@ const SmallVector<Lengthd, 1>& SVGTextPositioningElement::yList() const {
 }
 
 void SVGTextPositioningElement::setDx(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  SmallVector<Lengthd, 1>& dx = handle_.get_or_emplace<components::TextPositioningComponent>().dx;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  SmallVector<Lengthd, 1>& dx =
+      handle_.get_or_emplace<components::TextPositioningComponent>(access).dx;
   if (value) {
     dx = {*value};
   } else {
     dx.clear();
   }
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 void SVGTextPositioningElement::setDxList(SmallVector<Lengthd, 1>&& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::TextPositioningComponent>().dx = std::move(value);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextPositioningComponent>(access).dx = std::move(value);
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::dx() const {
@@ -135,22 +138,23 @@ const SmallVector<Lengthd, 1>& SVGTextPositioningElement::dxList() const {
 }
 
 void SVGTextPositioningElement::setDy(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  SmallVector<Lengthd, 1>& dy = handle_.get_or_emplace<components::TextPositioningComponent>().dy;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  SmallVector<Lengthd, 1>& dy =
+      handle_.get_or_emplace<components::TextPositioningComponent>(access).dy;
   if (value) {
     dy = {*value};
   } else {
     dy.clear();
   }
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 void SVGTextPositioningElement::setDyList(SmallVector<Lengthd, 1>&& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::TextPositioningComponent>().dy = std::move(value);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextPositioningComponent>(access).dy = std::move(value);
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::dy() const {
@@ -172,23 +176,24 @@ const SmallVector<Lengthd, 1>& SVGTextPositioningElement::dyList() const {
 }
 
 void SVGTextPositioningElement::setRotate(std::optional<double> degrees) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   SmallVector<double, 1>& rotateDegrees =
-      handle_.get_or_emplace<components::TextPositioningComponent>().rotateDegrees;
+      handle_.get_or_emplace<components::TextPositioningComponent>(access).rotateDegrees;
   if (degrees) {
     rotateDegrees = {*degrees};
   } else {
     rotateDegrees.clear();
   }
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 void SVGTextPositioningElement::setRotateList(SmallVector<double, 1>&& value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::TextPositioningComponent>().rotateDegrees = std::move(value);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextPositioningComponent>(access).rotateDegrees =
+      std::move(value);
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 std::optional<double> SVGTextPositioningElement::rotate() const {

@@ -122,9 +122,9 @@ public:
   }
 
   /// Acquire batched write access to this anchor's document.
-  DocumentMutationBatch mutationBatch() const {
+  DocumentMutationBatch mutationBatch(bool commitOnScopeExit = true) const {
     UTILS_RELEASE_ASSERT_MSG(documentHandle_, "SVGElement has no document state");
-    return DocumentMutationBatch(*documentHandle_);
+    return DocumentMutationBatch(*documentHandle_, commitOnScopeExit);
   }
 
   /// Assert that legacy raw ECS access is scoped when required by the document mode.
@@ -144,38 +144,64 @@ public:
 
   /// Get a component from the resolved entity.
   template <typename Type>
-  decltype(auto) get() const {
+  const Type& get() const {
     return resolve().get<Type>();
+  }
+
+  /// Get a mutable component from the resolved entity.
+  template <typename Type>
+  Type& get(DocumentWriteAccess& access) const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_.get() == &access.documentState(),
+                             "ElementAnchor write access belongs to a different document");
+    return EntityHandle(access.registry(), entity_).get<Type>();
   }
 
   /// Get a component pointer from the resolved entity, or null if it is absent.
   template <typename Type>
-  decltype(auto) try_get() const {
+  const Type* try_get() const {
     return resolve().try_get<Type>();
+  }
+
+  /// Get a mutable component pointer from the resolved entity, or null if it is absent.
+  template <typename Type>
+  Type* try_get(DocumentWriteAccess& access) const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_.get() == &access.documentState(),
+                             "ElementAnchor write access belongs to a different document");
+    return EntityHandle(access.registry(), entity_).try_get<Type>();
   }
 
   /// Emplace a component on the resolved entity.
   template <typename Type, typename... Args>
-  decltype(auto) emplace(Args&&... args) const {
-    return resolve().emplace<Type>(std::forward<Args>(args)...);
+  Type& emplace(DocumentWriteAccess& access, Args&&... args) const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_.get() == &access.documentState(),
+                             "ElementAnchor write access belongs to a different document");
+    return EntityHandle(access.registry(), entity_).emplace<Type>(std::forward<Args>(args)...);
   }
 
   /// Get or emplace a component on the resolved entity.
   template <typename Type, typename... Args>
-  decltype(auto) get_or_emplace(Args&&... args) const {
-    return resolve().get_or_emplace<Type>(std::forward<Args>(args)...);
+  Type& get_or_emplace(DocumentWriteAccess& access, Args&&... args) const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_.get() == &access.documentState(),
+                             "ElementAnchor write access belongs to a different document");
+    return EntityHandle(access.registry(), entity_)
+        .get_or_emplace<Type>(std::forward<Args>(args)...);
   }
 
   /// Emplace or replace a component on the resolved entity.
   template <typename Type, typename... Args>
-  decltype(auto) emplace_or_replace(Args&&... args) const {
-    return resolve().emplace_or_replace<Type>(std::forward<Args>(args)...);
+  Type& emplace_or_replace(DocumentWriteAccess& access, Args&&... args) const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_.get() == &access.documentState(),
+                             "ElementAnchor write access belongs to a different document");
+    return EntityHandle(access.registry(), entity_)
+        .emplace_or_replace<Type>(std::forward<Args>(args)...);
   }
 
   /// Remove components from the resolved entity.
   template <typename... Type>
-  decltype(auto) remove() const {
-    return resolve().remove<Type...>();
+  decltype(auto) remove(DocumentWriteAccess& access) const {
+    UTILS_RELEASE_ASSERT_MSG(documentHandle_.get() == &access.documentState(),
+                             "ElementAnchor write access belongs to a different document");
+    return EntityHandle(access.registry(), entity_).remove<Type...>();
   }
 
   /// Compare two anchors by document storage and entity id.
@@ -307,7 +333,7 @@ public:
    */
   template <typename Callback>
   decltype(auto) withWriteAccess(Callback&& callback) const {
-    DocumentMutationBatch batch = handle_.mutationBatch();
+    DocumentMutationBatch batch = handle_.mutationBatch(false);
     EntityHandle handle = handle_.resolve();
     using Result = std::invoke_result_t<Callback, DocumentWriteAccess&, EntityHandle>;
     if constexpr (std::is_void_v<Result>) {
@@ -665,6 +691,13 @@ protected:
    * @param document Containing document.
    */
   static DocumentWriteAccess CreateElementWriteAccess(SVGDocument& document);
+
+  /**
+   * Acquire a mutation scope for creating an element in a document.
+   *
+   * @param document Containing document.
+   */
+  static DocumentMutationBatch CreateElementMutationBatch(SVGDocument& document);
 
   /**
    * Create a new Entity within the document ECS, and return a handle to it.

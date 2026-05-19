@@ -31,7 +31,7 @@ TextEngine& getPreparedTextEngine(EntityHandle handle) {
 }  // namespace
 
 SVGTextContentElement::SVGTextContentElement(EntityHandle handle) : SVGGraphicsElement(handle) {
-  handle_.emplace<components::TextComponent>();
+  handle.emplace<components::TextComponent>();
 }
 
 void SVGTextContentElement::invalidateTextGeometry() {
@@ -77,10 +77,10 @@ std::optional<Lengthd> SVGTextContentElement::textLength() const {
 }
 
 void SVGTextContentElement::setTextLength(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::TextComponent>().textLength = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextComponent>(access).textLength = value;
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 LengthAdjust SVGTextContentElement::lengthAdjust() const {
@@ -90,10 +90,10 @@ LengthAdjust SVGTextContentElement::lengthAdjust() const {
 }
 
 void SVGTextContentElement::setLengthAdjust(LengthAdjust value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::TextComponent>().lengthAdjust = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextComponent>(access).lengthAdjust = value;
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 long SVGTextContentElement::getNumberOfChars() const {
@@ -142,8 +142,9 @@ void SVGTextContentElement::selectSubString(std::size_t /*charnum*/, std::size_t
 }
 
 void SVGTextContentElement::appendText(std::string_view text) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  auto& textComponent = handle_.get_or_emplace<components::TextComponent>();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
 
   if (textComponent.text.empty()) {
     textComponent.text = text;
@@ -160,18 +161,17 @@ void SVGTextContentElement::appendText(std::string_view text) {
   }
 
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 void SVGTextContentElement::advanceTextChunk() {
-  DocumentWriteAccess access = handle_.writeAccess();
-  auto& textComponent = handle_.get_or_emplace<components::TextComponent>();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
   if (textComponent.textChunks.empty()) {
     textComponent.textChunks.push_back(RcString(""));
   }
   textComponent.textChunks.push_back(RcString(""));
   invalidateTextGeometry();
-  access.bumpMutationRevision();
 }
 
 RcString SVGTextContentElement::textContent() const {

@@ -26,23 +26,23 @@ RcString SVGPathElement::d() const {
 }
 
 void SVGPathElement::setD(RcString d) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& path = handle_.get_or_emplace<components::PathComponent>();
+  auto& path = handle_.get_or_emplace<components::PathComponent>(access);
   path.d.set(d, css::Specificity::Override());
   path.splineOverride.reset();
-  access.bumpMutationRevision();
 }
 
 void SVGPathElement::setSpline(const Path& spline) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
 
-  auto& path = handle_.get_or_emplace<components::PathComponent>();
+  auto& path = handle_.get_or_emplace<components::PathComponent>(access);
   path.d.clear();
   path.splineOverride = spline;
-  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

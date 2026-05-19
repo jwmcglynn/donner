@@ -32,10 +32,10 @@ SVGSymbolElement SVGSymbolElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGSymbolElement::setViewBox(OptionalRef<Box2d> viewBox) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::ViewBoxComponent>().viewBox = viewBox;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::ViewBoxComponent>(access).viewBox = viewBox;
   InvalidateSymbol(handle_);
-  access.bumpMutationRevision();
 }
 
 std::optional<Box2d> SVGSymbolElement::viewBox() const {
@@ -45,11 +45,11 @@ std::optional<Box2d> SVGSymbolElement::viewBox() const {
 }
 
 void SVGSymbolElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PreserveAspectRatioComponent>().preserveAspectRatio =
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PreserveAspectRatioComponent>(access).preserveAspectRatio =
       preserveAspectRatio;
   InvalidateSymbol(handle_);
-  access.bumpMutationRevision();
 }
 
 PreserveAspectRatio SVGSymbolElement::preserveAspectRatio() const {
@@ -59,11 +59,11 @@ PreserveAspectRatio SVGSymbolElement::preserveAspectRatio() const {
 }
 
 void SVGSymbolElement::setX(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.x.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.x.set(
       value, css::Specificity::Override());
   InvalidateSymbol(handle_);
-  access.bumpMutationRevision();
 }
 
 Lengthd SVGSymbolElement::x() const {
@@ -74,11 +74,11 @@ Lengthd SVGSymbolElement::x() const {
 }
 
 void SVGSymbolElement::setY(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.y.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.y.set(
       value, css::Specificity::Override());
   InvalidateSymbol(handle_);
-  access.bumpMutationRevision();
 }
 
 Lengthd SVGSymbolElement::y() const {
@@ -89,11 +89,11 @@ Lengthd SVGSymbolElement::y() const {
 }
 
 void SVGSymbolElement::setWidth(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.width.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.width.set(
       value, css::Specificity::Override());
   InvalidateSymbol(handle_);
-  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGSymbolElement::width() const {
@@ -103,11 +103,11 @@ std::optional<Lengthd> SVGSymbolElement::width() const {
 }
 
 void SVGSymbolElement::setHeight(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.height.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.height.set(
       value, css::Specificity::Override());
   InvalidateSymbol(handle_);
-  access.bumpMutationRevision();
 }
 
 std::optional<Lengthd> SVGSymbolElement::height() const {
@@ -117,10 +117,10 @@ std::optional<Lengthd> SVGSymbolElement::height() const {
 }
 
 void SVGSymbolElement::setRefX(double value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SymbolComponent>().refX = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SymbolComponent>(access).refX = value;
   InvalidateSymbol(handle_);
-  access.bumpMutationRevision();
 }
 
 double SVGSymbolElement::refX() const {
@@ -130,10 +130,10 @@ double SVGSymbolElement::refX() const {
 }
 
 void SVGSymbolElement::setRefY(double value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SymbolComponent>().refY = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SymbolComponent>(access).refY = value;
   InvalidateSymbol(handle_);
-  access.bumpMutationRevision();
 }
 
 double SVGSymbolElement::refY() const {

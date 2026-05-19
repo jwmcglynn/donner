@@ -107,83 +107,82 @@ std::optional<RcString> SVGPatternElement::href() const {
 }
 
 void SVGPatternElement::setViewBox(OptionalRef<Box2d> viewBox) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::ViewBoxComponent>().viewBox = viewBox;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::ViewBoxComponent>(access).viewBox = viewBox;
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PreserveAspectRatioComponent>().preserveAspectRatio =
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PreserveAspectRatioComponent>(access).preserveAspectRatio =
       preserveAspectRatio;
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setX(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PatternComponent>().sizeProperties.x.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PatternComponent>(access).sizeProperties.x.set(
       value, css::Specificity::Override());
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setY(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PatternComponent>().sizeProperties.y.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PatternComponent>(access).sizeProperties.y.set(
       value, css::Specificity::Override());
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setWidth(OptionalRef<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PatternComponent>().sizeProperties.width.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PatternComponent>(access).sizeProperties.width.set(
       value, css::Specificity::Override());
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setHeight(OptionalRef<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PatternComponent>().sizeProperties.height.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PatternComponent>(access).sizeProperties.height.set(
       value, css::Specificity::Override());
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setPatternUnits(PatternUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PatternComponent>().patternUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PatternComponent>(access).patternUnits = value;
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setPatternContentUnits(PatternContentUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PatternComponent>().patternContentUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PatternComponent>(access).patternContentUnits = value;
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setPatternTransform(Transform2d transform) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
   components::LayoutSystem().setRawEntityFromParentTransform(handle_, transform);
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGPatternElement::setHref(OptionalRef<RcStringOrRef> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   if (value) {
-    handle_.get_or_emplace<components::PatternComponent>().href = RcString(value.value());
+    handle_.get_or_emplace<components::PatternComponent>(access).href = RcString(value.value());
   } else {
-    handle_.get_or_emplace<components::PatternComponent>().href = std::nullopt;
+    handle_.get_or_emplace<components::PatternComponent>(access).href = std::nullopt;
   }
 
   InvalidatePattern(handle_);
-  access.bumpMutationRevision();
 }
 
 }  // namespace donner::svg

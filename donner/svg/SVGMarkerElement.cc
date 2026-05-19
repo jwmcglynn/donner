@@ -31,10 +31,10 @@ SVGMarkerElement SVGMarkerElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGMarkerElement::setViewBox(OptionalRef<Box2d> viewBox) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::ViewBoxComponent>().viewBox = viewBox;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::ViewBoxComponent>(access).viewBox = viewBox;
   InvalidateMarker(handle_);
-  access.bumpMutationRevision();
 }
 
 std::optional<Box2d> SVGMarkerElement::viewBox() const {
@@ -44,11 +44,11 @@ std::optional<Box2d> SVGMarkerElement::viewBox() const {
 }
 
 void SVGMarkerElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PreserveAspectRatioComponent>().preserveAspectRatio =
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PreserveAspectRatioComponent>(access).preserveAspectRatio =
       preserveAspectRatio;
   InvalidateMarker(handle_);
-  access.bumpMutationRevision();
 }
 
 PreserveAspectRatio SVGMarkerElement::preserveAspectRatio() const {
@@ -58,10 +58,10 @@ PreserveAspectRatio SVGMarkerElement::preserveAspectRatio() const {
 }
 
 void SVGMarkerElement::setMarkerWidth(double value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MarkerComponent>().markerWidth = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MarkerComponent>(access).markerWidth = value;
   InvalidateMarker(handle_);
-  access.bumpMutationRevision();
 }
 
 double SVGMarkerElement::markerWidth() const {
@@ -71,10 +71,10 @@ double SVGMarkerElement::markerWidth() const {
 }
 
 void SVGMarkerElement::setMarkerHeight(double value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MarkerComponent>().markerHeight = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MarkerComponent>(access).markerHeight = value;
   InvalidateMarker(handle_);
-  access.bumpMutationRevision();
 }
 
 double SVGMarkerElement::markerHeight() const {
@@ -84,10 +84,10 @@ double SVGMarkerElement::markerHeight() const {
 }
 
 void SVGMarkerElement::setRefX(double value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MarkerComponent>().refX = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MarkerComponent>(access).refX = value;
   InvalidateMarker(handle_);
-  access.bumpMutationRevision();
 }
 
 double SVGMarkerElement::refX() const {
@@ -97,10 +97,10 @@ double SVGMarkerElement::refX() const {
 }
 
 void SVGMarkerElement::setRefY(double value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MarkerComponent>().refY = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MarkerComponent>(access).refY = value;
   InvalidateMarker(handle_);
-  access.bumpMutationRevision();
 }
 
 double SVGMarkerElement::refY() const {
@@ -116,17 +116,17 @@ MarkerUnits SVGMarkerElement::markerUnits() const {
 }
 
 void SVGMarkerElement::setMarkerUnits(MarkerUnits value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MarkerComponent>().markerUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MarkerComponent>(access).markerUnits = value;
   InvalidateMarker(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGMarkerElement::setOrient(MarkerOrient value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::MarkerComponent>().orient = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MarkerComponent>(access).orient = value;
   InvalidateMarker(handle_);
-  access.bumpMutationRevision();
 }
 
 MarkerOrient SVGMarkerElement::orient() const {

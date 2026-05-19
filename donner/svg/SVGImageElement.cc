@@ -29,10 +29,10 @@ SVGImageElement SVGImageElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGImageElement::setHref(RcStringOrRef value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::ImageComponent>().href = RcString(value);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::ImageComponent>(access).href = RcString(value);
   InvalidateImage(handle_);
-  access.bumpMutationRevision();
 }
 
 RcString SVGImageElement::href() const {
@@ -42,11 +42,11 @@ RcString SVGImageElement::href() const {
 }
 
 void SVGImageElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::PreserveAspectRatioComponent>().preserveAspectRatio =
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::PreserveAspectRatioComponent>(access).preserveAspectRatio =
       preserveAspectRatio;
   InvalidateImage(handle_);
-  access.bumpMutationRevision();
 }
 
 PreserveAspectRatio SVGImageElement::preserveAspectRatio() const {
@@ -56,35 +56,35 @@ PreserveAspectRatio SVGImageElement::preserveAspectRatio() const {
 }
 
 void SVGImageElement::setX(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.x.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.x.set(
       value, css::Specificity::Override());
   InvalidateImage(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGImageElement::setY(Lengthd value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.y.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.y.set(
       value, css::Specificity::Override());
   InvalidateImage(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGImageElement::setWidth(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.width.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.width.set(
       value, css::Specificity::Override());
   InvalidateImage(handle_);
-  access.bumpMutationRevision();
 }
 
 void SVGImageElement::setHeight(std::optional<Lengthd> value) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  handle_.get_or_emplace<components::SizedElementComponent>().properties.height.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::SizedElementComponent>(access).properties.height.set(
       value, css::Specificity::Override());
   InvalidateImage(handle_);
-  access.bumpMutationRevision();
 }
 
 Lengthd SVGImageElement::x() const {

@@ -12,21 +12,24 @@ SVGStyleElement SVGStyleElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGStyleElement::setType(const RcStringOrRef& type) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>(access);
   stylesheetComponent.type = RcString(type);
   components::RenderingContext(*handle_.registry()).invalidateRenderTree();
-  access.bumpMutationRevision();
 }
 
 void SVGStyleElement::setContents(std::string_view style) {
-  DocumentWriteAccess access = handle_.writeAccess();
-  auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>();
-  if (stylesheetComponent.isCssType()) {
-    stylesheetComponent.parseStylesheet(style);
-    components::RenderingContext(*handle_.registry()).invalidateRenderTree();
-    access.bumpMutationRevision();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& stylesheetComponent = handle_.get_or_emplace<components::StylesheetComponent>(access);
+  if (!stylesheetComponent.isCssType()) {
+    mutation.cancel();
+    return;
   }
+
+  stylesheetComponent.parseStylesheet(style);
+  components::RenderingContext(*handle_.registry()).invalidateRenderTree();
 }
 
 bool SVGStyleElement::isCssType() const {

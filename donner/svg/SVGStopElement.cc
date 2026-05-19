@@ -19,28 +19,28 @@ SVGStopElement SVGStopElement::CreateOn(EntityHandle handle) {
 void SVGStopElement::setOffset(float value) {
   assert(value >= 0.0f && value <= 1.0f);
 
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::StopComponent>().properties.offset = value;
-  access.bumpMutationRevision();
+  handle_.get_or_emplace<components::StopComponent>(access).properties.offset = value;
 }
 
 void SVGStopElement::setStopColor(css::Color value) {
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::StopComponent>().properties.stopColor.set(
+  handle_.get_or_emplace<components::StopComponent>(access).properties.stopColor.set(
       value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 void SVGStopElement::setStopOpacity(double value) {
   assert(value >= 0.0 && value <= 1.0);
 
-  DocumentWriteAccess access = handle_.writeAccess();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get_or_emplace<components::StopComponent>().properties.stopOpacity.set(
+  handle_.get_or_emplace<components::StopComponent>(access).properties.stopOpacity.set(
       value, css::Specificity::Override());
-  access.bumpMutationRevision();
 }
 
 float SVGStopElement::offset() const {
@@ -67,7 +67,7 @@ css::Color SVGStopElement::computedStopColor() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
-      handle_, handle_.get_or_emplace<components::StopComponent>(), disabledSink);
+      handle_, handle_.get_or_emplace<components::StopComponent>(access), disabledSink);
   return computed.properties.stopColor.getRequired();
 }
 
@@ -75,13 +75,13 @@ double SVGStopElement::computedStopOpacity() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
-      handle_, handle_.get_or_emplace<components::StopComponent>(), disabledSink);
+      handle_, handle_.get_or_emplace<components::StopComponent>(access), disabledSink);
   return computed.properties.stopOpacity.getRequired();
 }
 
 void SVGStopElement::invalidate() const {
   [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
-  handle_.remove<components::ComputedStopComponent>();
+  handle_.remove<components::ComputedStopComponent>(access);
   components::RenderingContext(*handle_.registry()).invalidateRenderTree();
 }
 
