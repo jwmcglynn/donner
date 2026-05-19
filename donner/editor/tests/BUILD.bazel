@@ -155,6 +155,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "layer_inspector_diagnostics_tests",
+    srcs = ["LayerInspectorDiagnostics_tests.cc"],
+    deps = [
+        "//donner/editor:layer_inspector_diagnostics",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "composited_presentation_tests",
     srcs = ["CompositedPresentation_tests.cc"],
     deps = [
@@ -456,6 +465,8 @@ donner_cc_binary(
     name = "editor_rnr_gl_replay",
     srcs = ["EditorRnrGlReplay.cc"],
     data = [
+        "drag_start_hang_repro.rnr",
+        "filter_post_drag_jump.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
     ],
@@ -475,6 +486,8 @@ donner_cc_test(
     timeout = "moderate",
     srcs = ["GlRnrReplay_tests.cc"],
     data = [
+        "drag_start_hang_repro.rnr",
+        "filter_post_drag_jump.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
     ],

@@ -79,6 +79,23 @@ std::vector<std::string> PreviewTileGenerationSignature(const json& preview) {
   return signature;
 }
 
+json ExpectedEffectiveDragTranslation(const json& frame, const json& tile) {
+  const json& active = frame["active_drag_preview"];
+  const json& displayed = frame["displayed_drag_preview"];
+  const json& cached = tile["drag_translation_doc"];
+  if (!active.is_object() || !displayed.is_object() ||
+      active.value("entity", 0u) != displayed.value("entity", 0u)) {
+    return cached;
+  }
+
+  return json{
+      {"x", cached.value("x", 0.0) + active["translation_doc"].value("x", 0.0) -
+                displayed["translation_doc"].value("x", 0.0)},
+      {"y", cached.value("y", 0.0) + active["translation_doc"].value("y", 0.0) -
+                displayed["translation_doc"].value("y", 0.0)},
+  };
+}
+
 MATCHER_P(HasPreviewTileSignature, expected, "") {
   const std::vector<std::string> actual = PreviewTileSignature(arg);
   if (actual != expected) {
@@ -302,7 +319,6 @@ TEST(EditorControlSessionTest, PreDragRenderUsesFullCanvasCompositedTile) {
   ASSERT_FALSE(load.body["render_stages"].empty());
 
   const json& stage = load.body["render_stages"].back();
-  ASSERT_EQ(stage.value("stage", ""), "final");
   ASSERT_FALSE(stage["composited_preview"].is_null());
   EXPECT_EQ(stage["composited_preview"].value("tile_count", 0), 1);
   ASSERT_EQ(stage["composited_preview"]["tiles"].size(), 1u);
@@ -583,13 +599,14 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
       sawActiveTileDisplay = true;
       const json& diff = frame["display_before_render_diff_from_final"];
       ASSERT_TRUE(diff.value("available", false));
-      const json& previewTranslation = beforeRender["displayed_drag_preview"]["translation_doc"];
       for (const json& tile : beforeRender["tiles"]) {
         if (!tile.value("is_drag_target", false)) {
           continue;
         }
-        EXPECT_EQ(tile["effective_drag_translation_doc"], previewTranslation)
-            << "active drags should draw cached drag-target tiles at the live preview translation";
+        EXPECT_EQ(tile["effective_drag_translation_doc"],
+                  ExpectedEffectiveDragTranslation(beforeRender, tile))
+            << "active drags should draw cached drag-target tiles at their cached offset plus "
+               "the residual active-minus-displayed drag delta";
       }
     }
     for (const json& stage : frame["stages"]) {

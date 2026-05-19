@@ -12,6 +12,7 @@
 #include "donner/editor/EditorShellLayout.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/LayerInspectorDiagnostics.h"
 #include "donner/editor/LayerInspectorPanel.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/RenderCoordinator.h"
@@ -43,6 +44,14 @@ struct EditorShellOptions {
   std::optional<std::string> reproOutputPath;
 };
 
+/// Layer-inspector freshness status exposed to replay/readback harnesses.
+struct LayerInspectorStatusReadback {
+  /// Canvas freshness classification used by the layer inspector.
+  CanvasFreshness canvasFreshness = CanvasFreshness::Current;
+  /// Status suffix rendered beside document canvas diagnostics.
+  std::string statusSuffix;
+};
+
 /// Stateful advanced editor frontend shell. Owns all long-lived GUI/editor orchestration state.
 class EditorShell {
 public:
@@ -57,6 +66,14 @@ public:
   [[nodiscard]] const ViewportState& viewportForReadback() const {
     return interactionController_.viewport();
   }
+  /// Override the viewport from a recorded replay frame before rendering.
+  ///
+  /// @param viewport Recorded viewport snapshot to install for the next frame.
+  void overrideViewportForReplay(const ViewportState& viewport);
+  /// Current selection label for replay/readback harnesses.
+  [[nodiscard]] std::optional<std::string> selectedElementLabelForReadback() const;
+  /// Current layer-inspector freshness status for replay/readback harnesses.
+  [[nodiscard]] LayerInspectorStatusReadback layerInspectorStatusForReadback() const;
 
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
@@ -86,6 +103,7 @@ private:
   RenderCoordinator renderCoordinator_;
   DocumentSyncController documentSyncController_;
   ViewportInteractionController interactionController_;
+  std::optional<ViewportState> pendingViewportReplayOverride_;
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;

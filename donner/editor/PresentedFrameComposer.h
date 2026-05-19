@@ -21,12 +21,14 @@ struct PresentedFrameTileGeometry {
   bool isDragTarget = false;
 };
 
-/// Drag preview data needed to resolve the currently presented tile offset.
-struct PresentedDragPreview {
+/// Active drag baseline needed to resolve a presented tile offset.
+struct PresentedDragBaseline {
   /// Entity whose cached layer is being previewed.
   Entity entity = entt::null;
-  /// Document-space translation to apply while presenting the layer.
-  Vector2d translationDoc = Vector2d::Zero();
+  /// Document-space translation already represented by the presented tiles.
+  Vector2d representedTranslationDoc = Vector2d::Zero();
+  /// Current active drag translation in document space.
+  Vector2d activeTranslationDoc = Vector2d::Zero();
 };
 
 /// Output-space rectangle for one presented tile.
@@ -59,28 +61,24 @@ struct PresentedPixelRect {
  * Resolve the drag translation to apply while presenting a cached tile.
  *
  * @param tile Geometry for the tile being presented.
- * @param activeDragPreview Live drag preview, when a drag is currently active.
- * @param displayedDragPreview Preview state selected by the presentation state machine.
+ * @param dragBaseline Active drag baseline represented by the presented tiles.
  * @return Translation to add to the tile's canvas offset.
  */
 [[nodiscard]] Vector2d ResolvePresentedTileDragTranslation(
     const PresentedFrameTileGeometry& tile,
-    const std::optional<PresentedDragPreview>& activeDragPreview,
-    const std::optional<PresentedDragPreview>& displayedDragPreview);
+    const std::optional<PresentedDragBaseline>& dragBaseline);
 
 /**
  * Compute the output-space rectangle for a presented tile.
  *
  * @param tile Geometry for the tile being presented.
  * @param outputFromCanvasTransform Transform from canvas/document coordinates to output space.
- * @param activeDragPreview Live drag preview, when a drag is currently active.
- * @param displayedDragPreview Preview state selected by the presentation state machine.
+ * @param dragBaseline Active drag baseline represented by the presented tiles.
  * @return Output rectangle, or \c std::nullopt when tile or transform geometry is invalid.
  */
 [[nodiscard]] std::optional<PresentedTileRect> ComputePresentedTileRect(
     const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
-    const std::optional<PresentedDragPreview>& activeDragPreview,
-    const std::optional<PresentedDragPreview>& displayedDragPreview);
+    const std::optional<PresentedDragBaseline>& dragBaseline);
 
 /**
  * Round a floating-point presented rectangle to integer pixel coordinates.

@@ -118,6 +118,55 @@ TEST(ReproFileTest, RoundTripExpectationMetadataWithoutCrop) {
   std::filesystem::remove(path, ec);
 }
 
+TEST(ReproFileTest, RoundTripExtendedExpectationMetadata) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.metadata.expect = ReproExpectation{
+      .proofKind = ReproExpectationProofKind::ActiveDragAlignment,
+      .leftMouseDownOrdinal = 2,
+      .frameOffsetAfterLeftMouseDown = 46,
+      .minFrameIndex = 249,
+      .maxFrameIndex = 250,
+      .targetSelector = "#Lightning_glow_dark",
+      .cropMode = "document-canvas",
+      .activeFrameIndex = 249,
+      .comparisonFrameIndex = 250,
+      .expectedSelectionLabel = "<g> #Lightning_glow_dark",
+      .statusStartFrameIndex = 153,
+      .statusMaxFrameIndex = 333,
+      .forbiddenStatusSubstring = "compositor not yet re-rasterized",
+  };
+
+  const auto path = TempFile("expect_metadata_extended");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  EXPECT_EQ(*loaded->metadata.expect, *file.metadata.expect);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, ExpectationMetadataDefaultsProofKindForOldFixtures) {
+  const auto path = TempFile("expect_metadata_old");
+  {
+    std::ofstream out(path);
+    out << "{\"v\":2,\"svg\":\"foo.svg\",\"wnd\":[1600,900],\"scale\":2,\"exp\":0,"
+           "\"expect\":{\"left_mouse_down_ordinal\":2,"
+           "\"frame_offset_after_left_mouse_down\":1,\"min_frame_index\":153,"
+           "\"max_frame_index\":156,\"target_selector\":\"#target\","
+           "\"crop_mode\":\"document-canvas\"}}\n";
+  }
+
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  EXPECT_EQ(loaded->metadata.expect->proofKind, ReproExpectationProofKind::PresentedPixels);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
 TEST(ReproFileTest, NewRecordingsDefaultLegacyExperimentalModeToFalse) {
   ReproFile file;
   EXPECT_FALSE(file.metadata.experimentalMode);

@@ -5,6 +5,7 @@
 #include <unordered_set>
 
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/LayerInspectorDiagnostics.h"
 
 namespace donner::editor {
 
@@ -123,8 +124,10 @@ void LayerInspectorPanel::render(
   //   - desired != document → commit pipeline stalled.
   //   - document != compositor → compositor hasn't re-rasterized at
   //     the new doc canvas yet (only matters transiently).
-  const bool commitStalled = viewportDesiredCanvas != documentCanvas;
-  const bool rasterizeBehind = documentCanvas != state.canvasSize;
+  const CanvasFreshness canvasFreshness =
+      ClassifyCanvasFreshness(viewportDesiredCanvas, documentCanvas, state.canvasSize);
+  const bool commitStalled = canvasFreshness == CanvasFreshness::CommitStalled;
+  const bool rasterizeBehind = canvasFreshness == CanvasFreshness::CompositorBehind;
   ImGui::TextColored(
       commitStalled ? ImVec4(1.0f, 0.4f, 0.4f, 1.0f) : ImGui::GetStyle().Colors[ImGuiCol_Text],
       "  viewport: zoom=%.3f  dpr=%.3f  → desired %d×%d", viewportZoom, viewportDpr,
@@ -133,9 +136,7 @@ void LayerInspectorPanel::render(
                      : rasterizeBehind ? ImVec4(1.0f, 0.7f, 0.4f, 1.0f)
                                        : ImGui::GetStyle().Colors[ImGuiCol_Text],
                      "  document canvas: %d×%d%s", documentCanvas.x, documentCanvas.y,
-                     commitStalled     ? "  ← commit stalled vs desired"
-                     : rasterizeBehind ? "  ← compositor not yet re-rasterized"
-                                       : "");
+                     CanvasFreshnessStatusSuffix(canvasFreshness).data());
   if (state.splitPathActive || workerCompositorEntity != entt::null) {
     ImGui::Text("  drag entity (split=%u, worker=%u)",
                 static_cast<unsigned>(state.splitStaticLayersEntity),

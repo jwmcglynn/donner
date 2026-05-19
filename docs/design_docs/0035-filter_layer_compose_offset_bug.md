@@ -20,7 +20,7 @@ The root cause was source sync, not compositor state preservation:
 editor-owned writebacks were routed back through the structured text
 classifier. That updated the live DOM redundantly but left the live
 `XMLNode` source ranges at their pre-patch byte offsets, so a second
-writeback against an unidentified sibling could resolve to the *next*
+writeback against an unidentified sibling could resolve to the _next_
 sibling. The most visible artifact was the second `N` in "DONNER" shifting
 its neighbor.
 
@@ -135,7 +135,7 @@ app.applyMutation(EditorCommand::ReplaceDocumentCommand(*previousSourceText,
 Classified single-attribute insertions / modifications never re-parsed,
 which meant every `XMLNode::getNodeLocation()` returned the pre-patch
 byte range. The live DOM was correct; the compositor never sees the XML
-ranges directly. But the *next* editor-owned writeback computed its
+ranges directly. But the _next_ editor-owned writeback computed its
 target offset from the stale range and wrote into the wrong span —
 landing on the next sibling when neither sibling had an `id`.
 
@@ -207,11 +207,10 @@ design doc:
    visible post-release (compose runs every non-drag frame) without
    changing the underlying rasterize cost.
 
-   This is the same shape of problem 0034 (progressive rendering) solved
-   for *drag-start* after zoom: ship an intermediate (stretched prior
-   canvas) immediately, refine in the background. A future "progressive
-   rendering for canvas resizes" doc should apply the same pattern to
-   mid-drag and post-drag canvas-size changes.
+   This looked similar to the now-removed 0034 progressive-rendering
+   experiment, but that approach is not valid for canvas-size changes:
+   stale canvas-sized tiles cannot be safely combined with new request
+   geometry.
 
 2. **Tearing on elevated layers — wrong scale after zoom.** Symptom:
    after a zoom, individual promoted layers appear at the wrong scale
@@ -246,18 +245,18 @@ design doc:
 Hypotheses that were ruled out before the source-sync mechanism
 surfaced (kept brief; commit history has the long-form):
 
-- *Compositor state preservation* across promote → drag → demote: the
+- _Compositor state preservation_ across promote → drag → demote: the
   cached layer bitmaps and `canvasFromBitmap` deltas are correct
   end-to-end. Verified by direct `SetTransformCommand` tests rendering
   byte-for-byte against ground truth.
-- *`compositionTransformsPass` math*: `stamp.inv * current` produces
+- _`compositionTransformsPass` math_: `stamp.inv * current` produces
   `Translate(52, 6)` for the filter's drag, exactly the compose offset
   needed. Verified with instrumentation in the pass.
-- *Hysteresis-demote segment dirty propagation*: forcing
+- _Hysteresis-demote segment dirty propagation_: forcing
   `markAllSegmentsDirty()` at the end of `processPendingDemotions`
   doesn't change the failing pixels — segment re-rasterize was already
   firing.
-- *`setAttribute` no-op + dirty-flag side effect*: actually *was*
+- _`setAttribute` no-op + dirty-flag side effect_: actually _was_
   load-bearing, but only via the computed-cache drift it left behind
   (now fixed by `LayoutSystem().invalidate`). The dirty flags themselves
   were always correct.

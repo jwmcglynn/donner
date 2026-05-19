@@ -40,16 +40,10 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
   tiles_.reserve(preview.tiles.size());
 
   for (const auto& tile : preview.tiles) {
-    // Design doc 0034 progressive rendering: an `Intermediate`
-    // stage result may ship tiles with empty `bitmap` but a valid
-    // `id` — meaning "keep the existing GL texture; just update
-    // the blit position and dimensions". This lets the worker emit
-    // the intermediate in ~ms instead of hundreds of ms by
-    // skipping the canvas-sized segment bitmap copies. Stale-pixel
-    // tiles must already have a GL texture from a prior render or
-    // there's nothing to display; we skip them in that case.
-    const bool reusingExistingTexture = tile.bitmap.empty();
-    if (reusingExistingTexture) {
+    // Partial tile snapshots can carry metadata without a pixel payload.
+    // Preserve the already-uploaded texture for that tile id and update only
+    // its presentation geometry.
+    if (tile.bitmap.empty()) {
       auto it = tileTextures_.find(tile.id);
       if (it == tileTextures_.end()) {
         continue;

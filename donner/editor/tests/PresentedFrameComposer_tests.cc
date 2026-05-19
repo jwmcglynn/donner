@@ -9,23 +9,50 @@
 namespace donner::editor {
 namespace {
 
-std::optional<PresentedDragPreview> Preview(Entity entity, const Vector2d& translationDoc) {
-  return PresentedDragPreview{
+std::optional<PresentedDragBaseline> Baseline(Entity entity,
+                                              const Vector2d& representedTranslationDoc,
+                                              const Vector2d& activeTranslationDoc) {
+  return PresentedDragBaseline{
       .entity = entity,
-      .translationDoc = translationDoc,
+      .representedTranslationDoc = representedTranslationDoc,
+      .activeTranslationDoc = activeTranslationDoc,
   };
 }
 
-TEST(PresentedFrameComposerTest, ActiveDragTargetUsesLivePreviewTranslation) {
+TEST(PresentedFrameComposerTest, ActiveDragTargetAddsLiveDeltaToCachedTranslation) {
   PresentedFrameTileGeometry tile;
   tile.isDragTarget = true;
   tile.dragTranslationDoc = Vector2d(1.0, 2.0);
 
   const Entity entity{123};
-  const std::optional<PresentedDragPreview> active = Preview(entity, Vector2d(7.0, 8.0));
-  const std::optional<PresentedDragPreview> displayed = Preview(entity, Vector2d::Zero());
+  const std::optional<PresentedDragBaseline> baseline =
+      Baseline(entity, Vector2d::Zero(), Vector2d(7.0, 8.0));
 
-  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, active, displayed), Vector2d(7.0, 8.0));
+  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, baseline), Vector2d(8.0, 10.0));
+}
+
+TEST(PresentedFrameComposerTest, ActiveDragTargetDoesNotDoubleApplyDisplayedDelta) {
+  PresentedFrameTileGeometry tile;
+  tile.isDragTarget = true;
+  tile.dragTranslationDoc = Vector2d(14.0, 6.0);
+
+  const Entity entity{123};
+  const std::optional<PresentedDragBaseline> baseline =
+      Baseline(entity, Vector2d(14.0, 6.0), Vector2d(14.0, 6.0));
+
+  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, baseline), Vector2d(14.0, 6.0));
+}
+
+TEST(PresentedFrameComposerTest, ActiveRedragTargetKeepsPreviousDragOffset) {
+  PresentedFrameTileGeometry tile;
+  tile.isDragTarget = true;
+  tile.dragTranslationDoc = Vector2d(21.0, 32.0);
+
+  const Entity entity{123};
+  const std::optional<PresentedDragBaseline> baseline =
+      Baseline(entity, Vector2d::Zero(), Vector2d(7.0, 8.0));
+
+  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, baseline), Vector2d(28.0, 40.0));
 }
 
 TEST(PresentedFrameComposerTest, IdleDragTargetKeepsCachedTileTranslation) {
@@ -33,20 +60,15 @@ TEST(PresentedFrameComposerTest, IdleDragTargetKeepsCachedTileTranslation) {
   tile.isDragTarget = true;
   tile.dragTranslationDoc = Vector2d(1.0, 2.0);
 
-  const std::optional<PresentedDragPreview> displayed = Preview(Entity{123}, Vector2d::Zero());
-
-  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, std::nullopt, displayed), Vector2d(1.0, 2.0));
+  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, std::nullopt), Vector2d(1.0, 2.0));
 }
 
-TEST(PresentedFrameComposerTest, TargetSwitchKeepsCachedTileTranslation) {
+TEST(PresentedFrameComposerTest, MissingBaselineKeepsCachedTileTranslation) {
   PresentedFrameTileGeometry tile;
   tile.isDragTarget = true;
   tile.dragTranslationDoc = Vector2d(1.0, 2.0);
 
-  const std::optional<PresentedDragPreview> active = Preview(Entity{456}, Vector2d(7.0, 8.0));
-  const std::optional<PresentedDragPreview> displayed = Preview(Entity{123}, Vector2d::Zero());
-
-  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, active, displayed), Vector2d(1.0, 2.0));
+  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, std::nullopt), Vector2d(1.0, 2.0));
 }
 
 TEST(PresentedFrameComposerTest, NonDragTilesKeepCachedTileTranslation) {
@@ -54,11 +76,10 @@ TEST(PresentedFrameComposerTest, NonDragTilesKeepCachedTileTranslation) {
   tile.isDragTarget = false;
   tile.dragTranslationDoc = Vector2d(1.0, 2.0);
 
-  const Entity entity{123};
-  const std::optional<PresentedDragPreview> active = Preview(entity, Vector2d(7.0, 8.0));
-  const std::optional<PresentedDragPreview> displayed = Preview(entity, Vector2d(7.0, 8.0));
+  const std::optional<PresentedDragBaseline> baseline =
+      Baseline(Entity{123}, Vector2d(7.0, 8.0), Vector2d(7.0, 8.0));
 
-  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, active, displayed), Vector2d(1.0, 2.0));
+  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, baseline), Vector2d(1.0, 2.0));
 }
 
 TEST(PresentedFrameComposerTest, ComputesTileRectFromDocumentGeometry) {
@@ -70,7 +91,7 @@ TEST(PresentedFrameComposerTest, ComputesTileRectFromDocumentGeometry) {
   const Transform2d outputFromCanvasTransform =
       Transform2d::Scale(2.0) * Transform2d::Translate(Vector2d(100.0, 200.0));
   const std::optional<PresentedTileRect> rect =
-      ComputePresentedTileRect(tile, outputFromCanvasTransform, std::nullopt, std::nullopt);
+      ComputePresentedTileRect(tile, outputFromCanvasTransform, std::nullopt);
 
   ASSERT_TRUE(rect.has_value());
   EXPECT_EQ(rect->topLeft, Vector2d(124.0, 246.0));
@@ -88,7 +109,7 @@ TEST(PresentedFrameComposerTest, ComputesTileRectFromNonZeroCanvasOrigin) {
   const Transform2d outputFromCanvasTransform =
       Transform2d::Translate(-viewBoxTopLeft) * Transform2d::Scale(Vector2d(4.0, 5.0));
   const std::optional<PresentedTileRect> rect =
-      ComputePresentedTileRect(tile, outputFromCanvasTransform, std::nullopt, std::nullopt);
+      ComputePresentedTileRect(tile, outputFromCanvasTransform, std::nullopt);
 
   ASSERT_TRUE(rect.has_value());
   EXPECT_EQ(rect->topLeft, Vector2d(12.0, 30.0));
@@ -100,12 +121,10 @@ TEST(PresentedFrameComposerTest, RejectsInvalidTileGeometry) {
   tile.canvasOffsetDoc = Vector2d(10.0, 20.0);
   tile.bitmapDimsDoc = Vector2d(0.0, 40.0);
 
-  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(2.0), std::nullopt, std::nullopt)
-                   .has_value());
+  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(2.0), std::nullopt).has_value());
 
   tile.bitmapDimsDoc = Vector2d(30.0, -1.0);
-  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(2.0), std::nullopt, std::nullopt)
-                   .has_value());
+  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(2.0), std::nullopt).has_value());
 }
 
 TEST(PresentedFrameComposerTest, RejectsInvalidOutputTransform) {
@@ -113,13 +132,12 @@ TEST(PresentedFrameComposerTest, RejectsInvalidOutputTransform) {
   tile.canvasOffsetDoc = Vector2d(10.0, 20.0);
   tile.bitmapDimsDoc = Vector2d(30.0, 40.0);
 
-  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(0.0), std::nullopt, std::nullopt)
-                   .has_value());
+  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Scale(0.0), std::nullopt).has_value());
 
   const double infinity = std::numeric_limits<double>::infinity();
-  EXPECT_FALSE(ComputePresentedTileRect(tile, Transform2d::Translate(Vector2d(infinity, 0.0)),
-                                        std::nullopt, std::nullopt)
-                   .has_value());
+  EXPECT_FALSE(
+      ComputePresentedTileRect(tile, Transform2d::Translate(Vector2d(infinity, 0.0)), std::nullopt)
+          .has_value());
 }
 
 TEST(PresentedFrameComposerTest, RoundsPresentedRectToPixelRect) {

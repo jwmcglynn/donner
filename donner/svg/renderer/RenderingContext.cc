@@ -767,6 +767,7 @@ void RenderingContext::instantiateRenderTree(bool verbose, ParseWarningSink& war
   ensureComputedComponents(warningSink);
   instantiateRenderTreeWithPrecomputedTree(verbose);
 
+  renderState.needsFullRebuild = false;
   renderState.needsFullStyleRecompute = false;
   renderState.hasBeenBuilt = true;
 }

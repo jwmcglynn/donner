@@ -1,4 +1,4 @@
-{"v":2,"svg":"donner_splash.svg","wnd":[1600,900],"scale":2,"exp":1,"at":"2026-05-14T00:07:35Z"}
+{"v":2,"svg":"donner_splash.svg","wnd":[1600,900],"scale":2,"exp":1,"at":"2026-05-14T00:07:35Z","expect":{"proof_kind":"worker-liveness","left_mouse_down_ordinal":2,"frame_offset_after_left_mouse_down":0,"min_frame_index":153,"max_frame_index":333,"target_selector":"#Lightning_glow_dark","crop_mode":"full","expected_selection_label":"<g> #Lightning_glow_dark","status_start_frame_index":153,"status_max_frame_index":333,"forbidden_status_substring":"compositor not yet re-rasterized"}}
 {"f":0,"t":0,"dt":16.6667,"mx":1064,"my":718,"btn":0,"mod":0,"vp":{"ox":0,"oy":0,"pw":0,"ph":0,"dpr":1,"z":1,"pdx":0,"pdy":0,"psx":0,"psy":0,"vbx":0,"vby":0,"vbw":0,"vbh":0}}
 {"f":1,"t":0.554047,"dt":427.782,"mx":1064,"my":718,"btn":0,"mod":0,"vp":{"ox":568,"oy":29,"pw":604,"ph":863,"dpr":2,"z":1,"pdx":446,"pdy":256,"psx":870,"psy":460.5,"vbx":0,"vby":0,"vbw":892,"vbh":512}}
 {"f":2,"t":0.580179,"dt":152.451,"mx":1064,"my":718,"btn":0,"mod":0,"vp":{"ox":568,"oy":29,"pw":590,"ph":863,"dpr":2,"z":1,"pdx":446,"pdy":256,"psx":870,"psy":460.5,"vbx":0,"vby":0,"vbw":892,"vbh":512}}

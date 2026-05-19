@@ -55,6 +55,37 @@ AsyncRenderer::~AsyncRenderer() {
   }
 }
 
+void AsyncRenderer::notePublishedCompositedPreview(
+    const std::optional<RenderResult::CompositedPreview>& compositedPreview) {
+  if (!compositedPreview.has_value() || !compositedPreview->valid()) {
+    return;
+  }
+
+  // A full-canvas fallback replaces the split tile set in `GlTextureCache`,
+  // so future split previews must resend pixels before switching back to
+  // metadata-only updates.
+  if (compositedPreview->tiles.size() == 1u &&
+      compositedPreview->tiles.front().id == "full-canvas") {
+    publishedCompositedTiles_.clear();
+    return;
+  }
+
+  std::unordered_map<std::string, PublishedCompositedTile> nextPublished;
+  nextPublished.reserve(compositedPreview->tiles.size());
+  for (const RenderResult::CompositedTile& tile : compositedPreview->tiles) {
+    if (!tile.bitmap.empty()) {
+      nextPublished[tile.id] = PublishedCompositedTile{
+          .generation = tile.generation,
+          .bitmapDims = tile.bitmap.dimensions,
+      };
+    } else if (const auto it = publishedCompositedTiles_.find(tile.id);
+               it != publishedCompositedTiles_.end()) {
+      nextPublished[tile.id] = it->second;
+    }
+  }
+  publishedCompositedTiles_ = std::move(nextPublished);
+}
+
 bool AsyncRenderer::workerStateBusy(const WorkerState& state) {
   return std::holds_alternative<RenderingState>(state) ||
          std::holds_alternative<CancellingState>(state) || std::holds_alternative<DoneState>(state);
@@ -80,10 +111,8 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
     }
 
     if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
-      // The newest request wins. Drop any staged intermediate from the active
-      // render so a superseded preview cannot leak after the replacement.
+      // The newest request wins.
       rendering->pendingRequest.emplace(std::move(stagedRequest));
-      rendering->intermediateResult.reset();
       signalCancel = true;
     } else {
       RenderingState nextRendering;
@@ -128,18 +157,7 @@ void AsyncRenderer::cancelInFlight() {
 
 std::optional<RenderResult> AsyncRenderer::pollResult() {
   std::lock_guard<std::mutex> lock(mutex_);
-  // Design doc 0034 progressive rendering: drain staged intermediates before
-  // final results. Rendering/Done both remain busy until the final result is
-  // drained.
-  if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
-    if (rendering->intermediateResult.has_value()) {
-      return std::move(*std::exchange(rendering->intermediateResult, std::nullopt));
-    }
-  }
   if (auto* done = std::get_if<DoneState>(&workerState_)) {
-    if (done->intermediateResult.has_value()) {
-      return std::move(*std::exchange(done->intermediateResult, std::nullopt));
-    }
     RenderResult result = std::move(done->result);
     workerState_ = IdleState{};
     return result;
@@ -178,7 +196,12 @@ void AsyncRenderer::workerLoop() {
       if (std::holds_alternative<CancellingState>(workerState_)) {
         // `cancelInFlight` raced with the worker before it could
         // start renderFrame. Transition to Idle and loop back to cv_.wait.
+        std::function<void()> wake = wakeCallback_;
         workerState_ = IdleState{};
+        lock.unlock();
+        if (wake) {
+          wake();
+        }
         continue;
       }
       auto* rendering = std::get_if<RenderingState>(&workerState_);
@@ -242,6 +265,7 @@ void AsyncRenderer::workerLoop() {
       compositorEntity_ = entt::null;
       compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
       compositorDocumentGeneration_ = request.documentGeneration;
+      publishedCompositedTiles_.clear();
       compositorReconstructCount_.fetch_add(1, std::memory_order_release);
       {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -277,6 +301,7 @@ void AsyncRenderer::workerLoop() {
         compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
         compositorResetCount_.fetch_add(1, std::memory_order_release);
       }
+      publishedCompositedTiles_.clear();
       compositorDocument_ = requestDocument;
       compositorDocumentGeneration_ = request.documentGeneration;
       {
@@ -362,22 +387,11 @@ void AsyncRenderer::workerLoop() {
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
     compositor_->setSkipMainComposeDuringSplit(activeDragRequest);
 
-    // Build a CompositedPreview from the compositor's current tile
-    // state. Used for both stages (design doc 0034):
-    //   * `Final` (skipNonDragTargetBitmaps=false): every tile
-    //     carries fresh pixels. Editor uploads each as a new GL
-    //     texture.
-    //   * `Intermediate` (skipNonDragTargetBitmaps=true): only the
-    //     drag-target layer carries pixels. Other tiles ship
-    //     metadata only (empty bitmap, but valid tile id +
-    //     position); the editor's `GlTextureCache::upload
-    //     Composited` keeps their previously-uploaded GL texture
-    //     alive via the tile-id match and blits at the metadata's
-    //     position. Lets the intermediate ship in ~ms instead of
-    //     hundreds of ms at high zoom (~60 MB per canvas-sized
-    //     segment × N segments to copy out of the compositor).
-    const auto buildCompositedPreview =
-        [&](bool skipNonDragTargetBitmaps) -> std::optional<RenderResult::CompositedPreview> {
+    // Build a CompositedPreview from the compositor's current tile state.
+    // Tiles whose id/generation/dimensions were already published carry
+    // metadata only; the GL cache keeps the existing texture and applies
+    // updated presentation geometry.
+    const auto buildCompositedPreview = [&]() -> std::optional<RenderResult::CompositedPreview> {
       if (!request.dragPreview.has_value() || compositorEntity_ == entt::null ||
           compositor_->layerCount() == 0u) {
         return std::nullopt;
@@ -394,19 +408,64 @@ void AsyncRenderer::workerLoop() {
         return Vector2d(scaleX != 0.0 ? canvas.x / scaleX : 0.0,
                         scaleY != 0.0 ? canvas.y / scaleY : 0.0);
       };
-      const auto payload = skipNonDragTargetBitmaps
-                               ? svg::compositor::CompositorTileBitmapPayload::DragTargetOnly
-                               : svg::compositor::CompositorTileBitmapPayload::All;
-      auto compositorTiles = compositor_->snapshotTilesForUpload(payload);
+      const auto publishedTextureMatches =
+          [this](const std::string& tileId, std::uint64_t generation, const Vector2i& bitmapDims) {
+            const auto publishedIt = publishedCompositedTiles_.find(tileId);
+            return publishedIt != publishedCompositedTiles_.end() &&
+                   publishedIt->second.generation == generation &&
+                   publishedIt->second.bitmapDims.x == bitmapDims.x &&
+                   publishedIt->second.bitmapDims.y == bitmapDims.y;
+          };
+
+      using svg::compositor::CompositorTileBitmapPayload;
+      auto compositorTiles =
+          compositor_->snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
+      bool canReuseNonDragTextures = !publishedCompositedTiles_.empty();
+      bool activeDragTileWillHaveBitmap = !activeDragRequest;
+      for (const auto& ct : compositorTiles) {
+        if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) {
+          continue;
+        }
+        const bool currentActiveDragLayer = activeDragRequest && request.dragPreview.has_value() &&
+                                            ct.layerEntity == request.dragPreview->entity;
+        if (currentActiveDragLayer) {
+          activeDragTileWillHaveBitmap =
+              ct.isDragTarget ||
+              publishedTextureMatches(std::to_string(ct.tileId), ct.generation, ct.bitmapDims);
+          if (!activeDragTileWillHaveBitmap) {
+            canReuseNonDragTextures = false;
+            break;
+          }
+          continue;
+        }
+        if (ct.isDragTarget && activeDragRequest) continue;
+        if (!publishedTextureMatches(std::to_string(ct.tileId), ct.generation, ct.bitmapDims)) {
+          canReuseNonDragTextures = false;
+          break;
+        }
+      }
+      if (!activeDragTileWillHaveBitmap) {
+        canReuseNonDragTextures = false;
+      }
+      const CompositorTileBitmapPayload payload =
+          canReuseNonDragTextures ? (activeDragRequest ? CompositorTileBitmapPayload::DragTargetOnly
+                                                       : CompositorTileBitmapPayload::MetadataOnly)
+                                  : CompositorTileBitmapPayload::All;
+      if (payload != CompositorTileBitmapPayload::MetadataOnly) {
+        compositorTiles = compositor_->snapshotTilesForUpload(payload);
+      }
       std::vector<RenderResult::CompositedTile> previewTiles;
       previewTiles.reserve(compositorTiles.size());
-      bool hasCurrentDragTargetBitmap = false;
       for (auto& ct : compositorTiles) {
         if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) continue;
         using OutKind = RenderResult::CompositedTile::Kind;
+        const std::string tileId = std::to_string(ct.tileId);
+        const bool metadataOnly = (!ct.isDragTarget || !activeDragRequest) &&
+                                  publishedTextureMatches(tileId, ct.generation, ct.bitmapDims);
+        if (!metadataOnly && ct.bitmap.empty()) continue;
         RenderResult::CompositedTile tile;
         tile.kind = ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer;
-        tile.id = std::to_string(ct.tileId);
+        tile.id = tileId;
         tile.generation = ct.generation;
         tile.canvasOffsetDoc = canvasToDoc(ct.canvasOffsetPx);
         tile.bitmapDimsDoc = canvasToDoc(
@@ -415,23 +474,12 @@ void AsyncRenderer::workerLoop() {
           tile.dragTranslationDoc = canvasToDoc(ct.canvasFromBitmap.translation());
         }
         tile.isDragTarget = ct.isDragTarget;
-        if (!ct.bitmap.empty()) {
+        if (!metadataOnly) {
           tile.bitmap = std::move(ct.bitmap);
-          if (skipNonDragTargetBitmaps && tile.isDragTarget &&
-              ct.layerEntity == compositorEntity_) {
-            hasCurrentDragTargetBitmap = true;
-          }
         }
         previewTiles.push_back(std::move(tile));
       }
-      // A progressive intermediate is only valid if it carries fresh
-      // pixels for the CURRENT drag target. During a target switch,
-      // `promoteEntity(new)` has already changed `compositorEntity_`,
-      // but `renderFrame` has not yet resynced the split target; the
-      // early snapshot can otherwise contain only empty metadata for
-      // the previous tile set. Publishing that relabels stale GL
-      // textures as the new drag entity and causes a one-frame flash.
-      if (previewTiles.empty() || (skipNonDragTargetBitmaps && !hasCurrentDragTargetBitmap)) {
+      if (previewTiles.empty()) {
         return std::nullopt;
       }
       return RenderResult::CompositedPreview{
@@ -444,62 +492,6 @@ void AsyncRenderer::workerLoop() {
     double workerMs = 0.0;
     bool renderCompleted = true;
     const auto renderStart = std::chrono::steady_clock::now();
-    // The compositor fires this callback after the drag-target layer
-    // rasterizes and before canvas-sized segment work. The intermediate
-    // result carries only tile updates; the editor keeps existing tiles
-    // visible while the final refinement catches up.
-    //
-    // Only meaningful when an ActiveDrag is in flight — the user
-    // is waiting for visible feedback from their click-and-drag.
-    // For Selection-kind prewarms (post-click, no drag yet, or
-    // pinch-zoom on a selected entity) the intermediate path
-    // misaligns: the intermediate's per-tile `canvasOffsetDoc`
-    // is computed against the NEW canvas-coordinate frame, but
-    // the cached GL textures are rasterized in the PRIOR canvas-
-    // coordinate frame. Without an ActiveDrag the user has no
-    // input latency to win and the misalignment shows as the
-    // scene jumping by the canvas-scale ratio until the final
-    // refinement lands. Skip the intermediate for Selection-kind.
-    const bool emitIntermediate =
-        request.dragPreview.has_value() &&
-        request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
-    const auto onIntermediate = [&]() {
-      const auto t = std::chrono::steady_clock::now();
-      const double partialMs = std::chrono::duration<double, std::milli>(t - renderStart).count();
-      // Design doc 0034: the intermediate result intentionally
-      // ships WITHOUT a fresh full-canvas snapshot. Copying the
-      // renderer surface at high zoom (5228×3000 = 60 MB at 3×
-      // canvas) takes ~30–50 ms — significant on the critical
-      // path. The editor keeps the previous composited tiles live;
-      // the intermediate's compositedPreview tiles overlay the
-      // drag-target layer (intrinsic-sized in doc units; valid at
-      // any viewport scale) on top.
-      auto intermediatePreview = buildCompositedPreview(/*skipNonDragTargetBitmaps=*/true);
-      if (!intermediatePreview.has_value()) {
-        return;
-      }
-      std::function<void()> wake;
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto* rendering = std::get_if<RenderingState>(&workerState_);
-        // Don't stage if we've been cancelled, shut down, or superseded between
-        // the callback firing and reaching this lock.
-        if (rendering == nullptr || rendering->pendingRequest.has_value()) {
-          return;
-        }
-        RenderResult intermediate;
-        intermediate.stage = RenderResult::Stage::Intermediate;
-        intermediate.bitmap = svg::RendererBitmap{};
-        intermediate.compositedPreview = std::move(intermediatePreview);
-        intermediate.version = request.version;
-        intermediate.workerMs = partialMs;
-        rendering->intermediateResult = std::move(intermediate);
-        wake = wakeCallback_;
-      }
-      if (wake) {
-        wake();
-      }
-    };
     {
       ZoneScopedN("Compositor::renderFrame");
       // Wall-clock the core backend render so the editor can plot it
@@ -508,11 +500,7 @@ void AsyncRenderer::workerLoop() {
       // total worker iteration (which also pays for takeSnapshot and
       // the result handoff). Scoped here so Tracy's zone cost isn't
       // included either.
-      if (emitIntermediate) {
-        renderCompleted = compositor_->renderFrame(viewport, cancelRender_, onIntermediate);
-      } else {
-        renderCompleted = compositor_->renderFrame(viewport, cancelRender_);
-      }
+      renderCompleted = compositor_->renderFrame(viewport, cancelRender_);
       const auto renderEnd = std::chrono::steady_clock::now();
       workerMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
     }
@@ -522,20 +510,25 @@ void AsyncRenderer::workerLoop() {
     // request or park after a cancel-without-replacement.
     if (!renderCompleted) {
       cancelledRenderCount_.fetch_add(1, std::memory_order_release);
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (std::holds_alternative<CancellingState>(workerState_)) {
-        workerState_ = IdleState{};
-      } else if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
-        rendering->intermediateResult.reset();
+      std::function<void()> wake;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (std::holds_alternative<CancellingState>(workerState_)) {
+          workerState_ = IdleState{};
+          wake = wakeCallback_;
+        }
+      }
+      if (wake) {
+        wake();
       }
       continue;
     }
 
-    // Build the final-stage CompositedPreview from the compositor tile set
-    // when available. If the splitter cannot provide tiles for this frame,
-    // the final snapshot below is wrapped as a single full-canvas tile so
-    // presentation still goes through the compositor path.
-    compositedPreview = buildCompositedPreview(/*skipNonDragTargetBitmaps=*/false);
+    // Build a CompositedPreview from the compositor tile set when available.
+    // If the splitter cannot provide tiles for this frame, the final snapshot
+    // below is wrapped as a single full-canvas tile so presentation still goes
+    // through the compositor path.
+    compositedPreview = buildCompositedPreview();
 
     // Selection chrome is no longer baked into the bitmap — main.cc
     // draws it via the ImGui draw list every frame so clicks don't
@@ -564,12 +557,12 @@ void AsyncRenderer::workerLoop() {
       // superseded mid-render.
       if (auto* rendering = std::get_if<RenderingState>(&workerState_)) {
         if (rendering->pendingRequest.has_value()) {
-          rendering->intermediateResult.reset();
           continue;
         }
 
+        notePublishedCompositedPreview(compositedPreview);
+
         DoneState done;
-        done.intermediateResult = std::move(rendering->intermediateResult);
         done.result.bitmap = std::move(bitmap);
         done.result.compositedPreview = std::move(compositedPreview);
         done.result.version = request.version;
@@ -594,6 +587,7 @@ void AsyncRenderer::workerLoop() {
         // Idle so the worker's cv_.wait at the top of the loop
         // doesn't deadlock.
         workerState_ = IdleState{};
+        wake = wakeCallback_;
       }
     }
     if (wake) {

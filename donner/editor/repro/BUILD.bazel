@@ -28,6 +28,7 @@ donner_cc_library(
         ":repro_file",
         "//donner/base",
         "//donner/editor:editor_shell",
+        "//donner/editor:layer_inspector_diagnostics",
         "//donner/editor:viewport_state",
         "//donner/editor/gui:editor_window",
         "//donner/svg/renderer:renderer_image_io",

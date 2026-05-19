@@ -152,6 +152,47 @@ EditorShell::~EditorShell() {
   }
 }
 
+void EditorShell::overrideViewportForReplay(const ViewportState& viewport) {
+  pendingViewportReplayOverride_ = viewport;
+}
+
+std::optional<std::string> EditorShell::selectedElementLabelForReadback() const {
+  const std::optional<svg::SVGElement>& selected = app_.selectedElement();
+  if (!selected.has_value()) {
+    return std::nullopt;
+  }
+
+  const std::string_view tagName = selected->tagName().name;
+  std::string label = "<";
+  label.append(tagName.data(), tagName.size());
+  label.push_back('>');
+
+  const RcString id = selected->id();
+  const std::string_view idSv = id;
+  if (!idSv.empty()) {
+    label.push_back(' ');
+    label.push_back('#');
+    label.append(idSv.data(), idSv.size());
+  }
+  return label;
+}
+
+LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() const {
+  const auto& viewport = interactionController_.viewport();
+  const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();
+  const bool workerBusy = renderCoordinator_.asyncRenderer().isBusy();
+  const Vector2i documentCanvas = (!workerBusy && app_.hasDocument())
+                                      ? app_.document().document().canvasSize()
+                                      : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
+  const Vector2i compositorCanvas = renderCoordinator_.asyncRenderer().compositorState().canvasSize;
+  const CanvasFreshness freshness =
+      ClassifyCanvasFreshness(viewportDesiredCanvas, documentCanvas, compositorCanvas);
+  return LayerInspectorStatusReadback{
+      .canvasFreshness = freshness,
+      .statusSuffix = std::string(CanvasFreshnessStatusSuffix(freshness)),
+  };
+}
+
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   auto contents = LoadFile(std::string(path));
   if (!contents.has_value()) {
@@ -290,14 +331,17 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                          : std::nullopt);
   interactionController_.updateDevicePixelRatio(window_.contentScale().x);
 
+  if (pendingViewportReplayOverride_.has_value()) {
+    interactionController_.viewport() = *pendingViewportReplayOverride_;
+    pendingViewportReplayOverride_.reset();
+    viewportInitialized_ = true;
+  }
+
   if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
       interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
     interactionController_.resetToActualSize();
     viewportInitialized_ = true;
   }
-
-  renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                        textures_);
 
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);

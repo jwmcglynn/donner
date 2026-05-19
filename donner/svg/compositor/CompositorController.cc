@@ -1019,50 +1019,12 @@ bool CompositorController::renderFrame(const RenderViewport& viewport, Cancellat
   return !cancelled;
 }
 
-bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token,
-                                       const std::function<void()>& onIntermediate) {
-  cancelToken_.emplace(token);
-  intermediateCallback_ = &onIntermediate;
-  renderFrame(viewport);
-  const bool cancelled = token.isCancelled();
-  cancelToken_.reset();
-  intermediateCallback_ = nullptr;
-  return !cancelled;
-}
-
 void CompositorController::renderFrame(const RenderViewport& viewport) {
   ZoneScopedN("Compositor::renderFrame");
 
   lastViewport_ = viewport;
   hasLastViewport_ = true;
-
   Registry& registry = document().registry();
-
-  // Design doc 0034 progressive rendering: shoulder-tap the caller before
-  // expensive full-rebuild work. Steady-state drag frames already hit the fast
-  // path, so an extra intermediate snapshot would add overhead without changing
-  // visible pixels.
-  //
-  // At this emit point every cached state from the prior render is
-  // still in place:
-  //
-  //   - `layers_` carry intrinsic-sized bitmaps in doc units (M2A).
-  //     They display correctly at the new viewport scale via the
-  //     editor's per-tile `bitmapDimsDoc * pixelsPerDocUnit` blit.
-  //   - `staticSegments_` carry canvas-sized bitmaps at the PRIOR
-  //     canvas size. Editor stretches them; user sees them slightly
-  //     blurry until the canvas-sized refinement lands.
-  //   - The renderer surface holds the prior frame's flat baseline,
-  //     valid as the GL fallback texture.
-  if (intermediateCallback_ != nullptr && *intermediateCallback_ && !layers_.empty() &&
-      !isCancelled()) {
-    const bool intermediateWorthEmitting =
-        rootDirty_ || (registry.ctx().contains<components::RenderTreeState>() &&
-                       registry.ctx().get<components::RenderTreeState>().needsFullRebuild);
-    if (intermediateWorthEmitting) {
-      (*intermediateCallback_)();
-    }
-  }
 
   // Design doc 0033 §M9 — age the hysteresis queue and flush
   // expirations before the dirty-flag snapshot. An entity that
@@ -1399,9 +1361,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       ZoneScopedN("Compositor::driver.draw (first-frame)");
       driver.draw(document());
     }
-    // `driver.draw` runs preparation for the first frame. Clear the rebuild
-    // flag it leaves behind so the eager-warmed compositor caches survive the
-    // next `renderFrame`.
+    // `driver.draw` runs preparation for the first frame. Defensively clear
+    // the rebuild flag so the eager-warmed compositor caches survive the next
+    // `renderFrame`.
     if (registry.ctx().contains<components::RenderTreeState>()) {
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }
@@ -1499,10 +1461,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     documentPrepared_ = true;
     refreshLayerMetadata();
 
-    // After preparation, clear the needsFullRebuild flag so consumeDirtyFlags doesn't
-    // re-trigger a full rebuild on the next frame. The render tree instantiation process
-    // leaves needsFullRebuild=true as a side effect of invalidateRenderTree(); we consume
-    // that signal here.
+    // After preparation, keep the global rebuild signal consumed. RenderingContext clears this
+    // after a successful render-tree instantiation; this write is a defensive no-op for callers
+    // that still reach this path with the flag set.
     if (registry.ctx().contains<components::RenderTreeState>()) {
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }

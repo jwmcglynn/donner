@@ -70,6 +70,24 @@ std::optional<ReproEvent::Kind> ParseEventKind(std::string_view tag) {
   return std::nullopt;
 }
 
+const char* ProofKindTag(ReproExpectationProofKind kind) {
+  switch (kind) {
+    case ReproExpectationProofKind::PresentedPixels: return "presented-pixels";
+    case ReproExpectationProofKind::ActiveDragAlignment: return "active-drag-alignment";
+    case ReproExpectationProofKind::Selection: return "selection";
+    case ReproExpectationProofKind::WorkerLiveness: return "worker-liveness";
+  }
+  return "presented-pixels";
+}
+
+std::optional<ReproExpectationProofKind> ParseProofKind(std::string_view tag) {
+  if (tag == "presented-pixels") return ReproExpectationProofKind::PresentedPixels;
+  if (tag == "active-drag-alignment") return ReproExpectationProofKind::ActiveDragAlignment;
+  if (tag == "selection") return ReproExpectationProofKind::Selection;
+  if (tag == "worker-liveness") return ReproExpectationProofKind::WorkerLiveness;
+  return std::nullopt;
+}
+
 void WriteHit(std::ostream& os, const ReproHit& hit) {
   os << "\"hit\":{";
   bool first = true;
@@ -120,7 +138,9 @@ void WriteEvent(std::ostream& os, const ReproEvent& ev) {
 
 void WriteExpectation(std::ostream& os, const ReproExpectation& expect) {
   os << "\"expect\":{"
-     << "\"left_mouse_down_ordinal\":" << expect.leftMouseDownOrdinal
+     << "\"proof_kind\":";
+  WriteQuotedJsonString(os, ProofKindTag(expect.proofKind));
+  os << ",\"left_mouse_down_ordinal\":" << expect.leftMouseDownOrdinal
      << ",\"frame_offset_after_left_mouse_down\":" << expect.frameOffsetAfterLeftMouseDown
      << ",\"min_frame_index\":" << expect.minFrameIndex
      << ",\"max_frame_index\":" << expect.maxFrameIndex << ",\"target_selector\":";
@@ -131,6 +151,26 @@ void WriteExpectation(std::ostream& os, const ReproExpectation& expect) {
     const ReproExpectedCrop& crop = *expect.cropRect;
     os << ",\"crop\":{\"x\":" << crop.x << ",\"y\":" << crop.y << ",\"w\":" << crop.width
        << ",\"h\":" << crop.height << '}';
+  }
+  if (expect.activeFrameIndex.has_value()) {
+    os << ",\"active_frame_index\":" << *expect.activeFrameIndex;
+  }
+  if (expect.comparisonFrameIndex.has_value()) {
+    os << ",\"comparison_frame_index\":" << *expect.comparisonFrameIndex;
+  }
+  if (expect.expectedSelectionLabel.has_value()) {
+    os << ",\"expected_selection_label\":";
+    WriteQuotedJsonString(os, *expect.expectedSelectionLabel);
+  }
+  if (expect.statusStartFrameIndex.has_value()) {
+    os << ",\"status_start_frame_index\":" << *expect.statusStartFrameIndex;
+  }
+  if (expect.statusMaxFrameIndex.has_value()) {
+    os << ",\"status_max_frame_index\":" << *expect.statusMaxFrameIndex;
+  }
+  if (expect.forbiddenStatusSubstring.has_value()) {
+    os << ",\"forbidden_status_substring\":";
+    WriteQuotedJsonString(os, *expect.forbiddenStatusSubstring);
   }
   os << '}';
 }
@@ -443,6 +483,31 @@ std::optional<ReproExpectation> ParseExpectationObject(std::string_view body) {
     out = std::move(*value);
     return true;
   };
+  const auto readOptionalIntField = [&](std::string_view key, std::optional<int>& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return true;
+    auto v = ReadNumber(r);
+    if (!v) return false;
+    out = static_cast<int>(*v);
+    return true;
+  };
+  const auto readOptionalStringField = [&](std::string_view key, std::optional<std::string>& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return true;
+    auto value = ReadString(r);
+    if (!value.has_value()) return false;
+    out = std::move(*value);
+    return true;
+  };
+
+  auto proofKindRest = FindKey(body, "proof_kind");
+  if (!proofKindRest.empty()) {
+    auto proofKindString = ReadString(proofKindRest);
+    if (!proofKindString.has_value()) return std::nullopt;
+    auto proofKind = ParseProofKind(*proofKindString);
+    if (!proofKind.has_value()) return std::nullopt;
+    expect.proofKind = *proofKind;
+  }
 
   if (!readIntField("left_mouse_down_ordinal", expect.leftMouseDownOrdinal)) {
     return std::nullopt;
@@ -466,6 +531,25 @@ std::optional<ReproExpectation> ParseExpectationObject(std::string_view body) {
     auto crop = ParseExpectedCropObject(cropBody);
     if (!crop.has_value()) return std::nullopt;
     expect.cropRect = *crop;
+  }
+
+  if (!readOptionalIntField("active_frame_index", expect.activeFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readOptionalIntField("comparison_frame_index", expect.comparisonFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readOptionalStringField("expected_selection_label", expect.expectedSelectionLabel)) {
+    return std::nullopt;
+  }
+  if (!readOptionalIntField("status_start_frame_index", expect.statusStartFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readOptionalIntField("status_max_frame_index", expect.statusMaxFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readOptionalStringField("forbidden_status_substring", expect.forbiddenStatusSubstring)) {
+    return std::nullopt;
   }
 
   return expect;

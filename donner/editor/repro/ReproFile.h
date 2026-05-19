@@ -186,8 +186,18 @@ struct ReproExpectedCrop {
   friend bool operator==(const ReproExpectedCrop&, const ReproExpectedCrop&) = default;
 };
 
+/// What a curated replay fixture is expected to prove.
+enum class ReproExpectationProofKind {
+  PresentedPixels,
+  ActiveDragAlignment,
+  Selection,
+  WorkerLiveness,
+};
+
 /// Human-reviewed expectation metadata for important replay fixtures.
 struct ReproExpectation {
+  /// Kind of proof this fixture expectation encodes.
+  ReproExpectationProofKind proofKind = ReproExpectationProofKind::PresentedPixels;
   /// Left-mouse-down ordinal that identifies the representative click.
   int leftMouseDownOrdinal = 0;
   /// Frame offset after the representative left-mouse-down.
@@ -202,6 +212,18 @@ struct ReproExpectation {
   std::string cropMode;
   /// Optional crop inside the selected crop mode.
   std::optional<ReproExpectedCrop> cropRect;
+  /// Active drag frame that should be captured before mouseup.
+  std::optional<int> activeFrameIndex;
+  /// Frame to compare against the active frame.
+  std::optional<int> comparisonFrameIndex;
+  /// Expected final selection label for selection/liveness fixtures.
+  std::optional<std::string> expectedSelectionLabel;
+  /// First frame in a status-liveness assertion window.
+  std::optional<int> statusStartFrameIndex;
+  /// Last frame in a status-liveness assertion window.
+  std::optional<int> statusMaxFrameIndex;
+  /// Status substring that must not persist through the assertion window.
+  std::optional<std::string> forbiddenStatusSubstring;
 
   friend bool operator==(const ReproExpectation&, const ReproExpectation&) = default;
 };

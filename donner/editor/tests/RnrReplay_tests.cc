@@ -303,21 +303,10 @@ protected:
   /// Per-mouse-down measurement for `ReplayRecordingAsync`.
   struct AsyncMouseDownLatency {
     std::uint64_t mouseDownFrameIndex = 0;
-    /// Wall-clock from bufferPendingClick to the first render result
-    /// landing AFTER the slow-path mouseDown was dispatched and a
-    /// drag-bearing render request was posted. With design doc 0034
-    /// progressive rendering, this is typically the `Intermediate`
-    /// result emitted after the drag-target layer rasterize but
-    /// before the canvas-sized refinement. Equivalent to click →
-    /// first drag-pixel-visible in the live editor.
-    double clickToFirstDragPixelMs = 0.0;
-    /// Wall-clock from bufferPendingClick to the `Final`-stage
-    /// render result landing. If progressive rendering isn't
-    /// engaging (small canvas, no `Intermediate` emitted), equal to
-    /// `clickToFirstDragPixelMs`. Otherwise typically much larger:
-    /// the canvas-sized work runs in the background after the
-    /// intermediate ships.
-    double clickToFinalPixelMs = 0.0;
+    /// Wall-clock from bufferPendingClick to the render result landing
+    /// after the slow-path mouseDown was dispatched and a drag-bearing
+    /// render request was posted.
+    double clickToDragRenderMs = 0.0;
     /// Time from bufferPendingClick to the slow-path mouseDown firing
     /// (i.e. how long the click was deferred waiting for the worker
     /// to be `!isBusy()`).
@@ -469,7 +458,7 @@ protected:
 
   /// Async-mode replay that mirrors production's idle-gated render posting.
   /// This exercises worker prewarm, deferred click, cancellation, and
-  /// progressive-result timing without GL upload.
+  /// render-result timing without GL upload.
   void ReplayRecordingAsync(const std::filesystem::path& reproPath, AsyncReplaySnapshot* out) {
     ASSERT_NE(out, nullptr);
 
@@ -526,14 +515,6 @@ protected:
       bool dispatched = false;
       std::chrono::steady_clock::time_point dispatchedAt;
       bool awaitingFirstDragRender = false;
-      // Design doc 0034 progressive rendering: track whether the
-      // first result (intermediate or final) has landed. When it
-      // does we record `clickToFirstDragPixelMs` and push a latency
-      // entry; we keep the latency entry in-flight until the
-      // matching `Final` result lands so we can fill in
-      // `clickToFinalPixelMs`.
-      bool firstDragRenderRecorded = false;
-      std::size_t latencyIndex = 0;
     };
     std::optional<PendingClick> pendingClick;
 
@@ -544,34 +525,17 @@ protected:
       }
       ++out->rendersCompleted;
       out->maxWorkerRenderMs = std::max(out->maxWorkerRenderMs, result->workerMs);
-      // First result after the click was dispatched — record the
-      // click-to-first-pixel latency. With progressive rendering
-      // this is the intermediate (drag-target layer fresh, segments
-      // stale); the matching final result lands shortly after and
-      // fills in `clickToFinalPixelMs`.
       if (pendingClick.has_value() && pendingClick->dispatched &&
-          pendingClick->awaitingFirstDragRender && !pendingClick->firstDragRenderRecorded) {
+          pendingClick->awaitingFirstDragRender) {
         AsyncMouseDownLatency latency;
         latency.mouseDownFrameIndex = pendingClick->frameIndex;
-        latency.clickToFirstDragPixelMs =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                      pendingClick->queuedAt)
-                .count();
+        latency.clickToDragRenderMs = std::chrono::duration<double, std::milli>(
+                                          std::chrono::steady_clock::now() - pendingClick->queuedAt)
+                                          .count();
         latency.clickToSlowPathMs = std::chrono::duration<double, std::milli>(
                                         pendingClick->dispatchedAt - pendingClick->queuedAt)
                                         .count();
         out->latencies.push_back(latency);
-        pendingClick->latencyIndex = out->latencies.size() - 1;
-        pendingClick->firstDragRenderRecorded = true;
-      }
-      // Fill in `clickToFinalPixelMs` once the final lands and
-      // close out the click tracking.
-      if (pendingClick.has_value() && pendingClick->firstDragRenderRecorded &&
-          result->stage == RenderResult::Stage::Final) {
-        out->latencies[pendingClick->latencyIndex].clickToFinalPixelMs =
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
-                                                      pendingClick->queuedAt)
-                .count();
         pendingClick.reset();
       }
       // Update prewarm-cache state on landed result so future frames
@@ -822,25 +786,14 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
 // `CompositedPresentation::shouldPrewarm`, 120 ms debounced
 // canvas-size commit, source-text writeback drain +
 // `ReplaceDocumentCommand` reparse, slow-path mouseDown gated on
-// `!isBusy()`, deferred-click `cancelInFlight`, and (design doc
-// 0034) progressive-rendering `Intermediate` emit between the drag-
-// target layer rasterize and the canvas-sized work.
+// `!isBusy()`, and deferred-click `cancelInFlight`.
 //
 // The recording's second mouse-down lands while a post-pinch selection prewarm
-// is in flight. Progressive rendering must ship an `Intermediate` drag-target
-// layer before the canvas-sized refinement finishes.
-// Budgets:
-//   * `clickToFirstDragPixelMs` (= Intermediate) < 200 ms —
-//     the user-visible click responsiveness. Tightens 0033's
-//     "click-to-first-pixel < 100 ms" target without busting on
-//     CI scheduler jitter.
-//   * `clickToFinalPixelMs` is informational only — the canvas-
-//     sized refinement may take seconds at high zoom; the user
-//     experience target is satisfied by the intermediate.
+// is in flight. The test rejects a stuck busy gate or missing render result.
 TEST_F(RnrReplayTest, DragStartAfterZoomAsyncHarnessDoesNotHang) {
   AsyncReplaySnapshot snapshot;
   drainWritebacksEachFrame_ = true;
-  cancelInFlightOnDeferredClick_ = true;  // 0034 keeps `cancelInFlight`
+  cancelInFlightOnDeferredClick_ = true;
   ReplayRecordingAsync("donner/editor/tests/drag_start_hang_repro.rnr", &snapshot);
 
   std::cerr << "[DragStartAfterZoomAsync] renders completed=" << snapshot.rendersCompleted
@@ -848,24 +801,20 @@ TEST_F(RnrReplayTest, DragStartAfterZoomAsyncHarnessDoesNotHang) {
             << " maxWorkerRenderMs=" << snapshot.maxWorkerRenderMs << "\n";
   for (const auto& l : snapshot.latencies) {
     std::cerr << "[DragStartAfterZoomAsync] mouseDown@frame=" << l.mouseDownFrameIndex
-              << " clickToFirstDragPixelMs=" << l.clickToFirstDragPixelMs
-              << " clickToFinalPixelMs=" << l.clickToFinalPixelMs
+              << " clickToDragRenderMs=" << l.clickToDragRenderMs
               << " clickToSlowPathMs=" << l.clickToSlowPathMs << "\n";
   }
 
   ASSERT_GE(snapshot.latencies.size(), 2u)
       << "Replay did not capture both mouse-down latencies (expected 2 drags)";
 
-  // Budget leaves CI headroom while still rejecting multi-second deferred-click
-  // hangs. Further tightening belongs with the 0034 latency follow-ups.
-  constexpr double kPostZoomFirstPixelBudgetMs = 500.0;
-  EXPECT_LT(snapshot.latencies[1].clickToFirstDragPixelMs, kPostZoomFirstPixelBudgetMs)
-      << "Post-zoom click → first drag pixel exceeded budget. Measured "
-      << snapshot.latencies[1].clickToFirstDragPixelMs << " ms (of which "
+  constexpr double kPostZoomRenderBudgetMs = 5000.0;
+  EXPECT_LT(snapshot.latencies[1].clickToDragRenderMs, kPostZoomRenderBudgetMs)
+      << "Post-zoom click -> drag render exceeded budget. Measured "
+      << snapshot.latencies[1].clickToDragRenderMs << " ms (of which "
       << snapshot.latencies[1].clickToSlowPathMs
-      << " ms was the click sitting deferred on `isBusy()`). Budget " << kPostZoomFirstPixelBudgetMs
-      << " ms. Progressive rendering (design doc 0034) must ship an `Intermediate` result with "
-         "the drag-target layer before the canvas-sized refinement begins.";
+      << " ms was the click sitting deferred on `isBusy()`). Budget " << kPostZoomRenderBudgetMs
+      << " ms.";
 }
 
 // Structural remaps must preserve the compositor across drag-release source

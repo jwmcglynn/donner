@@ -11,6 +11,7 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -173,6 +174,24 @@ TEST_F(RenderingContextTest, InvalidateAndReinstantiate) {
   ctx.instantiateRenderTree(false, warningSink_);
   ctx.invalidateRenderTree();
   ctx.instantiateRenderTree(false, warningSink_);
+}
+
+TEST_F(RenderingContextTest, InstantiateRenderTreeClearsFullRebuildState) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect x="10" y="10" width="80" height="80" fill="red"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  ctx.invalidateRenderTree();
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const auto* renderState = document.registry().ctx().find<RenderTreeState>();
+  ASSERT_THAT(renderState, NotNull());
+  EXPECT_FALSE(renderState->needsFullRebuild);
+  EXPECT_FALSE(renderState->needsFullStyleRecompute);
+  EXPECT_TRUE(renderState->hasBeenBuilt);
 }
 
 // --- Complex documents ---

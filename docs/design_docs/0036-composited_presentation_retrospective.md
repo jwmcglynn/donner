@@ -20,6 +20,21 @@ representative test became trustworthy only after it compared the presented
 bitmap, used the editor's asynchronous frame ordering, and could produce a
 human-checkable screenshot of the exact failing frame.
 
+The follow-up bug work found one more category: drag presentation math needs an
+explicit baseline. A cached drag tile may already include the currently
+displayed drag translation, while a newly started re-drag may need only the
+residual live delta on top of an older cached offset. Tests now cover those
+unit cases, but future visible-frame repros should still prove mid-drag
+alignment before mouseup instead of relying on the final settled frame.
+
+The later unrelated-layer generation bug clarified an important non-cause:
+redundant transform writes were noisy, but they were not the root reason every
+promoted layer rerasterized. The actual failure was a latched full-rebuild
+signal. A selection/hit-test path rebuilt the render tree and consumed local
+dirty flags, but `RenderTreeState::needsFullRebuild` stayed true. The next
+compositor frame interpreted that global flag as a full cache invalidation and
+bumped every promoted layer generation.
+
 ## Scope
 
 Reviewed stack:
@@ -219,6 +234,65 @@ geometry helpers.
 `//tools/mcp-servers/editor-control:editor_control_session_tests` continues to
 assert that replayed presented frames match final frames.
 
+### Resolved During Follow-Up Bug Fixes
+
+- **Second drag of the same object no longer snaps the composited tile back to
+  the original position.** The first shared-composer implementation replaced
+  cached drag-target tile translation with only the live active preview. During
+  a second drag, the cached tile still needed its previous document offset plus
+  the new active drag delta. `ResolvePresentedTileDragTranslation(...)` now
+  keeps the cached tile translation in the composition. Enforced by
+  `//donner/editor/tests:presented_frame_composer_tests`.
+- **Click/drag immediately after zoom no longer parks behind a stale prewarm
+  render.** The render pane now handles the pending click before posting the
+  next render request, cancels dispensable busy prewarm work when the click
+  needs the slow hit-test path, and the async worker fires its wake callback
+  when cancellation returns the worker to idle. The GL replay harness also
+  exposes the final selected element label so the zoom-before-reraster repro
+  can assert behavior, not just capture pixels. Enforced by
+  `//donner/editor/tests:async_renderer_tests` and
+  `//donner/editor/tests:gl_rnr_replay_tests`.
+- **Active drag presentation no longer double-applies the displayed drag
+  translation.** The first second-drag fix added the active preview delta
+  unconditionally. When a newly landed drag tile already represented the same
+  displayed preview, the composited pixels moved twice as far as the overlay.
+  `ResolvePresentedTileDragTranslation(...)` now adds only the residual delta:
+  tile offset plus active preview translation minus displayed preview
+  translation. Enforced by
+  `//donner/editor/tests:presented_frame_composer_tests`.
+- **Unrelated promoted layers no longer rerasterize after drag-writeback plus
+  selection.** The tempting workaround was to suppress dirty flags for semantic
+  no-op transform writes. That guard was removed after the true root cause was
+  isolated. `RenderingContext::instantiateRenderTree(...)` now clears
+  `RenderTreeState::needsFullRebuild` after a successful render-tree
+  instantiation, so query paths that rebuild render instances do not leave a
+  global full-rebuild signal for the compositor. Enforced by
+  `//donner/svg/renderer/tests:renderer_driver_tests` and
+  `//donner/editor/tests:async_renderer_tests`.
+
+### Working Tree Audit After Root Cause
+
+Audited the local changes after the `needsFullRebuild` latch was understood:
+
+- **Removed as unnecessary:** the transform equality/no-op dirty suppression in
+  `SVGElement` and `LayoutSystem`. It hid this repro but did not address the
+  global invalidation leak.
+- **Kept as independently justified:** metadata-only tile publication and
+  generation-stability tests. They are the intended upload contract: unchanged
+  tiles keep their generation and GL texture even when presentation metadata
+  moves.
+- **Kept as independently justified:** removal of progressive intermediate
+  results. Stale canvas-sized intermediate frames were an invalid presentation
+  state, and the feature had no remaining correct caller after composited
+  presentation became the only display path.
+- **Kept as independently justified:** worker-cancel/liveness, layer-inspector
+  freshness, and GL replay coverage for zoom/drag bugs. Those tests prove UI
+  progress and presented-frame behavior, not just this generation-counter
+  symptom.
+- **No new compositor dirty-range rewrite is needed for this bug.** The
+  existing per-layer/per-segment dirty mapping was not what dirtied every layer;
+  the global rebuild flag bypassed it.
+
 ### Must Fix Before Landing
 
 - **The flat-removal stack should be commit-split before review.** The local
@@ -241,16 +315,36 @@ assert that replayed presented frames match final frames.
 
 ## Fragility and Refactoring Opportunities
 
-- **Optional compositor callbacks still rely on scoped raw pointers.**
-  `CompositorController` keeps `intermediateCallback_` as an optional pointer
-  during the 3-argument `renderFrame` overload. This is still valid by call
-  scope, but any future callback expansion should prefer a scoped render-attempt
-  object so callback, cancellation, and exit publication live in one payload.
+- **Progressive intermediate frames were removed.** The callback-based
+  two-stage render path was only correct when cached compositor tiles already
+  matched the request canvas size, which excluded the zoom/canvas-resize case it
+  was meant to help. `AsyncRenderer` now publishes only complete render results
+  with fresh tile pixels.
 - **MCP replay still composes display frames separately from the editor.** The
   render-posting scheduler and presented-frame geometry are now shared, but MCP
   still performs the final CPU bitmap blending locally. Keep GL texture upload
   lifetime and MCP bitmap-cache lifetime separate unless a second non-MCP
   caller needs CPU bitmap composition.
+- **Drag presentation baseline is now explicit, but still caller-selected.**
+  `PresentedDragBaseline` names the represented and active translations, and
+  `//donner/editor/tests:presented_frame_composer_tests` covers the known
+  baseline cases. Future callers still need to build the baseline only for
+  matching active/displayed entities; keep that adapter logic small and local.
+- **Visible overlay alignment coverage is frame-pair based.**
+  `//donner/editor/tests:gl_rnr_replay_tests` now compares the active drag
+  frame with the same-cursor mouseup frame. This catches the reported drift
+  without splitting document pixels and overlay chrome into separate readback
+  layers.
+- **The layer-inspector status has replay liveness coverage.**
+  `//donner/editor/tests:layer_inspector_diagnostics_tests` covers the pure
+  canvas-freshness classification, and
+  `//donner/editor/tests:gl_rnr_replay_tests` asserts the stale-compositor
+  status is not present at the bounded final replay frame.
+- **Render-tree rebuild state must be consumed by the rebuilder.** A render
+  tree rebuild is allowed during rendering, hit testing, and bounds queries.
+  After it succeeds, `RenderTreeState::needsFullRebuild` must be false. Leaving
+  the flag latched turns a later compositor frame into a full cache
+  invalidation even when no local dirty entities remain.
 - **Pixel-diff policy still depends on adoption.** Replay tests now use central
   identity and approved-tolerance helpers, but future pixel tests can still add
   private comparison paths unless reviewers hold the line. New visible-frame
@@ -307,6 +401,12 @@ Infrastructure advances to propagate:
   expected frame window, target selector, and representative crop.
 - Add a reusable "presented frame must equal eventual final" helper so future
   tests do not re-implement the JSON walk.
+- For drag bugs, capture and assert the frame before mouseup. The settled frame
+  can be correct even when active composited pixels and overlay chrome are
+  visibly divergent.
+- For zoom/reraster bugs, assert both progress and final behavior: worker wake
+  count or idle transition, final selected element, and absence of a persistent
+  stale-compositor status across a bounded frame window.
 
 ## Process Review
 
@@ -326,10 +426,17 @@ What did not work:
   representative. The operator had to ask for proof of repro multiple times.
 - Tests were initially too implementation-centric. Tile ids, cached entities,
   and generation counters are diagnostics; visible pixels are the contract.
+- Generation counters still have value as a secondary invariant. Once a repro
+  is visibly understood, a generation-stability test is a good way to pin the
+  performance contract that unrelated layer textures are not re-uploaded.
 - Some tests are not ToTT-readable enough. The MCP JSON assertions are powerful
   but hard to scan. They need small helpers with domain language such as
   `ExpectPresentedFrameMatchesFinalAfterClick(...)`, backed by gMock matchers
   for JSON fields and preview tile signatures.
+- The second-drag and zoom-before-reraster bugs both initially looked solved
+  because the final settled state was correct. For interaction bugs, final
+  state is only one assertion; the active frame that the operator reports must
+  be part of the repro contract.
 - The branch now has tranche commits, but the final PR stack still needs one
   audit pass so representative tests, implementation, and cleanup remain easy
   to review independently.
@@ -385,3 +492,42 @@ What did not work:
 - [x] Remove `RenderPanePresenter`'s full-pane sizing fallback for invalid tile
       geometry once tests assert every visible tile has positive document
       dimensions.
+- [x] Add regression coverage for repeated same-entity drag presentation and
+      for active drag tiles that already represent the displayed preview
+      translation. Enforced by
+      `//donner/editor/tests:presented_frame_composer_tests`.
+- [x] Add zoom-before-reraster replay and worker-cancel wake coverage so a
+      click/drag after zoom can supersede stale prewarm work. Enforced by
+      `//donner/editor/tests:async_renderer_tests` and
+      `//donner/editor/tests:gl_rnr_replay_tests`.
+- [x] Add a GL replay assertion for second-drag overlay alignment before
+      mouseup. The test should capture a mid-drag frame, compare composited
+      document pixels against the path overlay or an equivalent geometric
+      signature, and fail when the document pixels move at a different scale
+      than the overlay. Enforced by
+      `//donner/editor/tests:gl_rnr_replay_tests`.
+- [x] Rename or restructure the drag presentation API so the baseline is
+      encoded in the type, not inferred from two optional previews. Implemented
+      as `PresentedDragBaseline`, carrying `entity`,
+      `representedTranslationDoc`, and `activeTranslationDoc`. Enforced by
+      `//donner/editor/tests:presented_frame_composer_tests` and
+      `//tools/mcp-servers/editor-control:editor_control_session_tests`.
+- [x] Extend `.rnr` expectations for interaction bugs with active-frame
+      requirements: before-mouseup frame, expected selection/status after a
+      bounded frame window, and whether the test is proving pixels, selection,
+      or worker liveness. Enforced by
+      `//donner/editor/repro:repro_file_tests` and
+      `//donner/editor/tests:gl_rnr_replay_tests`.
+- [x] Add a replay/status assertion for the layer inspector's
+      `"compositor not yet re-rasterized"` diagnostic so it cannot persist
+      indefinitely after zoom/cancel input if the UI treats the status as
+      user-visible correctness. Enforced by
+      `//donner/editor/tests:layer_inspector_diagnostics_tests` and
+      `//donner/editor/tests:gl_rnr_replay_tests`.
+- [x] Fix the root cause of unrelated layer-generation bumps instead of
+      suppressing transform dirty flags. A successful
+      `RenderingContext::instantiateRenderTree(...)` now consumes
+      `RenderTreeState::needsFullRebuild`, and the transform no-op workaround
+      is removed. Enforced by
+      `//donner/svg/renderer/tests:renderer_driver_tests` and
+      `//donner/editor/tests:async_renderer_tests`.

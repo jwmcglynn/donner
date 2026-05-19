@@ -1011,6 +1011,116 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   }
 }
 
+TEST_F(CompositorGoldenTest, DragTargetOnlySnapshotKeepsNonDragTileMetadata) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <rect width="200" height="100" fill="white"/>
+  <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+  <g filter="url(#blur)"><rect x="100" y="10" width="50" height="50" fill="yellow"/></g>
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="2"/></filter></defs>
+</svg>
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(viewport_);
+
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()).promotedLayer());
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
+  compositor.renderFrame(viewport_);
+
+  const auto fullTiles = compositor.snapshotTilesForUpload();
+  const auto dragTargetOnlyTiles =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::DragTargetOnly);
+
+  ASSERT_EQ(dragTargetOnlyTiles.size(), fullTiles.size());
+
+  bool sawDragTargetBitmap = false;
+  bool sawNonDragMetadataOnlyTile = false;
+  for (size_t i = 0; i < fullTiles.size(); ++i) {
+    const CompositorTile& full = fullTiles[i];
+    const CompositorTile& partial = dragTargetOnlyTiles[i];
+    EXPECT_EQ(partial.tileId, full.tileId);
+    EXPECT_EQ(partial.generation, full.generation);
+    EXPECT_EQ(partial.bitmapDims, full.bitmapDims);
+    EXPECT_EQ(partial.canvasOffsetPx, full.canvasOffsetPx);
+    EXPECT_EQ(partial.isDragTarget, full.isDragTarget);
+    if (partial.isDragTarget) {
+      sawDragTargetBitmap = true;
+      EXPECT_FALSE(partial.bitmap.empty());
+    } else {
+      sawNonDragMetadataOnlyTile = true;
+      EXPECT_TRUE(partial.bitmap.empty())
+          << "non-drag tile " << partial.tileId
+          << " should keep metadata without forcing a pixel payload";
+      EXPECT_GT(partial.bitmapDims.x, 0);
+      EXPECT_GT(partial.bitmapDims.y, 0);
+    }
+  }
+
+  EXPECT_TRUE(sawDragTargetBitmap);
+  EXPECT_TRUE(sawNonDragMetadataOnlyTile);
+}
+
+TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGenerations) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120">
+  <rect width="240" height="120" fill="white"/>
+  <g id="glow_a" filter="url(#blur)"><rect x="20" y="20" width="40" height="40" fill="yellow"/></g>
+  <rect id="target" x="90" y="30" width="50" height="50" fill="red"/>
+  <g id="glow_b" filter="url(#blur)"><rect x="170" y="20" width="40" height="40" fill="cyan"/></g>
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="2"/></filter></defs>
+</svg>
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  compositor.setSkipMainComposeDuringSplit(true);
+
+  // Cold render promotes mandatory filter layers.
+  compositor.renderFrame(viewport_);
+
+  // Selection prewarm elevates the target and rasterizes the complete tile set.
+  ASSERT_TRUE(compositor.promoteEntity(targetEntity, InteractionHint::Selection).promotedLayer());
+  compositor.renderFrame(viewport_);
+
+  const auto preDragTiles = compositor.snapshotTilesForUpload();
+  std::unordered_map<uint64_t, uint64_t> preDragGenerations;
+  for (const CompositorTile& tile : preDragTiles) {
+    ASSERT_FALSE(tile.bitmap.empty()) << "prewarmed tile " << tile.tileId << " has no pixels";
+    preDragGenerations[tile.tileId] = tile.generation;
+  }
+  ASSERT_FALSE(preDragGenerations.empty());
+
+  // Starting an active drag on an already-elevated target changes only presentation
+  // geometry: the target's cached pixels are reused through canvasFromBitmap, and unrelated
+  // elevated/filter tiles plus static segments keep their existing textures.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
+  ASSERT_TRUE(compositor.promoteEntity(targetEntity, InteractionHint::ActiveDrag).promotedLayer());
+  compositor.renderFrame(viewport_);
+
+  const auto activeDragTiles = compositor.snapshotTilesForUpload();
+  ASSERT_EQ(activeDragTiles.size(), preDragTiles.size());
+
+  bool sawTargetLayer = false;
+  for (const CompositorTile& tile : activeDragTiles) {
+    const auto it = preDragGenerations.find(tile.tileId);
+    ASSERT_NE(it, preDragGenerations.end())
+        << "new tile id appeared on drag start: " << tile.tileId;
+    EXPECT_EQ(tile.generation, it->second)
+        << "tile " << tile.tileId
+        << " advanced generation even though drag start changed only presentation geometry";
+    if (tile.layerEntity == targetEntity) {
+      sawTargetLayer = true;
+      EXPECT_TRUE(tile.isDragTarget);
+    }
+  }
+  EXPECT_TRUE(sawTargetLayer);
+}
+
 // A drag-release `SetTransformCommand` mutation must NOT trigger a full
 // `prepareDocumentForRendering` rebuild — that tears down every RIC and
 // every `ComputedShadowTreeComponent`, then recomputes styles / paint /

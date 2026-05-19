@@ -120,7 +120,6 @@ protected:
     tests::CompareBitmapToBitmap(liveBitmap, referenceBitmap, phase);
 
     RenderResult asyncResult = RenderAsyncPhase(phase);
-    EXPECT_EQ(asyncResult.stage, RenderResult::Stage::Final) << phase;
     tests::CompareBitmapToBitmap(asyncResult.bitmap, referenceBitmap, phase);
   }
 
@@ -279,23 +278,19 @@ protected:
   RenderResult RenderAsyncPhase(std::string_view phase) {
     asyncRenderer_.requestRender(BuildRenderRequest(++asyncVersion_));
 
-    std::optional<RenderResult> lastResult;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (std::chrono::steady_clock::now() < deadline) {
       std::optional<RenderResult> result = asyncRenderer_.pollResult();
       if (result.has_value()) {
-        lastResult = std::move(result);
-        if (lastResult->stage == RenderResult::Stage::Final) {
-          EXPECT_FALSE(asyncRenderer_.isBusy()) << phase << ": async renderer stayed busy";
-          return std::move(*lastResult);
-        }
+        EXPECT_FALSE(asyncRenderer_.isBusy()) << phase << ": async renderer stayed busy";
+        return std::move(*result);
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     ADD_FAILURE() << phase << ": async render timed out";
     EXPECT_FALSE(asyncRenderer_.isBusy()) << phase << ": async renderer stayed busy after timeout";
-    return lastResult.value_or(RenderResult());
+    return RenderResult();
   }
 
   ImGuiContext* imguiContext_ = nullptr;

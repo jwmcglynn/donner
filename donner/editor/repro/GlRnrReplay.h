@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/editor/LayerInspectorDiagnostics.h"
+
 namespace donner::editor::repro {
 
 /// Output crop mode for GL framebuffer replay captures.
@@ -50,10 +52,24 @@ struct GlRnrReplayCapture {
   std::filesystem::path path;
 };
 
+/// Per-frame diagnostics captured during GL replay.
+struct GlRnrReplayFrameDiagnostics {
+  /// Repro frame index.
+  std::uint64_t frameIndex = 0;
+  /// Canvas freshness classification used by the layer inspector.
+  CanvasFreshness canvasFreshness = CanvasFreshness::Current;
+  /// Status suffix rendered beside document canvas diagnostics.
+  std::string statusSuffix;
+};
+
 /// Result of a GL replay run.
 struct GlRnrReplayResult {
   /// Captures written during replay.
   std::vector<GlRnrReplayCapture> captures;
+  /// Per-frame diagnostics gathered after each editor frame runs.
+  std::vector<GlRnrReplayFrameDiagnostics> frameDiagnostics;
+  /// Selection label after the last replayed frame.
+  std::optional<std::string> finalSelectedElementLabel;
 };
 
 /**

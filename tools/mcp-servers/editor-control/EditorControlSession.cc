@@ -49,15 +49,18 @@ constexpr int kDefaultCanvasWidth = 892;
 constexpr int kDefaultCanvasHeight = 512;
 constexpr int kMaxDragFrames = 240;
 
-std::optional<PresentedDragPreview> PresentedPreviewFromSelectPreview(
-    const std::optional<SelectTool::ActiveDragPreview>& preview) {
-  if (!preview.has_value()) {
+std::optional<PresentedDragBaseline> PresentedBaselineFromSelectPreviews(
+    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
+    const std::optional<SelectTool::ActiveDragPreview>& displayedPreview) {
+  if (!activePreview.has_value() || !displayedPreview.has_value() ||
+      activePreview->entity != displayedPreview->entity) {
     return std::nullopt;
   }
 
-  return PresentedDragPreview{
-      .entity = preview->entity,
-      .translationDoc = preview->translation,
+  return PresentedDragBaseline{
+      .entity = activePreview->entity,
+      .representedTranslationDoc = displayedPreview->translation,
+      .activeTranslationDoc = activePreview->translation,
   };
 }
 
@@ -361,14 +364,6 @@ json BoxToJson(const Box2d& box) {
       {"size", VectorToJson(box.size())},
       {"center", VectorToJson((box.topLeft + box.bottomRight) * 0.5)},
   };
-}
-
-std::string StageName(RenderResult::Stage stage) {
-  switch (stage) {
-    case RenderResult::Stage::Intermediate: return "intermediate";
-    case RenderResult::Stage::Final: return "final";
-  }
-  return "unknown";
 }
 
 std::string InteractionKindName(svg::compositor::InteractionHint kind) {
@@ -730,13 +725,12 @@ json RenderResultJson(const RenderResult& result, ToolCallResult* out,
                       const EditorControlSession::CaptureOptions& capture,
                       std::string_view imagePrefix) {
   json resultJson{
-      {"stage", StageName(result.stage)},
       {"version", result.version},
       {"worker_ms", result.workerMs},
       {"bitmap", BitmapSummary(result.bitmap)},
   };
 
-  if (capture.includeFinalFrame && result.stage == RenderResult::Stage::Final) {
+  if (capture.includeFinalFrame) {
     AttachBitmapImage(out, std::string(imagePrefix) + "/final_frame", result.bitmap,
                       capture.embedPngBase64, &resultJson["bitmap"]);
   }
@@ -811,13 +805,11 @@ json DisplayFrameJson(const EditorControlSession::DisplayFrameSnapshot& display)
   }
 
   int index = 0;
-  const std::optional<PresentedDragPreview> activeDragPreview =
-      PresentedPreviewFromSelectPreview(display.activeDragPreview);
-  const std::optional<PresentedDragPreview> displayedDragPreview =
-      PresentedPreviewFromSelectPreview(display.displayedDragPreview);
+  const std::optional<PresentedDragBaseline> dragBaseline =
+      PresentedBaselineFromSelectPreviews(display.activeDragPreview, display.displayedDragPreview);
   for (const EditorControlSession::DisplayTileView& tile : display.tiles) {
-    const Vector2d effectiveDragTranslationDoc = ResolvePresentedTileDragTranslation(
-        PresentedGeometryFromDisplayTile(tile), activeDragPreview, displayedDragPreview);
+    const Vector2d effectiveDragTranslationDoc =
+        ResolvePresentedTileDragTranslation(PresentedGeometryFromDisplayTile(tile), dragBaseline);
     displayJson["tiles"].push_back(json{
         {"index", index},
         {"kind", TileKindName(tile.kind)},
@@ -974,10 +966,8 @@ std::optional<svg::RendererBitmap> EditorControlSession::HeadlessTextureCache::c
   const Transform2d canvasPixelsFromCanvasTransform =
       Transform2d::Translate(-viewBox.topLeft) *
       Transform2d::Scale(Vector2d(pixelsPerDocX, pixelsPerDocY));
-  const std::optional<PresentedDragPreview> activeDragPreview =
-      PresentedPreviewFromSelectPreview(display.activeDragPreview);
-  const std::optional<PresentedDragPreview> displayedDragPreview =
-      PresentedPreviewFromSelectPreview(display.displayedDragPreview);
+  const std::optional<PresentedDragBaseline> dragBaseline =
+      PresentedBaselineFromSelectPreviews(display.activeDragPreview, display.displayedDragPreview);
   for (const DisplayTileView& tile : display.tiles) {
     const auto tileIt = tileTextures_.find(tile.id);
     if (tileIt == tileTextures_.end() || tileIt->second.bitmap.empty()) {
@@ -985,8 +975,7 @@ std::optional<svg::RendererBitmap> EditorControlSession::HeadlessTextureCache::c
     }
 
     const std::optional<PresentedTileRect> tileRect = ComputePresentedTileRect(
-        PresentedGeometryFromDisplayTile(tile), canvasPixelsFromCanvasTransform, activeDragPreview,
-        displayedDragPreview);
+        PresentedGeometryFromDisplayTile(tile), canvasPixelsFromCanvasTransform, dragBaseline);
     if (!tileRect.has_value()) {
       continue;
     }
@@ -1870,10 +1859,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       }
 
       recordDisplayFrame(*result);
-      if (result->stage == RenderResult::Stage::Final) {
-        renderScheduler.noteRenderCompleted(result->version,
-                                            asyncRenderer_.lastDocumentCanvasSize());
-      }
+      renderScheduler.noteRenderCompleted(result->version, asyncRenderer_.lastDocumentCanvasSize());
       ++renderedFrameCount;
       return true;
     };
@@ -2070,9 +2056,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
         ++renderedFrameCount;
         const DisplayFrameSnapshot* finalDisplayFrame = nullptr;
         for (const CapturedRenderResult& result : renderResults) {
-          if (result.renderResult.stage == RenderResult::Stage::Final) {
-            finalDisplayFrame = &result.displayFrame;
-          }
+          finalDisplayFrame = &result.displayFrame;
         }
         if (finalDisplayFrame != nullptr) {
           const std::optional<svg::RendererBitmap> finalPresentedBitmap =
@@ -2190,9 +2174,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       if (includeFrameResults && storedFrameResults < maxFrameResults) {
         const DisplayFrameSnapshot* finalDisplayFrame = nullptr;
         for (const CapturedRenderResult& result : renderResults) {
-          if (result.renderResult.stage == RenderResult::Stage::Final) {
-            finalDisplayFrame = &result.displayFrame;
-          }
+          finalDisplayFrame = &result.displayFrame;
         }
         std::optional<svg::RendererBitmap> finalDisplayBitmap;
         if (finalDisplayFrame != nullptr) {
@@ -2352,15 +2334,12 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
   while (std::chrono::steady_clock::now() < deadline) {
     if (auto result = asyncRenderer_.pollResult(); result.has_value()) {
-      const bool isFinal = result->stage == RenderResult::Stage::Final;
       DisplayFrameSnapshot displayFrame = recordDisplayFrame(*result);
       results->push_back(CapturedRenderResult{
           .renderResult = std::move(*result),
           .displayFrame = std::move(displayFrame),
       });
-      if (isFinal) {
-        return true;
-      }
+      return true;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }

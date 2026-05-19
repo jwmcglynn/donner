@@ -127,10 +127,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   displayedDocVersion_ = result.version;
-  if (result.stage == RenderResult::Stage::Final) {
-    renderScheduler_.noteRenderCompleted(result.version,
-                                         renderWorker_.asyncRenderer.lastDocumentCanvasSize());
-  }
+  renderScheduler_.noteRenderCompleted(result.version,
+                                       renderWorker_.asyncRenderer.lastDocumentCanvasSize());
   if (result.compositedPreview.has_value() && result.compositedPreview->valid() &&
       compositedPresentation_.isWaitingForChromeRefresh() && app.hasDocument()) {
     refreshSelectionBoundsCache(app);

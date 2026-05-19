@@ -156,15 +156,18 @@ PresentedFrameTileGeometry PresentedGeometryFromTile(const GlTextureCache::TileV
   };
 }
 
-std::optional<PresentedDragPreview> PresentedPreviewFromSelectPreview(
-    const std::optional<SelectTool::ActiveDragPreview>& preview) {
-  if (!preview.has_value()) {
+std::optional<PresentedDragBaseline> PresentedBaselineFromSelectPreviews(
+    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
+    const std::optional<SelectTool::ActiveDragPreview>& displayedPreview) {
+  if (!activePreview.has_value() || !displayedPreview.has_value() ||
+      activePreview->entity != displayedPreview->entity) {
     return std::nullopt;
   }
 
-  return PresentedDragPreview{
-      .entity = preview->entity,
-      .translationDoc = preview->translation,
+  return PresentedDragBaseline{
+      .entity = activePreview->entity,
+      .representedTranslationDoc = displayedPreview->translation,
+      .activeTranslationDoc = activePreview->translation,
   };
 }
 
@@ -189,17 +192,14 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   const Vector2d imageOriginScreen(imageOrigin.x, imageOrigin.y);
   const Transform2d screenFromCanvasTransform =
       Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
-  const std::optional<PresentedDragPreview> activeDragPreview =
-      PresentedPreviewFromSelectPreview(state.activeDragPreview);
-  const std::optional<PresentedDragPreview> displayedDragPreview =
-      PresentedPreviewFromSelectPreview(state.displayedDragPreview);
+  const std::optional<PresentedDragBaseline> dragBaseline =
+      PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.displayedDragPreview);
   for (const auto& tile : state.textures.tiles()) {
     if (tile.texture == 0) {
       continue;
     }
-    const std::optional<PresentedTileRect> tileRect =
-        ComputePresentedTileRect(PresentedGeometryFromTile(tile), screenFromCanvasTransform,
-                                 activeDragPreview, displayedDragPreview);
+    const std::optional<PresentedTileRect> tileRect = ComputePresentedTileRect(
+        PresentedGeometryFromTile(tile), screenFromCanvasTransform, dragBaseline);
     if (!tileRect.has_value()) {
       continue;
     }

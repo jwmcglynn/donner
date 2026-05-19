@@ -10,12 +10,16 @@
 #include <memory>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 
 #include "donner/base/Transform.h"
 #include "donner/editor/AsyncSVGDocument.h"
+#include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/RenderCoordinator.h"
+#include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -120,6 +124,44 @@ TEST(AsyncRendererTest, WakeCallbackFiresPerRequest) {
   EXPECT_EQ(wakeCount.load(std::memory_order_acquire), 2);
 }
 
+TEST(AsyncRendererTest, WakeCallbackFiresWhenCancellationReturnsWorkerToIdle) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="4096" height="4096" fill="red" />
+  )svg");
+  document.setCanvasSize(4096, 4096);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  std::promise<void> wakeFired;
+  std::atomic<int> wakeCount{0};
+  asyncRenderer.setWakeCallback([&] {
+    const int prev = wakeCount.fetch_add(1, std::memory_order_acq_rel);
+    if (prev == 0) {
+      wakeFired.set_value();
+    }
+  });
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+  ASSERT_TRUE(asyncRenderer.isBusy());
+  asyncRenderer.cancelInFlight();
+
+  auto wakeFuture = wakeFired.get_future();
+  const auto status = wakeFuture.wait_for(std::chrono::seconds(1));
+  ASSERT_EQ(status, std::future_status::ready)
+      << "cancelInFlight returned the worker to idle without waking the UI loop";
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (asyncRenderer.isBusy() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_FALSE(asyncRenderer.isBusy());
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+  EXPECT_GE(wakeCount.load(std::memory_order_acquire), 1);
+}
+
 // `setWakeCallback` is optional — callers that don't set it must still
 // see the result via plain polling, with no regression in the legacy
 // pollResult-driven path.
@@ -176,27 +218,16 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  // Progressive rendering (design doc 0034) may emit `Intermediate`
-  // results before `Final`. The pending-demote invariant this test
-  // asserts on — A's `canvasFromBitmap` translation carried into
-  // its tile after the demote takes hold — is materialized during
-  // the canvas-sized compose work that happens AFTER the
-  // intermediate fires, so we have to drain past intermediates to
-  // observe the final state.
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    std::optional<RenderResult> last;
     for (int i = 0; i < 400; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) {
-        last = std::move(result);
-        if (last->stage == RenderResult::Stage::Final) {
-          return last;
-        }
+        return result;
       } else {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
     }
-    return last;
+    return std::nullopt;
   };
 
   // 1. Pre-warm A — promote with Selection so A's layer rasterizes at
@@ -258,9 +289,6 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
     }
     if (tile.isDragTarget) {
       continue;  // Live drag target is B; we want the pending-demote A.
-    }
-    if (tile.bitmap.empty()) {
-      continue;
     }
     sawAPending = true;
     // (7, 11) document units; the worker converts canvas px → doc via
@@ -809,6 +837,80 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
       << "drag-target tile bitmap should be identical after release → drag-again";
 }
 
+TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="under" x="0" y="0" width="160" height="100" fill="#102030" />
+    <rect id="target" x="48" y="30" width="32" height="32" fill="#f4d21f" />
+    <rect id="over" x="104" y="0" width="24" height="100" fill="#44aaff" />
+  )svg");
+  document.setCanvasSize(160, 100);
+  const Vector2i initialCanvasSize = document.canvasSize();
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) {
+        return result;
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return std::nullopt;
+  };
+
+  {
+    RenderRequest request(renderer, document);
+    request.version = 1;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+  }
+  ASSERT_TRUE(waitForResult().has_value());
+  EXPECT_EQ(asyncRenderer.compositorState().canvasSize, initialCanvasSize);
+
+  // The editor can commit a new zoom-derived canvas size while the user
+  // is still dragging. The worker must publish one final result whose
+  // compositor tile geometry and pixels both belong to the resized canvas.
+  document.setCanvasSize(96, 60);
+  const Vector2i resizedCanvasSize = document.canvasSize();
+  ASSERT_NE(resizedCanvasSize, initialCanvasSize);
+  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
+
+  {
+    RenderRequest request(renderer, document);
+    request.version = 2;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+    asyncRenderer.requestRender(request);
+  }
+
+  auto result = waitForResult();
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  for (const RenderResult::CompositedTile& tile : result->compositedPreview->tiles) {
+    if (tile.bitmapDimsDoc.x > 0.0 && tile.bitmapDimsDoc.y > 0.0) {
+      EXPECT_FALSE(tile.bitmap.empty()) << "final composited tiles must carry fresh pixels";
+    }
+  }
+  EXPECT_EQ(asyncRenderer.lastDocumentCanvasSize(), resizedCanvasSize);
+  EXPECT_EQ(asyncRenderer.compositorState().canvasSize, resizedCanvasSize);
+}
+
 // Regression: mimic the editor's splash scenario — a drag target living
 // alongside multiple mandatory-promoted filter-group siblings — and run
 // many drag frames through the real `AsyncRenderer` worker. Every drag
@@ -922,6 +1024,327 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   // The compositor should not have been reset a single time — only frame
   // version changed, not documentGeneration.
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
+}
+
+TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <defs>
+      <filter id="blur-a"><feGaussianBlur in="SourceGraphic" stdDeviation="4.5"/></filter>
+      <filter id="blur-b"><feGaussianBlur in="SourceGraphic" stdDeviation="6"/></filter>
+    </defs>
+    <rect width="400" height="200" fill="#0d0f1d"/>
+    <g id="glow_a" filter="url(#blur-a)">
+      <rect x="20" y="20" width="60" height="60" fill="#ffe54a"/>
+    </g>
+    <rect id="target" x="170" y="50" width="40" height="60" fill="#fae100"/>
+    <g id="glow_b" filter="url(#blur-b)">
+      <rect x="280" y="30" width="60" height="60" fill="#ffe54a"/>
+    </g>
+  )svg");
+  document.setCanvasSize(400, 200);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return std::nullopt;
+  };
+  const auto postRequest = [&](std::uint64_t version,
+                               svg::compositor::InteractionHint interactionHint) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = interactionHint,
+    };
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+  const auto tileGenerations = [](const RenderResult::CompositedPreview& preview)
+      -> std::unordered_map<std::string, uint64_t> {
+    std::unordered_map<std::string, uint64_t> generations;
+    for (const RenderResult::CompositedTile& tile : preview.tiles) {
+      generations.emplace(tile.id, tile.generation);
+    }
+    return generations;
+  };
+
+  auto selection = postRequest(1, svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(selection.has_value());
+  ASSERT_TRUE(selection->compositedPreview.has_value());
+  const std::unordered_map<std::string, uint64_t> selectionGenerations =
+      tileGenerations(*selection->compositedPreview);
+  ASSERT_FALSE(selectionGenerations.empty());
+
+  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
+  auto activeDrag = postRequest(2, svg::compositor::InteractionHint::ActiveDrag);
+  ASSERT_TRUE(activeDrag.has_value());
+  ASSERT_TRUE(activeDrag->compositedPreview.has_value());
+
+  std::vector<std::string> changedTiles;
+  for (const RenderResult::CompositedTile& tile : activeDrag->compositedPreview->tiles) {
+    const auto it = selectionGenerations.find(tile.id);
+    ASSERT_NE(it, selectionGenerations.end()) << "new tile appeared on drag start: " << tile.id;
+    if (it->second != tile.generation) {
+      std::ostringstream label;
+      label << tile.id << " " << it->second << "->" << tile.generation;
+      changedTiles.push_back(label.str());
+    }
+    if (!tile.isDragTarget) {
+      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
+                                       << " should move via metadata only on drag start";
+    }
+  }
+
+  EXPECT_TRUE(changedTiles.empty()) << "translation-only drag start advanced tile generations: "
+                                    << testing::PrintToString(changedTiles);
+
+  auto reselected = postRequest(3, svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(reselected.has_value());
+  ASSERT_TRUE(reselected->compositedPreview.has_value());
+
+  changedTiles.clear();
+  const std::unordered_map<std::string, uint64_t> activeDragGenerations =
+      tileGenerations(*activeDrag->compositedPreview);
+  for (const RenderResult::CompositedTile& tile : reselected->compositedPreview->tiles) {
+    const auto it = activeDragGenerations.find(tile.id);
+    ASSERT_NE(it, activeDragGenerations.end()) << "new tile appeared on reselection: " << tile.id;
+    if (it->second != tile.generation) {
+      std::ostringstream label;
+      label << tile.id << " " << it->second << "->" << tile.generation;
+      changedTiles.push_back(label.str());
+    }
+    if (!tile.isDragTarget) {
+      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
+                                       << " should move via metadata only on reselection";
+    }
+  }
+
+  EXPECT_TRUE(changedTiles.empty()) << "reselection advanced already-elevated tile generations: "
+                                    << testing::PrintToString(changedTiles);
+
+  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(18.0, 0.0)));
+  auto secondDrag = postRequest(4, svg::compositor::InteractionHint::ActiveDrag);
+  ASSERT_TRUE(secondDrag.has_value());
+  ASSERT_TRUE(secondDrag->compositedPreview.has_value());
+
+  changedTiles.clear();
+  const std::unordered_map<std::string, uint64_t> reselectedGenerations =
+      tileGenerations(*reselected->compositedPreview);
+  for (const RenderResult::CompositedTile& tile : secondDrag->compositedPreview->tiles) {
+    const auto it = reselectedGenerations.find(tile.id);
+    if (it == reselectedGenerations.end()) {
+      EXPECT_TRUE(tile.isDragTarget)
+          << "new non-drag tile appeared on second drag start: " << tile.id;
+      continue;
+    }
+    if (it->second != tile.generation) {
+      std::ostringstream label;
+      label << tile.id << " " << it->second << "->" << tile.generation;
+      changedTiles.push_back(label.str());
+    }
+    if (!tile.isDragTarget) {
+      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
+                                       << " should move via metadata only on second drag start";
+    }
+  }
+
+  EXPECT_TRUE(changedTiles.empty())
+      << "second translation-only drag start advanced tile generations: "
+      << testing::PrintToString(changedTiles);
+}
+
+TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGenerations) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(splashSource));
+  app.document().document().setCanvasSize(1784, 1024);
+
+  auto oPath = app.document().document().querySelector("#Donner path.cls-82");
+  auto ePolygon = app.document().document().querySelector("#Donner polygon.cls-85");
+  ASSERT_TRUE(oPath.has_value());
+  ASSERT_TRUE(ePolygon.has_value());
+  const Entity oEntity = oPath->entityHandle().entity();
+  const Entity eEntity = ePolygon->entityHandle().entity();
+
+  SelectTool selectTool;
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  using Clock = std::chrono::steady_clock;
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    const auto deadline = Clock::now() + std::chrono::seconds(30);
+    while (Clock::now() < deadline) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return std::nullopt;
+  };
+  uint64_t renderVersion = 0;
+  const auto postRequest = [&]() {
+    RenderRequest request(renderer, app.document().document());
+    request.version = ++renderVersion;
+    request.documentGeneration = app.document().documentGeneration();
+    request.structuralRemap = app.document().consumePendingStructuralRemap();
+    if (app.selectedElement().has_value() &&
+        app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
+      request.selectedEntity = app.selectedElement()->entityHandle().entity();
+    }
+    if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = preview->entity,
+          .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      };
+    } else if (request.selectedEntity != entt::null) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = request.selectedEntity,
+          .interactionKind = svg::compositor::InteractionHint::Selection,
+      };
+    }
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+  const auto applyDragSourceStoreWriteback = [&]() -> bool {
+    auto completed = selectTool.consumeCompletedDragWriteback();
+    if (!completed.has_value()) {
+      return false;
+    }
+
+    std::optional<svg::SVGElement> element =
+        resolveAttributeWritebackTarget(app.document().document(), completed->target);
+    if (!element.has_value()) {
+      return false;
+    }
+
+    const RcString serialized = toSVGTransformString(completed->transform);
+    if (std::string_view(serialized).empty()) {
+      (void)app.document().document().removeElementAttribute(*element, "transform");
+    } else {
+      (void)app.document().document().setElementAttribute(*element, "transform",
+                                                          std::string_view(serialized));
+    }
+    return true;
+  };
+  const auto generationByLayerEntity =
+      [](const std::vector<svg::compositor::CompositorController::LayerInspectorRow>& layers) {
+        std::unordered_map<uint32_t, uint64_t> generations;
+        for (const auto& layer : layers) {
+          generations.emplace(static_cast<uint32_t>(entt::to_integral(layer.entity)),
+                              layer.generation);
+        }
+        return generations;
+      };
+  const auto describeLayers =
+      [](const std::vector<svg::compositor::CompositorController::LayerInspectorRow>& layers) {
+        std::vector<std::string> descriptions;
+        for (const auto& layer : layers) {
+          std::ostringstream description;
+          description << "layer:" << static_cast<uint32_t>(entt::to_integral(layer.entity))
+                      << " gen=" << layer.generation << " dirty=" << layer.dirty
+                      << " valid=" << layer.hasValidBitmap
+                      << " fallback=" << layer.fallbackReasonsText;
+          descriptions.push_back(description.str());
+        }
+        return descriptions;
+      };
+  const auto describeGenerationChanges =
+      [](const std::unordered_map<uint32_t, uint64_t>& beforeGenerations,
+         const std::unordered_map<uint32_t, uint64_t>& afterGenerations) {
+        std::vector<std::string> changedExistingLayers;
+        std::vector<std::string> newLayers;
+        for (const auto& [entity, generation] : afterGenerations) {
+          const auto it = beforeGenerations.find(entity);
+          if (it == beforeGenerations.end()) {
+            std::ostringstream label;
+            label << "layer:" << entity << "=" << generation;
+            newLayers.push_back(label.str());
+            continue;
+          }
+          if (it->second != generation) {
+            std::ostringstream label;
+            label << "layer:" << entity << " " << it->second << "->" << generation;
+            changedExistingLayers.push_back(label.str());
+          }
+        }
+        return std::pair<std::vector<std::string>, std::vector<std::string>>(
+            std::move(changedExistingLayers), std::move(newLayers));
+      };
+
+  ASSERT_TRUE(postRequest().has_value());
+
+  // Drag the O through the same SelectTool path as the editor.
+  const Vector2d oStart(346.0, 394.0);
+  const Vector2d oDrag(354.0, 394.0);
+  selectTool.onMouseDown(app, oStart, MouseModifiers{});
+  ASSERT_TRUE(app.selectedElement().has_value());
+  ASSERT_EQ(app.selectedElement()->entityHandle().entity(), oEntity);
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  ASSERT_TRUE(postRequest().has_value());
+
+  selectTool.onMouseMove(app, oDrag, /*buttonHeld=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(postRequest().has_value());
+
+  const std::vector<svg::compositor::CompositorController::LayerInspectorRow> afterODragLayers =
+      asyncRenderer.compositorLayerInspectorRows();
+  const std::unordered_map<uint32_t, uint64_t> afterODragGenerations =
+      generationByLayerEntity(afterODragLayers);
+  ASSERT_FALSE(afterODragGenerations.empty());
+
+  // Simulate drag-end source writeback without rendering an intermediate
+  // release frame. File-loaded documents carry a source store, so the shell
+  // mirrors the transform by projecting an XML set-attribute mutation back into
+  // the live document instead of reparsing the whole SVG.
+  selectTool.onMouseUp(app, oDrag);
+  ASSERT_TRUE(applyDragSourceStoreWriteback());
+
+  // Now select the E. A click enters ActiveDrag immediately, even before the
+  // cursor has moved, so this is the frame where the old O hint becomes a
+  // pending demotion and the E is promoted.
+  const Vector2d eClick(568.0, 315.0);
+  selectTool.onMouseDown(app, eClick, MouseModifiers{});
+  ASSERT_TRUE(app.selectedElement().has_value());
+  ASSERT_EQ(app.selectedElement()->entityHandle().entity(), eEntity);
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+
+  auto ePolygonAfterWriteback = app.document().document().querySelector("#Donner polygon.cls-85");
+  ASSERT_TRUE(ePolygonAfterWriteback.has_value());
+  const Entity eEntityAfterWriteback = ePolygonAfterWriteback->entityHandle().entity();
+  ASSERT_EQ(eEntityAfterWriteback, eEntity);
+  ASSERT_TRUE(postRequest().has_value());
+
+  const std::vector<svg::compositor::CompositorController::LayerInspectorRow> afterEClickLayers =
+      asyncRenderer.compositorLayerInspectorRows();
+  const std::unordered_map<uint32_t, uint64_t> afterEClickGenerations =
+      generationByLayerEntity(afterEClickLayers);
+  const auto [changedLayers, newLayers] =
+      describeGenerationChanges(afterODragGenerations, afterEClickGenerations);
+
+  EXPECT_TRUE(changedLayers.empty())
+      << "Selecting E after dragging O changed existing compositor layer generations.\n"
+      << "changed=" << testing::PrintToString(changedLayers) << "\n"
+      << "new=" << testing::PrintToString(newLayers) << "\n"
+      << "after_o_drag=" << testing::PrintToString(describeLayers(afterODragLayers)) << "\n"
+      << "after_e_click=" << testing::PrintToString(describeLayers(afterEClickLayers));
 }
 
 // Regression: bumping `version` every drag frame (as `AsyncSVGDocument::

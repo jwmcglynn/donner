@@ -1,13 +1,21 @@
 # Design: Progressive Rendering for High-Zoom Drag-Start
 
-**Status:** Design
+**Status:** Removed
 **Author:** Claude Opus 4.7 (1M context)
 **Created:** 2026-05-13
+
+> **Removed 2026-05-20.** This design was implemented experimentally and then
+> removed. The intermediate frame is only safe when cached compositor tile
+> geometry already belongs to the current request canvas size; that excludes the
+> zoom/canvas-resize window this design was meant to accelerate. Publishing an
+> intermediate while the cached static segments still belonged to the prior
+> canvas caused unrelated layers to jump. The editor now publishes only complete
+> render results with fresh tile pixels.
 
 ## Summary
 
 After milestones M1–M9 of design doc 0033 landed, the editor still freezes for
-multiple seconds on the *post-pinch-zoom drag-start* path. The
+multiple seconds on the _post-pinch-zoom drag-start_ path. The
 `RnrReplay_tests::DragStartAfterZoomAsyncHarnessDoesNotHang` harness measures
 **6.6 s click → first drag pixel** baseline, **3.0 s with `cancelInFlight`** —
 both far over the < 100 ms user-visible target from 0033's goal #1. The
@@ -17,7 +25,7 @@ take ~3 s on the tiny-skia backend regardless of cancellation strategy, and
 both `cancelInFlight` and "wait for in-flight to finish" pay that cost.
 
 This doc proposes **progressive rendering**: the compositor emits an
-*intermediate result* containing the just-rasterized drag-target layer (at
+_intermediate result_ containing the just-rasterized drag-target layer (at
 intrinsic size, cheap), and the editor displays it composited over the
 previous canvas-sized bitmap (stretched in GL). The full-resolution canvas-
 sized rasterize continues in the background and replaces the intermediate
@@ -60,7 +68,7 @@ completes.
   via 0033's M7 priority lane and is independent of layer rasterize.
 - **Eliminating canvas-sized rasterization.** The full-resolution
   pass still runs in the background; progressive rendering just
-  *unblocks the UI* from waiting for it.
+  _unblocks the UI_ from waiting for it.
 
 ## Next Steps
 
@@ -78,51 +86,50 @@ completes.
 
 - [ ] **M1 — Two-stage `renderFrame` API**
   - [ ] Add `enum class RenderStage { Intermediate, Final }` to
-    `RenderResult`.
+        `RenderResult`.
   - [ ] Extend `CompositorController::renderFrame(viewport, token)` to
-    accept a `StageCallback` argument that fires once after the drag-
-    target layer has been rasterized + before the canvas-sized work.
+        accept a `StageCallback` argument that fires once after the drag-
+        target layer has been rasterized + before the canvas-sized work.
   - [ ] The intermediate callback receives a `RenderResult` populated
-    only with the drag-target's `compositedPreview` tile + the *prior*
-    canvas-sized flat baseline (no re-rasterize).
+        only with the drag-target's `compositedPreview` tile + the _prior_
+        canvas-sized flat baseline (no re-rasterize).
   - [ ] Canvas-sized segments and flat baseline continue to rasterize
-    after the callback; the second result emit at end of `renderFrame`
-    is `RenderStage::Final`.
+        after the callback; the second result emit at end of `renderFrame`
+        is `RenderStage::Final`.
 - [ ] **M2 — `AsyncRenderer` multi-emit**
   - [ ] Add a separate `intermediateResult_` slot and an
-    `Intermediate` state in the worker FSM, distinct from `Done`.
+        `Intermediate` state in the worker FSM, distinct from `Done`.
   - [ ] `pollResult()` drains intermediates first; the final result
-    overwrites the intermediate when it lands.
+        overwrites the intermediate when it lands.
   - [ ] `cancelInFlight()` continues to work — it drops both
-    intermediate and final results, since the user-input event that
-    cancelled the render supersedes the work entirely.
+        intermediate and final results, since the user-input event that
+        cancelled the render supersedes the work entirely.
 - [ ] **M3 — Editor display path**
   - [ ] `RenderCoordinator::pollRenderResult` handles `Intermediate`
-    by uploading the new composited preview tile (just the drag
-    target) without invalidating the cached flat baseline texture.
+        by uploading the new composited preview tile (just the drag
+        target) without invalidating the cached flat baseline texture.
   - [ ] `GlTextureCache::uploadComposited` already handles per-tile
-    upload; verify it does the right thing when a partial preview
-    arrives.
+        upload; verify it does the right thing when a partial preview
+        arrives.
 - [ ] **M4 — Harness + perf budget**
   - [ ] Extend `RnrReplayTest::ReplayRecordingAsync` to capture
-    `clickToIntermediatePixelMs` separately from
-    `clickToFirstDragPixelMs`.
-  - [ ] Add red regression test: `clickToIntermediatePixelMs <
-    200 ms` on `drag_start_hang_repro.rnr`. Must be red on the
-    parent commit, green at M3.
+        `clickToIntermediatePixelMs` separately from
+        `clickToFirstDragPixelMs`.
+  - [ ] Add red regression test: `clickToIntermediatePixelMs < 200 ms` on `drag_start_hang_repro.rnr`. Must be red on the
+        parent commit, green at M3.
   - [ ] Add validation: the `Final` result must arrive within
-    `1.5×` of the unmodified single-stage render time (i.e. the two-
-    stage split shouldn't *slow down* the full-resolution path by
-    more than 50%).
+        `1.5×` of the unmodified single-stage render time (i.e. the two-
+        stage split shouldn't _slow down_ the full-resolution path by
+        more than 50%).
 - [ ] **M5 — Live verification + cleanup**
   - [ ] User runs editor against `donner_splash.svg`, performs the
-    drag → pinch → drag-again repro. Confirms drag-2 click is
-    responsive.
+        drag → pinch → drag-again repro. Confirms drag-2 click is
+        responsive.
   - [ ] Strip any diagnostic logging left over from earlier
-    iterations.
+        iterations.
   - [ ] Update 0033 status table — M6 (pinch-zoom GPU stretch)
-    can be deprecated in favor of this milestone; M10 (perf
-    validation) is partially fulfilled by M4 here.
+        can be deprecated in favor of this milestone; M10 (perf
+        validation) is partially fulfilled by M4 here.
 
 ## Background
 
@@ -130,26 +137,26 @@ The harness `RnrReplayTest::DragStartAfterZoomAsyncHarnessDoesNotHang`
 captures the exact timing of the user's reported lag. Headline numbers
 on the unmodified post-0033-M9 codebase:
 
-| Variant | drag2 click→first pixel | breakdown |
-|---|---|---|
-| Baseline (no cancel) | 6632 ms | 2984 ms deferred-on-`isBusy()` + 3648 ms in-flight prewarm finishes |
-| `cancelInFlight` on deferred click | 3019 ms | 43 ms cancel + 2976 ms drag render redoes the cancelled work |
+| Variant                            | drag2 click→first pixel | breakdown                                                           |
+| ---------------------------------- | ----------------------- | ------------------------------------------------------------------- |
+| Baseline (no cancel)               | 6632 ms                 | 2984 ms deferred-on-`isBusy()` + 3648 ms in-flight prewarm finishes |
+| `cancelInFlight` on deferred click | 3019 ms                 | 43 ms cancel + 2976 ms drag render redoes the cancelled work        |
 
 Both variants pay ~3 s for a single canvas-sized rasterize at 3× zoom on the
 tiny-skia backend. Neither cancellation strategy can reduce this — the
 canvas-sized work IS the cost.
 
-The dragged element's *intrinsic-sized* layer bitmap, by contrast, takes
+The dragged element's _intrinsic-sized_ layer bitmap, by contrast, takes
 ~10–30 ms to rasterize. The user's perception ("I clicked, where's my drag?")
 is satisfied as soon as that layer is visible at the new transform. The
 rest of the scene catching up to fresh resolution can happen over multiple
 seconds without affecting interactivity.
 
 Per 0033 §M2A/M2B, the compositor already rasterizes layers at intrinsic
-size; the canvas-sized work is the *flat baseline* drawn by
-`driver.draw(*document_)` plus the canvas-sized *segment* bitmaps emitted by
+size; the canvas-sized work is the _flat baseline_ drawn by
+`driver.draw(*document_)` plus the canvas-sized _segment_ bitmaps emitted by
 `CompositorController`. Progressive rendering exploits the fact that the
-intrinsic-sized layer is already produced *first* in `renderFrame`'s
+intrinsic-sized layer is already produced _first_ in `renderFrame`'s
 ordering — we just need to surface that as a separate result rather than
 waiting for the full canvas-sized work.
 
@@ -183,10 +190,10 @@ Worker thread (CompositorController::renderFrame)
 The editor side composites the intermediate result by:
 
 1. Treating the new `Intermediate.compositedPreview.tiles` (containing
-   just the drag-target layer at intrinsic size) as the *authoritative*
+   just the drag-target layer at intrinsic size) as the _authoritative_
    tile for that entity.
 2. Keeping the existing GL texture for the canvas-sized flat baseline,
-   which now shows the scene at the *previous* canvas size, stretched
+   which now shows the scene at the _previous_ canvas size, stretched
    to fit the current viewport.
 3. Drawing path-overlay chrome at full crispness (0033's M7).
 
@@ -237,18 +244,18 @@ cancelled the render is the new authoritative state.
 
 ## Performance
 
-| Phase | Today | With progressive |
-|---|---|---|
-| drag-target rasterize | ~30 ms | ~30 ms |
-| Stage 1 emit + UI upload | n/a | ~10 ms (single tile upload) |
-| Canvas-sized segments + flat | ~3 s | ~3 s |
-| Stage 2 emit + UI upload | ~3 s + ~20 ms | ~3 s + ~20 ms |
-| **User-visible click→drag-pixel** | **~3 s** | **~50 ms** |
-| **Time to crisp final** | **~3 s** | **~3 s** |
+| Phase                             | Today         | With progressive            |
+| --------------------------------- | ------------- | --------------------------- |
+| drag-target rasterize             | ~30 ms        | ~30 ms                      |
+| Stage 1 emit + UI upload          | n/a           | ~10 ms (single tile upload) |
+| Canvas-sized segments + flat      | ~3 s          | ~3 s                        |
+| Stage 2 emit + UI upload          | ~3 s + ~20 ms | ~3 s + ~20 ms               |
+| **User-visible click→drag-pixel** | **~3 s**      | **~50 ms**                  |
+| **Time to crisp final**           | **~3 s**      | **~3 s**                    |
 
 Throughput is unchanged; latency-to-interactivity drops from ~3 s to
 ~50 ms. The "time to crisp" is identical — progressive rendering does
-*not* defer the canvas-sized work, just unblocks the UI from waiting on
+_not_ defer the canvas-sized work, just unblocks the UI from waiting on
 it.
 
 ## Testing and Validation
@@ -256,7 +263,7 @@ it.
 - **`RnrReplayTest::DragStartAfterZoomAsyncHarnessDoesNotHang`** —
   budget tightens from informational to `< 200 ms` for drag-2 click-
   to-first-pixel. Asserts the `Intermediate` result was received
-  *before* the `Final`.
+  _before_ the `Final`.
 - **New: `RnrReplayTest::DragStartAfterZoomFinalRenderArrives`** —
   asserts the `Final` result lands within 1.5× of the existing
   baseline render time, so progressive rendering doesn't regress
@@ -280,10 +287,10 @@ it.
 1. **"Skip prewarm during pinch" (0033 §M6 / earlier proposal B).**
    Suppress canvas-sized rasterization while the canvas-commit
    debounce is active, so when the user clicks the worker is idle
-   and the slow-path mouseDown fires immediately. *Rejected by
-   the operator:* "I don't want to defer rendering and reduce the
+   and the slow-path mouseDown fires immediately. _Rejected by
+   the operator:_ "I don't want to defer rendering and reduce the
    time-to-high-res." Progressive rendering achieves the same
-   click responsiveness *without* deferring the high-resolution
+   click responsiveness _without_ deferring the high-resolution
    work — both happen, just in a sensible order.
 
 2. **Finer-grained M4 cancellation polls inside segment / flat-
@@ -308,15 +315,15 @@ it.
 ## Open Questions
 
 - **Should the intermediate result include the segment bitmaps that
-  were valid at the *previous* canvas size?** Cheap to keep — they're
+  were valid at the _previous_ canvas size?** Cheap to keep — they're
   already cached. The flat baseline texture is the only one that
-  *needs* a fresh rasterize at the new canvas size; segments could
+  _needs_ a fresh rasterize at the new canvas size; segments could
   potentially stretch acceptably. Worth measuring in the harness.
 - **Two intermediates for very deep canvases?** If `Final` is taking
   > 5 s on huge documents, would the user benefit from a `Mid`
-  stage that flushes after the first canvas-sized segment but
-  before the flat baseline? Probably not at the splash's complexity;
-  revisit if user reports surface a slower document.
+  > stage that flushes after the first canvas-sized segment but
+  > before the flat baseline? Probably not at the splash's complexity;
+  > revisit if user reports surface a slower document.
 - **Threading of `StageCallback`.** Currently invoked on the worker
   thread directly. Should it be queued back to the UI thread via the
   wake callback instead? Simpler invariant: callback never runs on
@@ -327,9 +334,9 @@ it.
 ## Future Work
 
 - [ ] Apply progressive staging to `setDocumentMaybeStructural` (post-
-  source-reparse first frame) — same root cause, same fix shape.
+      source-reparse first frame) — same root cause, same fix shape.
 - [ ] Use the intermediate-result mechanism to also surface partial
-  composited tiles when a per-layer rasterize takes longer than a
-  budget (e.g. complex filter chains). Out of scope for this doc;
-  worth revisiting once Geode lands and per-layer cost variability
-  is measurable in the panel.
+      composited tiles when a per-layer rasterize takes longer than a
+      budget (e.g. complex filter chains). Out of scope for this doc;
+      worth revisiting once Geode lands and per-layer cost variability
+      is measurable in the panel.

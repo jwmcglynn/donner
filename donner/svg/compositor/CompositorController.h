@@ -4,7 +4,6 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -372,28 +371,6 @@ public:
   /// Returns true on full completion, false on early cancellation.
   /// The non-token overload above delegates with a no-op token.
   bool renderFrame(const RenderViewport& viewport, CancellationToken& token);
-
-  /// Design doc 0034 progressive rendering: same semantics as the
-  /// cancellable overload above, but `onIntermediate` fires once
-  /// between the drag-target's intrinsic-sized layer rasterize and
-  /// the canvas-sized segment work. The callback's
-  /// caller (typically `AsyncRenderer`) uses this window to snapshot
-  /// the compositor's current tile state — drag-target layer is
-  /// fresh; segments still reflect the PRIOR canvas size — and ship an
-  /// `Intermediate` result to the editor for
-  /// immediate display. The final canvas-sized rasterize continues
-  /// after the callback returns; cancellation between the callback
-  /// and final return drops the final result but leaves the
-  /// intermediate already-shipped result valid.
-  ///
-  /// `onIntermediate` fires AT MOST ONCE per `renderFrame` call. It
-  /// is invoked on the worker thread, inline (no thread hop). The
-  /// callback is fired only when there's a layer that was actually
-  /// re-rasterized in this frame — frames whose only work is
-  /// canvas-sized (segment rasterize at a new canvas size with no
-  /// dirty layer) skip the callback and go straight through.
-  bool renderFrame(const RenderViewport& viewport, CancellationToken& token,
-                   const std::function<void()>& onIntermediate);
 
   /**
    * Returns the number of currently active layers (excluding the root layer).
@@ -1021,13 +998,6 @@ private:
   [[nodiscard]] bool isCancelled() const {
     return cancelToken_.has_value() && cancelToken_->get().isCancelled();
   }
-
-  /// Design doc 0034 progressive rendering: optional callback fired
-  /// after the drag-target's intrinsic-sized layer rasterize but
-  /// before canvas-sized segment work. Set by the
-  /// 3-arg `renderFrame` overload at entry and cleared at exit. Null for the
-  /// 1- and 2-arg overloads so they incur zero overhead.
-  const std::function<void()>* intermediateCallback_ = nullptr;
 
   /// True after `composeLayers` has completed a full (non-skipped)
   /// main-renderer compose. Used to gate the skip-compose fast path:

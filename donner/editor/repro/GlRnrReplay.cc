@@ -100,6 +100,19 @@ struct PixelRect {
   return input;
 }
 
+[[nodiscard]] ViewportState ViewportFromReproViewport(const ReproViewport& recordedViewport) {
+  ViewportState viewport;
+  viewport.paneOrigin = Vector2d(recordedViewport.paneOriginX, recordedViewport.paneOriginY);
+  viewport.paneSize = Vector2d(recordedViewport.paneSizeW, recordedViewport.paneSizeH);
+  viewport.devicePixelRatio = recordedViewport.devicePixelRatio;
+  viewport.zoom = recordedViewport.zoom;
+  viewport.panDocPoint = Vector2d(recordedViewport.panDocX, recordedViewport.panDocY);
+  viewport.panScreenPoint = Vector2d(recordedViewport.panScreenX, recordedViewport.panScreenY);
+  viewport.documentViewBox = Box2d::FromXYWH(recordedViewport.viewBoxX, recordedViewport.viewBoxY,
+                                             recordedViewport.viewBoxW, recordedViewport.viewBoxH);
+  return viewport;
+}
+
 [[nodiscard]] std::filesystem::path CapturePath(const GlRnrReplayOptions& options,
                                                 const ReproFrame& frame, std::string_view reason) {
   std::string filename = "gl_replay_frame_" + std::to_string(frame.index);
@@ -314,7 +327,16 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
 
     window.pollEvents();
     window.beginFrameWithInput(InputFromFrame(frame));
+    if (frame.viewport.has_value()) {
+      shell.overrideViewportForReplay(ViewportFromReproViewport(*frame.viewport));
+    }
     shell.runFrame();
+    const LayerInspectorStatusReadback layerStatus = shell.layerInspectorStatusForReadback();
+    result->frameDiagnostics.push_back(GlRnrReplayFrameDiagnostics{
+        .frameIndex = frame.index,
+        .canvasFreshness = layerStatus.canvasFreshness,
+        .statusSuffix = layerStatus.statusSuffix,
+    });
 
     if (captureReason.has_value()) {
       const std::filesystem::path path = CapturePath(options, frame, *captureReason);
@@ -339,6 +361,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     }
   }
 
+  result->finalSelectedElementLabel = shell.selectedElementLabelForReadback();
   return true;
 }
 

@@ -33,11 +33,11 @@ bool IsValidRect(const Vector2d& topLeft, const Vector2d& bottomRight) {
 
 Vector2d ResolvePresentedTileDragTranslation(
     const PresentedFrameTileGeometry& tile,
-    const std::optional<PresentedDragPreview>& activeDragPreview,
-    const std::optional<PresentedDragPreview>& displayedDragPreview) {
-  if (tile.isDragTarget && activeDragPreview.has_value() && displayedDragPreview.has_value() &&
-      displayedDragPreview->entity == activeDragPreview->entity) {
-    return activeDragPreview->translationDoc;
+    const std::optional<PresentedDragBaseline>& dragBaseline) {
+  if (tile.isDragTarget && dragBaseline.has_value()) {
+    const Vector2d unpresentedDragDeltaDoc =
+        dragBaseline->activeTranslationDoc - dragBaseline->representedTranslationDoc;
+    return tile.dragTranslationDoc + unpresentedDragDeltaDoc;
   }
 
   return tile.dragTranslationDoc;
@@ -45,8 +45,7 @@ Vector2d ResolvePresentedTileDragTranslation(
 
 std::optional<PresentedTileRect> ComputePresentedTileRect(
     const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
-    const std::optional<PresentedDragPreview>& activeDragPreview,
-    const std::optional<PresentedDragPreview>& displayedDragPreview) {
+    const std::optional<PresentedDragBaseline>& dragBaseline) {
   if (!IsFinite(outputFromCanvasTransform) || !IsFinite(tile.canvasOffsetDoc) ||
       !IsFinite(tile.bitmapDimsDoc) || !IsFinite(tile.dragTranslationDoc) ||
       tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
@@ -54,7 +53,7 @@ std::optional<PresentedTileRect> ComputePresentedTileRect(
   }
 
   const Vector2d effectiveDragTranslationDoc =
-      ResolvePresentedTileDragTranslation(tile, activeDragPreview, displayedDragPreview);
+      ResolvePresentedTileDragTranslation(tile, dragBaseline);
   if (!IsFinite(effectiveDragTranslationDoc)) {
     return std::nullopt;
   }

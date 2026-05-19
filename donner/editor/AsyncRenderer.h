@@ -92,10 +92,9 @@ struct RenderRequest {
     /// Which interaction phase drove this preview. `Selection` means the
     /// editor is pre-warming a layer for the selected entity before any
     /// drag begins. `ActiveDrag` means the user is actively dragging — the
-    /// DOM's transform attribute already reflects the cursor delta, so no
-    /// extra translation is passed here. The compositor stamps the correct
-    /// `InteractionHint` on the entity based on this field so downstream
-    /// introspection stays accurate.
+    /// DOM's transform attribute already reflects the cursor delta. The
+    /// compositor stamps the correct `InteractionHint` on the entity based
+    /// on this field so downstream introspection stays accurate.
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
   };
 
@@ -196,25 +195,13 @@ struct RenderResult {
     [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };
 
-  /// Design doc 0034 progressive rendering: a single `renderFrame`
-  /// request may emit TWO results — one `Intermediate` after the
-  /// drag-target's intrinsic-sized layer has been rasterized but
-  /// before the canvas-sized segments finish, then a `Final` once the
-  /// canvas-sized work completes. Callers that don't
-  /// opt in to progressive rendering see only `Final`.
-  enum class Stage : std::uint8_t { Intermediate, Final };
-
-  Stage stage = Stage::Final;
   svg::RendererBitmap bitmap;
   std::optional<CompositedPreview> compositedPreview;
   std::uint64_t version = 0;
   /// Wall-clock milliseconds the worker spent inside
   /// `CompositorController::renderFrame` for this iteration. Reported so
   /// the editor can plot backend render time alongside ImGui frame time
-  /// on the frame graph. Zero means no backend work was recorded. For
-  /// an `Intermediate` result, this is the elapsed time
-  /// from the start of `renderFrame` to the intermediate callback —
-  /// roughly the cost of the drag-target layer rasterize.
+  /// on the frame graph. Zero means no backend work was recorded.
   double workerMs = 0.0;
 };
 
@@ -260,9 +247,10 @@ public:
   std::optional<RenderResult> pollResult();
 
   /// Install a callback that the worker thread invokes when a render
-  /// transitions to Done. Used by the editor's on-demand render loop
-  /// to wake the UI thread (e.g. via `glfwPostEmptyEvent`) so the
-  /// fresh result gets picked up without continuous polling.
+  /// result or cancellation completes. Used by the editor's on-demand
+  /// render loop to wake the UI thread (e.g. via `glfwPostEmptyEvent`)
+  /// so fresh results or newly-idle deferred input get picked up
+  /// without continuous polling.
   ///
   /// The callback runs on the worker thread. It must be thread-safe
   /// and must NOT re-enter the renderer — a simple wake-up post into
@@ -399,15 +387,10 @@ private:
     /// Latest request waiting for the worker. Empty while the worker is
     /// actively rendering the request it already dequeued.
     std::optional<RenderRequest> pendingRequest;
-    /// Progressive result staged by the active render. Drained before any final
-    /// result while this state stays active.
-    std::optional<RenderResult> intermediateResult;
   };
   struct CancellingState {};
   struct DoneState {
-    /// Intermediate result that was not drained before the final result landed.
-    std::optional<RenderResult> intermediateResult;
-    /// Final render result. Draining this transitions the worker state to idle.
+    /// Render result. Draining this transitions the worker state to idle.
     RenderResult result;
   };
   struct ShutdownState {};
@@ -453,6 +436,22 @@ private:
   /// Generation, not frame version, is the document-replacement signal that
   /// invalidates entity handles.
   std::uint64_t compositorDocumentGeneration_ = 0;
+
+  struct PublishedCompositedTile {
+    std::uint64_t generation = 0;
+    Vector2i bitmapDims = Vector2i::Zero();
+  };
+
+  /// Split-tile textures the UI has received from previous composited
+  /// previews. The worker uses this to send metadata-only entries for
+  /// unchanged tiles instead of copying and shipping full bitmaps on every
+  /// selection / drag frame.
+  std::unordered_map<std::string, PublishedCompositedTile> publishedCompositedTiles_;
+
+  /// Update `publishedCompositedTiles_` after a result is actually handed
+  /// to the UI thread.
+  void notePublishedCompositedPreview(
+      const std::optional<RenderResult::CompositedPreview>& compositedPreview);
 
   /// Counter of worker-side `resetAllLayers()` invocations. Tests verify that
   /// only document-generation changes fire resets.
