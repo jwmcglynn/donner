@@ -18,6 +18,10 @@ namespace {
 
 using svg::SVGGraphicsElement;
 
+CompositedPresentation::DiagnosticsSnapshot Snapshot(const CompositedPresentation& state) {
+  return state.diagnostics();
+}
+
 /// RGBA pixel extracted from a RendererBitmap.
 struct Pixel {
   uint8_t r = 0;
@@ -240,7 +244,7 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
   const auto recordDisplay = [&](const std::optional<SelectTool::ActiveDragPreview>& activeDrag,
                                  const char* label) -> FrameSnapshot {
     const auto preview = state.presentationPreview(activeDrag);
-    const bool useComposited = state.hasCachedTextures;
+    const bool useComposited = Snapshot(state).hasCachedTextures;
     FrameSnapshot snap;
     snap.composited = useComposited;
     if (useComposited && preview.has_value()) {
@@ -409,8 +413,8 @@ TEST(DragReleasePopBackTest, CpuSnapshotShowsCorrectImageAfterSettling) {
   state.beginSettling(SelectTool::ActiveDragPreview{entity, Vector2d(100, 0)}, 2);
   state.noteFullRenderLanded(/*landedVersion=*/2);
 
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_FALSE(state.waitingForFullRender) << "Settling window closed at target version";
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_FALSE(Snapshot(state).waitingForFullRender) << "Settling window closed at target version";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -503,7 +507,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   // Helper: check "what the user sees" based on state machine.
   const auto verifyDisplay = [&](const std::optional<SelectTool::ActiveDragPreview>& activeDrag,
                                  const char* label) {
-    const bool useComposited = state.hasCachedTextures;
+    const bool useComposited = Snapshot(state).hasCachedTextures;
     const auto preview = state.presentationPreview(activeDrag);
 
     if (useComposited && hasUploadedComposited && preview.has_value()) {

@@ -198,9 +198,7 @@ bool SyncCanvasSizeDebounced(EditorApp& app, const ViewportState& viewport,
 std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
                                                  svg::Renderer& renderer, EditorApp& app,
                                                  SelectTool& selectTool) {
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &app.document().document();
+  RenderRequest request(renderer, app.document().document());
   request.version = app.document().currentFrameVersion();
   request.documentGeneration = app.document().documentGeneration();
   request.structuralRemap = app.document().consumePendingStructuralRemap();
@@ -322,9 +320,7 @@ protected:
     double clickToFinalPixelMs = 0.0;
     /// Time from bufferPendingClick to the slow-path mouseDown firing
     /// (i.e. how long the click was deferred waiting for the worker
-    /// to be `!isBusy()`). On the buggy code this is the dominant
-    /// term of clickToFirstDragPixelMs at high zoom — the click
-    /// waits for a multi-second prewarm to finish.
+    /// to be `!isBusy()`).
     double clickToSlowPathMs = 0.0;
   };
 
@@ -471,24 +467,9 @@ protected:
     }
   }
 
-  /// Async-mode replay that mirrors `EditorShell::runFrame`'s
-  /// post-and-poll structure rather than the synchronous "post one
-  /// request, block until result, advance frame" loop in
-  /// `ReplayRecording`. Required to reproduce timing-sensitive bugs
-  /// like the post-pinch drag-start hang: the live editor's
-  /// `RenderCoordinator::maybeRequestRender` early-returns when
-  /// `asyncRenderer_.isBusy()`, so renders only fire on idle frames
-  /// and the worker accumulates a backlog of progressively-larger
-  /// selection prewarms during continuous zoom. A click that lands
-  /// while one of those prewarms is in flight is gated on
-  /// `!isBusy()` (`EditorShell.cc` slow-path) and waits seconds for
-  /// the prewarm to finish — exactly the bug we're chasing.
-  ///
-  /// The harness mirrors production's request-posting policy
-  /// (selection prewarm + active drag + canvas/version invalidation)
-  /// against a simplified `CompositedPresentation` state
-  /// machine. GL upload is skipped — the bug lives in worker
-  /// scheduling, not GL.
+  /// Async-mode replay that mirrors production's idle-gated render posting.
+  /// This exercises worker prewarm, deferred click, cancellation, and
+  /// progressive-result timing without GL upload.
   void ReplayRecordingAsync(const std::filesystem::path& reproPath, AsyncReplaySnapshot* out) {
     ASSERT_NE(out, nullptr);
 
@@ -638,9 +619,7 @@ protected:
         return;
       }
 
-      RenderRequest req;
-      req.renderer = &renderer;
-      req.document = &app.document().document();
+      RenderRequest req(renderer, app.document().document());
       req.version = currentVersion;
       req.documentGeneration = app.document().documentGeneration();
       req.structuralRemap = app.document().consumePendingStructuralRemap();
@@ -829,34 +808,13 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
       << "Replay ended before the second mouse-up checkpoint";
   ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
 
-  tests::BitmapGoldenCompareParams params;
-  params.threshold = 0.03f;
-  params.maxMismatchedPixels = 500;
+  // Approved exception: this committed golden still has small AA/raster drift across replay runs.
+  // The test remains useful for the presented-frame regression while the fixture is not yet
+  // identity-stable.
   tests::CompareBitmapToGolden(snapshot.bitmap, kGoldenPath, "rnr_replay_repro3_after_mup2",
-                               params);
+                               tests::ApprovedPixelToleranceParams(0.03f, 500));
 }
 
-// Regression for the filter-group "snap back to original position"
-// drag-release bug from design doc 0033. The `.rnr` covers the
-// minimal repro: drag `Big_lightning_glow` on the splash, release,
-// then move the mouse. On the post-release frame the source-pane
-// reparse swaps the `SVGDocumentHandle`, which `AsyncRenderer`'s
-// per-iteration `documentChanged` check used to interpret as "throw
-// the compositor away" — even when a valid `structuralRemap` (size
-// 445 on this replay) accompanied the request. The full reconstruct
-// flushed every cached filter-group bitmap and `canvasFromBitmap`
-// stamp, the editor's cached GL textures then showed the dragged
-// element at its pre-drag rasterize-time position, and the drag
-// preview's translation had already dropped to zero on release →
-// the user saw a visible "snap" until the slow render settled.
-//
-// The fix routes a non-empty structural remap through
-// `CompositorController::remapAfterStructuralReplace` even when the
-// handle pointer changed, preserving the in-flight compositor state.
-// Assertion: `compositorReconstructCount == 1` (the initial
-// construction) for the entire session. A second reconstruct means
-// the post-drag handle swap fell through to the destructive path
-// again.
 // Async-mode regression for the post-zoom drag-start hang.
 // Drives `drag_start_hang_repro.rnr` through the production-faithful
 // async replay harness: per-frame `maybeRequestRender`-equivalent
@@ -868,15 +826,9 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
 // 0034) progressive-rendering `Intermediate` emit between the drag-
 // target layer rasterize and the canvas-sized work.
 //
-// The recording's second mouse-down lands while a post-pinch
-// selection prewarm is in flight at ~3× canvas. With progressive
-// rendering enabled, the worker ships an `Intermediate` result
-// carrying the freshly-rasterized drag-target layer while existing
-// composited tiles remain visible as soon as the layer rasterize completes —
-// the user sees their drag target move at the new position within
-// ~100 ms, even though the full canvas-sized refinement takes
-// seconds.
-//
+// The recording's second mouse-down lands while a post-pinch selection prewarm
+// is in flight. Progressive rendering must ship an `Intermediate` drag-target
+// layer before the canvas-sized refinement finishes.
 // Budgets:
 //   * `clickToFirstDragPixelMs` (= Intermediate) < 200 ms —
 //     the user-visible click responsiveness. Tightens 0033's
@@ -904,13 +856,8 @@ TEST_F(RnrReplayTest, DragStartAfterZoomAsyncHarnessDoesNotHang) {
   ASSERT_GE(snapshot.latencies.size(), 2u)
       << "Replay did not capture both mouse-down latencies (expected 2 drags)";
 
-  // Budget: 500 ms. Headline observation on `donner_splash.svg` at
-  // 3× canvas — without progressive rendering this latency is
-  // ~6600 ms; with progressive rendering + cancelInFlight it lands
-  // around 300 ms. The 500 ms budget catches a regression to the
-  // pre-0034 multi-second hang while leaving headroom for CI
-  // scheduler jitter. Tightening to < 200 ms is a follow-on
-  // optimization — see design doc 0034's "Open Questions".
+  // Budget leaves CI headroom while still rejecting multi-second deferred-click
+  // hangs. Further tightening belongs with the 0034 latency follow-ups.
   constexpr double kPostZoomFirstPixelBudgetMs = 500.0;
   EXPECT_LT(snapshot.latencies[1].clickToFirstDragPixelMs, kPostZoomFirstPixelBudgetMs)
       << "Post-zoom click → first drag pixel exceeded budget. Measured "
@@ -921,6 +868,8 @@ TEST_F(RnrReplayTest, DragStartAfterZoomAsyncHarnessDoesNotHang) {
          "the drag-target layer before the canvas-sized refinement begins.";
 }
 
+// Structural remaps must preserve the compositor across drag-release source
+// reparses. Reconstruct count stays at the initial construction.
 TEST_F(RnrReplayTest, FilterSnapbackReproPreservesCompositorAcrossWriteback) {
   ReplaySnapshot snapshot;
   stopAfterAllFrames_ = true;  // .rnr has exactly one mouse-up; play to EOF.
@@ -1065,10 +1014,8 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
   ASSERT_FALSE(stateAfterDelete->bitmap.empty());
 
   // Pump enough renders to clear `processPendingDemotions`' 30-frame
-  // hysteresis (`kDemotionHysteresisFrames`). If the bug is the
-  // orphaned `Lightning_glow_dark` lingering in `activeHints_`
-  // through the hysteresis window, the bitmap should converge to
-  // ground truth once the deferred demote fires.
+  // hysteresis (`kDemotionHysteresisFrames`), then compare the settled
+  // compositor against ground truth.
   std::optional<RenderResult> stateAfterHysteresis;
   for (int i = 0; i < 35; ++i) {
     stateAfterHysteresis = RequestRenderAndWait(asyncRenderer, renderer, app, selectTool);
@@ -1122,43 +1069,23 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
   dump(stateAfterReparse->bitmap, "03_after_reparse");
   dump(groundTruth->bitmap, "04_ground_truth");
 
-  // The post-delete and post-reparse bitmaps must match the ground
-  // truth (modulo the AA threshold). If they don't, something in
-  // the carry-over pipeline (compositor cache, GL upload, source
-  // sync) is producing wrong pixels.
-  tests::BitmapGoldenCompareParams params;
-  params.threshold = 0.03f;
-  params.maxMismatchedPixels = 500;
+  // Approved exception: the replay and fresh-load ground truth still differ at AA edges. Keep the
+  // tolerance explicit so converting this case to identity remains visible follow-up work.
+  const tests::BitmapGoldenCompareParams deleteReplayTolerance =
+      tests::ApprovedPixelToleranceParams(0.03f, 500);
   tests::CompareBitmapToBitmap(stateAfterDelete->bitmap, groundTruth->bitmap,
-                               "delete_flash_post_delete_vs_ground_truth", params);
+                               "delete_flash_post_delete_vs_ground_truth", deleteReplayTolerance);
   tests::CompareBitmapToBitmap(stateAfterHysteresis->bitmap, groundTruth->bitmap,
-                               "delete_flash_post_hysteresis_vs_ground_truth", params);
+                               "delete_flash_post_hysteresis_vs_ground_truth",
+                               deleteReplayTolerance);
   tests::CompareBitmapToBitmap(stateAfterReparse->bitmap, groundTruth->bitmap,
-                               "delete_flash_post_reparse_vs_ground_truth", params);
+                               "delete_flash_post_reparse_vs_ground_truth", deleteReplayTolerance);
 }
 
-// Operator-recorded `.rnr` of the "filter shape jumps 2× on mouse
-// move after drag" bug from `filter_post_drag_jump.rnr`. Replays the
-// recording through the sync harness with writeback drain and
-// compares the final bitmap against a fresh-load ground-truth render
-// of the same end-state source.
-//
-// Regression coverage for stale presented pixels after a preserved
-// structural-remap drag session. Investigation log:
-//   * resetAllLayers fallback (return false from
-//     remapAfterStructuralReplace when any parser-dirty entity is
-//     present) fixes this test but regresses
-//     `AsyncRendererE2ETest.DragEndWritebackTakesStructuralRemapPath`
-//     and `RnrReplayTest.DeleteElementDoesNotResetPreviouslyMovedShapes`,
-//     both of which require the preservation optimization.
-//   * Fine-grained `consumeDirtyFlags(parserDirtyEntities)` on the
-//     captured pre-prepare dirty set marked 8/8 layers dirty but did
-//     not refresh the CPU snapshot because `composeLayers` was skipped
-//     after mouse-up by a sticky ActiveDrag hint.
-//
-// The `.rnr` + ground-truth pipeline writes diff PNGs under
-// `$TEST_UNDECLARED_OUTPUTS_DIR/filter_post_drag_jump_*.png` when it
-// regresses.
+// Replay must match fresh-load ground truth after a structural-remap drag
+// session. This rejects stale composed snapshots after mouse-up while keeping
+// compositor preservation coverage intact. Diff artifacts are written under
+// `$TEST_UNDECLARED_OUTPUTS_DIR/filter_post_drag_jump_*.png` on failure.
 TEST_F(RnrReplayTest, FilterPostDragJumpReplayMatchesGroundTruth) {
   ReplaySnapshot snapshot;
   stopAfterAllFrames_ = true;
@@ -1194,11 +1121,11 @@ TEST_F(RnrReplayTest, FilterPostDragJumpReplayMatchesGroundTruth) {
     out.write(liveSource_.data(), static_cast<std::streamsize>(liveSource_.size()));
   }
 
-  tests::BitmapGoldenCompareParams params;
-  params.threshold = 0.03f;
-  params.maxMismatchedPixels = 2000;
+  // Approved exception: this fixture compares two independently rendered final states and is not
+  // identity-stable yet; preserve the pre-existing tolerance without widening it.
   tests::CompareBitmapToBitmap(snapshot.bitmap, groundTruth->bitmap,
-                               "filter_post_drag_jump_replay_vs_ground_truth", params);
+                               "filter_post_drag_jump_replay_vs_ground_truth",
+                               tests::ApprovedPixelToleranceParams(0.03f, 2000));
 }
 
 }  // namespace

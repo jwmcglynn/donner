@@ -33,6 +33,34 @@ struct BitmapGoldenCompareParams {
   bool includeAntiAliasing = false;
 };
 
+/// Strict identity pixelmatch parameters for new replay regressions.
+[[nodiscard]] constexpr BitmapGoldenCompareParams PixelmatchIdentityParams() {
+  return BitmapGoldenCompareParams{
+      .threshold = 0.0f,
+      .maxMismatchedPixels = 0,
+      .includeAntiAliasing = true,
+  };
+}
+
+/**
+ * Explicitly-approved non-identity pixelmatch parameters.
+ *
+ * Use only for documented exceptions where identity comparison has
+ * been reviewed and rejected.
+ *
+ * @param threshold Per-channel pixelmatch threshold.
+ * @param maxMismatchedPixels Maximum number of mismatched pixels before failure.
+ * @param includeAntiAliasing Whether anti-aliased pixels count as mismatches.
+ */
+[[nodiscard]] constexpr BitmapGoldenCompareParams ApprovedPixelToleranceParams(
+    float threshold, int maxMismatchedPixels, bool includeAntiAliasing = false) {
+  return BitmapGoldenCompareParams{
+      .threshold = threshold,
+      .maxMismatchedPixels = maxMismatchedPixels,
+      .includeAntiAliasing = includeAntiAliasing,
+  };
+}
+
 /// Compare `bitmap` to the PNG at `goldenPath`.
 ///
 /// Adds gtest failures on size mismatch or too many divergent pixels.

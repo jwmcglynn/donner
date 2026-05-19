@@ -18,6 +18,8 @@ cc_library(
         "//donner/editor:async_renderer",
         "//donner/editor:composited_presentation",
         "//donner/editor:editor_app",
+        "//donner/editor:presentation_render_scheduler",
+        "//donner/editor:presented_frame_composer",
         "//donner/editor:select_tool",
         "//donner/editor:viewport_state",
         "//donner/editor/repro:gl_rnr_replay",
@@ -52,6 +54,7 @@ cc_test(
     deps = [
         ":editor_control_session",
         "//donner/editor/repro:repro_file",
+        "@com_google_gtest//:gtest",
         "@com_google_gtest//:gtest_main",
         "@nlohmann_json//:json",
     ],

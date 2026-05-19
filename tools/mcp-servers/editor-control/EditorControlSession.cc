@@ -27,6 +27,8 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/PresentationRenderScheduler.h"
+#include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/repro/GlRnrReplay.h"
 #include "donner/svg/SVGDocument.h"
@@ -46,6 +48,28 @@ using nlohmann::json;
 constexpr int kDefaultCanvasWidth = 892;
 constexpr int kDefaultCanvasHeight = 512;
 constexpr int kMaxDragFrames = 240;
+
+std::optional<PresentedDragPreview> PresentedPreviewFromSelectPreview(
+    const std::optional<SelectTool::ActiveDragPreview>& preview) {
+  if (!preview.has_value()) {
+    return std::nullopt;
+  }
+
+  return PresentedDragPreview{
+      .entity = preview->entity,
+      .translationDoc = preview->translation,
+  };
+}
+
+PresentedFrameTileGeometry PresentedGeometryFromDisplayTile(
+    const EditorControlSession::DisplayTileView& tile) {
+  return PresentedFrameTileGeometry{
+      .canvasOffsetDoc = tile.canvasOffsetDoc,
+      .bitmapDimsDoc = tile.bitmapDimsDoc,
+      .dragTranslationDoc = tile.dragTranslationDoc,
+      .isDragTarget = tile.isDragTarget,
+  };
+}
 
 ToolCallResult MakeErrorResult(std::string message) {
   ToolCallResult result;
@@ -177,8 +201,6 @@ bool ReadLoadOptions(const json& arguments, EditorControlSession::LoadOptions* o
   return ReadOptionalInt(arguments, "canvas_width", 0, &out->canvasWidth, error) &&
          ReadOptionalInt(arguments, "canvas_height", 0, &out->canvasHeight, error) &&
          ReadOptionalDouble(arguments, "device_pixel_ratio", 1.0, &out->devicePixelRatio, error) &&
-         ReadOptionalBool(arguments, "tight_bounded_segments", true, &out->tightBoundedSegments,
-                          error) &&
          ReadOptionalBool(arguments, "render_after_load", true, &out->renderAfterLoad, error) &&
          ReadCaptureOptions(arguments, false, &out->captureOptions, error);
 }
@@ -383,7 +405,6 @@ std::string PromoteRefusalReasonName(
   switch (reason) {
     case Reason::None: return "none";
     case Reason::InvalidEntity: return "invalid_entity";
-    case Reason::CompositingBreakingAncestor: return "compositing_breaking_ancestor";
     case Reason::LayerLimit: return "layer_limit";
     case Reason::MemoryLimit: return "memory_limit";
     case Reason::DescendantPromoted: return "descendant_promoted";
@@ -790,12 +811,13 @@ json DisplayFrameJson(const EditorControlSession::DisplayFrameSnapshot& display)
   }
 
   int index = 0;
+  const std::optional<PresentedDragPreview> activeDragPreview =
+      PresentedPreviewFromSelectPreview(display.activeDragPreview);
+  const std::optional<PresentedDragPreview> displayedDragPreview =
+      PresentedPreviewFromSelectPreview(display.displayedDragPreview);
   for (const EditorControlSession::DisplayTileView& tile : display.tiles) {
-    Vector2d effectiveDragTranslationDoc = tile.dragTranslationDoc;
-    if (display.hasActiveDragPreview && tile.isDragTarget &&
-        display.displayedDragPreview.has_value()) {
-      effectiveDragTranslationDoc = display.displayedDragPreview->translation;
-    }
+    const Vector2d effectiveDragTranslationDoc = ResolvePresentedTileDragTranslation(
+        PresentedGeometryFromDisplayTile(tile), activeDragPreview, displayedDragPreview);
     displayJson["tiles"].push_back(json{
         {"index", index},
         {"kind", TileKindName(tile.kind)},
@@ -949,23 +971,33 @@ std::optional<svg::RendererBitmap> EditorControlSession::HeadlessTextureCache::c
 
   const double pixelsPerDocX = static_cast<double>(canvasSize.x) / viewBox.size().x;
   const double pixelsPerDocY = static_cast<double>(canvasSize.y) / viewBox.size().y;
+  const Transform2d canvasPixelsFromCanvasTransform =
+      Transform2d::Translate(-viewBox.topLeft) *
+      Transform2d::Scale(Vector2d(pixelsPerDocX, pixelsPerDocY));
+  const std::optional<PresentedDragPreview> activeDragPreview =
+      PresentedPreviewFromSelectPreview(display.activeDragPreview);
+  const std::optional<PresentedDragPreview> displayedDragPreview =
+      PresentedPreviewFromSelectPreview(display.displayedDragPreview);
   for (const DisplayTileView& tile : display.tiles) {
     const auto tileIt = tileTextures_.find(tile.id);
     if (tileIt == tileTextures_.end() || tileIt->second.bitmap.empty()) {
       continue;
     }
 
-    Vector2d dragTranslationDoc = tile.dragTranslationDoc;
-    if (display.hasActiveDragPreview && tile.isDragTarget &&
-        display.displayedDragPreview.has_value()) {
-      dragTranslationDoc = display.displayedDragPreview->translation;
+    const std::optional<PresentedTileRect> tileRect = ComputePresentedTileRect(
+        PresentedGeometryFromDisplayTile(tile), canvasPixelsFromCanvasTransform, activeDragPreview,
+        displayedDragPreview);
+    if (!tileRect.has_value()) {
+      continue;
     }
-    const Vector2d originDoc = tile.canvasOffsetDoc + dragTranslationDoc - viewBox.topLeft;
-    const int targetX = static_cast<int>(std::lround(originDoc.x * pixelsPerDocX));
-    const int targetY = static_cast<int>(std::lround(originDoc.y * pixelsPerDocY));
-    const int targetWidth = static_cast<int>(std::lround(tile.bitmapDimsDoc.x * pixelsPerDocX));
-    const int targetHeight = static_cast<int>(std::lround(tile.bitmapDimsDoc.y * pixelsPerDocY));
-    BlendBitmapOver(&composed, tileIt->second.bitmap, targetX, targetY, targetWidth, targetHeight);
+    const std::optional<PresentedPixelRect> pixelRect =
+        RoundPresentedTileRectToPixelRect(*tileRect);
+    if (!pixelRect.has_value()) {
+      continue;
+    }
+
+    BlendBitmapOver(&composed, tileIt->second.bitmap, pixelRect->x, pixelRect->y, pixelRect->width,
+                    pixelRect->height);
   }
 
   return composed;
@@ -985,7 +1017,6 @@ json EditorControlSession::toolList() {
                     {"canvas_width", {{"type", "integer"}, {"minimum", 1}}},
                     {"canvas_height", {{"type", "integer"}, {"minimum", 1}}},
                     {"device_pixel_ratio", {{"type", "number"}, {"default", 1.0}}},
-                    {"tight_bounded_segments", {{"type", "boolean"}, {"default", true}}},
                     {"render_after_load", {{"type", "boolean"}, {"default", true}}},
                     {"include_final_frame", {{"type", "boolean"}, {"default", false}}},
                     {"embed_png_base64", {{"type", "boolean"}, {"default", false}}},
@@ -1006,7 +1037,6 @@ json EditorControlSession::toolList() {
                     {"canvas_width", {{"type", "integer"}, {"minimum", 1}}},
                     {"canvas_height", {{"type", "integer"}, {"minimum", 1}}},
                     {"device_pixel_ratio", {{"type", "number"}, {"default", 1.0}}},
-                    {"tight_bounded_segments", {{"type", "boolean"}, {"default", true}}},
                     {"render_after_load", {{"type", "boolean"}, {"default", true}}},
                     {"include_final_frame", {{"type", "boolean"}, {"default", false}}},
                     {"embed_png_base64", {{"type", "boolean"}, {"default", false}}},
@@ -1225,7 +1255,6 @@ ToolCallResult EditorControlSession::loadSvgSource(std::string_view source,
   app_.flushFrame();
 
   selectTool_ = std::make_unique<SelectTool>();
-  asyncRenderer_.setTightBoundedSegmentsEnabled(options.tightBoundedSegments);
   displayPresentation_ = CompositedPresentation{};
   displayTextures_.reset();
   rnrRecording_ = RnrRecordingState{};
@@ -1492,7 +1521,6 @@ ToolCallResult EditorControlSession::sessionState(const json&) const {
       {"canvas", {{"width", canvasWidth_}, {"height", canvasHeight_}}},
       {"device_pixel_ratio", devicePixelRatio_},
       {"selection", selectedElementJson()},
-      {"tight_bounded_segments", asyncRenderer_.tightBoundedSegmentsEnabled()},
       {"worker_compositor_entity", EntityToJsonValue(asyncRenderer_.workerCompositorEntity())},
   };
 
@@ -1833,8 +1861,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
     int leftMouseDownCount = 0;
     int targetLeftMouseDownFrameOffset = -1;
     bool comparedTargetPresentedFrame = false;
-    std::uint64_t lastRenderedVersion = std::numeric_limits<std::uint64_t>::max();
-    Vector2i lastRenderedCanvasSize = Vector2i::Zero();
+    PresentationRenderScheduler renderScheduler;
 
     const auto pollRenderResult = [&]() {
       std::optional<RenderResult> result = asyncRenderer_.pollResult();
@@ -1843,6 +1870,10 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       }
 
       recordDisplayFrame(*result);
+      if (result->stage == RenderResult::Stage::Final) {
+        renderScheduler.noteRenderCompleted(result->version,
+                                            asyncRenderer_.lastDocumentCanvasSize());
+      }
       ++renderedFrameCount;
       return true;
     };
@@ -1880,25 +1911,18 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
           app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
         selectedEntity = app_.selectedElement()->entityHandle().entity();
       }
-      displayPresentation_.clearSettlingIfSelectionChanged(selectedEntity, dragPreview.has_value());
-
-      const bool needsCompositedLayerCapture =
-          dragPreview.has_value() && (!displayPresentation_.hasCachedTextures ||
-                                      displayPresentation_.cachedEntity != dragPreview->entity ||
-                                      displayPresentation_.cachedVersion != currentVersion ||
-                                      displayPresentation_.cachedCanvasSize != currentCanvasSize);
-      const bool needsCompositedPrewarm =
-          displayPresentation_.shouldPrewarm(selectedEntity, currentVersion, currentCanvasSize,
-                                             /*dragActive=*/false);
-      const bool needsRegularRender =
-          currentVersion != lastRenderedVersion || currentCanvasSize != lastRenderedCanvasSize;
-      if (!needsCompositedLayerCapture && !needsCompositedPrewarm && !needsRegularRender) {
+      const PresentationRenderScheduleDecision schedule =
+          renderScheduler.evaluate(displayPresentation_, PresentationRenderScheduleInput{
+                                                             .selectedEntity = selectedEntity,
+                                                             .activeDragPreview = dragPreview,
+                                                             .currentVersion = currentVersion,
+                                                             .currentCanvasSize = currentCanvasSize,
+                                                         });
+      if (!schedule.shouldRequestRender()) {
         return false;
       }
 
-      RenderRequest request;
-      request.renderer = &renderer_;
-      request.document = &app_.document().document();
+      RenderRequest request(renderer_, app_.document().document());
       request.version = currentVersion;
       request.documentGeneration = app_.document().documentGeneration();
       request.structuralRemap = app_.document().consumePendingStructuralRemap();
@@ -1906,23 +1930,10 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
         request.selection = *app_.selectedElement();
       }
       request.selectedEntity = selectedEntity;
-      if (dragPreview.has_value()) {
-        request.dragPreview = RenderRequest::DragPreview{
-            .entity = dragPreview->entity,
-            .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
-        };
-      } else if (needsCompositedPrewarm && selectedEntity != entt::null) {
-        request.dragPreview = RenderRequest::DragPreview{
-            .entity = selectedEntity,
-            .interactionKind = svg::compositor::InteractionHint::Selection,
-        };
+      if (schedule.dragPreview.has_value()) {
+        request.dragPreview = *schedule.dragPreview;
       }
       asyncRenderer_.requestRender(request);
-
-      if (needsRegularRender) {
-        lastRenderedVersion = currentVersion;
-        lastRenderedCanvasSize = currentCanvasSize;
-      }
       return true;
     };
 
@@ -2314,9 +2325,7 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
   }
   displayPresentation_.clearSettlingIfSelectionChanged(selectedEntity, activePreview.has_value());
 
-  RenderRequest request;
-  request.renderer = &renderer_;
-  request.document = &app_.document().document();
+  RenderRequest request(renderer_, app_.document().document());
   request.version = nextRenderVersion_++;
   request.documentGeneration = app_.document().documentGeneration();
   request.structuralRemap = app_.document().consumePendingStructuralRemap();
@@ -2376,10 +2385,12 @@ EditorControlSession::DisplayFrameSnapshot EditorControlSession::currentDisplayF
       selectTool_->activeDragPreview();
   const std::optional<SelectTool::ActiveDragPreview> displayedPreview =
       displayPresentation_.presentationPreview(activePreview);
+  const CompositedPresentation::DiagnosticsSnapshot presentation =
+      displayPresentation_.diagnostics();
 
   DisplayFrameSnapshot frame;
-  frame.hasCachedTiles = displayPresentation_.hasCachedTextures;
-  frame.cachedEntity = displayPresentation_.cachedEntity;
+  frame.hasCachedTiles = presentation.hasCachedTextures;
+  frame.cachedEntity = presentation.cachedEntity;
   frame.hasActiveDragPreview = activePreview.has_value();
   frame.activeDragPreview = activePreview;
   frame.displayedDragPreview = displayedPreview;

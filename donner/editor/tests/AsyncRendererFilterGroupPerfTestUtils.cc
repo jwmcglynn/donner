@@ -65,9 +65,7 @@ void RunFilterGroupSubtreeDragPerfScenario(FilterGroupSubtreeDragPerfResult* res
   AsyncRenderer asyncRenderer;
 
   const auto postRequest = [&](uint64_t version, bool activeDrag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = version;
     request.documentGeneration = 1;
     request.selectedEntity = targetEntity;

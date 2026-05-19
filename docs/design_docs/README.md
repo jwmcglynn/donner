@@ -31,6 +31,10 @@ of the system looks the way it does (or will look). Developer docs describe
    using [`developer_template.md`](developer_template.md), or fold the
    still-relevant content into `../developer_docs.md` and leave a brief
    pointer behind.
+4. **Retrospective** — Use [`retrospective_template.md`](retrospective_template.md)
+   after a difficult bug, incident, or workstream. Retrospectives may include
+   history, but their output should be concrete decisions, review findings, and
+   follow-up actions.
 
 See [`AGENTS.md`](AGENTS.md) in this directory for more detail on the
 conventions automated agents should follow when editing design docs.
@@ -39,6 +43,7 @@ conventions automated agents should follow when editing design docs.
 
 - [`design_template.md`](design_template.md) — in-flight designs
 - [`developer_template.md`](developer_template.md) — shipped features
+- [`retrospective_template.md`](retrospective_template.md) — bug/workstream retrospectives
 
 ## Document Index
 
@@ -76,6 +81,10 @@ conventions automated agents should follow when editing design docs.
 | 0030 | [geode_performance](0030-geode_performance.md)                                         | In Progress                                                                | Geode GPU-backend performance milestones (counters, arenas, shared command encoder, target reuse). |
 | 0031 | [ci_hardening_2026q2](0031-ci_hardening_2026q2.md)                                     | Design                                                                     | Consolidated CI work for 2026-Q2: escape prevention (issue #552 class) + runtime reduction (subsumes 0029). |
 | 0032 | [sandbox_branch_split](0032-sandbox_branch_split.md)                                   | Design                                                                     | Plan for extracting general-purpose improvements off the `sandbox` branch into `main`-targeted PRs (tiered by porting cost). |
+| 0033 | [editor_design_tool_responsiveness](0033-editor_design_tool_responsiveness.md)         | Implementing                                                               | Editor responsiveness plan for high-zoom dragging, async rendering, and composited presentation. |
+| 0034 | [progressive_rendering](0034-progressive_rendering.md)                                 | Design                                                                     | Progressive intermediate frames for high-zoom drag-start responsiveness. |
+| 0035 | [filter_layer_compose_offset_bug](0035-filter_layer_compose_offset_bug.md)             | Fixed                                                                      | Root cause and coverage for the filtered-layer compose-offset/source-sync bug class. |
+| 0036 | [composited_presentation_retrospective](0036-composited_presentation_retrospective.md) | Retrospective                                                              | Review of the filtered drag repro, flat-mode removal, fragile code paths, testing gaps, and cleanup actions. |
 
 ## Cross-reference: developer docs
 

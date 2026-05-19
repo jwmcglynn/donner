@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "donner/editor/repro/ReproFile.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "nlohmann/json.hpp"
 
@@ -16,6 +17,7 @@ namespace donner::editor::mcp {
 namespace {
 
 using nlohmann::json;
+using ::testing::ElementsAreArray;
 
 constexpr std::string_view kFilteredScene = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
@@ -77,6 +79,65 @@ std::vector<std::string> PreviewTileGenerationSignature(const json& preview) {
   return signature;
 }
 
+MATCHER_P(HasPreviewTileSignature, expected, "") {
+  const std::vector<std::string> actual = PreviewTileSignature(arg);
+  if (actual != expected) {
+    *result_listener << "actual signature=" << json(actual).dump();
+    return false;
+  }
+  return true;
+}
+
+MATCHER_P(HasPreviewTileGenerationSignature, expected, "") {
+  const std::vector<std::string> actual = PreviewTileGenerationSignature(arg);
+  if (actual != expected) {
+    *result_listener << "actual generation signature=" << json(actual).dump();
+    return false;
+  }
+  return true;
+}
+
+MATCHER(IsPixelmatchIdentitySummary, "") {
+  if (!arg.value("available", false)) {
+    *result_listener << "diff unavailable: " << arg.dump();
+    return false;
+  }
+  if (arg.value("comparison", "") != "pixelmatch") {
+    *result_listener << "comparison=" << arg.value("comparison", "");
+    return false;
+  }
+  if (arg.value("differing_pixels", -1) != 0) {
+    *result_listener << "differing_pixels=" << arg.value("differing_pixels", -1)
+                     << " artifacts=" << arg.value("artifacts", json::object()).dump();
+    return false;
+  }
+  return true;
+}
+
+MATCHER(IsTilesPresentedFrameForActiveDrag, "") {
+  if (!arg["active_drag_preview"].is_object()) {
+    *result_listener << "active_drag_preview missing: " << arg.dump();
+    return false;
+  }
+  const std::uint32_t activeEntity =
+      arg["active_drag_preview"].value("entity", static_cast<std::uint32_t>(0));
+  if (activeEntity == 0u) {
+    *result_listener << "active drag entity is null";
+    return false;
+  }
+  if (arg.value("path", "") == "tiles") {
+    const std::uint32_t displayedEntity =
+        arg.value("displayed_entity", static_cast<std::uint32_t>(0));
+    if (displayedEntity != activeEntity) {
+      *result_listener << "displayed_entity=" << displayedEntity
+                       << " active_entity=" << activeEntity
+                       << " tile generations=" << json(PreviewTileGenerationSignature(arg)).dump();
+      return false;
+    }
+  }
+  return true;
+}
+
 bool HasLeftMouseDownEvent(const json& frame) {
   if (!frame.contains("events")) {
     return false;
@@ -87,6 +148,17 @@ bool HasLeftMouseDownEvent(const json& frame) {
     }
   }
   return false;
+}
+
+repro::ReproExpectation LoadFixtureExpectation(std::string_view rnrPath) {
+  std::optional<repro::ReproFile> file =
+      repro::ReadReproFile(std::filesystem::path(std::string(rnrPath)));
+  EXPECT_TRUE(file.has_value()) << rnrPath;
+  EXPECT_TRUE(file.has_value() && file->metadata.expect.has_value()) << rnrPath;
+  if (!file.has_value() || !file->metadata.expect.has_value()) {
+    return {};
+  }
+  return *file->metadata.expect;
 }
 
 std::vector<std::string> StageTileSignature(const json& stage, std::string_view previewKey) {
@@ -131,7 +203,7 @@ void ExpectEveryStageHasTileOrder(std::string_view label, const ToolCallResult& 
       DragTileSignatures(drag, previewKey, includeRelease, includeEmptySignatures);
   ASSERT_FALSE(signatures.empty()) << label;
   for (size_t i = 0; i < signatures.size(); ++i) {
-    EXPECT_EQ(signatures[i], expected) << label << " stage " << i;
+    EXPECT_THAT(signatures[i], ElementsAreArray(expected)) << label << " stage " << i;
   }
 }
 
@@ -145,7 +217,7 @@ void ExpectBeforeRenderDisplayHandoff(
   const json& firstDisplay = frames[0]["display_before_render"];
   if (expectedBeforeFirstRender.has_value()) {
     EXPECT_EQ(firstDisplay.value("path", ""), "tiles") << label;
-    EXPECT_EQ(PreviewTileSignature(firstDisplay), *expectedBeforeFirstRender) << label;
+    EXPECT_THAT(firstDisplay, HasPreviewTileSignature(*expectedBeforeFirstRender)) << label;
   } else {
     const std::string path = firstDisplay.value("path", "");
     EXPECT_TRUE(path == "tiles" || path == "empty") << label << " path=" << path;
@@ -154,8 +226,40 @@ void ExpectBeforeRenderDisplayHandoff(
   for (size_t i = 1; i < frames.size(); ++i) {
     const json& display = frames[i]["display_before_render"];
     EXPECT_EQ(display.value("path", ""), "tiles") << label << " frame " << i;
-    EXPECT_EQ(PreviewTileSignature(display), expectedAfterFirstRender) << label << " frame " << i;
+    EXPECT_THAT(display, HasPreviewTileSignature(expectedAfterFirstRender))
+        << label << " frame " << i;
   }
+}
+
+void ExpectPresentedFrameMatchesFinalAfterClick(const json& frames,
+                                                const repro::ReproExpectation& expect) {
+  const json* targetFrame = nullptr;
+  for (const json& frame : frames) {
+    const auto offsetIt = frame.find("left_mouse_down_compare_offset");
+    if (offsetIt == frame.end() || !offsetIt->is_number_integer() ||
+        offsetIt->get<int>() != expect.frameOffsetAfterLeftMouseDown) {
+      continue;
+    }
+    const int ordinal = frame.value("left_mouse_down_ordinal", 0);
+    if (ordinal == 0 || ordinal == expect.leftMouseDownOrdinal) {
+      targetFrame = &frame;
+      break;
+    }
+  }
+
+  ASSERT_NE(targetFrame, nullptr)
+      << "GUI-scheduled replay did not store the expected presented frame. Stored frames: "
+      << frames.dump(2);
+  EXPECT_GE(targetFrame->value("frame_index", 0), expect.minFrameIndex);
+  EXPECT_LE(targetFrame->value("frame_index", 0), expect.maxFrameIndex);
+
+  EXPECT_THAT((*targetFrame)["presented_frame"], IsTilesPresentedFrameForActiveDrag());
+  EXPECT_THAT((*targetFrame)["presented_frame_diff_from_eventual_final"],
+              IsPixelmatchIdentitySummary())
+      << "Frame " << targetFrame->value("frame_index", 0)
+      << ", display path=" << (*targetFrame)["presented_frame"].value("path", "")
+      << ", tile generations="
+      << json(PreviewTileGenerationSignature((*targetFrame)["presented_frame"])).dump();
 }
 
 TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
@@ -377,64 +481,27 @@ TEST(EditorControlSessionTest, ReplayFilteredElementFlashAfterDragsNeverReportsF
 
 TEST(EditorControlSessionTest,
      ReplayFilteredElementFlashAfterDragsGuiScheduleDoesNotFlashOnSecondClick) {
+  constexpr std::string_view kRnrPath =
+      "donner/editor/tests/filtered-element-flash-after-drags-2.rnr";
+  const repro::ReproExpectation expect = LoadFixtureExpectation(kRnrPath);
+
   EditorControlSession session;
   ToolCallResult replay = session.handleToolCall(
-      "replay_rnr",
-      json{{"rnr_path", "donner/editor/tests/filtered-element-flash-after-drags-2.rnr"},
-           {"simulate_editor_shell_frame_loop", true},
-           {"include_frame_results", true},
-           {"include_display_diff", true},
-           {"compare_presented_after_left_mouse_down", 2},
-           {"compare_presented_frame_offset_after_left_mouse_down", 1},
-           {"max_frame_results", 240},
-           {"include_final_frame", false}});
+      "replay_rnr", json{{"rnr_path", std::string(kRnrPath)},
+                         {"simulate_editor_shell_frame_loop", true},
+                         {"include_frame_results", true},
+                         {"include_display_diff", true},
+                         {"compare_presented_after_left_mouse_down", expect.leftMouseDownOrdinal},
+                         {"compare_presented_frame_offset_after_left_mouse_down",
+                          expect.frameOffsetAfterLeftMouseDown},
+                         {"max_frame_results", 240},
+                         {"include_final_frame", false}});
   ASSERT_TRUE(replay.body.value("ok", false)) << replay.body.dump(2);
 
   const json& frames = replay.body["frames"];
   ASSERT_FALSE(frames.empty());
 
-  const json* secondMouseDownFrame = nullptr;
-  for (const json& frame : frames) {
-    const auto offsetIt = frame.find("left_mouse_down_compare_offset");
-    if (offsetIt != frame.end() && offsetIt->is_number_integer() && offsetIt->get<int>() == 1) {
-      secondMouseDownFrame = &frame;
-      break;
-    }
-  }
-
-  ASSERT_NE(secondMouseDownFrame, nullptr)
-      << "GUI-scheduled replay did not store the accepted repro frame after the second "
-         "left-button mouse-down. Stored frames: "
-      << frames.dump(2);
-  EXPECT_GE((*secondMouseDownFrame).value("frame_index", 0), 153);
-  EXPECT_LE((*secondMouseDownFrame).value("frame_index", 0), 156);
-
-  const json& presented = (*secondMouseDownFrame)["presented_frame"];
-  ASSERT_TRUE(presented["active_drag_preview"].is_object()) << secondMouseDownFrame->dump(2);
-  const std::uint32_t activeEntity =
-      presented["active_drag_preview"].value("entity", static_cast<std::uint32_t>(0));
-  ASSERT_NE(activeEntity, 0u) << secondMouseDownFrame->dump(2);
-
-  if (presented.value("path", "") == "tiles") {
-    const std::uint32_t displayedEntity =
-        presented.value("displayed_entity", static_cast<std::uint32_t>(0));
-    EXPECT_EQ(displayedEntity, activeEntity)
-        << "The GUI-scheduled accepted repro frame after the second click is blitting cached "
-           "tiles for the wrong entity. Frame "
-        << (*secondMouseDownFrame).value("frame_index", 0)
-        << ", tile generations=" << json(PreviewTileGenerationSignature(presented)).dump();
-  }
-
-  const json& diff = (*secondMouseDownFrame)["presented_frame_diff_from_eventual_final"];
-  ASSERT_TRUE(diff.value("available", false)) << secondMouseDownFrame->dump(2);
-  EXPECT_EQ(diff.value("comparison", ""), "pixelmatch") << diff.dump(2);
-  EXPECT_EQ(diff.value("differing_pixels", -1), 0)
-      << "The GUI-scheduled accepted repro frame after the second click differs from the "
-         "eventual final render. Frame "
-      << (*secondMouseDownFrame).value("frame_index", 0)
-      << ", display path=" << presented.value("path", "")
-      << ", artifacts=" << diff.value("artifacts", json::object()).dump()
-      << ", tile generations=" << json(PreviewTileGenerationSignature(presented)).dump();
+  ExpectPresentedFrameMatchesFinalAfterClick(frames, expect);
 }
 
 TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {

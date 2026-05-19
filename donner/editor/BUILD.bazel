@@ -332,17 +332,40 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "presented_frame_composer",
+    srcs = ["PresentedFrameComposer.cc"],
+    hdrs = ["PresentedFrameComposer.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "render_pane_presenter",
     srcs = ["RenderPanePresenter.cc"],
     hdrs = ["RenderPanePresenter.h"],
     deps = [
         ":gl_texture_cache",
         ":imgui_headers",
+        ":presented_frame_composer",
         ":select_tool",
         ":selection_aabb",
         ":viewport_interaction_controller",
         "//donner/base",
         "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "presentation_render_scheduler",
+    srcs = ["PresentationRenderScheduler.cc"],
+    hdrs = ["PresentationRenderScheduler.h"],
+    deps = [
+        ":async_renderer",
+        ":composited_presentation",
+        ":select_tool",
+        "//donner/base",
+        "//donner/svg/compositor",
     ],
 )
 
@@ -355,6 +378,7 @@ donner_cc_library(
         ":composited_presentation",
         ":gl_texture_cache",
         ":overlay_renderer",
+        ":presentation_render_scheduler",
         ":select_tool",
         ":selection_aabb",
         ":tracy_wrapper",

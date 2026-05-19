@@ -76,8 +76,6 @@ public:
     int canvasHeight = 0;
     /// Device pixel ratio recorded in the session diagnostics.
     double devicePixelRatio = 1.0;
-    /// Whether tight-bounded compositor segments are enabled.
-    bool tightBoundedSegments = true;
     /// Whether to render an initial frame after load.
     bool renderAfterLoad = true;
     /// Initial render capture settings.

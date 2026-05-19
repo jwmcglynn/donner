@@ -18,11 +18,17 @@ All design documents live under `docs/design_docs/`.
 2. **Implementation plan.** Detailed plan + Markdown TODO checklist (`- [ ] Implement X`). Start with high-level milestones, expand into indented checkboxes when kicking off each milestone.
 3. **Iterative implementation.** Complete TODOs one at a time, gather feedback, update plan and check boxes to reflect progress. Always state the next planned step in summaries.
 4. **Finalization.** Convert to developer-facing doc via `developer_template.md`: remove prior-state notes/plans, describe current architecture in present tense.
+5. **Retrospectives.** For difficult bugs, incidents, or long workstreams, use
+   `retrospective_template.md`. Retrospectives may include timeline/history,
+   but they must end in concrete review findings, fragility/refactoring
+   opportunities, and follow-up actions.
 
 ## Templates
 
 - In-flight designs: `design_template.md` (Summary, Goals, Non-Goals, Next Steps, Implementation Plan, Security/Privacy, Testing/Validation).
 - Shipped features: `developer_template.md` (present tense, no TODOs, include guarantees/testing/security).
+- Retrospectives: `retrospective_template.md` (outcome, code-review findings,
+  fragility/refactoring review, testing/process review, action checklist).
 
 ## Invariants Must Point At CI Targets
 

@@ -61,9 +61,7 @@ TEST(AsyncRendererTest, WakeCallbackFiresOnDoneTransitionBeforePollResult) {
     }
   });
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   asyncRenderer.requestRender(request);
 
@@ -108,9 +106,7 @@ TEST(AsyncRendererTest, WakeCallbackFiresPerRequest) {
                        [&] { return wakeCount.load(std::memory_order_acquire) >= target; });
   };
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   asyncRenderer.requestRender(request);
   ASSERT_TRUE(waitForCount(1));
@@ -138,9 +134,7 @@ TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
   // No setWakeCallback — the editor's old pollResult-on-each-frame
   // path must continue to work.
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   asyncRenderer.requestRender(request);
 
@@ -212,9 +206,7 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   //    encounter would also be the first rasterize, which resets
   //    `canvasFromBitmap` back to Identity.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = entityA;
     request.dragPreview = RenderRequest::DragPreview{
@@ -230,9 +222,7 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   //    without re-rasterizing.
   elemA->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(7.0, 11.0)));
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 2;
     request.selectedEntity = entityA;
     request.dragPreview = RenderRequest::DragPreview{.entity = entityA};
@@ -245,9 +235,7 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   //    A's bitmap is still cached with its post-drag canvasFromBitmap.
   elemB->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(2.0, 3.0)));
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 3;
     request.selectedEntity = entityB;
     request.dragPreview = RenderRequest::DragPreview{.entity = entityB};
@@ -318,18 +306,14 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   // `requestRender` lands while `isBusy()` may be true and must
   // signal cancel on the in-flight render.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = elemA->entityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{.entity = elemA->entityHandle().entity()};
     asyncRenderer.requestRender(request);
   }
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 2;
     request.selectedEntity = elemB->entityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{.entity = elemB->entityHandle().entity()};
@@ -386,9 +370,7 @@ TEST(AsyncRendererTest, CancelInFlightDropsResultAndReturnsWorkerToIdle) {
   AsyncRenderer asyncRenderer;
   ASSERT_FALSE(asyncRenderer.isBusy());
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   request.documentGeneration = 1;
   request.selectedEntity = target->entityHandle().entity();
@@ -428,9 +410,7 @@ TEST(AsyncRendererTest, CancelInFlightFollowedByRequestRenderRunsCleanly) {
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   request.documentGeneration = 1;
   request.selectedEntity = target->entityHandle().entity();
@@ -474,9 +454,7 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   // Apply a transform to the DOM to simulate the drag having moved the target.
   target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 4.0)));
@@ -528,9 +506,7 @@ TEST(AsyncRendererTest, PreviewRequestWithoutDomTransformReturnsCompositedPrevie
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   request.dragPreview = RenderRequest::DragPreview{
       .entity = target->entityHandle().entity(),
@@ -567,9 +543,7 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
 
   // First render at version 1.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.dragPreview = RenderRequest::DragPreview{
         .entity = target->entityHandle().entity(),
@@ -590,9 +564,7 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
 
   // Second render at version 2 — compositor should reset rather than using stale layers.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 2;
     request.dragPreview = RenderRequest::DragPreview{
         .entity = target->entityHandle().entity(),
@@ -631,9 +603,7 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   request.selectedEntity = target->entityHandle().entity();
   // No dragPreview — editor is holding a selection pre-warmed but not
@@ -664,9 +634,7 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
 
   asyncRenderer.requestRender(request);
@@ -723,9 +691,7 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
     svg::Renderer renderer;
     AsyncRenderer asyncRenderer;
 
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = target->entityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{
@@ -786,9 +752,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   // Drag frame 1: DOM transform (4, 0).
   target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = target->entityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{
@@ -814,9 +778,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
 
   // Release: selection held but no drag.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = target->entityHandle().entity();
     asyncRenderer.requestRender(request);
@@ -832,9 +794,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   // — but the output would still be visually correct, so check the cheaper
   // proxy: the promoted-entity bitmap must be bit-identical.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = target->entityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{
@@ -905,9 +865,7 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   // selection, which promotes the target and warms every mandatory filter
   // layer.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.documentGeneration = 1;
     request.selectedEntity = entity;
@@ -944,9 +902,7 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   for (int i = 0; i < kDragFrames; ++i) {
     target->cast<svg::SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 1) * 2.0, 0.0)));
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = static_cast<std::uint64_t>(i + 2);
     request.documentGeneration = 1;
     request.selectedEntity = entity;
@@ -1006,9 +962,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 
   // Pre-warm render so the compositor has state worth preserving.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.documentGeneration = 1;
     request.selectedEntity = entity;
@@ -1029,9 +983,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
   for (int i = 0; i < kDragFrames; ++i) {
     target->cast<svg::SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 1), 0.0)));
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = static_cast<std::uint64_t>(i + 2);
     request.documentGeneration = 1;
     request.selectedEntity = entity;
@@ -1054,9 +1006,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
   // Bumping `documentGeneration` (e.g. source-pane reparse) *should* fire a
   // reset, exactly once — sanity check on the positive half of the contract.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 100;
     request.documentGeneration = 2;
     request.selectedEntity = entity;
@@ -1132,9 +1082,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
   };
 
   const auto postRequest = [&](uint64_t version, bool hasSelection, bool hasDrag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1253,9 +1201,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
   };
 
   const auto postRequest = [&](uint64_t version, bool hasSelection, bool hasDrag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1709,9 +1655,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
     return std::nullopt;
   };
   const auto post = [&](uint64_t version, Entity selectedEntity, Entity dragEntity) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1885,9 +1829,7 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
     return std::nullopt;
   };
   const auto post = [&](uint64_t version, Entity selectedEntity, Entity dragEntity) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -2006,9 +1948,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   };
 
   const auto postRequest = [&](uint64_t version, bool drag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -2062,9 +2002,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
 
   // Post the next render request. The worker consumes the remap and
   // takes the structural-remap path instead of resetAllLayers.
-  RenderRequest postReplaceRequest;
-  postReplaceRequest.renderer = &renderer;
-  postReplaceRequest.document = &asyncDoc.document();
+  RenderRequest postReplaceRequest(renderer, asyncDoc.document());
   postReplaceRequest.version = 100;
   postReplaceRequest.documentGeneration = asyncDoc.documentGeneration();
   postReplaceRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -2147,9 +2085,7 @@ TEST(AsyncRendererE2ETest, StructuralRemapSurvivesSupersededWritebackRequest) {
     return false;
   };
 
-  RenderRequest initialRequest;
-  initialRequest.renderer = &renderer;
-  initialRequest.document = &asyncDoc.document();
+  RenderRequest initialRequest(renderer, asyncDoc.document());
   initialRequest.version = 1;
   initialRequest.documentGeneration = asyncDoc.documentGeneration();
   initialRequest.selectedEntity = target->entityHandle().entity();
@@ -2167,7 +2103,7 @@ TEST(AsyncRendererE2ETest, StructuralRemapSurvivesSupersededWritebackRequest) {
   auto targetAfterWriteback = asyncDoc.document().querySelector("#target");
   ASSERT_TRUE(targetAfterWriteback.has_value());
 
-  RenderRequest supersededRequest;
+  RenderRequest supersededRequest(renderer, asyncDoc.document());
   supersededRequest.version = 2;
   supersededRequest.documentGeneration = asyncDoc.documentGeneration();
   supersededRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -2178,9 +2114,7 @@ TEST(AsyncRendererE2ETest, StructuralRemapSurvivesSupersededWritebackRequest) {
   asyncRenderer.requestRender(supersededRequest);
   ASSERT_TRUE(waitUntilIdle());
 
-  RenderRequest followupRequest;
-  followupRequest.renderer = &renderer;
-  followupRequest.document = &asyncDoc.document();
+  RenderRequest followupRequest(renderer, asyncDoc.document());
   followupRequest.version = 3;
   followupRequest.documentGeneration = asyncDoc.documentGeneration();
   followupRequest.selectedEntity = targetAfterWriteback->entityHandle().entity();
@@ -2239,9 +2173,7 @@ TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilt
     return std::nullopt;
   };
   const auto postRequest = [&](uint64_t version, Entity selectedEntity) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -2352,9 +2284,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   };
 
   const auto postRequest = [&](uint64_t version, bool drag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -2401,9 +2331,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   auto targetAfterEdit = asyncDoc.document().querySelector("#target");
   ASSERT_TRUE(targetAfterEdit.has_value());
 
-  RenderRequest postEditRequest;
-  postEditRequest.renderer = &renderer;
-  postEditRequest.document = &asyncDoc.document();
+  RenderRequest postEditRequest(renderer, asyncDoc.document());
   postEditRequest.version = 100;
   postEditRequest.documentGeneration = asyncDoc.documentGeneration();
   postEditRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -2428,18 +2356,9 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   EXPECT_EQ(resetCount, 0u) << "source-pane structurally-equivalent edit took the reset path";
 }
 
-// Regression: a user closing the editor mid-render (or immediately after the
-// last drag frame) was SIGSEGV'ing inside the compositor's `composeLayers`
-// `drawBitmap` lambda. Root cause: `RenderCoordinator` declared
-// `asyncRenderer_` before `renderer_`, so C++'s reverse-declaration-order
-// member destruction tore down the external `svg::Renderer` first and only
-// then ran `~AsyncRenderer` (which joins the worker thread). The worker,
-// still mid-iteration from a pending request, dereferenced a dangling
-// `RendererInterface*` through `CompositorController::renderer_` and
-// crashed. This test drives the exact teardown shape — post a render and
-// destroy the coordinator before it settles — so any future regression to
-// the declaration order trips this test instead of shipping a crash on
-// every editor close after a filter drag.
+// RenderCoordinator teardown must join the async worker before destroying the
+// renderer referenced by that worker's compositor. This posts a render and
+// destroys the coordinator before it settles, matching editor-close timing.
 TEST(RenderCoordinatorTest, TearingDownWithInFlightRenderDoesNotCrashOnExit) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <defs>
@@ -2456,26 +2375,15 @@ TEST(RenderCoordinatorTest, TearingDownWithInFlightRenderDoesNotCrashOnExit) {
 
   auto coordinator = std::make_unique<RenderCoordinator>();
 
-  RenderRequest request;
-  request.renderer = &coordinator->renderer();
-  request.document = &document;
+  RenderRequest request(coordinator->renderer(), document);
   request.version = 1;
   request.documentGeneration = 1;
   coordinator->asyncRenderer().requestRender(request);
 
-  // Brief yield so the worker actually picks up the render before
-  // teardown. Without it, the worker may still be blocked on `cv_.wait`
-  // when `~RenderCoordinator` runs and the race closes before it can
-  // trigger. With the yield, the worker is reliably inside
-  // `CompositorController::renderFrame` — if `renderer_` is torn down
-  // before `asyncRenderer_`, the next `renderer_->…` inside the
-  // compose-layers lambdas is a use-after-free.
+  // Brief yield so the worker actually picks up the render before teardown.
   std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-  // With the correct member order, `~RenderCoordinator` destroys
-  // `asyncRenderer_` first (joining the worker), then tears down
-  // `renderer_`. Reaching the end of this test without a crash is the
-  // assertion.
+  // Reaching the end of this test without a crash is the assertion.
   coordinator.reset();
 }
 

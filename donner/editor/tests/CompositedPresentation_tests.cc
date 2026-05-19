@@ -5,6 +5,106 @@
 namespace donner::editor {
 namespace {
 
+using Phase = CompositedPresentation::Phase;
+
+CompositedPresentation::DiagnosticsSnapshot Snapshot(const CompositedPresentation& state) {
+  return state.diagnostics();
+}
+
+TEST(CompositedPresentationTest, DefaultDiagnosticsDescribeNoCache) {
+  CompositedPresentation state;
+
+  const auto snapshot = Snapshot(state);
+  EXPECT_EQ(snapshot.phase, Phase::NoCache);
+  EXPECT_FALSE(snapshot.hasCachedTextures);
+  EXPECT_TRUE(snapshot.cachedEntity == entt::null);
+  EXPECT_EQ(snapshot.cachedVersion, 0u);
+  EXPECT_EQ(snapshot.cachedCanvasSize, Vector2i::Zero());
+  EXPECT_FALSE(snapshot.settlingPreview.has_value());
+  EXPECT_FALSE(snapshot.waitingForFullRender);
+  EXPECT_FALSE(snapshot.waitingForChromeRefresh);
+}
+
+TEST(CompositedPresentationTest, DiagnosticsSnapshotIsDetachedFromState) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+
+  auto snapshot = Snapshot(state);
+  snapshot.hasCachedTextures = false;
+  snapshot.cachedEntity = Entity(9);
+  snapshot.cachedVersion = 99;
+  snapshot.cachedCanvasSize = Vector2i(8, 8);
+
+  const auto nextSnapshot = Snapshot(state);
+  EXPECT_TRUE(nextSnapshot.hasCachedTextures);
+  EXPECT_EQ(nextSnapshot.cachedEntity, Entity(7));
+  EXPECT_EQ(nextSnapshot.cachedVersion, 3u);
+  EXPECT_EQ(nextSnapshot.cachedCanvasSize, Vector2i(100, 100));
+}
+
+TEST(CompositedPresentationTest, SettlingWithoutCacheHasClosedDiagnostics) {
+  CompositedPresentation state;
+  state.beginSettling(
+      SelectTool::ActiveDragPreview{
+          .entity = Entity(7),
+          .translation = Vector2d(3.0, 2.0),
+      },
+      /*targetVersion=*/4);
+
+  const auto snapshot = Snapshot(state);
+  EXPECT_EQ(snapshot.phase, Phase::SettlingForRender);
+  EXPECT_FALSE(snapshot.hasCachedTextures);
+  ASSERT_TRUE(snapshot.settlingPreview.has_value());
+  EXPECT_EQ(snapshot.settlingPreview->entity, Entity(7));
+  EXPECT_TRUE(snapshot.waitingForFullRender);
+  EXPECT_EQ(snapshot.settlingTargetVersion, 4u);
+  EXPECT_FALSE(snapshot.waitingForChromeRefresh);
+  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value());
+}
+
+TEST(CompositedPresentationTest, WaitingPhasesAreMutuallyExclusive) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+  state.beginSettling(
+      SelectTool::ActiveDragPreview{
+          .entity = Entity(7),
+          .translation = Vector2d(5.0, 0.0),
+      },
+      /*targetVersion=*/4);
+
+  auto snapshot = Snapshot(state);
+  EXPECT_EQ(snapshot.phase, Phase::SettlingForRender);
+  EXPECT_TRUE(snapshot.waitingForFullRender);
+  EXPECT_FALSE(snapshot.waitingForChromeRefresh);
+
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100));
+  snapshot = Snapshot(state);
+  EXPECT_EQ(snapshot.phase, Phase::WaitingForChromeRefresh);
+  EXPECT_FALSE(snapshot.waitingForFullRender);
+  EXPECT_TRUE(snapshot.waitingForChromeRefresh);
+
+  state.noteChromeRefreshCompleted(/*refreshedVersion=*/4);
+  snapshot = Snapshot(state);
+  EXPECT_EQ(snapshot.phase, Phase::Cached);
+  EXPECT_FALSE(snapshot.waitingForFullRender);
+  EXPECT_FALSE(snapshot.waitingForChromeRefresh);
+}
+
+TEST(CompositedPresentationTest, NeedsCompositedLayerCaptureChecksCacheIdentity) {
+  CompositedPresentation state;
+  const SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(4.0, 0.0),
+  };
+
+  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(100, 100)));
+
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(100, 100)));
+  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100)));
+  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(120, 100)));
+}
+
 TEST(CompositedPresentationTest, SelectionTriggersPrewarmWhenCacheMissing) {
   CompositedPresentation state;
   EXPECT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(100, 100),
@@ -27,7 +127,7 @@ TEST(CompositedPresentationTest, CachedTexturesDisplayZeroTranslationWithoutActi
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 0.0);
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.y, 0.0);
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 }
 
 TEST(CompositedPresentationTest, CachedTilesRemainVisibleAtIdle) {
@@ -36,7 +136,7 @@ TEST(CompositedPresentationTest, CachedTilesRemainVisibleAtIdle) {
 
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 
   SelectTool::ActiveDragPreview active{
       .entity = Entity(7),
@@ -45,7 +145,7 @@ TEST(CompositedPresentationTest, CachedTilesRemainVisibleAtIdle) {
   ASSERT_TRUE(state.presentationPreview(active).has_value());
   EXPECT_EQ(state.presentationPreview(active)->entity, Entity(7));
   EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 4.0);
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 }
 
 TEST(CompositedPresentationTest, ActiveDragForDifferentEntityKeepsPreviousTilesVisible) {
@@ -59,8 +159,8 @@ TEST(CompositedPresentationTest, ActiveDragForDifferentEntityKeepsPreviousTilesV
   ASSERT_TRUE(state.presentationPreview(active).has_value());
   EXPECT_EQ(state.presentationPreview(active)->entity, Entity(7));
   EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 0.0);
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_EQ(state.cachedEntity, Entity(7));
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
 }
 
 TEST(CompositedPresentationTest, MouseUpKeepsSettlingPreviewUntilFullRenderLands) {
@@ -70,7 +170,7 @@ TEST(CompositedPresentationTest, MouseUpKeepsSettlingPreviewUntilFullRenderLands
   SelectTool::ActiveDragPreview preview{.entity = Entity(7), .translation = Vector2d(12.0, 5.0)};
   state.beginSettling(preview, /*targetVersion=*/4);
 
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 12.0);
@@ -79,14 +179,14 @@ TEST(CompositedPresentationTest, MouseUpKeepsSettlingPreviewUntilFullRenderLands
   // window hasn't closed yet, so the settling preview still drives the
   // displayed translation.
   state.noteFullRenderLanded(/*landedVersion=*/3);
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 12.0);
 
   // The target render closes the settling window, clears the preview,
   // and leaves cached textures available at zero display offset.
   state.noteFullRenderLanded(/*landedVersion=*/4);
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 0.0)
@@ -105,8 +205,8 @@ TEST(CompositedPresentationTest, SelectionChangeClearsSettlingState) {
   state.noteFullRenderLanded(/*landedVersion=*/4);
 
   state.clearSettlingIfSelectionChanged(Entity(8), /*dragActive=*/false);
-  EXPECT_FALSE(state.waitingForFullRender);
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_FALSE(Snapshot(state).waitingForFullRender);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
   EXPECT_TRUE(state.presentationPreview(std::nullopt).has_value());
 }
 
@@ -123,17 +223,17 @@ TEST(CompositedPresentationTest, SelectionChangeDoesNotClearSettlingWhileWaiting
   state.clearSettlingIfSelectionChanged(Entity(8), /*dragActive=*/false);
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
-  EXPECT_TRUE(state.waitingForFullRender);
+  EXPECT_TRUE(Snapshot(state).waitingForFullRender);
 }
 
 TEST(CompositedPresentationTest, FullRenderLandedDoesNotClearCachedTextures) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 
   state.noteFullRenderLanded(/*landedVersion=*/3);
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_EQ(state.cachedEntity, Entity(7));
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
 }
@@ -143,12 +243,12 @@ TEST(CompositedPresentationTest, FullRenderLandedDoesNotClearCachedTextures) {
 TEST(CompositedPresentationTest, SelectionClearKeepsCachedTexturesVisible) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
-  ASSERT_TRUE(state.hasCachedTextures);
+  ASSERT_TRUE(Snapshot(state).hasCachedTextures);
 
   state.clearSettlingIfSelectionChanged(/*selectedEntity=*/entt::null,
                                         /*dragActive=*/false);
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_EQ(state.cachedEntity, Entity(7));
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
 }
 
 TEST(CompositedPresentationTest, SettlingCompletionTriggersPrewarmOnNextSelection) {
@@ -181,20 +281,20 @@ TEST(CompositedPresentationTest, SettlingViaCompositedRenderKeepsCachedTextures)
   // Composited settle keeps the drag offset alive until selection chrome
   // catches up, so overlay/AABB state and document pixels change together.
   state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100));
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_FALSE(state.waitingForFullRender);
-  EXPECT_TRUE(state.waitingForChromeRefresh);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_FALSE(Snapshot(state).waitingForFullRender);
+  EXPECT_TRUE(Snapshot(state).waitingForChromeRefresh);
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 5.0);
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.y, 0.0);
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 
   state.noteChromeRefreshCompleted(/*refreshedVersion=*/4);
-  EXPECT_FALSE(state.waitingForChromeRefresh);
+  EXPECT_FALSE(Snapshot(state).waitingForChromeRefresh);
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 0.0);
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.y, 0.0);
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 }
 
 TEST(CompositedPresentationTest, CompositedSettleKeepsOffsetUntilChromeRefreshCompletes) {
@@ -212,7 +312,7 @@ TEST(CompositedPresentationTest, CompositedSettleKeepsOffsetUntilChromeRefreshCo
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.x, 12.0);
   EXPECT_DOUBLE_EQ(state.presentationPreview(std::nullopt)->translation.y, 4.0);
-  EXPECT_TRUE(state.waitingForChromeRefresh);
+  EXPECT_TRUE(Snapshot(state).waitingForChromeRefresh);
 
   state.noteChromeRefreshCompleted(/*refreshedVersion=*/3);
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
@@ -238,8 +338,8 @@ TEST(CompositedPresentationTest, EntityChangeAfterSettlingReplacesCachedTextures
   state.noteFullRenderLanded(/*landedVersion=*/4);
 
   state.noteCachedTextures(Entity(9), /*version=*/5, Vector2i(100, 100));
-  EXPECT_EQ(state.cachedEntity, Entity(9));
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_EQ(Snapshot(state).cachedEntity, Entity(9));
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 }
 
 TEST(CompositedPresentationTest, ClearSettlingIfSelectionChangedKeepsTexturesAfterComposedSettle) {
@@ -254,14 +354,14 @@ TEST(CompositedPresentationTest, ClearSettlingIfSelectionChangedKeepsTexturesAft
 
   state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100));
   state.noteChromeRefreshCompleted(/*refreshedVersion=*/4);
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_FALSE(state.waitingForFullRender);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_FALSE(Snapshot(state).waitingForFullRender);
 
   state.clearSettlingIfSelectionChanged(Entity(9), /*dragActive=*/false);
 
-  EXPECT_FALSE(state.settlingPreview.has_value());
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_EQ(state.cachedEntity, Entity(7));
+  EXPECT_FALSE(Snapshot(state).settlingPreview.has_value());
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
   ASSERT_TRUE(state.presentationPreview(std::nullopt).has_value());
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
 }
@@ -269,12 +369,12 @@ TEST(CompositedPresentationTest, ClearSettlingIfSelectionChangedKeepsTexturesAft
 TEST(CompositedPresentationTest, ClearSettlingIfSelectionChangedKeepsTexturesWithoutSettle) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 
   state.clearSettlingIfSelectionChanged(Entity(9), /*dragActive=*/false);
 
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_EQ(state.cachedEntity, Entity(7));
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
 
   EXPECT_TRUE(state.shouldPrewarm(Entity(9), /*currentVersion=*/3, Vector2i(100, 100),
                                   /*dragActive=*/false));
@@ -283,11 +383,11 @@ TEST(CompositedPresentationTest, ClearSettlingIfSelectionChangedKeepsTexturesWit
 TEST(CompositedPresentationTest, DeselectionKeepsCachedTexturesVisible) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 
   state.clearSettlingIfSelectionChanged(entt::null, /*dragActive=*/false);
 
-  EXPECT_TRUE(state.hasCachedTextures);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 }
 
 TEST(CompositedPresentationTest, ActiveDragPreventsTextureClearing) {
@@ -296,8 +396,8 @@ TEST(CompositedPresentationTest, ActiveDragPreventsTextureClearing) {
 
   state.clearSettlingIfSelectionChanged(Entity(9), /*dragActive=*/true);
 
-  EXPECT_TRUE(state.hasCachedTextures);
-  EXPECT_EQ(state.cachedEntity, Entity(7));
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
 }
 
 }  // namespace

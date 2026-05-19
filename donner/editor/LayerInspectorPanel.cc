@@ -28,7 +28,6 @@ const char* RefusalReasonLabel(svg::compositor::CompositorController::PromoteRef
   switch (reason) {
     case Reason::None: return "none";
     case Reason::InvalidEntity: return "InvalidEntity";
-    case Reason::CompositingBreakingAncestor: return "CompositingBreakingAncestor";
     case Reason::LayerLimit: return "LayerLimit";
     case Reason::MemoryLimit: return "MemoryLimit";
     case Reason::DescendantPromoted: return "DescendantPromoted";

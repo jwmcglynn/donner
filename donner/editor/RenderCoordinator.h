@@ -12,6 +12,7 @@
 #include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/ViewportInteractionController.h"
 
@@ -25,9 +26,9 @@ class RenderCoordinator {
 public:
   RenderCoordinator() = default;
 
-  [[nodiscard]] AsyncRenderer& asyncRenderer() { return asyncRenderer_; }
-  [[nodiscard]] const AsyncRenderer& asyncRenderer() const { return asyncRenderer_; }
-  [[nodiscard]] svg::Renderer& renderer() { return renderer_; }
+  [[nodiscard]] AsyncRenderer& asyncRenderer() { return renderWorker_.asyncRenderer; }
+  [[nodiscard]] const AsyncRenderer& asyncRenderer() const { return renderWorker_.asyncRenderer; }
+  [[nodiscard]] svg::Renderer& renderer() { return renderWorker_.renderer; }
   [[nodiscard]] const SelectionBoundsCache& selectionBoundsCache() const {
     return selectionBoundsCache_;
   }
@@ -61,10 +62,14 @@ public:
 private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
 
-  // `asyncRenderer_` is declared last so it is destroyed first. Its destructor
-  // joins the worker thread while `renderer_`, which the compositor references
-  // during active renders, is still alive.
-  svg::Renderer renderer_;
+  struct RenderWorkerBundle {
+    // Members are destroyed in reverse declaration order. The async worker
+    // joins before the renderer it references is destroyed.
+    svg::Renderer renderer;
+    AsyncRenderer asyncRenderer;
+  };
+
+  RenderWorkerBundle renderWorker_;
   svg::Renderer overlayRenderer_;
   CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
@@ -81,16 +86,12 @@ private:
   /// the cached overlay when the marquee geometry changes.
   std::optional<Box2d> lastOverlayMarqueeRectDoc_;
 
-  std::uint64_t lastRenderedVersion_ = 0;
-  Vector2i lastRenderedCanvasSize_ = Vector2i::Zero();
+  PresentationRenderScheduler renderScheduler_;
   /// Most recent desired canvas size requested by `maybeRequestRender`.
   /// Used to debounce continuous pinch-zoom before committing through
   /// `SVGDocument::setCanvasSize`.
   Vector2i pendingCanvasSize_ = Vector2i::Zero();
   std::chrono::steady_clock::time_point pendingCanvasSizeSince_{};
-
-  // Declared last so it is destroyed first; see the `renderer_` comment.
-  AsyncRenderer asyncRenderer_;
 };
 
 }  // namespace donner::editor

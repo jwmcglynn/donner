@@ -105,7 +105,7 @@ each subsequent line is one frame.
 | `svg` | string | Path to the SVG that was being edited |
 | `wnd` | `[int,int]` | Initial logical window size `[w, h]` |
 | `scale` | float | HiDPI display scale factor |
-| `exp` | `0\|1` | `--experimental` flag state |
+| `exp` | `0\|1` | Legacy composited-mode flag, ignored by current replay |
 | `at` | string | ISO-8601 wall-clock timestamp (informational) |
 
 **Frame line**:

@@ -20,7 +20,7 @@ direction rather than another round of point fixes.
 
 This doc proposes the architectural shift from "rasterize the full canvas
 synchronously when state changes" to a Figma / browser-class model: rasterize
-layers at their *intrinsic* size, scale them on display via GPU during
+layers at their _intrinsic_ size, scale them on display via GPU during
 gesture, refine asynchronously, and never block user input on a high-res
 render. It also calls out a diagnostic panel that exposes the live compositor
 layer state to the operator so future regressions can be triaged without
@@ -41,7 +41,7 @@ re-running the long-form instrumentation cycle that this round needed.
    second freeze tied to the gesture itself.
 4. **Resolution monotonically improves**, never regresses. Once a layer has
    been rasterized at scale S, the editor never displays it stretched from a
-   lower-scale bitmap unless it's *intentionally* invalidating that cache
+   lower-scale bitmap unless it's _intentionally_ invalidating that cache
    (canvas size change, document structure change). The "low-res persists
    until I zoom again" symptom should be impossible by construction.
 5. **Selection chrome (path outline + AABB) renders at full resolution
@@ -50,13 +50,13 @@ re-running the long-form instrumentation cycle that this round needed.
    clicks an element sees the selection chrome appear in the next frame even
    if the underlying canvas is still warming up.
 6. **Incremental refinement is preemptive**: when a higher-resolution
-   rasterize lands, the editor swaps it in *immediately* — not on the next
+   rasterize lands, the editor swaps it in _immediately_ — not on the next
    mouse event, not on the next dirty-flag bump. The user sees the upgrade
    the moment it's ready.
 7. **Diagnostic panel exposes live compositor state** — layer count,
    per-layer thumbnails, bitmap canvas size, rasterize wall-clock,
    cache-hit/miss counters — so the operator can answer "why is this slow
-   *right now*" without instrumenting the source each time.
+   _right now_" without instrumenting the source each time.
 
 ## Non-Goals
 
@@ -75,26 +75,26 @@ re-running the long-form instrumentation cycle that this round needed.
   document-size growth pressures the layer-bitmap memory budget.
 - **Sub-1-frame drag latency on the tiny-skia backend.** With tiny-skia
   (CPU) as today's default, we target 33 ms (30 fps) sustained for
-  drag at the editor's max zoom. 16 ms / 60 fps is the target *once
-  Geode lands as the default*; the architecture in this doc is designed
+  drag at the editor's max zoom. 16 ms / 60 fps is the target _once
+  Geode lands as the default_; the architecture in this doc is designed
   so the same compose / cache / preempt machinery accelerates with
   Geode (GPU-tessellated path rasterization via the Slug algorithm)
   without a second rewrite.
 
 ## Status (2026-05-13)
 
-| Milestone | State | Commit |
-|-----------|-------|--------|
-| M1 — Diagnostic layer panel | ✅ Landed (expanded scope: paint-order tile table, state header, viewport diagnostics) | `e38d9a94` + iterations folded into `ab802105` |
-| M2 — Intrinsic-size rasterization | ✅ Landed (M2A+M2B squashed; zoom-fix follow-up) | `e5a08619`, `4f0f5bf6` |
-| M3 — Cache band invariant under canvas resize | ⏳ Open | — |
-| M4 — Async re-rasterization with cancellation | ✅ `CancellationToken` polled between segment / layer rasterizes; `requestRender` during busy preempts the in-flight render | (this commit) |
-| M5 — Preemptive swap-in | ✅ Landed | `793f96eb` |
-| M6 — Pinch-zoom GPU stretch | ⚠️ Partial (canvas-commit throttle only) | `0d1cdc56` |
-| M7 — Selection chrome priority lane | ✅ Snapshot infra landed; editor callsites not flipped yet | `965f0a02` |
-| M8 — Click→drag handoff doesn't wait for raster | ✅ Cache-backed re-drag fast path bypasses `!isBusy()`; full hitTest path still gated | (M8 re-attempt) |
-| M9 — Layer-set hysteresis | ✅ `demoteEntity` queues for `kDemotionHysteresisFrames` (30, ~0.5s @ 60Hz); re-promote inside the window cancels the demote without segment churn | (this commit) |
-| M10 — Operator perf validation | ⏳ Open | — |
+| Milestone                                       | State                                                                                                                                              | Commit                                         |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| M1 — Diagnostic layer panel                     | ✅ Landed (expanded scope: paint-order tile table, state header, viewport diagnostics)                                                             | `e38d9a94` + iterations folded into `ab802105` |
+| M2 — Intrinsic-size rasterization               | ✅ Landed (M2A+M2B squashed; zoom-fix follow-up)                                                                                                   | `e5a08619`, `4f0f5bf6`                         |
+| M3 — Cache band invariant under canvas resize   | ⏳ Open                                                                                                                                            | —                                              |
+| M4 — Async re-rasterization with cancellation   | ✅ `CancellationToken` polled between segment / layer rasterizes; `requestRender` during busy preempts the in-flight render                        | (this commit)                                  |
+| M5 — Preemptive swap-in                         | ✅ Landed                                                                                                                                          | `793f96eb`                                     |
+| M6 — Pinch-zoom GPU stretch                     | ⚠️ Partial (canvas-commit throttle only)                                                                                                            | `0d1cdc56`                                     |
+| M7 — Selection chrome priority lane             | ✅ Snapshot infra landed; editor callsites not flipped yet                                                                                         | `965f0a02`                                     |
+| M8 — Click→drag handoff doesn't wait for raster | ✅ Cache-backed re-drag fast path bypasses `!isBusy()`; full hitTest path still gated                                                              | (M8 re-attempt)                                |
+| M9 — Layer-set hysteresis                       | ✅ `demoteEntity` queues for `kDemotionHysteresisFrames` (30, ~0.5s @ 60Hz); re-promote inside the window cancels the demote without segment churn | (this commit)                                  |
+| M10 — Operator perf validation                  | ⏳ Open                                                                                                                                            | —                                              |
 
 ### Post-implementation stabilization (debugging arc, folded into `ab802105`)
 
@@ -121,8 +121,7 @@ omnibus stability commit:
 - **Canvas-commit stall after `ReplaceDocument`:** the throttle
   compared the pending desired canvas against a stale
   `lastSetCanvasSize_` cache that was never invalidated when
-  `ReplaceDocument` installed a fresh registry (with `canvasSize=
-  nullopt`). Fix: compare against the live
+  `ReplaceDocument` installed a fresh registry (with `canvasSize= nullopt`). Fix: compare against the live
   `app.document().document().canvasSize()` readback with a 1-pixel
   aspect-rounding tolerance.
 
@@ -160,24 +159,25 @@ omnibus stability commit:
 
 ## Implementation Plan
 
-- [x] **Milestone 1: Diagnostic layer panel.** *Landed in `e38d9a94`;
-  follow-on iterations folded into the omnibus `ab802105`.*
-  Right-side ImGui panel with one row per active compositor layer; columns
-  are (id, entity name/id, kind/source, bitmap canvas size, rasterize
-  wall-clock from last frame, cache-hit count, fast-path-engaged
-  count, last-rasterize-trigger reason, thumbnail). Read-only — observation
-  surface, not a control. Updates each frame the renderer isn't busy
-  (the SidebarPresenter's existing snapshot pattern).
+- [x] **Milestone 1: Diagnostic layer panel.** _Landed in `e38d9a94`;
+      follow-on iterations folded into the omnibus `ab802105`._
+      Right-side ImGui panel with one row per active compositor layer; columns
+      are (id, entity name/id, kind/source, bitmap canvas size, rasterize
+      wall-clock from last frame, cache-hit count, fast-path-engaged
+      count, last-rasterize-trigger reason, thumbnail). Read-only — observation
+      surface, not a control. Updates each frame the renderer isn't busy
+      (the SidebarPresenter's existing snapshot pattern).
 
-  *As shipped, the panel goes beyond the original scope:*
+  _As shipped, the panel goes beyond the original scope:_
   - **Unified paint-order tile table** — one row per composite tile
     (background, foreground, segments, layers) with thumbnails, so the
     panel reflects exactly what the renderer blits to make the final
     frame. Replaces the originally-planned per-layer-only view.
   - **State header** surfaces `activeHints`, `layerCount`, `splitPath`,
-    canvas size, and the last `PromoteRefusalReason` (`InvalidEntity`,
-    `CompositingBreakingAncestor`, `LayerLimit`, `MemoryLimit`,
-    `DescendantPromoted`). The `MemoryLimit` repro on splash at Retina
+    canvas size, and the last hard `PromoteRefusalReason` (`InvalidEntity`,
+    `LayerLimit`, `MemoryLimit`, `DescendantPromoted`). Descendants under
+    filter, clip-path, or mask return `PromoteResult::FullCanvasPreviewRequired`
+    instead of recording a hard refusal. The `MemoryLimit` repro on splash at Retina
     was diagnosed entirely from this header — no source-level
     instrumentation needed.
   - **Viewport diagnostics** — `zoom`, `DPR`, and a three-way canvas
@@ -189,17 +189,17 @@ omnibus stability commit:
     `snapshotCompositeTiles()`, `snapshotLayerInspectorRows()` — all
     self-contained value types, safe to read off the worker thread.
 
-- [x] **Milestone 2: Intrinsic-size layer rasterization.** *M2A landed
-  in `e5a08619`, M2B in the same commit (squashed); follow-up zoom-fix
-  in `4f0f5bf6`.*
-  Each promoted layer rasterizes into a bitmap sized to the *layer's
-  worldBounds + filter padding*, not the full canvas. Compose places the
-  bitmap at the layer's canvas offset. Removes the "all layer bitmaps are
-  canvas-sized, every canvas-size change invalidates everything" failure
-  mode. The bitmap stores its source-scale and its world-to-bitmap
-  transform so the fast-path delta math survives a canvas resize.
+- [x] **Milestone 2: Intrinsic-size layer rasterization.** _M2A landed
+      in `e5a08619`, M2B in the same commit (squashed); follow-up zoom-fix
+      in `4f0f5bf6`._
+      Each promoted layer rasterizes into a bitmap sized to the _layer's
+      worldBounds + filter padding_, not the full canvas. Compose places the
+      bitmap at the layer's canvas offset. Removes the "all layer bitmaps are
+      canvas-sized, every canvas-size change invalidates everything" failure
+      mode. The bitmap stores its source-scale and its world-to-bitmap
+      transform so the fast-path delta math survives a canvas resize.
 
-  *As-shipped notes:*
+  _As-shipped notes:_
   - `computeEntityRangeBounds` + a 2px AA halo defines the intrinsic
     bitmap; `CompositorController::canvasOffset_` carries the layer's
     canvas-space offset through to the editor blit.
@@ -209,33 +209,30 @@ omnibus stability commit:
     path. Fixed in `4f0f5bf6` by adding a `promotedBitmapDimsDoc`
     field that scales the blit destination by the live
     `documentFromCanvas`.
-  - Related regression discovered post-M1: when `SVGDocument::
-    setCanvasSize` calls `invalidateRenderTree`, every
-    `RenderingInstanceComponent` is wiped. If `mandatoryDetector_.
-    reconcile` ran before `prepareDocumentForRendering` rebuilt the
+  - Related regression discovered post-M1: when `SVGDocument::setCanvasSize` calls `invalidateRenderTree`, every
+    `RenderingInstanceComponent` is wiped. If `mandatoryDetector_.reconcile` ran before `prepareDocumentForRendering` rebuilt the
     RICs, the detector saw zero candidates and dropped the filter
     layer. Reordering fix lives in the M1 commit's diff and is
-    pinned by `CompositorController_tests.cc::
-    MandatoryFilterLayerSurvivesCanvasResize`.
+    pinned by `CompositorController_tests.cc::MandatoryFilterLayerSurvivesCanvasResize`.
 
 - [ ] **Milestone 3: Cache key invariant under canvas resize.**
-  A layer's bitmap remains valid across a canvas-size change as long as the
-  rasterized scale is "good enough" for the new viewport. Define a per-
-  layer `scaleRatio = bitmap_pixels / current_viewport_pixels`; if
-  `scaleRatio ∈ [0.5, 2.0]` use the cached bitmap with a compose-time
-  scale; outside the band, schedule a re-rasterize. The threshold is
-  asymmetric vs Figma's stricter ±1 stop because most user interactions
-  fall within one zoom step.
+      A layer's bitmap remains valid across a canvas-size change as long as the
+      rasterized scale is "good enough" for the new viewport. Define a per-
+      layer `scaleRatio = bitmap_pixels / current_viewport_pixels`; if
+      `scaleRatio ∈ [0.5, 2.0]` use the cached bitmap with a compose-time
+      scale; outside the band, schedule a re-rasterize. The threshold is
+      asymmetric vs Figma's stricter ±1 stop because most user interactions
+      fall within one zoom step.
 
-- [x] **Milestone 4: Async re-rasterization with cancellation.** *Landed.*
-  Re-rasterize requests run on the AsyncRenderer's worker. While a stale-
-  scale bitmap is being refined, the editor continues displaying the
-  stretched cached bitmap. New requests *cancel* in-flight requests that
-  haven't started (FIFO drained on `pendingRequest_` overwrite, like
-  drag-coalesce). Critical: never block UI thread on a re-rasterize, and
-  never queue more than one in-flight request per layer.
+- [x] **Milestone 4: Async re-rasterization with cancellation.** _Landed._
+      Re-rasterize requests run on the AsyncRenderer's worker. While a stale-
+      scale bitmap is being refined, the editor continues displaying the
+      stretched cached bitmap. New requests _cancel_ in-flight requests that
+      haven't started (FIFO drained on `pendingRequest_` overwrite, like
+      drag-coalesce). Critical: never block UI thread on a re-rasterize, and
+      never queue more than one in-flight request per layer.
 
-  *As shipped:*
+  _As shipped:_
   - New `donner::svg::compositor::CancellationToken` (wraps a single
     `std::atomic<bool>`). `CompositorController::renderFrame` gains a
     second overload `renderFrame(viewport, token)` returning `bool`
@@ -248,10 +245,10 @@ omnibus stability commit:
     calls out:
     - inside `rasterizeDirtyStaticSegments` between segment slots,
     - inside `rasterizeDirtyLayersLoop` between layer rasterizes.
-    A cancel-bail leaves the relevant `staticSegmentDirty_[i]` /
-    `CompositorLayer::isDirty()` flags intact, so the next
-    `renderFrame` finishes the work without re-doing already-
-    completed rasterizes.
+      A cancel-bail leaves the relevant `staticSegmentDirty_[i]` /
+      `CompositorLayer::isDirty()` flags intact, so the next
+      `renderFrame` finishes the work without re-doing already-
+      completed rasterizes.
   - `AsyncRenderer::requestRender` accepts calls while the worker is
     busy. When busy, the new request overwrites `pendingRequest_`
     and signals `cancelRender_.cancel()`; the worker bails at the
@@ -262,8 +259,7 @@ omnibus stability commit:
     still gate on `!isBusy()` get exactly the pre-§M4 behaviour.
   - `AsyncRenderer::cancelledRenderCount()` exposes the preemption
     counter for tests and the layer-inspector panel.
-  - Pinned by `AsyncRenderer_tests.cc::
-    RequestRenderDuringBusySignalsCancellationAndPicksUpNewRequest`
+  - Pinned by `AsyncRenderer_tests.cc::RequestRenderDuringBusySignalsCancellationAndPicksUpNewRequest`
     — posts two requests back-to-back and asserts the result that
     lands is for the second request (preemption succeeded). The
     cancellation counter is asserted ≥0 rather than ≥1 because on
@@ -271,41 +267,41 @@ omnibus stability commit:
     `requestRender` is dispatched; the load-bearing invariant is
     "result is for the latest request".
 
-  *Editor wire-up still gated.* Per the design doc's M4 risk
+  _Editor wire-up still gated._ Per the design doc's M4 risk
   analysis, dropping every `!isBusy()` gate in the editor would mean
   every 60 Hz mouse-move cancels the in-flight render — the worker
   would never finish a full render and the user would see the last
   completed render forever. The infrastructure landed here lets
-  *future* milestones (M3 scale-band re-rasterize, M6 pinch-zoom)
+  _future_ milestones (M3 scale-band re-rasterize, M6 pinch-zoom)
   preempt mid-render when the scene genuinely invalidates, without
   rewriting the threading model.
 
-- [x] **Milestone 5: Preemptive swap-in.** *Landed in `793f96eb`.*
-  When the AsyncRenderer's worker delivers a refined-resolution bitmap,
-  the editor's main loop swaps it in on the *next ImGui frame*, not on the
-  next mouse event. The current setup waits for `pollResult()` to be
-  called from the user's event-handling path, which can lag by hundreds of
-  ms during idle. Add an explicit `wake()` from the worker that triggers
-  ImGui to redraw via `glfwPostEmptyEvent`.
+- [x] **Milestone 5: Preemptive swap-in.** _Landed in `793f96eb`._
+      When the AsyncRenderer's worker delivers a refined-resolution bitmap,
+      the editor's main loop swaps it in on the _next ImGui frame_, not on the
+      next mouse event. The current setup waits for `pollResult()` to be
+      called from the user's event-handling path, which can lag by hundreds of
+      ms during idle. Add an explicit `wake()` from the worker that triggers
+      ImGui to redraw via `glfwPostEmptyEvent`.
 
-  *As shipped:* `AsyncRenderer::setWakeCallback` is wired to
+  _As shipped:_ `AsyncRenderer::setWakeCallback` is wired to
   `Window::wakeEventLoop` in `EditorShell::EditorShell` (which calls
   `glfwPostEmptyEvent` under the hood); the worker fires it the moment
   a refined-resolution result is ready. Pinned by
   `AsyncRenderer_tests.cc` (the test asserts the callback is invoked
   exactly once per ready result, regression-guarding the wake plumbing).
 
-- [ ] **Milestone 6: Pinch-zoom GPU stretch.** *Partial — canvas-commit
-  throttle landed in `0d1cdc56` (`kCanvasSizeCommitDelay = 120 ms` in
-  `RenderCoordinator`), but the full "no commit during gesture +
-  GPU-stretch the cached bitmap" model is not yet implemented.*
-  During an active pinch gesture, no `setCanvasSize` commit. The pane's
-  display-transform absorbs the pinch zoom via GL stretch on the cached
-  bitmap. After gesture-end + 200 ms idle, commit the new canvas size and
-  schedule the async re-rasterize. Same model browsers use for trackpad
-  pinch.
+- [ ] **Milestone 6: Pinch-zoom GPU stretch.** _Partial — canvas-commit
+      throttle landed in `0d1cdc56` (`kCanvasSizeCommitDelay = 120 ms` in
+      `RenderCoordinator`), but the full "no commit during gesture +
+      GPU-stretch the cached bitmap" model is not yet implemented._
+      During an active pinch gesture, no `setCanvasSize` commit. The pane's
+      display-transform absorbs the pinch zoom via GL stretch on the cached
+      bitmap. After gesture-end + 200 ms idle, commit the new canvas size and
+      schedule the async re-rasterize. Same model browsers use for trackpad
+      pinch.
 
-  *Status:* the throttle is sufficient to prevent the worst-case
+  _Status:_ the throttle is sufficient to prevent the worst-case
   setCanvasSize-per-event storm, but the editor still re-rasterizes
   mid-gesture once the throttle window elapses. The compositor-side
   `ReplaceDocument` canvas-commit stall (fixed by comparing against
@@ -314,19 +310,18 @@ omnibus stability commit:
   was a prerequisite — without that, the throttle would mask the
   stall and re-rasterizes would silently use the wrong canvas size.
 
-- [x] **Milestone 7: Selection chrome priority lane.** *Snapshot
-  infrastructure landed in `965f0a02`. Editor callsites still gate on
-  `!isBusy()`; flipping them to the snapshot path is what M8 needs to
-  unblock.*
-  The overlay renderer's chrome rasterize moves to a high-priority slot
-  that runs before any layer rasterize on the AsyncRenderer worker (or
-  on the UI thread if cheap enough — the chrome is a single offscreen
-  bitmap with one path outline + AABB). User sees the selection appear in
-  the frame after the click; high-res content can lag.
+- [x] **Milestone 7: Selection chrome priority lane.** _Snapshot
+      infrastructure landed in `965f0a02`. Editor callsites still gate on
+      `!isBusy()`; flipping them to the snapshot path is what M8 needs to
+      unblock._
+      The overlay renderer's chrome rasterize moves to a high-priority slot
+      that runs before any layer rasterize on the AsyncRenderer worker (or
+      on the UI thread if cheap enough — the chrome is a single offscreen
+      bitmap with one path outline + AABB). User sees the selection appear in
+      the frame after the click; high-res content can lag.
 
-  *As shipped:*
-  - `OverlayRenderer::captureChromeSnapshot(selection, marquee,
-    canvasFromDoc)` reads the registry once and packs everything the
+  _As shipped:_
+  - `OverlayRenderer::captureChromeSnapshot(selection, marquee, canvasFromDoc)` reads the registry once and packs everything the
     draw phase needs into a self-contained `SelectionChromeSnapshot`
     value (per-element `(spline, canvasFromElement)`, AABBs in doc
     space, optional marquee, pre-computed stroke widths). Holds no
@@ -337,19 +332,18 @@ omnibus stability commit:
     routes through `captureChromeSnapshot` + `drawChromeFromSnapshot`
     internally, so the snapshot path is the single source of truth.
   - Pinned by `SnapshotProducesByteIdenticalPixelsAsLivePath` (API
-    equivalence) and `SnapshotSurvivesDocumentMutationBetweenCapture
-    AndDraw` (race-safety).
+    equivalence) and `SnapshotSurvivesDocumentMutationBetweenCapture AndDraw` (race-safety).
 
 - [x] **Milestone 8: Click→drag handoff doesn't wait for raster.**
-  *Cache-backed re-drag fast path landed; the first M8 attempt
-  (`47901a55`) was reverted because it called the live
-  `SnapshotSelectionWorldBounds` mid-render and raced the worker's
-  `prepareDocumentForRendering`. The re-attempt routes the bounds
-  read through `SelectionBoundsCache::displayedBoundsDoc` —
-  populated on idle frames — so the call doesn't touch any
-  registry component the worker is mid-mutating.*
+      _Cache-backed re-drag fast path landed; the first M8 attempt
+      (`47901a55`) was reverted because it called the live
+      `SnapshotSelectionWorldBounds` mid-render and raced the worker's
+      `prepareDocumentForRendering`. The re-attempt routes the bounds
+      read through `SelectionBoundsCache::displayedBoundsDoc` —
+      populated on idle frames — so the call doesn't touch any
+      registry component the worker is mid-mutating._
 
-  *As shipped:*
+  _As shipped:_
   - `SelectTool::tryStartRedragOnSelected` accepts a caller-supplied
     `std::span<const Box2d> selectionBoundsDoc`. EditorShell passes
     the bounds-cache snapshot; `onMouseDown` (slow path, already
@@ -377,15 +371,15 @@ omnibus stability commit:
     - `TryRedragOnSelectedReturnsFalseOnEmptyCachedBounds`
     - `TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup`
 
-- [x] **Milestone 9: Layer-set hysteresis.** *Landed.*
-  Adding/removing a promoted layer (mandatory filter detector running
-  on a freshly-mutated document, drag-target promotion, etc.) currently
-  resets `resyncSegmentsToLayerSet`'s caches. Add hysteresis: promote
-  immediately; demote only after the entity has been below the threshold
-  for several frames. Prevents the "click-deselect-click" trash-and-
-  rebuild loop.
+- [x] **Milestone 9: Layer-set hysteresis.** _Landed._
+      Adding/removing a promoted layer (mandatory filter detector running
+      on a freshly-mutated document, drag-target promotion, etc.) currently
+      resets `resyncSegmentsToLayerSet`'s caches. Add hysteresis: promote
+      immediately; demote only after the entity has been below the threshold
+      for several frames. Prevents the "click-deselect-click" trash-and-
+      rebuild loop.
 
-  *As shipped:*
+  _As shipped:_
   - `CompositorController::demoteEntity` adds the entity to a
     `pendingDemotions_` map keyed on entity → frame counter
     (`kDemotionHysteresisFrames = 30`, ~0.5s at 60Hz). The hint
@@ -424,15 +418,14 @@ omnibus stability commit:
       bypass works.
     - `M9PendingDemoteDoesNotMaskLiveDragTarget` — pending-demote
       entries don't drag the live drag-target tile's
-      `isDragTarget` flag down via the M2C `activeHints_.size() ==
-      1` check.
+      `isDragTarget` flag down via the M2C `activeHints_.size() == 1` check.
     - `M9PendingDemoteKeepsHasSplitStaticLayersTrue` — pending-demote
       entries don't disable `skipMainCompose`, which would force
       `composeLayers` to do 2N+1 canvas-scale blits per fast-path
       drag frame.
 
-  *Three M9-aware carve-outs landed as follow-on fixes after the
-  initial commit (each pinned by its own red→green test above):*
+  _Three M9-aware carve-outs landed as follow-on fixes after the
+  initial commit (each pinned by its own red→green test above):_
   - `splitStaticLayersEntity_` setter (commit `a3c76ca3`) — count
     only live (non-pending) hints so the live drag target keeps its
     `isDragTarget` flag during the hysteresis window. Without this,
@@ -462,12 +455,12 @@ omnibus stability commit:
   load-bearing instances.
 
 - [ ] **Milestone 10: Operator perf validation.**
-  Each prior milestone has a per-milestone perf gate in
-  `donner_perf_cc_test`-style targets (correctness counters on the PR
-  gate; wall-clock budgets on the nightly perf lane). The whole stack
-  meets the goals stated above on the `donner_splash.svg` corpus with
-  the standard editor input recordings (`filter_elm_disappear-*.rnr`)
-  augmented by new zoom-then-drag recordings.
+      Each prior milestone has a per-milestone perf gate in
+      `donner_perf_cc_test`-style targets (correctness counters on the PR
+      gate; wall-clock budgets on the nightly perf lane). The whole stack
+      meets the goals stated above on the `donner_splash.svg` corpus with
+      the standard editor input recordings (`filter_elm_disappear-*.rnr`)
+      augmented by new zoom-then-drag recordings.
 
 ## Background
 
@@ -498,11 +491,11 @@ pileup happening maybe."**
 Prior art the doc draws from:
 
 - **Figma** rasterizes vector paths to triangle meshes on the GPU, ties
-  layer caches to *intrinsic* size + transform-on-compose, and tiles
+  layer caches to _intrinsic_ size + transform-on-compose, and tiles
   documents over a certain memory threshold. This is the model Donner
   is moving toward: Geode (WebGPU + the Slug algorithm) is the target
   renderer, and the intrinsic-size cache + transform-on-compose
-  structure proposed here is the *backend-agnostic* layer that lets the
+  structure proposed here is the _backend-agnostic_ layer that lets the
   same compositor work for both tiny-skia today and Geode once it
   ships. Until Geode is the default, the cache absorbs the gap by
   keeping previously-rasterized bitmaps reusable across zoom changes
@@ -528,41 +521,41 @@ Prior art the doc draws from:
 ## Proposed Architecture
 
 ```
-                 ┌─────────────────────────────────────────────────────┐
-                 │                  EditorShell (UI thread)            │
-                 │                                                     │
-   click/drag ──►│  SelectTool (sync, ms): selection + drag state      │
-                 │                              │                      │
-                 │                              ▼                      │
-                 │  RenderCoordinator:    request to AsyncRenderer     │
-                 │  - drag-coalesce       (canvas size frozen during   │
-                 │  - canvas debounce      pinch; only commits at gesture
-                 │                         settle)                     │
-                 │                              │                      │
-                 │  CompositedPreviewCache◄─────┤      ▼               │
-                 │  - bg/promoted/fg            │  AsyncRenderer       │
-                 │    at intrinsic scales       │  (worker thread)     │
-                 │  - scale-band check          │                      │
-                 │      hit  ─► reuse + stretch │  CompositorController│
-                 │      miss ─► schedule refine │  - layer bitmaps at  │
-                 │                              │    layer worldBounds │
-                 │                              │  - per-layer scale   │
-                 │                              │  - refine queue      │
-                 │  Display:                    │     (1 slot, FIFO    │
-                 │  - bg blit @ display scale   │      preemption)     │
-                 │  - promoted blit @ delta     │  - chrome rasterize  │
-                 │  - fg blit @ display scale   │     priority lane    │
-                 │  - chrome overlay @ full res │                      │
-                 │                                                     │
-                 │  (Sidebar) LayerPanel ◄─── live snapshot stream     │
-                 └─────────────────────────────────────────────────────┘
+              ┌─────────────────────────────────────────────────────┐
+              │                  EditorShell (UI thread)            │
+              │                                                     │
+click/drag ──►│  SelectTool (sync, ms): selection + drag state      │
+              │                              │                      │
+              │                              ▼                      │
+              │  RenderCoordinator:    request to AsyncRenderer     │
+              │  - drag-coalesce       (canvas size frozen during   │
+              │  - canvas debounce      pinch; only commits at gesture
+              │                         settle)                     │
+              │                              │                      │
+              │  CompositedPreviewCache◄─────┤      ▼               │
+              │  - bg/promoted/fg            │  AsyncRenderer       │
+              │    at intrinsic scales       │  (worker thread)     │
+              │  - scale-band check          │                      │
+              │      hit  ─► reuse + stretch │  CompositorController│
+              │      miss ─► schedule refine │  - layer bitmaps at  │
+              │                              │    layer worldBounds │
+              │                              │  - per-layer scale   │
+              │                              │  - refine queue      │
+              │  Display:                    │     (1 slot, FIFO    │
+              │  - bg blit @ display scale   │      preemption)     │
+              │  - promoted blit @ delta     │  - chrome rasterize  │
+              │  - fg blit @ display scale   │     priority lane    │
+              │  - chrome overlay @ full res │                      │
+              │                                                     │
+              │  (Sidebar) LayerPanel ◄─── live snapshot stream     │
+              └─────────────────────────────────────────────────────┘
 ```
 
 ### Key shifts from today
 
 1. **Layer bitmaps stop being canvas-sized.** Each layer's bitmap is sized
    to `layer.worldBounds() + filterPadding`. Compose-time placement uses
-   the layer's *canvas-space offset*, not the bitmap's pixel origin.
+   the layer's _canvas-space offset_, not the bitmap's pixel origin.
    Removes the "canvas size change = all bitmaps invalid" failure mode.
 
 2. **Compose-time scale absorbs zoom changes within a band.** A bitmap
@@ -612,14 +605,14 @@ follow-ups once the core ships:
 
 - **Coarse-to-fine mipmaps.** Maintain a low-detail "wireframe" raster
   of each layer (e.g. at 1/4 resolution). Display the wireframe
-  *immediately* in the first frame after a layer is invalidated; the
+  _immediately_ in the first frame after a layer is invalidated; the
   high-res rasterize lands within ~100 ms and swaps in. The user sees
   the right shape and color instantly; sharpness arrives over the next
   frame or two.
 - **Predictive prewarming.** When the user pauses pinch-zoom for >300 ms,
-  start rasterizing the *next-likely* zoom level (one stop up and down)
+  start rasterizing the _next-likely_ zoom level (one stop up and down)
   in the background. Eats the next pinch-step's cost during idle.
-- **Layer paint-order is dirty-stable.** A layer's *raster identity* is
+- **Layer paint-order is dirty-stable.** A layer's _raster identity_ is
   keyed on `(entityRange, scale)`, not paint-order index. The bitmap
   cache survives layer-set reshuffles (e.g. a new promotion shifting
   indices) as long as the entity range hasn't changed. Mostly already
@@ -634,7 +627,7 @@ follow-ups once the core ships:
   experimentalDragPresentation path already keeps three bitmaps. On a
   fresh click before any new render lands, blit those three with the
   selection chrome on top. The user sees a complete-looking frame
-  immediately; only the *content* of the layer being interacted with is
+  immediately; only the _content_ of the layer being interacted with is
   briefly stale.
 
 ## Performance
@@ -642,18 +635,18 @@ follow-ups once the core ships:
 Per-milestone targets (measured on the `donner_splash.svg` corpus on the
 operator's M-series Mac with Retina DPR=2):
 
-| Milestone | Metric | Today | Target after milestone |
-|-----------|--------|-------|------------------------|
-| 1 (panel) | n/a — diagnostic-only | n/a | n/a |
-| 2 (intrinsic size) | Single-layer rasterize wall-clock at zoom 9× | ~1500 ms | ~80 ms (1/(zoom²) reduction) |
-| 3 (cache band) | Layer-bitmap reuse rate during a zoom-in to 5× | 0 % | ≥ 80 % |
-| 4 (async + preempt) | UI thread blocked on raster during drag-start at zoom 5× | up to 12 s | ≤ 16 ms (one frame of buffer wakeup) |
-| 5 (preempt swap) | Time from raster-complete to display-on-screen | up to ~250 ms (next event) | ≤ 16 ms (next frame) |
-| 6 (pinch GPU stretch) | Worst-frame wall-clock during continuous pinch | ~1500 ms | ≤ 16 ms (GL stretch only) |
-| 7 (chrome priority) | Click-to-selection-visible | up to 12 s | ≤ 33 ms |
-| 8 (mousedown handoff) | Click-to-drag-begins | up to 12 s | ≤ 33 ms |
-| 9 (hysteresis) | Drag-after-drag freeze | ~1500 ms | ≤ 16 ms |
-| 10 (end-to-end) | Sustained drag at editor max zoom | unmeasurable (drops to ≤1 fps) | ≥ 30 fps sustained |
+| Milestone             | Metric                                                   | Today                          | Target after milestone               |
+| --------------------- | -------------------------------------------------------- | ------------------------------ | ------------------------------------ |
+| 1 (panel)             | n/a — diagnostic-only                                    | n/a                            | n/a                                  |
+| 2 (intrinsic size)    | Single-layer rasterize wall-clock at zoom 9×             | ~1500 ms                       | ~80 ms (1/(zoom²) reduction)         |
+| 3 (cache band)        | Layer-bitmap reuse rate during a zoom-in to 5×           | 0 %                            | ≥ 80 %                               |
+| 4 (async + preempt)   | UI thread blocked on raster during drag-start at zoom 5× | up to 12 s                     | ≤ 16 ms (one frame of buffer wakeup) |
+| 5 (preempt swap)      | Time from raster-complete to display-on-screen           | up to ~250 ms (next event)     | ≤ 16 ms (next frame)                 |
+| 6 (pinch GPU stretch) | Worst-frame wall-clock during continuous pinch           | ~1500 ms                       | ≤ 16 ms (GL stretch only)            |
+| 7 (chrome priority)   | Click-to-selection-visible                               | up to 12 s                     | ≤ 33 ms                              |
+| 8 (mousedown handoff) | Click-to-drag-begins                                     | up to 12 s                     | ≤ 33 ms                              |
+| 9 (hysteresis)        | Drag-after-drag freeze                                   | ~1500 ms                       | ≤ 16 ms                              |
+| 10 (end-to-end)       | Sustained drag at editor max zoom                        | unmeasurable (drops to ≤1 fps) | ≥ 30 fps sustained                   |
 
 The measurement plan uses `donner_perf_cc_test` to gate correctness
 counters (e.g. fast-path engaged, async cancel hit, mipmap-miss count)
@@ -785,11 +778,11 @@ Captured during the design review with the operator (2026-05-12):
 ## Future Work
 
 - **M2C — Stop flattening bg/fg in `recomposeSplitBitmaps`.**
-  *Diagnostic side delivered:* the M1 panel now iterates the unified
+  _Diagnostic side delivered:_ the M1 panel now iterates the unified
   paint-order tile list (background, foreground, segments, layers)
   via `snapshotCompositeTiles`, so the operator can see the
   individual tiles even while the editor blit is still going through
-  the flattened bg/fg pair. *Display side still open.* Today the
+  the flattened bg/fg pair. _Display side still open._ Today the
   compositor pre-composes every segment + non-drag layer into two
   canvas-sized bg/fg bitmaps on every drag-target switch and uploads
   those two textures to the editor. The cached layer/segment bitmaps

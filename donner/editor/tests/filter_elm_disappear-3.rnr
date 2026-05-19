@@ -1,4 +1,4 @@
-{"v":2,"svg":"donner_splash.svg","wnd":[1600,900],"scale":2,"exp":0,"at":"2026-04-22T22:33:27Z"}
+{"v":2,"svg":"donner_splash.svg","wnd":[1600,900],"scale":2,"exp":0,"at":"2026-04-22T22:33:27Z","expect":{"left_mouse_down_ordinal":2,"frame_offset_after_left_mouse_down":0,"min_frame_index":271,"max_frame_index":271,"target_selector":"#Big_lightning_glow","crop_mode":"document-canvas"}}
 {"f":0,"t":4.2e-08,"dt":16.6667,"mx":917,"my":597,"btn":0,"mod":0}
 {"f":1,"t":0.0116232,"dt":11.7233,"mx":915,"my":595,"btn":0,"mod":0}
 {"f":2,"t":0.230631,"dt":218.852,"mx":905,"my":583,"btn":0,"mod":0,"mdx":454.5,"mdy":378.5,"vp":{"ox":569,"oy":29,"pw":655,"ph":863,"dpr":2,"z":1,"pdx":446,"pdy":256,"psx":896.5,"psy":460.5,"vbx":0,"vby":0,"vbw":892,"vbh":512}}

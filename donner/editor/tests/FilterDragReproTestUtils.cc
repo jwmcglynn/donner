@@ -115,9 +115,7 @@ std::string LoadFileOrSkip(const std::filesystem::path& path) {
 std::optional<double> DrainOneRender(AsyncRenderer& asyncRenderer, svg::Renderer& renderer,
                                      svg::SVGDocument& document, EditorApp& editorApp,
                                      SelectTool& selectTool, uint64_t version) {
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = version;
   request.documentGeneration = editorApp.document().documentGeneration();
   request.structuralRemap = editorApp.document().consumePendingStructuralRemap();

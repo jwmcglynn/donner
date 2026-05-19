@@ -139,9 +139,7 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
                                                  std::string_view phase,
                                                  bool repostWhileBusy = false) {
   const auto buildRequest = [&] {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &app.document().document();
+    RenderRequest request(renderer, app.document().document());
     request.version = version;
     request.documentGeneration = app.document().documentGeneration();
     request.structuralRemap = app.document().consumePendingStructuralRemap();
@@ -272,9 +270,7 @@ protected:
   }
 
   RenderRequest BuildRenderRequest(std::uint64_t version) {
-    RenderRequest request;
-    request.renderer = &renderer_;
-    request.document = &app_.document().document();
+    RenderRequest request(renderer_, app_.document().document());
     request.version = version;
     request.documentGeneration = app_.document().documentGeneration();
     request.structuralRemap = app_.document().consumePendingStructuralRemap();

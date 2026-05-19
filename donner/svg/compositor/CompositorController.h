@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -24,6 +25,16 @@ namespace donner::svg::compositor {
 
 /// Maximum number of compositor layers that can be simultaneously active.
 inline constexpr int kMaxCompositorLayers = 32;
+
+/// Bitmap payload policy for \ref CompositorController::snapshotTilesForUpload.
+enum class CompositorTileBitmapPayload : uint8_t {
+  /// Include every available tile bitmap.
+  All,
+  /// Include only the active drag-target bitmap; keep non-drag tile metadata.
+  DragTargetOnly,
+  /// Include tile metadata only.
+  MetadataOnly,
+};
 
 /// A single bitmap cache unit the compositor exposes for GPU upload —
 /// either a static segment (non-promoted content between promoted
@@ -55,10 +66,11 @@ struct CompositorTile {
   /// composites tiles by blitting in ascending `paintOrderIndex`.
   uint32_t paintOrderIndex = 0;
 
-  /// Pointer into the compositor's cached bitmap. Empty if the tile's
-  /// slot is structurally present but no pixel content yet (e.g., a
-  /// segment whose range contains no visible non-promoted entities).
-  const RendererBitmap* bitmap = nullptr;
+  /// Owned bitmap payload. Empty when the snapshot policy omits this tile's pixels or when the tile
+  /// has no rendered content.
+  RendererBitmap bitmap;
+  /// Source bitmap dimensions, even when \ref bitmap is intentionally omitted.
+  Vector2i bitmapDims = Vector2i::Zero();
 
   /// Non-null for a promoted layer tile: the promoted entity id. Null
   /// for a static segment tile.
@@ -133,19 +145,10 @@ private:
 
 /// Maximum total memory budget for compositor layer bitmaps, in bytes.
 ///
-/// Sized for design-tool workloads on Retina-class displays. The splash
-/// at typical zoom is 7 mandatory filter / mask / isolated-layer
-/// promotions plus the editor's drag target; each canvas-sized layer
-/// at DPR=2 is ~36 MB (4054×2327×4). The pre-M2 budget of 256 MiB was
-/// at the limit on the splash and refused new editor promotes once
-/// hit — visible to the user via `PromoteRefusalReason::MemoryLimit`
-/// in the layer-inspector panel, with the user-visible symptom being
-/// "drag uses slow path and view turns low-res after a while" (the
-/// canvas-shrink path is what knocks loose enough memory for the
-/// next promote to succeed). M3 scale-band caching will reduce
-/// per-layer memory by letting layers live at sub-canvas resolution;
-/// until then, the budget is sized so a typical splash-class
-/// document at typical zoom stays under it with headroom.
+/// Sized for high-DPI editor sessions with mandatory filter, mask, and
+/// isolated-layer promotions plus one active drag target. Scale-band caching
+/// should eventually reduce per-layer memory by letting layers live below full
+/// canvas resolution.
 inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
 
 /**
@@ -233,6 +236,43 @@ struct CompositorConfig {
  */
 class CompositorController {
 public:
+  /// Result of requesting an editor-facing compositor presentation plan.
+  struct PromoteResult {
+    enum class Code : uint8_t {
+      /// The requested entity owns a promoted compositor layer.
+      PromotedLayer,
+      /// The request is valid but must be presented as a full-canvas preview.
+      FullCanvasPreviewRequired,
+      /// The requested entity is not valid in the document registry.
+      InvalidEntity,
+      /// The compositor cannot add another layer without exceeding the layer limit.
+      LayerLimit,
+      /// The compositor cannot add another layer without exceeding the memory budget.
+      MemoryLimit,
+      /// A descendant is already promoted, so this entity was not promoted.
+      DescendantPromoted,
+    };
+
+    static constexpr Code PromotedLayer = Code::PromotedLayer;
+    static constexpr Code FullCanvasPreviewRequired = Code::FullCanvasPreviewRequired;
+    static constexpr Code InvalidEntity = Code::InvalidEntity;
+    static constexpr Code LayerLimit = Code::LayerLimit;
+    static constexpr Code MemoryLimit = Code::MemoryLimit;
+    static constexpr Code DescendantPromoted = Code::DescendantPromoted;
+
+    /// Result code for this promotion request.
+    Code code = Code::PromotedLayer;
+
+    [[nodiscard]] bool promotedLayer() const { return code == Code::PromotedLayer; }
+    [[nodiscard]] bool fullCanvasPreviewRequired() const {
+      return code == Code::FullCanvasPreviewRequired;
+    }
+    [[nodiscard]] operator bool() const { return promotedLayer(); }
+
+    friend bool operator==(PromoteResult result, Code code) { return result.code == code; }
+    friend bool operator==(Code code, PromoteResult result) { return result.code == code; }
+  };
+
   /**
    * Construct a compositor controller.
    *
@@ -270,9 +310,12 @@ public:
    * @param interactionKind Semantic kind for the Interaction hint. Use `Selection` for
    *   selection-driven pre-warm (no drag in progress) and `ActiveDrag` for an active
    *   user drag. Defaults to `ActiveDrag` for callers that only use this API during drag.
-   * @return true if promotion succeeded, false if the layer limit or memory budget was reached.
+   * @return Promotion result. Valid renderable descendants under a filter, clip-path, or mask
+   *   return \ref PromoteResult::FullCanvasPreviewRequired so callers can present a full-canvas
+   *   composited tile instead of treating the request as a hard failure.
    */
-  bool promoteEntity(Entity entity, InteractionHint interactionKind = InteractionHint::ActiveDrag);
+  PromoteResult promoteEntity(Entity entity,
+                              InteractionHint interactionKind = InteractionHint::ActiveDrag);
 
   /**
    * Demote a previously promoted entity back to the root layer.
@@ -365,7 +408,7 @@ public:
   /**
    * Returns a reference to the underlying SVG document.
    */
-  [[nodiscard]] SVGDocument& document() { return *document_; }
+  [[nodiscard]] SVGDocument& document() const { return document_.get(); }
 
   /**
    * Returns the fallback reasons for a promoted entity, or FallbackReason::None if not promoted.
@@ -577,9 +620,6 @@ public:
     None = 0,
     /// Entity was destroyed / never existed in the registry.
     InvalidEntity,
-    /// Ancestor has `filter` / `mask` / `clip-path`. Promoting would
-    /// lose the ancestor's compositing context.
-    CompositingBreakingAncestor,
     /// Too many entities already promoted (`kMaxCompositorLayers`).
     LayerLimit,
     /// Total bitmap memory already at `kMaxCompositorMemoryBytes`.
@@ -706,7 +746,8 @@ public:
   /// tiles advance: the two halves of the split segment and the new
   /// drag-target layer. All other filter layers, segments, and
   /// bucket layers keep their generation and their GL texture binding.
-  [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload() const;
+  [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload(
+      CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All) const;
 
   /// Read-only accessor for the layer bound to @p entity. Test-only —
   /// lets regression tests inspect `canvasFromBitmap` /
@@ -719,6 +760,9 @@ public:
   }
 
 private:
+  /// Returns a reference to the renderer that receives composited output.
+  [[nodiscard]] RendererInterface& renderer() const { return renderer_.get(); }
+
   /// Find the layer for a given entity, or nullptr if not promoted.
   CompositorLayer* findLayer(Entity entity);
   const CompositorLayer* findLayer(Entity entity) const;
@@ -831,8 +875,8 @@ private:
   static void propagateFastPathTranslationToSubtree(Registry& registry, Entity root,
                                                     const Transform2d& worldFromPreviousWorld);
 
-  SVGDocument* document_ = nullptr;
-  RendererInterface* renderer_ = nullptr;
+  std::reference_wrapper<SVGDocument> document_;
+  std::reference_wrapper<RendererInterface> renderer_;
   /// Most recent render viewport. Used to validate remapped layer caches
   /// against the same raster geometry they were originally rendered with.
   RenderViewport lastViewport_;
@@ -965,29 +1009,24 @@ private:
   /// See `setSkipMainComposeDuringSplit`.
   bool skipMainComposeDuringSplit_ = false;
 
-  /// Design doc 0033 §M4 — non-owning pointer to the active
-  /// `CancellationToken`, set by the `renderFrame(viewport, token)`
-  /// overload at entry and cleared at exit. The rasterize loops poll
-  /// `isCancelled()` (below) at coarse safe points and bail early if
-  /// set. `nullptr` outside the cancellable `renderFrame` window;
-  /// `isCancelled()` returns false in that state, so the non-token
-  /// overload's loops never short-circuit.
-  const CancellationToken* cancelToken_ = nullptr;
+  /// Design doc 0033 §M4 — active cancellation token for the current
+  /// cancellable `renderFrame` call. Empty outside the cancellable
+  /// render window; `isCancelled()` returns false in that state.
+  std::optional<std::reference_wrapper<const CancellationToken>> cancelToken_;
 
   /// Cheap inline check used by the rasterize loops in `renderFrame`.
   /// Returns false when there's no active token (the non-cancellable
   /// `renderFrame` overload) so the cancellation paths add zero cost
   /// to that hot path.
   [[nodiscard]] bool isCancelled() const {
-    return cancelToken_ != nullptr && cancelToken_->isCancelled();
+    return cancelToken_.has_value() && cancelToken_->get().isCancelled();
   }
 
   /// Design doc 0034 progressive rendering: optional callback fired
   /// after the drag-target's intrinsic-sized layer rasterize but
   /// before canvas-sized segment work. Set by the
-  /// 3-arg `renderFrame` overload at entry and cleared at exit;
-  /// `nullptr` for the 1- and 2-arg overloads so they incur zero
-  /// overhead.
+  /// 3-arg `renderFrame` overload at entry and cleared at exit. Null for the
+  /// 1- and 2-arg overloads so they incur zero overhead.
   const std::function<void()>* intermediateCallback_ = nullptr;
 
   /// True after `composeLayers` has completed a full (non-skipped)

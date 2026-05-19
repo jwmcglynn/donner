@@ -60,6 +60,59 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   EXPECT_FALSE(loaded->frames[0].mouseDocX.has_value());
   EXPECT_FALSE(loaded->frames[0].mouseDocY.has_value());
   EXPECT_FALSE(loaded->frames[0].viewport.has_value());
+  EXPECT_FALSE(loaded->metadata.expect.has_value());
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, RoundTripExpectationMetadata) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.metadata.expect = ReproExpectation{
+      .leftMouseDownOrdinal = 2,
+      .frameOffsetAfterLeftMouseDown = 1,
+      .minFrameIndex = 153,
+      .maxFrameIndex = 156,
+      .targetSelector = "#target",
+      .cropMode = "document-canvas",
+      .cropRect =
+          ReproExpectedCrop{
+              .x = 260,
+              .y = 620,
+              .width = 360,
+              .height = 260,
+          },
+  };
+
+  const auto path = TempFile("expect_metadata");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  EXPECT_EQ(*loaded->metadata.expect, *file.metadata.expect);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, RoundTripExpectationMetadataWithoutCrop) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.metadata.expect = ReproExpectation{
+      .leftMouseDownOrdinal = 2,
+      .frameOffsetAfterLeftMouseDown = 0,
+      .minFrameIndex = 203,
+      .maxFrameIndex = 203,
+      .targetSelector = "#Lightning_glow_dark",
+      .cropMode = "document-canvas",
+  };
+
+  const auto path = TempFile("expect_metadata_no_crop");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  EXPECT_EQ(*loaded->metadata.expect, *file.metadata.expect);
+  EXPECT_FALSE(loaded->metadata.expect->cropRect.has_value());
 
   std::error_code ec;
   std::filesystem::remove(path, ec);

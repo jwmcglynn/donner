@@ -18,19 +18,6 @@ struct RenderPanePresenterState {
   Vector2d contentRegion = Vector2d::Zero();
 };
 
-/**
- * Resolve the drag translation to use when drawing a composited tile.
- *
- * @param tile Cached composited tile view.
- * @param activeDragPreview Live drag preview, when a drag is currently active.
- * @param displayedDragPreview Preview state selected by \ref CompositedPresentation.
- * @return Translation to add to the tile's canvas offset.
- */
-[[nodiscard]] Vector2d ResolveCompositedTileDragTranslation(
-    const GlTextureCache::TileView& tile,
-    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview);
-
 /// Draws the advanced editor render pane's image, overlay chrome, and frame graph.
 class RenderPanePresenter {
 public:

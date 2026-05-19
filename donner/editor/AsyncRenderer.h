@@ -7,14 +7,9 @@
 ///
 /// ## Threading model
 ///
-/// The worker thread owns the Renderer for its entire lifetime — the
-/// Renderer is constructed on the worker thread at startup and
-/// destroyed on the worker thread at shutdown. This is load-bearing
-/// for the Geode (WebGPU) backend under Emscripten pthreads: WebGPU
-/// JS objects are per-worker, so the device, pipelines, textures,
-/// and readback buffers must all be created and used on a single
-/// thread. See the "first render aborts with `getJsObject` assertion"
-/// incident that motivated moving renderer ownership here.
+/// The worker thread owns the Renderer for its entire lifetime. Backends
+/// with thread-affined GPU objects depend on device, pipeline, texture, and
+/// readback use staying on that thread.
 ///
 /// The worker additionally takes exclusive ownership of the
 /// `SVGDocument` during an active render. The UI thread must not
@@ -44,6 +39,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -64,6 +60,30 @@ class CompositorController;
 
 namespace donner::editor {
 
+/// Non-null renderer/document handoff for a render request.
+struct RenderLease {
+  /**
+   * Construct a render lease.
+   *
+   * @param renderer Renderer backend that remains alive until the request completes.
+   * @param document Document handle to render. The lease keeps its registry handle alive while the
+   * worker owns the request.
+   */
+  RenderLease(svg::Renderer& renderer, svg::SVGDocument document)
+      : renderer_(renderer), document_(std::move(document)) {}
+
+  /// Renderer backend for this request.
+  [[nodiscard]] svg::Renderer& renderer() const { return renderer_.get(); }
+  /// SVG document for this request.
+  [[nodiscard]] svg::SVGDocument& document() { return document_; }
+  /// SVG document for this request.
+  [[nodiscard]] const svg::SVGDocument& document() const { return document_; }
+
+private:
+  std::reference_wrapper<svg::Renderer> renderer_;
+  svg::SVGDocument document_;
+};
+
 /// Per-request handoff data captured at render-request time so the
 /// worker has everything it needs without touching live UI state.
 struct RenderRequest {
@@ -79,27 +99,29 @@ struct RenderRequest {
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
   };
 
-  svg::Renderer* renderer = nullptr;
-  svg::SVGDocument* document = nullptr;
+  /**
+   * Construct a render request.
+   *
+   * @param renderer Renderer backend that remains alive until the request completes.
+   * @param document Document handle to render. The request keeps its registry handle alive while
+   * the worker owns the request.
+   */
+  RenderRequest(svg::Renderer& renderer, svg::SVGDocument document)
+      : lease(renderer, std::move(document)) {}
+
+  /// Non-null renderer/document lease for the worker handoff.
+  RenderLease lease;
   /// Document frame version snapshotted at request time so the UI can
   /// match the landed bitmap with other same-version assets.
   std::uint64_t version = 0;
-  /// Generation counter from `AsyncSVGDocument::documentGeneration()`.
-  /// Only bumps when the inner document is fully replaced (source-pane
-  /// reparse / load). The worker uses this to decide when to drop the
-  /// compositor's activeHints_ backing the old entity space — NOT
-  /// `version`, which bumps on every mutation and would nuke the
-  /// compositor every drag frame.
+  /// Generation counter from `AsyncSVGDocument::documentGeneration()`. Bumps
+  /// only when the inner document is fully replaced, so the worker can reset
+  /// entity-keyed compositor state without treating every frame mutation as a
+  /// replacement.
   std::uint64_t documentGeneration = 0;
-  /// When non-empty, carries a remap from the previous document's entity
-  /// ids to the current document's entity ids — produced by
-  /// `AsyncSVGDocument::setDocumentMaybeStructural` when the swap was
-  /// structurally equivalent (same tree shape, same ids). The worker
-  /// uses the remap to call `CompositorController::remapAfterStructural
-  /// Replace` instead of `resetAllLayers(documentReplaced=true)`,
-  /// preserving layer bitmaps + segments across the swap. Empty map
-  /// means "fall through to the `documentGeneration` mismatch path"
-  /// (full reset).
+  /// Entity remap for structurally equivalent document replacement. When
+  /// present, the worker remaps compositor state instead of fully resetting
+  /// layer bitmaps and static segments.
   std::unordered_map<Entity, Entity> structuralRemap;
   /// Snapshot of the selection at request time (used for overlay chrome).
   /// The worker holds this optional by value, so if the UI thread clears
@@ -121,12 +143,9 @@ struct RenderResult {
   /// One composite tile from the worker's `CompositorController::
   /// snapshotCompositorTiles()` snapshot (design doc 0033 §M2C). The
   /// editor uploads one GL texture per tile (keyed on `id`) and
-  /// blits each tile at its canvas offset, replacing the legacy
-  /// `bg`/`promoted`/`fg` triple. Geometry fields are doc-unit
-  /// quantities so the editor can scale them by the *current*
-  /// `pixelsPerDocUnit` and the bitmap follows pinch-zoom changes
-  /// during canvas-resize debouncing (same rationale as the M2B
-  /// `promotedBitmapDimsDoc` field this replaces).
+  /// blits each tile at its canvas offset. Geometry fields are doc-unit
+  /// quantities so the editor can scale them by the current
+  /// `pixelsPerDocUnit` during canvas-resize debouncing.
   struct CompositedTile {
     enum class Kind : std::uint8_t { Segment, Layer };
 
@@ -192,9 +211,8 @@ struct RenderResult {
   /// Wall-clock milliseconds the worker spent inside
   /// `CompositorController::renderFrame` for this iteration. Reported so
   /// the editor can plot backend render time alongside ImGui frame time
-  /// on the frame graph. Zero means "no backend work recorded" (e.g. the
-  /// request had a null renderer/document and fell through the early-out
-  /// branch). For an `Intermediate` result, this is the elapsed time
+  /// on the frame graph. Zero means no backend work was recorded. For
+  /// an `Intermediate` result, this is the elapsed time
   /// from the start of `renderFrame` to the intermediate callback —
   /// roughly the cost of the drag-target layer rasterize.
   double workerMs = 0.0;
@@ -213,39 +231,16 @@ public:
   /// Returns true while a render is in flight on the worker thread.
   /// The UI thread must not touch the `Renderer` or mutate the
   /// `SVGDocument` while this returns true.
-  [[nodiscard]] bool isBusy() const { return busy_.load(std::memory_order_acquire); }
+  [[nodiscard]] bool isBusy() const;
 
-  /// Post a render request to the worker. Non-blocking. Transitions
-  /// the worker from idle → busy, or — design doc 0033 §M4 — signals
-  /// cancellation of the in-flight render and overwrites the pending
-  /// request slot when the worker is already busy. The worker polls
-  /// the cancellation token at coarse safe points (between
-  /// `rasterizeLayer` / segment rasterize calls); on cancel it
-  /// discards the incomplete `takeSnapshot` result and restarts with
-  /// the new request.
-  ///
-  /// The pre-§M4 caller contract — "must have checked `!isBusy()`
-  /// first" — has been relaxed: callers MAY now call this while busy,
-  /// and the in-flight render will be cancelled. Callers that still
-  /// gate on `!isBusy()` get the pre-§M4 behavior (one render at a
-  /// time, no cancellation) since the worker is idle when they post.
+  /// Post a render request to the worker. Non-blocking. If the worker is busy,
+  /// this cancels the in-flight render at the next compositor safe point and
+  /// replaces the pending request slot with the latest request.
   void requestRender(const RenderRequest& request);
 
-  /// Cancel an in-flight render WITHOUT posting a new one. The worker
-  /// bails at the next §M4 safe point and transitions back to idle
-  /// (no result stored, no auto-restart). No-op if the worker is
-  /// already idle.
-  ///
-  /// Use when the in-flight render is dispensable — typically a
-  /// selection prewarm that's about to be superseded by user input.
-  /// Without this API, the only way to interrupt a long render is
-  /// `requestRender(...)` which forces the worker to immediately
-  /// restart with the new request: useful when the new request IS
-  /// what we want to do, useless when the user's input first needs
-  /// the worker idle so a registry-touching slow path can run safely
-  /// (e.g. `EditorShell`'s deferred slow-path mouseDown, blocked on
-  /// `!isBusy()` while a multi-second post-pinch prewarm finishes).
-  ///
+  /// Cancel an in-flight render without posting a replacement. Use when the
+  /// current render is dispensable and the UI needs the worker to become idle
+  /// before dispatching registry-touching input.
   /// Safe to call from any thread.
   void cancelInFlight();
 
@@ -268,10 +263,6 @@ public:
   /// transitions to Done. Used by the editor's on-demand render loop
   /// to wake the UI thread (e.g. via `glfwPostEmptyEvent`) so the
   /// fresh result gets picked up without continuous polling.
-  ///
-  /// Callers that never set a callback are unaffected — the default
-  /// behavior (worker stores result in `result_`, UI thread polls in
-  /// its own cadence) remains exactly as before.
   ///
   /// The callback runs on the worker thread. It must be thread-safe
   /// and must NOT re-enter the renderer — a simple wake-up post into
@@ -299,10 +290,8 @@ public:
   }
 
   /// Number of times the worker has called `CompositorController::resetAllLayers()`
-  /// since construction. Exposed for regression tests that want to assert the
-  /// compositor is NOT torn down on every mutation — the bug that made drag-
-  /// frame version bumps masquerade as document replacements in the
-  /// pre-`documentGeneration_` design.
+  /// since construction. Tests use this to assert that frame-version mutations
+  /// do not masquerade as document replacements.
   ///
   /// Counts only resets driven by a `request.documentGeneration` mismatch; not
   /// the implicit reset performed on first compositor construction.
@@ -314,13 +303,8 @@ public:
   }
 
   /// Number of times the worker has reconstructed `compositor_` from scratch.
-  /// First construction counts as one. A second increment within a session
-  /// means an in-flight cached layer set (bitmaps, `canvasFromBitmap`
-  /// compose state, `bitmapEntityFromWorldTransform` stamps) was thrown
-  /// away — pinned to the filter-group "snap back to original position"
-  /// drag-release bug where the post-writeback source reparse swapped the
-  /// `SVGDocumentHandle` and forced a full compositor reconstruct even
-  /// though a valid structural remap was attached to the request.
+  /// First construction counts as one. Tests use this to verify that structural
+  /// remaps preserve cached layer state across drag-writeback reparses.
   ///
   /// Safe to read from the UI thread; incremented under the internal mutex
   /// on the worker.
@@ -391,7 +375,7 @@ public:
   }
 
   /// Canvas size in the request the worker is currently processing
-  /// (read from `request.document->canvasSize()`). Surfaces the
+  /// (read from the request's document lease). Surfaces the
   /// document's actual canvas size at the worker's last-completed
   /// render, separate from the compositor's `staticSegmentsCanvas_`
   /// (which is the size of the last successful rasterize). When
@@ -410,39 +394,35 @@ private:
   mutable std::mutex mutex_;
   std::condition_variable cv_;
 
-  enum class State : std::uint8_t {
-    Idle,        ///< No work. Worker is blocked on `cv_`.
-    Busy,        ///< Render in progress on the worker.
-    Cancelling,  ///< `cancelInFlight` was called; worker is bailing but hasn't
-                 ///< observed the cancel poll yet. `busy_` stays true so the
-                 ///< editor's `!isBusy()` gates keep gating registry reads.
-                 ///< Worker transitions to Idle once it observes the cancel.
-    Done,        ///< Render finished; bitmap available in `result_`.
-    Shutdown     ///< Destructor requested shutdown; worker exits.
+  struct IdleState {};
+  struct RenderingState {
+    /// Latest request waiting for the worker. Empty while the worker is
+    /// actively rendering the request it already dequeued.
+    std::optional<RenderRequest> pendingRequest;
+    /// Progressive result staged by the active render. Drained before any final
+    /// result while this state stays active.
+    std::optional<RenderResult> intermediateResult;
   };
+  struct CancellingState {};
+  struct DoneState {
+    /// Intermediate result that was not drained before the final result landed.
+    std::optional<RenderResult> intermediateResult;
+    /// Final render result. Draining this transitions the worker state to idle.
+    RenderResult result;
+  };
+  struct ShutdownState {};
+  using WorkerState =
+      std::variant<IdleState, RenderingState, CancellingState, DoneState, ShutdownState>;
 
-  State state_ = State::Idle;
-  std::atomic<bool> busy_{false};
+  [[nodiscard]] static bool workerStateBusy(const WorkerState& state);
 
-  RenderRequest pendingRequest_;
-  RenderResult result_;
+  WorkerState workerState_;
   /// Structural remaps retained by document generation until the worker has
   /// actually advanced the compositor to that generation. A request can be
   /// canceled before the worker consumes its remap; without this cache, the
   /// next request for the same replacement document would see an empty remap
   /// and fall back to `resetAllLayers(documentReplaced=true)`.
   std::unordered_map<std::uint64_t, std::unordered_map<Entity, Entity>> retainedStructuralRemaps_;
-  /// Design doc 0034 progressive rendering: staged intermediate result
-  /// produced mid-`renderFrame` by the compositor's intermediate
-  /// callback. Drained ahead of `result_` by `pollResult` so the UI
-  /// thread sees the partial preview (drag-target layer at the new
-  /// transform, scene baseline still stretched from the prior canvas
-  /// size) before the canvas-sized refinement lands as `result_`.
-  /// `hasIntermediateResult_` flips true under `mutex_` when the
-  /// worker stages an intermediate, and false when `pollResult` or
-  /// `cancelInFlight` drains/drops it.
-  RenderResult intermediateResult_;
-  bool hasIntermediateResult_ = false;
   /// Optional UI-thread wake-up hook, invoked by the worker when a
   /// render finishes. Set once at editor startup; owned by the
   /// installer. Held under `mutex_` so mutation vs. invocation races
@@ -453,7 +433,7 @@ private:
   /// value — `SVGDocument` is a thin value-facade over a `std::shared_ptr<Registry>`
   /// (see `SVGDocumentHandle`), so copying is a refcount bump, not a deep copy
   /// of the document state. `nullopt` before the first render request; set to
-  /// a copy of `request.document` on the first iteration and any time the
+  /// a copy of the request's document lease on the first iteration and any time the
   /// underlying document handle changes.
   ///
   /// Identity comparison uses `handle().get()` against the incoming request's
@@ -470,22 +450,17 @@ private:
   svg::compositor::InteractionHint compositorInteractionKind_ =
       svg::compositor::InteractionHint::Selection;
   /// Document generation at the time the compositor was last configured.
-  /// Detects document replacement (ReplaceDocumentCommand / source reparse)
-  /// that invalidates all entity handles. Crucially tracks the generation
-  /// counter, not the frame version — the frame version bumps on every
-  /// mutation (every drag frame) and would falsely trigger a full
-  /// `resetAllLayers` every time.
+  /// Generation, not frame version, is the document-replacement signal that
+  /// invalidates entity handles.
   std::uint64_t compositorDocumentGeneration_ = 0;
 
-  /// Counter of worker-side `resetAllLayers()` invocations. Used by regression
-  /// tests to verify that drag-frame mutations (which bump `frameVersion_`) do
-  /// NOT fire a reset — only a true `documentGeneration` change does.
+  /// Counter of worker-side `resetAllLayers()` invocations. Tests verify that
+  /// only document-generation changes fire resets.
   std::atomic<std::uint64_t> compositorResetCount_{0};
 
   /// Counter of worker-side `compositor_ = make_unique<...>(...)` reconstructs.
-  /// Bumps once per session at first construction and is expected to STAY at
-  /// that one throughout a drag-release-and-reparse cycle: structural remaps
-  /// preserve the compositor across `SVGDocumentHandle` swaps.
+  /// Bumps once per session at first construction. Structural remaps should
+  /// keep it there across drag-release-and-reparse cycles.
   std::atomic<std::uint64_t> compositorReconstructCount_{0};
 
   /// Design doc 0033 §M4 — cancellation token threaded into
@@ -530,7 +505,7 @@ private:
   /// currently promoted" to the editor's diagnostic panel.
   Entity lastWorkerCompositorEntity_ = entt::null;
 
-  /// Canvas size from `request.document->canvasSize()` at the last
+  /// Canvas size from the request's document lease at the last
   /// completed render. Diagnostic — compared against the
   /// compositor's `staticSegmentsCanvas_` to spot "document was
   /// re-sized but compositor hasn't caught up yet".

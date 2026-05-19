@@ -78,10 +78,6 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Actual Size", "Cmd+0")) {
       actions.actualSize = true;
     }
-    if (ImGui::MenuItem("Tight-Bounded Segments (debug)", nullptr,
-                        state.tightBoundedSegmentsEnabled)) {
-      actions.toggleTightBoundedSegments = true;
-    }
     ImGui::EndMenu();
   }
 

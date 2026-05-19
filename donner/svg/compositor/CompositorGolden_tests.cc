@@ -1436,7 +1436,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   auto smallTiles = compositor.snapshotTilesForUpload();
   std::unordered_map<uint64_t, uint64_t> generationsAtSmall;
   for (const auto& tile : smallTiles) {
-    if (!tile.isDragTarget && tile.bitmap != nullptr) {
+    if (!tile.isDragTarget && !tile.bitmap.empty()) {
       generationsAtSmall[tile.tileId] = tile.generation;
     }
   }
@@ -1458,7 +1458,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   auto largeTiles = compositor.snapshotTilesForUpload();
   for (const auto& tile : largeTiles) {
     auto it = generationsAtSmall.find(tile.tileId);
-    if (it == generationsAtSmall.end() || tile.isDragTarget || tile.bitmap == nullptr) {
+    if (it == generationsAtSmall.end() || tile.isDragTarget || tile.bitmap.empty()) {
       continue;
     }
     EXPECT_NE(it->second, tile.generation)
@@ -2809,29 +2809,7 @@ TEST_F(CompositorGoldenTest, FilteredGroupWithChildrenRasterizesIncludingChildre
   EXPECT_LE(result.mismatchCount, result.totalPixels / 20u) << result;  // 5% AA tolerance
 }
 
-// Regression for donner_splash.svg bug: the user drags a letter/path that's
-// a CHILD of a `<g filter="url(#blur)">` group. Under the current compositor
-// behavior, the child path gets auto-promoted (or interaction-promoted via
-// drag) and rasterized standalone — outside of its parent's filter context.
-// The blur visually disappears because the child's layer bitmap has no blur
-// applied (the filter is on the group, not the child).
-//
-// This test reproduces the scenario explicitly: we promote a CHILD of a
-// filtered group and compare the composited output against the full-render
-// reference. If the filter context is lost, the two paths diverge.
-TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRefusesPromotion) {
-  // Regression for the splash-SVG drag bug reported in manual testing:
-  // dragging a blurred shape (path inside `<g filter="url(#blur)">`) caused
-  // the blur to disappear. Root cause: the editor's drag promotion path
-  // extracted the descendant into its own cached layer, losing the
-  // ancestor's filter context. The cached layer bitmap had un-blurred
-  // content; the composed output showed pure red where the blurred halo
-  // should have been.
-  //
-  // Fix: `promoteEntity` now walks ancestors and refuses promotion when
-  // any ancestor has a filter/mask/clip-path. The editor's drag path,
-  // when promoteEntity returns false, falls back to the full-render
-  // mutation path which handles the ancestor filter correctly.
+TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRequiresFullCanvasPreview) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -2850,19 +2828,13 @@ TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRefusesPromotion) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  // Simulate the editor's drag promotion: the user clicked on the child
-  // rect inside the filtered group. The controller must refuse to promote.
-  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
-      << "promotion of a descendant of `<g filter=...>` must be refused so "
-         "the ancestor's filter context isn't lost during composited drag";
-
-  // With promotion refused, `isPromoted` is false and `layerCount` is 0.
+  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+            CompositorController::PromoteResult::FullCanvasPreviewRequired);
   EXPECT_FALSE(compositor.isPromoted(target->entityHandle().entity()));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-// Parallel regression: ancestor with clip-path also refuses promotion.
-TEST_F(CompositorGoldenTest, ChildOfClippedGroupRefusesPromotion) {
+TEST_F(CompositorGoldenTest, ChildOfClippedGroupRequiresFullCanvasPreview) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -2881,12 +2853,11 @@ TEST_F(CompositorGoldenTest, ChildOfClippedGroupRefusesPromotion) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
-      << "clip-path ancestor context must not be extracted";
+  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+            CompositorController::PromoteResult::FullCanvasPreviewRequired);
 }
 
-// Parallel regression: ancestor with mask also refuses promotion.
-TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRefusesPromotion) {
+TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRequiresFullCanvasPreview) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -2905,8 +2876,8 @@ TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRefusesPromotion) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
-      << "mask ancestor context must not be extracted";
+  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+            CompositorController::PromoteResult::FullCanvasPreviewRequired);
 }
 
 // Positive: a plain descendant (no compositing ancestor) still promotes.

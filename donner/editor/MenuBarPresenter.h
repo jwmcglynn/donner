@@ -9,10 +9,6 @@ struct MenuBarState {
   bool sourcePaneFocused = false;
   bool canUndo = false;
   bool canRedo = false;
-  /// Current state of the tight-bounded-segments compositor gate.
-  /// Rendered under View → "Tight-Bounded Segments (debug)". Flipping it
-  /// off is the bisection knob for design doc 0027 regressions.
-  bool tightBoundedSegmentsEnabled = true;
 };
 
 struct MenuBarActions {
@@ -28,7 +24,6 @@ struct MenuBarActions {
   bool zoomIn = false;
   bool zoomOut = false;
   bool actualSize = false;
-  bool toggleTightBoundedSegments = false;
 };
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.

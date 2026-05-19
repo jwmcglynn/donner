@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/PresentedFrameComposer.h"
 
 namespace donner::editor {
 
@@ -146,19 +147,28 @@ void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2&
   drawList->PopClipRect();
 }
 
-}  // namespace
+PresentedFrameTileGeometry PresentedGeometryFromTile(const GlTextureCache::TileView& tile) {
+  return PresentedFrameTileGeometry{
+      .canvasOffsetDoc = tile.canvasOffsetDoc,
+      .bitmapDimsDoc = tile.bitmapDimsDoc,
+      .dragTranslationDoc = tile.dragTranslationDoc,
+      .isDragTarget = tile.isDragTarget,
+  };
+}
 
-Vector2d ResolveCompositedTileDragTranslation(
-    const GlTextureCache::TileView& tile,
-    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview) {
-  if (tile.isDragTarget && activeDragPreview.has_value() && displayedDragPreview.has_value() &&
-      displayedDragPreview->entity == activeDragPreview->entity) {
-    return activeDragPreview->translation;
+std::optional<PresentedDragPreview> PresentedPreviewFromSelectPreview(
+    const std::optional<SelectTool::ActiveDragPreview>& preview) {
+  if (!preview.has_value()) {
+    return std::nullopt;
   }
 
-  return tile.dragTranslationDoc;
+  return PresentedDragPreview{
+      .entity = preview->entity,
+      .translationDoc = preview->translation,
+  };
 }
+
+}  // namespace
 
 void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   const bool hasTiles = !state.textures.tiles().empty();
@@ -176,24 +186,27 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
 
   const double pxPerDoc = state.viewport.pixelsPerDocUnit();
+  const Vector2d imageOriginScreen(imageOrigin.x, imageOrigin.y);
+  const Transform2d screenFromCanvasTransform =
+      Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
+  const std::optional<PresentedDragPreview> activeDragPreview =
+      PresentedPreviewFromSelectPreview(state.activeDragPreview);
+  const std::optional<PresentedDragPreview> displayedDragPreview =
+      PresentedPreviewFromSelectPreview(state.displayedDragPreview);
   for (const auto& tile : state.textures.tiles()) {
     if (tile.texture == 0) {
       continue;
     }
-    const Vector2d originDoc =
-        tile.canvasOffsetDoc + ResolveCompositedTileDragTranslation(tile, state.activeDragPreview,
-                                                                    state.displayedDragPreview);
-    Vector2d sizeScreen = tile.bitmapDimsDoc * pxPerDoc;
-    if (sizeScreen.x <= 0.0 || sizeScreen.y <= 0.0) {
-      // Defensive fallback for canvas-sized tiles that pre-date M2's
-      // intrinsic-size rasterize.
-      sizeScreen.x = static_cast<double>(imageBottomRight.x - imageOrigin.x);
-      sizeScreen.y = static_cast<double>(imageBottomRight.y - imageOrigin.y);
+    const std::optional<PresentedTileRect> tileRect =
+        ComputePresentedTileRect(PresentedGeometryFromTile(tile), screenFromCanvasTransform,
+                                 activeDragPreview, displayedDragPreview);
+    if (!tileRect.has_value()) {
+      continue;
     }
-    const ImVec2 tileOrigin(imageOrigin.x + static_cast<float>(originDoc.x * pxPerDoc),
-                            imageOrigin.y + static_cast<float>(originDoc.y * pxPerDoc));
-    const ImVec2 tileBottomRight(tileOrigin.x + static_cast<float>(sizeScreen.x),
-                                 tileOrigin.y + static_cast<float>(sizeScreen.y));
+    const ImVec2 tileOrigin(static_cast<float>(tileRect->topLeft.x),
+                            static_cast<float>(tileRect->topLeft.y));
+    const ImVec2 tileBottomRight(static_cast<float>(tileRect->bottomRight.x),
+                                 static_cast<float>(tileRect->bottomRight.y));
     paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tile.texture)),
                            tileOrigin, tileBottomRight);
   }

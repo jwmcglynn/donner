@@ -257,9 +257,7 @@ protected:
   }
 
   RenderRequest BuildRenderRequest(std::uint64_t version) {
-    RenderRequest request;
-    request.renderer = &asyncRendererBackend_;
-    request.document = &app_.document().document();
+    RenderRequest request(asyncRendererBackend_, app_.document().document());
     request.version = version;
     request.documentGeneration = app_.document().documentGeneration();
     request.structuralRemap = app_.document().consumePendingStructuralRemap();

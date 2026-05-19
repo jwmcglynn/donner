@@ -34,8 +34,7 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlayCanvasSize_ = Vector2i::Zero();
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   lastOverlayMarqueeRectDoc_.reset();
-  lastRenderedVersion_ = 0;
-  lastRenderedCanvasSize_ = Vector2i::Zero();
+  renderScheduler_.reset();
 }
 
 void RenderCoordinator::refreshSelectionBoundsCache(EditorApp& app) {
@@ -103,7 +102,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
                                          GlTextureCache& textures, FrameHistory* frameHistory) {
   ZoneScopedN("RenderCoordinator::pollRenderResult");
-  auto resultOpt = asyncRenderer_.pollResult();
+  auto resultOpt = renderWorker_.asyncRenderer.pollResult();
   if (!resultOpt.has_value()) {
     return;
   }
@@ -128,8 +127,12 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   displayedDocVersion_ = result.version;
+  if (result.stage == RenderResult::Stage::Final) {
+    renderScheduler_.noteRenderCompleted(result.version,
+                                         renderWorker_.asyncRenderer.lastDocumentCanvasSize());
+  }
   if (result.compositedPreview.has_value() && result.compositedPreview->valid() &&
-      compositedPresentation_.waitingForChromeRefresh && app.hasDocument()) {
+      compositedPresentation_.isWaitingForChromeRefresh() && app.hasDocument()) {
     refreshSelectionBoundsCache(app);
     // Preserve the last-known marquee rect across this internal
     // chrome-refresh path. Composited drag lands here; SelectTool isn't
@@ -154,7 +157,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
                                            const ViewportState& viewport,
                                            GlTextureCache& textures) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
-  if (asyncRenderer_.isBusy() || !app.hasDocument() || viewport.paneSize.x <= 0.0 ||
+  if (renderWorker_.asyncRenderer.isBusy() || !app.hasDocument() || viewport.paneSize.x <= 0.0 ||
       viewport.paneSize.y <= 0.0) {
     return;
   }
@@ -180,10 +183,9 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const auto currentVersion = app.document().currentFrameVersion();
   const auto dragPreview = selectTool.activeDragPreview();
   const Entity prewarmEntity = selectedCompositedEntity(app);
-  compositedPresentation_.clearSettlingIfSelectionChanged(prewarmEntity, dragPreview.has_value());
 
   const bool selectionBoundsChanged = app.selectedElements() != selectionBoundsCache_.lastSelection;
-  if (!compositedPresentation_.waitingForFullRender || dragPreview.has_value()) {
+  if (!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value()) {
     if (selectionBoundsChanged || currentVersion != selectionBoundsCache_.lastRefreshVersion) {
       refreshSelectionBoundsCache(app);
     }
@@ -197,38 +199,25 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // its own invalidation check. Comparing via `!=` on the optional<Box2d>
   // covers "marquee appeared", "marquee moved", and "marquee ended".
   const bool marqueeDiffers = marqueeRectDoc != lastOverlayMarqueeRectDoc_;
-  if ((!compositedPresentation_.waitingForFullRender || dragPreview.has_value() ||
+  if ((!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value() ||
        marqueeRectDoc.has_value()) &&
       (selectionDiffers || marqueeDiffers || currentCanvasSize != lastOverlayCanvasSize_ ||
        currentVersion != lastOverlayVersion_)) {
     rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc);
   }
 
-  const bool needsCompositedLayerCapture =
-      dragPreview.has_value() && (!compositedPresentation_.hasCachedTextures ||
-                                  compositedPresentation_.cachedEntity != dragPreview->entity ||
-                                  compositedPresentation_.cachedVersion != currentVersion ||
-                                  compositedPresentation_.cachedCanvasSize != currentCanvasSize);
-  const bool needsSettledSelectionRefresh =
-      !dragPreview.has_value() && prewarmEntity != entt::null &&
-      compositedPresentation_.waitingForFullRender &&
-      compositedPresentation_.settlingPreview.has_value() &&
-      compositedPresentation_.settlingPreview->entity == prewarmEntity &&
-      currentVersion >= compositedPresentation_.settlingTargetVersion;
-  const bool needsCompositedPrewarm =
-      needsSettledSelectionRefresh ||
-      compositedPresentation_.shouldPrewarm(prewarmEntity, currentVersion, currentCanvasSize,
-                                            /*dragActive=*/false);
-  const bool needsRegularRender =
-      currentVersion != lastRenderedVersion_ || currentCanvasSize != lastRenderedCanvasSize_;
-
-  if (!needsCompositedLayerCapture && !needsCompositedPrewarm && !needsRegularRender) {
+  const PresentationRenderScheduleDecision schedule =
+      renderScheduler_.evaluate(compositedPresentation_, PresentationRenderScheduleInput{
+                                                             .selectedEntity = prewarmEntity,
+                                                             .activeDragPreview = dragPreview,
+                                                             .currentVersion = currentVersion,
+                                                             .currentCanvasSize = currentCanvasSize,
+                                                         });
+  if (!schedule.shouldRequestRender()) {
     return;
   }
 
-  RenderRequest req;
-  req.renderer = &renderer_;
-  req.document = &app.document().document();
+  RenderRequest req(renderWorker_.renderer, app.document().document());
   req.version = currentVersion;
   req.documentGeneration = app.document().documentGeneration();
   // Drain any pending structural remap from a recent `setDocumentMaybe
@@ -250,23 +239,10 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       req.selectedEntity = selected.entityHandle().entity();
     }
   }
-  if (dragPreview.has_value()) {
-    req.dragPreview = RenderRequest::DragPreview{
-        .entity = dragPreview->entity,
-        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
-    };
-  } else if (needsCompositedPrewarm) {
-    req.dragPreview = RenderRequest::DragPreview{
-        .entity = prewarmEntity,
-        .interactionKind = svg::compositor::InteractionHint::Selection,
-    };
+  if (schedule.dragPreview.has_value()) {
+    req.dragPreview = *schedule.dragPreview;
   }
-  asyncRenderer_.requestRender(req);
-
-  if (needsRegularRender) {
-    lastRenderedVersion_ = currentVersion;
-    lastRenderedCanvasSize_ = currentCanvasSize;
-  }
+  renderWorker_.asyncRenderer.requestRender(req);
 }
 
 Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {

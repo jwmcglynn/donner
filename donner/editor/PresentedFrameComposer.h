@@ -1,0 +1,94 @@
+#pragma once
+/// @file
+
+#include <optional>
+
+#include "donner/base/EcsRegistry.h"
+#include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
+
+namespace donner::editor {
+
+/// Backend-neutral geometry for one presented composited tile.
+struct PresentedFrameTileGeometry {
+  /// Tile origin in canvas/document coordinates.
+  Vector2d canvasOffsetDoc = Vector2d::Zero();
+  /// Tile size in document units.
+  Vector2d bitmapDimsDoc = Vector2d::Zero();
+  /// Cached drag translation captured with the tile.
+  Vector2d dragTranslationDoc = Vector2d::Zero();
+  /// Whether this tile represents the current drag target.
+  bool isDragTarget = false;
+};
+
+/// Drag preview data needed to resolve the currently presented tile offset.
+struct PresentedDragPreview {
+  /// Entity whose cached layer is being previewed.
+  Entity entity = entt::null;
+  /// Document-space translation to apply while presenting the layer.
+  Vector2d translationDoc = Vector2d::Zero();
+};
+
+/// Output-space rectangle for one presented tile.
+struct PresentedTileRect {
+  /// Top-left corner in output coordinates.
+  Vector2d topLeft = Vector2d::Zero();
+  /// Bottom-right corner in output coordinates.
+  Vector2d bottomRight = Vector2d::Zero();
+  /// Drag translation used to derive this rectangle.
+  Vector2d effectiveDragTranslationDoc = Vector2d::Zero();
+
+  friend bool operator==(const PresentedTileRect&, const PresentedTileRect&) = default;
+};
+
+/// Integer output-space rectangle used by headless bitmap presentation.
+struct PresentedPixelRect {
+  /// Top-left x coordinate in pixels.
+  int x = 0;
+  /// Top-left y coordinate in pixels.
+  int y = 0;
+  /// Width in pixels.
+  int width = 0;
+  /// Height in pixels.
+  int height = 0;
+
+  friend bool operator==(const PresentedPixelRect&, const PresentedPixelRect&) = default;
+};
+
+/**
+ * Resolve the drag translation to apply while presenting a cached tile.
+ *
+ * @param tile Geometry for the tile being presented.
+ * @param activeDragPreview Live drag preview, when a drag is currently active.
+ * @param displayedDragPreview Preview state selected by the presentation state machine.
+ * @return Translation to add to the tile's canvas offset.
+ */
+[[nodiscard]] Vector2d ResolvePresentedTileDragTranslation(
+    const PresentedFrameTileGeometry& tile,
+    const std::optional<PresentedDragPreview>& activeDragPreview,
+    const std::optional<PresentedDragPreview>& displayedDragPreview);
+
+/**
+ * Compute the output-space rectangle for a presented tile.
+ *
+ * @param tile Geometry for the tile being presented.
+ * @param outputFromCanvasTransform Transform from canvas/document coordinates to output space.
+ * @param activeDragPreview Live drag preview, when a drag is currently active.
+ * @param displayedDragPreview Preview state selected by the presentation state machine.
+ * @return Output rectangle, or \c std::nullopt when tile or transform geometry is invalid.
+ */
+[[nodiscard]] std::optional<PresentedTileRect> ComputePresentedTileRect(
+    const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
+    const std::optional<PresentedDragPreview>& activeDragPreview,
+    const std::optional<PresentedDragPreview>& displayedDragPreview);
+
+/**
+ * Round a floating-point presented rectangle to integer pixel coordinates.
+ *
+ * @param rect Presented tile rectangle in output coordinates.
+ * @return Pixel rectangle, or \c std::nullopt when the rectangle is invalid or rounds to no area.
+ */
+[[nodiscard]] std::optional<PresentedPixelRect> RoundPresentedTileRectToPixelRect(
+    const PresentedTileRect& rect);
+
+}  // namespace donner::editor

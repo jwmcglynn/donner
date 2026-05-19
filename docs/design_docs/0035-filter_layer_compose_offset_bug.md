@@ -40,10 +40,10 @@ The fix has two halves:
    values.
 
 A third surface — `setSkipMainComposeDuringSplit(activeDragRequest)` in
-`AsyncRenderer` — toggles the flat-fallback skip per request rather than
-once at construction. Post-drag and selection-prewarm renders now refresh
-the flat bitmap; previously they could re-use the pre-drag baseline while
-the DOM and tile metadata had moved on.
+`AsyncRenderer` — toggles the full-canvas snapshot skip per request rather
+than once at construction. Post-drag and selection-prewarm renders now
+refresh the snapshot; previously they could re-use the pre-drag baseline
+while the DOM and tile metadata had moved on.
 
 ## Goals
 
@@ -75,9 +75,10 @@ the DOM and tile metadata had moved on.
 - [x] **M1: Preserve structural remap across writeback reparses.**
       `AsyncRenderer` remaps existing compositor state before falling back
       to reset on document swaps that carry a structural remap.
-- [x] **M2: Refresh flat fallback after drag settle.**
+- [x] **M2: Refresh the full-canvas snapshot after drag settle.**
       `skipMainComposeDuringSplit` is enabled only for actual `ActiveDrag`
-      requests, so post-release renders refresh the flat bitmap.
+      requests, so post-release renders refresh the snapshot that can seed a
+      full-canvas composited tile.
 - [x] **M3: Stop self-writebacks from using stale source offsets.**
       `QueueSourceWritebackReparse` always queues a preserving reparse;
       `trySetPresentationAttribute` calls `LayoutSystem().invalidate` so

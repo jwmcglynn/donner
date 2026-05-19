@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "donner/base/Vector2.h"
+#include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
@@ -118,11 +119,23 @@ std::optional<double> YellowCentroidY(const svg::RendererBitmap& bitmap) {
 }
 
 TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
+  constexpr std::string_view kRnrPath =
+      "donner/editor/tests/filtered-element-flash-after-drags-2.rnr";
+  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(std::filesystem::path(kRnrPath));
+  ASSERT_TRUE(reproFile.has_value());
+  ASSERT_TRUE(reproFile->metadata.expect.has_value());
+  ASSERT_TRUE(reproFile->metadata.expect->cropRect.has_value());
+  const repro::ReproExpectation& expect = *reproFile->metadata.expect;
+  ASSERT_EQ(expect.cropMode, "document-canvas");
+  const std::uint64_t beforeClickFrame = static_cast<std::uint64_t>(expect.minFrameIndex - 1);
+  const std::uint64_t firstClickFrame = static_cast<std::uint64_t>(expect.minFrameIndex);
+  const std::uint64_t settledClickFrame = static_cast<std::uint64_t>(expect.minFrameIndex + 2);
+
   repro::GlRnrReplayOptions options;
-  options.rnrPath = "donner/editor/tests/filtered-element-flash-after-drags-2.rnr";
+  options.rnrPath = std::string(kRnrPath);
   options.outputDir = DiagnosticOutputDir() / "gl_o_then_r_popback_repro";
-  options.captureFrames = {152, 153, 155};
-  options.maxFrame = 155;
+  options.captureFrames = {beforeClickFrame, firstClickFrame, settledClickFrame};
+  options.maxFrame = static_cast<std::uint64_t>(expect.maxFrameIndex);
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = true;
   options.visible = false;
@@ -131,29 +144,26 @@ TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
   std::string error;
   ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
 
-  std::optional<svg::RendererBitmap> beforeRClick = LoadCaptureBitmap(result, 152);
-  std::optional<svg::RendererBitmap> firstRClickFrame = LoadCaptureBitmap(result, 153);
-  std::optional<svg::RendererBitmap> settledRClickFrame = LoadCaptureBitmap(result, 155);
+  std::optional<svg::RendererBitmap> beforeRClick = LoadCaptureBitmap(result, beforeClickFrame);
+  std::optional<svg::RendererBitmap> firstRClickFrame = LoadCaptureBitmap(result, firstClickFrame);
+  std::optional<svg::RendererBitmap> settledRClickFrame =
+      LoadCaptureBitmap(result, settledClickFrame);
   ASSERT_TRUE(beforeRClick.has_value());
   ASSERT_TRUE(firstRClickFrame.has_value());
   ASSERT_TRUE(settledRClickFrame.has_value());
 
-  // Canvas crop around the moved O. Frame 152 is the last stable post-O-drag frame,
-  // frame 153 is the first R-click frame, and frame 155 is the settled R-click frame.
   const PixelCrop oCrop{
-      .x = 260,
-      .y = 620,
-      .width = 360,
-      .height = 260,
+      .x = expect.cropRect->x,
+      .y = expect.cropRect->y,
+      .width = expect.cropRect->width,
+      .height = expect.cropRect->height,
   };
   const svg::RendererBitmap firstRClickO = CropBitmap(*firstRClickFrame, oCrop);
   const svg::RendererBitmap settledRClickO = CropBitmap(*settledRClickFrame, oCrop);
 
-  tests::BitmapGoldenCompareParams params;
-  params.threshold = 0.02f;
-  params.maxMismatchedPixels = 0;
   tests::CompareBitmapToBitmap(firstRClickO, settledRClickO,
-                               "gl_o_then_r_frame_153_o_crop_vs_frame_155", params);
+                               "gl_o_then_r_frame_153_o_crop_vs_frame_155",
+                               tests::PixelmatchIdentityParams());
 
   const std::optional<double> beforeCentroidY = YellowCentroidY(CropBitmap(*beforeRClick, oCrop));
   const std::optional<double> firstCentroidY = YellowCentroidY(firstRClickO);

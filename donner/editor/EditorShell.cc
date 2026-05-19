@@ -768,8 +768,6 @@ void EditorShell::runFrame() {
       .sourcePaneFocused = textEditor_.isFocused(),
       .canUndo = app_.canUndo(),
       .canRedo = app_.undoTimeline().entryCount() > 0,
-      .tightBoundedSegmentsEnabled =
-          renderCoordinator_.asyncRenderer().tightBoundedSegmentsEnabled(),
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -809,10 +807,6 @@ void EditorShell::runFrame() {
   }
   if (menuActions.actualSize) {
     interactionController_.resetToActualSize();
-  }
-  if (menuActions.toggleTightBoundedSegments) {
-    auto& asyncRenderer = renderCoordinator_.asyncRenderer();
-    asyncRenderer.setTightBoundedSegmentsEnabled(!asyncRenderer.tightBoundedSegmentsEnabled());
   }
 
   dialogPresenter_.render(

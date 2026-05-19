@@ -172,6 +172,40 @@ struct ReproFrame {
   std::vector<ReproEvent> events;
 };
 
+/// Optional pixel crop attached to a replay expectation.
+struct ReproExpectedCrop {
+  /// Left edge in the expectation crop mode's pixel coordinate space.
+  int x = 0;
+  /// Top edge in the expectation crop mode's pixel coordinate space.
+  int y = 0;
+  /// Width in pixels.
+  int width = 0;
+  /// Height in pixels.
+  int height = 0;
+
+  friend bool operator==(const ReproExpectedCrop&, const ReproExpectedCrop&) = default;
+};
+
+/// Human-reviewed expectation metadata for important replay fixtures.
+struct ReproExpectation {
+  /// Left-mouse-down ordinal that identifies the representative click.
+  int leftMouseDownOrdinal = 0;
+  /// Frame offset after the representative left-mouse-down.
+  int frameOffsetAfterLeftMouseDown = 0;
+  /// Inclusive accepted frame window for the representative presented frame.
+  int minFrameIndex = 0;
+  /// Inclusive upper bound for the representative presented frame.
+  int maxFrameIndex = 0;
+  /// CSS selector for the element whose interaction the fixture represents.
+  std::string targetSelector;
+  /// Crop mode to use when producing human-reviewable screenshots.
+  std::string cropMode;
+  /// Optional crop inside the selected crop mode.
+  std::optional<ReproExpectedCrop> cropRect;
+
+  friend bool operator==(const ReproExpectation&, const ReproExpectation&) = default;
+};
+
 /// Session-level metadata captured at recording start.
 struct ReproMetadata {
   /// Path to the SVG being edited when recording started. Relative or
@@ -187,6 +221,8 @@ struct ReproMetadata {
   /// Absolute wall-clock timestamp when recording started, ISO-8601.
   /// Informational only; not used by the player.
   std::string startedAtIso8601;
+  /// Optional expected frame/crop metadata for curated regression fixtures.
+  std::optional<ReproExpectation> expect;
 };
 
 /// In-memory form of a loaded or in-progress recording.
