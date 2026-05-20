@@ -4,6 +4,7 @@
 #include <chrono>
 #include <utility>
 
+#include "donner/base/Utils.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
@@ -15,20 +16,26 @@ namespace donner::editor {
 namespace {
 
 RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
-    svg::SVGDocument& document, const svg::RendererBitmap& bitmap, std::uint64_t generation,
+    svg::SVGDocument& document, const svg::RendererBitmap& bitmap,
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot, std::uint64_t generation,
     Entity entity, svg::compositor::InteractionHint interactionKind) {
   RenderResult::CompositedTile tile;
   tile.kind = RenderResult::CompositedTile::Kind::Segment;
   tile.id = "full-canvas";
   tile.generation = generation;
   tile.bitmap = bitmap;
+  tile.textureSnapshot = std::move(textureSnapshot);
   tile.canvasOffsetDoc = Vector2d::Zero();
+  const Vector2i payloadDims =
+      !bitmap.empty() ? bitmap.dimensions
+                      : (tile.textureSnapshot != nullptr ? tile.textureSnapshot->dimensions()
+                                                         : Vector2i::Zero());
   if (const std::optional<Box2d> viewBox = document.svgElement().viewBox();
       viewBox.has_value() && viewBox->size().x > 0.0 && viewBox->size().y > 0.0) {
     tile.bitmapDimsDoc = viewBox->size();
   } else {
-    tile.bitmapDimsDoc = Vector2d(static_cast<double>(bitmap.dimensions.x),
-                                  static_cast<double>(bitmap.dimensions.y));
+    tile.bitmapDimsDoc =
+        Vector2d(static_cast<double>(payloadDims.x), static_cast<double>(payloadDims.y));
   }
 
   return RenderResult::CompositedPreview{
@@ -73,10 +80,12 @@ void AsyncRenderer::notePublishedCompositedPreview(
   std::unordered_map<std::string, PublishedCompositedTile> nextPublished;
   nextPublished.reserve(compositedPreview->tiles.size());
   for (const RenderResult::CompositedTile& tile : compositedPreview->tiles) {
-    if (!tile.bitmap.empty()) {
+    if (!tile.bitmap.empty() || tile.textureSnapshot != nullptr) {
+      const Vector2i bitmapDims =
+          !tile.bitmap.empty() ? tile.bitmap.dimensions : tile.textureSnapshot->dimensions();
       nextPublished[tile.id] = PublishedCompositedTile{
           .generation = tile.generation,
-          .bitmapDims = tile.bitmap.dimensions,
+          .bitmapDims = bitmapDims,
       };
     } else if (const auto it = publishedCompositedTiles_.find(tile.id);
                it != publishedCompositedTiles_.end()) {
@@ -462,7 +471,7 @@ void AsyncRenderer::workerLoop() {
         const std::string tileId = std::to_string(ct.tileId);
         const bool metadataOnly = (!ct.isDragTarget || !activeDragRequest) &&
                                   publishedTextureMatches(tileId, ct.generation, ct.bitmapDims);
-        if (!metadataOnly && ct.bitmap.empty()) continue;
+        if (!metadataOnly && ct.bitmap.empty() && ct.textureSnapshot == nullptr) continue;
         RenderResult::CompositedTile tile;
         tile.kind = ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer;
         tile.id = tileId;
@@ -476,6 +485,7 @@ void AsyncRenderer::workerLoop() {
         tile.isDragTarget = ct.isDragTarget;
         if (!metadataOnly) {
           tile.bitmap = std::move(ct.bitmap);
+          tile.textureSnapshot = std::move(ct.textureSnapshot);
         }
         previewTiles.push_back(std::move(tile));
       }
@@ -536,18 +546,29 @@ void AsyncRenderer::workerLoop() {
     // is left in place for back-compat callers but ignored here.
     (void)request.selection;
     svg::RendererBitmap bitmap;
-    {
+    std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
+    if (requestRenderer.requiresTextureSnapshotPresentation()) {
+      if (!compositedPreview.has_value()) {
+        ZoneScopedN("Renderer::takeTextureSnapshot");
+        fullCanvasTexture = requestRenderer.takeTextureSnapshot();
+        UTILS_RELEASE_ASSERT_MSG(
+            fullCanvasTexture != nullptr,
+            "Geode full-canvas presentation did not produce a GPU texture. Refusing CPU "
+            "readback/upload fallback in Geode presentation mode.");
+      }
+    } else {
       ZoneScopedN("Renderer::takeSnapshot");
       bitmap = requestRenderer.takeSnapshot();
     }
-    if (!compositedPreview.has_value() && !bitmap.empty()) {
+    if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
       const Entity previewEntity =
           request.dragPreview.has_value() ? request.dragPreview->entity : request.selectedEntity;
       const svg::compositor::InteractionHint interactionKind =
           request.dragPreview.has_value() ? request.dragPreview->interactionKind
                                           : svg::compositor::InteractionHint::Selection;
-      compositedPreview = BuildFullCanvasCompositedPreview(requestDocument, bitmap, request.version,
-                                                           previewEntity, interactionKind);
+      compositedPreview =
+          BuildFullCanvasCompositedPreview(requestDocument, bitmap, std::move(fullCanvasTexture),
+                                           request.version, previewEntity, interactionKind);
     }
 
     std::function<void()> wake;

@@ -192,97 +192,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
     return nullptr;
   }
 
-  // 5. Create the shared dummy textures / samplers used by every
-  // GeoEncoder. These are 1×1 "identity" fills for the pattern and
-  // clip-mask bind slots when the current draw doesn't actually use
-  // them. Previously each GeoEncoder allocated its own pair, which
-  // showed up as 2+ `textureCreates` per frame for every
-  // push/pop layer/filter/mask encoder. See design doc 0030 §M4.2.
-  //
-  // Created here (before any `setCounters()` call) so the allocations
-  // never count against per-frame ceilings.
-  {
-    // Pattern dummy: 1×1 RGBA8 opaque black.
-    wgpu::TextureDescriptor td = {};
-    td.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyPattern"}};
-    td.size = {1u, 1u, 1u};
-    td.format = wgpu::TextureFormat::RGBA8Unorm;
-    td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-    td.mipLevelCount = 1;
-    td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::_2D;
-    result->impl_->dummyPatternTexture = result->device_.createTexture(td);
-
-    const uint8_t pixel[4] = {0, 0, 0, 255};
-    wgpu::TexelCopyTextureInfo dst = {};
-    dst.texture = result->impl_->dummyPatternTexture;
-    wgpu::TexelCopyBufferLayout layout = {};
-    layout.bytesPerRow = 4;
-    layout.rowsPerImage = 1;
-    wgpu::Extent3D extent = {1u, 1u, 1u};
-    result->queue_.writeTexture(dst, pixel, sizeof(pixel), layout, extent);
-    result->impl_->dummyPatternTextureView = result->impl_->dummyPatternTexture.createView();
-
-    wgpu::SamplerDescriptor sd{wgpu::Default};
-    sd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyPatternSampler"}};
-    sd.addressModeU = wgpu::AddressMode::Repeat;
-    sd.addressModeV = wgpu::AddressMode::Repeat;
-    sd.minFilter = wgpu::FilterMode::Linear;
-    sd.magFilter = wgpu::FilterMode::Linear;
-    sd.maxAnisotropy = 1;
-    result->impl_->dummyPatternSampler = result->device_.createSampler(sd);
-  }
-
-  {
-    // Clip-mask dummy: 1×1 RGBA8Unorm with all channels 0xFF (= 1.0 coverage per
-    // sample lane in the alpha-coverage packed-mask path introduced by the
-    // Phase 3b clip-mask fix).
-    wgpu::TextureDescriptor md = {};
-    md.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMask"}};
-    md.size = {1u, 1u, 1u};
-    md.format = wgpu::TextureFormat::RGBA8Unorm;
-    md.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-    md.mipLevelCount = 1;
-    md.sampleCount = 1;
-    md.dimension = wgpu::TextureDimension::_2D;
-    result->impl_->dummyClipMaskTexture = result->device_.createTexture(md);
-
-    const uint8_t mpixel[4] = {0xFF, 0xFF, 0xFF, 0xFF};
-    wgpu::TexelCopyTextureInfo mdst = {};
-    mdst.texture = result->impl_->dummyClipMaskTexture;
-    wgpu::TexelCopyBufferLayout mlayout = {};
-    mlayout.bytesPerRow = 4;
-    mlayout.rowsPerImage = 1;
-    wgpu::Extent3D mextent = {1u, 1u, 1u};
-    result->queue_.writeTexture(mdst, mpixel, sizeof(mpixel), mlayout, mextent);
-    result->impl_->dummyClipMaskTextureView = result->impl_->dummyClipMaskTexture.createView();
-
-    wgpu::SamplerDescriptor msd{wgpu::Default};
-    msd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMaskSampler"}};
-    msd.addressModeU = wgpu::AddressMode::ClampToEdge;
-    msd.addressModeV = wgpu::AddressMode::ClampToEdge;
-    msd.minFilter = wgpu::FilterMode::Linear;
-    msd.magFilter = wgpu::FilterMode::Linear;
-    msd.maxAnisotropy = 1;
-    result->impl_->dummyClipMaskSampler = result->device_.createSampler(msd);
-  }
-
-  // M6 Bullet 2: identity instance-transform buffer for non-instanced
-  // solid fills. Two vec4f rows = 32 bytes, uploaded once.
-  {
-    const float identity[8] = {
-        1.0f, 0.0f, 0.0f, 0.0f,  // row0 = (a, c, e, _pad) = identity X
-        0.0f, 1.0f, 0.0f, 0.0f,  // row1 = (b, d, f, _pad) = identity Y
-    };
-    wgpu::BufferDescriptor bd = {};
-    bd.label = wgpu::StringView{std::string_view{"GeodeDeviceIdentityInstanceTransform"}};
-    bd.size = sizeof(identity);
-    bd.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-    result->impl_->identityInstanceTransformBuffer = result->device_.createBuffer(bd);
-    result->queue_.writeBuffer(result->impl_->identityInstanceTransformBuffer, 0, identity,
-                               sizeof(identity));
-  }
-
+  result->initSharedResources();
   result->initSharedPipelines();
 
   return result;
@@ -364,9 +274,90 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
 
   result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);
 
+  result->initSharedResources();
   result->initSharedPipelines();
 
   return result;
+}
+
+void GeodeDevice::initSharedResources() {
+  // Shared dummy textures / samplers used by every GeoEncoder. These are 1x1
+  // identity fills for the pattern and clip-mask bind slots when the current
+  // draw doesn't actually use them. Created before any setCounters() call so
+  // the allocations never count against per-frame ceilings.
+  {
+    wgpu::TextureDescriptor td = {};
+    td.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyPattern"}};
+    td.size = {1u, 1u, 1u};
+    td.format = wgpu::TextureFormat::RGBA8Unorm;
+    td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    td.mipLevelCount = 1;
+    td.sampleCount = 1;
+    td.dimension = wgpu::TextureDimension::_2D;
+    impl_->dummyPatternTexture = device_.createTexture(td);
+
+    const uint8_t pixel[4] = {0, 0, 0, 255};
+    wgpu::TexelCopyTextureInfo dst = {};
+    dst.texture = impl_->dummyPatternTexture;
+    wgpu::TexelCopyBufferLayout layout = {};
+    layout.bytesPerRow = 4;
+    layout.rowsPerImage = 1;
+    wgpu::Extent3D extent = {1u, 1u, 1u};
+    queue_.writeTexture(dst, pixel, sizeof(pixel), layout, extent);
+    impl_->dummyPatternTextureView = impl_->dummyPatternTexture.createView();
+
+    wgpu::SamplerDescriptor sd{wgpu::Default};
+    sd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyPatternSampler"}};
+    sd.addressModeU = wgpu::AddressMode::Repeat;
+    sd.addressModeV = wgpu::AddressMode::Repeat;
+    sd.minFilter = wgpu::FilterMode::Linear;
+    sd.magFilter = wgpu::FilterMode::Linear;
+    sd.maxAnisotropy = 1;
+    impl_->dummyPatternSampler = device_.createSampler(sd);
+  }
+
+  {
+    wgpu::TextureDescriptor md = {};
+    md.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMask"}};
+    md.size = {1u, 1u, 1u};
+    md.format = wgpu::TextureFormat::RGBA8Unorm;
+    md.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+    md.mipLevelCount = 1;
+    md.sampleCount = 1;
+    md.dimension = wgpu::TextureDimension::_2D;
+    impl_->dummyClipMaskTexture = device_.createTexture(md);
+
+    const uint8_t mpixel[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+    wgpu::TexelCopyTextureInfo mdst = {};
+    mdst.texture = impl_->dummyClipMaskTexture;
+    wgpu::TexelCopyBufferLayout mlayout = {};
+    mlayout.bytesPerRow = 4;
+    mlayout.rowsPerImage = 1;
+    wgpu::Extent3D mextent = {1u, 1u, 1u};
+    queue_.writeTexture(mdst, mpixel, sizeof(mpixel), mlayout, mextent);
+    impl_->dummyClipMaskTextureView = impl_->dummyClipMaskTexture.createView();
+
+    wgpu::SamplerDescriptor msd{wgpu::Default};
+    msd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMaskSampler"}};
+    msd.addressModeU = wgpu::AddressMode::ClampToEdge;
+    msd.addressModeV = wgpu::AddressMode::ClampToEdge;
+    msd.minFilter = wgpu::FilterMode::Linear;
+    msd.magFilter = wgpu::FilterMode::Linear;
+    msd.maxAnisotropy = 1;
+    impl_->dummyClipMaskSampler = device_.createSampler(msd);
+  }
+
+  {
+    const float identity[8] = {
+        1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+    };
+    wgpu::BufferDescriptor bd = {};
+    bd.label = wgpu::StringView{std::string_view{"GeodeDeviceIdentityInstanceTransform"}};
+    bd.size = sizeof(identity);
+    bd.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    impl_->identityInstanceTransformBuffer = device_.createBuffer(bd);
+    queue_.writeBuffer(impl_->identityInstanceTransformBuffer, 0, identity, sizeof(identity));
+  }
 }
 
 void GeodeDevice::initSharedPipelines() {

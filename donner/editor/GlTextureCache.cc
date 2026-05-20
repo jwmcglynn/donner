@@ -1,10 +1,14 @@
 #include "donner/editor/GlTextureCache.h"
 
 #include "donner/editor/TracyWrapper.h"
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/svg/renderer/RendererGeode.h"
+#endif
 
 namespace donner::editor {
 
 GlTextureCache::~GlTextureCache() {
+#ifndef DONNER_EDITOR_WGPU
   if (overlayTexture_ != 0) {
     glDeleteTextures(1, &overlayTexture_);
   }
@@ -13,18 +17,45 @@ GlTextureCache::~GlTextureCache() {
       glDeleteTextures(1, &entry.texture);
     }
   }
+#endif
 }
 
 void GlTextureCache::initialize() {
+#ifndef DONNER_EDITOR_WGPU
   if (overlayTexture_ == 0) {
     glGenTextures(1, &overlayTexture_);
     InitializeTexture(overlayTexture_);
   }
+#endif
 }
 
 void GlTextureCache::uploadOverlay(const svg::RendererBitmap& bitmap) {
   ZoneScopedN("GlTextureCache::uploadOverlay");
+#ifdef DONNER_EDITOR_WGPU
+  (void)bitmap;
+  clearOverlay();
+#else
   UploadBitmap(overlayTexture_, bitmap, &overlayWidth_, &overlayHeight_);
+#endif
+}
+
+void GlTextureCache::uploadOverlayTexture(
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot) {
+  ZoneScopedN("GlTextureCache::uploadOverlayTexture");
+#ifdef DONNER_EDITOR_WGPU
+  overlayTextureSnapshot_ = std::move(textureSnapshot);
+  overlayTexture_ = ToImTextureId(overlayTextureSnapshot_.get());
+  if (overlayTextureSnapshot_ != nullptr && overlayTexture_ != 0) {
+    const Vector2i dims = overlayTextureSnapshot_->dimensions();
+    overlayWidth_ = dims.x;
+    overlayHeight_ = dims.y;
+  } else {
+    clearOverlay();
+  }
+#else
+  (void)textureSnapshot;
+  clearOverlay();
+#endif
 }
 
 void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& preview) {
@@ -43,14 +74,14 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
     // Partial tile snapshots can carry metadata without a pixel payload.
     // Preserve the already-uploaded texture for that tile id and update only
     // its presentation geometry.
-    if (tile.bitmap.empty()) {
+    if (tile.bitmap.empty() && tile.textureSnapshot == nullptr) {
       auto it = tileTextures_.find(tile.id);
       if (it == tileTextures_.end()) {
         continue;
       }
       liveIds.insert(tile.id);
       TileView view;
-      view.texture = it->second.texture;
+      view.texture = ToImTextureId(it->second.texture);
       view.bitmapDimsPx = Vector2i(it->second.width, it->second.height);
       view.canvasOffsetDoc = tile.canvasOffsetDoc;
       view.bitmapDimsDoc = tile.bitmapDimsDoc;
@@ -60,8 +91,24 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
       continue;
     }
 
+#ifdef DONNER_EDITOR_WGPU
+    if (tile.textureSnapshot == nullptr) {
+      continue;
+    }
+    const ImTextureID textureId = ToImTextureId(tile.textureSnapshot.get());
+    if (textureId == 0) {
+      continue;
+    }
     liveIds.insert(tile.id);
-
+    auto& entry = tileTextures_[tile.id];
+    const Vector2i textureDims = tile.textureSnapshot->dimensions();
+    entry.texture = textureId;
+    entry.textureSnapshot = tile.textureSnapshot;
+    entry.uploadedGeneration = tile.generation;
+    entry.width = textureDims.x;
+    entry.height = textureDims.y;
+#else
+    liveIds.insert(tile.id);
     auto& entry = tileTextures_[tile.id];
     if (entry.texture == 0) {
       glGenTextures(1, &entry.texture);
@@ -78,10 +125,12 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
       UploadBitmap(entry.texture, tile.bitmap, &entry.width, &entry.height);
       entry.uploadedGeneration = tile.generation;
     }
+#endif
 
     TileView view;
-    view.texture = entry.texture;
-    view.bitmapDimsPx = tile.bitmap.dimensions;
+    view.texture = ToImTextureId(entry.texture);
+    view.bitmapDimsPx =
+        !tile.bitmap.empty() ? tile.bitmap.dimensions : Vector2i(entry.width, entry.height);
     view.canvasOffsetDoc = tile.canvasOffsetDoc;
     view.bitmapDimsDoc = tile.bitmapDimsDoc;
     view.dragTranslationDoc = tile.dragTranslationDoc;
@@ -92,9 +141,11 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
   // Evict textures whose tile id no longer appears.
   for (auto it = tileTextures_.begin(); it != tileTextures_.end();) {
     if (liveIds.find(it->first) == liveIds.end()) {
+#ifndef DONNER_EDITOR_WGPU
       if (it->second.texture != 0) {
         glDeleteTextures(1, &it->second.texture);
       }
+#endif
       it = tileTextures_.erase(it);
     } else {
       ++it;
@@ -103,20 +154,49 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
 }
 
 void GlTextureCache::clearOverlay() {
+  overlayTexture_ = 0;
+  overlayTextureSnapshot_.reset();
   overlayWidth_ = 0;
   overlayHeight_ = 0;
 }
 
 void GlTextureCache::resetComposited() {
+#ifndef DONNER_EDITOR_WGPU
   for (auto& [_, entry] : tileTextures_) {
     if (entry.texture != 0) {
       glDeleteTextures(1, &entry.texture);
     }
   }
+#endif
   tileTextures_.clear();
   tiles_.clear();
 }
 
+ImTextureID GlTextureCache::overlayTexture() const {
+  return ToImTextureId(overlayTexture_);
+}
+
+ImTextureID GlTextureCache::ToImTextureId(NativeTextureHandle texture) {
+#ifdef DONNER_EDITOR_WGPU
+  return texture;
+#else
+  return static_cast<ImTextureID>(texture);
+#endif
+}
+
+#ifdef DONNER_EDITOR_WGPU
+ImTextureID GlTextureCache::ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot) {
+  if (textureSnapshot == nullptr ||
+      textureSnapshot->backend() != svg::RendererTextureSnapshotBackend::Geode) {
+    return 0;
+  }
+  const auto* geodeTexture = static_cast<const svg::RendererGeodeTextureSnapshot*>(textureSnapshot);
+  const WGPUTextureView textureView = geodeTexture->textureView();
+  return static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(textureView));
+}
+#endif
+
+#ifndef DONNER_EDITOR_WGPU
 void GlTextureCache::UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
                                   int* outHeight) {
   if (bitmap.empty()) {
@@ -141,5 +221,6 @@ void GlTextureCache::InitializeTexture(GLuint texture) {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
+#endif
 
 }  // namespace donner::editor

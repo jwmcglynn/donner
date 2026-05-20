@@ -34,6 +34,49 @@ struct GeodeEmbedConfig;
 namespace donner::svg {
 
 /**
+ * WebGPU texture snapshot exported by \ref RendererGeode.
+ *
+ * The snapshot keeps the backing \ref geode::GeodeDevice and texture alive so
+ * editor presentation code can sample the texture after the renderer has moved
+ * on to a later frame.
+ */
+class RendererGeodeTextureSnapshot final : public RendererTextureSnapshot {
+public:
+  /**
+   * Construct a Geode texture snapshot.
+   *
+   * @param device Shared Geode device that owns the WebGPU handle lifetime.
+   * @param texture Resolved single-sample texture containing the rendered frame.
+   * @param dimensions Texture dimensions in device pixels.
+   * @param format Texture format.
+   */
+  RendererGeodeTextureSnapshot(std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture,
+                               Vector2i dimensions, wgpu::TextureFormat format);
+
+  [[nodiscard]] RendererTextureSnapshotBackend backend() const override {
+    return RendererTextureSnapshotBackend::Geode;
+  }
+  [[nodiscard]] Vector2i dimensions() const override { return dimensions_; }
+  [[nodiscard]] AlphaType alphaType() const override { return AlphaType::Premultiplied; }
+
+  /// Resolved single-sample WebGPU texture.
+  [[nodiscard]] const wgpu::Texture& texture() const { return texture_; }
+
+  /// Lazily-created texture view suitable for ImGui_ImplWGPU's ImTextureID.
+  [[nodiscard]] const wgpu::TextureView& textureView() const;
+
+  /// WebGPU texture format.
+  [[nodiscard]] wgpu::TextureFormat format() const { return format_; }
+
+private:
+  std::shared_ptr<geode::GeodeDevice> device_;
+  wgpu::Texture texture_;
+  mutable wgpu::TextureView textureView_;
+  Vector2i dimensions_ = Vector2i::Zero();
+  wgpu::TextureFormat format_ = wgpu::TextureFormat::Undefined;
+};
+
+/**
  * Per-frame performance instrumentation for RendererGeode.
  *
  * Returned by `RendererGeode::lastFrameTimings()`. Each field reports the
@@ -190,6 +233,8 @@ public:
   void drawEllipse(const Box2d& bounds, const StrokeParams& stroke) override;
 
   void drawImage(const ImageResource& image, const ImageParams& params) override;
+  bool drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,
+                           double opacity = 1.0, bool pixelated = false) override;
   void drawText(Registry& registry, const components::ComputedTextComponent& text,
                 const TextParams& params) override;
 
@@ -212,6 +257,19 @@ public:
    * before then all fields are zero.
    */
   [[nodiscard]] FrameTimings lastFrameTimings() const;
+
+  /**
+   * Captures the current resolved render target as a directly sampleable
+   * WebGPU texture.
+   *
+   * For internally-owned render targets, this transfers ownership out of the
+   * renderer and detaches the current target so a subsequent same-size frame
+   * cannot overwrite a texture still being sampled by editor presentation.
+   */
+  [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override;
+
+  /// Geode presentation is GPU-native; editor handoff must not use CPU readback/upload.
+  [[nodiscard]] bool requiresTextureSnapshotPresentation() const override { return true; }
 
 private:
   struct Impl;

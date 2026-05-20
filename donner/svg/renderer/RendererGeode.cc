@@ -50,6 +50,21 @@ namespace donner::svg {
 // GeodeWgpuUtil.h for the helper rationale.
 using ::donner::geode::wgpuLabel;
 
+RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
+    std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture, Vector2i dimensions,
+    wgpu::TextureFormat format)
+    : device_(std::move(device)),
+      texture_(std::move(texture)),
+      dimensions_(dimensions),
+      format_(format) {}
+
+const wgpu::TextureView& RendererGeodeTextureSnapshot::textureView() const {
+  if (!textureView_ && texture_) {
+    textureView_ = texture_.createView();
+  }
+  return textureView_;
+}
+
 namespace {
 
 // Render-target texture format stored per-instance in Impl::textureFormat (initialized from
@@ -3029,6 +3044,26 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
                             params.imageRenderingPixelated);
 }
 
+bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
+                                        const Box2d& targetRect, double opacity, bool pixelated) {
+  impl_->flushPendingBatch();
+  if (!impl_->encoder || opacity <= 0.0) {
+    return false;
+  }
+
+  if (texture.backend() != RendererTextureSnapshotBackend::Geode) {
+    return false;
+  }
+  const auto* geodeTexture = static_cast<const RendererGeodeTextureSnapshot*>(&texture);
+  if (geodeTexture == nullptr || !geodeTexture->texture()) {
+    return false;
+  }
+
+  impl_->syncTransform();
+  impl_->encoder->drawTexture(geodeTexture->texture(), targetRect, opacity, pixelated);
+  return true;
+}
+
 void RendererGeode::drawText(Registry& registry, const components::ComputedTextComponent& text,
                              const TextParams& params) {
   impl_->flushPendingBatch();  // M6-B step 3
@@ -3176,6 +3211,23 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
     return nullptr;
   }
   return std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
+}
+
+std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
+  if (!impl_->device || !impl_->target || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+    return nullptr;
+  }
+
+  wgpu::Texture texture = impl_->target;
+  const Vector2i dimensions(impl_->pixelWidth, impl_->pixelHeight);
+  if (!impl_->hostTarget) {
+    impl_->target = wgpu::Texture();
+    impl_->targetWidth = 0;
+    impl_->targetHeight = 0;
+  }
+
+  return std::make_shared<RendererGeodeTextureSnapshot>(impl_->device, std::move(texture),
+                                                        dimensions, impl_->textureFormat);
 }
 
 RendererBitmap RendererGeode::takeSnapshot() const {

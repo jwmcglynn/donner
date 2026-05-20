@@ -302,6 +302,65 @@ TEST_F(RendererGeodeTest, WidthHeightReflectViewport) {
   renderer.endFrame();
 }
 
+TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({4, 4}, {20, 20}), StrokeParams{});
+  renderer.endFrame();
+
+  std::shared_ptr<const RendererTextureSnapshot> texture = renderer.takeTextureSnapshot();
+  ASSERT_TRUE(texture != nullptr);
+  EXPECT_EQ(texture->backend(), RendererTextureSnapshotBackend::Geode);
+  EXPECT_EQ(texture->dimensions(),
+            Vector2i(static_cast<int>(kViewportSize), static_cast<int>(kViewportSize)));
+  const auto* geodeTexture = static_cast<const RendererGeodeTextureSnapshot*>(texture.get());
+  EXPECT_TRUE(static_cast<bool>(geodeTexture->texture()));
+  EXPECT_TRUE(static_cast<bool>(geodeTexture->textureView()));
+
+  EXPECT_TRUE(renderer.takeSnapshot().empty()) << "Texture export detaches the internal target so "
+                                                  "presentation cannot be overwritten by readback";
+
+  beginFrame(renderer);
+  renderer.endFrame();
+  std::shared_ptr<const RendererTextureSnapshot> secondTexture = renderer.takeTextureSnapshot();
+  ASSERT_TRUE(secondTexture != nullptr);
+  EXPECT_EQ(secondTexture->dimensions(), texture->dimensions());
+}
+
+TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
+  std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
+  ASSERT_TRUE(host != nullptr);
+
+  geode::GeodeEmbedConfig config;
+  config.device = host->device();
+  config.queue = host->queue();
+  config.adapter = host->adapter();
+  config.textureFormat = host->textureFormat();
+  auto embeddedUnique = geode::GeodeDevice::CreateFromExternal(config);
+  ASSERT_NE(embeddedUnique, nullptr);
+
+  std::shared_ptr<geode::GeodeDevice> embedded(std::move(embeddedUnique));
+  ASSERT_TRUE(static_cast<bool>(embedded->dummyPatternTextureView()));
+  ASSERT_TRUE(static_cast<bool>(embedded->dummyPatternSampler()));
+  ASSERT_TRUE(static_cast<bool>(embedded->dummyClipMaskTextureView()));
+  ASSERT_TRUE(static_cast<bool>(embedded->dummyClipMaskSampler()));
+  ASSERT_TRUE(static_cast<bool>(embedded->identityInstanceTransformBuffer()));
+
+  RendererGeode renderer(embedded);
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({8, 8}, {56, 56}), StrokeParams{});
+  renderer.endFrame();
+
+  std::shared_ptr<const RendererTextureSnapshot> texture = renderer.takeTextureSnapshot();
+  ASSERT_TRUE(texture != nullptr);
+  EXPECT_EQ(texture->backend(), RendererTextureSnapshotBackend::Geode);
+  EXPECT_EQ(texture->dimensions(),
+            Vector2i(static_cast<int>(kViewportSize), static_cast<int>(kViewportSize)));
+}
+
 /// Filling a path with a solid red paint should produce red pixels at the
 /// path's interior.
 TEST_F(RendererGeodeTest, DrawPathWithSolidFill) {

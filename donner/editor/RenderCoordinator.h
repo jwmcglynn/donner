@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -16,6 +17,10 @@
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/ViewportInteractionController.h"
 
+namespace donner::geode {
+class GeodeDevice;
+}
+
 namespace donner::editor {
 
 class SelectTool;
@@ -24,7 +29,7 @@ class SelectTool;
 /// composited drag presentation, and selection-bounds cache promotion.
 class RenderCoordinator {
 public:
-  RenderCoordinator() = default;
+  explicit RenderCoordinator(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
 
   [[nodiscard]] AsyncRenderer& asyncRenderer() { return renderWorker_.asyncRenderer; }
   [[nodiscard]] const AsyncRenderer& asyncRenderer() const { return renderWorker_.asyncRenderer; }
@@ -63,6 +68,9 @@ private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
 
   struct RenderWorkerBundle {
+    explicit RenderWorkerBundle(
+        std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
+
     // Members are destroyed in reverse declaration order. The async worker
     // joins before the renderer it references is destroyed.
     svg::Renderer renderer;
@@ -75,6 +83,7 @@ private:
   SelectionBoundsCache selectionBoundsCache_;
 
   std::optional<svg::RendererBitmap> pendingOverlayBitmap_;
+  std::shared_ptr<const svg::RendererTextureSnapshot> pendingOverlayTexture_;
   std::uint64_t pendingOverlayVersion_ = 0;
   std::uint64_t displayedDocVersion_ = 0;
 

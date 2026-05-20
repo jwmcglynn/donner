@@ -2,20 +2,22 @@
 /// @file
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__)
 #define GLFW_INCLUDE_ES3
 #include <GLES3/gl3.h>
-#else
+#elif !defined(DONNER_EDITOR_WGPU)
 #include "glad/glad.h"
 #endif
 
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
 
@@ -42,6 +44,8 @@ public:
   void initialize();
 
   void uploadOverlay(const svg::RendererBitmap& bitmap);
+  /// Register an overlay texture snapshot without CPU readback/upload.
+  void uploadOverlayTexture(std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
   /// Upload the worker's tile snapshot into per-tile GL textures.
   /// Allocates/reuses one texture per tile id; bumps a per-tile
   /// upload-generation so identity uploads short-circuit; evicts
@@ -51,7 +55,7 @@ public:
   void clearOverlay();
   void resetComposited();
 
-  [[nodiscard]] GLuint overlayTexture() const { return overlayTexture_; }
+  [[nodiscard]] ImTextureID overlayTexture() const;
 
   [[nodiscard]] int overlayWidth() const { return overlayWidth_; }
   [[nodiscard]] int overlayHeight() const { return overlayHeight_; }
@@ -60,7 +64,7 @@ public:
   /// texture handle (resolved from the upload cache) plus the
   /// geometry fields the presenter needs to blit in paint order.
   struct TileView {
-    GLuint texture = 0;
+    ImTextureID texture = 0;
     Vector2i bitmapDimsPx = Vector2i::Zero();
     Vector2d canvasOffsetDoc = Vector2d::Zero();
     Vector2d bitmapDimsDoc = Vector2d::Zero();
@@ -73,18 +77,32 @@ public:
   [[nodiscard]] const std::vector<TileView>& tiles() const { return tiles_; }
 
 private:
+#ifdef DONNER_EDITOR_WGPU
+  using NativeTextureHandle = ImTextureID;
+#else
+  using NativeTextureHandle = GLuint;
+#endif
+
+  static ImTextureID ToImTextureId(NativeTextureHandle texture);
+#ifdef DONNER_EDITOR_WGPU
+  static ImTextureID ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
+#endif
+#ifndef DONNER_EDITOR_WGPU
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
                            int* outHeight);
   static void InitializeTexture(GLuint texture);
+#endif
 
   struct CachedTextureEntry {
-    GLuint texture = 0;
+    NativeTextureHandle texture = 0;
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
     int height = 0;
   };
 
-  GLuint overlayTexture_ = 0;
+  NativeTextureHandle overlayTexture_ = 0;
+  std::shared_ptr<const svg::RendererTextureSnapshot> overlayTextureSnapshot_;
 
   int overlayWidth_ = 0;
   int overlayHeight_ = 0;

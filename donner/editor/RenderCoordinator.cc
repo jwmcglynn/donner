@@ -2,7 +2,9 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <utility>
 
+#include "donner/base/Utils.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
@@ -22,12 +24,27 @@ namespace {
 /// then happens once.
 constexpr std::chrono::milliseconds kCanvasSizeCommitDelay{120};
 
+svg::Renderer CreateRenderer(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice) {
+  if (geodeDevice != nullptr) {
+    return svg::Renderer(std::move(geodeDevice));
+  }
+  return svg::Renderer();
+}
+
 }  // namespace
+
+RenderCoordinator::RenderWorkerBundle::RenderWorkerBundle(
+    std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
+    : renderer(CreateRenderer(std::move(geodeDevice))) {}
+
+RenderCoordinator::RenderCoordinator(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
+    : renderWorker_(geodeDevice), overlayRenderer_(CreateRenderer(std::move(geodeDevice))) {}
 
 void RenderCoordinator::resetForLoadedDocument() {
   compositedPresentation_ = CompositedPresentation{};
   selectionBoundsCache_ = SelectionBoundsCache{};
   pendingOverlayBitmap_.reset();
+  pendingOverlayTexture_.reset();
   pendingOverlayVersion_ = 0;
   displayedDocVersion_ = 0;
   lastOverlaySelectionVec_.clear();
@@ -78,11 +95,24 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
                                            std::span<const svg::SVGElement>(overlaySelection),
                                            marqueeRectDoc, canvasFromDoc);
   overlayRenderer_.endFrame();
-  pendingOverlayBitmap_ = overlayRenderer_.takeSnapshot();
+  if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
+    pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
+    UTILS_RELEASE_ASSERT_MSG(
+        pendingOverlayTexture_ != nullptr,
+        "Geode overlay rasterization did not produce a GPU texture. Refusing CPU "
+        "readback/upload fallback in Geode presentation mode.");
+    pendingOverlayBitmap_.reset();
+  } else {
+    pendingOverlayBitmap_ = overlayRenderer_.takeSnapshot();
+    pendingOverlayTexture_.reset();
+  }
   pendingOverlayVersion_ = currentVersion;
 
-  if (currentVersion == displayedDocVersion_ && pendingOverlayBitmap_.has_value() &&
-      !pendingOverlayBitmap_->empty()) {
+  if (currentVersion == displayedDocVersion_ && pendingOverlayTexture_ != nullptr) {
+    textures.uploadOverlayTexture(std::move(pendingOverlayTexture_));
+    pendingOverlayVersion_ = 0;
+  } else if (currentVersion == displayedDocVersion_ && pendingOverlayBitmap_.has_value() &&
+             !pendingOverlayBitmap_->empty()) {
     textures.uploadOverlay(*pendingOverlayBitmap_);
     pendingOverlayBitmap_.reset();
     pendingOverlayVersion_ = 0;
@@ -139,7 +169,10 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     rasterizeOverlayForCurrentSelection(app, viewport, textures, lastOverlayMarqueeRectDoc_);
     compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
-  if (pendingOverlayBitmap_.has_value() && pendingOverlayVersion_ == displayedDocVersion_) {
+  if (pendingOverlayTexture_ != nullptr && pendingOverlayVersion_ == displayedDocVersion_) {
+    textures.uploadOverlayTexture(std::move(pendingOverlayTexture_));
+    pendingOverlayVersion_ = 0;
+  } else if (pendingOverlayBitmap_.has_value() && pendingOverlayVersion_ == displayedDocVersion_) {
     if (!pendingOverlayBitmap_->empty()) {
       textures.uploadOverlay(*pendingOverlayBitmap_);
     } else {

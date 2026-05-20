@@ -13,7 +13,7 @@ new file mode 100644
 index 00000000..12345678
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,69 @@
+@@ -0,0 +1,77 @@
 +""" Builds imgui.
 +"""
 +
@@ -69,6 +69,27 @@ index 00000000..12345678
 +    }),
 +)
 +
++cc_library(
++    name = "imgui_wgpu_backend",
++    srcs = [
++        "backends/imgui_impl_wgpu.cpp",
++    ],
++    hdrs = [
++        "backends/imgui_impl_wgpu.h",
++    ],
++    copts = [
++        "-Wno-nontrivial-memcall",
++        "-Wno-uninitialized-const-pointer",
++    ],
++    defines = ["IMGUI_IMPL_WEBGPU_BACKEND_DAWN"],
++    includes = ["backends"],
++    visibility = ["//visibility:public"],
++    deps = [
++        ":imgui",
++        "@donner//third_party/webgpu-cpp:webgpu_cpp",
++    ],
++)
++
 +cc_binary(
 +    name = "imgui_demo",
 +    srcs = [
@@ -83,6 +104,25 @@ index 00000000..12345678
 +        "@glfw",
 +    ],
 +)
+diff --git a/backends/imgui_impl_wgpu.cpp b/backends/imgui_impl_wgpu.cpp
+index 12345678..23456789 100644
+--- a/backends/imgui_impl_wgpu.cpp
++++ b/backends/imgui_impl_wgpu.cpp
+@@ -564,12 +564,12 @@ static void ImGui_ImplWGPU_CreateFontsTexture()
+     // Upload texture data
+     {
+-        WGPUImageCopyTexture dst_view = {};
++        WGPUTexelCopyTextureInfo dst_view = {};
+         dst_view.texture = bd->renderResources.FontTexture;
+         dst_view.mipLevel = 0;
+         dst_view.origin = { 0, 0, 0 };
+         dst_view.aspect = WGPUTextureAspect_All;
+-        WGPUTextureDataLayout layout = {};
++        WGPUTexelCopyBufferLayout layout = {};
+         layout.offset = 0;
+         layout.bytesPerRow = width * size_pp;
+         layout.rowsPerImage = height;
+         WGPUExtent3D size = { (uint32_t)width, (uint32_t)height, 1 };
 diff --git a/MODULE.bazel b/MODULE.bazel
 new file mode 100644
 index 00000000..4c85d76a

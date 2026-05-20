@@ -4,8 +4,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Utils.h"
@@ -567,10 +569,11 @@ std::vector<CompositorController::CompositeTileSnapshot>
 CompositorController::snapshotCompositeTiles() const {
   std::vector<CompositeTileSnapshot> tiles;
 
-  const auto pushBitmapTile = [&tiles](CompositeTileSnapshot::Kind kind, std::string id,
-                                       std::string label, const RendererBitmap& bitmap,
-                                       uint64_t generation, double lastRasterizeMs,
-                                       bool isDragTarget) {
+  const auto pushPayloadTile = [&tiles](
+                                   CompositeTileSnapshot::Kind kind, std::string id,
+                                   std::string label, const RendererBitmap& bitmap,
+                                   const std::shared_ptr<const RendererTextureSnapshot>& texture,
+                                   uint64_t generation, double lastRasterizeMs, bool isDragTarget) {
     CompositeTileSnapshot tile;
     tile.kind = kind;
     tile.id = std::move(id);
@@ -578,10 +581,12 @@ CompositorController::snapshotCompositeTiles() const {
     tile.generation = generation;
     tile.lastRasterizeMs = lastRasterizeMs;
     tile.isDragTarget = isDragTarget;
-    tile.hasValidBitmap = !bitmap.empty();
+    tile.hasValidBitmap = !bitmap.empty() || texture != nullptr;
     if (tile.hasValidBitmap) {
-      tile.bitmapDims = bitmap.dimensions;
-      BuildThumbnail(bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
+      tile.bitmapDims = !bitmap.empty() ? bitmap.dimensions : texture->dimensions();
+      if (!bitmap.empty()) {
+        BuildThumbnail(bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
+      }
     }
     tiles.push_back(std::move(tile));
   };
@@ -596,7 +601,13 @@ CompositorController::snapshotCompositeTiles() const {
   // bg/fg below as auxiliary views.
   const size_t layerCount = layers_.size();
   for (size_t i = 0; i <= layerCount; ++i) {
-    if (i < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[i])) {
+    const RendererBitmap* segmentBitmap =
+        (i < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[i]))
+            ? &staticSegments_[i]
+            : nullptr;
+    const std::shared_ptr<const RendererTextureSnapshot> segmentTexture =
+        i < staticSegmentTextures_.size() ? staticSegmentTextures_[i] : nullptr;
+    if (segmentBitmap != nullptr || segmentTexture != nullptr) {
       char label[32];
       std::snprintf(label, sizeof(label), "segment %zu", i);
       char id[32];
@@ -605,8 +616,9 @@ CompositorController::snapshotCompositeTiles() const {
           i < staticSegmentGeneration_.size() ? staticSegmentGeneration_[i] : 0u;
       const double segMs =
           i < staticSegmentLastRasterizeMs_.size() ? staticSegmentLastRasterizeMs_[i] : 0.0;
-      pushBitmapTile(CompositeTileSnapshot::Kind::Segment, id, label, staticSegments_[i], segGen,
-                     segMs, /*isDragTarget=*/false);
+      pushPayloadTile(CompositeTileSnapshot::Kind::Segment, id, label,
+                      segmentBitmap != nullptr ? *segmentBitmap : RendererBitmap{}, segmentTexture,
+                      segGen, segMs, /*isDragTarget=*/false);
     }
     if (i < layerCount) {
       const CompositorLayer& layer = layers_[i];
@@ -620,8 +632,9 @@ CompositorController::snapshotCompositeTiles() const {
       }
       char id[48];
       std::snprintf(id, sizeof(id), "layer:%u", static_cast<unsigned>(layer.entity()));
-      pushBitmapTile(CompositeTileSnapshot::Kind::Layer, id, label, layer.bitmap(),
-                     layer.generation(), layer.lastRasterizeMs(), isDragTarget);
+      pushPayloadTile(CompositeTileSnapshot::Kind::Layer, id, label, layer.bitmap(),
+                      layer.textureSnapshot(), layer.generation(), layer.lastRasterizeMs(),
+                      isDragTarget);
     }
   }
 
@@ -654,9 +667,13 @@ CompositorController::snapshotSegmentInspectorRows() const {
     SegmentInspectorRow row;
     row.slotIndex = i;
     const RendererBitmap& bitmap = staticSegments_[i];
-    row.hasValidBitmap = !bitmap.empty();
-    if (row.hasValidBitmap) {
+    const std::shared_ptr<const RendererTextureSnapshot> texture =
+        i < staticSegmentTextures_.size() ? staticSegmentTextures_[i] : nullptr;
+    row.hasValidBitmap = !bitmap.empty() || texture != nullptr;
+    if (!bitmap.empty()) {
       row.bitmapSize = bitmap.dimensions;
+    } else if (texture != nullptr) {
+      row.bitmapSize = texture->dimensions();
     }
     if (i < staticSegmentOffsets_.size()) {
       row.canvasOffset = staticSegmentOffsets_[i];
@@ -686,12 +703,14 @@ CompositorController::snapshotLayerInspectorRows() const {
     if (layer.hasValidBitmap()) {
       row.bitmapSize = layer.bitmap().dimensions;
       BuildThumbnail(layer.bitmap(), &row.thumbnailDims, &row.thumbnailPixels);
+    } else if (layer.textureSnapshot() != nullptr) {
+      row.bitmapSize = layer.textureSnapshot()->dimensions();
     }
     row.generation = layer.generation();
     row.rasterizeCount = layer.rasterizeCount();
     row.lastRasterizeMs = layer.lastRasterizeMs();
     row.dirty = layer.isDirty();
-    row.hasValidBitmap = layer.hasValidBitmap();
+    row.hasValidBitmap = layer.hasRenderablePayload();
     row.fallbackReasons = layer.fallbackReasons();
     row.fallbackReasonsText = FallbackReasonToString(layer.fallbackReasons());
     row.canvasOffset = layer.canvasOffset();
@@ -984,6 +1003,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   reconcileLayers(registry);
 
   staticSegments_.clear();
+  staticSegmentTextures_.clear();
   staticSegmentBoundaries_.clear();
   staticSegmentDirty_.clear();
   staticSegmentGeneration_.clear();
@@ -1372,6 +1392,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
     }
     staticSegments_.clear();
+    staticSegmentTextures_.clear();
     staticSegmentOffsets_.clear();
     staticSegmentLastRasterizeMs_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
@@ -1608,6 +1629,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // Rebuild from a reparse that didn't take the structural remap).
   if (rootDirty_) {
     staticSegments_.clear();
+    staticSegmentTextures_.clear();
     staticSegmentBoundaries_.clear();
     staticSegmentDirty_.clear();
     staticSegmentOffsets_.clear();
@@ -1729,8 +1751,19 @@ size_t CompositorController::totalBitmapMemory() const {
   for (const auto& segment : staticSegments_) {
     total += segment.pixels.size();
   }
+  for (const auto& texture : staticSegmentTextures_) {
+    if (texture == nullptr) {
+      continue;
+    }
+    const Vector2i dims = texture->dimensions();
+    total += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;
+  }
   for (const auto& layer : layers_) {
     total += layer.bitmap().pixels.size();
+    if (layer.textureSnapshot() != nullptr) {
+      const Vector2i dims = layer.textureSnapshot()->dimensions();
+      total += static_cast<size_t>(dims.x) * static_cast<size_t>(dims.y) * 4u;
+    }
   }
   return total;
 }
@@ -1783,7 +1816,15 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
     worldFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
                           .worldFromEntityTransform;
   }
-  layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
+  if (std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot()) {
+    layer.setTextureSnapshot(std::move(texture), worldFromEntity);
+  } else {
+    UTILS_RELEASE_ASSERT_MSG(
+        !offscreen->requiresTextureSnapshotPresentation(),
+        "Geode compositor layer rasterization did not produce a GPU texture. Refusing CPU "
+        "readback/upload fallback in Geode presentation mode.");
+    layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
+  }
   layer.setCanvasOffset(geometry.canvasOffset);
   const auto rasterizeEnd = std::chrono::steady_clock::now();
   const auto elapsedUs =
@@ -1810,6 +1851,9 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
   // the per-segment writes below are always in bounds.
   if (staticSegmentOffsets_.size() != layerCount + 1) {
     staticSegmentOffsets_.resize(layerCount + 1, Vector2d::Zero());
+  }
+  if (staticSegmentTextures_.size() != layerCount + 1) {
+    staticSegmentTextures_.resize(layerCount + 1);
   }
   if (staticSegmentLastRasterizeMs_.size() != layerCount + 1) {
     staticSegmentLastRasterizeMs_.resize(layerCount + 1, 0.0);
@@ -1892,6 +1936,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       placeholder.pixels.assign(4u, 0u);
       placeholder.alphaType = AlphaType::Premultiplied;
       staticSegments_[i] = std::move(placeholder);
+      staticSegmentTextures_[i].reset();
       staticSegmentOffsets_[i] = Vector2d::Zero();
     } else {
       // Try the tight-bound path before allocating pixels. When the entity
@@ -1958,14 +2003,36 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
                                Transform2d::Translate(-tightBoundsSnapped.topLeft));
-        staticSegments_[i] = offscreen->takeSnapshot();
+        if (std::shared_ptr<const RendererTextureSnapshot> texture =
+                offscreen->takeTextureSnapshot()) {
+          staticSegments_[i] = RendererBitmap{};
+          staticSegmentTextures_[i] = std::move(texture);
+        } else {
+          UTILS_RELEASE_ASSERT_MSG(
+              !offscreen->requiresTextureSnapshotPresentation(),
+              "Geode compositor segment rasterization did not produce a GPU texture. Refusing CPU "
+              "readback/upload fallback in Geode presentation mode.");
+          staticSegments_[i] = offscreen->takeSnapshot();
+          staticSegmentTextures_[i].reset();
+        }
         staticSegmentOffsets_[i] = tightBoundsSnapped.topLeft;
       } else {
         ZoneScopedN("Compositor::segment::drawEntityRange");
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
                                Transform2d());
-        staticSegments_[i] = offscreen->takeSnapshot();
+        if (std::shared_ptr<const RendererTextureSnapshot> texture =
+                offscreen->takeTextureSnapshot()) {
+          staticSegments_[i] = RendererBitmap{};
+          staticSegmentTextures_[i] = std::move(texture);
+        } else {
+          UTILS_RELEASE_ASSERT_MSG(
+              !offscreen->requiresTextureSnapshotPresentation(),
+              "Geode compositor segment rasterization did not produce a GPU texture. Refusing CPU "
+              "readback/upload fallback in Geode presentation mode.");
+          staticSegments_[i] = offscreen->takeSnapshot();
+          staticSegmentTextures_[i].reset();
+        }
         staticSegmentOffsets_[i] = Vector2d::Zero();
       }
     }
@@ -2004,6 +2071,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   const bool canvasChanged = staticSegmentsCanvas_ != currentCanvasSize;
 
   std::vector<RendererBitmap> newSegments(newCount);
+  std::vector<std::shared_ptr<const RendererTextureSnapshot>> newTextures(newCount);
   std::vector<bool> newDirty(newCount, true);
   std::vector<uint64_t> newGeneration(newCount, 0);
   std::vector<Vector2d> newOffsets(newCount, Vector2d::Zero());
@@ -2018,8 +2086,11 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
         if (staticSegmentBoundaries_[j].first == left &&
             staticSegmentBoundaries_[j].second == right) {
           newSegments[i] = std::move(staticSegments_[j]);
+          if (j < staticSegmentTextures_.size()) {
+            newTextures[i] = std::move(staticSegmentTextures_[j]);
+          }
           const bool wasDirty = j < staticSegmentDirty_.size() ? staticSegmentDirty_[j] : false;
-          newDirty[i] = newSegments[i].empty() || wasDirty;
+          newDirty[i] = wasDirty || (newSegments[i].empty() && newTextures[i] == nullptr);
           if (j < staticSegmentGeneration_.size()) {
             // Preserve the old slot's generation so the editor's GL
             // texture cache reuses the existing binding — no upload.
@@ -2052,6 +2123,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   }
 
   staticSegments_ = std::move(newSegments);
+  staticSegmentTextures_ = std::move(newTextures);
   staticSegmentDirty_ = std::move(newDirty);
   staticSegmentBoundaries_ = std::move(newBoundaries);
   staticSegmentGeneration_ = std::move(newGeneration);
@@ -2114,8 +2186,12 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
   const auto segmentOffsetAt = [this](size_t idx) {
     return idx < staticSegmentOffsets_.size() ? staticSegmentOffsets_[idx] : Vector2d::Zero();
   };
-  const auto includeBitmap = [payload](const RendererBitmap* bitmap, bool isDragTarget) {
-    if (bitmap == nullptr) return false;
+  const auto segmentTextureAt =
+      [this](size_t idx) -> std::shared_ptr<const RendererTextureSnapshot> {
+    return idx < staticSegmentTextures_.size() ? staticSegmentTextures_[idx] : nullptr;
+  };
+  const auto includePayload = [payload](bool hasPayload, bool isDragTarget) {
+    if (!hasPayload) return false;
     switch (payload) {
       case CompositorTileBitmapPayload::All: return true;
       case CompositorTileBitmapPayload::DragTargetOnly: return isDragTarget;
@@ -2134,14 +2210,18 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
         (i < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[i]))
             ? &staticSegments_[i]
             : nullptr;
-    if (segBitmap != nullptr) {
-      const bool includeSegBitmap = includeBitmap(segBitmap, /*isDragTarget=*/false);
+    const std::shared_ptr<const RendererTextureSnapshot> segTexture = segmentTextureAt(i);
+    if (segBitmap != nullptr || segTexture != nullptr) {
+      const bool includeSegPayload = includePayload(/*hasPayload=*/true, /*isDragTarget=*/false);
+      const Vector2i bitmapDims =
+          segBitmap != nullptr ? segBitmap->dimensions : segTexture->dimensions();
       tiles.push_back(CompositorTile{
           .tileId = SegmentTileId(boundary.first, boundary.second),
           .generation = segGen,
           .paintOrderIndex = paintIdx++,
-          .bitmap = includeSegBitmap ? *segBitmap : RendererBitmap{},
-          .bitmapDims = segBitmap->dimensions,
+          .bitmap = includeSegPayload && segBitmap != nullptr ? *segBitmap : RendererBitmap{},
+          .textureSnapshot = includeSegPayload ? segTexture : nullptr,
+          .bitmapDims = bitmapDims,
           .layerEntity = entt::null,
           .canvasOffsetPx = segmentOffsetAt(i),
           .canvasFromBitmap = Transform2d(),
@@ -2151,14 +2231,19 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
     // Layer tile.
     const auto& layer = layers_[i];
     const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
+    const std::shared_ptr<const RendererTextureSnapshot> layerTexture = layer.textureSnapshot();
     const bool isDragTarget = layer.entity() == splitStaticLayersEntity_;
-    const bool includeLayerBitmap = includeBitmap(layerBitmap, isDragTarget);
+    const bool includeLayerPayload =
+        includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget);
     tiles.push_back(CompositorTile{
         .tileId = kLayerTileBit | static_cast<uint64_t>(entt::to_integral(layer.entity())),
         .generation = layer.generation(),
         .paintOrderIndex = paintIdx++,
-        .bitmap = includeLayerBitmap ? *layerBitmap : RendererBitmap{},
-        .bitmapDims = layerBitmap != nullptr ? layerBitmap->dimensions : Vector2i::Zero(),
+        .bitmap = includeLayerPayload && layerBitmap != nullptr ? *layerBitmap : RendererBitmap{},
+        .textureSnapshot = includeLayerPayload ? layerTexture : nullptr,
+        .bitmapDims = layerBitmap != nullptr ? layerBitmap->dimensions
+                                             : (layerTexture != nullptr ? layerTexture->dimensions()
+                                                                        : Vector2i::Zero()),
         .layerEntity = layer.entity(),
         .canvasOffsetPx = layer.canvasOffset(),
         .canvasFromBitmap = layer.canvasFromBitmap(),
@@ -2176,14 +2261,18 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
       (tailIdx < staticSegments_.size() && HasPublicTileBitmap(staticSegments_[tailIdx]))
           ? &staticSegments_[tailIdx]
           : nullptr;
-  if (tailBitmap != nullptr) {
-    const bool includeTailBitmap = includeBitmap(tailBitmap, /*isDragTarget=*/false);
+  const std::shared_ptr<const RendererTextureSnapshot> tailTexture = segmentTextureAt(tailIdx);
+  if (tailBitmap != nullptr || tailTexture != nullptr) {
+    const bool includeTailPayload = includePayload(/*hasPayload=*/true, /*isDragTarget=*/false);
+    const Vector2i bitmapDims =
+        tailBitmap != nullptr ? tailBitmap->dimensions : tailTexture->dimensions();
     tiles.push_back(CompositorTile{
         .tileId = SegmentTileId(tailBoundary.first, tailBoundary.second),
         .generation = tailGen,
         .paintOrderIndex = paintIdx,
-        .bitmap = includeTailBitmap ? *tailBitmap : RendererBitmap{},
-        .bitmapDims = tailBitmap->dimensions,
+        .bitmap = includeTailPayload && tailBitmap != nullptr ? *tailBitmap : RendererBitmap{},
+        .textureSnapshot = includeTailPayload ? tailTexture : nullptr,
+        .bitmapDims = bitmapDims,
         .layerEntity = entt::null,
         .canvasOffsetPx = segmentOffsetAt(tailIdx),
         .canvasFromBitmap = Transform2d(),
@@ -2277,20 +2366,44 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
 
   renderer().beginFrame(viewport);
 
-  const auto drawBitmap = [this](const RendererBitmap& bitmap, const Transform2d& transform) {
-    if (!HasPublicTileBitmap(bitmap)) {
+  const auto drawPayload = [this](const RendererBitmap& bitmap,
+                                  const std::shared_ptr<const RendererTextureSnapshot>& texture,
+                                  const Transform2d& canvasFromPayload) {
+    const Vector2i payloadDims =
+        HasPublicTileBitmap(bitmap)
+            ? bitmap.dimensions
+            : (texture != nullptr ? texture->dimensions() : Vector2i::Zero());
+    if (payloadDims.x <= 0 || payloadDims.y <= 0) {
       return;
     }
-    ImageResource image = BuildImageResource(bitmap);
     ImageParams params;
-    params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
-                                                         static_cast<double>(bitmap.dimensions.y)));
-    renderer().setTransform(transform);
-    renderer().drawImage(image, params);
+    params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(payloadDims.x),
+                                                         static_cast<double>(payloadDims.y)));
+    renderer().setTransform(canvasFromPayload);
+    if (texture != nullptr) {
+      const bool drewTexture = renderer().drawTextureSnapshot(*texture, params.targetRect);
+      UTILS_RELEASE_ASSERT_MSG(
+          drewTexture || !renderer().requiresTextureSnapshotPresentation(),
+          "Geode compositor compose could not draw a GPU texture payload. Refusing CPU "
+          "bitmap fallback in Geode presentation mode.");
+      if (drewTexture) {
+        return;
+      }
+    }
+    UTILS_RELEASE_ASSERT_MSG(!renderer().requiresTextureSnapshotPresentation(),
+                             "Geode compositor compose received a CPU bitmap payload. Refusing CPU "
+                             "bitmap fallback in Geode presentation mode.");
+    if (renderer().requiresTextureSnapshotPresentation()) {
+      return;
+    }
+    if (HasPublicTileBitmap(bitmap)) {
+      ImageResource image = BuildImageResource(bitmap);
+      renderer().drawImage(image, params);
+    }
   };
 
   const auto drawLayer = [&](const CompositorLayer& layer) {
-    if (!layer.hasValidBitmap()) {
+    if (!layer.hasRenderablePayload()) {
       return;
     }
     // Compose = Translate(canvasOffset) * canvasFromBitmap. `canvasOffset`
@@ -2305,7 +2418,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
     } else {
       canvasFromBitmap = Transform2d::Translate(offset) * canvasFromBitmap;
     }
-    drawBitmap(layer.bitmap(), canvasFromBitmap);
+    drawPayload(layer.bitmap(), layer.textureSnapshot(), canvasFromBitmap);
   };
 
   // Design doc 0033 §M2C: compose static segments and promoted layers in
@@ -2315,13 +2428,18 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
     for (size_t i = 0; i < layers_.size(); ++i) {
       const Vector2d segmentOffset =
           i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i] : Vector2d::Zero();
-      drawBitmap(staticSegments_[i], Transform2d::Translate(segmentOffset));
+      const std::shared_ptr<const RendererTextureSnapshot> segmentTexture =
+          i < staticSegmentTextures_.size() ? staticSegmentTextures_[i] : nullptr;
+      drawPayload(staticSegments_[i], segmentTexture, Transform2d::Translate(segmentOffset));
       drawLayer(layers_[i]);
     }
     const Vector2d lastOffset = staticSegmentOffsets_.size() == staticSegments_.size()
                                     ? staticSegmentOffsets_.back()
                                     : Vector2d::Zero();
-    drawBitmap(staticSegments_.back(), Transform2d::Translate(lastOffset));
+    const std::shared_ptr<const RendererTextureSnapshot> lastTexture =
+        staticSegmentTextures_.size() == staticSegments_.size() ? staticSegmentTextures_.back()
+                                                                : nullptr;
+    drawPayload(staticSegments_.back(), lastTexture, Transform2d::Translate(lastOffset));
   }
 
   renderer().endFrame();

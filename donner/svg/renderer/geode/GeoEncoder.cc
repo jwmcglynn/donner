@@ -1614,6 +1614,30 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);
 }
 
+void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
+                             bool pixelated) {
+  if (!texture || destRect.isEmpty() || opacity <= 0.0) {
+    return;
+  }
+
+  impl_->ensurePassOpen();
+  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
+
+  float mvp[16];
+  impl_->buildMvp(mvp);
+
+  GeodeTextureEncoder::QuadParams qp;
+  qp.destRect = destRect;
+  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  qp.opacity = opacity;
+  qp.filter =
+      pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
+  qp.clipMaskView = impl_->activeClipMaskView;
+
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, texture,
+                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+}
+
 void GeoEncoder::finish() {
   if (impl_->passOpen) {
     impl_->pass.end();

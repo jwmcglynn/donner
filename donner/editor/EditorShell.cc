@@ -73,7 +73,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       selectTool_(),
       textEditor_(),
       textures_(),
-      renderCoordinator_(),
+      renderCoordinator_(window.geodeDevice()),
       documentSyncController_(LoadFile(options_.svgPath).value_or("")),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),

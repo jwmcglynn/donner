@@ -95,4 +95,9 @@ std::unique_ptr<RendererImplementation> CreateRendererImplementation(bool verbos
   return std::make_unique<RendererTinySkiaImplementation>(verbose);
 }
 
+std::unique_ptr<RendererImplementation> CreateRendererImplementation(
+    std::shared_ptr<geode::GeodeDevice> /*device*/, bool verbose) {
+  return std::make_unique<RendererTinySkiaImplementation>(verbose);
+}
+
 }  // namespace donner::svg

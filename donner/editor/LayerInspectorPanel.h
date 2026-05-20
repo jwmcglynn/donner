@@ -16,11 +16,12 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/ImGuiIncludes.h"
 
 #ifdef __EMSCRIPTEN__
 #define GLFW_INCLUDE_ES3
 #include <GLES3/gl3.h>
-#else
+#elif !defined(DONNER_EDITOR_WGPU)
 #include "glad/glad.h"
 #endif
 
@@ -72,8 +73,14 @@ public:
               const svg::compositor::CompositorController::FastPathCounters& fastPath);
 
 private:
+#ifdef DONNER_EDITOR_WGPU
+  using ThumbnailTextureHandle = ImTextureID;
+#else
+  using ThumbnailTextureHandle = GLuint;
+#endif
+
   struct ThumbnailTexture {
-    GLuint texture = 0;
+    ThumbnailTextureHandle texture = 0;
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
     int height = 0;
@@ -81,7 +88,8 @@ private:
 
   /// Upload (or refresh) the thumbnail texture for one tile. Returns
   /// the GL texture name (0 when the tile has no thumbnail).
-  GLuint uploadThumbnail(const svg::compositor::CompositorController::CompositeTileSnapshot& tile);
+  ThumbnailTextureHandle uploadThumbnail(
+      const svg::compositor::CompositorController::CompositeTileSnapshot& tile);
 
   /// Free textures for tiles absent from the current snapshot.
   void evictAbsentTiles(

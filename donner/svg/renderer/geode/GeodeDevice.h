@@ -327,6 +327,7 @@ private:
   /// Allocate the shared pipelines and filter engine after `device_`,
   /// `queue_`, and `textureFormat_` are finalised. Called from both
   /// `CreateHeadless` and `CreateFromExternal`.
+  void initSharedResources();
   void initSharedPipelines();
 
   // Order matters: queue/device/adapter/instance destroy bottom-up.

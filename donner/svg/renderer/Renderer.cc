@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/Renderer.h"
 
 #include <cstddef>
+#include <utility>
 
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererInternal.h"
@@ -8,6 +9,9 @@
 namespace donner::svg {
 
 Renderer::Renderer(bool verbose) : impl_(CreateRendererImplementation(verbose)) {}
+
+Renderer::Renderer(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
+    : impl_(CreateRendererImplementation(std::move(device), verbose)) {}
 
 Renderer::~Renderer() = default;
 
@@ -104,6 +108,11 @@ void Renderer::drawImage(const ImageResource& image, const ImageParams& params) 
   impl_->drawImage(image, params);
 }
 
+bool Renderer::drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,
+                                   double opacity, bool pixelated) {
+  return impl_->drawTextureSnapshot(texture, targetRect, opacity, pixelated);
+}
+
 void Renderer::drawText(Registry& registry, const components::ComputedTextComponent& text,
                         const TextParams& params) {
   impl_->drawText(registry, text, params);
@@ -111,6 +120,14 @@ void Renderer::drawText(Registry& registry, const components::ComputedTextCompon
 
 RendererBitmap Renderer::takeSnapshot() const {
   return impl_->takeSnapshot();
+}
+
+std::shared_ptr<const RendererTextureSnapshot> Renderer::takeTextureSnapshot() {
+  return impl_->takeTextureSnapshot();
+}
+
+bool Renderer::requiresTextureSnapshotPresentation() const {
+  return impl_->requiresTextureSnapshotPresentation();
 }
 
 std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {

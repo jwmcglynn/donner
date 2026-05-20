@@ -1,4 +1,5 @@
 #include <memory>
+#include <utility>
 
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererInternal.h"
@@ -9,6 +10,8 @@ namespace {
 class RendererGeodeImplementation final : public RendererImplementation {
 public:
   explicit RendererGeodeImplementation(bool verbose) : renderer_(verbose) {}
+  RendererGeodeImplementation(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
+      : renderer_(std::move(device), verbose) {}
 
   void draw(SVGDocument& document) override { renderer_.draw(document); }
 
@@ -69,12 +72,25 @@ public:
     renderer_.drawImage(image, params);
   }
 
+  bool drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,
+                           double opacity, bool pixelated) override {
+    return renderer_.drawTextureSnapshot(texture, targetRect, opacity, pixelated);
+  }
+
   void drawText(Registry& registry, const components::ComputedTextComponent& text,
                 const TextParams& params) override {
     renderer_.drawText(registry, text, params);
   }
 
   RendererBitmap takeSnapshot() const override { return renderer_.takeSnapshot(); }
+
+  std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override {
+    return renderer_.takeTextureSnapshot();
+  }
+
+  bool requiresTextureSnapshotPresentation() const override {
+    return renderer_.requiresTextureSnapshotPresentation();
+  }
 
   std::unique_ptr<RendererInterface> createOffscreenInstance() const override {
     return renderer_.createOffscreenInstance();
@@ -92,6 +108,11 @@ private:
 
 std::unique_ptr<RendererImplementation> CreateRendererImplementation(bool verbose) {
   return std::make_unique<RendererGeodeImplementation>(verbose);
+}
+
+std::unique_ptr<RendererImplementation> CreateRendererImplementation(
+    std::shared_ptr<geode::GeodeDevice> device, bool verbose) {
+  return std::make_unique<RendererGeodeImplementation>(std::move(device), verbose);
 }
 
 }  // namespace donner::svg

@@ -7,7 +7,11 @@
 #endif
 
 #include "backends/imgui_impl_glfw.h"
+#ifdef DONNER_EDITOR_WGPU
+#include "backends/imgui_impl_wgpu.h"
+#else
 #include "backends/imgui_impl_opengl3.h"
+#endif
 #include "imgui.h"
 
 #if defined(__clang__)

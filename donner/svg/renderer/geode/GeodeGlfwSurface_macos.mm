@@ -1,12 +1,7 @@
 /// @file
 /// macOS (Cocoa/Metal) implementation of `CreateSurfaceFromGlfwWindow`.
-///
-/// wgpu-native's Metal backend expects a `CAMetalLayer`, not an `NSWindow`.
-/// GLFW gives us an `NSWindow*` via `glfwGetCocoaWindow`; we install a
-/// `CAMetalLayer` on its content view if one isn't already there, then hand
-/// the layer pointer to webgpu via `SurfaceSourceMetalLayer`.
 
-#include "examples/geode_embed_surface.h"
+#include "donner/svg/renderer/geode/GeodeGlfwSurface.h"
 
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -17,7 +12,7 @@ extern "C" {
 #include "GLFW/glfw3native.h"
 }
 
-namespace donner::example {
+namespace donner::geode {
 
 wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwindow* window) {
   if (window == nullptr) {
@@ -29,10 +24,6 @@ wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwi
     return {};
   }
 
-  // Ensure the content view is layer-backed and owns a CAMetalLayer. GLFW
-  // creates an NSOpenGLView-compatible NSView by default; promoting it to a
-  // Metal-backed layer is a one-liner and matches the pattern used by Dawn's
-  // `utils_metal.mm` and the wgpu-native examples.
   NSView* view = [nswindow contentView];
   CAMetalLayer* metalLayer = [CAMetalLayer layer];
   [view setWantsLayer:YES];
@@ -47,4 +38,4 @@ wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwi
   return instance.createSurface(desc);
 }
 
-}  // namespace donner::example
+}  // namespace donner::geode

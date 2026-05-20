@@ -207,8 +207,7 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
                             static_cast<float>(tileRect->topLeft.y));
     const ImVec2 tileBottomRight(static_cast<float>(tileRect->bottomRight.x),
                                  static_cast<float>(tileRect->bottomRight.y));
-    paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tile.texture)),
-                           tileOrigin, tileBottomRight);
+    paneDrawList->AddImage(tile.texture, tileOrigin, tileBottomRight);
   }
 
   // All editor chrome — path outlines, selection AABBs, and the
@@ -218,9 +217,7 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   // was removed so there is a single invalidation envelope the GPU
   // backend (Geode) can optimize end-to-end.
   if (state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0) {
-    paneDrawList->AddImage(
-        static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.overlayTexture())),
-        imageOrigin, imageBottomRight);
+    paneDrawList->AddImage(state.textures.overlayTexture(), imageOrigin, imageBottomRight);
   }
 
   constexpr float kFramePadding = 8.0f;

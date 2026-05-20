@@ -34,6 +34,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -159,6 +160,8 @@ struct RenderResult {
     std::uint64_t generation = 0;
     /// Source bitmap; uploaded as the tile's GL texture content.
     svg::RendererBitmap bitmap;
+    /// Backend-owned texture payload. Geode editor builds present this directly via ImGui WGPU.
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
     /// Canvas-space top-left of `bitmap`, in document units. Editor
     /// multiplies by `pixelsPerDocUnit` to get the on-screen blit
     /// origin.

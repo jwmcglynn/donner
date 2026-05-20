@@ -10,15 +10,15 @@ decodes onto whatever `RendererInterface` backend was selected at build time.
 ### Desktop (default — tiny-skia backend)
 
 ```sh
-bazel build //donner/editor/gui:donner_editor_gui
-bazel run //donner/editor/gui:donner_editor_gui
+bazel build //donner/editor
+bazel run //donner/editor -- donner_splash.svg
 ```
 
 ### Desktop — Geode (WebGPU) backend
 
 ```sh
-bazel build --config=geode //donner/editor/gui:donner_editor_gui
-bazel run --config=geode //donner/editor/gui:donner_editor_gui
+bazel build --config=geode //donner/editor -c opt
+bazel run --config=geode //donner/editor -c opt -- donner_splash.svg
 ```
 
 ### WASM (default — tiny-skia backend)
@@ -42,10 +42,20 @@ The editor uses the backend-agnostic `Renderer` wrapper
 build time via the `--//donner/svg/renderer:renderer_backend` flag. No runtime
 flags or C++ code branches are needed:
 
-| Config | Backend |
-|--------|---------|
-| *(default)* | TinySkia — lightweight software rasterizer |
-| `--config=geode` | Geode — experimental WebGPU + Slug |
+| Config           | Backend                                    |
+| ---------------- | ------------------------------------------ |
+| _(default)_      | TinySkia — lightweight software rasterizer |
+| `--config=geode` | Geode — experimental WebGPU + Slug         |
+
+Desktop presentation is also selected at build time:
+
+- Default/tiny-skia uses the existing GLFW OpenGL host. Renderer outputs are CPU
+  `RendererBitmap` payloads that `GlTextureCache` uploads to GL textures.
+- `--config=geode` uses a GLFW `GLFW_NO_API` WebGPU host. `RendererGeode`
+  exports `RendererGeodeTextureSnapshot` payloads, and the editor presents
+  their `WGPUTextureView`s directly through ImGui WGPU. Normal Geode editor
+  presentation intentionally does not fall back to `takeSnapshot()` or GL
+  texture upload.
 
 ## Running tests
 

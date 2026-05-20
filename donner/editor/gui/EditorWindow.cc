@@ -8,6 +8,14 @@
 #include <GLES3/gl3.h>
 
 #include "GLFW/emscripten_glfw3.h"
+#elif defined(DONNER_EDITOR_WGPU)
+#include <webgpu/webgpu.h>
+
+#include <webgpu/webgpu.hpp>
+
+extern "C" {
+#include "GLFW/glfw3.h"
+}
 #else
 #include <glad/glad.h>
 // glad must be included before GLFW so it takes precedence.
@@ -19,10 +27,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGlfwSurface.h"
+#endif
 
 namespace donner::editor::gui {
 
@@ -40,6 +53,18 @@ void GlfwErrorCallback(int error, const char* description) {
 #endif
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
 }
+
+#ifdef DONNER_EDITOR_WGPU
+wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
+  for (size_t i = 0; i < caps.formatCount; ++i) {
+    const auto format = caps.formats[i];
+    if (format == WGPUTextureFormat_BGRA8Unorm || format == WGPUTextureFormat_RGBA8Unorm) {
+      return wgpu::TextureFormat{format};
+    }
+  }
+  return wgpu::TextureFormat::BGRA8Unorm;
+}
+#endif
 
 void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   ImGuiIO& io = ImGui::GetIO();
@@ -117,6 +142,23 @@ UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
   return config;
 }
 
+#ifdef DONNER_EDITOR_WGPU
+struct EditorWindow::WgpuState {
+  wgpu::Instance instance;
+  wgpu::Adapter adapter;
+  wgpu::Device device;
+  wgpu::Queue queue;
+  wgpu::Surface surface;
+  wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
+  wgpu::CompositeAlphaMode alphaMode = wgpu::CompositeAlphaMode::Auto;
+  std::shared_ptr<geode::GeodeDevice> geodeDevice;
+  int configuredWidth = 0;
+  int configuredHeight = 0;
+};
+#else
+struct EditorWindow::WgpuState {};
+#endif
+
 EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(options)) {
   glfwSetErrorCallback(&GlfwErrorCallback);
 
@@ -149,6 +191,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // warnings at startup.
   glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_TRUE);
   emscripten_glfw_set_next_window_canvas_selector("#canvas");
+#elif defined(DONNER_EDITOR_WGPU)
+  glfwWindowHint(GLFW_VISIBLE, options_.visible ? GLFW_TRUE : GLFW_FALSE);
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 #else
   // OpenGL 3.3 core is plenty — matches what imgui_impl_opengl3 targets
   // by default and what glad was generated for.
@@ -192,10 +237,92 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     return;
   }
 
-  glfwMakeContextCurrent(window_);
 #ifdef __EMSCRIPTEN__
+  glfwMakeContextCurrent(window_);
   emscripten_glfw_make_canvas_resizable(window_, "window", nullptr);
+#elif defined(DONNER_EDITOR_WGPU)
+  wgpuState_ = std::make_unique<WgpuState>();
+  wgpuState_->instance = wgpu::createInstance();
+  if (!wgpuState_->instance) {
+    std::fprintf(stderr, "EditorWindow: wgpuCreateInstance failed\n");
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    glfwTerminate();
+    return;
+  }
+  wgpuState_->surface = geode::CreateSurfaceFromGlfwWindow(wgpuState_->instance, window_);
+  if (!wgpuState_->surface) {
+    std::fprintf(stderr, "EditorWindow: failed to create WebGPU surface\n");
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    glfwTerminate();
+    return;
+  }
+  wgpu::RequestAdapterOptions adapterOptions = {};
+  adapterOptions.compatibleSurface = wgpuState_->surface;
+  wgpuState_->adapter = wgpuState_->instance.requestAdapter(adapterOptions);
+  if (!wgpuState_->adapter) {
+    std::fprintf(stderr, "EditorWindow: no WebGPU adapter available\n");
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    glfwTerminate();
+    return;
+  }
+  wgpu::DeviceDescriptor deviceDesc = {};
+  deviceDesc.label = wgpu::StringView{std::string_view{"DonnerEditorWGPUDevice"}};
+  wgpuState_->device = wgpuState_->adapter.requestDevice(deviceDesc);
+  if (!wgpuState_->device) {
+    std::fprintf(stderr, "EditorWindow: failed to create WebGPU device\n");
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    glfwTerminate();
+    return;
+  }
+  wgpuState_->queue = wgpuState_->device.getQueue();
+
+  wgpu::SurfaceCapabilities caps;
+  wgpuState_->surface.getCapabilities(wgpuState_->adapter, &caps);
+  wgpuState_->surfaceFormat = ChooseSurfaceFormat(caps);
+  if (caps.alphaModeCount > 0) {
+    wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
+  } else {
+    wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
+  }
+  caps.freeMembers();
+
+  int surfaceWidth = 0;
+  int surfaceHeight = 0;
+  glfwGetFramebufferSize(window_, &surfaceWidth, &surfaceHeight);
+  surfaceWidth = std::max(1, surfaceWidth);
+  surfaceHeight = std::max(1, surfaceHeight);
+  wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
+  surfaceConfig.device = wgpuState_->device;
+  surfaceConfig.format = wgpuState_->surfaceFormat;
+  surfaceConfig.usage = wgpu::TextureUsage::RenderAttachment;
+  surfaceConfig.width = surfaceWidth;
+  surfaceConfig.height = surfaceHeight;
+  surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
+  surfaceConfig.alphaMode = wgpuState_->alphaMode;
+  wgpuState_->surface.configure(surfaceConfig);
+  wgpuState_->configuredWidth = surfaceWidth;
+  wgpuState_->configuredHeight = surfaceHeight;
+
+  geode::GeodeEmbedConfig embedConfig;
+  embedConfig.device = wgpuState_->device;
+  embedConfig.queue = wgpuState_->queue;
+  embedConfig.adapter = wgpuState_->adapter;
+  embedConfig.textureFormat = wgpuState_->surfaceFormat;
+  wgpuState_->geodeDevice = geode::GeodeDevice::CreateFromExternal(embedConfig);
+  if (wgpuState_->geodeDevice == nullptr) {
+    std::fprintf(stderr, "EditorWindow: GeodeDevice::CreateFromExternal failed\n");
+    wgpuState_->surface.unconfigure();
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    glfwTerminate();
+    return;
+  }
 #else
+  glfwMakeContextCurrent(window_);
   glfwSwapInterval(1);  // vsync
 
   if (gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress)) == 0) {
@@ -262,6 +389,19 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   io.FontGlobalScale = uiScaleConfig_.fontGlobalScale();
 
   ImGui::StyleColorsDark();
+#ifdef DONNER_EDITOR_WGPU
+  if (!ImGui_ImplGlfw_InitForOther(window_, /*install_callbacks=*/true)) {
+    std::fprintf(stderr, "EditorWindow: ImGui_ImplGlfw_InitForOther failed\n");
+    return;
+  }
+  ImGui_ImplWGPU_InitInfo initInfo;
+  initInfo.Device = wgpuState_->device;
+  initInfo.RenderTargetFormat = static_cast<WGPUTextureFormat>(wgpuState_->surfaceFormat);
+  if (!ImGui_ImplWGPU_Init(&initInfo)) {
+    std::fprintf(stderr, "EditorWindow: ImGui_ImplWGPU_Init failed\n");
+    return;
+  }
+#else
   if (!ImGui_ImplGlfw_InitForOpenGL(window_, /*install_callbacks=*/true)) {
     std::fprintf(stderr, "EditorWindow: ImGui_ImplGlfw_InitForOpenGL failed\n");
     return;
@@ -274,6 +414,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: ImGui_ImplOpenGL3_Init failed\n");
     return;
   }
+#endif
 #ifdef __EMSCRIPTEN__
   ImGui_ImplGlfw_InstallEmscriptenCallbacks(window_, "#canvas");
 #endif
@@ -283,14 +424,28 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
 EditorWindow::~EditorWindow() {
   if (imguiInitialized_) {
+#ifdef DONNER_EDITOR_WGPU
+    ImGui_ImplWGPU_Shutdown();
+#else
     ImGui_ImplOpenGL3_Shutdown();
+#endif
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
   }
+#ifndef DONNER_EDITOR_WGPU
   if (textureId_ != 0) {
     glDeleteTextures(1, &textureId_);
     textureId_ = 0;
   }
+#endif
+#ifdef DONNER_EDITOR_WGPU
+  if (wgpuState_ != nullptr) {
+    wgpuState_->geodeDevice.reset();
+    if (wgpuState_->surface) {
+      wgpuState_->surface.unconfigure();
+    }
+  }
+#endif
   if (window_ != nullptr) {
     glfwDestroyWindow(window_);
     window_ = nullptr;
@@ -353,6 +508,14 @@ GLFWscrollfun EditorWindow::setScrollCallback(GLFWscrollfun callback) {
   return glfwSetScrollCallback(window_, callback);
 }
 
+std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeDevice() const {
+#ifdef DONNER_EDITOR_WGPU
+  return wgpuState_ != nullptr ? wgpuState_->geodeDevice : nullptr;
+#else
+  return nullptr;
+#endif
+}
+
 void EditorWindow::pollEvents() {
   glfwPollEvents();
 }
@@ -386,7 +549,11 @@ void EditorWindow::beginFrameWithInput(const EditorWindowInputOverride& inputOve
 
 void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride) {
   ZoneScopedN("EditorWindow::beginFrame");
+#ifdef DONNER_EDITOR_WGPU
+  ImGui_ImplWGPU_NewFrame();
+#else
   ImGui_ImplOpenGL3_NewFrame();
+#endif
   ImGui_ImplGlfw_NewFrame();
   if (frameDisplayScaleOverride_ > 0.0) {
     // The null platform reports a 1:1 framebuffer/window ratio, so ImGui's GLFW
@@ -431,6 +598,63 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 #else
   glfwGetFramebufferSize(window_, &displayW, &displayH);
 #endif
+#ifdef DONNER_EDITOR_WGPU
+  if (readback != nullptr) {
+    *readback = svg::RendererBitmap{};
+  }
+  if (wgpuState_ == nullptr || !wgpuState_->surface || !wgpuState_->device || displayW <= 0 ||
+      displayH <= 0) {
+    return;
+  }
+  if (displayW != wgpuState_->configuredWidth || displayH != wgpuState_->configuredHeight) {
+    wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
+    surfaceConfig.device = wgpuState_->device;
+    surfaceConfig.format = wgpuState_->surfaceFormat;
+    surfaceConfig.usage = wgpu::TextureUsage::RenderAttachment;
+    surfaceConfig.width = displayW;
+    surfaceConfig.height = displayH;
+    surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
+    surfaceConfig.alphaMode = wgpuState_->alphaMode;
+    wgpuState_->surface.configure(surfaceConfig);
+    wgpuState_->configuredWidth = displayW;
+    wgpuState_->configuredHeight = displayH;
+  }
+
+  wgpu::SurfaceTexture surfaceTexture;
+  wgpuState_->surface.getCurrentTexture(&surfaceTexture);
+  if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
+      surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+    if (surfaceTexture.texture != nullptr) {
+      wgpuTextureRelease(surfaceTexture.texture);
+    }
+    return;
+  }
+
+  wgpu::Texture target = surfaceTexture.texture;
+  wgpu::TextureView view = target.createView();
+  wgpu::CommandEncoder encoder = wgpuState_->device.createCommandEncoder();
+  wgpu::RenderPassColorAttachment color = {};
+  color.view = view;
+  color.loadOp = wgpu::LoadOp::Clear;
+  color.storeOp = wgpu::StoreOp::Store;
+  color.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                      options_.clearColor[3]};
+  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+  wgpu::RenderPassDescriptor passDesc = {};
+  passDesc.colorAttachmentCount = 1;
+  passDesc.colorAttachments = &color;
+  wgpu::RenderPassEncoder pass = encoder.beginRenderPass(passDesc);
+  {
+    ZoneScopedN("ImGui_ImplWGPU_RenderDrawData");
+    ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), pass);
+  }
+  pass.end();
+  wgpu::CommandBuffer commands = encoder.finish();
+  wgpuState_->queue.submit(1, &commands);
+  wgpuState_->surface.present();
+  wgpuTextureRelease(surfaceTexture.texture);
+#else
   glViewport(0, 0, displayW, displayH);
   glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
                options_.clearColor[3]);
@@ -467,9 +691,14 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     glfwSwapBuffers(window_);
   }
 #endif
+#endif
 }
 
 void EditorWindow::uploadBitmap(const svg::RendererBitmap& bitmap) {
+#ifdef DONNER_EDITOR_WGPU
+  (void)bitmap;
+  return;
+#else
   if (bitmap.pixels.empty() || bitmap.dimensions.x <= 0 || bitmap.dimensions.y <= 0) {
     return;
   }
@@ -492,6 +721,7 @@ void EditorWindow::uploadBitmap(const svg::RendererBitmap& bitmap) {
 
   textureWidth_ = bitmap.dimensions.x;
   textureHeight_ = bitmap.dimensions.y;
+#endif
 }
 
 }  // namespace donner::editor::gui

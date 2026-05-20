@@ -44,7 +44,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "examples/geode_embed_surface.h"
+#include "donner/svg/renderer/geode/GeodeGlfwSurface.h"
 
 extern "C" {
 #include "GLFW/glfw3.h"
@@ -140,7 +140,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  wgpu::Surface surface = donner::example::CreateSurfaceFromGlfwWindow(instance, window);
+  wgpu::Surface surface = donner::geode::CreateSurfaceFromGlfwWindow(instance, window);
   if (!surface) {
     std::fprintf(stderr, "Failed to create WebGPU surface from GLFW window\n");
     glfwDestroyWindow(window);

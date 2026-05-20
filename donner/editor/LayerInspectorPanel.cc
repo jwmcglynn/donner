@@ -39,15 +39,21 @@ const char* RefusalReasonLabel(svg::compositor::CompositorController::PromoteRef
 }  // namespace
 
 LayerInspectorPanel::~LayerInspectorPanel() {
+#ifndef DONNER_EDITOR_WGPU
   for (auto& [_, entry] : textures_) {
     if (entry.texture != 0) {
       glDeleteTextures(1, &entry.texture);
     }
   }
+#endif
 }
 
-GLuint LayerInspectorPanel::uploadThumbnail(
+LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+#ifdef DONNER_EDITOR_WGPU
+  (void)tile;
+  return 0;
+#else
   if (!tile.hasValidBitmap || tile.thumbnailPixels.empty() || tile.thumbnailDims.x <= 0 ||
       tile.thumbnailDims.y <= 0) {
     return 0;
@@ -79,6 +85,7 @@ GLuint LayerInspectorPanel::uploadThumbnail(
   entry.width = tile.thumbnailDims.x;
   entry.height = tile.thumbnailDims.y;
   return entry.texture;
+#endif
 }
 
 void LayerInspectorPanel::evictAbsentTiles(
@@ -90,9 +97,11 @@ void LayerInspectorPanel::evictAbsentTiles(
   }
   for (auto it = textures_.begin(); it != textures_.end();) {
     if (live.find(it->first) == live.end()) {
+#ifndef DONNER_EDITOR_WGPU
       if (it->second.texture != 0) {
         glDeleteTextures(1, &it->second.texture);
       }
+#endif
       it = textures_.erase(it);
     } else {
       ++it;
@@ -117,6 +126,9 @@ void LayerInspectorPanel::render(
   ImGui::Text("State: hints=%u  layers=%u  split=%s  canvas=%d×%d", state.activeHintsCount,
               state.layerCount, state.splitPathActive ? "yes" : "no", state.canvasSize.x,
               state.canvasSize.y);
+#ifdef DONNER_EDITOR_WGPU
+  ImGui::TextUnformatted("Presentation: WebGPU direct textures (CPU readback/upload disabled)");
+#endif
   // Three-way state: viewport.desired (what should be) vs
   // document.canvasSize() (what the commit pipeline has pushed) vs
   // compositor.staticSegmentsCanvas_ (what the compositor last
@@ -184,7 +196,19 @@ void LayerInspectorPanel::render(
     }
 
     ImGui::TableSetColumnIndex(0);
-    const GLuint texture = uploadThumbnail(tile);
+#ifdef DONNER_EDITOR_WGPU
+    const ThumbnailTextureHandle texture = uploadThumbnail(tile);
+    if (texture != 0) {
+      const float aspect = tile.thumbnailDims.y > 0 ? static_cast<float>(tile.thumbnailDims.x) /
+                                                          static_cast<float>(tile.thumbnailDims.y)
+                                                    : 1.0f;
+      const ImVec2 displaySize(kThumbnailDisplayHeight * aspect, kThumbnailDisplayHeight);
+      ImGui::Image(texture, displaySize);
+    } else {
+      ImGui::TextDisabled("(none)");
+    }
+#else
+    const ThumbnailTextureHandle texture = uploadThumbnail(tile);
     if (texture != 0) {
       const float aspect = tile.thumbnailDims.y > 0 ? static_cast<float>(tile.thumbnailDims.x) /
                                                           static_cast<float>(tile.thumbnailDims.y)
@@ -194,6 +218,7 @@ void LayerInspectorPanel::render(
     } else {
       ImGui::TextDisabled("(none)");
     }
+#endif
 
     ImGui::TableSetColumnIndex(1);
     ImGui::TextUnformatted(KindLabel(tile.kind));

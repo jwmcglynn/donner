@@ -2,6 +2,8 @@
 /// @file
 
 #include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
@@ -68,6 +70,36 @@ struct RendererBitmap {
   [[nodiscard]] bool empty() const {
     return dimensions.x <= 0 || dimensions.y <= 0 || pixels.empty();
   }
+};
+
+/// Backend type for \ref RendererTextureSnapshot payloads.
+enum class RendererTextureSnapshotBackend : uint8_t {
+  Unknown,
+  Geode,
+};
+
+/**
+ * Backend-owned GPU texture snapshot produced by a renderer.
+ *
+ * The base type is intentionally backend-neutral so compositor/editor code can
+ * carry texture payloads without depending on WebGPU, OpenGL, or any concrete
+ * graphics API. Backends that support direct texture presentation return a
+ * derived type from \ref RendererInterface::takeTextureSnapshot().
+ */
+class RendererTextureSnapshot {
+public:
+  virtual ~RendererTextureSnapshot() = default;
+
+  /// Renderer backend that produced this texture.
+  [[nodiscard]] virtual RendererTextureSnapshotBackend backend() const {
+    return RendererTextureSnapshotBackend::Unknown;
+  }
+
+  /// Pixel dimensions of the texture in device pixels.
+  [[nodiscard]] virtual Vector2i dimensions() const = 0;
+
+  /// Alpha interpretation of the texture contents.
+  [[nodiscard]] virtual AlphaType alphaType() const = 0;
 };
 
 /**
@@ -347,6 +379,22 @@ public:
   virtual void drawImage(const ImageResource& image, const ImageParams& params) = 0;
 
   /**
+   * Draws a backend-owned texture snapshot into the given target rectangle.
+   *
+   * Backends that cannot consume \p texture directly return false. Callers
+   * should retain a CPU bitmap fallback when cross-backend composition is
+   * required.
+   */
+  virtual bool drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,
+                                   double opacity = 1.0, bool pixelated = false) {
+    (void)texture;
+    (void)targetRect;
+    (void)opacity;
+    (void)pixelated;
+    return false;
+  }
+
+  /**
    * Draws pre-shaped text with the provided paint parameters.
    */
   virtual void drawText(Registry& registry, const components::ComputedTextComponent& text,
@@ -357,6 +405,21 @@ public:
    * consumers. The snapshot must remain valid after the render pass completes.
    */
   [[nodiscard]] virtual RendererBitmap takeSnapshot() const = 0;
+
+  /**
+   * Captures the current frame buffer as a backend-owned GPU texture.
+   *
+   * Returns nullptr for backends that cannot expose a directly-sampleable
+   * texture. When non-null, the returned snapshot owns the texture lifetime
+   * needed by downstream presentation code.
+   */
+  [[nodiscard]] virtual std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() {
+    return nullptr;
+  }
+
+  /// Returns true when presentation callers must use \ref takeTextureSnapshot and must not fall
+  /// back to CPU bitmap readback for normal frame handoff.
+  [[nodiscard]] virtual bool requiresTextureSnapshotPresentation() const { return false; }
 
   /**
    * Creates an independent offscreen renderer instance of the same type as this one.

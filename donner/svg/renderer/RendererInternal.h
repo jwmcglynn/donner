@@ -6,6 +6,10 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
+namespace donner::geode {
+class GeodeDevice;
+}
+
 namespace donner::svg {
 
 /// @cond INTERNAL
@@ -21,6 +25,8 @@ public:
 };
 
 std::unique_ptr<RendererImplementation> CreateRendererImplementation(bool verbose);
+std::unique_ptr<RendererImplementation> CreateRendererImplementation(
+    std::shared_ptr<geode::GeodeDevice> device, bool verbose);
 /// @endcond
 
 }  // namespace donner::svg

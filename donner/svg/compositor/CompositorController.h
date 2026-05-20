@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -68,6 +69,9 @@ struct CompositorTile {
   /// Owned bitmap payload. Empty when the snapshot policy omits this tile's pixels or when the tile
   /// has no rendered content.
   RendererBitmap bitmap;
+  /// Optional backend-owned GPU texture payload. Present when the renderer can expose this tile
+  /// without CPU readback.
+  std::shared_ptr<const RendererTextureSnapshot> textureSnapshot;
   /// Source bitmap dimensions, even when \ref bitmap is intentionally omitted.
   Vector2i bitmapDims = Vector2i::Zero();
 
@@ -901,6 +905,8 @@ private:
   /// correct paint order without ever baking promoted content into the
   /// static caches. Empty vector means segments need (re)rasterization.
   std::vector<RendererBitmap> staticSegments_;
+  /// Optional GPU texture payloads parallel to \ref staticSegments_.
+  std::vector<std::shared_ptr<const RendererTextureSnapshot>> staticSegmentTextures_;
   /// Per-segment dirty flags. When a non-promoted entity mutates we mark
   /// just the segment whose paint-order slot contains it; `rasterizeDirty
   /// StaticSegments` only re-rasterizes segments with `true` here, so the
