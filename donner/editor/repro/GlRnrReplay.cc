@@ -293,6 +293,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       // Reproduce the recorded HiDPI scale during hidden replay so framebuffer
       // crops line up with captures taken on the recording host.
       .offscreenContentScale = recordedScale,
+      .enableFramebufferReadback = true,
   });
   if (!window.valid()) {
     return SetError(error, "failed to initialize editor window");
@@ -342,11 +343,35 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     }
     shell.runFrame();
     const LayerInspectorStatusReadback layerStatus = shell.layerInspectorStatusForReadback();
-    result->frameDiagnostics.push_back(GlRnrReplayFrameDiagnostics{
+    GlRnrReplayFrameDiagnostics frameDiagnostics{
         .frameIndex = frame.index,
         .canvasFreshness = layerStatus.canvasFreshness,
         .statusSuffix = layerStatus.statusSuffix,
-    });
+        .viewportDesiredCanvas = layerStatus.viewportDesiredCanvas,
+        .documentCanvas = layerStatus.documentCanvas,
+        .compositorCanvas = layerStatus.compositorCanvas,
+        .metadataOnlyMissCount = layerStatus.metadataOnlyMissCount,
+        .duplicateLiveTextureCount = layerStatus.duplicateLiveTextureCount,
+        .overlayDimsPx = layerStatus.overlayDimsPx,
+        .overlayTextureHandle = layerStatus.overlayTextureHandle,
+    };
+    frameDiagnostics.tiles.reserve(layerStatus.tiles.size());
+    for (const LayerInspectorStatusReadback::Tile& tile : layerStatus.tiles) {
+      frameDiagnostics.tiles.push_back(GlRnrReplayTileDiagnostics{
+          .id = tile.id,
+          .kind = tile.kind,
+          .generation = tile.generation,
+          .bitmapDimsPx = tile.bitmapDimsPx,
+          .rasterCanvasSize = tile.rasterCanvasSize,
+          .canvasOffsetDoc = tile.canvasOffsetDoc,
+          .bitmapDimsDoc = tile.bitmapDimsDoc,
+          .dragTranslationDoc = tile.dragTranslationDoc,
+          .textureHandle = tile.textureHandle,
+          .metadataOnly = tile.metadataOnly,
+          .isDragTarget = tile.isDragTarget,
+      });
+    }
+    result->frameDiagnostics.push_back(std::move(frameDiagnostics));
 
     if (captureReason.has_value()) {
       const std::filesystem::path path = CapturePath(options, frame, *captureReason);

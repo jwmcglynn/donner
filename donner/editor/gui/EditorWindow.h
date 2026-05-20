@@ -73,6 +73,9 @@ struct EditorWindowOptions {
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
   /// when the document doesn't fill the whole window.
   float clearColor[4] = {0.11f, 0.11f, 0.13f, 1.0f};
+  /// Enable framebuffer CPU readback from \ref endFrameAndReadPixels. Intended for replay tests;
+  /// disabled by default so production WGPU editor frames cannot read back by accident.
+  bool enableFramebufferReadback = false;
 };
 
 /// ImGui input state to inject for deterministic editor replay.

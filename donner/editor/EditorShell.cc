@@ -209,10 +209,34 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
   const Vector2i compositorCanvas = renderCoordinator_.asyncRenderer().compositorState().canvasSize;
   const CanvasFreshness freshness =
       ClassifyCanvasFreshness(viewportDesiredCanvas, documentCanvas, compositorCanvas);
-  return LayerInspectorStatusReadback{
+  LayerInspectorStatusReadback readback{
       .canvasFreshness = freshness,
       .statusSuffix = std::string(CanvasFreshnessStatusSuffix(freshness)),
+      .viewportDesiredCanvas = viewportDesiredCanvas,
+      .documentCanvas = documentCanvas,
+      .compositorCanvas = compositorCanvas,
+      .metadataOnlyMissCount = textures_.metadataOnlyMissCount(),
+      .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
+      .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
+      .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
   };
+  readback.tiles.reserve(textures_.tiles().size());
+  for (const GlTextureCache::TileView& tile : textures_.tiles()) {
+    readback.tiles.push_back(LayerInspectorStatusReadback::Tile{
+        .id = tile.id,
+        .kind = tile.kind,
+        .generation = tile.generation,
+        .bitmapDimsPx = tile.bitmapDimsPx,
+        .rasterCanvasSize = tile.rasterCanvasSize,
+        .canvasOffsetDoc = tile.canvasOffsetDoc,
+        .bitmapDimsDoc = tile.bitmapDimsDoc,
+        .dragTranslationDoc = tile.dragTranslationDoc,
+        .textureHandle = static_cast<std::uint64_t>(tile.texture),
+        .metadataOnly = tile.metadataOnly,
+        .isDragTarget = tile.isDragTarget,
+    });
+  }
+  return readback;
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
@@ -549,6 +573,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         lastPostedScreenPoint_ = currentScreen;
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
           renderCoordinator_.refreshSelectionBoundsCache(app_);
+          if (selectTool_.activeDragPreview().has_value()) {
+            renderCoordinator_.rasterizeOverlayForCurrentSelection(
+                app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+                RenderCoordinator::OverlayUploadMode::Immediate);
+          }
         }
       }
     }
@@ -569,6 +598,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         // needed — the compositor view IS the settled view.
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
           renderCoordinator_.refreshSelectionBoundsCache(app_);
+          renderCoordinator_.rasterizeOverlayForCurrentSelection(
+              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              RenderCoordinator::OverlayUploadMode::Immediate);
         }
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
@@ -829,6 +861,7 @@ bool EditorShell::highlightSelectionSourceIfNeeded() {
 
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
+  textures_.advancePresentationFrame();
   if (reproRecorder_) {
     // Snapshot before any widget consumes input events. ImGui's IO
     // state for the frame has been populated by

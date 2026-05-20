@@ -23,6 +23,7 @@ extern "C" {
 #endif
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -35,6 +36,7 @@ extern "C" {
 #ifdef DONNER_EDITOR_WGPU
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGlfwSurface.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
 
 namespace donner::editor::gui {
@@ -63,6 +65,100 @@ wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
     }
   }
   return wgpu::TextureFormat::BGRA8Unorm;
+}
+
+/// WebGPU requires texture-to-buffer rows to be 256-byte aligned.
+constexpr uint32_t AlignTextureCopyBytesPerRow(uint32_t unpaddedBytesPerRow) {
+  constexpr uint32_t kAlignment = 256u;
+  return (unpaddedBytesPerRow + kAlignment - 1u) & ~(kAlignment - 1u);
+}
+
+wgpu::TextureUsage SurfaceUsageForCapabilities(const wgpu::SurfaceCapabilities& caps,
+                                               bool enableReadback) {
+  WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
+  if (enableReadback && (caps.usages & WGPUTextureUsage_CopySrc) != 0) {
+    usage |= WGPUTextureUsage_CopySrc;
+  }
+  return wgpu::TextureUsage{usage};
+}
+
+bool SurfaceUsageSupportsReadback(wgpu::TextureUsage usage) {
+  return (static_cast<WGPUTextureUsage>(usage) & WGPUTextureUsage_CopySrc) != 0;
+}
+
+bool IsBgraSurfaceFormat(wgpu::TextureFormat format) {
+  return static_cast<WGPUTextureFormat>(format) == WGPUTextureFormat_BGRA8Unorm;
+}
+
+void CopyMappedSurfaceToBitmap(const uint8_t* mapped, uint32_t width, uint32_t height,
+                               uint32_t bytesPerRow, wgpu::TextureFormat surfaceFormat,
+                               svg::RendererBitmap* readback) {
+  readback->dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));
+  readback->rowBytes = static_cast<size_t>(width) * 4u;
+  readback->alphaType = svg::AlphaType::Premultiplied;
+  readback->pixels.resize(readback->rowBytes * static_cast<size_t>(height));
+
+  const bool isBgra = IsBgraSurfaceFormat(surfaceFormat);
+  for (uint32_t y = 0; y < height; ++y) {
+    const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
+    uint8_t* dstRow = readback->pixels.data() + static_cast<size_t>(y) * readback->rowBytes;
+    for (uint32_t x = 0; x < width; ++x) {
+      const uint8_t src0 = srcRow[x * 4u + 0u];
+      const uint8_t src1 = srcRow[x * 4u + 1u];
+      const uint8_t src2 = srcRow[x * 4u + 2u];
+      const uint8_t src3 = srcRow[x * 4u + 3u];
+      dstRow[x * 4u + 0u] = isBgra ? src2 : src0;
+      dstRow[x * 4u + 1u] = src1;
+      dstRow[x * 4u + 2u] = isBgra ? src0 : src2;
+      dstRow[x * 4u + 3u] = src3;
+    }
+  }
+}
+
+void CopySurfaceTextureToReadbackBuffer(const wgpu::Texture& texture, const wgpu::Buffer& buffer,
+                                        uint32_t width, uint32_t height, uint32_t bytesPerRow,
+                                        wgpu::CommandEncoder& encoder) {
+  wgpu::TexelCopyTextureInfo src = {};
+  src.texture = texture;
+  src.mipLevel = 0;
+  src.origin = {0, 0, 0};
+
+  wgpu::TexelCopyBufferInfo dst = {};
+  dst.buffer = buffer;
+  dst.layout.bytesPerRow = bytesPerRow;
+  dst.layout.rowsPerImage = height;
+
+  const wgpu::Extent3D copySize = {width, height, 1u};
+  encoder.copyTextureToBuffer(src, dst, copySize);
+}
+
+bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, uint64_t size) {
+  struct MapState {
+    bool done = false;
+    bool ok = false;
+  } mapState;
+
+  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                      void* /*userdata2*/) {
+    auto* state = static_cast<MapState*>(userdata1);
+    state->ok = (status == WGPUMapAsyncStatus_Success);
+    state->done = true;
+  };
+  mapCb.userdata1 = &mapState;
+  mapCb.userdata2 = nullptr;
+  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
+  buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
+
+  int pollCount = 0;
+  while (!mapState.done) {
+    device.poll(true, nullptr);
+    ++pollCount;
+    if (pollCount > 2000) {
+      break;
+    }
+  }
+  return mapState.ok;
 }
 #endif
 
@@ -150,6 +246,7 @@ struct EditorWindow::WgpuState {
   wgpu::Queue queue;
   wgpu::Surface surface;
   wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
+  wgpu::TextureUsage surfaceUsage = wgpu::TextureUsage::RenderAttachment;
   wgpu::CompositeAlphaMode alphaMode = wgpu::CompositeAlphaMode::Auto;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
   int configuredWidth = 0;
@@ -283,6 +380,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   wgpu::SurfaceCapabilities caps;
   wgpuState_->surface.getCapabilities(wgpuState_->adapter, &caps);
   wgpuState_->surfaceFormat = ChooseSurfaceFormat(caps);
+  wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, options_.enableFramebufferReadback);
   if (caps.alphaModeCount > 0) {
     wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
   } else {
@@ -298,7 +396,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
   surfaceConfig.device = wgpuState_->device;
   surfaceConfig.format = wgpuState_->surfaceFormat;
-  surfaceConfig.usage = wgpu::TextureUsage::RenderAttachment;
+  surfaceConfig.usage = wgpuState_->surfaceUsage;
   surfaceConfig.width = surfaceWidth;
   surfaceConfig.height = surfaceHeight;
   surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
@@ -610,7 +708,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
     surfaceConfig.device = wgpuState_->device;
     surfaceConfig.format = wgpuState_->surfaceFormat;
-    surfaceConfig.usage = wgpu::TextureUsage::RenderAttachment;
+    surfaceConfig.usage = wgpuState_->surfaceUsage;
     surfaceConfig.width = displayW;
     surfaceConfig.height = displayH;
     surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
@@ -624,36 +722,81 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   wgpuState_->surface.getCurrentTexture(&surfaceTexture);
   if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
       surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-    if (surfaceTexture.texture != nullptr) {
-      wgpuTextureRelease(surfaceTexture.texture);
-    }
+    donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
+        wgpu::Texture(surfaceTexture.texture));
     return;
   }
 
-  wgpu::Texture target = surfaceTexture.texture;
-  wgpu::TextureView view = target.createView();
-  wgpu::CommandEncoder encoder = wgpuState_->device.createCommandEncoder();
-  wgpu::RenderPassColorAttachment color = {};
-  color.view = view;
-  color.loadOp = wgpu::LoadOp::Clear;
-  color.storeOp = wgpu::StoreOp::Store;
-  color.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-                      options_.clearColor[3]};
-  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-  wgpu::RenderPassDescriptor passDesc = {};
-  passDesc.colorAttachmentCount = 1;
-  passDesc.colorAttachments = &color;
-  wgpu::RenderPassEncoder pass = encoder.beginRenderPass(passDesc);
-  {
-    ZoneScopedN("ImGui_ImplWGPU_RenderDrawData");
-    ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), pass);
+  donner::geode::ScopedWgpuHandle<wgpu::Texture> target(wgpu::Texture(surfaceTexture.texture));
+  const bool shouldReadback = readback != nullptr && options_.enableFramebufferReadback &&
+                              SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
+  const uint32_t readbackWidth = static_cast<uint32_t>(displayW);
+  const uint32_t readbackHeight = static_cast<uint32_t>(displayH);
+  const uint32_t readbackBytesPerRow = AlignTextureCopyBytesPerRow(readbackWidth * 4u);
+  const uint64_t readbackBufferSize =
+      static_cast<uint64_t>(readbackBytesPerRow) * static_cast<uint64_t>(readbackHeight);
+  donner::geode::ScopedWgpuHandle<wgpu::Buffer> readbackBuffer;
+  if (shouldReadback) {
+    wgpu::BufferDescriptor readbackDesc = {};
+    readbackDesc.label = donner::geode::wgpuLabel("EditorWindowSurfaceReadback");
+    readbackDesc.size = readbackBufferSize;
+    readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+    readbackBuffer.reset(wgpuState_->device.createBuffer(readbackDesc));
   }
-  pass.end();
-  wgpu::CommandBuffer commands = encoder.finish();
-  wgpuState_->queue.submit(1, &commands);
+
+  {
+    donner::geode::ScopedWgpuHandle<wgpu::TextureView> view(target.get().createView());
+    if (!view) {
+      return;
+    }
+    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
+        wgpuState_->device.createCommandEncoder());
+    if (!encoder) {
+      return;
+    }
+    wgpu::RenderPassColorAttachment color = {};
+    color.view = view.get();
+    color.loadOp = wgpu::LoadOp::Clear;
+    color.storeOp = wgpu::StoreOp::Store;
+    color.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                        options_.clearColor[3]};
+    color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+    wgpu::RenderPassDescriptor passDesc = {};
+    passDesc.colorAttachmentCount = 1;
+    passDesc.colorAttachments = &color;
+    donner::geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(
+        encoder.get().beginRenderPass(passDesc));
+    if (!pass) {
+      return;
+    }
+    {
+      ZoneScopedN("ImGui_ImplWGPU_RenderDrawData");
+      ImGui_ImplWGPU_RenderDrawData(ImGui::GetDrawData(), pass.get());
+    }
+    pass.get().end();
+    pass.reset();
+    if (readbackBuffer) {
+      CopySurfaceTextureToReadbackBuffer(target.get(), readbackBuffer.get(), readbackWidth,
+                                         readbackHeight, readbackBytesPerRow, encoder.get());
+    }
+    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
+    if (!commands) {
+      return;
+    }
+    wgpuState_->queue.submit(1, &commands.get());
+  }
+  if (readbackBuffer &&
+      MapReadbackBuffer(wgpuState_->device, readbackBuffer.get(), readbackBufferSize)) {
+    const uint8_t* mapped = static_cast<const uint8_t*>(
+        readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));
+    if (mapped != nullptr) {
+      CopyMappedSurfaceToBitmap(mapped, readbackWidth, readbackHeight, readbackBytesPerRow,
+                                wgpuState_->surfaceFormat, readback);
+    }
+    readbackBuffer.get().unmap();
+  }
   wgpuState_->surface.present();
-  wgpuTextureRelease(surfaceTexture.texture);
 #else
   glViewport(0, 0, displayW, displayH);
   glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],

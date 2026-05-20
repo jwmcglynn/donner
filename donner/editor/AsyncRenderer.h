@@ -162,6 +162,13 @@ struct RenderResult {
     svg::RendererBitmap bitmap;
     /// Backend-owned texture payload. Geode editor builds present this directly via ImGui WGPU.
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+    /// Intrinsic texture dimensions in raster pixels. Metadata-only tiles
+    /// keep this populated so the presentation cache can reject stale
+    /// texture reuse across canvas-size epochs.
+    Vector2i bitmapDimsPx = Vector2i::Zero();
+    /// Raster canvas size that produced this payload. Metadata-only reuse is
+    /// only valid inside the same raster-canvas epoch.
+    Vector2i rasterCanvasSize = Vector2i::Zero();
     /// Canvas-space top-left of `bitmap`, in document units. Editor
     /// multiplies by `pixelsPerDocUnit` to get the on-screen blit
     /// origin.
@@ -441,8 +448,10 @@ private:
   std::uint64_t compositorDocumentGeneration_ = 0;
 
   struct PublishedCompositedTile {
+    RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
     std::uint64_t generation = 0;
     Vector2i bitmapDims = Vector2i::Zero();
+    Vector2i rasterCanvasSize = Vector2i::Zero();
   };
 
   /// Split-tile textures the UI has received from previous composited

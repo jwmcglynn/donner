@@ -13,6 +13,7 @@ tools/doxygen.sh
 It requires the `doxygen` package to be installed. The generated documentation will be in `generated-doxygen/html/index.html`.
 
 Tools required to generate the documentation are:
+
 - `doxygen`
 - `graphviz` (for class diagrams)
 
@@ -49,6 +50,12 @@ bazel build --config clang-tidy //...
 ```sh
 tools/cloc.sh
 ```
+
+## Editor Visual Debugging
+
+Use \subpage EditorVisualDebugging for the editor replay harness, Geode
+direct-texture diagnostics, pixel comparisons, and root-cause patterns for
+one-frame visual bugs.
 
 # Security
 

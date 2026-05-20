@@ -128,6 +128,16 @@ ImageResource BuildImageResource(const RendererBitmap& bitmap) {
   return img;
 }
 
+Vector2i LayerPayloadDimensions(const CompositorLayer& layer) {
+  if (layer.hasValidBitmap()) {
+    return layer.bitmap().dimensions;
+  }
+  if (layer.textureSnapshot() != nullptr) {
+    return layer.textureSnapshot()->dimensions();
+  }
+  return Vector2i::Zero();
+}
+
 struct LayerRasterGeometry {
   RenderViewport viewport;
   Transform2d surfaceFromCanvas;
@@ -750,7 +760,7 @@ bool CompositorController::hasSplitStaticLayers() const {
     return false;
   }
   const CompositorLayer* layer = findLayer(liveCandidate);
-  return layer != nullptr && layer->hasValidBitmap();
+  return layer != nullptr && layer->hasRenderablePayload();
 }
 
 const RendererBitmap& CompositorController::layerBitmapOf(Entity entity) const {
@@ -935,7 +945,7 @@ bool CompositorController::remapAfterStructuralReplace(
                                                          .devicePixelRatio = 1.0,
                                                      };
   for (auto& layer : layers_) {
-    if (layer.isDirty() || !layer.hasValidBitmap()) {
+    if (layer.isDirty() || !layer.hasRenderablePayload()) {
       continue;
     }
     if (!activeHints_.contains(layer.entity())) {
@@ -955,7 +965,7 @@ bool CompositorController::remapAfterStructuralReplace(
             renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport);
         const Vector2i expectedBitmapDims = BitmapDimensionsForViewport(geometry.viewport);
         const Vector2d composedCanvasOffset = layer.canvasOffset() + roundedTranslation;
-        cacheStillValid = layer.bitmap().dimensions == expectedBitmapDims &&
+        cacheStillValid = LayerPayloadDimensions(layer) == expectedBitmapDims &&
                           (!geometry.tight || composedCanvasOffset == geometry.canvasOffset);
 
         if (cacheStillValid) {
@@ -1177,7 +1187,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         eligible = false;
         break;
       }
-      if (!matchedLayer->hasValidBitmap() ||
+      if (!matchedLayer->hasRenderablePayload() ||
           !matchedLayer->bitmapEntityFromWorldTransform().has_value()) {
         eligible = false;
         break;
@@ -1440,7 +1450,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         {
           ZoneScopedN("Compositor::eagerWarmupRasterizeLayers");
           for (auto& layer : layers_) {
-            if (!layer.hasValidBitmap()) {
+            if (!layer.hasRenderablePayload()) {
               rasterizeLayer(layer, viewport);
             }
           }
@@ -1530,7 +1540,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` pins
   // the previously-resized-element drag delta.
   for (auto& layer : layers_) {
-    if (!layer.hasValidBitmap() || !layer.bitmapEntityFromWorldTransform().has_value()) {
+    if (!layer.hasRenderablePayload() || !layer.bitmapEntityFromWorldTransform().has_value()) {
       continue;
     }
     if (!registry.valid(layer.entity()) ||
@@ -1590,7 +1600,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   {
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
     for (auto& layer : layers_) {
-      if (layer.isDirty() || !layer.hasValidBitmap() || rootDirty_) {
+      if (layer.isDirty() || !layer.hasRenderablePayload() || rootDirty_) {
         // §M4: bail between layer rasterizes. The remaining dirty
         // layers keep their `isDirty()` flag set, so the next
         // `renderFrame` finishes them. Returns directly out of

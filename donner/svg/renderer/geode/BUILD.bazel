@@ -82,10 +82,32 @@ donner_cc_library(
     name = "geode_wgpu_util",
     hdrs = ["GeodeWgpuUtil.h"],
     target_compatible_with = _GEODE_ONLY,
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+    visibility = [
+        "//donner/editor/gui:__pkg__",
+        "//donner/svg/renderer:__subpackages__",
+        "//examples:__pkg__",
+    ],
     deps = [
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
+)
+
+donner_cc_test(
+    name = "geode_wgpu_util_tests_impl",
+    srcs = ["tests/GeodeWgpuUtil_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_wgpu_util",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_wgpu_util_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":geode_wgpu_util_tests_impl",
+    renderer_backend = "geode",
 )
 
 donner_cc_library(

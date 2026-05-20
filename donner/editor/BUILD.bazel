@@ -188,6 +188,7 @@ donner_cc_library(
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer:renderer_geode",
+            "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [
             "//third_party/glad",

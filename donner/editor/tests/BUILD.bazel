@@ -269,6 +269,19 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "gl_texture_cache_tests",
+    srcs = ["GlTextureCache_tests.cc"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//donner/editor:gl_texture_cache",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "editor_layer_stress_tests",
     srcs = ["EditorLayerStress_tests.cc"],
     deps = [
@@ -493,8 +506,10 @@ donner_cc_binary(
     data = [
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
+        "geode_drag_zoom_o_pop.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
+        "//:zoom-out-drag-jump.rnr",
     ],
     target_compatible_with = select({
         "@platforms//os:macos": [],
@@ -514,8 +529,10 @@ donner_cc_test(
     data = [
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
+        "geode_drag_zoom_o_pop.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
+        "//:zoom-out-drag-jump.rnr",
     ],
     target_compatible_with = select({
         "@platforms//os:linux": [],

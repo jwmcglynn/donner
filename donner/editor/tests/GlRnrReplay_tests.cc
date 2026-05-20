@@ -82,6 +82,27 @@ const repro::GlRnrReplayFrameDiagnostics* FindFrameDiagnostics(
   return nullptr;
 }
 
+bool CanvasSizeCloseEnoughForReplay(const Vector2i& lhs, const Vector2i& rhs) {
+  return std::abs(lhs.x - rhs.x) <= 1 && std::abs(lhs.y - rhs.y) <= 1;
+}
+
+bool HasStaleSplitTiles(const repro::GlRnrReplayFrameDiagnostics& frame) {
+  if (frame.tiles.empty()) {
+    return false;
+  }
+
+  if (frame.tiles.size() == 1u && frame.tiles.front().id == "full-canvas") {
+    return false;
+  }
+
+  for (const repro::GlRnrReplayTileDiagnostics& tile : frame.tiles) {
+    if (!CanvasSizeCloseEnoughForReplay(tile.rasterCanvasSize, frame.viewportDesiredCanvas)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 svg::RendererBitmap BitmapFromImage(const svg::Image& image) {
   svg::RendererBitmap bitmap;
   bitmap.dimensions = Vector2i(image.width, image.height);
@@ -282,6 +303,93 @@ TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
   tests::CompareBitmapToBitmap(*active, *comparison,
                                "gl_second_drag_frame_249_active_vs_250_mouseup",
                                tests::PixelmatchIdentityParams());
+}
+
+TEST(GlRnrReplayTest, ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles) {
+  constexpr std::string_view kRnrPath = "zoom-out-drag-jump.rnr";
+  constexpr std::uint64_t kBeforeFrame = 145;
+  constexpr std::uint64_t kGuardedFrame = 146;
+  constexpr std::uint64_t kCaughtUpFrame = 147;
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = RunfilePath(kRnrPath);
+  options.svgPathOverride = RunfilePath("donner_splash.svg");
+  options.outputDir = DiagnosticOutputDir() / "gl_zoom_out_drag_overlay_epoch";
+  options.captureFrames = {kBeforeFrame, kGuardedFrame, kCaughtUpFrame};
+  options.maxFrame = kCaughtUpFrame;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.visible = false;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  const repro::GlRnrReplayFrameDiagnostics* before = FindFrameDiagnostics(result, kBeforeFrame);
+  const repro::GlRnrReplayFrameDiagnostics* guarded = FindFrameDiagnostics(result, kGuardedFrame);
+  const repro::GlRnrReplayFrameDiagnostics* caughtUp = FindFrameDiagnostics(result, kCaughtUpFrame);
+  ASSERT_NE(before, nullptr);
+  ASSERT_NE(guarded, nullptr);
+  ASSERT_NE(caughtUp, nullptr);
+
+  ASSERT_TRUE(HasStaleSplitTiles(*guarded))
+      << "The fixture should exercise the stale split-tile zoom window at frame " << kGuardedFrame;
+  EXPECT_EQ(guarded->overlayDimsPx, before->overlayDimsPx)
+      << "A current-canvas overlay must not publish over stale split tiles.";
+  EXPECT_EQ(guarded->overlayTextureHandle, before->overlayTextureHandle)
+      << "Frame " << kGuardedFrame
+      << " should retain the previous overlay until the split content catches up.";
+  EXPECT_FALSE(
+      CanvasSizeCloseEnoughForReplay(guarded->overlayDimsPx, guarded->viewportDesiredCanvas))
+      << "Publishing a viewport-current overlay over stale split tiles reintroduces the "
+         "one-frame texture splat repro.";
+
+  EXPECT_FALSE(HasStaleSplitTiles(*caughtUp));
+  EXPECT_TRUE(
+      CanvasSizeCloseEnoughForReplay(caughtUp->overlayDimsPx, caughtUp->viewportDesiredCanvas));
+}
+
+TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
+  constexpr std::string_view kRnrPath = "donner/editor/tests/geode_drag_zoom_o_pop.rnr";
+  constexpr std::uint64_t kFirstCaptureFrame = 78;
+  constexpr std::uint64_t kLastCaptureFrame = 81;
+
+  const std::filesystem::path rnrPath = RunfilePath(kRnrPath);
+  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(rnrPath);
+  ASSERT_TRUE(reproFile.has_value());
+  ASSERT_TRUE(reproFile->metadata.expect.has_value());
+  const repro::ReproExpectation& expect = *reproFile->metadata.expect;
+  ASSERT_EQ(expect.proofKind, repro::ReproExpectationProofKind::PresentedPixels);
+  ASSERT_EQ(expect.cropMode, "document-canvas");
+  ASSERT_EQ(expect.targetSelector, "#Donner path:nth-of-type(2)");
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = rnrPath;
+  options.svgPathOverride = RunfilePath("donner_splash.svg");
+  options.outputDir = DiagnosticOutputDir() / "gl_geode_drag_zoom_o_pop";
+  options.captureFrames = {kFirstCaptureFrame, 79, 80, kLastCaptureFrame};
+  options.maxFrame = kLastCaptureFrame;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.visible = false;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  for (std::uint64_t frame = kFirstCaptureFrame; frame <= kLastCaptureFrame; ++frame) {
+    const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
+    ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
+    EXPECT_EQ(diagnostics->metadataOnlyMissCount, 0)
+        << "metadata-only reuse unexpectedly missed in root-cause replay frame " << frame;
+    EXPECT_EQ(diagnostics->duplicateLiveTextureCount, 0)
+        << "duplicate live texture handles in root-cause replay frame " << frame;
+
+    std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, frame);
+    ASSERT_TRUE(capture.has_value()) << "missing capture for replay frame " << frame;
+    EXPECT_GT(capture->dimensions.x, 0);
+    EXPECT_GT(capture->dimensions.y, 0);
+  }
 }
 
 TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {

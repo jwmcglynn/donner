@@ -25,6 +25,7 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer/geode:geode_device",
             "//donner/svg/renderer/geode:geode_glfw_surface",
+            "//donner/svg/renderer/geode:geode_wgpu_util",
             "//third_party/webgpu-cpp:webgpu_cpp",
             "@glfw",
             "@imgui//:imgui_wgpu_backend",

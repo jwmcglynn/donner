@@ -8,9 +8,12 @@
 #include <future>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <sstream>
 #include <thread>
+#include <tuple>
 #include <unordered_map>
+#include <vector>
 
 #include "donner/base/Transform.h"
 #include "donner/editor/AsyncSVGDocument.h"
@@ -31,6 +34,10 @@
 
 namespace donner::editor {
 namespace {
+
+bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
+  return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
+}
 
 // Design doc 0033 §M5 — preemptive swap-in. When the worker finishes a
 // render, the editor's main loop must learn about the result on the
@@ -503,16 +510,16 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
   EXPECT_TRUE(result->compositedPreview->valid());
-  // A CPU snapshot is still produced for diagnostics and for seeding the
-  // full-canvas composited tile when the splitter has no finer-grained tiles.
-  EXPECT_FALSE(result->bitmap.empty());
+  // Tiny-skia keeps a CPU snapshot for diagnostics; Geode direct presentation
+  // must not fall back to CPU readback.
+  EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
   EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity());
-  // M2C: promoted bitmap now lives inside the `tiles` paint-order
+  // M2C: promoted presentation payload now lives inside the `tiles` paint-order
   // list. Assert at least one Layer-kind tile carries non-empty
-  // pixels for the dragged entity.
+  // content for the dragged entity.
   bool sawLayerTile = false;
   for (const auto& tile : result->compositedPreview->tiles) {
-    if (tile.kind == RenderResult::CompositedTile::Kind::Layer && !tile.bitmap.empty()) {
+    if (tile.kind == RenderResult::CompositedTile::Kind::Layer && HasPresentationPayload(tile)) {
       sawLayerTile = true;
       break;
     }
@@ -648,9 +655,10 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   }
 
   ASSERT_TRUE(result.has_value());
-  EXPECT_FALSE(result->bitmap.empty());
+  EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
   ASSERT_TRUE(result->compositedPreview.has_value());
   EXPECT_TRUE(result->compositedPreview->valid());
+  EXPECT_TRUE(std::ranges::any_of(result->compositedPreview->tiles, HasPresentationPayload));
 }
 
 TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTile) {
@@ -683,9 +691,50 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
   EXPECT_EQ(tile.id, "full-canvas");
   EXPECT_FALSE(tile.bitmap.empty());
   EXPECT_EQ(tile.bitmap.dimensions, Vector2i(64, 64));
+  EXPECT_EQ(tile.bitmapDimsPx, Vector2i(64, 64));
+  EXPECT_EQ(tile.rasterCanvasSize, Vector2i(64, 64));
   EXPECT_EQ(tile.canvasOffsetDoc, Vector2d::Zero());
   EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(64.0, 64.0));
   EXPECT_TRUE(result->compositedPreview->entity == entt::null);
+}
+
+TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="target" x="8" y="8" width="20" height="20" fill="red" />
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.selectedEntity = target->entityHandle().entity();
+  request.dragPreview = RenderRequest::DragPreview{
+      .entity = target->entityHandle().entity(),
+      .interactionKind = svg::compositor::InteractionHint::Selection,
+  };
+  asyncRenderer.requestRender(request);
+
+  std::optional<RenderResult> result;
+  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_FALSE(result->compositedPreview->tiles.empty());
+  for (const RenderResult::CompositedTile& tile : result->compositedPreview->tiles) {
+    EXPECT_EQ(tile.rasterCanvasSize, Vector2i(64, 64));
+    EXPECT_GT(tile.bitmapDimsPx.x, 0);
+    EXPECT_GT(tile.bitmapDimsPx.y, 0);
+  }
 }
 
 TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasCompositedPreview) {
@@ -801,8 +850,22 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
     }
     return std::vector<uint8_t>{};
   };
+  const auto findDragTileSignature = [](const RenderResult::CompositedPreview& cp) {
+    for (const auto& tile : cp.tiles) {
+      if (tile.isDragTarget && tile.kind == RenderResult::CompositedTile::Kind::Layer) {
+        return std::tuple<bool, std::uint64_t, Vector2i>(HasPresentationPayload(tile),
+                                                         tile.generation, tile.bitmapDimsPx);
+      }
+    }
+    return std::tuple<bool, std::uint64_t, Vector2i>(false, 0u, Vector2i::Zero());
+  };
   const std::vector<uint8_t> promotedPixelsDrag1 = findDragTileBitmap(*drag1->compositedPreview);
-  ASSERT_FALSE(promotedPixelsDrag1.empty());
+  const auto promotedSignatureDrag1 = findDragTileSignature(*drag1->compositedPreview);
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    ASSERT_FALSE(promotedPixelsDrag1.empty());
+  } else {
+    EXPECT_TRUE(std::get<0>(promotedSignatureDrag1));
+  }
 
   // Release: selection held but no drag.
   {
@@ -833,8 +896,13 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto drag2 = waitForResult();
   ASSERT_TRUE(drag2.has_value());
   ASSERT_TRUE(drag2->compositedPreview.has_value());
-  EXPECT_EQ(findDragTileBitmap(*drag2->compositedPreview), promotedPixelsDrag1)
-      << "drag-target tile bitmap should be identical after release → drag-again";
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    EXPECT_EQ(findDragTileBitmap(*drag2->compositedPreview), promotedPixelsDrag1)
+        << "drag-target tile bitmap should be identical after release -> drag-again";
+  } else {
+    EXPECT_EQ(findDragTileSignature(*drag2->compositedPreview), promotedSignatureDrag1)
+        << "drag-target tile signature should be stable after release -> drag-again";
+  }
 }
 
 TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
@@ -904,7 +972,8 @@ TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
   ASSERT_TRUE(result->compositedPreview.has_value());
   for (const RenderResult::CompositedTile& tile : result->compositedPreview->tiles) {
     if (tile.bitmapDimsDoc.x > 0.0 && tile.bitmapDimsDoc.y > 0.0) {
-      EXPECT_FALSE(tile.bitmap.empty()) << "final composited tiles must carry fresh pixels";
+      EXPECT_TRUE(HasPresentationPayload(tile))
+          << "final composited tiles must carry fresh presentation payloads";
     }
   }
   EXPECT_EQ(asyncRenderer.lastDocumentCanvasSize(), resizedCanvasSize);
@@ -981,17 +1050,17 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   ASSERT_TRUE(prewarm.has_value());
   ASSERT_TRUE(prewarm->compositedPreview.has_value());
   ASSERT_FALSE(prewarm->compositedPreview->tiles.empty());
-  // At least one tile must carry a non-empty bitmap (post-M2C the prewarm
+  // At least one tile must carry a non-empty presentation payload (post-M2C the prewarm
   // delivers the full paint-order tile list, not just a single promoted
   // bitmap, so the assertion exists on the union, not a named slot).
-  bool sawTileBitmap = false;
+  bool sawTilePayload = false;
   for (const auto& tile : prewarm->compositedPreview->tiles) {
-    if (!tile.bitmap.empty()) {
-      sawTileBitmap = true;
+    if (HasPresentationPayload(tile)) {
+      sawTilePayload = true;
       break;
     }
   }
-  ASSERT_TRUE(sawTileBitmap);
+  ASSERT_TRUE(sawTilePayload);
 
   // Drive a long drag sequence. Each frame: mutate the DOM transform (via
   // the public `setTransform`, identical to `SetTransformCommand` in
@@ -2239,6 +2308,10 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
   const Entity donnerEntity = donnerPath->entityHandle().entity();
 
   svg::Renderer renderer;
+  if (renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode editor presentation is direct-texture only; this regression is "
+                    "specific to tiny-skia CPU snapshots.";
+  }
   AsyncRenderer asyncRenderer;
 
   using Clock = std::chrono::steady_clock;
@@ -2357,6 +2430,10 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   const Entity targetEntity = target->entityHandle().entity();
 
   svg::Renderer renderer;
+  if (renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "This pixel assertion requires tiny-skia CPU snapshots; Geode keeps "
+                    "presentation on GPU texture snapshots.";
+  }
   AsyncRenderer asyncRenderer;
 
   using Clock = std::chrono::steady_clock;
@@ -2808,6 +2885,109 @@ TEST(RenderCoordinatorTest, TearingDownWithInFlightRenderDoesNotCrashOnExit) {
 
   // Reaching the end of this test without a crash is the assertion.
   coordinator.reset();
+}
+
+TEST(RenderCoordinatorTest, ImmediateOverlayUploadBypassesDisplayedVersionGate) {
+  svg::Renderer rendererProbe;
+  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Immediate tiny-skia overlay upload needs a live GL context; the Geode "
+                    "direct-texture path exercises this regression.";
+  }
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+  app.document().document().setCanvasSize(64, 64);
+  ASSERT_NE(app.document().currentFrameVersion(), 0u);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(64.0, 64.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+
+  GlTextureCache textures;
+  RenderCoordinator versionMatchedCoordinator;
+  EXPECT_TRUE(versionMatchedCoordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
+                                                                            std::nullopt));
+  EXPECT_TRUE(versionMatchedCoordinator.hasPendingOverlayForTesting())
+      << "default overlay mode should wait for the displayed async-render version";
+
+  RenderCoordinator immediateCoordinator;
+  EXPECT_TRUE(immediateCoordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, textures, std::nullopt, RenderCoordinator::OverlayUploadMode::Immediate));
+  EXPECT_FALSE(immediateCoordinator.hasPendingOverlayForTesting())
+      << "active-drag overlay mode must publish current-frame chrome immediately";
+}
+
+TEST(RenderCoordinatorTest, ImmediateOverlayUploadAllowsEmptyOrFullCanvasContent) {
+  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles(
+      std::span<const GlTextureCache::TileView>(), Vector2i(1896, 1088)));
+
+  GlTextureCache::TileView fullCanvas;
+  fullCanvas.id = "full-canvas";
+  fullCanvas.rasterCanvasSize = Vector2i(3203, 1838);
+  const std::vector<GlTextureCache::TileView> tiles{fullCanvas};
+
+  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles(tiles, Vector2i(1896, 1088)));
+}
+
+TEST(RenderCoordinatorTest, ImmediateOverlayUploadRequiresCurrentSplitCanvasEpoch) {
+  GlTextureCache::TileView segment;
+  segment.id = "segment-0";
+  segment.rasterCanvasSize = Vector2i(1896, 1088);
+  GlTextureCache::TileView layer;
+  layer.id = "layer-7";
+  layer.rasterCanvasSize = Vector2i(1897, 1087);
+  const std::vector<GlTextureCache::TileView> currentTiles{segment, layer};
+
+  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles(currentTiles, Vector2i(1896, 1088)));
+
+  segment.rasterCanvasSize = Vector2i(3298, 1893);
+  layer.rasterCanvasSize = Vector2i(3298, 1893);
+  const std::vector<GlTextureCache::TileView> staleTiles{segment, layer};
+
+  EXPECT_FALSE(ShouldUploadImmediateOverlayForPresentedTiles(staleTiles, Vector2i(1896, 1088)));
+}
+
+TEST(RenderCoordinatorTest, SplitPreviewFromStaleCanvasEpochIsRejected) {
+  RenderResult::CompositedPreview preview;
+  preview.entity = Entity(7);
+  RenderResult::CompositedTile segment;
+  segment.id = "segment-0";
+  segment.rasterCanvasSize = Vector2i(3203, 1838);
+  preview.tiles.push_back(segment);
+
+  EXPECT_FALSE(ShouldPresentCompositedPreviewForViewport(preview, Vector2i(1896, 1088)));
+}
+
+TEST(RenderCoordinatorTest, SplitPreviewFromCurrentCanvasEpochIsAccepted) {
+  RenderResult::CompositedPreview preview;
+  preview.entity = Entity(7);
+  RenderResult::CompositedTile segment;
+  segment.id = "segment-0";
+  segment.rasterCanvasSize = Vector2i(1896, 1088);
+  preview.tiles.push_back(segment);
+  RenderResult::CompositedTile layer;
+  layer.kind = RenderResult::CompositedTile::Kind::Layer;
+  layer.id = "layer-7";
+  layer.rasterCanvasSize = Vector2i(1897, 1087);
+  preview.tiles.push_back(layer);
+
+  EXPECT_TRUE(ShouldPresentCompositedPreviewForViewport(preview, Vector2i(1896, 1088)));
+}
+
+TEST(RenderCoordinatorTest, FullCanvasPreviewCanStretchAcrossCanvasEpochs) {
+  RenderResult::CompositedPreview preview;
+  preview.entity = Entity(7);
+  RenderResult::CompositedTile fullCanvas;
+  fullCanvas.id = "full-canvas";
+  fullCanvas.rasterCanvasSize = Vector2i(3203, 1838);
+  preview.tiles.push_back(fullCanvas);
+
+  EXPECT_TRUE(ShouldPresentCompositedPreviewForViewport(preview, Vector2i(1896, 1088)));
 }
 
 }  // namespace

@@ -29,6 +29,7 @@ exports_files(
         "donner_icon.svg",
         "donner_splash.svg",
         "MODULE.bazel",
+        "zoom-out-drag-jump.rnr",
     ],
     visibility = ["//visibility:public"],
 )

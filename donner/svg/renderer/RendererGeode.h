@@ -20,6 +20,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 class GeodeDevice;
@@ -52,6 +53,7 @@ public:
    */
   RendererGeodeTextureSnapshot(std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture,
                                Vector2i dimensions, wgpu::TextureFormat format);
+  ~RendererGeodeTextureSnapshot() override = default;
 
   [[nodiscard]] RendererTextureSnapshotBackend backend() const override {
     return RendererTextureSnapshotBackend::Geode;
@@ -60,7 +62,7 @@ public:
   [[nodiscard]] AlphaType alphaType() const override { return AlphaType::Premultiplied; }
 
   /// Resolved single-sample WebGPU texture.
-  [[nodiscard]] const wgpu::Texture& texture() const { return texture_; }
+  [[nodiscard]] const wgpu::Texture& texture() const { return texture_.get(); }
 
   /// Lazily-created texture view suitable for ImGui_ImplWGPU's ImTextureID.
   [[nodiscard]] const wgpu::TextureView& textureView() const;
@@ -70,8 +72,8 @@ public:
 
 private:
   std::shared_ptr<geode::GeodeDevice> device_;
-  wgpu::Texture texture_;
-  mutable wgpu::TextureView textureView_;
+  geode::ScopedWgpuHandle<wgpu::Texture> texture_;
+  mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;
   Vector2i dimensions_ = Vector2i::Zero();
   wgpu::TextureFormat format_ = wgpu::TextureFormat::Undefined;
 };

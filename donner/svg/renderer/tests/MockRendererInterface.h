@@ -42,11 +42,17 @@ public:
   MOCK_METHOD(void, drawRect, (const Box2d& rect, const StrokeParams& stroke), (override));
   MOCK_METHOD(void, drawEllipse, (const Box2d& bounds, const StrokeParams& stroke), (override));
   MOCK_METHOD(void, drawImage, (const ImageResource& image, const ImageParams& params), (override));
+  MOCK_METHOD(bool, drawTextureSnapshot,
+              (const RendererTextureSnapshot& texture, const Box2d& targetRect, double opacity,
+               bool pixelated),
+              (override));
   MOCK_METHOD(void, drawText,
               (Registry & registry, const components::ComputedTextComponent& text,
                const TextParams& params),
               (override));
   MOCK_METHOD(RendererBitmap, takeSnapshot, (), (const, override));
+  MOCK_METHOD(std::shared_ptr<const RendererTextureSnapshot>, takeTextureSnapshot, (), (override));
+  MOCK_METHOD(bool, requiresTextureSnapshotPresentation, (), (const, override));
   MOCK_METHOD(std::unique_ptr<RendererInterface>, createOffscreenInstance, (), (const, override));
 
   /// 1×1 opaque-black RGBA bitmap. Cheap way to satisfy cache-warming code

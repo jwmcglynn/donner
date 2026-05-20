@@ -30,6 +30,8 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
       !bitmap.empty() ? bitmap.dimensions
                       : (tile.textureSnapshot != nullptr ? tile.textureSnapshot->dimensions()
                                                          : Vector2i::Zero());
+  tile.bitmapDimsPx = payloadDims;
+  tile.rasterCanvasSize = payloadDims;
   if (const std::optional<Box2d> viewBox = document.svgElement().viewBox();
       viewBox.has_value() && viewBox->size().x > 0.0 && viewBox->size().y > 0.0) {
     tile.bitmapDimsDoc = viewBox->size();
@@ -84,8 +86,10 @@ void AsyncRenderer::notePublishedCompositedPreview(
       const Vector2i bitmapDims =
           !tile.bitmap.empty() ? tile.bitmap.dimensions : tile.textureSnapshot->dimensions();
       nextPublished[tile.id] = PublishedCompositedTile{
+          .kind = tile.kind,
           .generation = tile.generation,
           .bitmapDims = bitmapDims,
+          .rasterCanvasSize = tile.rasterCanvasSize,
       };
     } else if (const auto it = publishedCompositedTiles_.find(tile.id);
                it != publishedCompositedTiles_.end()) {
@@ -417,14 +421,19 @@ void AsyncRenderer::workerLoop() {
         return Vector2d(scaleX != 0.0 ? canvas.x / scaleX : 0.0,
                         scaleY != 0.0 ? canvas.y / scaleY : 0.0);
       };
-      const auto publishedTextureMatches =
-          [this](const std::string& tileId, std::uint64_t generation, const Vector2i& bitmapDims) {
-            const auto publishedIt = publishedCompositedTiles_.find(tileId);
-            return publishedIt != publishedCompositedTiles_.end() &&
-                   publishedIt->second.generation == generation &&
-                   publishedIt->second.bitmapDims.x == bitmapDims.x &&
-                   publishedIt->second.bitmapDims.y == bitmapDims.y;
-          };
+      const auto publishedTextureMatches = [this](const std::string& tileId,
+                                                  RenderResult::CompositedTile::Kind kind,
+                                                  std::uint64_t generation,
+                                                  const Vector2i& bitmapDims,
+                                                  const Vector2i& rasterCanvasSize) {
+        const auto publishedIt = publishedCompositedTiles_.find(tileId);
+        return publishedIt != publishedCompositedTiles_.end() && publishedIt->second.kind == kind &&
+               publishedIt->second.generation == generation &&
+               publishedIt->second.bitmapDims.x == bitmapDims.x &&
+               publishedIt->second.bitmapDims.y == bitmapDims.y &&
+               publishedIt->second.rasterCanvasSize.x == rasterCanvasSize.x &&
+               publishedIt->second.rasterCanvasSize.y == rasterCanvasSize.y;
+      };
 
       using svg::compositor::CompositorTileBitmapPayload;
       auto compositorTiles =
@@ -435,12 +444,14 @@ void AsyncRenderer::workerLoop() {
         if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) {
           continue;
         }
+        using OutKind = RenderResult::CompositedTile::Kind;
+        const OutKind kind = ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer;
         const bool currentActiveDragLayer = activeDragRequest && request.dragPreview.has_value() &&
                                             ct.layerEntity == request.dragPreview->entity;
         if (currentActiveDragLayer) {
           activeDragTileWillHaveBitmap =
-              ct.isDragTarget ||
-              publishedTextureMatches(std::to_string(ct.tileId), ct.generation, ct.bitmapDims);
+              ct.isDragTarget || publishedTextureMatches(std::to_string(ct.tileId), kind,
+                                                         ct.generation, ct.bitmapDims, canvasSize);
           if (!activeDragTileWillHaveBitmap) {
             canReuseNonDragTextures = false;
             break;
@@ -448,7 +459,8 @@ void AsyncRenderer::workerLoop() {
           continue;
         }
         if (ct.isDragTarget && activeDragRequest) continue;
-        if (!publishedTextureMatches(std::to_string(ct.tileId), ct.generation, ct.bitmapDims)) {
+        if (!publishedTextureMatches(std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims,
+                                     canvasSize)) {
           canReuseNonDragTextures = false;
           break;
         }
@@ -469,13 +481,17 @@ void AsyncRenderer::workerLoop() {
         if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) continue;
         using OutKind = RenderResult::CompositedTile::Kind;
         const std::string tileId = std::to_string(ct.tileId);
-        const bool metadataOnly = (!ct.isDragTarget || !activeDragRequest) &&
-                                  publishedTextureMatches(tileId, ct.generation, ct.bitmapDims);
+        const OutKind kind = ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer;
+        const bool metadataOnly =
+            (!ct.isDragTarget || !activeDragRequest) &&
+            publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims, canvasSize);
         if (!metadataOnly && ct.bitmap.empty() && ct.textureSnapshot == nullptr) continue;
         RenderResult::CompositedTile tile;
-        tile.kind = ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer;
+        tile.kind = kind;
         tile.id = tileId;
         tile.generation = ct.generation;
+        tile.bitmapDimsPx = ct.bitmapDims;
+        tile.rasterCanvasSize = canvasSize;
         tile.canvasOffsetDoc = canvasToDoc(ct.canvasOffsetPx);
         tile.bitmapDimsDoc = canvasToDoc(
             Vector2d(static_cast<double>(ct.bitmapDims.x), static_cast<double>(ct.bitmapDims.y)));

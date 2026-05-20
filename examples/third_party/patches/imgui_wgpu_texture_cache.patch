@@ -1,0 +1,82 @@
+Subject: [PATCH] Add WGPU texture cache eviction hook
+
+Expose a small backend API for clients that present transient WGPU texture
+views through ImTextureID. The stock backend caches bind groups by hashed
+ImTextureID, so a recycled WGPUTextureView value can otherwise reuse a stale
+bind group.
+
+diff --git a/backends/imgui_impl_wgpu.h b/backends/imgui_impl_wgpu.h
+index 12345678..23456789 100644
+--- a/backends/imgui_impl_wgpu.h
++++ b/backends/imgui_impl_wgpu.h
+@@ -53,6 +53,7 @@ IMGUI_IMPL_API bool ImGui_ImplWGPU_Init(ImGui_ImplWGPU_InitInfo* init_info);
+ IMGUI_IMPL_API void ImGui_ImplWGPU_Shutdown();
+ IMGUI_IMPL_API void ImGui_ImplWGPU_NewFrame();
+ IMGUI_IMPL_API void ImGui_ImplWGPU_RenderDrawData(ImDrawData* draw_data, WGPURenderPassEncoder pass_encoder);
++IMGUI_IMPL_API void ImGui_ImplWGPU_RemoveTexture(ImTextureID texture_id);
+ 
+ // Use if you want to reset your rendering device without losing Dear ImGui state.
+ IMGUI_IMPL_API void ImGui_ImplWGPU_InvalidateDeviceObjects();
+diff --git a/backends/imgui_impl_wgpu.cpp b/backends/imgui_impl_wgpu.cpp
+index 12345678..23456789 100644
+--- a/backends/imgui_impl_wgpu.cpp
++++ b/backends/imgui_impl_wgpu.cpp
+@@ -230,15 +230,28 @@ static void SafeRelease(WGPUTexture& res)
+     res = nullptr;
+ }
+ 
++static void SafeReleaseImageBindGroupCache(RenderResources& res)
++{
++    for (int n = 0; n < res.ImageBindGroups.Data.Size; n++)
++    {
++        WGPUBindGroup bind_group = (WGPUBindGroup)res.ImageBindGroups.Data[n].val_p;
++        if (bind_group)
++            wgpuBindGroupRelease(bind_group);
++    }
++    res.ImageBindGroups.Clear();
++    res.ImageBindGroup = nullptr;
++}
++
+ static void SafeRelease(RenderResources& res)
+ {
+     SafeRelease(res.FontTexture);
+     SafeRelease(res.FontTextureView);
+     SafeRelease(res.Sampler);
+     SafeRelease(res.Uniforms);
+     SafeRelease(res.CommonBindGroup);
+-    SafeRelease(res.ImageBindGroup);
++    SafeReleaseImageBindGroupCache(res);
+     SafeRelease(res.ImageBindGroupLayout);
+ };
+@@ -279,6 +292,31 @@ static WGPUBindGroup ImGui_ImplWGPU_CreateImageBindGroup(WGPUBindGroupLayout la
+     return wgpuDeviceCreateBindGroup(bd->wgpuDevice, &image_bg_descriptor);
+ }
+ 
++void ImGui_ImplWGPU_RemoveTexture(ImTextureID texture_id)
++{
++    ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();
++    if (bd == nullptr)
++        return;
++    if (texture_id == (ImTextureID)bd->renderResources.FontTextureView)
++        return;
++
++    ImGuiID tex_id_hash = ImHashData(&texture_id, sizeof(texture_id));
++    for (int n = 0; n < bd->renderResources.ImageBindGroups.Data.Size; n++)
++    {
++        ImGuiStoragePair& pair = bd->renderResources.ImageBindGroups.Data[n];
++        if (pair.key != tex_id_hash)
++            continue;
++
++        WGPUBindGroup bind_group = (WGPUBindGroup)pair.val_p;
++        if (bind_group)
++            wgpuBindGroupRelease(bind_group);
++        if (bind_group == bd->renderResources.ImageBindGroup)
++            bd->renderResources.ImageBindGroup = nullptr;
++        bd->renderResources.ImageBindGroups.Data.erase(&pair);
++        return;
++    }
++}
++
+ static void ImGui_ImplWGPU_SetupRenderState(ImDrawData* draw_data, WGPURenderPassEncoder ctx, FrameResources* fr)
+ {
+     ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();

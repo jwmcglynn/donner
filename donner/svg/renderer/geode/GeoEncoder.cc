@@ -265,6 +265,7 @@ struct GeoEncoder::Impl {
   // readback) samples / copies from this texture, never the MSAA color.
   wgpu::Texture target;
   wgpu::TextureView targetView;
+  ScopedWgpuHandle<wgpu::CommandEncoder> ownedCommandEncoder;
   wgpu::CommandEncoder commandEncoder;
   uint32_t targetWidth;
   uint32_t targetHeight;
@@ -602,7 +603,8 @@ GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
 
   wgpu::CommandEncoderDescriptor desc = {};
   desc.label = wgpuLabel("GeoEncoder");
-  impl_->commandEncoder = device.device().createCommandEncoder(desc);
+  impl_->ownedCommandEncoder.reset(device.device().createCommandEncoder(desc));
+  impl_->commandEncoder = impl_->ownedCommandEncoder.get();
   impl_->ownsCommandEncoder = true;
 
   finalizeImpl(*impl_);
@@ -1657,9 +1659,13 @@ void GeoEncoder::finish() {
     return;
   }
 
-  wgpu::CommandBuffer cmdBuf = impl_->commandEncoder.finish();
-  impl_->device->queue().submit(1, &cmdBuf);
-  impl_->device->countSubmit();
+  {
+    ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(impl_->commandEncoder.finish());
+    impl_->device->queue().submit(1, &cmdBuf.get());
+    impl_->device->countSubmit();
+  }
+  impl_->ownedCommandEncoder.reset();
+  impl_->commandEncoder = wgpu::CommandEncoder();
 }
 
 }  // namespace donner::geode
