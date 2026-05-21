@@ -278,11 +278,20 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
 
   const int initialWidth = repro->metadata.windowWidth > 0 ? repro->metadata.windowWidth : 1600;
   const int initialHeight = repro->metadata.windowHeight > 0 ? repro->metadata.windowHeight : 900;
+  const double recordedScale =
+      repro->metadata.displayScale > 0.0 ? repro->metadata.displayScale : 1.0;
   EditorWindow window(EditorWindowOptions{
       .title = "Donner RNR GL Replay",
       .initialWidth = initialWidth,
       .initialHeight = initialHeight,
       .visible = options.visible,
+      // Capture replays render offscreen (GLFW null platform + OSMesa) so they
+      // run identically on headless CI and dev boxes across OSes; an interactive
+      // (visible) replay keeps the native windowed platform.
+      .offscreen = !options.visible,
+      // Reproduce the recorded HiDPI scale when running headless (null platform),
+      // so framebuffer crops line up with captures taken on the recording host.
+      .offscreenContentScale = recordedScale,
   });
   if (!window.valid()) {
     return SetError(error, "failed to initialize editor window");

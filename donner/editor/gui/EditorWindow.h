@@ -56,6 +56,17 @@ struct EditorWindowOptions {
   /// Whether the native desktop window should be shown. Hidden windows still
   /// create a real OpenGL context and are useful for framebuffer replay tests.
   bool visible = true;
+  /// Force GLFW's windowless "null" platform (OSMesa software GL) for offscreen
+  /// rendering, even when a display is available. When false, the null platform
+  /// is still selected automatically if no display (`DISPLAY`/`WAYLAND_DISPLAY`)
+  /// is present, so framebuffer-readback replay tests run on headless CI.
+  bool offscreen = false;
+  /// Content/display scale to emulate when running on the windowless null
+  /// platform, which reports no HiDPI scale of its own. Replay sets this to the
+  /// recorded scale so headless framebuffer readback reproduces the pixel
+  /// geometry of captures taken on a HiDPI machine. Ignored on real display
+  /// platforms, which use the OS-reported content scale instead.
+  double offscreenContentScale = 1.0;
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
   /// when the document doesn't fill the whole window.
   float clearColor[4] = {0.11f, 0.11f, 0.13f, 1.0f};
@@ -184,6 +195,10 @@ private:
   int textureWidth_ = 0;
   int textureHeight_ = 0;
   UiScaleConfig uiScaleConfig_;
+  /// When > 0, the content scale to force into ImGui's `DisplayFramebufferScale`
+  /// every frame because the windowless null platform reports no HiDPI scale of
+  /// its own (and `ImGui_ImplGlfw_NewFrame` would otherwise reset it to 1).
+  double frameDisplayScaleOverride_ = 0.0;
   bool valid_ = false;
   bool imguiInitialized_ = false;
 };

@@ -14,7 +14,9 @@
 #include <GLFW/glfw3.h>
 #endif
 
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string_view>
 #include <vector>
@@ -118,8 +120,25 @@ UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
 EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(options)) {
   glfwSetErrorCallback(&GlfwErrorCallback);
 
+  bool useNullPlatform = false;
 #ifdef __EMSCRIPTEN__
   glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_EMSCRIPTEN);
+#else
+  // Use GLFW's windowless "null" platform (OSMesa software GL) for offscreen
+  // framebuffer-readback replay. On Linux we also fall back to it automatically
+  // when there is no X11/Wayland display, so headless runs degrade gracefully;
+  // other platforms only switch when offscreen is requested explicitly (their
+  // display detection isn't a simple env var, and forcing null would break the
+  // native path on real displays).
+  useNullPlatform = options_.offscreen;
+#if defined(__linux__)
+  const bool hasDisplay =
+      std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr;
+  useNullPlatform = useNullPlatform || !hasDisplay;
+#endif
+  if (useNullPlatform) {
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
+  }
 #endif
   if (glfwInit() == GLFW_FALSE) {
     std::fprintf(stderr, "EditorWindow: glfwInit() failed\n");
@@ -157,9 +176,16 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #else
       options_.initialHeight;
 #endif
-  window_ =
-      glfwCreateWindow(initialWidth, initialHeight, options_.title.c_str(), /*monitor=*/nullptr,
-                       /*share=*/nullptr);
+  // The null platform reports no HiDPI scale, so emulate the requested content
+  // scale by allocating the framebuffer (== window size on the null platform) at
+  // the scaled resolution. Real platforms apply HiDPI scaling themselves.
+  const double offscreenScale = (useNullPlatform && options_.offscreenContentScale > 0.0)
+                                    ? options_.offscreenContentScale
+                                    : 1.0;
+  const int createWidth = static_cast<int>(std::lround(initialWidth * offscreenScale));
+  const int createHeight = static_cast<int>(std::lround(initialHeight * offscreenScale));
+  window_ = glfwCreateWindow(createWidth, createHeight, options_.title.c_str(), /*monitor=*/nullptr,
+                             /*share=*/nullptr);
   if (window_ == nullptr) {
     std::fprintf(stderr, "EditorWindow: glfwCreateWindow() failed\n");
     glfwTerminate();
@@ -199,8 +225,16 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #else
   glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
 #endif
-  const Vector2d scale = contentScale();
-  uiScaleConfig_ = ComputeUiScaleConfig(logicalWindowWidth, framebufferWidth, scale.x);
+  if (offscreenScale != 1.0) {
+    // Null platform: the framebuffer/window ratio is always 1, so derive the
+    // display scale from the emulated value and reapply it every frame (see
+    // beginFrameImpl) because ImGui_ImplGlfw_NewFrame would otherwise reset it.
+    uiScaleConfig_.displayScale = offscreenScale;
+    frameDisplayScaleOverride_ = offscreenScale;
+  } else {
+    const Vector2d scale = contentScale();
+    uiScaleConfig_ = ComputeUiScaleConfig(logicalWindowWidth, framebufferWidth, scale.x);
+  }
   io.DisplayFramebufferScale = ImVec2(static_cast<float>(uiScaleConfig_.displayScale),
                                       static_cast<float>(uiScaleConfig_.displayScale));
   io.FontGlobalScale = uiScaleConfig_.fontGlobalScale();
@@ -332,6 +366,19 @@ void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride
   ZoneScopedN("EditorWindow::beginFrame");
   ImGui_ImplOpenGL3_NewFrame();
   ImGui_ImplGlfw_NewFrame();
+  if (frameDisplayScaleOverride_ > 0.0) {
+    // The null platform reports a 1:1 framebuffer/window ratio, so ImGui's GLFW
+    // backend just reset DisplayFramebufferScale to 1. Restore the emulated
+    // HiDPI scale and the matching logical DisplaySize for this frame.
+    ImGuiIO& io = ImGui::GetIO();
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
+    io.DisplaySize = ImVec2(static_cast<float>(framebufferWidth / frameDisplayScaleOverride_),
+                            static_cast<float>(framebufferHeight / frameDisplayScaleOverride_));
+    io.DisplayFramebufferScale = ImVec2(static_cast<float>(frameDisplayScaleOverride_),
+                                        static_cast<float>(frameDisplayScaleOverride_));
+  }
   if (inputOverride != nullptr) {
     ApplyInputOverride(*inputOverride);
   }
