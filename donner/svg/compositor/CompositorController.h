@@ -525,9 +525,9 @@ public:
   /// §M1++. Mirrors what `composeLayers` actually draws so the operator
   /// sees the same sequence of blits the renderer performs.
   ///
-  /// Carries a downsampled thumbnail for every tile (background,
-  /// foreground, segment, layer) so the panel can render previews
-  /// inline instead of just dimensions.
+  /// Carries either a downsampled CPU thumbnail or a backend texture snapshot for every tile
+  /// (background, foreground, segment, layer) so the panel can render previews inline instead of
+  /// just dimensions.
   struct CompositeTileSnapshot {
     enum class Kind : uint8_t {
       Background,
@@ -561,8 +561,11 @@ public:
     /// Whether this tile is the active drag-target layer (highlighted
     /// in the panel). Always false for non-Layer kinds.
     bool isDragTarget = false;
-    /// Aspect-preserving downsample (max-side `kLayerThumbnailMaxSide`)
-    /// of the source bitmap. Empty when the source has no pixels.
+    /// Optional backend-owned GPU texture. Geode-backed editor builds render this directly in the
+    /// layer panel to avoid a CPU readback just for diagnostics.
+    std::shared_ptr<const RendererTextureSnapshot> textureSnapshot;
+    /// Aspect-preserving CPU downsample (max-side `kLayerThumbnailMaxSide`) of the source bitmap.
+    /// Empty when the source has no CPU bitmap or when `textureSnapshot` is used instead.
     Vector2i thumbnailDims = Vector2i::Zero();
     std::vector<uint8_t> thumbnailPixels;
   };

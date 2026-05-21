@@ -358,7 +358,10 @@ donner_cc_library(
         "//donner/editor/wasm:wasm_enabled": [
             "//third_party/emscripten-glfw",
         ],
-        "//donner/svg/renderer:renderer_backend_geode": [],
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer",
+            "@imgui//:imgui_wgpu_backend",
+        ],
         "//conditions:default": [
             "//third_party/glad",
         ],

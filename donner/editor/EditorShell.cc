@@ -862,6 +862,7 @@ bool EditorShell::highlightSelectionSourceIfNeeded() {
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
   textures_.advancePresentationFrame();
+  layerInspectorPanel_.advancePresentationFrame();
   if (reproRecorder_) {
     // Snapshot before any widget consumes input events. ImGui's IO
     // state for the frame has been populated by

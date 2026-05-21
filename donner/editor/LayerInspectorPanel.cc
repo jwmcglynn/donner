@@ -2,16 +2,24 @@
 
 #include <cinttypes>
 #include <cstdint>
+#include <iterator>
 #include <unordered_set>
 
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
+#ifdef DONNER_EDITOR_WGPU
+#include "backends/imgui_impl_wgpu.h"
+#include "donner/svg/renderer/RendererGeode.h"
+#endif
 
 namespace donner::editor {
 
 namespace {
 
 constexpr float kThumbnailDisplayHeight = 48.0f;
+#ifdef DONNER_EDITOR_WGPU
+constexpr std::size_t kRetiredSnapshotFrameLimit = 3;
+#endif
 
 const char* KindLabel(svg::compositor::CompositorController::CompositeTileSnapshot::Kind kind) {
   using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
@@ -39,7 +47,19 @@ const char* RefusalReasonLabel(svg::compositor::CompositorController::PromoteRef
 }  // namespace
 
 LayerInspectorPanel::~LayerInspectorPanel() {
-#ifndef DONNER_EDITOR_WGPU
+#ifdef DONNER_EDITOR_WGPU
+  for (const auto& [_, entry] : textures_) {
+    ReleaseImGuiTexture(entry.texture);
+  }
+  for (const RetiredSnapshot& retired : pendingRetiredSnapshots_) {
+    ReleaseImGuiTexture(retired.texture);
+  }
+  for (const RetiredSnapshotBatch& batch : retiredSnapshotFrames_) {
+    for (const RetiredSnapshot& retired : batch) {
+      ReleaseImGuiTexture(retired.texture);
+    }
+  }
+#else
   for (auto& [_, entry] : textures_) {
     if (entry.texture != 0) {
       glDeleteTextures(1, &entry.texture);
@@ -51,8 +71,48 @@ LayerInspectorPanel::~LayerInspectorPanel() {
 LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
 #ifdef DONNER_EDITOR_WGPU
-  (void)tile;
-  return 0;
+  if (tile.textureSnapshot == nullptr || tile.bitmapDims.x <= 0 || tile.bitmapDims.y <= 0) {
+    auto it = textures_.find(tile.id);
+    if (it != textures_.end()) {
+      RetiredSnapshotBatch retiredSnapshots;
+      if (it->second.textureSnapshot != nullptr) {
+        retiredSnapshots.push_back(
+            RetireSnapshot(it->second.texture, std::move(it->second.textureSnapshot)));
+      }
+      textures_.erase(it);
+      retireSnapshots(std::move(retiredSnapshots));
+    }
+    return 0;
+  }
+
+  const ThumbnailTextureHandle texture = ToImTextureId(tile.textureSnapshot.get());
+  if (texture == 0) {
+    auto it = textures_.find(tile.id);
+    if (it != textures_.end()) {
+      RetiredSnapshotBatch retiredSnapshots;
+      if (it->second.textureSnapshot != nullptr) {
+        retiredSnapshots.push_back(
+            RetireSnapshot(it->second.texture, std::move(it->second.textureSnapshot)));
+      }
+      textures_.erase(it);
+      retireSnapshots(std::move(retiredSnapshots));
+    }
+    return 0;
+  }
+
+  auto& entry = textures_[tile.id];
+  RetiredSnapshotBatch retiredSnapshots;
+  if (entry.textureSnapshot != nullptr && entry.textureSnapshot != tile.textureSnapshot) {
+    retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot)));
+  }
+
+  entry.texture = texture;
+  entry.textureSnapshot = tile.textureSnapshot;
+  entry.uploadedGeneration = tile.generation;
+  entry.width = tile.bitmapDims.x;
+  entry.height = tile.bitmapDims.y;
+  retireSnapshots(std::move(retiredSnapshots));
+  return entry.texture;
 #else
   if (!tile.hasValidBitmap || tile.thumbnailPixels.empty() || tile.thumbnailDims.x <= 0 ||
       tile.thumbnailDims.y <= 0) {
@@ -95,11 +155,19 @@ void LayerInspectorPanel::evictAbsentTiles(
   for (const auto& tile : tiles) {
     live.insert(tile.id);
   }
+#ifdef DONNER_EDITOR_WGPU
+  RetiredSnapshotBatch retiredSnapshots;
+#endif
   for (auto it = textures_.begin(); it != textures_.end();) {
     if (live.find(it->first) == live.end()) {
 #ifndef DONNER_EDITOR_WGPU
       if (it->second.texture != 0) {
         glDeleteTextures(1, &it->second.texture);
+      }
+#else
+      if (it->second.textureSnapshot != nullptr) {
+        retiredSnapshots.push_back(
+            RetireSnapshot(it->second.texture, std::move(it->second.textureSnapshot)));
       }
 #endif
       it = textures_.erase(it);
@@ -107,6 +175,27 @@ void LayerInspectorPanel::evictAbsentTiles(
       ++it;
     }
   }
+#ifdef DONNER_EDITOR_WGPU
+  retireSnapshots(std::move(retiredSnapshots));
+#endif
+}
+
+void LayerInspectorPanel::advancePresentationFrame() {
+#ifdef DONNER_EDITOR_WGPU
+  if (!pendingRetiredSnapshots_.empty()) {
+    retiredSnapshotFrames_.push_back(std::move(pendingRetiredSnapshots_));
+    pendingRetiredSnapshots_.clear();
+  } else if (!retiredSnapshotFrames_.empty()) {
+    retiredSnapshotFrames_.push_back(RetiredSnapshotBatch{});
+  }
+
+  while (retiredSnapshotFrames_.size() > kRetiredSnapshotFrameLimit) {
+    for (const RetiredSnapshot& retired : retiredSnapshotFrames_.front()) {
+      ReleaseImGuiTexture(retired.texture);
+    }
+    retiredSnapshotFrames_.pop_front();
+  }
+#endif
 }
 
 void LayerInspectorPanel::render(
@@ -199,9 +288,9 @@ void LayerInspectorPanel::render(
 #ifdef DONNER_EDITOR_WGPU
     const ThumbnailTextureHandle texture = uploadThumbnail(tile);
     if (texture != 0) {
-      const float aspect = tile.thumbnailDims.y > 0 ? static_cast<float>(tile.thumbnailDims.x) /
-                                                          static_cast<float>(tile.thumbnailDims.y)
-                                                    : 1.0f;
+      const float aspect = tile.bitmapDims.y > 0 ? static_cast<float>(tile.bitmapDims.x) /
+                                                       static_cast<float>(tile.bitmapDims.y)
+                                                 : 1.0f;
       const ImVec2 displaySize(kThumbnailDisplayHeight * aspect, kThumbnailDisplayHeight);
       ImGui::Image(texture, displaySize);
     } else {
@@ -252,5 +341,45 @@ void LayerInspectorPanel::render(
 
   evictAbsentTiles(tiles);
 }
+
+#ifdef DONNER_EDITOR_WGPU
+LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::ToImTextureId(
+    const svg::RendererTextureSnapshot* textureSnapshot) {
+  if (textureSnapshot == nullptr ||
+      textureSnapshot->backend() != svg::RendererTextureSnapshotBackend::Geode) {
+    return 0;
+  }
+
+  const auto* geodeTexture = static_cast<const svg::RendererGeodeTextureSnapshot*>(textureSnapshot);
+  const WGPUTextureView textureView = geodeTexture->textureView();
+  return static_cast<ThumbnailTextureHandle>(reinterpret_cast<std::uintptr_t>(textureView));
+}
+
+LayerInspectorPanel::RetiredSnapshot LayerInspectorPanel::RetireSnapshot(
+    ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot) {
+  return RetiredSnapshot{
+      .texture = texture,
+      .snapshot = std::move(snapshot),
+  };
+}
+
+void LayerInspectorPanel::ReleaseImGuiTexture(ThumbnailTextureHandle texture) {
+  if (texture == 0) {
+    return;
+  }
+
+  ImGui_ImplWGPU_RemoveTexture(texture);
+}
+
+void LayerInspectorPanel::retireSnapshots(RetiredSnapshotBatch snapshots) {
+  if (snapshots.empty()) {
+    return;
+  }
+
+  pendingRetiredSnapshots_.insert(pendingRetiredSnapshots_.end(),
+                                  std::make_move_iterator(snapshots.begin()),
+                                  std::make_move_iterator(snapshots.end()));
+}
+#endif
 
 }  // namespace donner::editor

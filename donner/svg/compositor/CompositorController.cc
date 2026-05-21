@@ -597,6 +597,7 @@ CompositorController::snapshotCompositeTiles() const {
       if (!bitmap.empty()) {
         BuildThumbnail(bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
       }
+      tile.textureSnapshot = texture;
     }
     tiles.push_back(std::move(tile));
   };

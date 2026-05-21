@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
@@ -844,6 +846,19 @@ TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
   ASSERT_TRUE(rowsAfterFirst.front().hasValidBitmap);
   const uint64_t generationAfterFirst = rowsAfterFirst.front().generation;
   const uint32_t rasterizeCountAfterFirst = rowsAfterFirst.front().rasterizeCount;
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  auto layerTile = std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
+    return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Layer;
+  });
+  ASSERT_NE(layerTile, inspectorTiles.end());
+  EXPECT_TRUE(layerTile->hasValidBitmap);
+  EXPECT_EQ(layerTile->bitmapDims, Vector2i(32, 32));
+  EXPECT_NE(layerTile->textureSnapshot, nullptr)
+      << "Geode layer diagnostics should keep the GPU texture snapshot so the layer panel can "
+         "render a thumbnail without CPU readback.";
+  EXPECT_TRUE(layerTile->thumbnailPixels.empty())
+      << "Texture-backed diagnostics should not synthesize a CPU thumbnail.";
 
   const auto countersBeforeDrag = compositor.fastPathCountersForTesting();
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
