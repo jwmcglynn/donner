@@ -2018,7 +2018,8 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
         if (staticSegmentBoundaries_[j].first == left &&
             staticSegmentBoundaries_[j].second == right) {
           newSegments[i] = std::move(staticSegments_[j]);
-          newDirty[i] = newSegments[i].empty();
+          const bool wasDirty = j < staticSegmentDirty_.size() ? staticSegmentDirty_[j] : false;
+          newDirty[i] = newSegments[i].empty() || wasDirty;
           if (j < staticSegmentGeneration_.size()) {
             // Preserve the old slot's generation so the editor's GL
             // texture cache reuses the existing binding — no upload.

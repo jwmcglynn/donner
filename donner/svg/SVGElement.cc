@@ -322,6 +322,13 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
     auto trySetResult = trySetPresentationAttribute(name.name, value);
     const bool attributeWasSet = trySetResult.hasResult() && trySetResult.result();
     if (attributeWasSet) {
+      if (name.name == "transform") {
+        // Source/XML transform edits are settled document changes, not active drag frames.
+        // Keep canvas drag mutations on the transform-only fast path, but force XML-sourced
+        // transform changes through the normal dirty reraster path so filtered layer pixels
+        // settle exactly.
+        markDirty(handle_, components::DirtyFlagsComponent::Paint);
+      }
       // Early-return since if this succeeds, the attribute has already been stored.
       return std::nullopt;
     }

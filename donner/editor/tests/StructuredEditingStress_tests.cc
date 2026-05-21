@@ -400,15 +400,15 @@ protected:
     EXPECT_FALSE(app_.document().lastParseError().has_value()) << phase;
     ExpectLiveSourceLocations(phase);
 
+    svg::RendererBitmap referenceBitmap =
+        RenderReference(app_.document().document().source(), canvasSize_);
+    RenderResult asyncResult = RenderAsyncPhase(phase);
+    tests::CompareBitmapToBitmap(asyncResult.bitmap, referenceBitmap, phase);
+
     svg::Renderer liveRenderer;
     liveRenderer.draw(app_.document().document());
     svg::RendererBitmap liveBitmap = liveRenderer.takeSnapshot();
-    svg::RendererBitmap referenceBitmap =
-        RenderReference(app_.document().document().source(), canvasSize_);
     tests::CompareBitmapToBitmap(liveBitmap, referenceBitmap, phase);
-
-    RenderResult asyncResult = RenderAsyncPhase(phase);
-    tests::CompareBitmapToBitmap(asyncResult.bitmap, referenceBitmap, phase);
     if (::testing::Test::HasFailure() == hadFailureAtStart) {
       StoreLastSettledBitmaps(phase, liveBitmap, referenceBitmap);
     }
