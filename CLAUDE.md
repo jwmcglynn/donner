@@ -1,8 +1,5 @@
 # Donner Project Instructions
 
-**This file is prepended to every user message. Keep entries terse — one sentence of rule + one short example beats a paragraph of rationale. If a rule needs more, link to a design doc instead.**
-
-
 ## Pull Requests
 
 - **Always squash-and-merge** when merging PRs. Use `gh pr merge --squash`.
@@ -52,10 +49,6 @@ When debugging bugs — **especially performance or UI bugs** — write an autom
 
 - **Commits claiming `Fixes #NNN` / `closes #NNN` must name a test file + test name that failed at the parent commit and passes at this commit.** If the test was introduced in the same PR, an earlier commit in the series must show it failing (red→green sequence on the branch).
 - **"Plausible-sounding fix without a documented red→green transition" is an attempt, not a fix.** Use `attempt:` or `hypothesis:` in the commit subject and do NOT close the issue — a human reviewer decides when the evidence is sufficient.
-
-## Diagnosable Failure Codes
-
-- **Functions that can fail for N reasons must return an `enum class XxxReason`, not `bool`.** `bool false` collapses every cause to "something went wrong" and forces the next debugger to re-derive it. `bool` is fine for true predicates (`isEmpty()`); the rule targets multi-cause failure-vs-success returns.
 
 ## No Dead Code, Refactor In-Place
 
