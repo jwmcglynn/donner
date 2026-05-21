@@ -66,6 +66,8 @@ struct LayerInspectorStatusReadback {
     Vector2d bitmapDimsDoc = Vector2d::Zero();
     /// Drag translation represented by the presented tile.
     Vector2d dragTranslationDoc = Vector2d::Zero();
+    /// Effective drag translation used by the render-pane presenter this frame.
+    Vector2d presentedDragTranslationDoc = Vector2d::Zero();
     /// Backend texture/view handle, represented as an integer for diagnostics.
     std::uint64_t textureHandle = 0;
     /// True when the tile reused an existing texture with metadata-only geometry.

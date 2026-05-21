@@ -97,6 +97,8 @@ struct RenderRequest {
     /// compositor stamps the correct `InteractionHint` on the entity based
     /// on this field so downstream introspection stays accurate.
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
+    /// Active drag translation represented by this request. Selection prewarms use zero.
+    Vector2d translation = Vector2d::Zero();
   };
 
   /**
@@ -201,6 +203,8 @@ struct RenderResult {
     Entity entity = entt::null;
     /// Interaction phase that produced this composited preview.
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::Selection;
+    /// Drag preview state represented by the tile transforms in this result.
+    std::optional<RenderRequest::DragPreview> representedDragPreview;
 
     [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };

@@ -366,6 +366,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
           .canvasOffsetDoc = tile.canvasOffsetDoc,
           .bitmapDimsDoc = tile.bitmapDimsDoc,
           .dragTranslationDoc = tile.dragTranslationDoc,
+          .presentedDragTranslationDoc = tile.presentedDragTranslationDoc,
           .textureHandle = tile.textureHandle,
           .metadataOnly = tile.metadataOnly,
           .isDragTarget = tile.isDragTarget,

@@ -259,6 +259,7 @@ donner_cc_test(
         "//donner/editor:command_queue",
         "//donner/editor:editor_app",
         "//donner/editor:overlay_renderer",
+        "//donner/editor:presented_frame_composer",
         "//donner/editor:render_coordinator",
         "//donner/editor:tracy_wrapper",
         "//donner/svg/compositor",

@@ -220,8 +220,18 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
       .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
   };
+  const std::optional<SelectTool::ActiveDragPreview> activeDragPreview =
+      selectTool_.activeDragPreview();
+  const std::optional<SelectTool::ActiveDragPreview> displayedDragPreview =
+      renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
   readback.tiles.reserve(textures_.tiles().size());
   for (const GlTextureCache::TileView& tile : textures_.tiles()) {
+    Vector2d presentedDragTranslationDoc = tile.dragTranslationDoc;
+    if (tile.isDragTarget && activeDragPreview.has_value() && displayedDragPreview.has_value() &&
+        activeDragPreview->entity == displayedDragPreview->entity) {
+      presentedDragTranslationDoc +=
+          activeDragPreview->translation - displayedDragPreview->translation;
+    }
     readback.tiles.push_back(LayerInspectorStatusReadback::Tile{
         .id = tile.id,
         .kind = tile.kind,
@@ -231,6 +241,7 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
         .canvasOffsetDoc = tile.canvasOffsetDoc,
         .bitmapDimsDoc = tile.bitmapDimsDoc,
         .dragTranslationDoc = tile.dragTranslationDoc,
+        .presentedDragTranslationDoc = presentedDragTranslationDoc,
         .textureHandle = static_cast<std::uint64_t>(tile.texture),
         .metadataOnly = tile.metadataOnly,
         .isDragTarget = tile.isDragTarget,
@@ -540,7 +551,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
                                             textures_);
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
-          app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
+          app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+          RenderCoordinator::OverlayUploadMode::MatchDisplayedVersion,
+          selectTool_.activeDragPreview());
       interactionController_.clearPendingClick();
     } else {
       // Worker is busy with a (likely-stale) prewarm render at the
@@ -573,11 +586,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         lastPostedScreenPoint_ = currentScreen;
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
           renderCoordinator_.refreshSelectionBoundsCache(app_);
-          if (selectTool_.activeDragPreview().has_value()) {
-            renderCoordinator_.rasterizeOverlayForCurrentSelection(
-                app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-                RenderCoordinator::OverlayUploadMode::Immediate);
-          }
         }
       }
     }
@@ -624,6 +632,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .textures = textures_,
       .activeDragPreview = activeDragPreview,
       .displayedDragPreview = displayedDragPreview,
+      .overlayDragPreview = renderCoordinator_.presentedOverlayDragPreview(),
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
   };
   renderPanePresenter_.render(paneState);

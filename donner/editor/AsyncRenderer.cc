@@ -18,7 +18,8 @@ namespace {
 RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
     svg::SVGDocument& document, const svg::RendererBitmap& bitmap,
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot, std::uint64_t generation,
-    Entity entity, svg::compositor::InteractionHint interactionKind) {
+    Entity entity, svg::compositor::InteractionHint interactionKind,
+    std::optional<RenderRequest::DragPreview> representedDragPreview) {
   RenderResult::CompositedTile tile;
   tile.kind = RenderResult::CompositedTile::Kind::Segment;
   tile.id = "full-canvas";
@@ -44,6 +45,7 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
       .tiles = {std::move(tile)},
       .entity = entity,
       .interactionKind = interactionKind,
+      .representedDragPreview = std::move(representedDragPreview),
   };
 }
 
@@ -512,6 +514,7 @@ void AsyncRenderer::workerLoop() {
           .tiles = std::move(previewTiles),
           .entity = compositorEntity_,
           .interactionKind = request.dragPreview->interactionKind,
+          .representedDragPreview = request.dragPreview,
       };
     };
 
@@ -582,9 +585,9 @@ void AsyncRenderer::workerLoop() {
       const svg::compositor::InteractionHint interactionKind =
           request.dragPreview.has_value() ? request.dragPreview->interactionKind
                                           : svg::compositor::InteractionHint::Selection;
-      compositedPreview =
-          BuildFullCanvasCompositedPreview(requestDocument, bitmap, std::move(fullCanvasTexture),
-                                           request.version, previewEntity, interactionKind);
+      compositedPreview = BuildFullCanvasCompositedPreview(
+          requestDocument, bitmap, std::move(fullCanvasTexture), request.version, previewEntity,
+          interactionKind, request.dragPreview);
     }
 
     std::function<void()> wake;

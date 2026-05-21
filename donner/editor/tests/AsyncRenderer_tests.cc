@@ -21,6 +21,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
@@ -774,6 +775,7 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
     request.dragPreview = RenderRequest::DragPreview{
         .entity = target->entityHandle().entity(),
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+        .translation = Vector2d(3.0, 2.0),
     };
 
     asyncRenderer.requestRender(request);
@@ -791,10 +793,21 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
     ASSERT_EQ(result->compositedPreview->tiles.size(), 1u) << svgBody;
     const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
     EXPECT_EQ(tile.id, "full-canvas") << svgBody;
-    EXPECT_FALSE(tile.bitmap.empty()) << svgBody;
-    EXPECT_EQ(tile.bitmap.dimensions, result->bitmap.dimensions) << svgBody;
-    EXPECT_EQ(tile.bitmap.pixels, result->bitmap.pixels) << svgBody;
+    EXPECT_TRUE(HasPresentationPayload(tile)) << svgBody;
+    if (!tile.bitmap.empty()) {
+      EXPECT_EQ(tile.bitmap.dimensions, result->bitmap.dimensions) << svgBody;
+      EXPECT_EQ(tile.bitmap.pixels, result->bitmap.pixels) << svgBody;
+    }
+    if (tile.textureSnapshot != nullptr) {
+      EXPECT_EQ(tile.textureSnapshot->dimensions(), tile.bitmapDimsPx) << svgBody;
+    }
     EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity()) << svgBody;
+    ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value()) << svgBody;
+    EXPECT_EQ(result->compositedPreview->representedDragPreview->entity,
+              target->entityHandle().entity())
+        << svgBody;
+    EXPECT_EQ(result->compositedPreview->representedDragPreview->translation, Vector2d(3.0, 2.0))
+        << svgBody;
   }
 }
 
@@ -1414,6 +1427,98 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
       << "new=" << testing::PrintToString(newLayers) << "\n"
       << "after_o_drag=" << testing::PrintToString(describeLayers(afterODragLayers)) << "\n"
       << "after_e_click=" << testing::PrintToString(describeLayers(afterEClickLayers));
+}
+
+TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
+  app.document().document().setCanvasSize(1784, 1024);
+
+  std::optional<svg::SVGElement> backgroundPath =
+      app.document().document().querySelector("#Background_sticker > path");
+  if (!backgroundPath.has_value()) {
+    backgroundPath = app.document().document().querySelector("#Background_sticker path");
+  }
+  ASSERT_TRUE(backgroundPath.has_value());
+  const Entity backgroundEntity = backgroundPath->entityHandle().entity();
+  app.setSelection(*backgroundPath);
+
+  SelectTool selectTool;
+  const Box2d selectedBounds = Box2d::FromXYWH(230.0, 80.0, 470.0, 410.0);
+  ASSERT_TRUE(selectTool.tryStartRedragOnSelected(app, Vector2d(300.0, 200.0), MouseModifiers{},
+                                                  std::span<const Box2d>(&selectedBounds, 1)));
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  RenderRequest request(renderer, app.document().document());
+  request.version = 1;
+  request.documentGeneration = app.document().documentGeneration();
+  request.selectedEntity = backgroundEntity;
+  request.dragPreview = RenderRequest::DragPreview{
+      .entity = backgroundEntity,
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      .translation = selectTool.activeDragPreview()->translation,
+  };
+  asyncRenderer.requestRender(request);
+
+  std::optional<RenderResult> result;
+  for (int i = 0; i < 300 && !result.has_value(); ++i) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
+  EXPECT_EQ(result->compositedPreview->representedDragPreview->translation, Vector2d::Zero());
+
+  CompositedPresentation presentation;
+  presentation.noteCachedTextures(
+      result->compositedPreview->entity, result->version, app.document().document().canvasSize(),
+      SelectTool::ActiveDragPreview{
+          .entity = result->compositedPreview->representedDragPreview->entity,
+          .translation = result->compositedPreview->representedDragPreview->translation,
+      });
+
+  selectTool.onMouseMove(app, Vector2d(312.0, 204.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  const SelectTool::ActiveDragPreview activeDrag = *selectTool.activeDragPreview();
+  ASSERT_EQ(activeDrag.entity, backgroundEntity);
+  EXPECT_EQ(activeDrag.translation, Vector2d(12.0, 4.0));
+
+  const std::optional<SelectTool::ActiveDragPreview> displayedDrag =
+      presentation.presentationPreview(activeDrag);
+  ASSERT_TRUE(displayedDrag.has_value());
+  EXPECT_EQ(displayedDrag->translation, Vector2d::Zero());
+
+  const auto dragTileIt =
+      std::find_if(result->compositedPreview->tiles.begin(), result->compositedPreview->tiles.end(),
+                   [](const RenderResult::CompositedTile& tile) { return tile.isDragTarget; });
+  ASSERT_NE(dragTileIt, result->compositedPreview->tiles.end());
+
+  const PresentedFrameTileGeometry tile{
+      .canvasOffsetDoc = dragTileIt->canvasOffsetDoc,
+      .bitmapDimsDoc = dragTileIt->bitmapDimsDoc,
+      .dragTranslationDoc = dragTileIt->dragTranslationDoc,
+      .isDragTarget = dragTileIt->isDragTarget,
+  };
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = activeDrag.entity,
+      .representedTranslationDoc = displayedDrag->translation,
+      .activeTranslationDoc = activeDrag.translation,
+  };
+  EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, baseline), activeDrag.translation)
+      << "A stale promoted #Background_sticker tile must move at the current mouse delta, not wait "
+         "for the next worker result.";
 }
 
 // Regression: bumping `version` every drag frame (as `AsyncSVGDocument::
@@ -2920,6 +3025,55 @@ TEST(RenderCoordinatorTest, ImmediateOverlayUploadBypassesDisplayedVersionGate) 
       app, viewport, textures, std::nullopt, RenderCoordinator::OverlayUploadMode::Immediate));
   EXPECT_FALSE(immediateCoordinator.hasPendingOverlayForTesting())
       << "active-drag overlay mode must publish current-frame chrome immediately";
+}
+
+TEST(RenderCoordinatorTest, ActiveDragReusesOverlayForPureTranslation) {
+  svg::Renderer rendererProbe;
+  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Overlay drag presentation is exercised by the Geode direct-texture path.";
+  }
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+  app.document().document().setCanvasSize(64, 64);
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(64.0, 64.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+
+  SelectTool selectTool;
+  const Box2d selectedBounds = Box2d::FromXYWH(8.0, 8.0, 16.0, 16.0);
+  ASSERT_TRUE(selectTool.tryStartRedragOnSelected(app, Vector2d(12.0, 12.0), MouseModifiers{},
+                                                  std::span<const Box2d>(&selectedBounds, 1)));
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, textures, std::nullopt, RenderCoordinator::OverlayUploadMode::Immediate,
+      selectTool.activeDragPreview()));
+  ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
+  EXPECT_EQ(coordinator.presentedOverlayDragPreview()->translation, Vector2d::Zero());
+
+  selectTool.onMouseMove(app, Vector2d(20.0, 12.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  EXPECT_EQ(selectTool.activeDragPreview()->translation, Vector2d(8.0, 0.0));
+
+  coordinator.maybeRequestRender(app, selectTool, viewport, textures);
+
+  ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
+  EXPECT_EQ(coordinator.presentedOverlayDragPreview()->translation, Vector2d::Zero())
+      << "Pure translation drags should move the overlay texture at presentation time instead of "
+         "rerasterizing chrome every frame.";
 }
 
 TEST(RenderCoordinatorTest, ImmediateOverlayUploadAllowsEmptyOrFullCanvasContent) {

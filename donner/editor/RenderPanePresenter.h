@@ -15,6 +15,7 @@ struct RenderPanePresenterState {
   const GlTextureCache& textures;
   const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview;
   const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview;
+  const std::optional<SelectTool::ActiveDragPreview>& overlayDragPreview;
   Vector2d contentRegion = Vector2d::Zero();
 };
 

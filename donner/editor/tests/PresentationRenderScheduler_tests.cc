@@ -72,6 +72,7 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithStaleCacheRequestsDragCaptur
   ASSERT_TRUE(decision.dragPreview.has_value());
   EXPECT_EQ(decision.dragPreview->entity, Entity(7));
   EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::ActiveDrag);
+  EXPECT_EQ(decision.dragPreview->translation, Vector2d(4.0, 0.0));
 }
 
 TEST(PresentationRenderSchedulerTest, SettledSelectionRefreshRequestsSelectionHint) {

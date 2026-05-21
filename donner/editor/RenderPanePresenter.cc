@@ -194,10 +194,12 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
   const std::optional<PresentedDragBaseline> dragBaseline =
       PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.displayedDragPreview);
+  bool hasDragTargetTile = false;
   for (const auto& tile : state.textures.tiles()) {
     if (tile.texture == 0) {
       continue;
     }
+    hasDragTargetTile = hasDragTargetTile || tile.isDragTarget;
     const std::optional<PresentedTileRect> tileRect = ComputePresentedTileRect(
         PresentedGeometryFromTile(tile), screenFromCanvasTransform, dragBaseline);
     if (!tileRect.has_value()) {
@@ -217,7 +219,21 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   // was removed so there is a single invalidation envelope the GPU
   // backend (Geode) can optimize end-to-end.
   if (state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0) {
-    paneDrawList->AddImage(state.textures.overlayTexture(), imageOrigin, imageBottomRight);
+    const std::optional<PresentedDragBaseline> overlayBaseline =
+        hasDragTargetTile
+            ? PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.overlayDragPreview)
+            : std::nullopt;
+    const Vector2d overlayTranslationDoc = ResolvePresentedOverlayDragTranslation(overlayBaseline);
+    const ImVec2 overlayTranslationScreen(static_cast<float>(overlayTranslationDoc.x * pxPerDoc),
+                                          static_cast<float>(overlayTranslationDoc.y * pxPerDoc));
+    paneDrawList->PushClipRect(imageOrigin, imageBottomRight,
+                               /*intersect_with_current_clip_rect=*/true);
+    paneDrawList->AddImage(state.textures.overlayTexture(),
+                           ImVec2(imageOrigin.x + overlayTranslationScreen.x,
+                                  imageOrigin.y + overlayTranslationScreen.y),
+                           ImVec2(imageBottomRight.x + overlayTranslationScreen.x,
+                                  imageBottomRight.y + overlayTranslationScreen.y));
+    paneDrawList->PopClipRect();
   }
 
   constexpr float kFramePadding = 8.0f;

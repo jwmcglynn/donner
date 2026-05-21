@@ -144,7 +144,41 @@ TEST(CompositedPresentationTest, CachedTilesRemainVisibleAtIdle) {
   };
   ASSERT_TRUE(state.presentationPreview(active).has_value());
   EXPECT_EQ(state.presentationPreview(active)->entity, Entity(7));
-  EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 4.0);
+  EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 0.0);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+}
+
+TEST(CompositedPresentationTest, ActiveDragUsesCachedRepresentedTranslation) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+
+  SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(4.0, 0.0),
+  };
+  ASSERT_TRUE(state.presentationPreview(active).has_value());
+  EXPECT_EQ(state.presentationPreview(active)->entity, Entity(7));
+  EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 0.0);
+  EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.y, 0.0);
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+}
+
+TEST(CompositedPresentationTest, ActiveDragUsesLandedRepresentedTranslation) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100),
+                           SelectTool::ActiveDragPreview{
+                               .entity = Entity(7),
+                               .translation = Vector2d(3.0, 1.0),
+                           });
+
+  SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(5.0, 2.0),
+  };
+  ASSERT_TRUE(state.presentationPreview(active).has_value());
+  EXPECT_EQ(state.presentationPreview(active)->entity, Entity(7));
+  EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 3.0);
+  EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.y, 1.0);
   EXPECT_TRUE(Snapshot(state).hasCachedTextures);
 }
 

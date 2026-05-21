@@ -286,6 +286,8 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
         PrintVector2d(tile.bitmapDimsDoc);
         std::cout << ",\"drag_translation_doc\":";
         PrintVector2d(tile.dragTranslationDoc);
+        std::cout << ",\"presented_drag_translation_doc\":";
+        PrintVector2d(tile.presentedDragTranslationDoc);
         std::cout << ",\"texture_handle\":" << tile.textureHandle
                   << ",\"metadata_only\":" << (tile.metadataOnly ? "true" : "false")
                   << ",\"is_drag_target\":" << (tile.isDragTarget ? "true" : "false") << "}";

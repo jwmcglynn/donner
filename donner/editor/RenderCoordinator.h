@@ -77,6 +77,11 @@ public:
   [[nodiscard]] const CompositedPresentation& compositedPresentation() const {
     return compositedPresentation_;
   }
+  /// Drag preview state represented by the currently uploaded overlay texture.
+  [[nodiscard]] const std::optional<SelectTool::ActiveDragPreview>& presentedOverlayDragPreview()
+      const {
+    return presentedOverlayDragPreview_;
+  }
   [[nodiscard]] std::uint64_t displayedDocVersion() const { return displayedDocVersion_; }
   /// Return true when freshly rasterized overlay chrome is waiting for a
   /// matching async-render result before upload.
@@ -93,7 +98,8 @@ public:
   bool rasterizeOverlayForCurrentSelection(
       EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
       const std::optional<Box2d>& marqueeRectDoc,
-      OverlayUploadMode uploadMode = OverlayUploadMode::MatchDisplayedVersion);
+      OverlayUploadMode uploadMode = OverlayUploadMode::MatchDisplayedVersion,
+      std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt);
   /// Drain the latest async-render result into the editor's UI state.
   /// If a `frameHistory` is supplied, its latest slot is stamped with
   /// the backend (worker) ms reported by `AsyncRenderer` so the frame
@@ -124,6 +130,8 @@ private:
 
   std::optional<svg::RendererBitmap> pendingOverlayBitmap_;
   std::shared_ptr<const svg::RendererTextureSnapshot> pendingOverlayTexture_;
+  std::optional<SelectTool::ActiveDragPreview> pendingOverlayDragPreview_;
+  std::optional<SelectTool::ActiveDragPreview> presentedOverlayDragPreview_;
   std::uint64_t pendingOverlayVersion_ = 0;
   std::uint64_t displayedDocVersion_ = 0;
 
