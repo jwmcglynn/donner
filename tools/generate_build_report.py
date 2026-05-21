@@ -469,6 +469,33 @@ def make_lines_of_code_section(runner: CommandRunner) -> SectionResult:
     )
 
 
+def make_feature_loc_section(runner: CommandRunner) -> SectionResult:
+    args = ["tools/feature_loc.py"]
+    result = runner.run("feature-loc", args)
+
+    if result.success:
+        if result.stdout:
+            content = f"Generated with: `{format_command(args)}`\n\n{result.stdout}"
+        else:
+            content = (
+                f"Generated with: `{format_command(args)}`\n\n"
+                "(feature_loc.py produced no output)"
+            )
+    else:
+        content = _render_command_block(
+            format_command(args),
+            result,
+            empty_output_message="(feature_loc.py produced no output)",
+        )
+
+    return SectionResult(
+        "Feature LOC",
+        _result_status(result),
+        result.duration_sec,
+        content,
+    )
+
+
 # Where `tools/binary_size.sh` / `tools/coverage.sh` drop their HTML output
 # inside the workspace. These live at the repo root and are `.gitignore`d.
 _BINARY_SIZE_OUTPUT_DIR = Path("build-binary-size")
@@ -819,7 +846,7 @@ def create_build_report(
     runner = runner or CommandRunner()
     links = _resolve_link_targets(link_mode)
 
-    sections = [make_lines_of_code_section(runner)]
+    sections = [make_lines_of_code_section(runner), make_feature_loc_section(runner)]
     if options.all or options.binary_size:
         sections.append(
             make_binary_size_section(
