@@ -241,6 +241,14 @@ class GenerateBuildReportTests(unittest.TestCase):
                     stderr="",
                     duration_sec=0.5,
                 ),
+                ("tools/feature_loc.py",): generate_build_report.CommandResult(
+                    label="feature-loc",
+                    args=("tools/feature_loc.py",),
+                    returncode=0,
+                    stdout="| Feature | Product LOC |\n| Text | 42 |",
+                    stderr="",
+                    duration_sec=0.2,
+                ),
                 (
                     "bazel",
                     "query",
@@ -280,9 +288,12 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertIn("## Summary", report)
         self.assertIn("- Working tree: dirty (2 paths)", report)
         self.assertIn("- Lines of Code: success (0.5s)", report)
+        self.assertIn("- Feature LOC: success (0.2s)", report)
         self.assertIn("- Tests: success (9.0s)", report)
         self.assertIn("- Public Targets: success (1.2s)", report)
         self.assertIn("## Local Changes", report)
+        self.assertIn("## Feature LOC", report)
+        self.assertIn("| Text | 42 |", report)
         self.assertIn("## Tests", report)
         self.assertIn("## Public Targets", report)
         self.assertIn("//:donner", report)

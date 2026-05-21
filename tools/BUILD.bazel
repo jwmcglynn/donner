@@ -56,3 +56,11 @@ py_test(
         "generate_build_report_tests.py",
     ],
 )
+
+py_test(
+    name = "feature_loc_tests",
+    srcs = [
+        "feature_loc.py",
+        "feature_loc_tests.py",
+    ],
+)
