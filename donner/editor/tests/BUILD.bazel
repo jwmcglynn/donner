@@ -52,10 +52,20 @@ donner_cc_test(
 donner_cc_test(
     name = "editor_window_tests",
     srcs = ["EditorWindow_tests.cc"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
     deps = [
         "//donner/editor/gui:editor_window",
         "@com_google_gtest//:gtest_main",
-    ],
+    ] + select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+            "@imgui//:imgui_wgpu_backend",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_test(

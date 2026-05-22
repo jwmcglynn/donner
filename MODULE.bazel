@@ -237,6 +237,7 @@ git_override(
     patches = [
         "//third_party/patches:imgui_bazel_build_files.patch",
         "//third_party/patches:imgui_wgpu_texture_cache.patch",
+        "//third_party/patches:imgui_wgpu_premultiplied_textures.patch",
     ],
     patch_strip = 1,
 )

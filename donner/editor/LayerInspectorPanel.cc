@@ -99,6 +99,7 @@ LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail
     }
     return 0;
   }
+  ImGui_ImplWGPU_SetTexturePremultipliedAlpha(texture, true);
 
   auto& entry = textures_[tile.id];
   RetiredSnapshotBatch retiredSnapshots;

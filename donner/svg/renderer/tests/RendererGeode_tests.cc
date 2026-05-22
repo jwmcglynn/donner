@@ -329,6 +329,41 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   EXPECT_EQ(secondTexture->dimensions(), texture->dimensions());
 }
 
+TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  RendererGeode source = createRenderer();
+  beginFrame(source);
+  source.setPaint(solidFill(css::RGBA(255, 0, 0, 128)));
+  source.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  source.endFrame();
+
+  std::shared_ptr<const RendererTextureSnapshot> texture = source.takeTextureSnapshot();
+  ASSERT_TRUE(texture != nullptr);
+  EXPECT_EQ(texture->alphaType(), AlphaType::Premultiplied);
+
+  RendererGeode composited = createRenderer();
+  beginFrame(composited);
+  ASSERT_TRUE(composited.drawTextureSnapshot(
+      *texture, Box2d(Vector2d::Zero(), Vector2d(kViewportSize, kViewportSize))));
+  composited.endFrame();
+  const RendererBitmap actual = composited.takeSnapshot();
+
+  RendererGeode reference = createRenderer();
+  beginFrame(reference);
+  reference.setPaint(solidFill(css::RGBA(255, 0, 0, 128)));
+  reference.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  reference.endFrame();
+  const RendererBitmap expected = reference.takeSnapshot();
+
+  ASSERT_FALSE(actual.empty());
+  ASSERT_FALSE(expected.empty());
+  ASSERT_EQ(actual.dimensions, expected.dimensions);
+  EXPECT_EQ(pixelAt(actual, 32, 32), pixelAt(expected, 32, 32))
+      << "Texture snapshots are premultiplied render-target pixels. The blit shader must not "
+         "premultiply them again.";
+}
+
 TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
   ASSERT_TRUE(host != nullptr);

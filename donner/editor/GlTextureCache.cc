@@ -103,6 +103,7 @@ void GlTextureCache::uploadOverlayTexture(
   overlayTextureSnapshot_ = std::move(textureSnapshot);
   overlayTexture_ = ToImTextureId(overlayTextureSnapshot_.get());
   if (overlayTextureSnapshot_ != nullptr && overlayTexture_ != 0) {
+    ImGui_ImplWGPU_SetTexturePremultipliedAlpha(overlayTexture_, true);
     const Vector2i dims = overlayTextureSnapshot_->dimensions();
     overlayWidth_ = dims.x;
     overlayHeight_ = dims.y;
@@ -176,6 +177,7 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
     if (textureId == 0) {
       continue;
     }
+    ImGui_ImplWGPU_SetTexturePremultipliedAlpha(textureId, true);
     liveIds.insert(tile.id);
     auto& entry = tileTextures_[tile.id];
     const Vector2i textureDims = tile.textureSnapshot->dimensions();

@@ -1634,6 +1634,10 @@ void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect
   qp.opacity = opacity;
   qp.filter =
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
+  // Renderer texture snapshots come from Geode render targets, which store
+  // premultiplied RGBA. Sampling them as straight-alpha would multiply RGB by
+  // alpha a second time and visibly darken translucent cached layers.
+  qp.sourceIsPremultiplied = true;
   qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, texture,

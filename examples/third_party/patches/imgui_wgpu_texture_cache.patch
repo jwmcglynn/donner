@@ -14,7 +14,7 @@ index 12345678..23456789 100644
  IMGUI_IMPL_API void ImGui_ImplWGPU_NewFrame();
  IMGUI_IMPL_API void ImGui_ImplWGPU_RenderDrawData(ImDrawData* draw_data, WGPURenderPassEncoder pass_encoder);
 +IMGUI_IMPL_API void ImGui_ImplWGPU_RemoveTexture(ImTextureID texture_id);
- 
+
  // Use if you want to reset your rendering device without losing Dear ImGui state.
  IMGUI_IMPL_API void ImGui_ImplWGPU_InvalidateDeviceObjects();
 diff --git a/backends/imgui_impl_wgpu.cpp b/backends/imgui_impl_wgpu.cpp
@@ -24,7 +24,7 @@ index 12345678..23456789 100644
 @@ -230,15 +230,28 @@ static void SafeRelease(WGPUTexture& res)
      res = nullptr;
  }
- 
+
 +static void SafeReleaseImageBindGroupCache(RenderResources& res)
 +{
 +    for (int n = 0; n < res.ImageBindGroups.Data.Size; n++)
@@ -51,7 +51,7 @@ index 12345678..23456789 100644
 @@ -279,6 +292,31 @@ static WGPUBindGroup ImGui_ImplWGPU_CreateImageBindGroup(WGPUBindGroupLayout la
      return wgpuDeviceCreateBindGroup(bd->wgpuDevice, &image_bg_descriptor);
  }
- 
+
 +void ImGui_ImplWGPU_RemoveTexture(ImTextureID texture_id)
 +{
 +    ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();
