@@ -99,12 +99,15 @@ LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail
     }
     return 0;
   }
-  ImGui_ImplWGPU_SetTexturePremultipliedAlpha(texture, true);
 
   auto& entry = textures_[tile.id];
   RetiredSnapshotBatch retiredSnapshots;
+  const bool acquiredSnapshot = entry.textureSnapshot != tile.textureSnapshot;
   if (entry.textureSnapshot != nullptr && entry.textureSnapshot != tile.textureSnapshot) {
     retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot)));
+  }
+  if (acquiredSnapshot) {
+    ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(texture);
   }
 
   entry.texture = texture;
@@ -369,6 +372,7 @@ void LayerInspectorPanel::ReleaseImGuiTexture(ThumbnailTextureHandle texture) {
     return;
   }
 
+  ImGui_ImplWGPU_RemoveTexturePremultipliedAlphaRef(texture);
   ImGui_ImplWGPU_RemoveTexture(texture);
 }
 

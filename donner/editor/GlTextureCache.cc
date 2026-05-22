@@ -97,13 +97,17 @@ void GlTextureCache::uploadOverlayTexture(
   ZoneScopedN("GlTextureCache::uploadOverlayTexture");
 #ifdef DONNER_EDITOR_WGPU
   RetiredSnapshotBatch retiredSnapshots;
+  const bool acquiredSnapshot =
+      textureSnapshot != nullptr && overlayTextureSnapshot_ != textureSnapshot;
   if (overlayTextureSnapshot_ != nullptr && overlayTextureSnapshot_ != textureSnapshot) {
     retiredSnapshots.push_back(RetireSnapshot(overlayTexture_, std::move(overlayTextureSnapshot_)));
   }
   overlayTextureSnapshot_ = std::move(textureSnapshot);
   overlayTexture_ = ToImTextureId(overlayTextureSnapshot_.get());
   if (overlayTextureSnapshot_ != nullptr && overlayTexture_ != 0) {
-    ImGui_ImplWGPU_SetTexturePremultipliedAlpha(overlayTexture_, true);
+    if (acquiredSnapshot) {
+      ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(overlayTexture_);
+    }
     const Vector2i dims = overlayTextureSnapshot_->dimensions();
     overlayWidth_ = dims.x;
     overlayHeight_ = dims.y;
@@ -177,12 +181,15 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
     if (textureId == 0) {
       continue;
     }
-    ImGui_ImplWGPU_SetTexturePremultipliedAlpha(textureId, true);
     liveIds.insert(tile.id);
     auto& entry = tileTextures_[tile.id];
     const Vector2i textureDims = tile.textureSnapshot->dimensions();
+    const bool acquiredSnapshot = entry.textureSnapshot != tile.textureSnapshot;
     if (entry.textureSnapshot != nullptr && entry.textureSnapshot != tile.textureSnapshot) {
       retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot)));
+    }
+    if (acquiredSnapshot) {
+      ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(textureId);
     }
     entry.texture = textureId;
     entry.textureSnapshot = tile.textureSnapshot;
@@ -343,6 +350,7 @@ void GlTextureCache::releaseImGuiTexture(NativeTextureHandle texture) {
     return;
   }
 
+  ImGui_ImplWGPU_RemoveTexturePremultipliedAlphaRef(texture);
   ImGui_ImplWGPU_RemoveTexture(texture);
 }
 
