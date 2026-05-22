@@ -44,6 +44,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "examples/geode_embed_surface.h"
 
 extern "C" {
@@ -224,21 +225,17 @@ int main(int argc, char* argv[]) {
       // minimal example we simply skip the frame.
       if (surfaceTex.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
           surfaceTex.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-        if (surfaceTex.texture) {
-          wgpuTextureRelease(surfaceTex.texture);
-        }
+        donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
+            wgpu::Texture(surfaceTex.texture));
         continue;
       }
 
-      wgpu::Texture target = surfaceTex.texture;
-      renderer.setTargetTexture(target);
+      donner::geode::ScopedWgpuHandle<wgpu::Texture> target(wgpu::Texture(surfaceTex.texture));
+      renderer.setTargetTexture(target.get());
       renderer.draw(document);
       renderer.clearTargetTexture();
 
       surface.present();
-      // `getCurrentTexture` returns with a +1 refcount that must be balanced
-      // after present.
-      wgpuTextureRelease(surfaceTex.texture);
     }
   }
 

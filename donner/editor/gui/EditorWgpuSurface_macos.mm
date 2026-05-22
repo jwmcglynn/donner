@@ -1,7 +1,7 @@
 /// @file
-/// macOS (Cocoa/Metal) implementation of `CreateSurfaceFromGlfwWindow`.
+/// macOS (Cocoa/Metal) implementation of `CreateWgpuSurfaceFromGlfwWindow`.
 
-#include "examples/geode_embed_surface.h"
+#include "donner/editor/gui/EditorWgpuSurface.h"
 
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -12,9 +12,9 @@ extern "C" {
 #include "GLFW/glfw3native.h"
 }
 
-namespace donner::example {
+namespace donner::editor::gui {
 
-wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwindow* window) {
+wgpu::Surface CreateWgpuSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwindow* window) {
   if (window == nullptr) {
     return {};
   }
@@ -38,4 +38,4 @@ wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwi
   return instance.createSurface(desc);
 }
 
-}  // namespace donner::example
+}  // namespace donner::editor::gui

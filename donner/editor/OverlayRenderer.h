@@ -116,8 +116,8 @@ public:
   /// All chrome lives in this one rasterized overlay layer. The earlier
   /// "two-path" design that drew AABBs + marquee directly via
   /// ImGui's draw list in `RenderPanePresenter` was folded into here
-  /// — Geode can optimize the whole layer end-to-end (a single
-  /// invalidation envelope, a single GPU upload) once it lands.
+  /// — in Geode editor builds the resulting overlay is exported as a
+  /// `RendererTextureSnapshot` and presented directly through WebGPU.
   ///
   /// AABBs are computed inline from `selection` (via
   /// `SnapshotSelectionWorldBounds`) at overlay-draw time so they

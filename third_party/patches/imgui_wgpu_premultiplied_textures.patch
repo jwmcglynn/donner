@@ -1,0 +1,295 @@
+Subject: [PATCH] Add WGPU premultiplied texture presentation
+
+Dear ImGui's WGPU backend normally treats every sampled texture as straight
+alpha and uses src-alpha color blending. Donner's Geode render-target snapshots
+are premultiplied alpha, so presenting them directly as ImTextureID multiplies
+their RGB by alpha a second time and darkens translucent editor tiles.
+
+Add a small per-texture registration API and switch only those draw commands to
+a premultiplied-alpha shader/pipeline. Regular Dear ImGui UI and font rendering
+keep the stock straight-alpha path. Registrations are reference-counted because
+multiple editor presentation owners can point at the same transient texture view.
+
+diff --git a/backends/imgui_impl_wgpu.h b/backends/imgui_impl_wgpu.h
+index 23456789..34567890 100644
+--- a/backends/imgui_impl_wgpu.h
++++ b/backends/imgui_impl_wgpu.h
+@@ -54,6 +54,9 @@ IMGUI_IMPL_API void ImGui_ImplWGPU_Shutdown();
+ IMGUI_IMPL_API void ImGui_ImplWGPU_NewFrame();
+ IMGUI_IMPL_API void ImGui_ImplWGPU_RenderDrawData(ImDrawData* draw_data, WGPURenderPassEncoder pass_encoder);
+ IMGUI_IMPL_API void ImGui_ImplWGPU_RemoveTexture(ImTextureID texture_id);
++IMGUI_IMPL_API void ImGui_ImplWGPU_SetTexturePremultipliedAlpha(ImTextureID texture_id, bool premultiplied_alpha);
++IMGUI_IMPL_API void ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(ImTextureID texture_id);
++IMGUI_IMPL_API void ImGui_ImplWGPU_RemoveTexturePremultipliedAlphaRef(ImTextureID texture_id);
+
+ // Use if you want to reset your rendering device without losing Dear ImGui state.
+ IMGUI_IMPL_API void ImGui_ImplWGPU_InvalidateDeviceObjects();
+diff --git a/backends/imgui_impl_wgpu.cpp b/backends/imgui_impl_wgpu.cpp
+index 23456789..34567890 100644
+--- a/backends/imgui_impl_wgpu.cpp
++++ b/backends/imgui_impl_wgpu.cpp
+@@ -73,6 +73,7 @@ struct RenderResources
+     WGPUBuffer          Uniforms = nullptr;             // Shader uniforms
+     WGPUBindGroup       CommonBindGroup = nullptr;      // Resources bind-group to bind the common resources to pipeline
+     ImGuiStorage        ImageBindGroups;                // Resources bind-group to bind the font/image resources to pipeline (this is a key->value map)
++    ImGuiStorage        PremultipliedAlphaTextureRefs;  // Ref counts for user texture IDs whose sampled color is already premultiplied by alpha
+     WGPUBindGroup       ImageBindGroup = nullptr;       // Default font-resource of Dear ImGui
+     WGPUBindGroupLayout ImageBindGroupLayout = nullptr; // Cache layout used for the image bind group. Avoids allocating unnecessary JS objects when working with WebASM
+ };
+@@ -97,6 +98,7 @@ struct ImGui_ImplWGPU_Data
+     WGPUTextureFormat       renderTargetFormat = WGPUTextureFormat_Undefined;
+     WGPUTextureFormat       depthStencilFormat = WGPUTextureFormat_Undefined;
+     WGPURenderPipeline      pipelineState = nullptr;
++    WGPURenderPipeline      premultipliedAlphaPipelineState = nullptr;
+
+     RenderResources         renderResources;
+     FrameResources*         pFrameResources = nullptr;
+@@ -189,6 +191,46 @@ fn main(in: VertexOutput) -> @location(0) vec4<f32> {
+ }
+ )";
+
++static const char __shader_frag_premultiplied_alpha_wgsl[] = R"(
++struct VertexOutput {
++    @builtin(position) position: vec4<f32>,
++    @location(0) color: vec4<f32>,
++    @location(1) uv: vec2<f32>,
++};
++
++struct Uniforms {
++    mvp: mat4x4<f32>,
++    gamma: f32,
++};
++
++@group(0) @binding(0) var<uniform> uniforms: Uniforms;
++@group(0) @binding(1) var s: sampler;
++@group(1) @binding(0) var t: texture_2d<f32>;
++
++@fragment
++fn main(in: VertexOutput) -> @location(0) vec4<f32> {
++    let tex_color = textureSample(t, s, in.uv);
++    let color = vec4<f32>(
++        tex_color.rgb * in.color.rgb * in.color.a,
++        tex_color.a * in.color.a);
++    let corrected_color = pow(color.rgb, vec3<f32>(uniforms.gamma));
++    return vec4<f32>(corrected_color, color.a);
++}
++)";
++
++static void RemoveStorageKey(ImGuiStorage& storage, ImGuiID key)
++{
++    for (int n = 0; n < storage.Data.Size; n++)
++    {
++        ImGuiStoragePair& pair = storage.Data[n];
++        if (pair.key == key)
++        {
++            storage.Data.erase(&pair);
++            return;
++        }
++    }
++}
++
+ static void SafeRelease(ImDrawIdx*& res)
+ {
+     if (res)
+@@ -259,6 +295,7 @@ static void SafeRelease(RenderResources& res)
+     SafeRelease(res.Uniforms);
+     SafeRelease(res.CommonBindGroup);
+     SafeReleaseImageBindGroupCache(res);
++    res.PremultipliedAlphaTextureRefs.Clear();
+     SafeRelease(res.ImageBindGroupLayout);
+ };
+
+@@ -292,6 +329,57 @@ static WGPUBindGroup ImGui_ImplWGPU_CreateImageBindGroup(WGPUBindGroupLayout la
+     return wgpuDeviceCreateBindGroup(bd->wgpuDevice, &image_bg_descriptor);
+ }
+
++static bool ImGui_ImplWGPU_TextureUsesPremultipliedAlpha(ImTextureID texture_id)
++{
++    ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();
++    if (bd == nullptr)
++        return false;
++
++    ImGuiID tex_id_hash = ImHashData(&texture_id, sizeof(texture_id));
++    return bd->renderResources.PremultipliedAlphaTextureRefs.GetInt(tex_id_hash, 0) > 0;
++}
++
++void ImGui_ImplWGPU_SetTexturePremultipliedAlpha(ImTextureID texture_id, bool premultiplied_alpha)
++{
++    ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();
++    if (bd == nullptr || texture_id == 0)
++        return;
++
++    ImGuiID tex_id_hash = ImHashData(&texture_id, sizeof(texture_id));
++    if (premultiplied_alpha)
++    {
++        if (bd->renderResources.PremultipliedAlphaTextureRefs.GetInt(tex_id_hash, 0) <= 0)
++            bd->renderResources.PremultipliedAlphaTextureRefs.SetInt(tex_id_hash, 1);
++    }
++    else
++        RemoveStorageKey(bd->renderResources.PremultipliedAlphaTextureRefs, tex_id_hash);
++}
++
++void ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(ImTextureID texture_id)
++{
++    ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();
++    if (bd == nullptr || texture_id == 0)
++        return;
++
++    ImGuiID tex_id_hash = ImHashData(&texture_id, sizeof(texture_id));
++    const int ref_count = bd->renderResources.PremultipliedAlphaTextureRefs.GetInt(tex_id_hash, 0);
++    bd->renderResources.PremultipliedAlphaTextureRefs.SetInt(tex_id_hash, ref_count + 1);
++}
++
++void ImGui_ImplWGPU_RemoveTexturePremultipliedAlphaRef(ImTextureID texture_id)
++{
++    ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();
++    if (bd == nullptr || texture_id == 0)
++        return;
++
++    ImGuiID tex_id_hash = ImHashData(&texture_id, sizeof(texture_id));
++    const int ref_count = bd->renderResources.PremultipliedAlphaTextureRefs.GetInt(tex_id_hash, 0);
++    if (ref_count <= 1)
++        RemoveStorageKey(bd->renderResources.PremultipliedAlphaTextureRefs, tex_id_hash);
++    else
++        bd->renderResources.PremultipliedAlphaTextureRefs.SetInt(tex_id_hash, ref_count - 1);
++}
++
+ void ImGui_ImplWGPU_RemoveTexture(ImTextureID texture_id)
+ {
+     ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();
+@@ -313,8 +396,8 @@ void ImGui_ImplWGPU_RemoveTexture(ImTextureID texture_id)
+         if (bind_group == bd->renderResources.ImageBindGroup)
+             bd->renderResources.ImageBindGroup = nullptr;
+         bd->renderResources.ImageBindGroups.Data.erase(&pair);
+-        return;
++        break;
+     }
+ }
+
+ static void ImGui_ImplWGPU_SetupRenderState(ImDrawData* draw_data, WGPURenderPassEncoder ctx, FrameResources* fr)
+@@ -412,6 +494,7 @@ void ImGui_ImplWGPU_RenderDrawData(ImDrawData* draw_data, WGPURenderPassEncoder
+
+     // Setup desired render state
+     ImGui_ImplWGPU_SetupRenderState(draw_data, pass_encoder, fr);
++    WGPURenderPipeline active_pipeline = bd->pipelineState;
+
+     // Setup render state structure (for callbacks and custom texture bindings)
+     ImGuiPlatformIO& platform_io = ImGui::GetPlatformIO();
+@@ -436,8 +519,12 @@ void ImGui_ImplWGPU_RenderDrawData(ImDrawData* draw_data, WGPURenderPassEncoder
+             {
+                 // User callback, registered via ImDrawList::AddCallback()
+                 // (ImDrawCallback_ResetRenderState is a special callback value used by the user to request the renderer to reset render state.)
++                // ResetRenderState returns to the default straight-alpha UI pipeline.
+                 if (pcmd->UserCallback == ImDrawCallback_ResetRenderState)
++                {
+                     ImGui_ImplWGPU_SetupRenderState(draw_data, pass_encoder, fr);
++                    active_pipeline = bd->pipelineState;
++                }
+                 else
+                     pcmd->UserCallback(draw_list, pcmd);
+             }
+@@ -445,6 +532,18 @@ void ImGui_ImplWGPU_RenderDrawData(ImDrawData* draw_data, WGPURenderPassEncoder
+             {
+                 // Bind custom texture
+                 ImTextureID tex_id = pcmd->GetTexID();
++                WGPURenderPipeline requested_pipeline =
++                    ImGui_ImplWGPU_TextureUsesPremultipliedAlpha(tex_id)
++                        ? bd->premultipliedAlphaPipelineState
++                        : bd->pipelineState;
++                if (requested_pipeline == nullptr)
++                    requested_pipeline = bd->pipelineState;
++                if (requested_pipeline != active_pipeline)
++                {
++                    wgpuRenderPassEncoderSetPipeline(pass_encoder, requested_pipeline);
++                    active_pipeline = requested_pipeline;
++                }
++
+                 ImGuiID tex_id_hash = ImHashData(&tex_id, sizeof(tex_id));
+                 auto bind_group = bd->renderResources.ImageBindGroups.GetVoidPtr(tex_id_hash);
+                 if (bind_group)
+@@ -643,6 +742,30 @@ static void ImGui_ImplWGPU_CreateUniformBuffer()
+     bd->renderResources.Uniforms = wgpuDeviceCreateBuffer(bd->wgpuDevice, &ub_desc);
+ }
+
++static WGPUBlendState ImGui_ImplWGPU_CreateStraightAlphaBlendState()
++{
++    WGPUBlendState blend_state = {};
++    blend_state.alpha.operation = WGPUBlendOperation_Add;
++    blend_state.alpha.srcFactor = WGPUBlendFactor_One;
++    blend_state.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
++    blend_state.color.operation = WGPUBlendOperation_Add;
++    blend_state.color.srcFactor = WGPUBlendFactor_SrcAlpha;
++    blend_state.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
++    return blend_state;
++}
++
++static WGPUBlendState ImGui_ImplWGPU_CreatePremultipliedAlphaBlendState()
++{
++    WGPUBlendState blend_state = {};
++    blend_state.alpha.operation = WGPUBlendOperation_Add;
++    blend_state.alpha.srcFactor = WGPUBlendFactor_One;
++    blend_state.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
++    blend_state.color.operation = WGPUBlendOperation_Add;
++    blend_state.color.srcFactor = WGPUBlendFactor_One;
++    blend_state.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
++    return blend_state;
++}
++
+ bool ImGui_ImplWGPU_CreateDeviceObjects()
+ {
+     ImGui_ImplWGPU_Data* bd = ImGui_ImplWGPU_GetBackendData();
+@@ -704,15 +826,10 @@ bool ImGui_ImplWGPU_CreateDeviceObjects()
+
+     // Create the pixel shader
+     WGPUProgrammableStageDescriptor pixel_shader_desc = ImGui_ImplWGPU_CreateShaderModule(__shader_frag_wgsl);
++    WGPUProgrammableStageDescriptor premultiplied_alpha_pixel_shader_desc = ImGui_ImplWGPU_CreateShaderModule(__shader_frag_premultiplied_alpha_wgsl);
+
+     // Create the blending setup
+-    WGPUBlendState blend_state = {};
+-    blend_state.alpha.operation = WGPUBlendOperation_Add;
+-    blend_state.alpha.srcFactor = WGPUBlendFactor_One;
+-    blend_state.alpha.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
+-    blend_state.color.operation = WGPUBlendOperation_Add;
+-    blend_state.color.srcFactor = WGPUBlendFactor_SrcAlpha;
+-    blend_state.color.dstFactor = WGPUBlendFactor_OneMinusSrcAlpha;
++    WGPUBlendState blend_state = ImGui_ImplWGPU_CreateStraightAlphaBlendState();
+
+     WGPUColorTargetState color_state = {};
+     color_state.format = bd->renderTargetFormat;
+@@ -749,6 +866,12 @@ bool ImGui_ImplWGPU_CreateDeviceObjects()
+     graphics_pipeline_desc.depthStencil = (bd->depthStencilFormat == WGPUTextureFormat_Undefined) ? nullptr :  &depth_stencil_state;
+
+     bd->pipelineState = wgpuDeviceCreateRenderPipeline(bd->wgpuDevice, &graphics_pipeline_desc);
++    WGPUBlendState premultiplied_alpha_blend_state = ImGui_ImplWGPU_CreatePremultipliedAlphaBlendState();
++    color_state.blend = &premultiplied_alpha_blend_state;
++    fragment_state.module = premultiplied_alpha_pixel_shader_desc.module;
++    bd->premultipliedAlphaPipelineState = wgpuDeviceCreateRenderPipeline(bd->wgpuDevice, &graphics_pipeline_desc);
++    color_state.blend = &blend_state;
++    fragment_state.module = pixel_shader_desc.module;
+
+     ImGui_ImplWGPU_CreateFontsTexture();
+     ImGui_ImplWGPU_CreateUniformBuffer();
+@@ -773,6 +896,7 @@ bool ImGui_ImplWGPU_CreateDeviceObjects()
+
+     SafeRelease(vertex_shader_desc.module);
+     SafeRelease(pixel_shader_desc.module);
++    SafeRelease(premultiplied_alpha_pixel_shader_desc.module);
+     SafeRelease(graphics_pipeline_desc.layout);
+     SafeRelease(bg_layouts[0]);
+
+@@ -786,6 +910,7 @@ void ImGui_ImplWGPU_InvalidateDeviceObjects()
+         return;
+
+     SafeRelease(bd->pipelineState);
++    SafeRelease(bd->premultipliedAlphaPipelineState);
+     SafeRelease(bd->renderResources);
+
+     ImGuiIO& io = ImGui::GetIO();
+@@ -827,6 +952,7 @@ bool ImGui_ImplWGPU_Init(ImGui_ImplWGPU_InitInfo* init_info)
+     bd->renderResources.CommonBindGroup = nullptr;
+     bd->renderResources.ImageBindGroups.Data.reserve(100);
+     bd->renderResources.ImageBindGroup = nullptr;
++    bd->renderResources.PremultipliedAlphaTextureRefs.Data.reserve(100);
+     bd->renderResources.ImageBindGroupLayout = nullptr;
+
+     // Create buffers with a default size (they will later be grown as needed)

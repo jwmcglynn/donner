@@ -2,7 +2,9 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <utility>
 
+#include "donner/base/Utils.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
@@ -22,12 +24,115 @@ namespace {
 /// then happens once.
 constexpr std::chrono::milliseconds kCanvasSizeCommitDelay{120};
 
+svg::Renderer CreateRenderer(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice) {
+  if (geodeDevice != nullptr) {
+    return svg::Renderer(std::move(geodeDevice));
+  }
+  return svg::Renderer();
+}
+
+bool CanvasSizeCloseEnough(const Vector2i& lhs, const Vector2i& rhs) {
+  return std::abs(lhs.x - rhs.x) <= 1 && std::abs(lhs.y - rhs.y) <= 1;
+}
+
+std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
+    const std::optional<RenderRequest::DragPreview>& preview) {
+  if (!preview.has_value() || preview->entity == entt::null) {
+    return std::nullopt;
+  }
+
+  return SelectTool::ActiveDragPreview{
+      .entity = preview->entity,
+      .translation = preview->translation,
+  };
+}
+
+std::optional<SelectTool::ActiveDragPreview> OverlayDragPreviewForSelection(
+    EditorApp& app, std::optional<SelectTool::ActiveDragPreview> representedDragPreview) {
+  if (representedDragPreview.has_value()) {
+    return representedDragPreview;
+  }
+
+  if (app.selectedElements().size() != 1u || !app.selectedElement().has_value() ||
+      !app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
+    return std::nullopt;
+  }
+
+  return SelectTool::ActiveDragPreview{
+      .entity = app.selectedElement()->entityHandle().entity(),
+      .translation = Vector2d::Zero(),
+  };
+}
+
+bool CanReuseOverlayForActiveDrag(
+    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& presentedOverlayDragPreview,
+    const GlTextureCache& textures) {
+  return activeDragPreview.has_value() && presentedOverlayDragPreview.has_value() &&
+         activeDragPreview->entity == presentedOverlayDragPreview->entity &&
+         textures.overlayWidth() > 0 && textures.overlayHeight() > 0;
+}
+
 }  // namespace
+
+bool ShouldPresentCompositedPreviewForViewport(const RenderResult::CompositedPreview& preview,
+                                               const Vector2i& viewportDesiredCanvas) {
+  if (!preview.valid()) {
+    return false;
+  }
+
+  if (preview.tiles.size() == 1u && preview.tiles.front().id == "full-canvas") {
+    return true;
+  }
+
+  if (viewportDesiredCanvas.x <= 0 || viewportDesiredCanvas.y <= 0) {
+    return false;
+  }
+
+  for (const RenderResult::CompositedTile& tile : preview.tiles) {
+    if (!CanvasSizeCloseEnough(tile.rasterCanvasSize, viewportDesiredCanvas)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ShouldUploadImmediateOverlayForPresentedTiles(std::span<const GlTextureCache::TileView> tiles,
+                                                   const Vector2i& currentCanvasSize) {
+  if (tiles.empty()) {
+    return true;
+  }
+
+  if (tiles.size() == 1u && tiles.front().id == "full-canvas") {
+    return true;
+  }
+
+  if (currentCanvasSize.x <= 0 || currentCanvasSize.y <= 0) {
+    return false;
+  }
+
+  for (const GlTextureCache::TileView& tile : tiles) {
+    if (!CanvasSizeCloseEnough(tile.rasterCanvasSize, currentCanvasSize)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+RenderCoordinator::RenderWorkerBundle::RenderWorkerBundle(
+    std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
+    : renderer(CreateRenderer(std::move(geodeDevice))) {}
+
+RenderCoordinator::RenderCoordinator(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
+    : renderWorker_(geodeDevice), overlayRenderer_(CreateRenderer(std::move(geodeDevice))) {}
 
 void RenderCoordinator::resetForLoadedDocument() {
   compositedPresentation_ = CompositedPresentation{};
   selectionBoundsCache_ = SelectionBoundsCache{};
   pendingOverlayBitmap_.reset();
+  pendingOverlayTexture_.reset();
+  pendingOverlayDragPreview_.reset();
+  presentedOverlayDragPreview_.reset();
   pendingOverlayVersion_ = 0;
   displayedDocVersion_ = 0;
   lastOverlaySelectionVec_.clear();
@@ -54,7 +159,8 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
 
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
     EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
-    const std::optional<Box2d>& marqueeRectDoc) {
+    const std::optional<Box2d>& marqueeRectDoc, OverlayUploadMode uploadMode,
+    std::optional<SelectTool::ActiveDragPreview> representedDragPreview) {
   ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     return false;
@@ -78,16 +184,39 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
                                            std::span<const svg::SVGElement>(overlaySelection),
                                            marqueeRectDoc, canvasFromDoc);
   overlayRenderer_.endFrame();
-  pendingOverlayBitmap_ = overlayRenderer_.takeSnapshot();
+  if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
+    pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
+    UTILS_RELEASE_ASSERT_MSG(
+        pendingOverlayTexture_ != nullptr,
+        "Geode overlay rasterization did not produce a GPU texture. Refusing CPU "
+        "readback/upload fallback in Geode presentation mode.");
+    pendingOverlayBitmap_.reset();
+  } else {
+    pendingOverlayBitmap_ = overlayRenderer_.takeSnapshot();
+    pendingOverlayTexture_.reset();
+  }
   pendingOverlayVersion_ = currentVersion;
+  pendingOverlayDragPreview_ =
+      OverlayDragPreviewForSelection(app, std::move(representedDragPreview));
+  const bool shouldUploadNow =
+      currentVersion == displayedDocVersion_ ||
+      (uploadMode == OverlayUploadMode::Immediate &&
+       ShouldUploadImmediateOverlayForPresentedTiles(textures.tiles(), currentCanvasSize));
 
-  if (currentVersion == displayedDocVersion_ && pendingOverlayBitmap_.has_value() &&
-      !pendingOverlayBitmap_->empty()) {
+  if (shouldUploadNow && pendingOverlayTexture_ != nullptr) {
+    textures.uploadOverlayTexture(std::move(pendingOverlayTexture_));
+    presentedOverlayDragPreview_ = std::move(pendingOverlayDragPreview_);
+    pendingOverlayVersion_ = 0;
+  } else if (shouldUploadNow && pendingOverlayBitmap_.has_value() &&
+             !pendingOverlayBitmap_->empty()) {
     textures.uploadOverlay(*pendingOverlayBitmap_);
+    presentedOverlayDragPreview_ = std::move(pendingOverlayDragPreview_);
     pendingOverlayBitmap_.reset();
     pendingOverlayVersion_ = 0;
-  } else if (currentVersion == displayedDocVersion_) {
+  } else if (shouldUploadNow) {
     textures.clearOverlay();
+    presentedOverlayDragPreview_.reset();
+    pendingOverlayDragPreview_.reset();
     pendingOverlayBitmap_.reset();
     pendingOverlayVersion_ = 0;
   }
@@ -116,14 +245,21 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   if (frameHistory != nullptr) {
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
+  const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();
   if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
+    if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview,
+                                                   viewportDesiredCanvas)) {
+      return;
+    }
+
     textures.uploadComposited(*result.compositedPreview);
     // Cache identity is keyed to the document canvas size, not the promoted
     // tile's intrinsic dimensions. Bounded layer tiles can be smaller than the
     // canvas, and using their dimensions here would make the cache appear stale
     // on every UI frame.
-    compositedPresentation_.noteCachedTextures(result.compositedPreview->entity, result.version,
-                                               app.document().document().canvasSize());
+    compositedPresentation_.noteCachedTextures(
+        result.compositedPreview->entity, result.version, app.document().document().canvasSize(),
+        DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
   }
 
   displayedDocVersion_ = result.version;
@@ -139,11 +275,18 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     rasterizeOverlayForCurrentSelection(app, viewport, textures, lastOverlayMarqueeRectDoc_);
     compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
-  if (pendingOverlayBitmap_.has_value() && pendingOverlayVersion_ == displayedDocVersion_) {
+  if (pendingOverlayTexture_ != nullptr && pendingOverlayVersion_ == displayedDocVersion_) {
+    textures.uploadOverlayTexture(std::move(pendingOverlayTexture_));
+    presentedOverlayDragPreview_ = std::move(pendingOverlayDragPreview_);
+    pendingOverlayVersion_ = 0;
+  } else if (pendingOverlayBitmap_.has_value() && pendingOverlayVersion_ == displayedDocVersion_) {
     if (!pendingOverlayBitmap_->empty()) {
       textures.uploadOverlay(*pendingOverlayBitmap_);
+      presentedOverlayDragPreview_ = std::move(pendingOverlayDragPreview_);
     } else {
       textures.clearOverlay();
+      presentedOverlayDragPreview_.reset();
+      pendingOverlayDragPreview_.reset();
     }
     pendingOverlayBitmap_.reset();
     pendingOverlayVersion_ = 0;
@@ -197,11 +340,20 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // its own invalidation check. Comparing via `!=` on the optional<Box2d>
   // covers "marquee appeared", "marquee moved", and "marquee ended".
   const bool marqueeDiffers = marqueeRectDoc != lastOverlayMarqueeRectDoc_;
+  const bool canvasDiffers = currentCanvasSize != lastOverlayCanvasSize_;
+  const bool overlayVersionDiffers = currentVersion != lastOverlayVersion_;
+  const bool activeDragCanReuseOverlay =
+      !selectionDiffers && !marqueeDiffers && !canvasDiffers &&
+      CanReuseOverlayForActiveDrag(dragPreview, presentedOverlayDragPreview_, textures);
   if ((!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value() ||
        marqueeRectDoc.has_value()) &&
-      (selectionDiffers || marqueeDiffers || currentCanvasSize != lastOverlayCanvasSize_ ||
-       currentVersion != lastOverlayVersion_)) {
-    rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc);
+      (selectionDiffers || marqueeDiffers || canvasDiffers ||
+       (overlayVersionDiffers && !activeDragCanReuseOverlay))) {
+    rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc,
+                                        dragPreview.has_value()
+                                            ? OverlayUploadMode::Immediate
+                                            : OverlayUploadMode::MatchDisplayedVersion,
+                                        dragPreview);
   }
 
   const PresentationRenderScheduleDecision schedule =

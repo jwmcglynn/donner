@@ -2,8 +2,10 @@
 /// @file
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
@@ -101,6 +103,11 @@ public:
   /// Returns the cached bitmap for this layer. Empty if not yet rasterized.
   [[nodiscard]] const RendererBitmap& bitmap() const { return bitmap_; }
 
+  /// Returns the cached GPU texture for this layer, if the renderer produced one.
+  [[nodiscard]] const std::shared_ptr<const RendererTextureSnapshot>& textureSnapshot() const {
+    return textureSnapshot_;
+  }
+
   /// Returns the `canvasFromBitmap` transform applied during blitting.
   /// Maps bitmap-local pixel coordinates (origin at the bitmap's top
   /// left, i.e. the rasterize-time coordinate frame) into canvas pixels.
@@ -146,6 +153,11 @@ public:
   /// Returns true if the layer has a valid cached bitmap.
   [[nodiscard]] bool hasValidBitmap() const { return !bitmap_.empty(); }
 
+  /// Returns true if the layer has any renderable cached payload.
+  [[nodiscard]] bool hasRenderablePayload() const {
+    return hasValidBitmap() || textureSnapshot_ != nullptr;
+  }
+
   /// Returns the fallback reasons for this layer, or FallbackReason::None.
   [[nodiscard]] FallbackReason fallbackReasons() const { return fallbackReasons_; }
 
@@ -176,6 +188,7 @@ public:
   /// generation` and skip redundant GL texture uploads.
   void setBitmap(RendererBitmap bitmap, const Transform2d& worldFromEntityTransform) {
     bitmap_ = std::move(bitmap);
+    textureSnapshot_.reset();
     bitmapEntityFromWorldTransform_ = worldFromEntityTransform;
     // Reset the compose offset: the new bitmap captures the entity at
     // `worldFromEntityTransform` (its CURRENT world position), so no
@@ -193,6 +206,18 @@ public:
     // freshly-rasterized bitmap (e.g. a drag hand-off that wants to
     // preserve the in-flight screen position across the rasterize)
     // must call `setCanvasFromBitmap` explicitly AFTER this.
+    canvasFromBitmap_ = Transform2d();
+    dirty_ = false;
+    ++generation_;
+    ++rasterizeCount_;
+  }
+
+  /// Set the cached GPU texture for this layer.
+  void setTextureSnapshot(std::shared_ptr<const RendererTextureSnapshot> texture,
+                          const Transform2d& worldFromEntityTransform) {
+    bitmap_ = RendererBitmap{};
+    textureSnapshot_ = std::move(texture);
+    bitmapEntityFromWorldTransform_ = worldFromEntityTransform;
     canvasFromBitmap_ = Transform2d();
     dirty_ = false;
     ++generation_;
@@ -260,6 +285,7 @@ private:
   Entity firstEntity_;
   Entity lastEntity_;
   RendererBitmap bitmap_;
+  std::shared_ptr<const RendererTextureSnapshot> textureSnapshot_;
   std::optional<Transform2d> bitmapEntityFromWorldTransform_;
   /// `canvasFromBitmap` transform applied during blitting — see the
   /// public accessor for the full semantics.

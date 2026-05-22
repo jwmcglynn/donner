@@ -236,6 +236,8 @@ git_override(
     commit = "ee1deccc08c14ab1e6abcfa6aae11d915763cdb7",
     patches = [
         "//third_party/patches:imgui_bazel_build_files.patch",
+        "//third_party/patches:imgui_wgpu_texture_cache.patch",
+        "//third_party/patches:imgui_wgpu_premultiplied_textures.patch",
     ],
     patch_strip = 1,
 )
@@ -250,4 +252,3 @@ git_override(
     ],
     patch_strip = 1,
 )
-

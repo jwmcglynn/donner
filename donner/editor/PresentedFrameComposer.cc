@@ -43,6 +43,15 @@ Vector2d ResolvePresentedTileDragTranslation(
   return tile.dragTranslationDoc;
 }
 
+Vector2d ResolvePresentedOverlayDragTranslation(
+    const std::optional<PresentedDragBaseline>& dragBaseline) {
+  if (!dragBaseline.has_value()) {
+    return Vector2d::Zero();
+  }
+
+  return dragBaseline->activeTranslationDoc - dragBaseline->representedTranslationDoc;
+}
+
 std::optional<PresentedTileRect> ComputePresentedTileRect(
     const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
     const std::optional<PresentedDragBaseline>& dragBaseline) {

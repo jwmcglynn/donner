@@ -218,7 +218,7 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
 //
 // Timeline (matching main.cc ordering):
 //   Frame 0: Initial prewarm render lands → composited textures cached
-//   Frame 1: User starts drag → composited display with drag offset
+//   Frame 1: User starts drag → composited display with cached represented offset
 //   Frame 2: User releases → settling begins, settling render dispatched
 //   Frame 3: Settling render lands → composited textures updated, offset→0
 //   Frame 4: ReplaceDocument → entity handles change, prewarm dispatched
@@ -270,8 +270,12 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
     auto snap = recordDisplay(drag, "Frame 1: dragging");
     EXPECT_TRUE(snap.composited) << "Frame 1: composited display expected";
     EXPECT_EQ(snap.entity, entityOld);
-    EXPECT_DOUBLE_EQ(snap.offset.x, 100.0)
-        << "Frame 1: promoted layer at DOM position + offset 100";
+    // The presentation state exposes the cached texture's represented drag
+    // translation. The live mouse delta is supplied separately to
+    // PresentedFrameComposer, which resolves the on-screen tile delta from
+    // active - represented.
+    EXPECT_DOUBLE_EQ(snap.offset.x, 0.0)
+        << "Frame 1: promoted layer reports its cached represented offset";
   }
 
   // ── Frame 2: Release ─ beginSettling ──────────────────────────────────

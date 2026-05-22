@@ -10,17 +10,21 @@
 /// the earlier separate per-layer / per-segment / split-bitmap tables.
 
 #include <cstdint>
+#include <deque>
+#include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/ImGuiIncludes.h"
 
 #ifdef __EMSCRIPTEN__
 #define GLFW_INCLUDE_ES3
 #include <GLES3/gl3.h>
-#else
+#elif !defined(DONNER_EDITOR_WGPU)
 #include "glad/glad.h"
 #endif
 
@@ -28,11 +32,11 @@
 
 namespace donner::editor {
 
-/// Stateful — owns one GL texture per active composite tile (keyed on
-/// `CompositeTileSnapshot::id`), refreshes via `glTexImage2D` only when
-/// the tile's `generation` advances, and frees textures when their
-/// tile leaves the snapshot. Construct on the GL thread; destroy on
-/// the GL thread (the dtor calls `glDeleteTextures`).
+/// Stateful — owns one preview resource per active composite tile (keyed on
+/// `CompositeTileSnapshot::id`). OpenGL builds upload CPU thumbnail pixels into
+/// small GL textures. WebGPU builds keep backend texture snapshots alive and
+/// pass their texture views directly to ImGui, avoiding thumbnail readback.
+/// Construct and destroy on the presentation thread.
 class LayerInspectorPanel {
 public:
   LayerInspectorPanel() = default;
@@ -71,9 +75,19 @@ public:
               const Vector2i& viewportDesiredCanvas, const Vector2i& documentCanvas,
               const svg::compositor::CompositorController::FastPathCounters& fastPath);
 
+  /// Advance one UI presentation frame for backend texture retirement.
+  void advancePresentationFrame();
+
 private:
+#ifdef DONNER_EDITOR_WGPU
+  using ThumbnailTextureHandle = ImTextureID;
+#else
+  using ThumbnailTextureHandle = GLuint;
+#endif
+
   struct ThumbnailTexture {
-    GLuint texture = 0;
+    ThumbnailTextureHandle texture = 0;
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
     int height = 0;
@@ -81,13 +95,34 @@ private:
 
   /// Upload (or refresh) the thumbnail texture for one tile. Returns
   /// the GL texture name (0 when the tile has no thumbnail).
-  GLuint uploadThumbnail(const svg::compositor::CompositorController::CompositeTileSnapshot& tile);
+  ThumbnailTextureHandle uploadThumbnail(
+      const svg::compositor::CompositorController::CompositeTileSnapshot& tile);
 
   /// Free textures for tiles absent from the current snapshot.
   void evictAbsentTiles(
       std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles);
 
+#ifdef DONNER_EDITOR_WGPU
+  struct RetiredSnapshot {
+    ThumbnailTextureHandle texture = 0;
+    std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
+  };
+
+  using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
+
+  static ThumbnailTextureHandle ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
+  static RetiredSnapshot RetireSnapshot(
+      ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot);
+  static void ReleaseImGuiTexture(ThumbnailTextureHandle texture);
+
+  void retireSnapshots(RetiredSnapshotBatch snapshots);
+#endif
+
   std::unordered_map<std::string, ThumbnailTexture> textures_;
+#ifdef DONNER_EDITOR_WGPU
+  RetiredSnapshotBatch pendingRetiredSnapshots_;
+  std::deque<RetiredSnapshotBatch> retiredSnapshotFrames_;
+#endif
 };
 
 }  // namespace donner::editor

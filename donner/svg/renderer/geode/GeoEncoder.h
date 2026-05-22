@@ -389,6 +389,16 @@ public:
                  bool pixelated);
 
   /**
+   * Draw an already-GPU-resident RGBA texture into the destination rectangle.
+   *
+   * The current transform is applied exactly like \ref drawImage, but the
+   * texture is sampled directly without a CPU upload. The texture is expected
+   * to contain premultiplied RGBA, matching Geode render-target snapshots.
+   */
+  void drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
+                   bool pixelated);
+
+  /**
    * Fill a path with a solid color.
    *
    * The path is encoded into Slug band data on the CPU, uploaded to GPU

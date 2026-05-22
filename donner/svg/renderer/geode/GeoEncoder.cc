@@ -265,6 +265,7 @@ struct GeoEncoder::Impl {
   // readback) samples / copies from this texture, never the MSAA color.
   wgpu::Texture target;
   wgpu::TextureView targetView;
+  ScopedWgpuHandle<wgpu::CommandEncoder> ownedCommandEncoder;
   wgpu::CommandEncoder commandEncoder;
   uint32_t targetWidth;
   uint32_t targetHeight;
@@ -602,7 +603,8 @@ GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
 
   wgpu::CommandEncoderDescriptor desc = {};
   desc.label = wgpuLabel("GeoEncoder");
-  impl_->commandEncoder = device.device().createCommandEncoder(desc);
+  impl_->ownedCommandEncoder.reset(device.device().createCommandEncoder(desc));
+  impl_->commandEncoder = impl_->ownedCommandEncoder.get();
   impl_->ownsCommandEncoder = true;
 
   finalizeImpl(*impl_);
@@ -1614,6 +1616,34 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
                                         mvp, impl_->targetWidth, impl_->targetHeight, qp);
 }
 
+void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
+                             bool pixelated) {
+  if (!texture || destRect.isEmpty() || opacity <= 0.0) {
+    return;
+  }
+
+  impl_->ensurePassOpen();
+  impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
+
+  float mvp[16];
+  impl_->buildMvp(mvp);
+
+  GeodeTextureEncoder::QuadParams qp;
+  qp.destRect = destRect;
+  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  qp.opacity = opacity;
+  qp.filter =
+      pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
+  // Renderer texture snapshots come from Geode render targets, which store
+  // premultiplied RGBA. Sampling them as straight-alpha would multiply RGB by
+  // alpha a second time and visibly darken translucent cached layers.
+  qp.sourceIsPremultiplied = true;
+  qp.clipMaskView = impl_->activeClipMaskView;
+
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, texture,
+                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+}
+
 void GeoEncoder::finish() {
   if (impl_->passOpen) {
     impl_->pass.end();
@@ -1633,9 +1663,13 @@ void GeoEncoder::finish() {
     return;
   }
 
-  wgpu::CommandBuffer cmdBuf = impl_->commandEncoder.finish();
-  impl_->device->queue().submit(1, &cmdBuf);
-  impl_->device->countSubmit();
+  {
+    ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(impl_->commandEncoder.finish());
+    impl_->device->queue().submit(1, &cmdBuf.get());
+    impl_->device->countSubmit();
+  }
+  impl_->ownedCommandEncoder.reset();
+  impl_->commandEncoder = wgpu::CommandEncoder();
 }
 
 }  // namespace donner::geode

@@ -42,6 +42,7 @@ private:
     Entity entity = entt::null;
     std::uint64_t version = 0;
     Vector2i canvasSize = Vector2i::Zero();
+    std::optional<SelectTool::ActiveDragPreview> representedPreview;
   };
 
   struct NoCache {};
@@ -146,11 +147,14 @@ public:
   }
 
   /// Mark cached composited textures as available for the given entity/version/canvas size.
-  void noteCachedTextures(Entity entity, std::uint64_t version, const Vector2i& canvasSize) {
+  void noteCachedTextures(
+      Entity entity, std::uint64_t version, const Vector2i& canvasSize,
+      std::optional<SelectTool::ActiveDragPreview> representedPreview = std::nullopt) {
     const CachedTextures cache{
         .entity = entity,
         .version = version,
         .canvasSize = canvasSize,
+        .representedPreview = std::move(representedPreview),
     };
 
     if (const auto* settling = std::get_if<SettlingForRender>(&state_)) {
@@ -241,7 +245,7 @@ public:
     // in flight, keep displaying the last cached document image without
     // applying the new entity's live drag offset to stale drag-target tiles.
     if (activePreview.has_value() && cache.has_value() && activePreview->entity == cache->entity) {
-      return activePreview;
+      return representedPreviewForCache(*cache);
     }
 
     if (const auto* settling = std::get_if<SettlingForRender>(&state_);
@@ -294,6 +298,17 @@ private:
     snapshot->cachedEntity = cache.entity;
     snapshot->cachedVersion = cache.version;
     snapshot->cachedCanvasSize = cache.canvasSize;
+  }
+
+  static SelectTool::ActiveDragPreview representedPreviewForCache(const CachedTextures& cache) {
+    if (cache.representedPreview.has_value() && cache.representedPreview->entity == cache.entity) {
+      return *cache.representedPreview;
+    }
+
+    return SelectTool::ActiveDragPreview{
+        .entity = cache.entity,
+        .translation = Vector2d::Zero(),
+    };
   }
 
   State state_ = NoCache{};

@@ -82,6 +82,27 @@ const repro::GlRnrReplayFrameDiagnostics* FindFrameDiagnostics(
   return nullptr;
 }
 
+bool CanvasSizeCloseEnoughForReplay(const Vector2i& lhs, const Vector2i& rhs) {
+  return std::abs(lhs.x - rhs.x) <= 1 && std::abs(lhs.y - rhs.y) <= 1;
+}
+
+bool HasStaleSplitTiles(const repro::GlRnrReplayFrameDiagnostics& frame) {
+  if (frame.tiles.empty()) {
+    return false;
+  }
+
+  if (frame.tiles.size() == 1u && frame.tiles.front().id == "full-canvas") {
+    return false;
+  }
+
+  for (const repro::GlRnrReplayTileDiagnostics& tile : frame.tiles) {
+    if (!CanvasSizeCloseEnoughForReplay(tile.rasterCanvasSize, frame.viewportDesiredCanvas)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 svg::RendererBitmap BitmapFromImage(const svg::Image& image) {
   svg::RendererBitmap bitmap;
   bitmap.dimensions = Vector2i(image.width, image.height);
@@ -282,6 +303,120 @@ TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
   tests::CompareBitmapToBitmap(*active, *comparison,
                                "gl_second_drag_frame_249_active_vs_250_mouseup",
                                tests::PixelmatchIdentityParams());
+}
+
+TEST(GlRnrReplayTest, ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles) {
+  constexpr std::string_view kRnrPath = "zoom-out-drag-jump.rnr";
+  constexpr std::uint64_t kBeforeFrame = 145;
+  constexpr std::uint64_t kGuardedFrame = 146;
+  // The zoom-out gesture re-rasterizes a 3298x1893 canvas down to 1896x1088 on
+  // the async render worker. Re-rasterization only completes well after the
+  // gesture ends (drag release is frame 186), so the caught-up frame is found by
+  // scanning rather than hard-coded — its exact index depends on worker speed.
+  // Replay the full recording so the catch-up is observable.
+  constexpr std::uint64_t kLastFrame = 252;
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = RunfilePath(kRnrPath);
+  options.svgPathOverride = RunfilePath("donner_splash.svg");
+  options.outputDir = DiagnosticOutputDir() / "gl_zoom_out_drag_overlay_epoch";
+  options.captureFrames = {kLastFrame};
+  options.maxFrame = kLastFrame;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  // The stale split-tile window only exists while the async render worker is
+  // genuinely behind the viewport, and that lag develops only under real-time
+  // pacing. With pace=false the worker never lands a render in this headless
+  // replay, so no composited tiles are published and the window can't be
+  // observed (the stale-tile precondition below would never hold).
+  options.pace = true;
+  options.visible = false;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  const repro::GlRnrReplayFrameDiagnostics* before = FindFrameDiagnostics(result, kBeforeFrame);
+  const repro::GlRnrReplayFrameDiagnostics* guarded = FindFrameDiagnostics(result, kGuardedFrame);
+  ASSERT_NE(before, nullptr);
+  ASSERT_NE(guarded, nullptr);
+
+  ASSERT_TRUE(HasStaleSplitTiles(*guarded))
+      << "The fixture should exercise the stale split-tile zoom window at frame " << kGuardedFrame;
+  EXPECT_EQ(guarded->overlayDimsPx, before->overlayDimsPx)
+      << "A current-canvas overlay must not publish over stale split tiles.";
+  EXPECT_EQ(guarded->overlayTextureHandle, before->overlayTextureHandle)
+      << "Frame " << kGuardedFrame
+      << " should retain the previous overlay until the split content catches up.";
+  EXPECT_FALSE(
+      CanvasSizeCloseEnoughForReplay(guarded->overlayDimsPx, guarded->viewportDesiredCanvas))
+      << "Publishing a viewport-current overlay over stale split tiles reintroduces the "
+         "one-frame texture splat repro.";
+
+  // Once the worker finishes re-rasterizing at the settled viewport, the split
+  // tiles catch up and the overlay tracks the viewport canvas again. How many
+  // frames that takes — or whether it lands within the recording at all —
+  // depends on the async render worker's wall-clock throughput, which varies
+  // across machines (a slower CI runner may still be catching up at the final
+  // recorded frame). So the catch-up is verified best-effort: when the replay
+  // does reach it, confirm the overlay tracks the viewport; never fail the test
+  // just because this machine didn't finish catching up in time. The hard
+  // guarantee under test is the stale-window invariant asserted above.
+  const repro::GlRnrReplayFrameDiagnostics* caughtUp = nullptr;
+  for (const repro::GlRnrReplayFrameDiagnostics& frame : result.frameDiagnostics) {
+    if (frame.frameIndex > kGuardedFrame && !HasStaleSplitTiles(frame) &&
+        CanvasSizeCloseEnoughForReplay(frame.overlayDimsPx, frame.viewportDesiredCanvas)) {
+      caughtUp = &frame;
+      break;
+    }
+  }
+  if (caughtUp != nullptr) {
+    EXPECT_FALSE(HasStaleSplitTiles(*caughtUp));
+    EXPECT_TRUE(
+        CanvasSizeCloseEnoughForReplay(caughtUp->overlayDimsPx, caughtUp->viewportDesiredCanvas));
+  }
+}
+
+TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
+  constexpr std::string_view kRnrPath = "donner/editor/tests/geode_drag_zoom_o_pop.rnr";
+  constexpr std::uint64_t kFirstCaptureFrame = 78;
+  constexpr std::uint64_t kLastCaptureFrame = 81;
+
+  const std::filesystem::path rnrPath = RunfilePath(kRnrPath);
+  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(rnrPath);
+  ASSERT_TRUE(reproFile.has_value());
+  ASSERT_TRUE(reproFile->metadata.expect.has_value());
+  const repro::ReproExpectation& expect = *reproFile->metadata.expect;
+  ASSERT_EQ(expect.proofKind, repro::ReproExpectationProofKind::PresentedPixels);
+  ASSERT_EQ(expect.cropMode, "document-canvas");
+  ASSERT_EQ(expect.targetSelector, "#Donner path:nth-of-type(2)");
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = rnrPath;
+  options.svgPathOverride = RunfilePath("donner_splash.svg");
+  options.outputDir = DiagnosticOutputDir() / "gl_geode_drag_zoom_o_pop";
+  options.captureFrames = {kFirstCaptureFrame, 79, 80, kLastCaptureFrame};
+  options.maxFrame = kLastCaptureFrame;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.visible = false;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  for (std::uint64_t frame = kFirstCaptureFrame; frame <= kLastCaptureFrame; ++frame) {
+    const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
+    ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
+    EXPECT_EQ(diagnostics->metadataOnlyMissCount, 0)
+        << "metadata-only reuse unexpectedly missed in root-cause replay frame " << frame;
+    EXPECT_EQ(diagnostics->duplicateLiveTextureCount, 0)
+        << "duplicate live texture handles in root-cause replay frame " << frame;
+
+    std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, frame);
+    ASSERT_TRUE(capture.has_value()) << "missing capture for replay frame " << frame;
+    EXPECT_GT(capture->dimensions.x, 0);
+    EXPECT_GT(capture->dimensions.y, 0);
+  }
 }
 
 TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {

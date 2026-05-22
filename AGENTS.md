@@ -77,6 +77,7 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
 - **Prefer replacement over parallel paths.** When adding or switching behavior, such as moving a comparison path to pixelmatch, aggressively remove the old implementation, output fields, docs, and tests instead of keeping multiple code paths unless compatibility or rollback is explicitly required.
 - **Pixel-diff tests use `donner/editor/tests:bitmap_golden_compare` (`CompareBitmapToBitmap` / `CompareBitmapToGolden`) + pixelmatch.** No private `composeOver` helpers; no percentage-divergence thresholds — either identity or inspectable `actual_*`/`expected_*`/`diff_*.png` under `$TEST_UNDECLARED_OUTPUTS_DIR`. See `CLAUDE.md` §"Pixel-Diff Tests".
 - **Regression tests must fail at HEAD before the fix lands.** Commit the failing test on its own commit first so CI records a red→green transition. See `CLAUDE.md` §"Debugging Discipline" and §"Bug-Fix Commit Discipline".
+- **Editor visual bugs use the visual debugging playbook.** Start with a live `.rnr`/screenshot repro, then work down the editor stack using [`docs/editor_visual_debugging.md`](docs/editor_visual_debugging.md).
 
 ## Building
 

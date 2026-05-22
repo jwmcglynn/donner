@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
@@ -21,6 +23,20 @@ namespace {
 
 using MockRendererInterface = tests::MockRendererInterface;
 
+class FakeTextureSnapshot : public RendererTextureSnapshot {
+public:
+  explicit FakeTextureSnapshot(Vector2i dimensions) : dimensions_(dimensions) {}
+
+  [[nodiscard]] RendererTextureSnapshotBackend backend() const override {
+    return RendererTextureSnapshotBackend::Geode;
+  }
+  [[nodiscard]] Vector2i dimensions() const override { return dimensions_; }
+  [[nodiscard]] AlphaType alphaType() const override { return AlphaType::Premultiplied; }
+
+private:
+  Vector2i dimensions_;
+};
+
 }  // namespace
 
 class CompositorControllerTest : public ::testing::Test {
@@ -33,10 +49,26 @@ protected:
     ON_CALL(renderer_, takeSnapshot()).WillByDefault([]() {
       return MockRendererInterface::makeDummyBitmap();
     });
-    ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([this]() {
+    ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([]() {
       auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
       ON_CALL(*offscreen, takeSnapshot()).WillByDefault([]() {
         return MockRendererInterface::makeDummyBitmap();
+      });
+      ON_CALL(*offscreen, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
+      return offscreen;
+    });
+  }
+
+  void configureMockForTextureCaching() {
+    ON_CALL(renderer_, requiresTextureSnapshotPresentation())
+        .WillByDefault(::testing::Return(true));
+    ON_CALL(renderer_, drawTextureSnapshot(_, _, _, _)).WillByDefault(::testing::Return(true));
+    ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([]() {
+      auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
+      ON_CALL(*offscreen, requiresTextureSnapshotPresentation())
+          .WillByDefault(::testing::Return(true));
+      ON_CALL(*offscreen, takeTextureSnapshot()).WillByDefault([]() {
+        return std::make_shared<FakeTextureSnapshot>(Vector2i(32, 32));
       });
       ON_CALL(*offscreen, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
       return offscreen;
@@ -791,6 +823,57 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsTracksRasterizeCountA
   ASSERT_EQ(rowsAfterTranslate.size(), 1u);
   EXPECT_EQ(rowsAfterTranslate.front().rasterizeCount, 1u)
       << "Pure-translation drag must reuse the cached bitmap rather than re-rasterize.";
+}
+
+TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="0" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForTextureCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_TRUE(compositor.hasSplitStaticLayers())
+      << "Texture-backed drag layers must count as cached split layers.";
+  const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterFirst.size(), 1u);
+  ASSERT_TRUE(rowsAfterFirst.front().hasValidBitmap);
+  const uint64_t generationAfterFirst = rowsAfterFirst.front().generation;
+  const uint32_t rasterizeCountAfterFirst = rowsAfterFirst.front().rasterizeCount;
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  auto layerTile = std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
+    return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Layer;
+  });
+  ASSERT_NE(layerTile, inspectorTiles.end());
+  EXPECT_TRUE(layerTile->hasValidBitmap);
+  EXPECT_EQ(layerTile->bitmapDims, Vector2i(32, 32));
+  EXPECT_NE(layerTile->textureSnapshot, nullptr)
+      << "Geode layer diagnostics should keep the GPU texture snapshot so the layer panel can "
+         "render a thumbnail without CPU readback.";
+  EXPECT_TRUE(layerTile->thumbnailPixels.empty())
+      << "Texture-backed diagnostics should not synthesize a CPU thumbnail.";
+
+  const auto countersBeforeDrag = compositor.fastPathCountersForTesting();
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rowsAfterDrag = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterDrag.size(), 1u);
+  EXPECT_EQ(rowsAfterDrag.front().generation, generationAfterFirst)
+      << "Pure-translation drag must not mint a new texture generation.";
+  EXPECT_EQ(rowsAfterDrag.front().rasterizeCount, rasterizeCountAfterFirst)
+      << "Pure-translation drag must reuse the cached texture rather than re-rasterize.";
+
+  const auto countersAfterDrag = compositor.fastPathCountersForTesting();
+  EXPECT_EQ(countersAfterDrag.fastPathFrames, countersBeforeDrag.fastPathFrames + 1u);
+  EXPECT_EQ(countersAfterDrag.slowPathFramesWithDirty, countersBeforeDrag.slowPathFramesWithDirty);
 }
 
 TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsThumbnailWithMaxSideClamp) {

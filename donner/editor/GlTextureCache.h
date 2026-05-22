@@ -2,22 +2,54 @@
 /// @file
 
 #include <cstdint>
+#include <deque>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__)
 #define GLFW_INCLUDE_ES3
 #include <GLES3/gl3.h>
-#else
+#elif !defined(DONNER_EDITOR_WGPU)
 #include "glad/glad.h"
 #endif
 
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
+
+/// Stable identity for deciding whether a metadata-only composited tile can reuse an existing
+/// presentation texture.
+struct CompositedTileTextureIdentity {
+  RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
+  std::uint64_t generation = 0;
+  Vector2i textureDimsPx = Vector2i::Zero();
+  Vector2i rasterCanvasSize = Vector2i::Zero();
+
+  friend bool operator==(const CompositedTileTextureIdentity& lhs,
+                         const CompositedTileTextureIdentity& rhs) = default;
+};
+
+/**
+ * Return the presentation texture identity carried by `tile`.
+ *
+ * @param tile Composited tile whose payload or metadata should be identified.
+ */
+[[nodiscard]] CompositedTileTextureIdentity TextureIdentityForCompositedTile(
+    const RenderResult::CompositedTile& tile);
+
+/**
+ * Return true when a metadata-only `tile` can reuse `cachedIdentity`.
+ *
+ * @param cachedIdentity Identity recorded for the currently cached texture.
+ * @param tile Incoming composited tile metadata.
+ */
+[[nodiscard]] bool TextureIdentityMatchesCompositedTile(
+    const CompositedTileTextureIdentity& cachedIdentity, const RenderResult::CompositedTile& tile);
 
 /**
  * Owns the GL textures the advanced editor uses for overlay and composited presentation.
@@ -42,16 +74,22 @@ public:
   void initialize();
 
   void uploadOverlay(const svg::RendererBitmap& bitmap);
+  /// Register an overlay texture snapshot without CPU readback/upload.
+  void uploadOverlayTexture(std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
   /// Upload the worker's tile snapshot into per-tile GL textures.
   /// Allocates/reuses one texture per tile id; bumps a per-tile
   /// upload-generation so identity uploads short-circuit; evicts
   /// textures whose tile is absent from the snapshot.
   void uploadComposited(const RenderResult::CompositedPreview& preview);
 
+  /// Advance one presentation frame, retiring WGPU texture snapshots whose
+  /// handles have aged past the backend's frames-in-flight window.
+  void advancePresentationFrame();
+
   void clearOverlay();
   void resetComposited();
 
-  [[nodiscard]] GLuint overlayTexture() const { return overlayTexture_; }
+  [[nodiscard]] ImTextureID overlayTexture() const;
 
   [[nodiscard]] int overlayWidth() const { return overlayWidth_; }
   [[nodiscard]] int overlayHeight() const { return overlayHeight_; }
@@ -60,31 +98,72 @@ public:
   /// texture handle (resolved from the upload cache) plus the
   /// geometry fields the presenter needs to blit in paint order.
   struct TileView {
-    GLuint texture = 0;
+    ImTextureID texture = 0;
+    std::string id;
+    RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
+    std::uint64_t generation = 0;
     Vector2i bitmapDimsPx = Vector2i::Zero();
+    Vector2i rasterCanvasSize = Vector2i::Zero();
     Vector2d canvasOffsetDoc = Vector2d::Zero();
     Vector2d bitmapDimsDoc = Vector2d::Zero();
     Vector2d dragTranslationDoc = Vector2d::Zero();
+    bool metadataOnly = false;
     bool isDragTarget = false;
   };
 
   /// Paint-order tile view; empty when no composited preview has been
   /// uploaded yet (or the preview was cleared via `resetComposited`).
   [[nodiscard]] const std::vector<TileView>& tiles() const { return tiles_; }
+  /// Number of metadata-only tiles skipped during the most recent composited
+  /// upload because their cached texture identity was absent or stale.
+  [[nodiscard]] int metadataOnlyMissCount() const { return metadataOnlyMissCount_; }
+  /// Number of duplicate live texture handles found in the most recent
+  /// composited upload across different tile ids.
+  [[nodiscard]] int duplicateLiveTextureCount() const { return duplicateLiveTextureCount_; }
 
 private:
+#ifdef DONNER_EDITOR_WGPU
+  using NativeTextureHandle = ImTextureID;
+#else
+  using NativeTextureHandle = GLuint;
+#endif
+
+  static ImTextureID ToImTextureId(NativeTextureHandle texture);
+#ifdef DONNER_EDITOR_WGPU
+  static ImTextureID ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
+#endif
+#ifndef DONNER_EDITOR_WGPU
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
                            int* outHeight);
   static void InitializeTexture(GLuint texture);
+#endif
 
   struct CachedTextureEntry {
-    GLuint texture = 0;
+    NativeTextureHandle texture = 0;
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+    CompositedTileTextureIdentity identity;
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
     int height = 0;
   };
 
-  GLuint overlayTexture_ = 0;
+#ifdef DONNER_EDITOR_WGPU
+  struct RetiredSnapshot {
+    NativeTextureHandle texture = 0;
+    std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
+  };
+
+  using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
+
+  static RetiredSnapshot RetireSnapshot(
+      NativeTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot);
+  static void releaseImGuiTexture(NativeTextureHandle texture);
+
+  void retireSnapshots(RetiredSnapshotBatch snapshots);
+#endif
+
+  NativeTextureHandle overlayTexture_ = 0;
+  std::shared_ptr<const svg::RendererTextureSnapshot> overlayTextureSnapshot_;
 
   int overlayWidth_ = 0;
   int overlayHeight_ = 0;
@@ -97,6 +176,13 @@ private:
   /// Paint-order view of the most recent `uploadComposited` call.
   /// Rebuilt every upload (cheap — N tiles, plain values).
   std::vector<TileView> tiles_;
+  int metadataOnlyMissCount_ = 0;
+  int duplicateLiveTextureCount_ = 0;
+
+#ifdef DONNER_EDITOR_WGPU
+  RetiredSnapshotBatch pendingRetiredSnapshots_;
+  std::deque<RetiredSnapshotBatch> retiredSnapshotFrames_;
+#endif
 };
 
 }  // namespace donner::editor

@@ -1,7 +1,7 @@
 /// @file
-/// Linux (X11) implementation of `CreateSurfaceFromGlfwWindow`.
+/// Linux (X11) implementation of `CreateWgpuSurfaceFromGlfwWindow`.
 
-#include "examples/geode_embed_surface.h"
+#include "donner/editor/gui/EditorWgpuSurface.h"
 
 #define GLFW_EXPOSE_NATIVE_X11
 extern "C" {
@@ -22,9 +22,9 @@ extern "C" {
 #undef Status
 #endif
 
-namespace donner::example {
+namespace donner::editor::gui {
 
-wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwindow* window) {
+wgpu::Surface CreateWgpuSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwindow* window) {
   if (window == nullptr) {
     return {};
   }
@@ -45,4 +45,4 @@ wgpu::Surface CreateSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwi
   return instance.createSurface(desc);
 }
 
-}  // namespace donner::example
+}  // namespace donner::editor::gui

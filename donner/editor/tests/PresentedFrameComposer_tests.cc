@@ -82,6 +82,17 @@ TEST(PresentedFrameComposerTest, NonDragTilesKeepCachedTileTranslation) {
   EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, baseline), Vector2d(1.0, 2.0));
 }
 
+TEST(PresentedFrameComposerTest, OverlayAddsLiveDeltaToCachedTranslation) {
+  const std::optional<PresentedDragBaseline> baseline =
+      Baseline(Entity{123}, Vector2d(14.0, 6.0), Vector2d(20.0, 8.0));
+
+  EXPECT_EQ(ResolvePresentedOverlayDragTranslation(baseline), Vector2d(6.0, 2.0));
+}
+
+TEST(PresentedFrameComposerTest, OverlayWithoutBaselineStaysAtCachedPlacement) {
+  EXPECT_EQ(ResolvePresentedOverlayDragTranslation(std::nullopt), Vector2d::Zero());
+}
+
 TEST(PresentedFrameComposerTest, ComputesTileRectFromDocumentGeometry) {
   PresentedFrameTileGeometry tile;
   tile.canvasOffsetDoc = Vector2d(10.0, 20.0);

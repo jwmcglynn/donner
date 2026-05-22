@@ -172,14 +172,23 @@ donner_cc_library(
     name = "gl_texture_cache",
     srcs = ["GlTextureCache.cc"],
     hdrs = ["GlTextureCache.h"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":async_renderer",
+        ":imgui_headers",
         ":tracy_wrapper",
         "//donner/base",
         "//donner/svg",
     ] + select({
         "//donner/editor/wasm:wasm_enabled": [
             "//third_party/emscripten-glfw",
+        ],
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+            "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [
             "//third_party/glad",
@@ -335,6 +344,10 @@ donner_cc_library(
     name = "layer_inspector_panel",
     srcs = ["LayerInspectorPanel.cc"],
     hdrs = ["LayerInspectorPanel.h"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":imgui_headers",
         ":layer_inspector_diagnostics",
@@ -344,6 +357,10 @@ donner_cc_library(
     ] + select({
         "//donner/editor/wasm:wasm_enabled": [
             "//third_party/emscripten-glfw",
+        ],
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer",
+            "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [
             "//third_party/glad",

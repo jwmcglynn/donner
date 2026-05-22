@@ -22,6 +22,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -30,6 +31,10 @@
 
 struct GLFWwindow;
 using GLFWscrollfun = void (*)(GLFWwindow*, double, double);
+
+namespace donner::geode {
+class GeodeDevice;
+}
 
 namespace donner::editor::gui {
 
@@ -68,6 +73,9 @@ struct EditorWindowOptions {
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
   /// when the document doesn't fill the whole window.
   float clearColor[4] = {0.11f, 0.11f, 0.13f, 1.0f};
+  /// Enable framebuffer CPU readback from \ref endFrameAndReadPixels. Intended for replay tests;
+  /// disabled by default so production WGPU editor frames cannot read back by accident.
+  bool enableFramebufferReadback = false;
 };
 
 /// ImGui input state to inject for deterministic editor replay.
@@ -183,12 +191,18 @@ public:
   /// bindings, drag-and-drop setup). The main MVP binary doesn't need it.
   [[nodiscard]] GLFWwindow* rawHandle() const { return window_; }
 
+  /// Shared Geode/WebGPU device for renderer instances in Geode editor builds.
+  [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeDevice() const;
+
 private:
+  struct WgpuState;
+
   void beginFrameImpl(const EditorWindowInputOverride* inputOverride);
   void endFrameImpl(svg::RendererBitmap* readback);
 
   EditorWindowOptions options_;
   GLFWwindow* window_ = nullptr;
+  std::unique_ptr<WgpuState> wgpuState_;
   uint32_t textureId_ = 0;
   int textureWidth_ = 0;
   int textureHeight_ = 0;

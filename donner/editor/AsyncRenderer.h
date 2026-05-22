@@ -34,6 +34,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -96,6 +97,8 @@ struct RenderRequest {
     /// compositor stamps the correct `InteractionHint` on the entity based
     /// on this field so downstream introspection stays accurate.
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
+    /// Active drag translation represented by this request. Selection prewarms use zero.
+    Vector2d translation = Vector2d::Zero();
   };
 
   /**
@@ -159,6 +162,15 @@ struct RenderResult {
     std::uint64_t generation = 0;
     /// Source bitmap; uploaded as the tile's GL texture content.
     svg::RendererBitmap bitmap;
+    /// Backend-owned texture payload. Geode editor builds present this directly via ImGui WGPU.
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+    /// Intrinsic texture dimensions in raster pixels. Metadata-only tiles
+    /// keep this populated so the presentation cache can reject stale
+    /// texture reuse across canvas-size epochs.
+    Vector2i bitmapDimsPx = Vector2i::Zero();
+    /// Raster canvas size that produced this payload. Metadata-only reuse is
+    /// only valid inside the same raster-canvas epoch.
+    Vector2i rasterCanvasSize = Vector2i::Zero();
     /// Canvas-space top-left of `bitmap`, in document units. Editor
     /// multiplies by `pixelsPerDocUnit` to get the on-screen blit
     /// origin.
@@ -191,6 +203,8 @@ struct RenderResult {
     Entity entity = entt::null;
     /// Interaction phase that produced this composited preview.
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::Selection;
+    /// Drag preview state represented by the tile transforms in this result.
+    std::optional<RenderRequest::DragPreview> representedDragPreview;
 
     [[nodiscard]] bool valid() const { return !tiles.empty(); }
   };
@@ -438,8 +452,10 @@ private:
   std::uint64_t compositorDocumentGeneration_ = 0;
 
   struct PublishedCompositedTile {
+    RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
     std::uint64_t generation = 0;
     Vector2i bitmapDims = Vector2i::Zero();
+    Vector2i rasterCanvasSize = Vector2i::Zero();
   };
 
   /// Split-tile textures the UI has received from previous composited

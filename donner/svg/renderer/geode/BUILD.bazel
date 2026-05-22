@@ -82,10 +82,32 @@ donner_cc_library(
     name = "geode_wgpu_util",
     hdrs = ["GeodeWgpuUtil.h"],
     target_compatible_with = _GEODE_ONLY,
-    visibility = ["//donner/svg/renderer:__subpackages__"],
+    visibility = [
+        "//donner/editor/gui:__pkg__",
+        "//donner/svg/renderer:__subpackages__",
+        "//examples:__pkg__",
+    ],
     deps = [
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
+)
+
+donner_cc_test(
+    name = "geode_wgpu_util_tests_impl",
+    srcs = ["tests/GeodeWgpuUtil_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_wgpu_util",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_wgpu_util_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":geode_wgpu_util_tests_impl",
+    renderer_backend = "geode",
 )
 
 donner_cc_library(
@@ -125,6 +147,7 @@ donner_cc_library(
     }),
     target_compatible_with = _GEODE_ONLY,
     visibility = [
+        "//donner/editor/gui:__pkg__",
         "//donner/svg/renderer:__subpackages__",
         "//examples:__pkg__",
     ],
@@ -157,9 +180,9 @@ donner_multi_transitioned_test(
     # is almost certainly hung and should be killed before it wastes
     # more CI time (e.g., Intel Arc + Mesa 25.2.8 Xe-KMD regressions).
     timeout = "short",
+    testonly = 1,
     dep = ":geode_device_tests_impl",
     renderer_backend = "geode",
-    testonly = 1,
 )
 
 # Embed the WGSL shader source as a C++ resource. The generated header
@@ -436,6 +459,7 @@ donner_cc_library(
     deps = [
         ":filter_blend_wgsl",
         ":filter_color_matrix_wgsl",
+        ":filter_color_space_convert_wgsl",
         ":filter_component_transfer_wgsl",
         ":filter_composite_wgsl",
         ":filter_convolve_matrix_wgsl",
@@ -448,19 +472,18 @@ donner_cc_library(
         ":filter_morphology_wgsl",
         ":filter_offset_wgsl",
         ":filter_specular_lighting_wgsl",
-        ":filter_color_space_convert_wgsl",
         ":filter_subregion_clip_wgsl",
         ":filter_tile_wgsl",
         ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",
         ":geode_wgpu_util",
         ":image_blit_wgsl",
-        ":slug_fill_wgsl",
         ":slug_fill_alpha_coverage_wgsl",
-        ":slug_gradient_wgsl",
+        ":slug_fill_wgsl",
         ":slug_gradient_alpha_coverage_wgsl",
-        ":slug_mask_wgsl",
+        ":slug_gradient_wgsl",
         ":slug_mask_alpha_coverage_wgsl",
+        ":slug_mask_wgsl",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
@@ -480,9 +503,9 @@ donner_multi_transitioned_test(
     name = "geode_shaders_tests",
     # See geode_device_tests for the rationale on the short timeout.
     timeout = "short",
+    testonly = 1,
     dep = ":geode_shaders_tests_impl",
     renderer_backend = "geode",
-    testonly = 1,
 )
 
 # `geode_filter_engine`, `geode_pipeline`, and `geode_image_pipeline` are
@@ -530,17 +553,17 @@ donner_cc_test(
         ":geode_device",
         ":geode_wgpu_util",
         "//donner/base",
+        "//donner/base:gtest_timeout_main",
         "//donner/css",
         "//donner/svg/resources:image_resource",
-        "//donner/base:gtest_timeout_main",
     ],
 )
 
 donner_multi_transitioned_test(
     name = "geo_encoder_tests",
+    testonly = 1,
     dep = ":geo_encoder_tests_impl",
     renderer_backend = "geode",
-    testonly = 1,
 )
 
 # Geode perf-counter assertions. See design doc 0030 (geode_performance).
@@ -557,19 +580,19 @@ donner_cc_test(
         ":geode_counters",
         ":geode_device",
         "//donner/base",
+        "//donner/base:gtest_timeout_main",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/base:gtest_timeout_main",
     ],
 )
 
 donner_multi_transitioned_test(
     name = "geode_perf_tests",
+    testonly = 1,
     dep = ":geode_perf_tests_impl",
     renderer_backend = "geode",
-    testonly = 1,
 )
 
 donner_cc_test(
@@ -580,16 +603,16 @@ donner_cc_test(
         ":geode_device",
         ":geode_wgpu_util",
         "//donner/base",
+        "//donner/base:gtest_timeout_main",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/base:gtest_timeout_main",
     ],
 )
 
 donner_multi_transitioned_test(
     name = "geode_embed_tests",
     timeout = "moderate",
+    testonly = 1,
     dep = ":geode_embed_tests_impl",
     renderer_backend = "geode",
-    testonly = 1,
 )

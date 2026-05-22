@@ -15,10 +15,15 @@
 
 namespace {
 
+using donner::Vector2d;
+using donner::Vector2i;
+using donner::editor::RenderResult;
 using donner::editor::repro::GlRnrReplayCapture;
 using donner::editor::repro::GlRnrReplayCropMode;
+using donner::editor::repro::GlRnrReplayFrameDiagnostics;
 using donner::editor::repro::GlRnrReplayOptions;
 using donner::editor::repro::GlRnrReplayResult;
+using donner::editor::repro::GlRnrReplayTileDiagnostics;
 using donner::editor::repro::ParseGlRnrReplayCropMode;
 using donner::editor::repro::RunGlRnrReplay;
 
@@ -54,10 +59,11 @@ void PrintUsage(std::string_view argv0) {
             << " --rnr <path> [--out-dir <path>] [--capture-frame <n>]...\n"
                "       [--capture-left-mousedown <ordinal>] [--max-frame <n>]\n"
                "       [--crop full|render-pane|document-canvas]\n"
-               "       [--visible] [--no-pace]\n";
+               "       [--visible] [--no-pace] [--print-diagnostics]\n";
 }
 
-[[nodiscard]] bool ParseArgs(int argc, char** argv, GlRnrReplayOptions* options) {
+[[nodiscard]] bool ParseArgs(int argc, char** argv, GlRnrReplayOptions* options,
+                             bool* printDiagnostics) {
   if (options == nullptr) {
     return false;
   }
@@ -164,6 +170,14 @@ void PrintUsage(std::string_view argv0) {
       continue;
     }
 
+    if (arg == "--print-diagnostics") {
+      if (printDiagnostics == nullptr) {
+        return false;
+      }
+      *printDiagnostics = true;
+      continue;
+    }
+
     std::cerr << "Unknown argument: " << arg << "\n";
     return false;
   }
@@ -181,17 +195,108 @@ void PrintUsage(std::string_view argv0) {
   return true;
 }
 
-void PrintJson(const GlRnrReplayResult& result) {
+void PrintJsonString(std::string_view value) {
+  std::cout << "\"";
+  for (const char c : value) {
+    switch (c) {
+      case '\\': std::cout << "\\\\"; break;
+      case '"': std::cout << "\\\""; break;
+      case '\n': std::cout << "\\n"; break;
+      case '\r': std::cout << "\\r"; break;
+      case '\t': std::cout << "\\t"; break;
+      default: std::cout << c; break;
+    }
+  }
+  std::cout << "\"";
+}
+
+std::string_view TileKindName(RenderResult::CompositedTile::Kind kind) {
+  switch (kind) {
+    case RenderResult::CompositedTile::Kind::Segment: return "segment";
+    case RenderResult::CompositedTile::Kind::Layer: return "layer";
+  }
+
+  return "unknown";
+}
+
+void PrintVector2i(const Vector2i& value) {
+  std::cout << "[" << value.x << "," << value.y << "]";
+}
+
+void PrintVector2d(const Vector2d& value) {
+  std::cout << "[" << value.x << "," << value.y << "]";
+}
+
+void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
   std::cout << "{\"captures\":[";
   for (std::size_t i = 0; i < result.captures.size(); ++i) {
     const GlRnrReplayCapture& capture = result.captures[i];
     if (i != 0) {
       std::cout << ",";
     }
-    std::cout << "{\"frame\":" << capture.frameIndex << ",\"reason\":\"" << capture.reason
-              << "\",\"path\":\"" << capture.path.string() << "\"}";
+    std::cout << "{\"frame\":" << capture.frameIndex << ",\"reason\":";
+    PrintJsonString(capture.reason);
+    std::cout << ",\"path\":";
+    PrintJsonString(capture.path.string());
+    std::cout << "}";
   }
-  std::cout << "]}\n";
+  std::cout << "]";
+  if (result.finalSelectedElementLabel.has_value()) {
+    std::cout << ",\"final_selection\":";
+    PrintJsonString(*result.finalSelectedElementLabel);
+  }
+  if (printDiagnostics) {
+    std::cout << ",\"frame_diagnostics\":[";
+    for (std::size_t i = 0; i < result.frameDiagnostics.size(); ++i) {
+      const GlRnrReplayFrameDiagnostics& frame = result.frameDiagnostics[i];
+      if (i != 0) {
+        std::cout << ",";
+      }
+      std::cout << "{\"frame\":" << frame.frameIndex
+                << ",\"freshness\":" << static_cast<int>(frame.canvasFreshness)
+                << ",\"status_suffix\":";
+      PrintJsonString(frame.statusSuffix);
+      std::cout << ",\"viewport_desired_canvas\":";
+      PrintVector2i(frame.viewportDesiredCanvas);
+      std::cout << ",\"document_canvas\":";
+      PrintVector2i(frame.documentCanvas);
+      std::cout << ",\"compositor_canvas\":";
+      PrintVector2i(frame.compositorCanvas);
+      std::cout << ",\"metadata_only_miss_count\":" << frame.metadataOnlyMissCount
+                << ",\"duplicate_live_texture_count\":" << frame.duplicateLiveTextureCount
+                << ",\"overlay_dims_px\":";
+      PrintVector2i(frame.overlayDimsPx);
+      std::cout << ",\"overlay_texture_handle\":" << frame.overlayTextureHandle << ",\"tiles\":[";
+      for (std::size_t tileIndex = 0; tileIndex < frame.tiles.size(); ++tileIndex) {
+        const GlRnrReplayTileDiagnostics& tile = frame.tiles[tileIndex];
+        if (tileIndex != 0) {
+          std::cout << ",";
+        }
+        std::cout << "{\"id\":";
+        PrintJsonString(tile.id);
+        std::cout << ",\"kind\":";
+        PrintJsonString(TileKindName(tile.kind));
+        std::cout << ",\"generation\":" << tile.generation << ",\"bitmap_dims_px\":";
+        PrintVector2i(tile.bitmapDimsPx);
+        std::cout << ",\"raster_canvas_size\":";
+        PrintVector2i(tile.rasterCanvasSize);
+        std::cout << ",\"canvas_offset_doc\":";
+        PrintVector2d(tile.canvasOffsetDoc);
+        std::cout << ",\"bitmap_dims_doc\":";
+        PrintVector2d(tile.bitmapDimsDoc);
+        std::cout << ",\"drag_translation_doc\":";
+        PrintVector2d(tile.dragTranslationDoc);
+        std::cout << ",\"presented_drag_translation_doc\":";
+        PrintVector2d(tile.presentedDragTranslationDoc);
+        std::cout << ",\"texture_handle\":" << tile.textureHandle
+                  << ",\"metadata_only\":" << (tile.metadataOnly ? "true" : "false")
+                  << ",\"is_drag_target\":" << (tile.isDragTarget ? "true" : "false") << "}";
+      }
+      std::cout << "]}";
+    }
+    std::cout << "]";
+  }
+  std::cout << "}\n";
 }
 
 }  // namespace
@@ -202,7 +307,8 @@ int main(int argc, char** argv) {
   }
 
   GlRnrReplayOptions options;
-  if (!ParseArgs(argc, argv, &options)) {
+  bool printDiagnostics = false;
+  if (!ParseArgs(argc, argv, &options, &printDiagnostics)) {
     PrintUsage(argc > 0 ? argv[0] : "editor_rnr_gl_replay");
     return 2;
   }
@@ -214,6 +320,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  PrintJson(result);
+  PrintJson(result, printDiagnostics);
   return 0;
 }

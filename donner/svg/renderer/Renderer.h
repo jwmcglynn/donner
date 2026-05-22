@@ -6,6 +6,10 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
+namespace donner::geode {
+class GeodeDevice;
+}
+
 namespace donner::svg {
 
 class RendererImplementation;
@@ -32,6 +36,17 @@ public:
    * @param verbose If true, enables backend-specific verbose logging.
    */
   explicit Renderer(bool verbose = false);
+
+  /**
+   * Creates a renderer for the active backend using an externally-owned
+   * Geode device when the Geode backend is selected.
+   *
+   * Non-Geode backends ignore \p device and construct their normal backend.
+   *
+   * @param device Shared Geode device.
+   * @param verbose If true, enables backend-specific verbose logging.
+   */
+  explicit Renderer(std::shared_ptr<geode::GeodeDevice> device, bool verbose = false);
 
   /// Destructor.
   ~Renderer() override;
@@ -179,6 +194,10 @@ public:
    */
   void drawImage(const ImageResource& image, const ImageParams& params) override;
 
+  /// Draws a backend-owned texture snapshot when the active backend supports it.
+  bool drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,
+                           double opacity = 1.0, bool pixelated = false) override;
+
   /**
    * Draws shaped text.
    *
@@ -195,6 +214,12 @@ public:
    * @return A snapshot of the rendered frame.
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
+
+  /// Captures a backend-owned GPU texture snapshot when the active backend supports it.
+  [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override;
+
+  /// Returns true when this backend requires direct texture presentation.
+  [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;
 
   /// Creates an offscreen renderer of the active backend type.
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
