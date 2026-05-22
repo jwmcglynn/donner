@@ -40,6 +40,13 @@ bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
   return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
 }
 
+constexpr bool kAsyncRendererWallclockTestsEnabled =
+#ifdef DONNER_ASYNC_RENDERER_WALLCLOCK_TESTS
+    true;
+#else
+    false;
+#endif
+
 // Design doc 0033 §M5 — preemptive swap-in. When the worker finishes a
 // render, the editor's main loop must learn about the result on the
 // NEXT ImGui frame, not on the next mouse event. The mechanism is the
@@ -1958,6 +1965,11 @@ constexpr double kClickToFirstPixelBudgetMs = 1500.0;
 constexpr double kDragFrameBudgetMs = 40.0;
 
 TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
+  if (!kAsyncRendererWallclockTestsEnabled) {
+    GTEST_SKIP() << "Runner-speed-sensitive wall-clock budget test runs in the manual perf "
+                    "target //donner/editor/tests:async_renderer_wallclock_tests.";
+  }
+
   // Read the ACTUAL `donner_splash.svg` (112 paths, complex filter
   // groups with real geometry — not a simplified stub). This is the
   // document the user is interacting with in the editor; test numbers
@@ -2032,6 +2044,11 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
 }
 
 TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnSplashShape) {
+  if (!kAsyncRendererWallclockTestsEnabled) {
+    GTEST_SKIP() << "Runner-speed-sensitive wall-clock budget test runs in the manual perf "
+                    "target //donner/editor/tests:async_renderer_wallclock_tests.";
+  }
+
   AsyncSVGDocument asyncDoc;
   ASSERT_TRUE(asyncDoc.loadFromString(R"svg(
 <?xml version="1.0" encoding="UTF-8"?>
@@ -2082,6 +2099,11 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnSplashShape) {
 // whose numbers should match the editor's observed behavior on the same
 // document.
 TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnRealSplash) {
+  if (!kAsyncRendererWallclockTestsEnabled) {
+    GTEST_SKIP() << "Runner-speed-sensitive wall-clock budget test runs in the manual perf "
+                    "target //donner/editor/tests:async_renderer_wallclock_tests.";
+  }
+
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -2132,6 +2154,11 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnRealSplash) {
 // what the user feels — but with a current-reality gate so the test
 // reports the number without hiding regressions.
 TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) {
+  if (!kAsyncRendererWallclockTestsEnabled) {
+    GTEST_SKIP() << "Runner-speed-sensitive wall-clock budget test runs in the manual perf "
+                    "target //donner/editor/tests:async_renderer_wallclock_tests.";
+  }
+
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -2213,6 +2240,11 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
 // path, last promote-refusal reason) give the equivalent breakdown
 // live.
 TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
+  if (!kAsyncRendererWallclockTestsEnabled) {
+    GTEST_SKIP() << "Runner-speed-sensitive wall-clock budget test runs in the manual perf "
+                    "target //donner/editor/tests:async_renderer_wallclock_tests.";
+  }
+
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
