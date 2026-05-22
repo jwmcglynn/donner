@@ -309,16 +309,26 @@ TEST(GlRnrReplayTest, ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles) {
   constexpr std::string_view kRnrPath = "zoom-out-drag-jump.rnr";
   constexpr std::uint64_t kBeforeFrame = 145;
   constexpr std::uint64_t kGuardedFrame = 146;
-  constexpr std::uint64_t kCaughtUpFrame = 147;
+  // The zoom-out gesture re-rasterizes a 3298x1893 canvas down to 1896x1088 on
+  // the async render worker. Re-rasterization only completes well after the
+  // gesture ends (drag release is frame 186), so the caught-up frame is found by
+  // scanning rather than hard-coded — its exact index depends on worker speed.
+  // Replay the full recording so the catch-up is observable.
+  constexpr std::uint64_t kLastFrame = 252;
 
   repro::GlRnrReplayOptions options;
   options.rnrPath = RunfilePath(kRnrPath);
   options.svgPathOverride = RunfilePath("donner_splash.svg");
   options.outputDir = DiagnosticOutputDir() / "gl_zoom_out_drag_overlay_epoch";
-  options.captureFrames = {kBeforeFrame, kGuardedFrame, kCaughtUpFrame};
-  options.maxFrame = kCaughtUpFrame;
+  options.captureFrames = {kLastFrame};
+  options.maxFrame = kLastFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
-  options.pace = false;
+  // The stale split-tile window only exists while the async render worker is
+  // genuinely behind the viewport, and that lag develops only under real-time
+  // pacing. With pace=false the worker never lands a render in this headless
+  // replay, so no composited tiles are published and the window can't be
+  // observed (the stale-tile precondition below would never hold).
+  options.pace = true;
   options.visible = false;
 
   repro::GlRnrReplayResult result;
@@ -327,10 +337,8 @@ TEST(GlRnrReplayTest, ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles) {
 
   const repro::GlRnrReplayFrameDiagnostics* before = FindFrameDiagnostics(result, kBeforeFrame);
   const repro::GlRnrReplayFrameDiagnostics* guarded = FindFrameDiagnostics(result, kGuardedFrame);
-  const repro::GlRnrReplayFrameDiagnostics* caughtUp = FindFrameDiagnostics(result, kCaughtUpFrame);
   ASSERT_NE(before, nullptr);
   ASSERT_NE(guarded, nullptr);
-  ASSERT_NE(caughtUp, nullptr);
 
   ASSERT_TRUE(HasStaleSplitTiles(*guarded))
       << "The fixture should exercise the stale split-tile zoom window at frame " << kGuardedFrame;
@@ -344,6 +352,18 @@ TEST(GlRnrReplayTest, ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles) {
       << "Publishing a viewport-current overlay over stale split tiles reintroduces the "
          "one-frame texture splat repro.";
 
+  // Once the worker finishes re-rasterizing at the settled viewport, the split
+  // tiles catch up and the overlay tracks the viewport canvas again.
+  const repro::GlRnrReplayFrameDiagnostics* caughtUp = nullptr;
+  for (const repro::GlRnrReplayFrameDiagnostics& frame : result.frameDiagnostics) {
+    if (frame.frameIndex > kGuardedFrame && !HasStaleSplitTiles(frame) &&
+        CanvasSizeCloseEnoughForReplay(frame.overlayDimsPx, frame.viewportDesiredCanvas)) {
+      caughtUp = &frame;
+      break;
+    }
+  }
+  ASSERT_NE(caughtUp, nullptr)
+      << "The split content should catch up to the settled viewport before the recording ends.";
   EXPECT_FALSE(HasStaleSplitTiles(*caughtUp));
   EXPECT_TRUE(
       CanvasSizeCloseEnoughForReplay(caughtUp->overlayDimsPx, caughtUp->viewportDesiredCanvas));
