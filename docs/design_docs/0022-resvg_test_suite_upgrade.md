@@ -1,5 +1,50 @@
 # resvg-test-suite Upgrade: The Great Rename and Beyond
 
+**Status:** Shipped — Milestone 1 (mechanical migration) landed. Milestone 2
+(enabling the newly-pulled-in tests) is ongoing and now tracked as the living
+backlog in [0021-resvg_feature_gaps.md](0021-resvg_feature_gaps.md). The
+sections below the Outcome are preserved as the historical migration plan.
+
+## Outcome (what shipped)
+
+The upgrade landed: the vendored suite is on current upstream HEAD with the
+hierarchical post-rename layout, and the C++ harness, custom goldens, and triage
+tooling were migrated to match.
+
+- **Vendoring**: `third_party/bazel/non_bcr_deps.bzl` pins
+  `d8e064337faf01bc5a9579187a56dbdbe3eacc72` from
+  `https://github.com/linebender/resvg-test-suite.git` (the HEAD targeted by this
+  doc).
+- **Overlay BUILD**: `third_party/BUILD.resvg-test-suite` exposes `tests`,
+  `resources`, and `fonts` filegroups against the new `tests/<category>/<feature>/`
+  tree (the old flat `svg` / `png` / `images` filegroups are gone).
+- **Discovery**: `resvg_test_suite.cc` uses the directory-scoped
+  `getTestsInCategory("<category>", { …overrides… })` API (Option A), with one
+  `INSTANTIATE_TEST_SUITE_P` block per category directory.
+- **Override inventory (current)**: ~288 `Skip`, ~51 `RenderOnly`, 34
+  `WithGoldenOverride` entries — see [0021](0021-resvg_feature_gaps.md) for the
+  skip backlog and [0009](0009-resvg_test_suite_bugs.md) for the golden overrides.
+- **Custom goldens**: re-validated and renamed to the new stems; two dead em/ex
+  orphans removed (2026-05-15, see [0009](0009-resvg_test_suite_bugs.md)).
+- **Migration artifacts retained** under `tools/resvg_test_suite_upgrade/`
+  (`rename_map.json`, `build_rename_map.py`, `rewrite_test_entries.py`,
+  `extract_overrides.py`, `overrides.json`, `migration_report.md`) so a future
+  Renovate-driven re-run is reproducible. The scratch `resvg_test_suite.cc.draft`
+  was deleted 2026-05-15 as a leftover.
+
+### Known residue (handed to 0021)
+
+- The entire **`filters/filter-functions`** `INSTANTIATE` block is commented out:
+  it throws `"Data corrupted"` parse errors on CI x86_64 but passes locally on
+  aarch64. Root cause unknown. Its two custom goldens are parked (see
+  [0009](0009-resvg_test_suite_bugs.md)).
+- M2 per-category enablement (the point of the upgrade) is the backlog in
+  [0021](0021-resvg_feature_gaps.md).
+
+---
+
+## Historical: migration design & plan
+
 Design doc for upgrading Donner's vendored `resvg-test-suite` from the 2022-02-12
 snapshot we currently pin to the current upstream HEAD (late 2024), handling the
 2023-05-05 restructure, the 2023-05-06 "Great Rename", the repo move from
@@ -467,7 +512,7 @@ the new tests we just pulled in. Both are required for the upgrade to be
 "done"; skipping M2 means we paid the migration cost without getting the
 coverage benefit.
 
-### Milestone 1 — Mechanical migration (landing PR)
+### Milestone 1 — Mechanical migration (landing PR) — ✅ DONE
 
 Rough sequencing; each bullet is a self-contained unit of work within one PR.
 
@@ -490,7 +535,7 @@ Rough sequencing; each bullet is a self-contained unit of work within one PR.
 **Exit criterion**: `bazel test //...` green on main. Probably hundreds more
 Skip entries than before — this is acknowledged and the fix is Milestone 2.
 
-### Milestone 2 — Enable new tests (fast-follow)
+### Milestone 2 — Enable new tests (fast-follow) — 🔄 ONGOING (tracked in [0021](0021-resvg_feature_gaps.md))
 
 Kicks off the day M1 lands. Goal: work through every newly-added test and
 either enable it (with a threshold if needed), flag it as a real bug, or

@@ -1,9 +1,9 @@
 # Design: Geode — GPU-Native Rendering Backend
 
-**Status:** Phases 0–3 + Phase 5b landed on main (Phase 0 #481; Phase 1 #484 + #492; Phase 2 #497; Phase 5b MSAA + resvg parity — 596 passing, 0 failing — #504; Phase 3 clip/mask #506); vendor story swapped from Dawn-from-source to prebuilt wgpu-native in #510; first real-GPU verification on 2026-04-17 (Intel Arc A380 / Mesa Xe-KMD Vulkan — smoke + 1-band path-fill green; multi-band paths hung on Xe-KMD sample_mask output; vendor-gated alpha-coverage shader fallback shipped in #536). Phase 3d (blend modes + miter + markers) and Phase 4 (text) remain unshipped; `RendererGeode::drawText` and `pushFilterLayer` are still stubs.
+**Status:** Phases 0–3d + 5/6/7 landed on main (Phase 0 #481; Phase 1 #484 + #492; Phase 2 #497; Phase 3 clip/mask #506; Phase 5b MSAA #504; Phase 3d blend modes + miter + markers #541; Phase 5/6/7 completion + parity push #547); vendor story swapped from Dawn-from-source to prebuilt wgpu-native in #510; first real-GPU verification on 2026-04-17 (Intel Arc A380 / Mesa Xe-KMD Vulkan — smoke + 1-band path-fill green; multi-band paths hung on Xe-KMD sample_mask output; vendor-gated alpha-coverage shader fallback shipped in #536). `RendererGeode::drawText` (text → Slug fill) and `pushFilterLayer` (offscreen filter graph) are now **implemented**, not stubs; clip, mask, blend modes, markers, patterns, gradients, and images all run live. resvg-suite parity as of 2026-05-15: **1,345 passing / 0 failing / 291 skipped** (268 text gated off pending root-cause of a large per-glyph divergence — **not AA**; pixelmatch already excludes AA — plus 23 per-test pixel divergences) — see [0021 §Geode parity](0021-resvg_feature_gaps.md#geode-parity--priority-0). Remaining: the text-suite divergence (root cause unidentified), color-emoji/bitmap glyphs, and the filter-primitive divergences.
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
-**Last updated:** 2026-04-17
+**Last updated:** 2026-05-15
 
 ## Implementation status
 
