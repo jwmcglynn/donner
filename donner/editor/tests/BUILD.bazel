@@ -518,7 +518,6 @@ donner_cc_test(
         "//:donner_splash.svg",
     ],
     target_compatible_with = select({
-        "@platforms//os:macos": [],
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
