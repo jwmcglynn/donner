@@ -3,6 +3,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string_view>
+
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/css/CSS.h"
@@ -19,6 +21,7 @@ using css::RGBA;
 using css::Specificity;
 using css::Token;
 
+using testing::Contains;
 using testing::Eq;
 using testing::Ne;
 using testing::Optional;
@@ -36,6 +39,17 @@ TEST(PropertyRegistry, Set) {
   color: rgba(255, 0, 0, 255) (set) @ Specificity(0, 0, 1)
 }
 )"));
+}
+
+TEST(PropertyRegistry, PropertyNamesExposeCssRegistryKeys) {
+  EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("fill")));
+  EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("mix-blend-mode")));
+  EXPECT_THAT(PropertyRegistry::propertyNames(), Contains(std::string_view("marker")));
+
+  EXPECT_TRUE(PropertyRegistry::isPresentationAttributeName("fill"));
+  EXPECT_TRUE(PropertyRegistry::isPresentationAttributeName("transform-origin"));
+  EXPECT_FALSE(PropertyRegistry::isPresentationAttributeName("mix-blend-mode"));
+  EXPECT_FALSE(PropertyRegistry::isPresentationAttributeName("marker"));
 }
 
 TEST(PropertyRegistry, ParseDeclaration) {

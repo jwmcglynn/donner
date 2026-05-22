@@ -61,6 +61,9 @@ TEST_F(DragSessionTest, EndDemotesEntity) {
 
   session->end();
   EXPECT_FALSE(session->isActive());
+  // §M9: demote is queued; flush so the post-end committed state is
+  // observable here.
+  compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(compositor.isPromoted(entity));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
@@ -80,7 +83,8 @@ TEST_F(DragSessionTest, DestructorDemotes) {
     ASSERT_TRUE(session.has_value());
     EXPECT_TRUE(compositor.isPromoted(entity));
   }
-  // Session destroyed — entity should be demoted.
+  // Session destroyed — demote is queued, flush to observe.
+  compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(compositor.isPromoted(entity));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
@@ -114,6 +118,9 @@ TEST_F(DragSessionTest, MoveConstructor) {
   EXPECT_TRUE(compositor.isPromoted(entity));
 
   moved.end();
+  // §M9: demote is queued; flush so the post-end committed state is
+  // observable here.
+  compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(compositor.isPromoted(entity));
 }
 
@@ -138,6 +145,10 @@ TEST_F(DragSessionTest, MoveAssignment) {
 
   // Move-assign B over A — should demote A.
   *sessionA = std::move(*sessionB);
+  // §M9: A's demote is queued; flush so the post-assignment committed
+  // state is observable. B remains promoted (its hint was never
+  // touched).
+  compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(compositor.isPromoted(entityA));  // A was demoted by assignment.
   EXPECT_TRUE(compositor.isPromoted(entityB));   // B is still promoted via sessionA.
 }

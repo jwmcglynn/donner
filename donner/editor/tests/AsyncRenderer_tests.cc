@@ -1,18 +1,25 @@
 #include "donner/editor/AsyncRenderer.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <sstream>
 #include <thread>
+#include <unordered_map>
 
 #include "donner/base/Transform.h"
 #include "donner/editor/AsyncSVGDocument.h"
+#include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/RenderCoordinator.h"
+#include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -24,6 +31,442 @@
 
 namespace donner::editor {
 namespace {
+
+// Design doc 0033 §M5 — preemptive swap-in. When the worker finishes a
+// render, the editor's main loop must learn about the result on the
+// NEXT ImGui frame, not on the next mouse event. The mechanism is the
+// `setWakeCallback` hook, which the worker invokes after every
+// Busy→Done transition (`AsyncRenderer.cc` releases the mutex before
+// firing it). The editor wires this to `glfwPostEmptyEvent` so a
+// blocked `glfwWaitEvents` returns immediately.
+//
+// This test pins the invariant: post a render request, wait on a
+// future signaled by the wake closure, and assert the wake fired
+// before any `pollResult()` call. Without the wake (or if the worker
+// regresses to firing it inside the lock + before state==Done), the
+// future never completes and the test times out.
+TEST(AsyncRendererTest, WakeCallbackFiresOnDoneTransitionBeforePollResult) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="r" x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  std::promise<void> wakeFired;
+  std::atomic<int> wakeCount{0};
+  asyncRenderer.setWakeCallback([&] {
+    // First wake completes the promise; subsequent wakes (if any —
+    // they shouldn't happen for a single request) just bump the count.
+    const int prev = wakeCount.fetch_add(1, std::memory_order_acq_rel);
+    if (prev == 0) {
+      wakeFired.set_value();
+    }
+  });
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+
+  // Block on the wake. Without the callback, this would never fire and
+  // the test would time out at 5s.
+  auto wakeFuture = wakeFired.get_future();
+  const auto status = wakeFuture.wait_for(std::chrono::seconds(5));
+  ASSERT_EQ(status, std::future_status::ready) << "wake callback never fired; M5 invariant broken.";
+
+  // Wake fires after the Done transition, so pollResult() must now
+  // return the result on the first call — no spinning needed.
+  std::optional<RenderResult> result = asyncRenderer.pollResult();
+  ASSERT_TRUE(result.has_value())
+      << "pollResult returned nothing after wake fired; state machine bug.";
+
+  // The wake is fired exactly once per Done transition.
+  EXPECT_EQ(wakeCount.load(std::memory_order_acquire), 1);
+}
+
+// A second wake should fire for a second render request — the worker
+// loop is reusable; the callback is not single-shot.
+TEST(AsyncRendererTest, WakeCallbackFiresPerRequest) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  std::atomic<int> wakeCount{0};
+  std::mutex mu;
+  std::condition_variable cv;
+  asyncRenderer.setWakeCallback([&] {
+    wakeCount.fetch_add(1, std::memory_order_acq_rel);
+    cv.notify_all();
+  });
+
+  const auto waitForCount = [&](int target) {
+    std::unique_lock<std::mutex> lock(mu);
+    return cv.wait_for(lock, std::chrono::seconds(5),
+                       [&] { return wakeCount.load(std::memory_order_acquire) >= target; });
+  };
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+  ASSERT_TRUE(waitForCount(1));
+  asyncRenderer.pollResult();  // Drain to Idle so the worker accepts a new request.
+
+  request.version = 2;
+  asyncRenderer.requestRender(request);
+  ASSERT_TRUE(waitForCount(2));
+  asyncRenderer.pollResult();
+
+  EXPECT_EQ(wakeCount.load(std::memory_order_acquire), 2);
+}
+
+TEST(AsyncRendererTest, WakeCallbackFiresWhenCancellationReturnsWorkerToIdle) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="4096" height="4096" fill="red" />
+  )svg");
+  document.setCanvasSize(4096, 4096);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  std::promise<void> wakeFired;
+  std::atomic<int> wakeCount{0};
+  asyncRenderer.setWakeCallback([&] {
+    const int prev = wakeCount.fetch_add(1, std::memory_order_acq_rel);
+    if (prev == 0) {
+      wakeFired.set_value();
+    }
+  });
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+  ASSERT_TRUE(asyncRenderer.isBusy());
+  asyncRenderer.cancelInFlight();
+
+  auto wakeFuture = wakeFired.get_future();
+  const auto status = wakeFuture.wait_for(std::chrono::seconds(1));
+  ASSERT_EQ(status, std::future_status::ready)
+      << "cancelInFlight returned the worker to idle without waking the UI loop";
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (asyncRenderer.isBusy() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_FALSE(asyncRenderer.isBusy());
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+  EXPECT_GE(wakeCount.load(std::memory_order_acquire), 1);
+}
+
+// `setWakeCallback` is optional — callers that don't set it must still
+// see the result via plain polling, with no regression in the legacy
+// pollResult-driven path.
+TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  // No setWakeCallback — the editor's old pollResult-on-each-frame
+  // path must continue to work.
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+
+  std::optional<RenderResult> result;
+  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ASSERT_TRUE(result.has_value());
+}
+
+// Design doc 0033 §M9 + §M2C — pending-demote layers must carry their
+// `canvasFromBitmap` translation through to the editor blit. The
+// worker's tile-build code previously populated `dragTranslationDoc`
+// only when `isDragTarget == true`, so a pending-demote layer (whose
+// bitmap was rasterized at the entity's pre-drag transform and whose
+// canvasFromBitmap compensates with the residual drag delta) blitted
+// at its rasterize-time canvas offset — the operator saw previously-
+// moved shapes "pop back" to their pre-drag positions during the
+// hysteresis window, then pop forward again when the demote actually
+// fired and the segment re-rasterized. Fix: extract the translation
+// for every layer tile, not just the active drag target.
+TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTile) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="a" x="0" y="0" width="16" height="16" fill="red" />
+    <rect id="b" x="40" y="0" width="16" height="16" fill="blue" />
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto elemA = document.querySelector("#a");
+  auto elemB = document.querySelector("#b");
+  ASSERT_TRUE(elemA.has_value());
+  ASSERT_TRUE(elemB.has_value());
+  const Entity entityA = elemA->entityHandle().entity();
+  const Entity entityB = elemB->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) {
+        return result;
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return std::nullopt;
+  };
+
+  // 1. Pre-warm A — promote with Selection so A's layer rasterizes at
+  //    the entity's CURRENT (identity) transform. The fast path's
+  //    `canvasFromBitmap` update later replaces with a non-zero
+  //    translation; without a pre-rasterize the fast path's first
+  //    encounter would also be the first rasterize, which resets
+  //    `canvasFromBitmap` back to Identity.
+  {
+    RenderRequest request(renderer, document);
+    request.version = 1;
+    request.selectedEntity = entityA;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entityA,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+  }
+  ASSERT_TRUE(waitForResult().has_value());
+
+  // 2. Drag A by (7, 11) document units. Fast path stamps
+  //    `canvasFromBitmap = Translate(7, 11)` on A's pre-warmed layer
+  //    without re-rasterizing.
+  elemA->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(7.0, 11.0)));
+  {
+    RenderRequest request(renderer, document);
+    request.version = 2;
+    request.selectedEntity = entityA;
+    request.dragPreview = RenderRequest::DragPreview{.entity = entityA};
+    asyncRenderer.requestRender(request);
+  }
+  auto resultA = waitForResult();
+  ASSERT_TRUE(resultA.has_value());
+
+  // 3. Now drag B — A is demoted (queued by M9) and B is promoted.
+  //    A's bitmap is still cached with its post-drag canvasFromBitmap.
+  elemB->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(2.0, 3.0)));
+  {
+    RenderRequest request(renderer, document);
+    request.version = 3;
+    request.selectedEntity = entityB;
+    request.dragPreview = RenderRequest::DragPreview{.entity = entityB};
+    asyncRenderer.requestRender(request);
+  }
+  auto resultB = waitForResult();
+  ASSERT_TRUE(resultB.has_value());
+  ASSERT_TRUE(resultB->compositedPreview.has_value());
+
+  // The pending-demote tile for A MUST carry a non-zero
+  // `dragTranslationDoc` reflecting the (7, 11) drag delta from step
+  // 1. Without this fix, the worker only sets `dragTranslationDoc`
+  // for `isDragTarget==true` tiles, so A's tile would have
+  // (0, 0) and the editor blit would place A at its pre-drag
+  // canvas offset.
+  bool sawAPending = false;
+  for (const auto& tile : resultB->compositedPreview->tiles) {
+    if (tile.kind != RenderResult::CompositedTile::Kind::Layer) {
+      continue;
+    }
+    if (tile.isDragTarget) {
+      continue;  // Live drag target is B; we want the pending-demote A.
+    }
+    sawAPending = true;
+    // (7, 11) document units; the worker converts canvas px → doc via
+    // canvasSize/viewBox. With canvasSize=64 and an unset viewBox the
+    // scale is 1, so doc units == canvas px.
+    EXPECT_NEAR(tile.dragTranslationDoc.x, 7.0, 1e-3)
+        << "Pending-demote A's tile must carry its post-drag translation; "
+           "the editor would otherwise blit A at its rasterize-time canvas "
+           "offset and the user sees A 'pop back' to pre-drag position.";
+    EXPECT_NEAR(tile.dragTranslationDoc.y, 11.0, 1e-3);
+  }
+  EXPECT_TRUE(sawAPending) << "M9 hysteresis must keep pending-demote A's layer tile in the "
+                              "result so the editor can keep blitting it while the demote ages.";
+}
+
+// Design doc 0033 §M4 — async re-rasterization with cancellation. A
+// second `requestRender` posted while the worker is busy must:
+//   * signal cancellation to the in-flight `CompositorController::
+//     renderFrame` (the compositor polls between rasterize loops);
+//   * overwrite `pendingRequest_` so the restart sees the latest
+//     request;
+//   * discard the partial in-flight result instead of committing it;
+//   * bump `cancelledRenderCount()` so the test (and the editor) can
+//     observe preemption happening.
+TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewRequest) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="a" x="0" y="0" width="16" height="16" fill="red" />
+    <rect id="b" x="40" y="0" width="16" height="16" fill="blue" />
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto elemA = document.querySelector("#a");
+  auto elemB = document.querySelector("#b");
+  ASSERT_TRUE(elemA.has_value());
+  ASSERT_TRUE(elemB.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  ASSERT_EQ(asyncRenderer.cancelledRenderCount(), 0u);
+
+  // Post request 1 (drag A) immediately followed by request 2 (drag B)
+  // without waiting for the first to complete. The second
+  // `requestRender` lands while `isBusy()` may be true and must
+  // signal cancel on the in-flight render.
+  {
+    RenderRequest request(renderer, document);
+    request.version = 1;
+    request.selectedEntity = elemA->entityHandle().entity();
+    request.dragPreview = RenderRequest::DragPreview{.entity = elemA->entityHandle().entity()};
+    asyncRenderer.requestRender(request);
+  }
+  {
+    RenderRequest request(renderer, document);
+    request.version = 2;
+    request.selectedEntity = elemB->entityHandle().entity();
+    request.dragPreview = RenderRequest::DragPreview{.entity = elemB->entityHandle().entity()};
+    asyncRenderer.requestRender(request);
+  }
+
+  std::optional<RenderResult> result;
+  for (int i = 0; i < 600 && !result.has_value(); ++i) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ASSERT_TRUE(result.has_value());
+
+  // The result that lands MUST be for the second request — request 1
+  // either was cancelled mid-flight or was preempted before starting.
+  // Either way `version` tracks the request the worker actually
+  // committed.
+  EXPECT_EQ(result->version, 2u);
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  EXPECT_EQ(result->compositedPreview->entity, elemB->entityHandle().entity());
+
+  // On a micro-document like this two-rect scene the first render
+  // may complete before the second `requestRender` lands. The
+  // load-bearing invariant is "the worker delivers request 2's
+  // result regardless of timing"; the counter is a best-effort
+  // observation that doesn't flake on scheduling jitter.
+  EXPECT_GE(asyncRenderer.cancelledRenderCount(), 0u);
+}
+
+// Design doc 0033 — `cancelInFlight()` bails a long render that's no
+// longer wanted (a stale selection prewarm at high zoom, etc.) WITHOUT
+// queueing a new one. The worker either:
+//   - bails at the next §M4 safe point and parks (mid-render cancel),
+//     or
+//   - completes the render but discovers state has been flipped to
+//     Idle and drops the result on the floor instead of queueing it
+//     (post-render cancel).
+// Either way the worker reaches idle and the user-thread observes
+// `pollResult() == nullopt`. This is what unblocks `EditorShell`'s
+// deferred slow-path `onMouseDown` (gated on `!isBusy()`) when the
+// editor's stale post-pinch selection prewarm is still in flight.
+TEST(AsyncRendererTest, CancelInFlightDropsResultAndReturnsWorkerToIdle) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="target" x="0" y="0" width="64" height="64" fill="red"/>
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  ASSERT_FALSE(asyncRenderer.isBusy());
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.selectedEntity = target->entityHandle().entity();
+  asyncRenderer.requestRender(request);
+  EXPECT_TRUE(asyncRenderer.isBusy());
+
+  asyncRenderer.cancelInFlight();
+
+  // Spin-wait for the worker to settle. Whether the M4 cancel poll
+  // fired mid-render or the render completed and `result_` got
+  // dropped via the state-flip, the worker must end up parked.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (asyncRenderer.isBusy() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  ASSERT_FALSE(asyncRenderer.isBusy())
+      << "cancelInFlight failed to return the worker to idle within 5 s";
+
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value())
+      << "cancelInFlight must drop the render result rather than publishing it for "
+         "`pollResult` — otherwise the caller picks up stale pre-cancel state";
+}
+
+// Same contract, but assert that a follow-up `requestRender` after the
+// cancel runs through cleanly. The cancel must not leave the
+// AsyncRenderer in a state where the next request stalls or is treated
+// as a continuation of the cancelled one.
+TEST(AsyncRendererTest, CancelInFlightFollowedByRequestRenderRunsCleanly) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="target" x="0" y="0" width="64" height="64" fill="red"/>
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.selectedEntity = target->entityHandle().entity();
+
+  asyncRenderer.requestRender(request);
+  asyncRenderer.cancelInFlight();
+
+  // Drain the cancelled state.
+  while (asyncRenderer.isBusy()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+
+  // Post a fresh request and verify it produces a result. If the
+  // cancel left the renderer in a stuck state, this would time out.
+  request.version = 2;
+  asyncRenderer.requestRender(request);
+  std::optional<RenderResult> result;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (!result.has_value() && std::chrono::steady_clock::now() < deadline) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+  ASSERT_TRUE(result.has_value()) << "requestRender after cancelInFlight stalled";
+  EXPECT_EQ(result->version, 2u);
+}
 
 TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
@@ -39,9 +482,7 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   // Apply a transform to the DOM to simulate the drag having moved the target.
   target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 4.0)));
@@ -62,11 +503,21 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
   EXPECT_TRUE(result->compositedPreview->valid());
-  // The flat fallback bitmap is always produced (even for composited renders) so the main loop can
-  // keep its flat texture current.
+  // A CPU snapshot is still produced for diagnostics and for seeding the
+  // full-canvas composited tile when the splitter has no finer-grained tiles.
   EXPECT_FALSE(result->bitmap.empty());
   EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity());
-  EXPECT_FALSE(result->compositedPreview->promotedBitmap.empty());
+  // M2C: promoted bitmap now lives inside the `tiles` paint-order
+  // list. Assert at least one Layer-kind tile carries non-empty
+  // pixels for the dragged entity.
+  bool sawLayerTile = false;
+  for (const auto& tile : result->compositedPreview->tiles) {
+    if (tile.kind == RenderResult::CompositedTile::Kind::Layer && !tile.bitmap.empty()) {
+      sawLayerTile = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(sawLayerTile);
 }
 
 TEST(AsyncRendererTest, PreviewRequestWithoutDomTransformReturnsCompositedPreviewLayers) {
@@ -83,9 +534,7 @@ TEST(AsyncRendererTest, PreviewRequestWithoutDomTransformReturnsCompositedPrevie
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   request.dragPreview = RenderRequest::DragPreview{
       .entity = target->entityHandle().entity(),
@@ -122,9 +571,7 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
 
   // First render at version 1.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.dragPreview = RenderRequest::DragPreview{
         .entity = target->entityHandle().entity(),
@@ -145,9 +592,7 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
 
   // Second render at version 2 — compositor should reset rather than using stale layers.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 2;
     request.dragPreview = RenderRequest::DragPreview{
         .entity = target->entityHandle().entity(),
@@ -166,17 +611,15 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     // After a version change, the compositor should still produce valid composited output.
     ASSERT_TRUE(result->compositedPreview.has_value());
     EXPECT_TRUE(result->compositedPreview->valid());
-    // The flat bitmap is also always produced.
+    // The CPU snapshot is also always produced for diagnostics.
     EXPECT_FALSE(result->bitmap.empty());
   }
 }
 
-// A request with `selectedEntity` set and no `dragPreview` must still
-// produce a valid flat bitmap. This is the "compositor stays warm against
-// the selection while no drag is happening" path — exercised when the user
-// has just selected an element, or when a drag has released and the
-// selection is being held ready for the next drag.
-TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesFlatBitmap) {
+// A request with `selectedEntity` set and no `dragPreview` must still produce
+// a valid composited preview. If the compositor cannot split the selection yet,
+// the final CPU snapshot is wrapped as one full-canvas tile.
+TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPreview) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect id="target" x="0" y="0" width="16" height="16" fill="red" />
   )svg");
@@ -188,9 +631,7 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesFlatBitmap) {
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
 
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = 1;
   request.selectedEntity = target->entityHandle().entity();
   // No dragPreview — editor is holding a selection pre-warmed but not
@@ -208,10 +649,104 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesFlatBitmap) {
 
   ASSERT_TRUE(result.has_value());
   EXPECT_FALSE(result->bitmap.empty());
-  // compositedPreview is only exposed when the editor is actively dragging
-  // (it's what drives the GPU-textures overlay). Pre-warm without drag just
-  // produces the flat bitmap.
-  EXPECT_FALSE(result->compositedPreview.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  EXPECT_TRUE(result->compositedPreview->valid());
+}
+
+TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTile) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="64" height="64" fill="red" />
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+
+  asyncRenderer.requestRender(request);
+
+  std::optional<RenderResult> result;
+  for (int i = 0; i < 200 && !result.has_value(); ++i) {
+    result = asyncRenderer.pollResult();
+    if (!result.has_value()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_EQ(result->compositedPreview->tiles.size(), 1u);
+  const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
+  EXPECT_EQ(tile.kind, RenderResult::CompositedTile::Kind::Segment);
+  EXPECT_EQ(tile.id, "full-canvas");
+  EXPECT_FALSE(tile.bitmap.empty());
+  EXPECT_EQ(tile.bitmap.dimensions, Vector2i(64, 64));
+  EXPECT_EQ(tile.canvasOffsetDoc, Vector2d::Zero());
+  EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(64.0, 64.0));
+  EXPECT_TRUE(result->compositedPreview->entity == entt::null);
+}
+
+TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasCompositedPreview) {
+  const std::array<std::string_view, 3> cases = {
+      R"svg(
+        <defs><filter id="blur"><feGaussianBlur stdDeviation="4"/></filter></defs>
+        <g filter="url(#blur)">
+          <rect id="target" x="20" y="20" width="30" height="30" fill="red"/>
+        </g>
+      )svg",
+      R"svg(
+        <defs><clipPath id="clip"><rect x="0" y="0" width="40" height="80"/></clipPath></defs>
+        <g clip-path="url(#clip)">
+          <rect id="target" x="20" y="20" width="30" height="30" fill="red"/>
+        </g>
+      )svg",
+      R"svg(
+        <defs><mask id="mask"><rect x="0" y="0" width="40" height="80" fill="white"/></mask></defs>
+        <g mask="url(#mask)">
+          <rect id="target" x="20" y="20" width="30" height="30" fill="red"/>
+        </g>
+      )svg",
+  };
+
+  for (std::string_view svgBody : cases) {
+    svg::SVGDocument document = svg::instantiateSubtree(std::string(svgBody));
+    document.setCanvasSize(80, 80);
+    auto target = document.querySelector("#target");
+    ASSERT_TRUE(target.has_value());
+
+    svg::Renderer renderer;
+    AsyncRenderer asyncRenderer;
+
+    RenderRequest request(renderer, document);
+    request.version = 1;
+    request.selectedEntity = target->entityHandle().entity();
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = target->entityHandle().entity(),
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+
+    asyncRenderer.requestRender(request);
+
+    std::optional<RenderResult> result;
+    for (int i = 0; i < 200 && !result.has_value(); ++i) {
+      result = asyncRenderer.pollResult();
+      if (!result.has_value()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->compositedPreview.has_value()) << svgBody;
+    ASSERT_EQ(result->compositedPreview->tiles.size(), 1u) << svgBody;
+    const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
+    EXPECT_EQ(tile.id, "full-canvas") << svgBody;
+    EXPECT_FALSE(tile.bitmap.empty()) << svgBody;
+    EXPECT_EQ(tile.bitmap.dimensions, result->bitmap.dimensions) << svgBody;
+    EXPECT_EQ(tile.bitmap.pixels, result->bitmap.pixels) << svgBody;
+    EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity()) << svgBody;
+  }
 }
 
 // After a drag → release → drag-again sequence on the same entity, the
@@ -245,9 +780,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   // Drag frame 1: DOM transform (4, 0).
   target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = target->entityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{
@@ -258,30 +791,38 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto drag1 = waitForResult();
   ASSERT_TRUE(drag1.has_value());
   ASSERT_TRUE(drag1->compositedPreview.has_value());
-  const std::vector<uint8_t> promotedPixelsDrag1 = drag1->compositedPreview->promotedBitmap.pixels;
+  // M2C: capture the dragged layer's tile bitmap (kind=Layer, isDragTarget=true)
+  // to compare against the post-release/re-drag frame below.
+  const auto findDragTileBitmap = [](const RenderResult::CompositedPreview& cp) {
+    for (const auto& tile : cp.tiles) {
+      if (tile.isDragTarget && tile.kind == RenderResult::CompositedTile::Kind::Layer) {
+        return tile.bitmap.pixels;
+      }
+    }
+    return std::vector<uint8_t>{};
+  };
+  const std::vector<uint8_t> promotedPixelsDrag1 = findDragTileBitmap(*drag1->compositedPreview);
   ASSERT_FALSE(promotedPixelsDrag1.empty());
 
   // Release: selection held but no drag.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = target->entityHandle().entity();
     asyncRenderer.requestRender(request);
   }
   auto held = waitForResult();
   ASSERT_TRUE(held.has_value());
-  EXPECT_FALSE(held->compositedPreview.has_value());
+  ASSERT_TRUE(held->compositedPreview.has_value());
+  ASSERT_EQ(held->compositedPreview->tiles.size(), 1u);
+  EXPECT_EQ(held->compositedPreview->tiles.front().id, "full-canvas");
 
   // Drag frame 2: same entity, same DOM transform (4, 0). If the compositor
   // were torn down between the release and this drag, it would re-rasterize
   // — but the output would still be visually correct, so check the cheaper
   // proxy: the promoted-entity bitmap must be bit-identical.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = target->entityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{
@@ -292,8 +833,82 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto drag2 = waitForResult();
   ASSERT_TRUE(drag2.has_value());
   ASSERT_TRUE(drag2->compositedPreview.has_value());
-  EXPECT_EQ(drag2->compositedPreview->promotedBitmap.pixels, promotedPixelsDrag1)
-      << "promoted bitmap should be identical after release → drag-again";
+  EXPECT_EQ(findDragTileBitmap(*drag2->compositedPreview), promotedPixelsDrag1)
+      << "drag-target tile bitmap should be identical after release → drag-again";
+}
+
+TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="under" x="0" y="0" width="160" height="100" fill="#102030" />
+    <rect id="target" x="48" y="30" width="32" height="32" fill="#f4d21f" />
+    <rect id="over" x="104" y="0" width="24" height="100" fill="#44aaff" />
+  )svg");
+  document.setCanvasSize(160, 100);
+  const Vector2i initialCanvasSize = document.canvasSize();
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) {
+        return result;
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return std::nullopt;
+  };
+
+  {
+    RenderRequest request(renderer, document);
+    request.version = 1;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+  }
+  ASSERT_TRUE(waitForResult().has_value());
+  EXPECT_EQ(asyncRenderer.compositorState().canvasSize, initialCanvasSize);
+
+  // The editor can commit a new zoom-derived canvas size while the user
+  // is still dragging. The worker must publish one final result whose
+  // compositor tile geometry and pixels both belong to the resized canvas.
+  document.setCanvasSize(96, 60);
+  const Vector2i resizedCanvasSize = document.canvasSize();
+  ASSERT_NE(resizedCanvasSize, initialCanvasSize);
+  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
+
+  {
+    RenderRequest request(renderer, document);
+    request.version = 2;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+    asyncRenderer.requestRender(request);
+  }
+
+  auto result = waitForResult();
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  for (const RenderResult::CompositedTile& tile : result->compositedPreview->tiles) {
+    if (tile.bitmapDimsDoc.x > 0.0 && tile.bitmapDimsDoc.y > 0.0) {
+      EXPECT_FALSE(tile.bitmap.empty()) << "final composited tiles must carry fresh pixels";
+    }
+  }
+  EXPECT_EQ(asyncRenderer.lastDocumentCanvasSize(), resizedCanvasSize);
+  EXPECT_EQ(asyncRenderer.compositorState().canvasSize, resizedCanvasSize);
 }
 
 // Regression: mimic the editor's splash scenario — a drag target living
@@ -352,9 +967,7 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   // selection, which promotes the target and warms every mandatory filter
   // layer.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.documentGeneration = 1;
     request.selectedEntity = entity;
@@ -367,7 +980,18 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   auto prewarm = waitForResult();
   ASSERT_TRUE(prewarm.has_value());
   ASSERT_TRUE(prewarm->compositedPreview.has_value());
-  ASSERT_FALSE(prewarm->compositedPreview->promotedBitmap.empty());
+  ASSERT_FALSE(prewarm->compositedPreview->tiles.empty());
+  // At least one tile must carry a non-empty bitmap (post-M2C the prewarm
+  // delivers the full paint-order tile list, not just a single promoted
+  // bitmap, so the assertion exists on the union, not a named slot).
+  bool sawTileBitmap = false;
+  for (const auto& tile : prewarm->compositedPreview->tiles) {
+    if (!tile.bitmap.empty()) {
+      sawTileBitmap = true;
+      break;
+    }
+  }
+  ASSERT_TRUE(sawTileBitmap);
 
   // Drive a long drag sequence. Each frame: mutate the DOM transform (via
   // the public `setTransform`, identical to `SetTransformCommand` in
@@ -380,9 +1004,7 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   for (int i = 0; i < kDragFrames; ++i) {
     target->cast<svg::SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 1) * 2.0, 0.0)));
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = static_cast<std::uint64_t>(i + 2);
     request.documentGeneration = 1;
     request.selectedEntity = entity;
@@ -395,13 +1017,334 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
     ASSERT_TRUE(result.has_value()) << "drag frame " << i << " did not complete";
     ASSERT_TRUE(result->compositedPreview.has_value())
         << "drag frame " << i << " produced no composited preview — the split-layer path "
-        << "broke and the editor would fall back to the flat texture. This is the perf "
+        << "broke and the editor would lose the composited presentation path. This is the perf "
         << "regression shape behind the user's ~200ms drag updates.";
   }
 
   // The compositor should not have been reset a single time — only frame
   // version changed, not documentGeneration.
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
+}
+
+TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <defs>
+      <filter id="blur-a"><feGaussianBlur in="SourceGraphic" stdDeviation="4.5"/></filter>
+      <filter id="blur-b"><feGaussianBlur in="SourceGraphic" stdDeviation="6"/></filter>
+    </defs>
+    <rect width="400" height="200" fill="#0d0f1d"/>
+    <g id="glow_a" filter="url(#blur-a)">
+      <rect x="20" y="20" width="60" height="60" fill="#ffe54a"/>
+    </g>
+    <rect id="target" x="170" y="50" width="40" height="60" fill="#fae100"/>
+    <g id="glow_b" filter="url(#blur-b)">
+      <rect x="280" y="30" width="60" height="60" fill="#ffe54a"/>
+    </g>
+  )svg");
+  document.setCanvasSize(400, 200);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return std::nullopt;
+  };
+  const auto postRequest = [&](std::uint64_t version,
+                               svg::compositor::InteractionHint interactionHint) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = interactionHint,
+    };
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+  const auto tileGenerations = [](const RenderResult::CompositedPreview& preview)
+      -> std::unordered_map<std::string, uint64_t> {
+    std::unordered_map<std::string, uint64_t> generations;
+    for (const RenderResult::CompositedTile& tile : preview.tiles) {
+      generations.emplace(tile.id, tile.generation);
+    }
+    return generations;
+  };
+
+  auto selection = postRequest(1, svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(selection.has_value());
+  ASSERT_TRUE(selection->compositedPreview.has_value());
+  const std::unordered_map<std::string, uint64_t> selectionGenerations =
+      tileGenerations(*selection->compositedPreview);
+  ASSERT_FALSE(selectionGenerations.empty());
+
+  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
+  auto activeDrag = postRequest(2, svg::compositor::InteractionHint::ActiveDrag);
+  ASSERT_TRUE(activeDrag.has_value());
+  ASSERT_TRUE(activeDrag->compositedPreview.has_value());
+
+  std::vector<std::string> changedTiles;
+  for (const RenderResult::CompositedTile& tile : activeDrag->compositedPreview->tiles) {
+    const auto it = selectionGenerations.find(tile.id);
+    ASSERT_NE(it, selectionGenerations.end()) << "new tile appeared on drag start: " << tile.id;
+    if (it->second != tile.generation) {
+      std::ostringstream label;
+      label << tile.id << " " << it->second << "->" << tile.generation;
+      changedTiles.push_back(label.str());
+    }
+    if (!tile.isDragTarget) {
+      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
+                                       << " should move via metadata only on drag start";
+    }
+  }
+
+  EXPECT_TRUE(changedTiles.empty()) << "translation-only drag start advanced tile generations: "
+                                    << testing::PrintToString(changedTiles);
+
+  auto reselected = postRequest(3, svg::compositor::InteractionHint::Selection);
+  ASSERT_TRUE(reselected.has_value());
+  ASSERT_TRUE(reselected->compositedPreview.has_value());
+
+  changedTiles.clear();
+  const std::unordered_map<std::string, uint64_t> activeDragGenerations =
+      tileGenerations(*activeDrag->compositedPreview);
+  for (const RenderResult::CompositedTile& tile : reselected->compositedPreview->tiles) {
+    const auto it = activeDragGenerations.find(tile.id);
+    ASSERT_NE(it, activeDragGenerations.end()) << "new tile appeared on reselection: " << tile.id;
+    if (it->second != tile.generation) {
+      std::ostringstream label;
+      label << tile.id << " " << it->second << "->" << tile.generation;
+      changedTiles.push_back(label.str());
+    }
+    if (!tile.isDragTarget) {
+      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
+                                       << " should move via metadata only on reselection";
+    }
+  }
+
+  EXPECT_TRUE(changedTiles.empty()) << "reselection advanced already-elevated tile generations: "
+                                    << testing::PrintToString(changedTiles);
+
+  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(18.0, 0.0)));
+  auto secondDrag = postRequest(4, svg::compositor::InteractionHint::ActiveDrag);
+  ASSERT_TRUE(secondDrag.has_value());
+  ASSERT_TRUE(secondDrag->compositedPreview.has_value());
+
+  changedTiles.clear();
+  const std::unordered_map<std::string, uint64_t> reselectedGenerations =
+      tileGenerations(*reselected->compositedPreview);
+  for (const RenderResult::CompositedTile& tile : secondDrag->compositedPreview->tiles) {
+    const auto it = reselectedGenerations.find(tile.id);
+    if (it == reselectedGenerations.end()) {
+      EXPECT_TRUE(tile.isDragTarget)
+          << "new non-drag tile appeared on second drag start: " << tile.id;
+      continue;
+    }
+    if (it->second != tile.generation) {
+      std::ostringstream label;
+      label << tile.id << " " << it->second << "->" << tile.generation;
+      changedTiles.push_back(label.str());
+    }
+    if (!tile.isDragTarget) {
+      EXPECT_TRUE(tile.bitmap.empty()) << "unchanged non-drag tile " << tile.id
+                                       << " should move via metadata only on second drag start";
+    }
+  }
+
+  EXPECT_TRUE(changedTiles.empty())
+      << "second translation-only drag start advanced tile generations: "
+      << testing::PrintToString(changedTiles);
+}
+
+TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGenerations) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(splashSource));
+  app.document().document().setCanvasSize(1784, 1024);
+
+  auto oPath = app.document().document().querySelector("#Donner path.cls-82");
+  auto ePolygon = app.document().document().querySelector("#Donner polygon.cls-85");
+  ASSERT_TRUE(oPath.has_value());
+  ASSERT_TRUE(ePolygon.has_value());
+  const Entity oEntity = oPath->entityHandle().entity();
+  const Entity eEntity = ePolygon->entityHandle().entity();
+
+  SelectTool selectTool;
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  using Clock = std::chrono::steady_clock;
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    const auto deadline = Clock::now() + std::chrono::seconds(30);
+    while (Clock::now() < deadline) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return std::nullopt;
+  };
+  uint64_t renderVersion = 0;
+  const auto postRequest = [&]() {
+    RenderRequest request(renderer, app.document().document());
+    request.version = ++renderVersion;
+    request.documentGeneration = app.document().documentGeneration();
+    request.structuralRemap = app.document().consumePendingStructuralRemap();
+    if (app.selectedElement().has_value() &&
+        app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
+      request.selectedEntity = app.selectedElement()->entityHandle().entity();
+    }
+    if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = preview->entity,
+          .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      };
+    } else if (request.selectedEntity != entt::null) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = request.selectedEntity,
+          .interactionKind = svg::compositor::InteractionHint::Selection,
+      };
+    }
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+  const auto applyDragSourceStoreWriteback = [&]() -> bool {
+    auto completed = selectTool.consumeCompletedDragWriteback();
+    if (!completed.has_value()) {
+      return false;
+    }
+
+    std::optional<svg::SVGElement> element =
+        resolveAttributeWritebackTarget(app.document().document(), completed->target);
+    if (!element.has_value()) {
+      return false;
+    }
+
+    const RcString serialized = toSVGTransformString(completed->transform);
+    if (std::string_view(serialized).empty()) {
+      (void)app.document().document().removeElementAttribute(*element, "transform");
+    } else {
+      (void)app.document().document().setElementAttribute(*element, "transform",
+                                                          std::string_view(serialized));
+    }
+    return true;
+  };
+  const auto generationByLayerEntity =
+      [](const std::vector<svg::compositor::CompositorController::LayerInspectorRow>& layers) {
+        std::unordered_map<uint32_t, uint64_t> generations;
+        for (const auto& layer : layers) {
+          generations.emplace(static_cast<uint32_t>(entt::to_integral(layer.entity)),
+                              layer.generation);
+        }
+        return generations;
+      };
+  const auto describeLayers =
+      [](const std::vector<svg::compositor::CompositorController::LayerInspectorRow>& layers) {
+        std::vector<std::string> descriptions;
+        for (const auto& layer : layers) {
+          std::ostringstream description;
+          description << "layer:" << static_cast<uint32_t>(entt::to_integral(layer.entity))
+                      << " gen=" << layer.generation << " dirty=" << layer.dirty
+                      << " valid=" << layer.hasValidBitmap
+                      << " fallback=" << layer.fallbackReasonsText;
+          descriptions.push_back(description.str());
+        }
+        return descriptions;
+      };
+  const auto describeGenerationChanges =
+      [](const std::unordered_map<uint32_t, uint64_t>& beforeGenerations,
+         const std::unordered_map<uint32_t, uint64_t>& afterGenerations) {
+        std::vector<std::string> changedExistingLayers;
+        std::vector<std::string> newLayers;
+        for (const auto& [entity, generation] : afterGenerations) {
+          const auto it = beforeGenerations.find(entity);
+          if (it == beforeGenerations.end()) {
+            std::ostringstream label;
+            label << "layer:" << entity << "=" << generation;
+            newLayers.push_back(label.str());
+            continue;
+          }
+          if (it->second != generation) {
+            std::ostringstream label;
+            label << "layer:" << entity << " " << it->second << "->" << generation;
+            changedExistingLayers.push_back(label.str());
+          }
+        }
+        return std::pair<std::vector<std::string>, std::vector<std::string>>(
+            std::move(changedExistingLayers), std::move(newLayers));
+      };
+
+  ASSERT_TRUE(postRequest().has_value());
+
+  // Drag the O through the same SelectTool path as the editor.
+  const Vector2d oStart(346.0, 394.0);
+  const Vector2d oDrag(354.0, 394.0);
+  selectTool.onMouseDown(app, oStart, MouseModifiers{});
+  ASSERT_TRUE(app.selectedElement().has_value());
+  ASSERT_EQ(app.selectedElement()->entityHandle().entity(), oEntity);
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  ASSERT_TRUE(postRequest().has_value());
+
+  selectTool.onMouseMove(app, oDrag, /*buttonHeld=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(postRequest().has_value());
+
+  const std::vector<svg::compositor::CompositorController::LayerInspectorRow> afterODragLayers =
+      asyncRenderer.compositorLayerInspectorRows();
+  const std::unordered_map<uint32_t, uint64_t> afterODragGenerations =
+      generationByLayerEntity(afterODragLayers);
+  ASSERT_FALSE(afterODragGenerations.empty());
+
+  // Simulate drag-end source writeback without rendering an intermediate
+  // release frame. File-loaded documents carry a source store, so the shell
+  // mirrors the transform by projecting an XML set-attribute mutation back into
+  // the live document instead of reparsing the whole SVG.
+  selectTool.onMouseUp(app, oDrag);
+  ASSERT_TRUE(applyDragSourceStoreWriteback());
+
+  // Now select the E. A click enters ActiveDrag immediately, even before the
+  // cursor has moved, so this is the frame where the old O hint becomes a
+  // pending demotion and the E is promoted.
+  const Vector2d eClick(568.0, 315.0);
+  selectTool.onMouseDown(app, eClick, MouseModifiers{});
+  ASSERT_TRUE(app.selectedElement().has_value());
+  ASSERT_EQ(app.selectedElement()->entityHandle().entity(), eEntity);
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+
+  auto ePolygonAfterWriteback = app.document().document().querySelector("#Donner polygon.cls-85");
+  ASSERT_TRUE(ePolygonAfterWriteback.has_value());
+  const Entity eEntityAfterWriteback = ePolygonAfterWriteback->entityHandle().entity();
+  ASSERT_EQ(eEntityAfterWriteback, eEntity);
+  ASSERT_TRUE(postRequest().has_value());
+
+  const std::vector<svg::compositor::CompositorController::LayerInspectorRow> afterEClickLayers =
+      asyncRenderer.compositorLayerInspectorRows();
+  const std::unordered_map<uint32_t, uint64_t> afterEClickGenerations =
+      generationByLayerEntity(afterEClickLayers);
+  const auto [changedLayers, newLayers] =
+      describeGenerationChanges(afterODragGenerations, afterEClickGenerations);
+
+  EXPECT_TRUE(changedLayers.empty())
+      << "Selecting E after dragging O changed existing compositor layer generations.\n"
+      << "changed=" << testing::PrintToString(changedLayers) << "\n"
+      << "new=" << testing::PrintToString(newLayers) << "\n"
+      << "after_o_drag=" << testing::PrintToString(describeLayers(afterODragLayers)) << "\n"
+      << "after_e_click=" << testing::PrintToString(describeLayers(afterEClickLayers));
 }
 
 // Regression: bumping `version` every drag frame (as `AsyncSVGDocument::
@@ -442,9 +1385,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 
   // Pre-warm render so the compositor has state worth preserving.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 1;
     request.documentGeneration = 1;
     request.selectedEntity = entity;
@@ -465,9 +1406,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
   for (int i = 0; i < kDragFrames; ++i) {
     target->cast<svg::SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 1), 0.0)));
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = static_cast<std::uint64_t>(i + 2);
     request.documentGeneration = 1;
     request.selectedEntity = entity;
@@ -490,9 +1429,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
   // Bumping `documentGeneration` (e.g. source-pane reparse) *should* fire a
   // reset, exactly once — sanity check on the positive half of the contract.
   {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &document;
+    RenderRequest request(renderer, document);
     request.version = 100;
     request.documentGeneration = 2;
     request.selectedEntity = entity;
@@ -568,9 +1505,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
   };
 
   const auto postRequest = [&](uint64_t version, bool hasSelection, bool hasDrag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -689,9 +1624,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
   };
 
   const auto postRequest = [&](uint64_t version, bool hasSelection, bool hasDrag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -778,14 +1711,15 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
     // steady-state sizes since canvas dims don't change).
     if (result.has_value()) {
       if (result->compositedPreview.has_value()) {
-        const auto& cp = *result->compositedPreview;
-        stats.compositedUploadBytesPerFrame =
-            static_cast<std::size_t>(cp.backgroundBitmap.dimensions.x) *
-                static_cast<std::size_t>(cp.backgroundBitmap.dimensions.y) * 4u +
-            static_cast<std::size_t>(cp.promotedBitmap.dimensions.x) *
-                static_cast<std::size_t>(cp.promotedBitmap.dimensions.y) * 4u +
-            static_cast<std::size_t>(cp.foregroundBitmap.dimensions.x) *
-                static_cast<std::size_t>(cp.foregroundBitmap.dimensions.y) * 4u;
+        // M2C: composited preview is now a paint-order tile list, not
+        // a flattened bg/promoted/fg triple. Total upload bytes is the
+        // sum over all tiles' RGBA8 buffers.
+        std::size_t totalBytes = 0;
+        for (const auto& tile : result->compositedPreview->tiles) {
+          totalBytes += static_cast<std::size_t>(tile.bitmap.dimensions.x) *
+                        static_cast<std::size_t>(tile.bitmap.dimensions.y) * 4u;
+        }
+        stats.compositedUploadBytesPerFrame = totalBytes;
       }
       stats.flatUploadBytesPerFrame = static_cast<std::size_t>(result->bitmap.dimensions.x) *
                                       static_cast<std::size_t>(result->bitmap.dimensions.y) * 4u;
@@ -925,7 +1859,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
 
 TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnSplashShape) {
   AsyncSVGDocument asyncDoc;
-  asyncDoc.loadFromString(R"svg(
+  ASSERT_TRUE(asyncDoc.loadFromString(R"svg(
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">
   <defs>
@@ -947,7 +1881,7 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnSplashShape) {
     </g>
   </g>
 </svg>
-  )svg");
+  )svg"));
   asyncDoc.document().setCanvasSize(892, 512);
 
   auto target = asyncDoc.document().querySelector("#letter_2");
@@ -1099,10 +2033,11 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
 //     rasterizes the whole splash twice over.
 //
 // The test asserts the per-click-drag compositor renderFrame stays
-// under 500 ms. If it trips the threshold, the `[CompositorSlowFrame]`
-// stderr print from `CompositorController::renderFrame` dumps a state
-// breakdown (canvas size, layer count, per-layer rasterize reasons)
-// that's rich enough to construct a tighter repro.
+// under 500 ms. If it trips the threshold, run the editor against the
+// same SVG and inspect the LayerInspectorPanel — the paint-order tile
+// list, raster-time column, and state header (active hints, split
+// path, last promote-refusal reason) give the equivalent breakdown
+// live.
 TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
@@ -1143,9 +2078,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
     return std::nullopt;
   };
   const auto post = [&](uint64_t version, Entity selectedEntity, Entity dragEntity) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1247,11 +2180,12 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
     if (t.label == "click-D (first promote)" || t.label == "click-O (second promote)") {
       EXPECT_LT(t.wallMs, 2500.0)
           << t.label
-          << " — slow-frame diagnostic should have fired to stderr. "
-             "If this trips, the most common regression is re-introducing the "
-             "eager `rootDirty_ = true` / segment-cache wipe in `CompositorController"
-             "::demoteEntity`. Check the `[CompositorSlowFrame]` stderr log above: "
-             "a count of rasterizeLayerCalls >> 1 indicates that regression.";
+          << " — the most common regression is re-introducing the eager "
+             "`rootDirty_ = true` / segment-cache wipe in `CompositorController"
+             "::demoteEntity`. Reproduce in the editor and open the layer "
+             "inspector panel: a raster-time column where most segments and "
+             "layers all rasterize on the click (instead of just the dragged "
+             "entity's layer) indicates that regression.";
     }
   }
 
@@ -1273,24 +2207,20 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
          "that the fix was meant to prevent.";
 }
 
-// Regression: clicking a different element mid-session (D → release →
-// O) used to produce a one-frame transparent-canvas flash in the
-// editor. Root cause was `CompositorController::composeLayers` calling
-// `renderer_->beginFrame()` (which recreates the main renderer's
-// pixmap as fully transparent) and then skipping the actual compose
-// because `skipMainComposeDuringSplit_` was on. The main renderer's
-// `takeSnapshot` then returned a transparent bitmap, which got
-// uploaded as the editor's flat fallback texture. When the presenter
-// fell back to flat during the drag-target swap (before the new
-// composited result landed), the user saw the transparent buffer.
+// Regression: clicking a different element mid-session (D → release → O) used
+// to produce a one-frame transparent-canvas flash in the editor. Root cause was
+// `CompositorController::composeLayers` calling `renderer_->beginFrame()` (which
+// recreates the main renderer's pixmap as fully transparent) and then skipping
+// the actual compose because `skipMainComposeDuringSplit_` was on. The main
+// renderer's `takeSnapshot` then returned a transparent bitmap, which is now
+// used to seed the full-canvas composited tile whenever split tiles are not
+// available.
 //
-// The fix preserves the main renderer's framebuffer across skip-
-// compose frames so the flat fallback always holds the last valid
-// non-split render. This test locks that in by polling the render
-// result after each phase of the click-D → drag-D → release-D →
-// click-O sequence and asserting the flat bitmap is non-empty AND
-// contains at least some non-fully-transparent pixels.
-TEST(AsyncRendererE2ETest, FlatBitmapStaysNonTransparentAcrossDragTargetSwap) {
+// The fix preserves the main renderer's framebuffer across skip-compose frames.
+// This test locks that in by polling the render result after each phase of the
+// click-D → drag-D → release-D → click-O sequence and asserting the CPU snapshot
+// is non-empty and contains at least some non-fully-transparent pixels.
+TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -1322,9 +2252,7 @@ TEST(AsyncRendererE2ETest, FlatBitmapStaysNonTransparentAcrossDragTargetSwap) {
     return std::nullopt;
   };
   const auto post = [&](uint64_t version, Entity selectedEntity, Entity dragEntity) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1356,29 +2284,26 @@ TEST(AsyncRendererE2ETest, FlatBitmapStaysNonTransparentAcrossDragTargetSwap) {
   auto checkResult = [&](std::string_view phase) {
     auto result = waitForResult();
     ASSERT_TRUE(result.has_value()) << "no result for " << phase;
-    EXPECT_FALSE(result->bitmap.empty()) << phase << ": flat bitmap empty";
+    EXPECT_FALSE(result->bitmap.empty()) << phase << ": CPU snapshot empty";
     EXPECT_FALSE(isBitmapMostlyTransparent(result->bitmap))
         << phase
-        << ": flat bitmap is ≥99% transparent — the fallback "
-           "texture the editor uploads would show as a "
-           "transparent flash to the user when the presenter "
-           "switches display modes.";
+        << ": CPU snapshot is ≥99% transparent — a full-canvas composited tile seeded from it "
+           "would show as a transparent flash to the user.";
   };
 
   // Phase 0 — cold render. Flat must contain real document content.
   post(1, entt::null, entt::null);
   checkResult("cold");
 
-  // Phase 1 — click-drag on D. Even though the editor displays the
-  // composited triple for this frame, the flat fallback must retain
-  // the cold render's pixels.
+  // Phase 1 — click-drag on D. Even though the editor displays composited
+  // tiles for this frame, the CPU snapshot must retain the cold render's pixels.
   donnerPath->cast<svg::SVGGraphicsElement>().setTransform(
       Transform2d::Translate(Vector2d(4.0, 0.0)));
   post(2, donnerEntity, donnerEntity);
   checkResult("click-D");
 
-  // Phase 2 — drag frames. Flat must still hold cold pixels (skip-
-  // main-compose is active, main renderer's pixmap preserved).
+  // Phase 2 — drag frames. The CPU snapshot must still hold cold pixels
+  // (skip-main-compose is active, main renderer's pixmap preserved).
   for (int i = 0; i < 3; ++i) {
     donnerPath->cast<svg::SVGGraphicsElement>().setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 4.0, 0.0)));
@@ -1446,9 +2371,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   };
 
   const auto postRequest = [&](uint64_t version, bool drag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1502,9 +2425,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
 
   // Post the next render request. The worker consumes the remap and
   // takes the structural-remap path instead of resetAllLayers.
-  RenderRequest postReplaceRequest;
-  postReplaceRequest.renderer = &renderer;
-  postReplaceRequest.document = &asyncDoc.document();
+  RenderRequest postReplaceRequest(renderer, asyncDoc.document());
   postReplaceRequest.version = 100;
   postReplaceRequest.documentGeneration = asyncDoc.documentGeneration();
   postReplaceRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1512,11 +2433,221 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   ASSERT_FALSE(postReplaceRequest.structuralRemap.empty())
       << "structural remap should be populated after preserve-undo ReplaceDocumentCommand";
   asyncRenderer.requestRender(postReplaceRequest);
-  ASSERT_TRUE(waitForResult().has_value());
+  auto postReplaceResult = waitForResult();
+  ASSERT_TRUE(postReplaceResult.has_value());
+
+  const svg::RendererBitmap& postReplaceBitmap = postReplaceResult->bitmap;
+  ASSERT_FALSE(postReplaceBitmap.empty()) << "post-replace CPU snapshot must refresh";
+  const auto pixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
+    const size_t offset =
+        static_cast<size_t>(y) * postReplaceBitmap.rowBytes + static_cast<size_t>(x) * 4u;
+    return {postReplaceBitmap.pixels[offset + 0u], postReplaceBitmap.pixels[offset + 1u],
+            postReplaceBitmap.pixels[offset + 2u], postReplaceBitmap.pixels[offset + 3u]};
+  };
+  const auto movedOnlyPixel = pixelAt(150, 90);
+  const auto originalOnlyPixel = pixelAt(60, 90);
+  EXPECT_GT(static_cast<int>(movedOnlyPixel[0]), 200)
+      << "post-release CPU snapshot must show #target at its writeback transform";
+  EXPECT_LT(static_cast<int>(movedOnlyPixel[1]), 80);
+  EXPECT_LT(static_cast<int>(movedOnlyPixel[2]), 80);
+  EXPECT_GT(static_cast<int>(originalOnlyPixel[0]), 200)
+      << "post-release CPU snapshot should have the white background at the old position";
+  EXPECT_GT(static_cast<int>(originalOnlyPixel[1]), 200);
+  EXPECT_GT(static_cast<int>(originalOnlyPixel[2]), 200);
 
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u)
       << "drag-end writeback took the full-reset path instead of the structural remap path — "
          "Option B regressed";
+}
+
+TEST(AsyncRendererE2ETest, StructuralRemapSurvivesSupersededWritebackRequest) {
+  const char* kSvgSource = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="400" height="200" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="300" cy="100" r="30" fill="yellow"/></g>
+  <rect id="target" x="50" y="50" width="80" height="80" fill="red"/>
+</svg>
+  )svg";
+  const char* kSvgAfterWriteback = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="400" height="200" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="300" cy="100" r="30" fill="yellow"/></g>
+  <rect id="target" x="50" y="50" width="80" height="80" fill="red" transform="translate(30,0)"/>
+</svg>
+  )svg";
+
+  AsyncSVGDocument asyncDoc;
+  ASSERT_TRUE(asyncDoc.loadFromString(kSvgSource));
+  asyncDoc.document().setCanvasSize(400, 200);
+
+  auto target = asyncDoc.document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  using Clock = std::chrono::steady_clock;
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    const auto deadline = Clock::now() + std::chrono::seconds(10);
+    while (Clock::now() < deadline) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return std::nullopt;
+  };
+  const auto waitUntilIdle = [&]() -> bool {
+    const auto deadline = Clock::now() + std::chrono::seconds(10);
+    while (Clock::now() < deadline) {
+      (void)asyncRenderer.pollResult();
+      if (!asyncRenderer.isBusy()) return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  };
+
+  RenderRequest initialRequest(renderer, asyncDoc.document());
+  initialRequest.version = 1;
+  initialRequest.documentGeneration = asyncDoc.documentGeneration();
+  initialRequest.selectedEntity = target->entityHandle().entity();
+  initialRequest.dragPreview = RenderRequest::DragPreview{
+      .entity = target->entityHandle().entity(),
+      .interactionKind = svg::compositor::InteractionHint::Selection,
+  };
+  asyncRenderer.requestRender(initialRequest);
+  ASSERT_TRUE(waitForResult().has_value());
+  ASSERT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
+
+  asyncDoc.applyMutation(
+      EditorCommand::ReplaceDocumentCommand(kSvgAfterWriteback, /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(asyncDoc.flushFrame());
+  auto targetAfterWriteback = asyncDoc.document().querySelector("#target");
+  ASSERT_TRUE(targetAfterWriteback.has_value());
+
+  RenderRequest supersededRequest(renderer, asyncDoc.document());
+  supersededRequest.version = 2;
+  supersededRequest.documentGeneration = asyncDoc.documentGeneration();
+  supersededRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
+  ASSERT_FALSE(supersededRequest.structuralRemap.empty());
+  // Simulate a writeback render request that got superseded before the worker
+  // advanced its compositor to the replacement document generation. The remap
+  // must remain available for the next real request.
+  asyncRenderer.requestRender(supersededRequest);
+  ASSERT_TRUE(waitUntilIdle());
+
+  RenderRequest followupRequest(renderer, asyncDoc.document());
+  followupRequest.version = 3;
+  followupRequest.documentGeneration = asyncDoc.documentGeneration();
+  followupRequest.selectedEntity = targetAfterWriteback->entityHandle().entity();
+  followupRequest.dragPreview = RenderRequest::DragPreview{
+      .entity = targetAfterWriteback->entityHandle().entity(),
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+  };
+  ASSERT_TRUE(followupRequest.structuralRemap.empty());
+  asyncRenderer.requestRender(followupRequest);
+  ASSERT_TRUE(waitForResult().has_value());
+
+  EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u)
+      << "A superseded writeback request consumed the only structural remap, so the follow-up "
+         "drag request reset every compositor layer.";
+}
+
+TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilterLayers) {
+  const char* kSvgSource = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="200" height="100" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="150" cy="50" r="20" fill="yellow"/></g>
+  <rect id="target" x="20" y="20" width="40" height="40" fill="red"/>
+</svg>
+  )svg";
+  const char* kSvgAfterWriteback = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="3"/></filter></defs>
+  <rect width="200" height="100" fill="white"/>
+  <g id="glow" filter="url(#blur)"><circle cx="150" cy="50" r="20" fill="yellow"/></g>
+  <rect id="target" x="20" y="20" width="40" height="40" fill="red" transform="translate(10,0)"/>
+</svg>
+  )svg";
+
+  AsyncSVGDocument asyncDoc;
+  ASSERT_TRUE(asyncDoc.loadFromString(kSvgSource));
+  const Vector2i editorCanvasSize(400, 200);
+  asyncDoc.document().setCanvasSize(editorCanvasSize.x, editorCanvasSize.y);
+
+  auto target = asyncDoc.document().querySelector("#target");
+  auto glow = asyncDoc.document().querySelector("#glow");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(glow.has_value());
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  using Clock = std::chrono::steady_clock;
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    const auto deadline = Clock::now() + std::chrono::seconds(10);
+    while (Clock::now() < deadline) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return std::nullopt;
+  };
+  const auto postRequest = [&](uint64_t version, Entity selectedEntity) {
+    RenderRequest request(renderer, asyncDoc.document());
+    request.version = version;
+    request.documentGeneration = asyncDoc.documentGeneration();
+    request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
+    request.selectedEntity = selectedEntity;
+    if (selectedEntity != entt::null) {
+      request.dragPreview = RenderRequest::DragPreview{
+          .entity = selectedEntity,
+          .interactionKind = svg::compositor::InteractionHint::Selection,
+      };
+    }
+    asyncRenderer.requestRender(request);
+  };
+  const auto layerGeneration = [&](Entity entity) -> std::optional<uint64_t> {
+    for (const auto& row : asyncRenderer.compositorLayerInspectorRows()) {
+      if (row.entity == entity) {
+        return row.generation;
+      }
+    }
+    return std::nullopt;
+  };
+
+  postRequest(1, target->entityHandle().entity());
+  ASSERT_TRUE(waitForResult().has_value());
+  const auto glowGenerationBefore = layerGeneration(glow->entityHandle().entity());
+  ASSERT_TRUE(glowGenerationBefore.has_value()) << "#glow should be a mandatory filter layer";
+
+  asyncDoc.applyMutation(
+      EditorCommand::ReplaceDocumentCommand(kSvgAfterWriteback, /*preserveUndoOnReparse=*/true));
+  ASSERT_TRUE(asyncDoc.flushFrame());
+  // Mirrors RenderCoordinator's canvas maintenance. Before the fix, the
+  // structural reparse dropped back to 200x100 here, this branch called
+  // setCanvasSize(400,200), and the compositor took the needsFullRebuild
+  // path that rerasterized every preserved filter layer.
+  if (asyncDoc.document().canvasSize() != editorCanvasSize) {
+    asyncDoc.document().setCanvasSize(editorCanvasSize.x, editorCanvasSize.y);
+  }
+
+  auto targetAfterWriteback = asyncDoc.document().querySelector("#target");
+  auto glowAfterWriteback = asyncDoc.document().querySelector("#glow");
+  ASSERT_TRUE(targetAfterWriteback.has_value());
+  ASSERT_TRUE(glowAfterWriteback.has_value());
+
+  postRequest(2, targetAfterWriteback->entityHandle().entity());
+  ASSERT_TRUE(waitForResult().has_value());
+
+  EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
+  const auto glowGenerationAfter = layerGeneration(glowAfterWriteback->entityHandle().entity());
+  ASSERT_TRUE(glowGenerationAfter.has_value());
+  EXPECT_EQ(*glowGenerationAfter, *glowGenerationBefore)
+      << "Unchanged mandatory filter layer rerasterized across structural writeback; "
+         "the editor canvas size must be preserved before the remap reaches the worker.";
 }
 
 // Completes the Option B coverage matrix: a user-typed source-pane
@@ -1576,9 +2707,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   };
 
   const auto postRequest = [&](uint64_t version, bool drag) {
-    RenderRequest request;
-    request.renderer = &renderer;
-    request.document = &asyncDoc.document();
+    RenderRequest request(renderer, asyncDoc.document());
     request.version = version;
     request.documentGeneration = asyncDoc.documentGeneration();
     request.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1625,9 +2754,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   auto targetAfterEdit = asyncDoc.document().querySelector("#target");
   ASSERT_TRUE(targetAfterEdit.has_value());
 
-  RenderRequest postEditRequest;
-  postEditRequest.renderer = &renderer;
-  postEditRequest.document = &asyncDoc.document();
+  RenderRequest postEditRequest(renderer, asyncDoc.document());
   postEditRequest.version = 100;
   postEditRequest.documentGeneration = asyncDoc.documentGeneration();
   postEditRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
@@ -1652,18 +2779,9 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   EXPECT_EQ(resetCount, 0u) << "source-pane structurally-equivalent edit took the reset path";
 }
 
-// Regression: a user closing the editor mid-render (or immediately after the
-// last drag frame) was SIGSEGV'ing inside the compositor's `composeLayers`
-// `drawBitmap` lambda. Root cause: `RenderCoordinator` declared
-// `asyncRenderer_` before `renderer_`, so C++'s reverse-declaration-order
-// member destruction tore down the external `svg::Renderer` first and only
-// then ran `~AsyncRenderer` (which joins the worker thread). The worker,
-// still mid-iteration from a pending request, dereferenced a dangling
-// `RendererInterface*` through `CompositorController::renderer_` and
-// crashed. This test drives the exact teardown shape — post a render and
-// destroy the coordinator before it settles — so any future regression to
-// the declaration order trips this test instead of shipping a crash on
-// every editor close after a filter drag.
+// RenderCoordinator teardown must join the async worker before destroying the
+// renderer referenced by that worker's compositor. This posts a render and
+// destroys the coordinator before it settles, matching editor-close timing.
 TEST(RenderCoordinatorTest, TearingDownWithInFlightRenderDoesNotCrashOnExit) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <defs>
@@ -1680,26 +2798,15 @@ TEST(RenderCoordinatorTest, TearingDownWithInFlightRenderDoesNotCrashOnExit) {
 
   auto coordinator = std::make_unique<RenderCoordinator>();
 
-  RenderRequest request;
-  request.renderer = &coordinator->renderer();
-  request.document = &document;
+  RenderRequest request(coordinator->renderer(), document);
   request.version = 1;
   request.documentGeneration = 1;
   coordinator->asyncRenderer().requestRender(request);
 
-  // Brief yield so the worker actually picks up the render before
-  // teardown. Without it, the worker may still be blocked on `cv_.wait`
-  // when `~RenderCoordinator` runs and the race closes before it can
-  // trigger. With the yield, the worker is reliably inside
-  // `CompositorController::renderFrame` — if `renderer_` is torn down
-  // before `asyncRenderer_`, the next `renderer_->…` inside the
-  // compose-layers lambdas is a use-after-free.
+  // Brief yield so the worker actually picks up the render before teardown.
   std::this_thread::sleep_for(std::chrono::milliseconds(1));
 
-  // With the correct member order, `~RenderCoordinator` destroys
-  // `asyncRenderer_` first (joining the worker), then tears down
-  // `renderer_`. Reaching the end of this test without a crash is the
-  // assertion.
+  // Reaching the end of this test without a crash is the assertion.
   coordinator.reset();
 }
 

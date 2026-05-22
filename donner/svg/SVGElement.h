@@ -4,6 +4,7 @@
 #include <string_view>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
 #include "donner/base/Utils.h"
@@ -28,6 +29,9 @@ class DonnerController;
 
 namespace parser {
 
+// Forward declaration, for parser-only attribute projection.
+class AttributeParser;
+
 // Forward declaration, for friend internal data access.
 class SVGParserImpl;
 
@@ -50,7 +54,9 @@ class SVGParserImpl;
  * @see \ref SVGDocument
  */
 class SVGElement {
+  friend class parser::AttributeParser;
   friend class DonnerController;
+  friend class SVGDocument;
 
 protected:
   /**
@@ -409,6 +415,25 @@ public:
   const PropertyRegistry& getComputedStyle() const;
 
 protected:
+  /**
+   * Set an attribute from an XML mutation and return any SVG semantic parse diagnostic.
+   *
+   * Invalid presentation-attribute values are still stored in the XML attribute projection, but
+   * leave the previous valid SVG semantic component in place.
+   *
+   * @param name Name of the attribute to set.
+   * @param value New value to set.
+   */
+  std::optional<ParseDiagnostic> setAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name,
+                                                             std::string_view value);
+
+  /**
+   * Remove an attribute from an XML mutation without writing back to XML source.
+   *
+   * @param name Name of the attribute to remove.
+   */
+  void removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name);
+
   /**
    * Create a new Entity within the document ECS, and return a handle to it.
    *

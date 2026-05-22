@@ -7,6 +7,16 @@
         "${workspaceFolder}/tools/mcp-servers/resvg-test-triage/server.py"
       ]
     },
+    "donner-editor-control": {
+      "type": "stdio",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/tools/mcp-servers/editor-control/editor_control_wrapper.py"
+      ],
+      "env": {
+        "DONNER_EDITOR_CONTROL_BUILD_ON_START": "1"
+      }
+    },
   },
   "inputs": []
 }

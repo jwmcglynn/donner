@@ -1,39 +1,120 @@
 #include "donner/editor/SourceSync.h"
 
-#include "donner/editor/ChangeClassifier.h"
+#include <algorithm>
+#include <optional>
+#include <string>
+
+#include "donner/base/FileOffset.h"
 #include "donner/editor/EditorCommand.h"
 
 namespace donner::editor {
 
+namespace {
+
+struct SourceTextEdit {
+  std::size_t offset = 0;
+  std::size_t removedLength = 0;
+  std::string_view replacement;
+};
+
+struct StructuredApplyResult {
+  bool applied = false;
+  bool needsDocumentReplace = false;
+};
+
+std::optional<SourceTextEdit> BuildSingleSourceTextEdit(std::string_view oldSource,
+                                                        std::string_view newSource) {
+  if (oldSource == newSource) {
+    return std::nullopt;
+  }
+
+  std::size_t prefixLength = 0;
+  const std::size_t commonLimit = std::min(oldSource.size(), newSource.size());
+  while (prefixLength < commonLimit && oldSource[prefixLength] == newSource[prefixLength]) {
+    ++prefixLength;
+  }
+
+  std::size_t suffixLength = 0;
+  while (suffixLength < oldSource.size() - prefixLength &&
+         suffixLength < newSource.size() - prefixLength &&
+         oldSource[oldSource.size() - suffixLength - 1] ==
+             newSource[newSource.size() - suffixLength - 1]) {
+    ++suffixLength;
+  }
+
+  return SourceTextEdit{
+      .offset = prefixLength,
+      .removedLength = oldSource.size() - prefixLength - suffixLength,
+      .replacement = newSource.substr(prefixLength, newSource.size() - prefixLength - suffixLength),
+  };
+}
+
+std::optional<std::string> ApplySourceTextEdit(std::string_view source,
+                                               const SourceEditIntent& intent) {
+  if (intent.offset > source.size() || intent.removedLength > source.size() - intent.offset) {
+    return std::nullopt;
+  }
+
+  std::string result(source);
+  result.replace(intent.offset, intent.removedLength, intent.replacement);
+  return result;
+}
+
+StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_view previousSource,
+                                                   const SourceTextEdit& edit) {
+  if (!app.structuredEditingEnabled() || !app.hasDocument()) {
+    return {};
+  }
+
+  svg::SVGDocument& document = app.document().document();
+  if (!document.hasSourceStore() || document.source() != previousSource) {
+    return {};
+  }
+
+  xml::ApplySourceEditResult result = app.document().applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(edit.offset),
+                           FileOffset::Offset(edit.offset + edit.removedLength)},
+      .replacement = edit.replacement,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  if (!result.applied) {
+    return {};
+  }
+
+  return StructuredApplyResult{
+      .applied = true,
+      .needsDocumentReplace = result.scope == xml::ReparseScope::Document,
+  };
+}
+
+bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSource,
+                                    std::string_view newSource) {
+  std::optional<SourceTextEdit> edit = BuildSingleSourceTextEdit(previousSource, newSource);
+  if (!edit.has_value()) {
+    return false;
+  }
+
+  const StructuredApplyResult result = TryApplyStructuredSourceEdit(app, previousSource, *edit);
+  if (!result.applied) {
+    return false;
+  }
+
+  if (result.needsDocumentReplace || app.document().document().source() != newSource) {
+    app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+  }
+
+  return true;
+}
+
+}  // namespace
+
 void QueueSourceWritebackReparse(EditorApp& app, std::string_view newSource,
-                                 std::string_view previousSourcePrePatch,
                                  std::string* previousSourceText,
                                  std::optional<std::string>* lastWritebackSourceText) {
   *previousSourceText = std::string(newSource);
   *lastWritebackSourceText = *previousSourceText;
 
-  // Incremental path: try to classify the patch as a targeted attribute
-  // edit on a single element. If the writeback only touched one
-  // `transform="..."` value (the drag-end case), this produces a
-  // `SetAttributeCommand` that updates the attribute on the live DOM
-  // without rebuilding the entity space. The compositor's cached layer
-  // bitmaps + segments survive, so the user doesn't see a freeze when
-  // they let go of a drag on a complex document.
-  if (app.structuredEditingEnabled() && app.hasDocument()) {
-    auto classified =
-        classifyTextChange(app.document().document(), previousSourcePrePatch, newSource);
-    if (classified.command.has_value()) {
-      app.applyMutation(std::move(*classified.command));
-      return;
-    }
-  }
-
-  // Fall-through: the writeback's diff range spans more than one
-  // attribute value, or structured editing is off. Full reparse is
-  // still correct — with `Option B` landed on the compositor
-  // (`setDocumentMaybeStructural`), the reparse now takes the
-  // structural-remap path when the tree shape is unchanged, so the
-  // fallback still avoids the full-reset cost in the common case.
   app.applyMutation(
       EditorCommand::ReplaceDocumentCommand(*previousSourceText, /*preserveUndoOnReparse=*/true));
 }
@@ -55,15 +136,83 @@ DispatchSourceTextChangeResult DispatchSourceTextChange(
   }
 
   bool handled = false;
-  if (app.structuredEditingEnabled() && app.hasDocument()) {
-    auto classified = classifyTextChange(app.document().document(), *previousSourceText, newSource);
-    if (classified.command.has_value()) {
-      app.applyMutation(std::move(*classified.command));
-      handled = true;
-    }
-  }
+  handled = TryApplyStructuredSourceChange(app, *previousSourceText, newSource);
 
   if (!handled) {
+    app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+  }
+
+  *previousSourceText = std::string(newSource);
+  lastWritebackSourceText->reset();
+  return DispatchSourceTextChangeResult{
+      .dispatchedMutation = true,
+      .skippedSelfWriteback = false,
+  };
+}
+
+DispatchSourceTextChangeResult DispatchSourceEditIntents(
+    EditorApp& app, const std::vector<SourceEditIntent>& intents, std::string_view newSource,
+    std::string* previousSourceText, std::optional<std::string>* lastWritebackSourceText) {
+  if (lastWritebackSourceText->has_value() && newSource == **lastWritebackSourceText) {
+    *previousSourceText = std::string(newSource);
+    lastWritebackSourceText->reset();
+    return DispatchSourceTextChangeResult{
+        .dispatchedMutation = false,
+        .skippedSelfWriteback = true,
+    };
+  }
+
+  if (newSource == *previousSourceText) {
+    return {};
+  }
+
+  if (intents.empty()) {
+    return DispatchSourceTextChange(app, newSource, previousSourceText, lastWritebackSourceText);
+  }
+
+  std::string workingSource = *previousSourceText;
+  for (const SourceEditIntent& intent : intents) {
+    std::optional<std::string> nextSource = ApplySourceTextEdit(workingSource, intent);
+    if (!nextSource.has_value()) {
+      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+      *previousSourceText = std::string(newSource);
+      lastWritebackSourceText->reset();
+      return DispatchSourceTextChangeResult{
+          .dispatchedMutation = true,
+          .skippedSelfWriteback = false,
+      };
+    }
+
+    const SourceTextEdit edit{
+        .offset = intent.offset,
+        .removedLength = intent.removedLength,
+        .replacement = intent.replacement,
+    };
+    const StructuredApplyResult result = TryApplyStructuredSourceEdit(app, workingSource, edit);
+    if (!result.applied || result.needsDocumentReplace) {
+      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+      *previousSourceText = std::string(newSource);
+      lastWritebackSourceText->reset();
+      return DispatchSourceTextChangeResult{
+          .dispatchedMutation = true,
+          .skippedSelfWriteback = false,
+      };
+    }
+
+    if (app.document().document().source() != *nextSource) {
+      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+      *previousSourceText = std::string(newSource);
+      lastWritebackSourceText->reset();
+      return DispatchSourceTextChangeResult{
+          .dispatchedMutation = true,
+          .skippedSelfWriteback = false,
+      };
+    }
+
+    workingSource = std::move(*nextSource);
+  }
+
+  if (workingSource != newSource) {
     app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
   }
 

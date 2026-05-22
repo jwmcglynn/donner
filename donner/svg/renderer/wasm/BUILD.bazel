@@ -1,9 +1,41 @@
+load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@emsdk//emscripten_toolchain:wasm_cc_binary.bzl", "wasm_cc_binary")
 load("@rules_cc//cc:defs.bzl", "cc_binary")
-load("//build_defs:rules.bzl", "renderer_backend_compatible_with")
 load("//tools/http:serve_http.bzl", "serve_http")
 
 package(default_visibility = ["//visibility:public"])
+
+bool_flag(
+    name = "enable_wasm",
+    build_setting_default = False,
+    visibility = ["//visibility:public"],
+)
+
+config_setting(
+    name = "wasm_tiny_skia",
+    flag_values = {
+        ":enable_wasm": "True",
+        "//donner/svg/renderer:renderer_backend": "tiny_skia",
+    },
+)
+
+config_setting(
+    name = "wasm_geode",
+    flag_values = {
+        ":enable_wasm": "True",
+        "//donner/svg/renderer:renderer_backend": "geode",
+    },
+)
+
+_WASM_TINY_SKIA_COMPATIBLE_WITH = select({
+    ":wasm_tiny_skia": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
+
+_WASM_GEODE_COMPATIBLE_WITH = select({
+    ":wasm_geode": [],
+    "//conditions:default": ["@platforms//:incompatible"],
+})
 
 # ─── Tiny-Skia (software rasterizer) WASM build ────────────────────────
 
@@ -23,7 +55,7 @@ cc_binary(
         "--no-entry",
     ],
     tags = ["manual"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
     deps = [
         "//donner/svg",
         "//donner/svg/parser",
@@ -39,7 +71,7 @@ wasm_cc_binary(
         "donner_wasm_bin.js",
         "donner_wasm_bin.wasm",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
 )
 
 # Convenience filegroup for the test page and its assets.
@@ -49,7 +81,7 @@ filegroup(
         "test.html",
         ":donner_wasm",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
 )
 
 # ─── Geode (WebGPU) WASM build ─────────────────────────────────────────
@@ -84,7 +116,7 @@ cc_binary(
         "--js-library=$(execpath //third_party/emdawnwebgpu:webgpu/src/library_webgpu.js)",
     ],
     tags = ["manual"],
-    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
     deps = [
         "//donner/svg",
         "//donner/svg/parser",
@@ -100,7 +132,7 @@ wasm_cc_binary(
         "donner_wasm_geode_bin.js",
         "donner_wasm_geode_bin.wasm",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
 )
 
 # Convenience filegroup for the Geode test page and its assets.
@@ -110,7 +142,7 @@ filegroup(
         "test-geode.html",
         ":donner_wasm_geode",
     ],
-    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
 )
 
 # `bazel run :serve_test_geode` starts a local HTTP server at
@@ -121,7 +153,7 @@ serve_http(
     name = "serve_test_geode",
     dir = ":test_page_geode",
     tags = ["manual"],
-    target_compatible_with = renderer_backend_compatible_with(["geode"]),
+    target_compatible_with = _WASM_GEODE_COMPATIBLE_WITH,
 )
 
 # Same, but for the tiny-skia test page (`test.html`).
@@ -129,5 +161,5 @@ serve_http(
     name = "serve_test",
     dir = ":test_page",
     tags = ["manual"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    target_compatible_with = _WASM_TINY_SKIA_COMPATIBLE_WITH,
 )

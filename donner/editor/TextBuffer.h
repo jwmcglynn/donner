@@ -580,6 +580,65 @@ public:
   }
 
   /**
+   * Resolve a coordinate to a byte offset in the full buffer text.
+   *
+   * @param coords Coordinate to resolve.
+   */
+  std::size_t getByteOffset(const Coordinates& coords) const {
+    if (lines_.empty()) {
+      return 0;
+    }
+
+    if (coords.line >= static_cast<int>(lines_.size())) {
+      return estimatedSize() == 0 ? 0 : estimatedSize() - 1;
+    }
+
+    const int lineNumber = std::max(0, coords.line);
+    std::size_t offset = 0;
+    for (int line = 0; line < lineNumber; ++line) {
+      offset += lines_[line].size() + 1;
+    }
+
+    const int charIndex = getCharacterIndex(Coordinates(lineNumber, std::max(0, coords.column)));
+    return offset +
+           std::min<std::size_t>(static_cast<std::size_t>(charIndex), lines_[lineNumber].size());
+  }
+
+  /**
+   * Resolve a full-buffer byte offset to editor coordinates.
+   *
+   * Offsets are interpreted against \ref getText(), where line breaks are represented by single
+   * `\n` bytes between lines. Offsets that point at a line break resolve to the end of the
+   * preceding line; offsets after a line break resolve to the start of the next line.
+   *
+   * @param offset Byte offset in the full buffer text.
+   */
+  Coordinates getCoordinatesAtByteOffset(std::size_t offset) const {
+    if (lines_.empty()) {
+      return Coordinates(0, 0);
+    }
+
+    std::size_t remaining = offset;
+    for (int line = 0; line < static_cast<int>(lines_.size()); ++line) {
+      const std::size_t lineBytes = lines_[line].size();
+      if (remaining <= lineBytes) {
+        return Coordinates(line, getCharacterColumn(line, static_cast<int>(remaining)));
+      }
+
+      remaining -= lineBytes;
+      if (line + 1 >= static_cast<int>(lines_.size())) {
+        return Coordinates(line, getLineMaxColumn(line));
+      }
+
+      // Consume the '\n' separator between this line and the next.
+      --remaining;
+    }
+
+    const int lastLine = static_cast<int>(lines_.size()) - 1;
+    return Coordinates(lastLine, getLineMaxColumn(lastLine));
+  }
+
+  /**
    * The total number of lines in the buffer.
    */
   int getTotalLines() const { return (int)lines_.size(); }

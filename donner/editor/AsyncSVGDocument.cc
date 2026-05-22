@@ -27,6 +27,7 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
     setDocument(std::move(newDocument));
     return ReplaceKind::FullReplace;
   }
+  const Vector2i preservedCanvasSize = document_->canvasSize();
 
   // Build the remap BEFORE the swap. The walker needs both documents'
   // XML trees live; once we move `newDocument` into `document_`, the
@@ -35,6 +36,17 @@ AsyncSVGDocument::ReplaceKind AsyncSVGDocument::setDocumentMaybeStructural(
   // only the UI thread touches the document outside a render.
   auto remap = svg::compositor::BuildStructuralEntityRemap(*document_, newDocument);
   const bool structural = !remap.empty();
+  if (structural) {
+    // The editor owns the raster canvas size independently from the SVG
+    // source. A structural source writeback reparses into a fresh
+    // document whose canvas would otherwise fall back to intrinsic SVG
+    // dimensions, forcing `RenderCoordinator` to call setCanvasSize on
+    // the next frame. That late resize invalidates the whole render tree
+    // and dirties every preserved compositor layer. Carry the canvas
+    // size into the new document before the worker consumes the remap so
+    // it prepares the replacement at the already-displayed size.
+    newDocument.setCanvasSize(preservedCanvasSize.x, preservedCanvasSize.y);
+  }
 
   // Swap the document. We can't call `setDocument` directly because it
   // clears `pendingStructuralRemap_` — we want to populate it right
@@ -64,17 +76,41 @@ bool AsyncSVGDocument::flushFrame() {
     return false;
   }
 
-  for (const auto& cmd : queueFlush.effectiveCommands) {
-    applyOne(cmd);
-  }
-
   lastFlushResult_ = FlushResult{
       .appliedCommands = true,
       .replacedDocument = queueFlush.hadReplaceDocument,
       .preserveUndoOnReparse = queueFlush.preserveUndoOnReparse,
   };
+
+  for (const auto& cmd : queueFlush.effectiveCommands) {
+    applyOne(cmd);
+  }
+
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;
+}
+
+xml::ApplySourceEditResult AsyncSVGDocument::applySourceEdit(const xml::XMLEditIntent& intent) {
+  if (!document_.has_value()) {
+    xml::ApplySourceEditResult result;
+    result.diagnostic =
+        ParseDiagnostic::Error("Cannot apply source edit without a loaded document", intent.range);
+    lastParseError_ = result.diagnostic;
+    return result;
+  }
+
+  xml::ApplySourceEditResult result = document_->applySourceEdit(intent);
+  if (result.diagnostic.has_value()) {
+    lastParseError_ = result.diagnostic;
+  } else {
+    lastParseError_.reset();
+  }
+
+  if (result.applied || !result.mutations.empty()) {
+    frameVersion_.fetch_add(1, std::memory_order_release);
+  }
+
+  return result;
 }
 
 bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
@@ -154,7 +190,10 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // AttributeParser::ParseAndSetAttribute call, but for M3 the
       // public setAttribute is correct and sufficient.
       svg::SVGElement element = *command.element;
-      element.setAttribute(xml::XMLQualifiedNameRef(command.attributeName), command.attributeValue);
+      xml::ApplySourceEditResult result = document_->setElementAttribute(
+          element, xml::XMLQualifiedNameRef(command.attributeName), command.attributeValue);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
       break;
     }
 
@@ -169,7 +208,9 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // walk stops at the detach point. We copy to a local because
       // `remove()` is non-const and `command` is `const&`.
       svg::SVGElement element = *command.element;
-      element.remove();
+      xml::ApplySourceEditResult result = document_->removeElement(element);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
       break;
     }
   }

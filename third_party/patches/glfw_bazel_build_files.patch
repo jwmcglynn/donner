@@ -2,9 +2,9 @@ Subject: [PATCH] Add bazel build files
 Base-commit: b35641f4a3c62aa86a0b3c983d163bc0fe36026d
 
 ---
- BUILD.bazel  | 143 +++++++++++++++++++++++++++++++++++++++++++++++++++
- MODULE.bazel |   10 +++++
- 2 files changed, 153 insertions(+)
+ BUILD.bazel  | 144 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ MODULE.bazel |  10 +++++
+ 2 files changed, 154 insertions(+)
  create mode 100644 BUILD.bazel
  create mode 100644 MODULE.bazel
 

@@ -1,7 +1,11 @@
 #pragma once
 /// @file
 
+#include <memory>
+#include <optional>
+
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/ParseDiagnostic.h"
 #include "donner/base/Utils.h"
 
 namespace donner::xml {
@@ -9,6 +13,7 @@ namespace donner::xml {
 // Forward declarations
 class XMLDocument;
 class XMLNode;
+class XMLSourceStore;
 
 }  // namespace donner::xml
 
@@ -47,6 +52,12 @@ public:
 
   /// Root entity of the document.
   Entity rootEntity = entt::null;
+
+  /// Optional source store for parsed documents that own their source projection.
+  std::shared_ptr<XMLSourceStore> sourceStore;
+
+  /// Current source diagnostic for a dirty structured-editing region, if any.
+  std::optional<ParseDiagnostic> sourceDiagnostic;
 };
 
 }  // namespace donner::xml::components

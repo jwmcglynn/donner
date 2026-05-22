@@ -44,7 +44,6 @@ int main(int argc, char** argv) {
     std::filesystem::current_path(bwd);
   }
 
-  bool experimentalMode = false;
   std::optional<std::string> svgPath;
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
@@ -58,9 +57,12 @@ int main(int argc, char** argv) {
   for (int i = 1; i < argc; ++i) {
     const std::string_view arg(argv[i]);
     if (arg == "--experimental") {
-      experimentalMode = true;
+      // Developer CLI contract: keep accepting this flag even when it is a
+      // no-op. Old repro scripts and launch aliases pass it, and removing it
+      // breaks callers.
       continue;
     }
+
     if (arg == "--save-repro") {
       if (i + 1 >= argc) {
         std::cerr << "--save-repro requires a filename argument\n" << kUsage;
@@ -68,6 +70,11 @@ int main(int argc, char** argv) {
       }
       reproOutputPath = std::string(argv[++i]);
       continue;
+    }
+
+    if (arg.starts_with("--")) {
+      std::cerr << "Unknown option " << arg << "\n" << kUsage;
+      return 1;
     }
 
     if (svgPath.has_value()) {
@@ -97,7 +104,6 @@ int main(int argc, char** argv) {
                .initialSource = initialSource,
                .initialPath = initialPath,
                .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
-               .experimentalMode = experimentalMode,
                .reproOutputPath = reproOutputPath});
   if (!shell.valid()) {
     if (svgPath.has_value()) {

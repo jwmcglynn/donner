@@ -56,7 +56,7 @@ drift.
   a ~1 cache-line read per entity, no filter-region recompute, no transform
   chain walk — because all three are resolved at instantiation time.
 - **v2-specific:** runtime kill-switch (`CompositorConfig::tightBoundedSegments`
-  + editor View-menu toggle) so a visual regression can be bisected without
+  and test/diagnostic setter) so a visual regression can be bisected without
   rebuild.
 
 ## Non-Goals
@@ -75,9 +75,8 @@ drift.
 ## Reversibility
 
 Runtime gate: `CompositorConfig::tightBoundedSegments` (default `true`). Flip
-to `false` — or toggle via the editor's **View → Tight-Bounded Segments
-(debug)** menu item — and `rasterizeDirtyStaticSegments` bypasses the bounds
-path entirely, rasterizing every segment full-canvas. The setter
+to `false` through test or diagnostic code and `rasterizeDirtyStaticSegments`
+bypasses the bounds path entirely, rasterizing every segment full-canvas. The setter
 (`CompositorController::setTightBoundedSegmentsEnabled`) marks all cached
 segments dirty so the next frame re-rasterizes under the new policy; the
 editor plumbs through `AsyncRenderer::setTightBoundedSegmentsEnabled(bool)`
@@ -95,11 +94,10 @@ v1-style on-demand traversal. That's a 3-line change at the call site.
       `RendererDriver::computeEntityRangeBounds` + compositor integration +
       splash drag golden.
 - [x] **Milestone 0.5 (this change):** `CompositorConfig::tightBoundedSegments`
-      runtime gate + editor View-menu toggle + golden
+      runtime gate + test/diagnostic toggle + golden
       (`SetTightBoundedSegmentsEnabledTogglesAtRuntime`).
 - [x] **Milestone 0.6:** CTM composition-order fix + transform naming audit.
-      v1 shipped with `drawEntityRange`'s `setTransform(layerBaseTransform_ *
-      instance.entityFromWorldTransform)` in the wrong order for donner's
+      v1 shipped with `drawEntityRange`'s `setTransform(layerBaseTransform_ * instance.entityFromWorldTransform)` in the wrong order for donner's
       left-first `operator*` convention (`A * B` = "apply A, then B"). For
       full-canvas segments (`layerBase = Identity`) and pure-translation
       element transforms (translations commute) the bug was invisible. For
@@ -118,8 +116,7 @@ v1-style on-demand traversal. That's a 3-line change at the call site.
       `parentFromEntity` (~90 callsites, 20 files). All follow
       `destFromSource` convention now.
 - [ ] **Milestone 1:** Shared-traversal refactor. Extract
-      `traverseEntityRange(registry, first, last, viewport, baseTransform,
-      Visitor&)`. `drawEntityRange` and `computeEntityRangeBounds` become thin
+      `traverseEntityRange(registry, first, last, viewport, baseTransform, Visitor&)`. `drawEntityRange` and `computeEntityRangeBounds` become thin
       wrappers that instantiate the right visitor. Behavior-preserving,
       gated at `isExact()` on all existing goldens.
 - [ ] **Milestone 2:** Add `std::optional<Box2d> localDrawBounds` to
@@ -195,7 +192,7 @@ Local (entity-space, pre-transform) bounds of every pixel the eventual
 - **Masks:** punt. Set `localDrawBounds = std::nullopt` if the entity
   has a mask. Mask extent depends on what the mask content renders to,
   which is itself transform-dependent.
-- **Isolated layers / subtrees:** the *instance* of an isolated-layer
+- **Isolated layers / subtrees:** the _instance_ of an isolated-layer
   parent doesn't get its own `localDrawBounds` expanded for its subtree
   — the bounds visitor at query time unions the subtree's cached
   child-bounds into the parent's accumulator. Storage stays per-entity.
@@ -228,12 +225,12 @@ field instead of recomputing from scratch.
 `RenderingInstanceComponent` is recreated wholesale on structural /
 `RenderInstance` dirty. So:
 
-| Mutation | Is RIC rebuilt? | Local-bounds validity |
-|---|---|---|
-| Drag transform (`setTransform`) | No — in-place `worldFromEntityTransform` write | Valid — local-space, transform-independent |
-| Style change (class/fill/stroke-width/etc.) | If `StyleCascade` dirty | Invalidated when RIC is rebuilt ✓ |
-| Structural (element added/removed) | Yes | Invalidated ✓ |
-| Attribute write-back (drag end commits `transform="…"`) | Via `ReplaceDocumentCommand` → full rebuild | Invalidated ✓ |
+| Mutation                                                | Is RIC rebuilt?                                | Local-bounds validity                      |
+| ------------------------------------------------------- | ---------------------------------------------- | ------------------------------------------ |
+| Drag transform (`setTransform`)                         | No — in-place `worldFromEntityTransform` write | Valid — local-space, transform-independent |
+| Style change (class/fill/stroke-width/etc.)             | If `StyleCascade` dirty                        | Invalidated when RIC is rebuilt ✓          |
+| Structural (element added/removed)                      | Yes                                            | Invalidated ✓                              |
+| Attribute write-back (drag end commits `transform="…"`) | Via `ReplaceDocumentCommand` → full rebuild    | Invalidated ✓                              |
 
 No separate dirty flag needed on `localDrawBounds` — it piggybacks on
 the existing instance-lifetime guarantees.
@@ -244,6 +241,7 @@ the existing instance-lifetime guarantees.
 called every frame during bounds computation today. Its inputs split:
 
 **Static (resolvable at instantiation):**
+
 - `filterUnits` (userSpaceOnUse vs objectBoundingBox)
 - Explicit `x / y / width / height` on the `<filter>` element (or their
   default percentages)
@@ -251,6 +249,7 @@ called every frame during bounds computation today. Its inputs split:
 - Filter graph structure (chain of primitives)
 
 **Dynamic (per-frame):**
+
 - `shapeBounds` via `ShapeSystem::getShapeBounds` — only used when
   `filterUnits=objectBoundingBox`. For `userSpaceOnUse` (the common case
   in hand-authored SVGs + the splash), shape bounds aren't consulted.
@@ -294,18 +293,18 @@ OBB fallback keeps the feature general.
 
 From the audit of `drawEntityRange` / `computeEntityRangeBounds`:
 
-| Work | Static? | Caching target |
-|---|---|---|
-| Path spline bounds | Static | `localDrawBounds` (this design) |
-| Stroke padding (width + miter) | Static | `localDrawBounds` (this design) |
-| `clipRect` | Static | Already on `RenderingInstanceComponent` |
-| Isolated-layer structure (opacity, blend, isolation) | Static | Already resolved on RIC |
-| Image target rect | Static | `localDrawBounds` (this design) |
-| Text shaped-run extent | Static | `localDrawBounds` (this design, milestone 6) |
-| Filter region (userSpaceOnUse) | Static | `ComputedFilterRegionComponent` |
-| Filter region (objectBoundingBox) | Mixed — static descriptor + dynamic shape bounds | `ComputedFilterRegionComponent` + on-demand scale |
-| Marker placement | Dynamic (path vertices) | **Not** cached; entities with markers fall back |
-| Mask extent | Dynamic (mask content render) | **Not** cached; entities with masks fall back |
+| Work                                                 | Static?                                          | Caching target                                    |
+| ---------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------- |
+| Path spline bounds                                   | Static                                           | `localDrawBounds` (this design)                   |
+| Stroke padding (width + miter)                       | Static                                           | `localDrawBounds` (this design)                   |
+| `clipRect`                                           | Static                                           | Already on `RenderingInstanceComponent`           |
+| Isolated-layer structure (opacity, blend, isolation) | Static                                           | Already resolved on RIC                           |
+| Image target rect                                    | Static                                           | `localDrawBounds` (this design)                   |
+| Text shaped-run extent                               | Static                                           | `localDrawBounds` (this design, milestone 6)      |
+| Filter region (userSpaceOnUse)                       | Static                                           | `ComputedFilterRegionComponent`                   |
+| Filter region (objectBoundingBox)                    | Mixed — static descriptor + dynamic shape bounds | `ComputedFilterRegionComponent` + on-demand scale |
+| Marker placement                                     | Dynamic (path vertices)                          | **Not** cached; entities with markers fall back   |
+| Mask extent                                          | Dynamic (mask content render)                    | **Not** cached; entities with masks fall back     |
 
 The three "Static" rows that aren't yet cached (path, stroke, image, text)
 all consolidate into `localDrawBounds`. Filter becomes its own descriptor.
@@ -403,8 +402,8 @@ premul round-trip output. No quantization loss.
 The compositor already ensures most splash segments fit these invariants
 by construction: segments never span an isolation group boundary
 (opacity <1, blend mode, filter, mask all force layer promotion at the
-compositor level, which splits the containing segment). So the *segment
-itself* has trivial compose semantics; only *its output pixels* carry
+compositor level, which splits the containing segment). So the _segment
+itself_ has trivial compose semantics; only _its output pixels_ carry
 any internal alpha-composited content, which is already baked in.
 
 ### Required API change
@@ -423,13 +422,13 @@ API surface, more branching inside a hot path. Needs benchmarking.
 On splash at 892×512 60 fps drag: ~1-2 ms per frame. Small compared to
 the 10-55 MB allocation cut v1 already landed, but it's the kind of
 multi-segment overhead that shows up cumulatively in the Tracy
-`composeLayers` span. Worth doing *after* Milestones 1-4 are stable;
+`composeLayers` span. Worth doing _after_ Milestones 1-4 are stable;
 doing it alongside risks pattern-matching a premul bug as a
 tight-bounds bug.
 
 ### Risks
 
-- **Overlapping semi-transparent shapes *inside* a segment:** safe. The
+- **Overlapping semi-transparent shapes _inside_ a segment:** safe. The
   segment's offscreen was painted through tiny-skia's internal premul
   blend, then stored unpremul. A direct unpremul→unpremul copy is
   bit-identical to the premul round-trip output for the same pixels.
@@ -508,7 +507,7 @@ Perf gate (Milestone 4):
    but doesn't address "don't upload large textures." Tracked as
    follow-up.
 
-5. **Bake bounds into *world*-space on RIC, not local-space.** Rejected:
+5. **Bake bounds into _world_-space on RIC, not local-space.** Rejected:
    every transform mutation (each drag frame) would have to invalidate
    the cache. World-space is just as recomputable as v1's on-demand
    approach, so the cache buys nothing.

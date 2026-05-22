@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 namespace donner::editor::repro {
 
@@ -69,6 +70,24 @@ std::optional<ReproEvent::Kind> ParseEventKind(std::string_view tag) {
   return std::nullopt;
 }
 
+const char* ProofKindTag(ReproExpectationProofKind kind) {
+  switch (kind) {
+    case ReproExpectationProofKind::PresentedPixels: return "presented-pixels";
+    case ReproExpectationProofKind::ActiveDragAlignment: return "active-drag-alignment";
+    case ReproExpectationProofKind::Selection: return "selection";
+    case ReproExpectationProofKind::WorkerLiveness: return "worker-liveness";
+  }
+  return "presented-pixels";
+}
+
+std::optional<ReproExpectationProofKind> ParseProofKind(std::string_view tag) {
+  if (tag == "presented-pixels") return ReproExpectationProofKind::PresentedPixels;
+  if (tag == "active-drag-alignment") return ReproExpectationProofKind::ActiveDragAlignment;
+  if (tag == "selection") return ReproExpectationProofKind::Selection;
+  if (tag == "worker-liveness") return ReproExpectationProofKind::WorkerLiveness;
+  return std::nullopt;
+}
+
 void WriteHit(std::ostream& os, const ReproHit& hit) {
   os << "\"hit\":{";
   bool first = true;
@@ -117,6 +136,45 @@ void WriteEvent(std::ostream& os, const ReproEvent& ev) {
   os << '}';
 }
 
+void WriteExpectation(std::ostream& os, const ReproExpectation& expect) {
+  os << "\"expect\":{"
+     << "\"proof_kind\":";
+  WriteQuotedJsonString(os, ProofKindTag(expect.proofKind));
+  os << ",\"left_mouse_down_ordinal\":" << expect.leftMouseDownOrdinal
+     << ",\"frame_offset_after_left_mouse_down\":" << expect.frameOffsetAfterLeftMouseDown
+     << ",\"min_frame_index\":" << expect.minFrameIndex
+     << ",\"max_frame_index\":" << expect.maxFrameIndex << ",\"target_selector\":";
+  WriteQuotedJsonString(os, expect.targetSelector);
+  os << ",\"crop_mode\":";
+  WriteQuotedJsonString(os, expect.cropMode);
+  if (expect.cropRect.has_value()) {
+    const ReproExpectedCrop& crop = *expect.cropRect;
+    os << ",\"crop\":{\"x\":" << crop.x << ",\"y\":" << crop.y << ",\"w\":" << crop.width
+       << ",\"h\":" << crop.height << '}';
+  }
+  if (expect.activeFrameIndex.has_value()) {
+    os << ",\"active_frame_index\":" << *expect.activeFrameIndex;
+  }
+  if (expect.comparisonFrameIndex.has_value()) {
+    os << ",\"comparison_frame_index\":" << *expect.comparisonFrameIndex;
+  }
+  if (expect.expectedSelectionLabel.has_value()) {
+    os << ",\"expected_selection_label\":";
+    WriteQuotedJsonString(os, *expect.expectedSelectionLabel);
+  }
+  if (expect.statusStartFrameIndex.has_value()) {
+    os << ",\"status_start_frame_index\":" << *expect.statusStartFrameIndex;
+  }
+  if (expect.statusMaxFrameIndex.has_value()) {
+    os << ",\"status_max_frame_index\":" << *expect.statusMaxFrameIndex;
+  }
+  if (expect.forbiddenStatusSubstring.has_value()) {
+    os << ",\"forbidden_status_substring\":";
+    WriteQuotedJsonString(os, *expect.forbiddenStatusSubstring);
+  }
+  os << '}';
+}
+
 void WriteMetadataLine(std::ostream& os, const ReproMetadata& meta) {
   os << "{\"v\":" << kReproFileVersion << ",\"svg\":";
   WriteQuotedJsonString(os, meta.svgPath);
@@ -125,6 +183,10 @@ void WriteMetadataLine(std::ostream& os, const ReproMetadata& meta) {
   if (!meta.startedAtIso8601.empty()) {
     os << ",\"at\":";
     WriteQuotedJsonString(os, meta.startedAtIso8601);
+  }
+  if (meta.expect.has_value()) {
+    os << ',';
+    WriteExpectation(os, *meta.expect);
   }
   os << "}\n";
 }
@@ -385,6 +447,114 @@ std::optional<ReproViewport> ParseViewportObject(std::string_view body) {
   return viewport;
 }
 
+std::optional<ReproExpectedCrop> ParseExpectedCropObject(std::string_view body) {
+  ReproExpectedCrop crop;
+  const auto readField = [&](std::string_view key, int& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return false;
+    auto v = ReadNumber(r);
+    if (!v) return false;
+    out = static_cast<int>(*v);
+    return true;
+  };
+
+  if (!readField("x", crop.x)) return std::nullopt;
+  if (!readField("y", crop.y)) return std::nullopt;
+  if (!readField("w", crop.width)) return std::nullopt;
+  if (!readField("h", crop.height)) return std::nullopt;
+  return crop;
+}
+
+std::optional<ReproExpectation> ParseExpectationObject(std::string_view body) {
+  ReproExpectation expect;
+  const auto readIntField = [&](std::string_view key, int& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return false;
+    auto v = ReadNumber(r);
+    if (!v) return false;
+    out = static_cast<int>(*v);
+    return true;
+  };
+  const auto readStringField = [&](std::string_view key, std::string& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return false;
+    auto value = ReadString(r);
+    if (!value.has_value()) return false;
+    out = std::move(*value);
+    return true;
+  };
+  const auto readOptionalIntField = [&](std::string_view key, std::optional<int>& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return true;
+    auto v = ReadNumber(r);
+    if (!v) return false;
+    out = static_cast<int>(*v);
+    return true;
+  };
+  const auto readOptionalStringField = [&](std::string_view key, std::optional<std::string>& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return true;
+    auto value = ReadString(r);
+    if (!value.has_value()) return false;
+    out = std::move(*value);
+    return true;
+  };
+
+  auto proofKindRest = FindKey(body, "proof_kind");
+  if (!proofKindRest.empty()) {
+    auto proofKindString = ReadString(proofKindRest);
+    if (!proofKindString.has_value()) return std::nullopt;
+    auto proofKind = ParseProofKind(*proofKindString);
+    if (!proofKind.has_value()) return std::nullopt;
+    expect.proofKind = *proofKind;
+  }
+
+  if (!readIntField("left_mouse_down_ordinal", expect.leftMouseDownOrdinal)) {
+    return std::nullopt;
+  }
+  if (!readIntField("frame_offset_after_left_mouse_down", expect.frameOffsetAfterLeftMouseDown)) {
+    return std::nullopt;
+  }
+  if (!readIntField("min_frame_index", expect.minFrameIndex)) return std::nullopt;
+  if (!readIntField("max_frame_index", expect.maxFrameIndex)) return std::nullopt;
+  if (!readStringField("target_selector", expect.targetSelector)) return std::nullopt;
+  if (!readStringField("crop_mode", expect.cropMode)) return std::nullopt;
+
+  auto cropRest = FindKey(body, "crop");
+  if (!cropRest.empty()) {
+    std::size_t p = 0;
+    while (p < cropRest.size() && (cropRest[p] == ' ' || cropRest[p] == '\t')) ++p;
+    if (p >= cropRest.size() || cropRest[p] != '{') return std::nullopt;
+    std::string_view cropCursor = cropRest.substr(p + 1);
+    std::string_view cropBody;
+    if (!ExtractBalancedObject(cropCursor, cropBody)) return std::nullopt;
+    auto crop = ParseExpectedCropObject(cropBody);
+    if (!crop.has_value()) return std::nullopt;
+    expect.cropRect = *crop;
+  }
+
+  if (!readOptionalIntField("active_frame_index", expect.activeFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readOptionalIntField("comparison_frame_index", expect.comparisonFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readOptionalStringField("expected_selection_label", expect.expectedSelectionLabel)) {
+    return std::nullopt;
+  }
+  if (!readOptionalIntField("status_start_frame_index", expect.statusStartFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readOptionalIntField("status_max_frame_index", expect.statusMaxFrameIndex)) {
+    return std::nullopt;
+  }
+  if (!readOptionalStringField("forbidden_status_substring", expect.forbiddenStatusSubstring)) {
+    return std::nullopt;
+  }
+
+  return expect;
+}
+
 std::optional<ReproFrame> ParseFrameLine(std::string_view line) {
   ReproFrame frame;
   auto readIntField = [&](std::string_view key, auto& out) {
@@ -558,6 +728,21 @@ std::optional<ReproFile> ReadReproFile(const std::filesystem::path& path) {
       if (!atRest.empty()) {
         auto s = ReadString(atRest);
         if (s) meta.startedAtIso8601 = std::move(*s);
+      }
+      auto expectRest = FindKey(view, "expect");
+      if (!expectRest.empty()) {
+        std::size_t p = 0;
+        while (p < expectRest.size() && (expectRest[p] == ' ' || expectRest[p] == '\t')) ++p;
+        if (p >= expectRest.size() || expectRest[p] != '{') return std::nullopt;
+        std::string_view expectCursor = expectRest.substr(p + 1);
+        std::string_view expectBody;
+        if (!ExtractBalancedObject(expectCursor, expectBody)) return std::nullopt;
+        auto expect = ParseExpectationObject(expectBody);
+        if (!expect.has_value()) {
+          std::fprintf(stderr, "ReproFile: malformed `expect` metadata block\n");
+          return std::nullopt;
+        }
+        meta.expect = std::move(*expect);
       }
       file.metadata = std::move(meta);
       gotMeta = true;

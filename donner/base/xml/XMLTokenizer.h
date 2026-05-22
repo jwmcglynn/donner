@@ -84,10 +84,69 @@ private:
     return pos_ - start;
   }
 
-  void syncToNextTag() {
-    while (pos_ < size_ && source_[pos_] != '<') {
+  void syncToMarkupRecoveryEnd() {
+    while (pos_ < size_ && source_[pos_] != '<' && source_[pos_] != '>') {
       ++pos_;
     }
+    if (pos_ < size_ && source_[pos_] == '>') {
+      ++pos_;
+    }
+  }
+
+  bool consumeEntityRef() {
+    if (pos_ >= size_ || source_[pos_] != '&') {
+      return false;
+    }
+
+    const std::size_t start = pos_;
+    ++pos_;
+    if (pos_ >= size_) {
+      pos_ = start;
+      return false;
+    }
+
+    if (source_[pos_] == '#') {
+      ++pos_;
+      if (pos_ < size_ && (source_[pos_] == 'x' || source_[pos_] == 'X')) {
+        ++pos_;
+        const std::size_t digitsStart = pos_;
+        while (pos_ < size_ && ((source_[pos_] >= '0' && source_[pos_] <= '9') ||
+                                (source_[pos_] >= 'a' && source_[pos_] <= 'f') ||
+                                (source_[pos_] >= 'A' && source_[pos_] <= 'F'))) {
+          ++pos_;
+        }
+        if (pos_ == digitsStart) {
+          pos_ = start;
+          return false;
+        }
+      } else {
+        const std::size_t digitsStart = pos_;
+        while (pos_ < size_ && source_[pos_] >= '0' && source_[pos_] <= '9') {
+          ++pos_;
+        }
+        if (pos_ == digitsStart) {
+          pos_ = start;
+          return false;
+        }
+      }
+    } else {
+      if (!isNameStartChar(source_[pos_])) {
+        pos_ = start;
+        return false;
+      }
+      ++pos_;
+      while (pos_ < size_ && isNameChar(source_[pos_])) {
+        ++pos_;
+      }
+    }
+
+    if (pos_ < size_ && source_[pos_] == ';') {
+      ++pos_;
+      return true;
+    }
+
+    pos_ = start;
+    return false;
   }
 
   bool consumeQuotedValue() {
@@ -122,8 +181,19 @@ private:
 
   template <typename EmitFn>
   void tokenizeTextContent(EmitFn& fn) {
-    const std::size_t textStart = pos_;
+    std::size_t textStart = pos_;
     while (pos_ < size_ && source_[pos_] != '<') {
+      if (source_[pos_] == '&') {
+        const std::size_t entityStart = pos_;
+        if (consumeEntityRef()) {
+          if (entityStart > textStart) {
+            emit(fn, XMLTokenType::TextContent, textStart, entityStart);
+          }
+          emit(fn, XMLTokenType::EntityRef, entityStart, pos_);
+          textStart = pos_;
+          continue;
+        }
+      }
       ++pos_;
     }
     if (pos_ > textStart) {
@@ -206,8 +276,8 @@ private:
     const std::size_t nameStart = pos_;
     const std::size_t nameLen = consumeName();
     if (nameLen == 0) {
-      emit(fn, T::ErrorRecovery, nameStart, nameStart);
-      syncToNextTag();
+      syncToMarkupRecoveryEnd();
+      emit(fn, T::ErrorRecovery, nameStart, pos_);
       return;
     }
     emit(fn, T::TagName, nameStart, pos_);
@@ -221,8 +291,9 @@ private:
         emit(fn, T::TagClose, pos_, pos_ + 1);
         ++pos_;
       } else {
-        emit(fn, T::ErrorRecovery, pos_, pos_);
-        syncToNextTag();
+        const std::size_t errorStart = pos_;
+        syncToMarkupRecoveryEnd();
+        emit(fn, T::ErrorRecovery, errorStart, pos_);
       }
       return;
     }
@@ -252,7 +323,7 @@ private:
       const std::size_t attrNameLen = consumeName();
       if (attrNameLen == 0) {
         const std::size_t errStart = pos_;
-        syncToNextTag();
+        syncToMarkupRecoveryEnd();
         emit(fn, T::ErrorRecovery, errStart, pos_);
         return;
       }
@@ -285,6 +356,8 @@ private:
         }
       }
     }
+
+    emit(fn, T::ErrorRecovery, pos_, pos_);
   }
 
   std::string_view source_;

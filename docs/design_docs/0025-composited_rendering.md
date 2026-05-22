@@ -2069,9 +2069,8 @@ Why runtime, not compile-time:
 The primary kill-switch ("don't use the compositor at all") is not
 a feature gate — it's a linkage decision: a consumer that doesn't
 want compositing simply doesn't depend on `//donner/svg/compositor`.
-The editor's `--experimental` flag controls whether the compositor
-is constructed; when the flag is off, no `CompositorController`
-exists and all frames route through `RendererDriver::render()`.
+The editor always constructs the compositor; render-pane presentation is
+composited even when the preview is a single full-canvas tile.
 
 Tests exercise each gate individually (controller constructed with
 that field flipped) and in combination. Dual-path pixel-identity
@@ -2268,7 +2267,7 @@ progress but weren't:
 
 - **Investigation chasing the wrong architecture.** For several
   sessions, investigation focused on `GlTextureCache` /
-  `RenderPanePresenter` / `ExperimentalDragPresentation` —
+  `RenderPanePresenter` / the old drag-presentation helper —
   classes whose file paths still existed in the tree but which
   had been orphaned from the live binary by the thin-client
   migration (`60052563`). Hypotheses about
@@ -2364,7 +2363,7 @@ Four things, in order:
 
 4. **Dead code is actively harmful during debugging.** The
    orphaned frontend classes (EditorShell, GlTextureCache,
-   RenderPanePresenter, ExperimentalDragPresentation) survived
+   RenderPanePresenter, the old drag-presentation helper) survived
    in the tree because their tests still passed. They soaked
    up weeks of investigation because they matched the symptom
    lexically ("drag-target swap stale textures", "promoted-layer

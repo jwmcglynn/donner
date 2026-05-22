@@ -110,6 +110,208 @@ TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
   EXPECT_EQ(compositor.layerCount(), 1u);
 
   compositor.demoteEntity(entity);
+  // §M9: demote is queued; layer + hint linger until the hysteresis
+  // window expires. Flush immediately so we can assert the
+  // committed-demote state here.
+  compositor.flushPendingDemotionsForTesting();
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_EQ(compositor.layerCount(), 0u);
+}
+
+// Design doc 0033 §M9 — layer-set hysteresis. `demoteEntity` queues the
+// demotion for `kDemotionHysteresisFrames` and only fires after the
+// counter expires. A `promoteEntity` for the same entity inside the
+// window cancels the queued demotion and reuses the cached layer
+// (no `resyncSegmentsToLayerSet` rebuild).
+TEST_F(CompositorControllerTest, M9DemoteIsLazyWithinHysteresisWindow) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  ASSERT_EQ(compositor.layerCount(), 1u);
+
+  compositor.demoteEntity(entity);
+  // The hysteresis hasn't expired — the layer + hint linger so the
+  // editor's GL textures stay live and a re-promote can short-circuit.
+  EXPECT_EQ(compositor.layerCount(), 1u);
+  EXPECT_TRUE(compositor.isPromoted(entity));
+}
+
+TEST_F(CompositorControllerTest, M9RepromoteSameEntityCancelsPendingDemote) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_EQ(compositor.layerCount(), 1u);
+  const uint64_t generationAfterFirstRender =
+      compositor.snapshotLayerInspectorRows().front().generation;
+
+  // Demote → re-promote with a different kind, mirroring the editor's
+  // selection → drag transition. With the M9 fast path the layer is
+  // preserved and its cached bitmap reused (generation does NOT
+  // bump).
+  compositor.demoteEntity(entity);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+  ASSERT_TRUE(compositor.isPromoted(entity));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const uint64_t generationAfterRepromote =
+      compositor.snapshotLayerInspectorRows().front().generation;
+  EXPECT_EQ(generationAfterRepromote, generationAfterFirstRender)
+      << "M9 fast path should reuse the cached bitmap — re-rasterizing on every "
+         "click-deselect-click is exactly the work the hysteresis prevents.";
+}
+
+TEST_F(CompositorControllerTest, M9DemoteFiresAfterHysteresisExpires) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  ASSERT_EQ(compositor.layerCount(), 1u);
+
+  compositor.demoteEntity(entity);
+  EXPECT_EQ(compositor.layerCount(), 1u);
+
+  // Render `kDemotionHysteresisFrames` frames — each call ages the
+  // counter by one. The last call should expire the queue and run
+  // the deferred resolver/reconcile that actually drops the layer.
+  for (uint32_t i = 0; i < CompositorController::kDemotionHysteresisFrames + 1; ++i) {
+    compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  }
+
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_EQ(compositor.layerCount(), 0u);
+}
+
+// Design doc 0033 §M9 + §M2C — pending-demote entries must NOT make
+// `hasSplitStaticLayers()` return false during the hysteresis window.
+// `skipMainCompose` gates on `hasSplitStaticLayers()`; if it returns
+// false, `composeLayers` runs every fast-path drag frame, doing 2N+1
+// canvas-scale bitmap blits per render. Operator observation on a
+// selection-change drag at high zoom: "fast path counter increments
+// but framerate stays low, scales worse with zoom".
+TEST_F(CompositorControllerTest, M9PendingDemoteKeepsHasSplitStaticLayersTrue) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="red" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  const Entity entityA = a->entityHandle().entity();
+  const Entity entityB = b->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entityA));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_TRUE(compositor.hasSplitStaticLayers())
+      << "Sanity: single live promote should engage split-static-layers.";
+
+  compositor.demoteEntity(entityA);
+  ASSERT_TRUE(compositor.promoteEntity(entityB));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  // The live drag-target is B; A is pending-demote. Without this fix,
+  // activeHints_.size() == 2 made hasSplitStaticLayers() return false
+  // for the whole hysteresis window, disabling `skipMainCompose`.
+  EXPECT_TRUE(compositor.hasSplitStaticLayers())
+      << "Pending-demote A must not mask the live promote B from "
+         "hasSplitStaticLayers() — would otherwise force composeLayers "
+         "to run every fast-path drag frame.";
+}
+
+// Design doc 0033 §M9 + §M2C — pending-demote entries must NOT keep
+// the live drag-target tile from being flagged `isDragTarget`. Before
+// this fix, the `activeHints_.size() == 1` check in `renderFrame`'s
+// `splitStaticLayersEntity_` setter saw `{old-pending-demote, new-
+// drag-target}.size() == 2` during the hysteresis window and fell to
+// `entt::null` — the worker's tile snapshot stopped emitting a
+// dragTranslationDoc for the live target, and the editor blitted the
+// content at the pre-drag position while the overlay (driven by the
+// live DOM) moved with the cursor. Symptom: ~5–7s of "content stays
+// put while overlay tracks the cursor" until the hysteresis expires.
+TEST_F(CompositorControllerTest, M9PendingDemoteDoesNotMaskLiveDragTarget) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="red" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  const Entity entityA = a->entityHandle().entity();
+  const Entity entityB = b->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entityA));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  // Editor switches drag-target: demote A (queued by M9), promote B.
+  // activeHints_ now contains both A (pending) and B (live).
+  compositor.demoteEntity(entityA);
+  ASSERT_TRUE(compositor.promoteEntity(entityB));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  // The live drag-target tile (B) must be flagged `isDragTarget` so
+  // the worker's `dragTranslationDoc` extraction propagates B's
+  // `canvasFromBitmap` translation into the editor blit. Without
+  // this guard the post-M9 `activeHints_.size() == 1` check would
+  // count 2 hints and fall back to `entt::null` for the duration of
+  // the hysteresis window.
+  const auto tiles = compositor.snapshotTilesForUpload();
+  bool sawLiveDragTarget = false;
+  for (const auto& tile : tiles) {
+    if (tile.layerEntity == entityB) {
+      EXPECT_TRUE(tile.isDragTarget) << "live drag-target tile must be flagged isDragTarget";
+      sawLiveDragTarget = true;
+    } else if (tile.layerEntity == entityA) {
+      EXPECT_FALSE(tile.isDragTarget) << "pending-demote tile must NOT be flagged isDragTarget";
+    }
+  }
+  EXPECT_TRUE(sawLiveDragTarget);
+}
+
+TEST_F(CompositorControllerTest, M9FlushPendingDemotionsForTestingFiresImmediately) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" />
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.demoteEntity(entity);
+  ASSERT_EQ(compositor.layerCount(), 1u);
+
+  compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(compositor.isPromoted(entity));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
@@ -146,6 +348,9 @@ TEST_F(CompositorControllerTest, ComputedLayerAssignmentAttachedOnPromote) {
   EXPECT_NE(registry.get<ComputedLayerAssignmentComponent>(entity).layerId, 0u);
 
   compositor.demoteEntity(entity);
+  // §M9: flush the hysteresis queue so the assignment teardown
+  // happens before we check.
+  compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(registry.all_of<ComputedLayerAssignmentComponent>(entity));
 }
 
@@ -278,10 +483,12 @@ TEST_F(CompositorControllerTest, SinglePromotedLayerBuildsSplitStaticLayers) {
   viewport.devicePixelRatio = 1.0;
   compositor.renderFrame(viewport);
 
+  // Post design-doc 0033 §M2C: `hasSplitStaticLayers` reports the
+  // editor-promoted single-drag-target state, no bg/fg flatten step
+  // exists. Assert the layer's bitmap is non-empty (the editor reads
+  // it directly via `snapshotTilesForUpload`).
   EXPECT_TRUE(compositor.hasSplitStaticLayers());
-  EXPECT_FALSE(compositor.backgroundBitmap().empty());
   EXPECT_FALSE(compositor.layerBitmapOf(entity).empty());
-  EXPECT_FALSE(compositor.foregroundBitmap().empty());
 }
 
 TEST_F(CompositorControllerTest, MultiplePromotedLayersDoNotBuildSplitStaticLayers) {
@@ -510,6 +717,340 @@ TEST_F(CompositorControllerTest, ResetAllLayersClearsComputedLayerAssignment) {
 
   // Verify component was removed.
   EXPECT_FALSE(document.registry().all_of<ComputedLayerAssignmentComponent>(entity));
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsIsEmptyBeforePromotion) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="10" height="10" fill="red" />
+  )svg");
+
+  CompositorController compositor(document, renderer_);
+  EXPECT_TRUE(compositor.snapshotLayerInspectorRows().empty());
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsRowPerLayerWithBitmapDims) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="blue" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  const Entity entityA = a->entityHandle().entity();
+  const Entity entityB = b->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entityA));
+  ASSERT_TRUE(compositor.promoteEntity(entityB));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rows.size(), 2u);
+
+  // Every row must point at one of the promoted entities; every row must
+  // have a populated bitmap (the mock renderer's dummy bitmap) and a
+  // non-zero rasterize count after the first renderFrame.
+  std::vector<Entity> entitiesInRows;
+  for (const auto& row : rows) {
+    EXPECT_TRUE(row.hasValidBitmap);
+    EXPECT_NE(row.bitmapSize, Vector2i::Zero());
+    EXPECT_GE(row.rasterizeCount, 1u);
+    EXPECT_GE(row.generation, 1u);
+    entitiesInRows.push_back(row.entity);
+  }
+  EXPECT_THAT(entitiesInRows, ::testing::UnorderedElementsAre(entityA, entityB));
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsTracksRasterizeCountAcrossFrames) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="0" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  // First frame: layer must rasterize exactly once.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterFirst.size(), 1u);
+  EXPECT_EQ(rowsAfterFirst.front().rasterizeCount, 1u);
+
+  // A pure-translation drag goes through the fast path — bitmap is reused,
+  // rasterize count does NOT advance.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterTranslate = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rowsAfterTranslate.size(), 1u);
+  EXPECT_EQ(rowsAfterTranslate.front().rasterizeCount, 1u)
+      << "Pure-translation drag must reuse the cached bitmap rather than re-rasterize.";
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsThumbnailWithMaxSideClamp) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="0" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  ASSERT_EQ(rows.size(), 1u);
+  const auto& row = rows.front();
+  ASSERT_TRUE(row.hasValidBitmap);
+
+  // Thumbnail must be non-empty, longer side clamped to `kLayerThumbnailMaxSide`,
+  // and the RGBA8 byte buffer must match the dimensions.
+  EXPECT_GT(row.thumbnailDims.x, 0);
+  EXPECT_GT(row.thumbnailDims.y, 0);
+  EXPECT_LE(std::max(row.thumbnailDims.x, row.thumbnailDims.y),
+            CompositorController::kLayerThumbnailMaxSide);
+  EXPECT_EQ(row.thumbnailPixels.size(), static_cast<size_t>(row.thumbnailDims.x) *
+                                            static_cast<size_t>(row.thumbnailDims.y) * 4u);
+}
+
+TEST_F(CompositorControllerTest, SnapshotSegmentInspectorRowsEmitsOneRowPerSlot) {
+  // With N promoted layers there should be N+1 segment slots (pre-first,
+  // between-each-pair, post-last). Each populated slot reports
+  // dimensions, generation, and a wall-clock for the most recent
+  // rasterize.
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="a" x="0" y="0" width="10" height="10" fill="blue" />
+    <rect id="b" x="20" y="0" width="10" height="10" fill="red" />
+  )svg");
+
+  configureMockForCaching();
+  auto a = document.querySelector("#a");
+  ASSERT_TRUE(a.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows = compositor.snapshotSegmentInspectorRows();
+  // One promoted layer → two segment slots (pre-layer + post-layer).
+  ASSERT_EQ(rows.size(), 2u);
+  EXPECT_EQ(rows[0].slotIndex, 0u);
+  EXPECT_EQ(rows[1].slotIndex, 1u);
+  for (const auto& row : rows) {
+    if (row.hasValidBitmap) {
+      EXPECT_NE(row.bitmapSize, Vector2i::Zero());
+      EXPECT_GT(row.generation, 0u);
+    }
+  }
+}
+
+TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanvasOffset) {
+  // Design doc 0033 §M2A: mandatory-detected filter layers rasterize
+  // into an offscreen sized to their tight canvas bounds (with 1px AA
+  // padding), not the full viewport. The MockRenderer's takeSnapshot
+  // returns a stub 1x1 bitmap regardless of viewport, so we can't
+  // inspect dimensions directly — instead pin that `canvasOffset` is
+  // non-zero (the rasterize went through the tight-bound path, which
+  // is the architectural invariant we care about). The real-renderer
+  // pixel correctness is covered by the `CompositorGolden_tests`.
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+    <rect width="200" height="100" fill="white"/>
+    <g id="target" filter="url(#f)">
+      <circle cx="40" cy="40" r="10" fill="red"/>
+    </g>
+  )svg",
+                                      Vector2i(200, 100));
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const auto* layer = compositor.findLayerForTest(target->entityHandle().entity());
+  ASSERT_NE(layer, nullptr);
+  ASSERT_TRUE(layer->hasValidBitmap());
+
+  // The circle is centered at (40, 40), so the tight bound's top-left
+  // should be in the upper-left quadrant of the canvas — well away
+  // from origin.
+  EXPECT_GT(layer->canvasOffset().x, 0.0)
+      << "Expected tight-bound rasterize; canvasOffset.x = " << layer->canvasOffset().x;
+  EXPECT_GT(layer->canvasOffset().y, 0.0)
+      << "Expected tight-bound rasterize; canvasOffset.y = " << layer->canvasOffset().y;
+}
+
+TEST_F(CompositorControllerTest, EditorPromotedLayerAlsoUsesIntrinsicSize) {
+  // Design doc 0033 §M2B: editor-promoted layers (drag target /
+  // selection prewarm) go through the same tight-bound rasterize as
+  // mandatory-detected layers. The editor reads the layer's
+  // `canvasOffset` via `CompositedPreview` and blits the texture at
+  // intrinsic dimensions instead of stretching to canvas.
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="50" y="30" width="20" height="20" fill="red"/>
+  )svg",
+                                      Vector2i(200, 100));
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+
+  const auto* layer = compositor.findLayerForTest(entity);
+  ASSERT_NE(layer, nullptr);
+  ASSERT_TRUE(layer->hasValidBitmap());
+
+  // The rect spans canvas (50,30)..(70,50), so the tight-bound rasterize
+  // sets a non-zero canvasOffset somewhere in the upper-left quadrant.
+  EXPECT_GT(layer->canvasOffset().x, 0.0)
+      << "Editor-promoted layers must use intrinsic size; canvasOffset.x = "
+      << layer->canvasOffset().x;
+  EXPECT_GT(layer->canvasOffset().y, 0.0);
+
+  // `layerCanvasOffsetOf` is the editor's accessor for the same value
+  // and must agree with `findLayerForTest`.
+  EXPECT_EQ(compositor.layerCanvasOffsetOf(entity), layer->canvasOffset());
+}
+
+TEST_F(CompositorControllerTest, IntrinsicSizeLayerFastPathTranslationStillWorks) {
+  // The fast-path delta math is independent of bitmap size. Verify
+  // that a translation applied to a mandatory-filter parent group
+  // produces the expected `canvasFromBitmap` translation on top of
+  // the layer's stable canvasOffset.
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="1"/></filter>
+    </defs>
+    <g id="target" filter="url(#f)">
+      <rect x="0" y="0" width="20" height="20" fill="red"/>
+    </g>
+  )svg",
+                                      Vector2i(200, 100));
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  // Rasterize-time: canvasFromBitmap is identity, canvasOffset is the
+  // bitmap's intrinsic position.
+  const auto* layerBefore = compositor.findLayerForTest(target->entityHandle().entity());
+  ASSERT_NE(layerBefore, nullptr);
+  const Vector2d offsetAtRasterize = layerBefore->canvasOffset();
+
+  // Translate the group by (5, 10) in DOM space.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 10.0));
+  compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
+
+  const auto* layerAfter = compositor.findLayerForTest(target->entityHandle().entity());
+  ASSERT_NE(layerAfter, nullptr);
+  EXPECT_EQ(layerAfter->canvasOffset(), offsetAtRasterize)
+      << "canvasOffset stays put — only canvasFromBitmap encodes the drag delta.";
+  const Transform2d xform = layerAfter->canvasFromBitmap();
+  EXPECT_TRUE(xform.isTranslation());
+  EXPECT_NEAR(xform.translation().x, 5.0, 1e-10);
+  EXPECT_NEAR(xform.translation().y, 10.0, 1e-10);
+}
+
+TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
+  // Regression for the detector-ordering bug surfaced by design doc 0033
+  // M1's layer inspector: `RenderingContext::invalidateRenderTree()`
+  // (called by `SVGDocument::setCanvasSize`) clears every
+  // `RenderingInstanceComponent`. If `mandatoryDetector_.reconcile`
+  // runs against that empty RIC view BEFORE
+  // `prepareDocumentForRendering` rebuilds it, the detector scores
+  // zero candidates and `reconcileLayers` drops the filter layer.
+  // The next render frame must keep the filter group promoted.
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+    <g id="target" filter="url(#f)">
+      <rect x="0" y="0" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  configureMockForCaching();
+  CompositorController compositor(document, renderer_);
+
+  // First render: mandatory detector picks up the filter group.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  ASSERT_FALSE(compositor.snapshotLayerInspectorRows().empty())
+      << "Sanity check: mandatory filter detection should have promoted #target on first frame.";
+
+  // Simulate a canvas resize — same code path as the editor's pinch-zoom
+  // / window-resize path. `setCanvasSize` calls
+  // `invalidateRenderTree()` which wipes every RIC.
+  document.setCanvasSize(kTestSvgDefaultSize.x * 2, kTestSvgDefaultSize.y * 2);
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize * 2});
+
+  // The filter group must still be promoted after the resize-driven
+  // render. Without the fix, the snapshot returns zero rows because
+  // the detector ran before prepare and saw an empty RIC view.
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  EXPECT_FALSE(rows.empty())
+      << "Canvas resize dropped the mandatory filter layer (detector ran against empty RICs).";
+  bool sawFilterAfterResize = false;
+  for (const auto& row : rows) {
+    if ((row.fallbackReasons & FallbackReason::Filter) != FallbackReason::None) {
+      sawFilterAfterResize = true;
+    }
+  }
+  EXPECT_TRUE(sawFilterAfterResize)
+      << "Filter-bearing layer should still be promoted after canvas resize.";
+}
+
+TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsFormatsFallbackReasons) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
+    </defs>
+    <g id="target" filter="url(#f)">
+      <rect x="0" y="0" width="10" height="10" fill="red" />
+    </g>
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  // Filter-bearing entities are auto-promoted by MandatoryHintDetector;
+  // drive a frame to let it run.
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rows = compositor.snapshotLayerInspectorRows();
+  ASSERT_FALSE(rows.empty());
+
+  // At least one row should have the Filter fallback flag set, with the
+  // string representation matching the FallbackReasonToString output.
+  bool sawFilter = false;
+  for (const auto& row : rows) {
+    if ((row.fallbackReasons & FallbackReason::Filter) != FallbackReason::None) {
+      sawFilter = true;
+      EXPECT_NE(row.fallbackReasonsText.find("Filter"), std::string::npos)
+          << "fallbackReasonsText='" << row.fallbackReasonsText << "'";
+    }
+  }
+  EXPECT_TRUE(sawFilter);
 }
 
 TEST_F(CompositorControllerTest, ResetAllLayersAllowsRepromotion) {

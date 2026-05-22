@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
@@ -18,6 +19,21 @@ namespace donner::components {
 struct AttributesComponent {
   /// Constructor.
   AttributesComponent() = default;
+
+  /// Source anchors for one serialized attribute.
+  struct AttributeSourceAnchors {
+    std::uint32_t fullStartAnchorId = 0;   ///< Start anchor for `name="value"`.
+    std::uint32_t fullEndAnchorId = 0;     ///< End anchor for `name="value"`.
+    std::uint32_t valueStartAnchorId = 0;  ///< Start anchor for the unquoted value.
+    std::uint32_t valueEndAnchorId = 0;    ///< End anchor for the unquoted value.
+    char quote = '"';                      ///< Quote delimiter used by the attribute value.
+
+    /// Return true when all stored anchors can refer to XML source anchors.
+    bool isValid() const {
+      return fullStartAnchorId != 0 && fullEndAnchorId != 0 && valueStartAnchorId != 0 &&
+             valueEndAnchorId != 0;
+    }
+  };
 
   // No copy, move-only.
   AttributesComponent(const AttributesComponent&) = delete;
@@ -49,6 +65,48 @@ struct AttributesComponent {
   std::optional<RcString> getAttribute(const xml::XMLQualifiedNameRef& name) const {
     const auto it = attributes_.find(name);
     return (it != attributes_.end()) ? std::make_optional(it->second.value) : std::nullopt;
+  }
+
+  /**
+   * Get source-anchor metadata for an attribute, if it exists.
+   *
+   * @param name Name of the attribute to query.
+   * @return Anchor ids for the serialized attribute, or \c std::nullopt if unavailable.
+   */
+  std::optional<AttributeSourceAnchors> getAttributeSourceAnchors(
+      const xml::XMLQualifiedNameRef& name) const {
+    const auto it = attributes_.find(name);
+    if (it == attributes_.end() || !it->second.sourceAnchors.has_value()) {
+      return std::nullopt;
+    }
+
+    return it->second.sourceAnchors;
+  }
+
+  /**
+   * Store source-anchor metadata for an existing attribute.
+   *
+   * @param name Name of the attribute to update.
+   * @param anchors Source anchors for the attribute.
+   */
+  void setAttributeSourceAnchors(const xml::XMLQualifiedNameRef& name,
+                                 AttributeSourceAnchors anchors) {
+    const auto it = attributes_.find(name);
+    if (it != attributes_.end()) {
+      it->second.sourceAnchors = anchors;
+    }
+  }
+
+  /**
+   * Remove source-anchor metadata for an attribute.
+   *
+   * @param name Name of the attribute to clear.
+   */
+  void clearAttributeSourceAnchors(const xml::XMLQualifiedNameRef& name) {
+    const auto it = attributes_.find(name);
+    if (it != attributes_.end()) {
+      it->second.sourceAnchors = std::nullopt;
+    }
   }
 
   /**
@@ -113,8 +171,9 @@ private:
 
   /// Storage for attribute name and value.
   struct Storage {
-    xml::XMLQualifiedName name;  ///< Name of the attribute.
-    RcString value;              ///< Value of the attribute.
+    xml::XMLQualifiedName name;                           ///< Name of the attribute.
+    RcString value;                                       ///< Value of the attribute.
+    std::optional<AttributeSourceAnchors> sourceAnchors;  ///< Source metadata, if parsed.
 
     /// Constructor.
     Storage(const xml::XMLQualifiedName& name, const RcString& value) : name(name), value(value) {}

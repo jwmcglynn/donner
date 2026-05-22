@@ -3,7 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace donner::xml {
@@ -38,11 +40,23 @@ std::vector<TokenWithText> TokenizeWithText(std::string_view source) {
   return result;
 }
 
+std::string Reconstruct(std::string_view source) {
+  std::string reconstructed;
+  Tokenize(source, [&](XMLToken token) { reconstructed += token.text(source); });
+  return reconstructed;
+}
+
 MATCHER_P2(Tok, type, text, "") {
   return arg.type == type && arg.text == text;
 }
 
 using T = XMLTokenType;
+
+struct NoTokenSink {
+  void operator()(XMLToken) const noexcept {}
+};
+
+static_assert(sizeof(NoTokenSink) == 1);
 
 // =============================================================================
 // Basic element tokenization
@@ -243,9 +257,44 @@ TEST(XMLTokenizer, JustText) {
   EXPECT_THAT(TokenizeWithText("hello world"), ElementsAre(Tok(T::TextContent, "hello world")));
 }
 
-TEST(XMLTokenizer, EntityInTextNotExpanded) {
-  // Entities are NOT expanded — they appear as part of TextContent.
-  EXPECT_THAT(TokenizeWithText("a&amp;b"), ElementsAre(Tok(T::TextContent, "a&amp;b")));
+TEST(XMLTokenizer, EntityInTextEmitsEntityRefWithoutExpanding) {
+  // Entities are NOT expanded — the token text remains the exact source bytes.
+  EXPECT_THAT(
+      TokenizeWithText("a&amp;b&#x20;c&#32;d&notClosed"),
+      ElementsAre(Tok(T::TextContent, "a"), Tok(T::EntityRef, "&amp;"), Tok(T::TextContent, "b"),
+                  Tok(T::EntityRef, "&#x20;"), Tok(T::TextContent, "c"), Tok(T::EntityRef, "&#32;"),
+                  Tok(T::TextContent, "d&notClosed")));
+}
+
+TEST(XMLTokenizer, RepresentativeCorpusReconstructsInputByteForByte) {
+  constexpr std::array<std::string_view, 10> kCorpus = {
+      "",
+      "plain text",
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect fill="red"/></svg>)",
+      R"(<?xml version="1.0"?><svg><!-- c --><text>a&amp;b</text></svg>)",
+      R"(<!DOCTYPE svg [ <!ENTITY a "b"> ]><svg>&a;</svg>)",
+      "<svg><![CDATA[<not markup>&still bytes]]></svg>",
+      "<?xml-stylesheet href=\"style.css\"?><svg/>",
+      R"(<a  x = "1"  y = '2' />)",
+      "<svg><1bad><rect/></svg>",
+      R"(<svg><rect fill="unterminated</svg>)",
+  };
+
+  for (std::string_view input : kCorpus) {
+    EXPECT_EQ(Reconstruct(input), input) << input;
+  }
+}
+
+TEST(XMLTokenizer, MalformedInputKeepsWellFormedPrefixThenErrorRecovery) {
+  EXPECT_THAT(TokenizeWithText("<svg><1bad><rect/></svg>"),
+              ElementsAre(Tok(T::TagOpen, "<"), Tok(T::TagName, "svg"), Tok(T::TagClose, ">"),
+                          Tok(T::TagOpen, "<"), Tok(T::ErrorRecovery, "1bad>"),
+                          Tok(T::TagOpen, "<"), Tok(T::TagName, "rect"), Tok(T::TagSelfClose, "/>"),
+                          Tok(T::TagOpen, "</"), Tok(T::TagName, "svg"), Tok(T::TagClose, ">")));
+}
+
+TEST(XMLTokenizer, EmptySinkInstantiatesAndRuns) {
+  Tokenize("<svg><rect fill=\"red\"/></svg>", NoTokenSink{});
 }
 
 }  // namespace donner::xml

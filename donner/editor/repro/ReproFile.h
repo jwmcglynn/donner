@@ -172,6 +172,62 @@ struct ReproFrame {
   std::vector<ReproEvent> events;
 };
 
+/// Optional pixel crop attached to a replay expectation.
+struct ReproExpectedCrop {
+  /// Left edge in the expectation crop mode's pixel coordinate space.
+  int x = 0;
+  /// Top edge in the expectation crop mode's pixel coordinate space.
+  int y = 0;
+  /// Width in pixels.
+  int width = 0;
+  /// Height in pixels.
+  int height = 0;
+
+  friend bool operator==(const ReproExpectedCrop&, const ReproExpectedCrop&) = default;
+};
+
+/// What a curated replay fixture is expected to prove.
+enum class ReproExpectationProofKind {
+  PresentedPixels,
+  ActiveDragAlignment,
+  Selection,
+  WorkerLiveness,
+};
+
+/// Human-reviewed expectation metadata for important replay fixtures.
+struct ReproExpectation {
+  /// Kind of proof this fixture expectation encodes.
+  ReproExpectationProofKind proofKind = ReproExpectationProofKind::PresentedPixels;
+  /// Left-mouse-down ordinal that identifies the representative click.
+  int leftMouseDownOrdinal = 0;
+  /// Frame offset after the representative left-mouse-down.
+  int frameOffsetAfterLeftMouseDown = 0;
+  /// Inclusive accepted frame window for the representative presented frame.
+  int minFrameIndex = 0;
+  /// Inclusive upper bound for the representative presented frame.
+  int maxFrameIndex = 0;
+  /// CSS selector for the element whose interaction the fixture represents.
+  std::string targetSelector;
+  /// Crop mode to use when producing human-reviewable screenshots.
+  std::string cropMode;
+  /// Optional crop inside the selected crop mode.
+  std::optional<ReproExpectedCrop> cropRect;
+  /// Active drag frame that should be captured before mouseup.
+  std::optional<int> activeFrameIndex;
+  /// Frame to compare against the active frame.
+  std::optional<int> comparisonFrameIndex;
+  /// Expected final selection label for selection/liveness fixtures.
+  std::optional<std::string> expectedSelectionLabel;
+  /// First frame in a status-liveness assertion window.
+  std::optional<int> statusStartFrameIndex;
+  /// Last frame in a status-liveness assertion window.
+  std::optional<int> statusMaxFrameIndex;
+  /// Status substring that must not persist through the assertion window.
+  std::optional<std::string> forbiddenStatusSubstring;
+
+  friend bool operator==(const ReproExpectation&, const ReproExpectation&) = default;
+};
+
 /// Session-level metadata captured at recording start.
 struct ReproMetadata {
   /// Path to the SVG being edited when recording started. Relative or
@@ -182,11 +238,13 @@ struct ReproMetadata {
   int windowHeight = 0;
   /// HiDPI display scale at start (`io.DisplayFramebufferScale.x`).
   double displayScale = 1.0;
-  /// Whether the editor was started with `--experimental`.
+  /// Legacy composited-mode metadata kept for old `.rnr` compatibility.
   bool experimentalMode = false;
   /// Absolute wall-clock timestamp when recording started, ISO-8601.
   /// Informational only; not used by the player.
   std::string startedAtIso8601;
+  /// Optional expected frame/crop metadata for curated regression fixtures.
+  std::optional<ReproExpectation> expect;
 };
 
 /// In-memory form of a loaded or in-progress recording.

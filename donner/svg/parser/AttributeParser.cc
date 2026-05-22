@@ -376,13 +376,13 @@ void ParsePresentationAttribute(SVGParserContext& context, SVGElement& element,
           err.range.start = maybeLocation->start;
         }
         context.addWarning(std::move(err));
-        element.removeAttribute(name);
+        AttributeParser::RemoveParsedAttribute(element, name);
         return;
       }
     }
   }
 
-  element.setAttribute(name, value);
+  (void)AttributeParser::ApplyParsedAttribute(element, name, value);
 }
 
 void ParseUnconditionalCommonAttribute(SVGParserContext& context, SVGElement& element,
@@ -390,7 +390,7 @@ void ParseUnconditionalCommonAttribute(SVGParserContext& context, SVGElement& el
   // TODO: Support namespaces on presentation attributes.
   // For now, only parse attributes that are not in a namespace as presentation attributes.
   if (IsAlwaysGenericAttribute(name)) {
-    element.setAttribute(name, value);
+    (void)AttributeParser::ApplyParsedAttribute(element, name, value);
   } else {
     ParsePresentationAttribute(context, element, name, value);
   }
@@ -2086,6 +2086,15 @@ std::optional<ParseDiagnostic> AttributeParser::ParseAndSetAttribute(
     SVGParserContext& context, SVGElement& element, const XMLQualifiedNameRef& name,
     std::string_view value) noexcept {
   return ParseAttributesForElement(context, element, name, value, AllSVGElements());
+}
+
+std::optional<ParseDiagnostic> AttributeParser::ApplyParsedAttribute(
+    SVGElement& element, const XMLQualifiedNameRef& name, std::string_view value) {
+  return element.setAttributeFromXMLMutation(name, value);
+}
+
+void AttributeParser::RemoveParsedAttribute(SVGElement& element, const XMLQualifiedNameRef& name) {
+  element.removeAttributeFromXMLMutation(name);
 }
 
 }  // namespace donner::svg::parser

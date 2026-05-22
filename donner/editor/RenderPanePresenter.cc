@@ -3,6 +3,7 @@
 #include <cmath>
 
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/PresentedFrameComposer.h"
 
 namespace donner::editor {
 
@@ -19,11 +20,6 @@ constexpr float kTargetFrameMs = 1000.0f / 60.0f;
 constexpr float kOverBudgetThresholdMs = kTargetFrameMs * 1.1f;
 constexpr float kFrameGraphWidth = 240.0f;
 constexpr float kFrameGraphHeight = 32.0f;
-
-Vector2d PromotedTextureScreenOffset(const GlTextureCache& textures,
-                                     const ViewportState& viewport) {
-  return textures.promotedTranslationDoc() * viewport.pixelsPerDocUnit();
-}
 
 void RenderFrameGraph(const FrameHistory& history) {
   const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -151,19 +147,35 @@ void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2&
   drawList->PopClipRect();
 }
 
+PresentedFrameTileGeometry PresentedGeometryFromTile(const GlTextureCache::TileView& tile) {
+  return PresentedFrameTileGeometry{
+      .canvasOffsetDoc = tile.canvasOffsetDoc,
+      .bitmapDimsDoc = tile.bitmapDimsDoc,
+      .dragTranslationDoc = tile.dragTranslationDoc,
+      .isDragTarget = tile.isDragTarget,
+  };
+}
+
+std::optional<PresentedDragBaseline> PresentedBaselineFromSelectPreviews(
+    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
+    const std::optional<SelectTool::ActiveDragPreview>& displayedPreview) {
+  if (!activePreview.has_value() || !displayedPreview.has_value() ||
+      activePreview->entity != displayedPreview->entity) {
+    return std::nullopt;
+  }
+
+  return PresentedDragBaseline{
+      .entity = activePreview->entity,
+      .representedTranslationDoc = displayedPreview->translation,
+      .activeTranslationDoc = activePreview->translation,
+  };
+}
+
 }  // namespace
 
 void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
-  // The DOM is the source of truth for position. The overlay chrome and AABBs
-  // are recomputed against the current DOM transform, so no editor-side
-  // "screen offset" is layered on top. The only offset that survives is the
-  // one the compositor itself reports for the promoted bitmap — the delta
-  // between the bitmap's stamp-time DOM transform and the current DOM
-  // transform, used when a stale bitmap is reused via the fast path.
-  const auto promotedScreenOffset = PromotedTextureScreenOffset(state.textures, state.viewport);
-
-  if (state.textures.flatWidth() <= 0 && state.textures.flatHeight() <= 0 &&
-      !state.experimentalDragPresentation.hasCachedTextures) {
+  const bool hasTiles = !state.textures.tiles().empty();
+  if (!hasTiles) {
     ImGui::TextUnformatted("(no rendered image)");
     return;
   }
@@ -176,34 +188,27 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   ImDrawList* paneDrawList = ImGui::GetWindowDrawList();
   DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
 
-  if (state.experimentalMode &&
-      state.experimentalDragPresentation.shouldDisplayCompositedLayers(state.activeDragPreview) &&
-      state.textures.promotedWidth() > 0 && state.textures.promotedHeight() > 0 &&
-      state.displayedDragPreview.has_value()) {
-    if (state.textures.backgroundWidth() > 0 && state.textures.backgroundHeight() > 0) {
-      paneDrawList->AddImage(
-          static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.backgroundTexture())),
-          imageOrigin, imageBottomRight);
+  const double pxPerDoc = state.viewport.pixelsPerDocUnit();
+  const Vector2d imageOriginScreen(imageOrigin.x, imageOrigin.y);
+  const Transform2d screenFromCanvasTransform =
+      Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
+  const std::optional<PresentedDragBaseline> dragBaseline =
+      PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.displayedDragPreview);
+  for (const auto& tile : state.textures.tiles()) {
+    if (tile.texture == 0) {
+      continue;
     }
-
-    const ImVec2 promotedOrigin(imageOrigin.x + static_cast<float>(promotedScreenOffset.x),
-                                imageOrigin.y + static_cast<float>(promotedScreenOffset.y));
-    const ImVec2 promotedBottomRight(
-        imageBottomRight.x + static_cast<float>(promotedScreenOffset.x),
-        imageBottomRight.y + static_cast<float>(promotedScreenOffset.y));
-    paneDrawList->AddImage(
-        static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.promotedTexture())),
-        promotedOrigin, promotedBottomRight);
-
-    if (state.textures.foregroundWidth() > 0 && state.textures.foregroundHeight() > 0) {
-      paneDrawList->AddImage(
-          static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.foregroundTexture())),
-          imageOrigin, imageBottomRight);
+    const std::optional<PresentedTileRect> tileRect = ComputePresentedTileRect(
+        PresentedGeometryFromTile(tile), screenFromCanvasTransform, dragBaseline);
+    if (!tileRect.has_value()) {
+      continue;
     }
-  } else {
-    paneDrawList->AddImage(
-        static_cast<ImTextureID>(static_cast<std::uintptr_t>(state.textures.flatTexture())),
-        imageOrigin, imageBottomRight);
+    const ImVec2 tileOrigin(static_cast<float>(tileRect->topLeft.x),
+                            static_cast<float>(tileRect->topLeft.y));
+    const ImVec2 tileBottomRight(static_cast<float>(tileRect->bottomRight.x),
+                                 static_cast<float>(tileRect->bottomRight.y));
+    paneDrawList->AddImage(static_cast<ImTextureID>(static_cast<std::uintptr_t>(tile.texture)),
+                           tileOrigin, tileBottomRight);
   }
 
   // All editor chrome — path outlines, selection AABBs, and the

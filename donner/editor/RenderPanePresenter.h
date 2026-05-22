@@ -3,7 +3,6 @@
 
 #include <optional>
 
-#include "donner/editor/ExperimentalDragPresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportInteractionController.h"
@@ -14,11 +13,9 @@ struct RenderPanePresenterState {
   const ViewportState& viewport;
   const FrameHistory& frameHistory;
   const GlTextureCache& textures;
-  const ExperimentalDragPresentation& experimentalDragPresentation;
   const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview;
   const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview;
   Vector2d contentRegion = Vector2d::Zero();
-  bool experimentalMode = false;
 };
 
 /// Draws the advanced editor render pane's image, overlay chrome, and frame graph.

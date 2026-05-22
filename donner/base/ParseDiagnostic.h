@@ -59,6 +59,9 @@ struct ParseDiagnostic {
     return {DiagnosticSeverity::Warning, std::move(reason), range};
   }
 
+  /// Equality operator.
+  bool operator==(const ParseDiagnostic& other) const = default;
+
   /// Ostream output operator for \ref ParseDiagnostic, outputs severity and error message.
   friend std::ostream& operator<<(std::ostream& os, const ParseDiagnostic& diag);
 };

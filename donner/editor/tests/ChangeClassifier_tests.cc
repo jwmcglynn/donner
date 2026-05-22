@@ -107,5 +107,101 @@ TEST_F(ChangeClassifierTest, DeleteCharacterFromAttributeValue) {
   EXPECT_EQ(result.command->attributeValue, "re");
 }
 
+// Drag-release writeback on an element with no existing `transform`
+// attribute inserts ` transform="..."` into the opening tag. The
+// classifier must recognize this as an attribute-INSERTION (vs
+// modification of an existing value) and emit a `SetAttributeCommand`,
+// avoiding the structural-fallback `ReplaceDocumentCommand` reparse
+// (~150–300 ms on `donner_splash.svg` even with structural-remap
+// preservation). Pins design doc 0034's "drag-release ⇄ drag-again
+// hitch" follow-on fix.
+TEST_F(ChangeClassifierTest, InsertNewAttributeIntoOpeningTagClassifies) {
+  // The simple SVG's <rect> has no `transform` attribute. Insert one
+  // just before the self-closing `/>`.
+  std::string newSource(kSimpleSvg);
+  const auto closingPos = newSource.find("\"/>");
+  ASSERT_NE(closingPos, std::string::npos);
+  newSource.insert(closingPos + 1, " transform=\"translate(5,7)\"");
+
+  auto result = classifyTextChange(document_, kSimpleSvg, newSource);
+  ASSERT_TRUE(result.command.has_value())
+      << "Attribute insertion must classify as SetAttribute, not structural";
+  EXPECT_EQ(result.command->kind, EditorCommand::Kind::SetAttribute);
+  EXPECT_EQ(result.command->attributeName, "transform");
+  EXPECT_EQ(result.command->attributeValue, "translate(5,7)");
+}
+
+// Same insertion shape, but the inserted leading space sits adjacent
+// to the existing closing quote of the prior attribute. The classifier
+// must walk past the boundary whitespace to find the new attribute
+// rather than mistaking the change for an edit inside the prior
+// quoted value.
+TEST_F(ChangeClassifierTest, InsertNewAttributeAfterExistingAttributeClassifies) {
+  // Insert ` transform="rotate(5)"` immediately after the `fill="red"`
+  // attribute (the new attribute sits between `fill="red"` and `/>`).
+  std::string newSource(kSimpleSvg);
+  const auto fillEnd = newSource.find("\"red\"") + 5;  // position past the closing "
+  newSource.insert(fillEnd, " transform=\"rotate(5)\"");
+
+  auto result = classifyTextChange(document_, kSimpleSvg, newSource);
+  ASSERT_TRUE(result.command.has_value())
+      << "Attribute insertion after existing attribute must classify as SetAttribute";
+  EXPECT_EQ(result.command->kind, EditorCommand::Kind::SetAttribute);
+  EXPECT_EQ(result.command->attributeName, "transform");
+  EXPECT_EQ(result.command->attributeValue, "rotate(5)");
+}
+
+// Regression for the live-editor hitch: the bug surfaced on
+// `donner_splash.svg` (many elements, many quoted attributes scattered
+// through the source) but NOT on `kSimpleSvg` (one rect, no `"` after
+// the insertion point). When the inserted ` transform="..."` lands
+// at `/>` of an element followed by MORE elements with quoted
+// attributes, the backward scan from the diff start lands on the
+// closing quote of the prior attribute; the unfixed forward-scan
+// then pairs that closing quote with the NEXT attribute's opening
+// quote on a downstream element, producing a spurious "quoted value"
+// that swallows the insertion site and steers the classifier into
+// the modification path (which then fails `extractAttributeName`,
+// returns no command, and falls through to ReplaceDocumentCommand).
+//
+// The fix requires `findEnclosingQuotedValue` to verify the
+// candidate `"` is preceded by `=` (with optional whitespace) —
+// otherwise it's a closing quote and the offset is OUTSIDE any
+// attribute value.
+TEST_F(ChangeClassifierTest, InsertNewAttributeBeforeSelfCloseWithDownstreamElementsClassifies) {
+  // SVG with two sibling rects. The first rect (the writeback target)
+  // has no transform; the second carries quoted attributes that will
+  // be picked up by an over-greedy backward-then-forward scan.
+  constexpr std::string_view kMultiElementSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <rect id="r1" x="10" y="20" width="50" height="30" fill="red"/>
+  <rect id="r2" x="80" y="20" width="50" height="30" fill="blue"/>
+</svg>)";
+
+  ParseWarningSink sink;
+  auto parseResult = svg::parser::SVGParser::ParseSVG(kMultiElementSvg, sink);
+  ASSERT_TRUE(parseResult.hasResult());
+  svg::SVGDocument doc = std::move(parseResult.result());
+
+  std::string newSource(kMultiElementSvg);
+  // Insert ` transform="translate(3,-5)"` immediately before the
+  // self-closing `/>` of r1. The closing quote of `fill="red"` sits
+  // right before the insertion point.
+  const auto r1ClosePos = newSource.find("\"red\"/>");
+  ASSERT_NE(r1ClosePos, std::string::npos);
+  const auto insertPos = r1ClosePos + 5;  // past `"red"`, before `/>`
+  newSource.insert(insertPos, " transform=\"translate(3,-5)\"");
+
+  auto result = classifyTextChange(doc, kMultiElementSvg, newSource);
+  ASSERT_TRUE(result.command.has_value())
+      << "Attribute insertion with downstream quoted attributes must STILL classify as "
+         "SetAttribute, not fall through to ReplaceDocumentCommand. The unfixed classifier "
+         "mistook the closing `\"` of `fill=\"red\"` for an opening quote and paired it with "
+         "r2's downstream attribute quote.";
+  EXPECT_EQ(result.command->kind, EditorCommand::Kind::SetAttribute);
+  EXPECT_EQ(result.command->attributeName, "transform");
+  EXPECT_EQ(result.command->attributeValue, "translate(3,-5)");
+}
+
 }  // namespace
 }  // namespace donner::editor

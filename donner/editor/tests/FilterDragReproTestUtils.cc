@@ -84,6 +84,9 @@ struct FrameTiming {
   double workerMs = 0.0;
   double totalFrameMs = 0.0;
   bool wasBusy = false;
+  uint64_t fastPathFrames = 0;
+  uint64_t slowPathFramesWithDirty = 0;
+  uint64_t noDirtyFrames = 0;
 };
 
 // Mirrors `EditorShell::runFrame`'s render-pane layout derivation (see
@@ -112,9 +115,7 @@ std::string LoadFileOrSkip(const std::filesystem::path& path) {
 std::optional<double> DrainOneRender(AsyncRenderer& asyncRenderer, svg::Renderer& renderer,
                                      svg::SVGDocument& document, EditorApp& editorApp,
                                      SelectTool& selectTool, uint64_t version) {
-  RenderRequest request;
-  request.renderer = &renderer;
-  request.document = &document;
+  RenderRequest request(renderer, document);
   request.version = version;
   request.documentGeneration = editorApp.document().documentGeneration();
   request.structuralRemap = editorApp.document().consumePendingStructuralRemap();
@@ -162,6 +163,7 @@ struct ReplayResults {
   std::vector<uint64_t> mouseUpFrameIndices;
   std::vector<Entity> selectedEntityAtFrame;
   std::vector<Entity> selectionAfterMouseUp;
+  std::vector<int> selectionSizesAfterMouseUp;
   std::vector<std::string> selectionElementIds;
   std::vector<std::string> selectionFilterAncestorIds;
   uint64_t fastPathFrames = 0;
@@ -183,14 +185,6 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
   [&]() { ASSERT_TRUE(app.loadFromString(svgSource)) << "loadFromString on splash failed"; }();
 
   SelectTool selectTool;
-  // The recording was captured with `--experimental`, which in the live
-  // shell flips `SelectTool::setCompositedDragPreviewEnabled(true)` so
-  // `activeDragPreview()` returns a valid payload and the drag path
-  // flows through the compositor. Replay has to mirror that or the
-  // drag requests arrive with only a Selection-kind hint (not
-  // ActiveDrag), which disables the `skipMainCompose` fast path in
-  // `composeLayers` and forces a full canvas compose every frame.
-  selectTool.setCompositedDragPreviewEnabled(repro.metadata.experimentalMode);
 
   RenderCoordinator renderCoordinator;
 
@@ -248,6 +242,8 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
           }
         }
         results.selectionAfterMouseUp.push_back(postSelect);
+        results.selectionSizesAfterMouseUp.push_back(
+            static_cast<int>(app.selectedElements().size()));
         results.selectionElementIds.push_back(std::move(selId));
         results.selectionFilterAncestorIds.push_back(std::move(filterAncestorId));
       }
@@ -274,6 +270,10 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
                                    app.document().document(), app, selectTool, version);
     ++version;
     timing.workerMs = workerMs.value_or(-1.0);
+    const auto counters = renderCoordinator.asyncRenderer().compositorFastPathCountersForTesting();
+    timing.fastPathFrames = counters.fastPathFrames;
+    timing.slowPathFramesWithDirty = counters.slowPathFramesWithDirty;
+    timing.noDirtyFrames = counters.noDirtyFrames;
     timing.totalFrameMs =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart)
             .count();
@@ -306,6 +306,28 @@ DragStats ComputeDragStats(const ReplayResults& r, uint64_t fromFrame, uint64_t 
   }
   if (stats.frameCount > 0) {
     stats.avgWorkerMs = sum / stats.frameCount;
+  }
+  return stats;
+}
+
+DragCounterStats ComputeDragCounterStats(const ReplayResults& r, uint64_t fromFrame,
+                                         uint64_t toFrame) {
+  DragCounterStats stats;
+  uint64_t previousFastPathFrames = 0;
+  uint64_t previousSlowPathFramesWithDirty = 0;
+  uint64_t previousNoDirtyFrames = 0;
+  for (const auto& f : r.frames) {
+    const uint64_t fastPathDelta = f.fastPathFrames - previousFastPathFrames;
+    const uint64_t slowPathDelta = f.slowPathFramesWithDirty - previousSlowPathFramesWithDirty;
+    const uint64_t noDirtyDelta = f.noDirtyFrames - previousNoDirtyFrames;
+    if (f.reproFrameIndex > fromFrame && f.reproFrameIndex < toFrame) {
+      stats.fastPathFrames += fastPathDelta;
+      stats.slowPathFramesWithDirty += slowPathDelta;
+      stats.noDirtyFrames += noDirtyDelta;
+    }
+    previousFastPathFrames = f.fastPathFrames;
+    previousSlowPathFramesWithDirty = f.slowPathFramesWithDirty;
+    previousNoDirtyFrames = f.noDirtyFrames;
   }
   return stats;
 }
@@ -377,6 +399,8 @@ void RunFilterDragReproScenario(FilterDragReproResult* out) {
 
   out->firstDrag = ComputeDragStats(r, firstDown, firstUp);
   out->secondDrag = ComputeDragStats(r, secondDown, secondUp);
+  out->firstDragCounters = ComputeDragCounterStats(r, firstDown, firstUp);
+  out->secondDragCounters = ComputeDragCounterStats(r, secondDown, secondUp);
   ASSERT_GT(out->firstDrag.frameCount, 0);
   ASSERT_GT(out->secondDrag.frameCount, 0);
 
@@ -401,11 +425,14 @@ void RunFilterDragReproScenario(FilterDragReproResult* out) {
             << " filterAncestor=" << r.selectionFilterAncestorIds[1] << "\n";
 
   ASSERT_EQ(r.selectionAfterMouseUp.size(), 2u);
+  ASSERT_EQ(r.selectionSizesAfterMouseUp.size(), 2u);
   const Entity firstSel = r.selectionAfterMouseUp[0];
   const Entity secondSel = r.selectionAfterMouseUp[1];
   out->firstSelectionExists = (firstSel != entt::null);
   out->secondSelectionExists = (secondSel != entt::null);
   out->selectionChangedAcrossDrags = (firstSel != secondSel);
+  out->firstSelectionSize = r.selectionSizesAfterMouseUp[0];
+  out->secondSelectionSize = r.selectionSizesAfterMouseUp[1];
   out->firstSelectionId = r.selectionElementIds[0];
   out->firstSelectionFilterAncestorId = r.selectionFilterAncestorIds[0];
   out->secondSelectionId = r.selectionElementIds[1];

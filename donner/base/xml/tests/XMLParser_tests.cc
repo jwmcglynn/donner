@@ -8,6 +8,7 @@
 #include "donner/base/ParseResult.h"
 #include "donner/base/RcString.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/base/xml/XMLIncrementalParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/EntityDeclarationsContext.h"
 
@@ -18,6 +19,15 @@ using testing::Eq;
 // TODO: Add an ErrorHighlightsText matcher
 
 namespace donner::xml {
+
+std::string_view SourceText(const XMLDocument& document, SourceRange range) {
+  if (!range.start.offset.has_value() || !range.end.offset.has_value() ||
+      *range.end.offset < *range.start.offset || *range.end.offset > document.source().size()) {
+    return {};
+  }
+
+  return document.source().substr(*range.start.offset, *range.end.offset - *range.start.offset);
+}
 
 class XMLParserTests : public testing::Test {
 protected:
@@ -83,6 +93,1545 @@ protected:
 private:
   XMLDocument document_;
 };
+
+TEST_F(XMLParserTests, ParsedDocumentOwnsSourceStore) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  EXPECT_TRUE(document.hasSourceStore());
+  EXPECT_EQ(document.source(), kXml);
+  EXPECT_EQ(document.sourceVersion(), 0u);
+
+  XMLSourceStore* sourceStore = document.sourceStore();
+  ASSERT_NE(sourceStore, nullptr);
+  const std::size_t fillOffset = document.source().find("red");
+  ASSERT_NE(fillOffset, std::string_view::npos);
+
+  std::optional<SourceAnchorSpan> fillSpan = sourceStore->createSpan(fillOffset, fillOffset + 3);
+  ASSERT_TRUE(fillSpan.has_value());
+  ASSERT_TRUE(sourceStore->replace(fillOffset, 3, "blue").has_value());
+
+  EXPECT_EQ(document.source(), R"(<svg><rect fill="blue"/></svg>)");
+  EXPECT_EQ(document.sourceVersion(), 1u);
+  EXPECT_EQ(sourceStore->resolveSpan(*fillSpan), (ResolvedSourceSpan{fillOffset, fillOffset + 4}));
+}
+
+TEST_F(XMLParserTests, ParsedNodeLocationsFollowSourceStoreEdits) {
+  constexpr std::string_view kXml = R"(<svg><rect id="r" fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode rect = svg.firstChild().value();
+
+  std::optional<SourceRange> originalLocation = rect.getNodeLocation();
+  ASSERT_TRUE(originalLocation.has_value());
+  ASSERT_TRUE(originalLocation->start.offset.has_value());
+  ASSERT_TRUE(originalLocation->end.offset.has_value());
+  EXPECT_EQ(
+      document.source().substr(*originalLocation->start.offset,
+                               *originalLocation->end.offset - *originalLocation->start.offset),
+      R"(<rect id="r" fill="red"/>)");
+
+  XMLSourceStore* sourceStore = document.sourceStore();
+  ASSERT_NE(sourceStore, nullptr);
+  ASSERT_TRUE(sourceStore->replace(*originalLocation->start.offset, 0, "<g/>").has_value());
+  EXPECT_EQ(document.source(), R"(<svg><g/><rect id="r" fill="red"/></svg>)");
+
+  std::optional<SourceRange> updatedLocation = rect.getNodeLocation();
+  ASSERT_TRUE(updatedLocation.has_value());
+  ASSERT_TRUE(updatedLocation->start.offset.has_value());
+  ASSERT_TRUE(updatedLocation->end.offset.has_value());
+  EXPECT_EQ(document.source().substr(*updatedLocation->start.offset,
+                                     *updatedLocation->end.offset - *updatedLocation->start.offset),
+            R"(<rect id="r" fill="red"/>)");
+  EXPECT_EQ(rect.sourceStartOffset(), updatedLocation->start);
+
+  std::optional<SourceRange> fillLocation = rect.getAttributeLocation(document.source(), "fill");
+  ASSERT_TRUE(fillLocation.has_value());
+  ASSERT_TRUE(fillLocation->start.offset.has_value());
+  ASSERT_TRUE(fillLocation->end.offset.has_value());
+  EXPECT_EQ(document.source().substr(*fillLocation->start.offset,
+                                     *fillLocation->end.offset - *fillLocation->start.offset),
+            R"(fill="red")");
+
+  ASSERT_TRUE(sourceStore->replace(*fillLocation->start.offset, 0, R"(data-x="1" )").has_value());
+  std::optional<SourceRange> movedFillLocation =
+      rect.getAttributeLocation(document.source(), "fill");
+  ASSERT_TRUE(movedFillLocation.has_value());
+  ASSERT_TRUE(movedFillLocation->start.offset.has_value());
+  ASSERT_TRUE(movedFillLocation->end.offset.has_value());
+  EXPECT_EQ(
+      document.source().substr(*movedFillLocation->start.offset,
+                               *movedFillLocation->end.offset - *movedFillLocation->start.offset),
+      R"(fill="red")");
+
+  std::optional<XMLAttributeAtSourceOffset> attributeAtOffset =
+      document.attributeAtSourceOffset(*movedFillLocation->start.offset + 1);
+  ASSERT_TRUE(attributeAtOffset.has_value());
+  EXPECT_EQ(attributeAtOffset->node, rect);
+  EXPECT_EQ(attributeAtOffset->name, XMLQualifiedName("fill"));
+  EXPECT_EQ(attributeAtOffset->location, *movedFillLocation);
+}
+
+TEST_F(XMLParserTests, ParsedAttributeSourceMetadataFollowsSourceStoreEdits) {
+  constexpr std::string_view kXml = R"(<svg><rect id='r' fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  std::optional<XMLAttributeSourceLocation> idLocation = rect.getAttributeSourceLocation("id");
+  ASSERT_TRUE(idLocation.has_value());
+  EXPECT_EQ(idLocation->quote, '\'');
+  EXPECT_EQ(document.source().substr(
+                *idLocation->fullRange.start.offset,
+                *idLocation->fullRange.end.offset - *idLocation->fullRange.start.offset),
+            R"(id='r')");
+  EXPECT_EQ(document.source().substr(
+                *idLocation->valueRange.start.offset,
+                *idLocation->valueRange.end.offset - *idLocation->valueRange.start.offset),
+            "r");
+
+  std::optional<XMLAttributeSourceLocation> fillLocation = rect.getAttributeSourceLocation("fill");
+  ASSERT_TRUE(fillLocation.has_value());
+  EXPECT_EQ(fillLocation->quote, '"');
+  EXPECT_EQ(document.source().substr(
+                *fillLocation->fullRange.start.offset,
+                *fillLocation->fullRange.end.offset - *fillLocation->fullRange.start.offset),
+            R"(fill="red")");
+  EXPECT_EQ(document.source().substr(
+                *fillLocation->valueRange.start.offset,
+                *fillLocation->valueRange.end.offset - *fillLocation->valueRange.start.offset),
+            "red");
+
+  std::optional<XMLAttributeAtSourceOffset> attributeAtOffset =
+      document.attributeAtSourceOffset(*fillLocation->valueRange.start.offset);
+  ASSERT_TRUE(attributeAtOffset.has_value());
+  EXPECT_EQ(attributeAtOffset->node, rect);
+  EXPECT_EQ(attributeAtOffset->name, XMLQualifiedName("fill"));
+  EXPECT_EQ(attributeAtOffset->location, fillLocation->fullRange);
+  EXPECT_EQ(attributeAtOffset->valueLocation, fillLocation->valueRange);
+  EXPECT_EQ(attributeAtOffset->quote, '"');
+
+  XMLSourceStore* sourceStore = document.sourceStore();
+  ASSERT_NE(sourceStore, nullptr);
+  ASSERT_TRUE(
+      sourceStore->replace(*fillLocation->fullRange.start.offset, 0, R"(data-x="1" )").has_value());
+
+  std::optional<XMLAttributeSourceLocation> movedFillLocation =
+      rect.getAttributeSourceLocation("fill");
+  ASSERT_TRUE(movedFillLocation.has_value());
+  EXPECT_EQ(document.source().substr(*movedFillLocation->fullRange.start.offset,
+                                     *movedFillLocation->fullRange.end.offset -
+                                         *movedFillLocation->fullRange.start.offset),
+            R"(fill="red")");
+
+  ASSERT_TRUE(
+      sourceStore->replace(*movedFillLocation->valueRange.start.offset, 0, "dark").has_value());
+  std::optional<XMLAttributeSourceLocation> expandedFillLocation =
+      rect.getAttributeSourceLocation("fill");
+  ASSERT_TRUE(expandedFillLocation.has_value());
+  EXPECT_EQ(document.source().substr(*expandedFillLocation->valueRange.start.offset,
+                                     *expandedFillLocation->valueRange.end.offset -
+                                         *expandedFillLocation->valueRange.start.offset),
+            "darkred");
+}
+
+TEST_F(XMLParserTests, ParsedElementSubspansFollowSourceStoreEdits) {
+  constexpr std::string_view kXml = R"(<svg><text>Hello</text><empty/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode text = svg.firstChild().value();
+  XMLNode data = text.firstChild().value();
+  XMLNode empty = text.nextSibling().value();
+
+  ASSERT_TRUE(svg.getOpeningTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *svg.getOpeningTagLocation()), "<svg>");
+  ASSERT_TRUE(svg.getClosingTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *svg.getClosingTagLocation()), "</svg>");
+
+  ASSERT_TRUE(text.getOpeningTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *text.getOpeningTagLocation()), "<text>");
+  ASSERT_TRUE(text.getClosingTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *text.getClosingTagLocation()), "</text>");
+  ASSERT_TRUE(text.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *text.getValueLocation()), "Hello");
+
+  ASSERT_TRUE(data.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *data.getValueLocation()), "Hello");
+
+  ASSERT_TRUE(empty.getOpeningTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *empty.getOpeningTagLocation()), "<empty/>");
+  EXPECT_EQ(empty.getClosingTagLocation(), std::nullopt);
+  EXPECT_EQ(empty.getValueLocation(), std::nullopt);
+
+  XMLSourceStore* sourceStore = document.sourceStore();
+  ASSERT_NE(sourceStore, nullptr);
+  ASSERT_TRUE(
+      sourceStore->replace(*text.getOpeningTagLocation()->start.offset, 0, "<g/>").has_value());
+
+  ASSERT_TRUE(text.getOpeningTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *text.getOpeningTagLocation()), "<text>");
+  ASSERT_TRUE(text.getClosingTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *text.getClosingTagLocation()), "</text>");
+  ASSERT_TRUE(text.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *text.getValueLocation()), "Hello");
+}
+
+TEST_F(XMLParserTests, ParsedTextLikeNodeValueSubspans) {
+  constexpr std::string_view kXml =
+      R"(<?pi value?><!DOCTYPE svg><!-- comment --><svg><![CDATA[x<y]]></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml, XMLParser::Options::ParseAll());
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode pi = document.root().firstChild().value();
+  XMLNode doctype = pi.nextSibling().value();
+  XMLNode comment = doctype.nextSibling().value();
+  XMLNode svg = comment.nextSibling().value();
+  XMLNode cdata = svg.firstChild().value();
+
+  ASSERT_TRUE(pi.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *pi.getValueLocation()), "value");
+  ASSERT_TRUE(doctype.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *doctype.getValueLocation()), "svg");
+  ASSERT_TRUE(comment.getOpeningTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *comment.getOpeningTagLocation()), "<!--");
+  ASSERT_TRUE(comment.getClosingTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *comment.getClosingTagLocation()), "-->");
+  ASSERT_TRUE(comment.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *comment.getValueLocation()), " comment ");
+  ASSERT_TRUE(cdata.getOpeningTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *cdata.getOpeningTagLocation()), "<![CDATA[");
+  ASSERT_TRUE(cdata.getClosingTagLocation().has_value());
+  EXPECT_EQ(SourceText(document, *cdata.getClosingTagLocation()), "]]>");
+  ASSERT_TRUE(cdata.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *cdata.getValueLocation()), "x<y");
+}
+
+TEST_F(XMLParserTests, XMLIncrementalParserParsesLocalFragments) {
+  ParseResult<XMLDocument> maybeAttribute =
+      XMLIncrementalParser::ParseAttribute(R"(fill="a&amp;b")");
+  ASSERT_THAT(maybeAttribute, NoParseError());
+  XMLNode attributeElement = maybeAttribute.result().root().firstChild().value();
+  EXPECT_THAT(attributeElement.getAttribute("fill"), testing::Optional(RcString("a&b")));
+
+  ParseResult<XMLDocument> maybeOpeningTag =
+      XMLIncrementalParser::ParseOpeningTag(R"(<rect fill="red">)");
+  ASSERT_THAT(maybeOpeningTag, NoParseError());
+  XMLDocument openingTagDocument = std::move(maybeOpeningTag.result());
+  XMLNode rect = openingTagDocument.root().firstChild().value();
+  EXPECT_EQ(rect.tagName(), XMLQualifiedName("rect"));
+  EXPECT_THAT(rect.getAttribute("fill"), testing::Optional(RcString("red")));
+  std::optional<XMLAttributeSourceLocation> fillLocation = rect.getAttributeSourceLocation("fill");
+  ASSERT_TRUE(fillLocation.has_value());
+  EXPECT_EQ(SourceText(openingTagDocument, fillLocation->valueRange), "red");
+
+  ParseResult<XMLDocument> maybePcdata = XMLIncrementalParser::ParsePcdata("a&amp;b");
+  ASSERT_THAT(maybePcdata, NoParseError());
+  XMLNode data = maybePcdata.result().root().firstChild()->firstChild().value();
+  EXPECT_EQ(data.type(), XMLNode::Type::Data);
+  EXPECT_THAT(data.value(), testing::Optional(RcString("a&b")));
+
+  ParseResult<XMLDocument> maybeTextLike =
+      XMLIncrementalParser::ParseTextLikeNode("<![CDATA[x<y]]>");
+  ASSERT_THAT(maybeTextLike, NoParseError());
+  XMLDocument textLikeDocument = std::move(maybeTextLike.result());
+  XMLNode cdata = textLikeDocument.root().firstChild().value();
+  EXPECT_EQ(cdata.type(), XMLNode::Type::CData);
+  EXPECT_THAT(cdata.value(), testing::Optional(RcString("x<y")));
+  ASSERT_TRUE(cdata.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(textLikeDocument, *cdata.getValueLocation()), "x<y");
+
+  ParseResult<XMLDocument> maybeElement =
+      XMLIncrementalParser::ParseElement(R"(<g><rect id="r"/></g>)");
+  ASSERT_THAT(maybeElement, NoParseError());
+  XMLNode group = maybeElement.result().root().firstChild().value();
+  EXPECT_EQ(group.tagName(), XMLQualifiedName("g"));
+  EXPECT_THAT(group.firstChild()->getAttribute("id"), testing::Optional(RcString("r")));
+}
+
+TEST_F(XMLParserTests, NodeAtSourceOffsetFollowsSourceStoreEdits) {
+  constexpr std::string_view kXml = R"(<svg><g><rect id="r"/></g><circle/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  std::optional<XMLNode> maybeSvg = document.root().firstChild();
+  ASSERT_TRUE(maybeSvg.has_value());
+  std::optional<XMLNode> maybeG = maybeSvg->firstChild();
+  ASSERT_TRUE(maybeG.has_value());
+  std::optional<XMLNode> maybeRect = maybeG->firstChild();
+  ASSERT_TRUE(maybeRect.has_value());
+  std::optional<XMLNode> maybeCircle = maybeG->nextSibling();
+  ASSERT_TRUE(maybeCircle.has_value());
+
+  std::optional<SourceRange> originalRectLocation = maybeRect->getNodeLocation();
+  ASSERT_TRUE(originalRectLocation.has_value());
+  ASSERT_TRUE(originalRectLocation->start.offset.has_value());
+
+  XMLSourceStore* sourceStore = document.sourceStore();
+  ASSERT_NE(sourceStore, nullptr);
+  ASSERT_TRUE(sourceStore->replace(*originalRectLocation->start.offset, 0, "<line/>").has_value());
+
+  std::optional<SourceRange> updatedRectLocation = maybeRect->getNodeLocation();
+  ASSERT_TRUE(updatedRectLocation.has_value());
+  ASSERT_TRUE(updatedRectLocation->start.offset.has_value());
+  ASSERT_TRUE(updatedRectLocation->end.offset.has_value());
+
+  EXPECT_EQ(document.nodeAtSourceOffset(*updatedRectLocation->start.offset), maybeRect);
+  EXPECT_EQ(document.nodeAtSourceOffset(*updatedRectLocation->end.offset - 1), maybeRect);
+
+  const std::size_t circleOffset = document.source().find("<circle");
+  ASSERT_NE(circleOffset, std::string_view::npos);
+  EXPECT_EQ(document.nodeAtSourceOffset(circleOffset), maybeCircle);
+  EXPECT_EQ(document.nodeAtSourceOffset(document.source().size()), std::nullopt);
+}
+
+TEST_F(XMLParserTests, ApplySourceEditUpdatesAttributeValue) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("red");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "blue",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(result.sourceDeltas, ElementsAre(XMLSourceDelta{
+                                       .offset = valueOffset,
+                                       .removedLength = 3,
+                                       .insertedLength = 4,
+                                       .sourceVersion = 1,
+                                   }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("blue")));
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::AttributeValue);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><rect fill="blue"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("blue"));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditReparsesAttributeEntities) {
+  constexpr std::string_view kXml = R"(<svg><rect data-label="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("red");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "a&amp;b",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::AttributeValue);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  EXPECT_EQ(document.source(), R"(<svg><rect data-label="a&amp;b"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("data-label"), Eq("a&b"));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditMarksAttributeEntityDirtyAndRecovers) {
+  constexpr std::string_view kXml = R"(<svg><rect data-label="a&#65;b"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t entityOffset = document.source().find("&#65;");
+  ASSERT_NE(entityOffset, std::string_view::npos);
+
+  ApplySourceEditResult dirtyResult = document.applySourceEdit(XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(entityOffset + 4), FileOffset::Offset(entityOffset + 5)},
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(dirtyResult.applied);
+  EXPECT_EQ(dirtyResult.scope, ReparseScope::AttributeValue);
+  ASSERT_TRUE(dirtyResult.diagnostic.has_value());
+  ASSERT_EQ(dirtyResult.mutations.size(), 1u);
+  EXPECT_EQ(dirtyResult.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(dirtyResult.mutations[0].node, rect);
+  EXPECT_EQ(dirtyResult.mutations[0].diagnostic, dirtyResult.diagnostic);
+  EXPECT_EQ(dirtyResult.mutations[0].scope, ReparseScope::AttributeValue);
+  EXPECT_EQ(SourceText(document, dirtyResult.diagnostic->range), "a&#65b");
+  EXPECT_EQ(document.source(), R"(<svg><rect data-label="a&#65b"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("data-label"), Eq("aAb"));
+
+  ApplySourceEditResult recoveryResult = document.applySourceEdit(XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(entityOffset + 4), FileOffset::Offset(entityOffset + 4)},
+      .replacement = ";",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(recoveryResult.applied);
+  EXPECT_EQ(recoveryResult.scope, ReparseScope::AttributeValue);
+  EXPECT_EQ(recoveryResult.diagnostic, std::nullopt);
+  ASSERT_EQ(recoveryResult.mutations.size(), 2u);
+  EXPECT_EQ(recoveryResult.mutations[0].node, rect);
+  EXPECT_THAT(recoveryResult.mutations[0].value, testing::Optional(RcString("aAb")));
+  EXPECT_EQ(recoveryResult.mutations[1].kind, XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(recoveryResult.mutations[1].node, rect);
+  EXPECT_EQ(recoveryResult.mutations[1].diagnostic, std::nullopt);
+  EXPECT_EQ(recoveryResult.mutations[1].scope, ReparseScope::AttributeValue);
+  EXPECT_EQ(document.source(), kXml);
+  EXPECT_THAT(rect.getAttribute("data-label"), Eq("aAb"));
+}
+
+TEST_F(XMLParserTests, SetAttributeUpdatesSourceThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><rect fill='red' stroke="black"/></svg>)";
+  constexpr std::string_view kEscapedValue = R"(Tom&apos;s &amp; "q")";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("red");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.setAttribute(rect, "fill", R"(Tom's & "q")");
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::AttributeValue);
+  EXPECT_THAT(result.sourceDeltas, ElementsAre(XMLSourceDelta{
+                                       .offset = valueOffset,
+                                       .removedLength = 3,
+                                       .insertedLength = kEscapedValue.size(),
+                                       .sourceVersion = 1,
+                                   }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString(R"(Tom's & "q")")));
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::AttributeValue);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><rect fill='Tom&apos;s &amp; "q"' stroke="black"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq(R"(Tom's & "q")"));
+}
+
+TEST_F(XMLParserTests, SetAttributeInsertsMissingSourceAttributeThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><rect /></svg>)";
+  constexpr std::string_view kInsertedSource = R"(fill="blue &amp; white")";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t insertionOffset = document.source().find("/");
+  ASSERT_NE(insertionOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.setAttribute(rect, "fill", "blue & white");
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.sourceDeltas, ElementsAre(XMLSourceDelta{
+                                       .offset = insertionOffset,
+                                       .removedLength = 0,
+                                       .insertedLength = kInsertedSource.size(),
+                                       .sourceVersion = 1,
+                                   }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("blue & white")));
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><rect fill="blue &amp; white"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("blue & white"));
+
+  std::optional<XMLAttributeSourceLocation> fillLocation = rect.getAttributeSourceLocation("fill");
+  ASSERT_TRUE(fillLocation.has_value());
+  EXPECT_EQ(fillLocation->quote, '"');
+  EXPECT_EQ(document.source().substr(
+                *fillLocation->fullRange.start.offset,
+                *fillLocation->fullRange.end.offset - *fillLocation->fullRange.start.offset),
+            R"(fill="blue &amp; white")");
+  EXPECT_EQ(document.source().substr(
+                *fillLocation->valueRange.start.offset,
+                *fillLocation->valueRange.end.offset - *fillLocation->valueRange.start.offset),
+            "blue &amp; white");
+
+  std::optional<XMLAttributeAtSourceOffset> attributeAtOffset =
+      document.attributeAtSourceOffset(*fillLocation->valueRange.start.offset + 1);
+  ASSERT_TRUE(attributeAtOffset.has_value());
+  EXPECT_EQ(attributeAtOffset->node, rect);
+  EXPECT_EQ(attributeAtOffset->name, XMLQualifiedName("fill"));
+  EXPECT_EQ(attributeAtOffset->valueLocation, fillLocation->valueRange);
+}
+
+TEST_F(XMLParserTests, RemoveAttributeUpdatesSourceThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red" stroke="blue"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+  std::optional<SourceRange> fillLocation = rect.getAttributeLocation(document.source(), "fill");
+  ASSERT_TRUE(fillLocation.has_value());
+  ASSERT_TRUE(fillLocation->start.offset.has_value());
+  ASSERT_TRUE(fillLocation->end.offset.has_value());
+
+  ApplySourceEditResult result = document.removeAttribute(rect, "fill");
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(result.sourceDeltas,
+              ElementsAre(XMLSourceDelta{
+                  .offset = *fillLocation->start.offset - 1,
+                  .removedLength = *fillLocation->end.offset - *fillLocation->start.offset + 1,
+                  .insertedLength = 0,
+                  .sourceVersion = 1,
+              }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeRemoved);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
+  EXPECT_EQ(result.mutations[0].value, std::nullopt);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><rect stroke="blue"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq(std::nullopt));
+  EXPECT_THAT(rect.getAttribute("stroke"), Eq("blue"));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditRejectsStaleSourceVersion) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("red");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "blue",
+      .sourceVersion = document.sourceVersion() + 1,
+  });
+
+  EXPECT_FALSE(result.applied);
+  EXPECT_TRUE(result.sourceDeltas.empty());
+  EXPECT_TRUE(result.mutations.empty());
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_EQ(result.diagnostic->reason, "Source version mismatch");
+  EXPECT_EQ(document.source(), kXml);
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditMarksOpeningTagDirtyWhenDeletingAttributeQuote) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t quoteOffset = document.source().find(R"("/>)");
+  ASSERT_NE(quoteOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(quoteOffset), FileOffset::Offset(quoteOffset + 1)},
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].diagnostic, result.diagnostic);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(SourceText(document, result.diagnostic->range), R"(<rect fill="red/>)");
+  EXPECT_EQ(document.source(), R"(<svg><rect fill="red/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditMarksPartialOpeningTagDirty) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t closeOffset = document.source().find(R"(></svg>)");
+  ASSERT_NE(closeOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(closeOffset), FileOffset::Offset(closeOffset + 1)},
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].diagnostic, result.diagnostic);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(SourceText(document, result.diagnostic->range), R"(<rect fill="red"/)");
+  EXPECT_EQ(document.source(), R"(<svg><rect fill="red"/</svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditRestoresDirtyOpeningTagWithoutDocumentFallback) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t quoteOffset = document.source().find(R"("/>)");
+  ASSERT_NE(quoteOffset, std::string_view::npos);
+
+  ApplySourceEditResult dirtyResult = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(quoteOffset), FileOffset::Offset(quoteOffset + 1)},
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(dirtyResult.applied);
+  ASSERT_TRUE(dirtyResult.diagnostic.has_value());
+  ASSERT_EQ(document.source(), R"(<svg><rect fill="red/></svg>)");
+
+  const std::size_t restoreOffset = document.source().find("/>");
+  ASSERT_NE(restoreOffset, std::string_view::npos);
+
+  ApplySourceEditResult recoveryResult = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(restoreOffset), FileOffset::Offset(restoreOffset)},
+      .replacement = R"(")",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(recoveryResult.applied);
+  EXPECT_EQ(recoveryResult.scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(recoveryResult.diagnostic, std::nullopt);
+  ASSERT_EQ(recoveryResult.mutations.size(), 1u);
+  EXPECT_EQ(recoveryResult.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(recoveryResult.mutations[0].node, rect);
+  EXPECT_EQ(recoveryResult.mutations[0].diagnostic, std::nullopt);
+  EXPECT_EQ(recoveryResult.mutations[0].scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(document.source(), kXml);
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditOpeningTagAddsAttribute) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t insertOffset = document.source().find("/>");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = R"( stroke="blue")",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeSet);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("stroke"));
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("blue")));
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+
+  EXPECT_EQ(document.source(), R"(<svg><rect fill="red" stroke="blue"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq("red"));
+  EXPECT_THAT(rect.getAttribute("stroke"), Eq("blue"));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditOpeningTagRemovesAttribute) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red" stroke="blue"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+  std::optional<SourceRange> fillLocation = rect.getAttributeLocation(document.source(), "fill");
+  ASSERT_TRUE(fillLocation.has_value());
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = *fillLocation,
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeRemoved);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
+  EXPECT_EQ(result.mutations[0].value, std::nullopt);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::OpeningTag);
+
+  EXPECT_EQ(document.source(), R"(<svg><rect  stroke="blue"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq(std::nullopt));
+  EXPECT_THAT(rect.getAttribute("stroke"), Eq("blue"));
+}
+
+TEST_F(XMLParserTests, RemoveNodeUpdatesSourceThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><g id="target"><rect/></g><circle/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  std::optional<SourceRange> groupLocation = group.getNodeLocation();
+  ASSERT_TRUE(groupLocation.has_value());
+  ASSERT_TRUE(groupLocation->start.offset.has_value());
+  ASSERT_TRUE(groupLocation->end.offset.has_value());
+
+  ApplySourceEditResult result = document.removeNode(group);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.sourceDeltas,
+              ElementsAre(XMLSourceDelta{
+                  .offset = *groupLocation->start.offset,
+                  .removedLength = *groupLocation->end.offset - *groupLocation->start.offset,
+                  .insertedLength = 0,
+                  .sourceVersion = 1,
+              }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
+  EXPECT_EQ(result.mutations[0].node, group);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><circle/></svg>)");
+  ASSERT_TRUE(svg.firstChild().has_value());
+  EXPECT_EQ(svg.firstChild()->tagName(), XMLQualifiedNameRef("circle"));
+  EXPECT_EQ(group.parentElement(), std::nullopt);
+}
+
+TEST_F(XMLParserTests, RemoveNodeInvalidatesRemovedSubtreeSourceLocations) {
+  constexpr std::string_view kXml = R"(<svg><g id="target"><rect id="child"/></g><circle/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode child = group.firstChild().value();
+
+  ASSERT_TRUE(group.getNodeLocation().has_value());
+  ASSERT_TRUE(child.getNodeLocation().has_value());
+
+  ApplySourceEditResult result = document.removeNode(group);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  EXPECT_EQ(group.parentElement(), std::nullopt);
+  EXPECT_EQ(group.getNodeLocation(), std::nullopt);
+  EXPECT_EQ(child.getNodeLocation(), std::nullopt);
+  EXPECT_EQ(group.sourceStartOffset(), std::nullopt);
+  EXPECT_EQ(group.sourceEndOffset(), std::nullopt);
+}
+
+TEST_F(XMLParserTests, InsertNodeUpdatesSourceThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><g id="parent"></g><circle/></svg>)";
+  constexpr std::string_view kInserted = R"(<rect id="inserted"/>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode rect = XMLNode::CreateElementNode(document, "rect");
+  rect.setAttribute("id", "inserted");
+
+  const std::size_t insertionOffset = kXml.find("</g>");
+  ASSERT_NE(insertionOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.insertNode(group, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.sourceDeltas, ElementsAre(XMLSourceDelta{
+                                       .offset = insertionOffset,
+                                       .removedLength = 0,
+                                       .insertedLength = kInserted.size(),
+                                       .sourceVersion = 1,
+                                   }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><g id="parent"><rect id="inserted"/></g><circle/></svg>)");
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(*group.firstChild(), rect);
+  EXPECT_THAT(rect.getAttribute("id"), Eq("inserted"));
+
+  std::optional<SourceRange> rectLocation = rect.getNodeLocation();
+  ASSERT_TRUE(rectLocation.has_value());
+  ASSERT_TRUE(rectLocation->start.offset.has_value());
+  ASSERT_TRUE(rectLocation->end.offset.has_value());
+  EXPECT_EQ(*rectLocation->start.offset, insertionOffset);
+  EXPECT_EQ(*rectLocation->end.offset, insertionOffset + kInserted.size());
+  EXPECT_TRUE(rect.getAttributeSourceLocation("id").has_value());
+}
+
+TEST_F(XMLParserTests, InsertNodeBeforeReferenceUpdatesSourceThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><g><circle id="sibling"/></g></svg>)";
+  constexpr std::string_view kInserted = R"(<rect id="inserted"/>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode sibling = group.firstChild().value();
+  XMLNode rect = XMLNode::CreateElementNode(document, "rect");
+  rect.setAttribute("id", "inserted");
+
+  const std::size_t insertionOffset = kXml.find("<circle");
+  ASSERT_NE(insertionOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.insertNode(group, rect, sibling);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.sourceDeltas, ElementsAre(XMLSourceDelta{
+                                       .offset = insertionOffset,
+                                       .removedLength = 0,
+                                       .insertedLength = kInserted.size(),
+                                       .sourceVersion = 1,
+                                   }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeInserted);
+
+  EXPECT_EQ(document.source(), R"(<svg><g><rect id="inserted"/><circle id="sibling"/></g></svg>)");
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(*group.firstChild(), rect);
+  ASSERT_TRUE(rect.nextSibling().has_value());
+  EXPECT_EQ(*rect.nextSibling(), sibling);
+}
+
+TEST_F(XMLParserTests, InsertNodeExpandsSelfClosingParentThroughDocument) {
+  constexpr std::string_view kXml = R"(<svg><g id="parent"/><circle/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode rect = XMLNode::CreateElementNode(document, "rect");
+  rect.setAttribute("id", "inserted");
+
+  ApplySourceEditResult result = document.insertNode(group, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(result.sourceDeltas,
+              ElementsAre(XMLSourceDelta{
+                  .offset = kXml.find("/>"),
+                  .removedLength = 2,
+                  .insertedLength = std::string_view(R"(><rect id="inserted"/></g>)").size(),
+                  .sourceVersion = 1,
+              }));
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><g id="parent"><rect id="inserted"/></g><circle/></svg>)");
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(*group.firstChild(), rect);
+  EXPECT_THAT(rect.getAttribute("id"), Eq("inserted"));
+
+  std::optional<SourceRange> groupOpening = group.getOpeningTagLocation();
+  std::optional<SourceRange> groupClosing = group.getClosingTagLocation();
+  ASSERT_TRUE(groupOpening.has_value());
+  ASSERT_TRUE(groupClosing.has_value());
+  EXPECT_EQ(SourceText(document, *groupOpening), R"(<g id="parent">)");
+  EXPECT_EQ(SourceText(document, *groupClosing), "</g>");
+
+  std::optional<SourceRange> rectLocation = rect.getNodeLocation();
+  ASSERT_TRUE(rectLocation.has_value());
+  EXPECT_EQ(SourceText(document, *rectLocation), R"(<rect id="inserted"/>)");
+}
+
+TEST_F(XMLParserTests, InsertNodeMovesExistingSourceBackedChildToEnd) {
+  constexpr std::string_view kXml = R"(<svg><g><rect id="a"/><circle id="b"/></g></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode rect = group.firstChild().value();
+  XMLNode circle = rect.nextSibling().value();
+
+  ApplySourceEditResult result = document.insertNode(group, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  ASSERT_EQ(result.sourceDeltas.size(), 2u);
+  ASSERT_EQ(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_EQ(result.mutations[1].node, rect);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><g><circle id="b"/><rect id="a"/></g></svg>)");
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(*group.firstChild(), circle);
+  ASSERT_TRUE(circle.nextSibling().has_value());
+  EXPECT_EQ(*circle.nextSibling(), rect);
+  EXPECT_EQ(rect.parentElement(), group);
+  EXPECT_EQ(SourceText(document, *rect.getNodeLocation()), R"(<rect id="a"/>)");
+}
+
+TEST_F(XMLParserTests, InsertNodeMovesExistingSourceBackedChildBeforeReference) {
+  constexpr std::string_view kXml = R"(<svg><g><rect id="a"/><circle id="b"/></g></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode rect = group.firstChild().value();
+  XMLNode circle = rect.nextSibling().value();
+
+  ApplySourceEditResult result = document.insertNode(group, circle, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  ASSERT_EQ(result.sourceDeltas.size(), 2u);
+  ASSERT_EQ(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_EQ(result.mutations[1].node, circle);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><g><circle id="b"/><rect id="a"/></g></svg>)");
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(*group.firstChild(), circle);
+  ASSERT_TRUE(circle.nextSibling().has_value());
+  EXPECT_EQ(*circle.nextSibling(), rect);
+  EXPECT_EQ(circle.parentElement(), group);
+  EXPECT_EQ(SourceText(document, *circle.getNodeLocation()), R"(<circle id="b"/>)");
+}
+
+TEST_F(XMLParserTests, InsertNodeMovesExistingSourceBackedChildIntoLaterSelfClosingParent) {
+  constexpr std::string_view kXml = R"(<svg><rect id="a"/><g id="target"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode rect = svg.firstChild().value();
+  XMLNode group = rect.nextSibling().value();
+
+  ApplySourceEditResult result = document.insertNode(group, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  ASSERT_EQ(result.sourceDeltas.size(), 2u);
+  ASSERT_EQ(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><g id="target"><rect id="a"/></g></svg>)");
+  EXPECT_EQ(svg.firstChild(), group);
+  EXPECT_EQ(group.firstChild(), rect);
+
+  std::optional<SourceRange> groupOpening = group.getOpeningTagLocation();
+  std::optional<SourceRange> groupClosing = group.getClosingTagLocation();
+  ASSERT_TRUE(groupOpening.has_value());
+  ASSERT_TRUE(groupClosing.has_value());
+  EXPECT_EQ(SourceText(document, *groupOpening), R"(<g id="target">)");
+  EXPECT_EQ(SourceText(document, *groupClosing), "</g>");
+  EXPECT_EQ(SourceText(document, *rect.getNodeLocation()), R"(<rect id="a"/>)");
+}
+
+TEST_F(XMLParserTests, InsertNodeMovesExistingSourceBackedChildIntoEarlierSelfClosingParent) {
+  constexpr std::string_view kXml = R"(<svg><g id="target"/><rect id="a"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode rect = group.nextSibling().value();
+
+  ApplySourceEditResult result = document.insertNode(group, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  ASSERT_EQ(result.sourceDeltas.size(), 2u);
+  ASSERT_EQ(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeRemoved);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  EXPECT_EQ(document.source(), R"(<svg><g id="target"><rect id="a"/></g></svg>)");
+  EXPECT_EQ(svg.firstChild(), group);
+  EXPECT_EQ(group.firstChild(), rect);
+
+  std::optional<SourceRange> groupOpening = group.getOpeningTagLocation();
+  std::optional<SourceRange> groupClosing = group.getClosingTagLocation();
+  ASSERT_TRUE(groupOpening.has_value());
+  ASSERT_TRUE(groupClosing.has_value());
+  EXPECT_EQ(SourceText(document, *groupOpening), R"(<g id="target">)");
+  EXPECT_EQ(SourceText(document, *groupClosing), "</g>");
+  EXPECT_EQ(SourceText(document, *rect.getNodeLocation()), R"(<rect id="a"/>)");
+}
+
+TEST_F(XMLParserTests, ApplySourceEditElementSubtreeInsertsChildWithoutDocumentFallback) {
+  constexpr std::string_view kXml =
+      R"(<svg><g id="layer"><rect id="r"/></g><circle id="outside"/></svg>)";
+  constexpr std::string_view kInserted = R"(<circle id="c"/>)";
+  constexpr std::string_view kExpected =
+      R"(<svg><g id="layer"><rect id="r"/><circle id="c"/></g><circle id="outside"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  const Entity groupEntity = group.entityHandle().entity();
+
+  const std::size_t insertOffset = document.source().find("</g>");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = kInserted,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SubtreeReplaced);
+  EXPECT_EQ(result.mutations[0].node, group);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeInserted);
+  EXPECT_EQ(result.mutations[1].scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(document.source(), kExpected);
+  EXPECT_EQ(group.entityHandle().entity(), groupEntity);
+
+  ASSERT_TRUE(group.firstChild().has_value());
+  XMLNode rect = *group.firstChild();
+  EXPECT_EQ(rect.tagName(), XMLQualifiedNameRef("rect"));
+  ASSERT_TRUE(rect.nextSibling().has_value());
+  XMLNode inserted = *rect.nextSibling();
+  EXPECT_EQ(inserted.tagName(), XMLQualifiedNameRef("circle"));
+  EXPECT_THAT(inserted.getAttribute("id"), testing::Optional(RcString("c")));
+  EXPECT_EQ(inserted.nextSibling(), std::nullopt);
+
+  ASSERT_TRUE(inserted.getNodeLocation().has_value());
+  EXPECT_EQ(document.nodeAtSourceOffset(insertOffset + 1), inserted);
+}
+
+TEST_F(XMLParserTests, ApplySourceEditElementSubtreePreservesMatchedChildIdentity) {
+  constexpr std::string_view kXml =
+      R"(<svg><g id="layer"><rect id="r"/></g><circle id="outside"/></svg>)";
+  constexpr std::string_view kInserted = R"(<circle id="c"/>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode group = svg.firstChild().value();
+  XMLNode rect = group.firstChild().value();
+  const Entity rectEntity = rect.entityHandle().entity();
+
+  const std::size_t insertOffset = document.source().find("</g>");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertOffset), FileOffset::Offset(insertOffset)},
+      .replacement = kInserted,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+
+  ASSERT_TRUE(group.firstChild().has_value());
+  XMLNode updatedRect = *group.firstChild();
+  EXPECT_EQ(updatedRect.tagName(), XMLQualifiedNameRef("rect"));
+  EXPECT_EQ(updatedRect.entityHandle().entity(), rectEntity);
+  EXPECT_THAT(updatedRect.getAttribute("id"), testing::Optional(RcString("r")));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditElementSubtreeDeletionInvalidatesRemovedChildLocation) {
+  constexpr std::string_view kXml =
+      R"(<svg><g id="layer"><rect id="r"/><circle id="c"/></g></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode group = document.root().firstChild()->firstChild().value();
+  XMLNode rect = group.firstChild().value();
+  XMLNode circle = rect.nextSibling().value();
+
+  std::optional<SourceRange> rectLocation = rect.getNodeLocation();
+  ASSERT_TRUE(rectLocation.has_value());
+  ASSERT_TRUE(rectLocation->start.offset.has_value());
+  ASSERT_TRUE(rectLocation->end.offset.has_value());
+  ASSERT_TRUE(circle.getNodeLocation().has_value());
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = *rectLocation,
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::ElementSubtree);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SubtreeReplaced);
+  EXPECT_EQ(result.mutations[0].node, group);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::NodeRemoved);
+  EXPECT_EQ(result.mutations[1].node, rect);
+  EXPECT_EQ(rect.parentElement(), std::nullopt);
+  EXPECT_EQ(rect.getNodeLocation(), std::nullopt);
+  ASSERT_TRUE(group.firstChild().has_value());
+  EXPECT_EQ(*group.firstChild(), circle);
+  EXPECT_TRUE(circle.getNodeLocation().has_value());
+}
+
+TEST_F(XMLParserTests, ApplySourceEditOpeningTagRenamesAttribute) {
+  constexpr std::string_view kXml = R"(<svg><rect fill="red"/></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+
+  const std::size_t nameOffset = document.source().find("fill");
+  ASSERT_NE(nameOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(nameOffset), FileOffset::Offset(nameOffset + 4)},
+      .replacement = "stroke",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::OpeningTag);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 2u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::AttributeRemoved);
+  EXPECT_EQ(result.mutations[0].attributeName, XMLQualifiedName("fill"));
+  EXPECT_EQ(result.mutations[0].node, rect);
+  EXPECT_EQ(result.mutations[1].kind, XMLMutation::Kind::AttributeSet);
+  EXPECT_EQ(result.mutations[1].attributeName, XMLQualifiedName("stroke"));
+  EXPECT_EQ(result.mutations[1].node, rect);
+  EXPECT_THAT(result.mutations[1].value, testing::Optional(RcString("red")));
+
+  EXPECT_EQ(document.source(), R"(<svg><rect stroke="red"/></svg>)");
+  EXPECT_THAT(rect.getAttribute("fill"), Eq(std::nullopt));
+  EXPECT_THAT(rect.getAttribute("stroke"), Eq("red"));
+}
+
+TEST_F(XMLParserTests, ParsedDataNodeLocationsFollowSourceStoreEdits) {
+  constexpr std::string_view kXml = R"(<svg><text>Hello world</text></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode text = document.root().firstChild()->firstChild().value();
+  XMLNode data = text.firstChild().value();
+  ASSERT_EQ(data.type(), XMLNode::Type::Data);
+
+  std::optional<SourceRange> dataLocation = data.getNodeLocation();
+  ASSERT_TRUE(dataLocation.has_value());
+  ASSERT_TRUE(dataLocation->start.offset.has_value());
+  ASSERT_TRUE(dataLocation->end.offset.has_value());
+  EXPECT_EQ(document.source().substr(*dataLocation->start.offset,
+                                     *dataLocation->end.offset - *dataLocation->start.offset),
+            "Hello world");
+
+  XMLSourceStore* sourceStore = document.sourceStore();
+  ASSERT_NE(sourceStore, nullptr);
+  ASSERT_TRUE(sourceStore->replace(*dataLocation->start.offset, 0, "Say: ").has_value());
+
+  std::optional<SourceRange> updatedDataLocation = data.getNodeLocation();
+  ASSERT_TRUE(updatedDataLocation.has_value());
+  ASSERT_TRUE(updatedDataLocation->start.offset.has_value());
+  ASSERT_TRUE(updatedDataLocation->end.offset.has_value());
+  EXPECT_EQ(document.source().substr(
+                *updatedDataLocation->start.offset,
+                *updatedDataLocation->end.offset - *updatedDataLocation->start.offset),
+            "Say: Hello world");
+  EXPECT_EQ(document.nodeAtSourceOffset(*updatedDataLocation->start.offset), data);
+}
+
+TEST_F(XMLParserTests, ApplySourceEditUpdatesTextNode) {
+  constexpr std::string_view kXml = R"(<svg><text>Hello world</text></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode text = document.root().firstChild()->firstChild().value();
+  XMLNode data = text.firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("world");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 5)},
+      .replacement = "there",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeValueChanged);
+  EXPECT_EQ(result.mutations[0].node, data);
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("Hello there")));
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::TextNode);
+
+  EXPECT_EQ(document.source(), R"(<svg><text>Hello there</text></svg>)");
+  EXPECT_THAT(data.value(), testing::Optional(RcString("Hello there")));
+  EXPECT_THAT(text.value(), testing::Optional(RcString("Hello there")));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditInsertsAtTextNodeEnd) {
+  constexpr std::string_view kXml = R"(<svg><text>Hello</text></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode text = document.root().firstChild()->firstChild().value();
+  XMLNode data = text.firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("</text>");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset)},
+      .replacement = "!",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].node, data);
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("Hello!")));
+
+  EXPECT_EQ(document.source(), R"(<svg><text>Hello!</text></svg>)");
+  EXPECT_THAT(data.value(), testing::Optional(RcString("Hello!")));
+  EXPECT_THAT(text.value(), testing::Optional(RcString("Hello!")));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditReparsesTextEntities) {
+  constexpr std::string_view kXml = R"(<svg><text>Hello world</text></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode text = document.root().firstChild()->firstChild().value();
+  XMLNode data = text.firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("world");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 5)},
+      .replacement = "a&amp;b",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  EXPECT_EQ(document.source(), R"(<svg><text>Hello a&amp;b</text></svg>)");
+  EXPECT_THAT(data.value(), testing::Optional(RcString("Hello a&b")));
+  EXPECT_THAT(text.value(), testing::Optional(RcString("Hello a&b")));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditMarksTextEntityDirtyAndRecovers) {
+  constexpr std::string_view kXml = R"(<svg><text>a&#65;b</text></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode text = document.root().firstChild()->firstChild().value();
+  XMLNode data = text.firstChild().value();
+
+  const std::size_t entityOffset = document.source().find("&#65;");
+  ASSERT_NE(entityOffset, std::string_view::npos);
+
+  ApplySourceEditResult dirtyResult = document.applySourceEdit(XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(entityOffset + 4), FileOffset::Offset(entityOffset + 5)},
+      .replacement = "",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(dirtyResult.applied);
+  EXPECT_EQ(dirtyResult.scope, ReparseScope::TextNode);
+  ASSERT_TRUE(dirtyResult.diagnostic.has_value());
+  ASSERT_EQ(dirtyResult.mutations.size(), 1u);
+  EXPECT_EQ(dirtyResult.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(dirtyResult.mutations[0].node, data);
+  EXPECT_EQ(dirtyResult.mutations[0].diagnostic, dirtyResult.diagnostic);
+  EXPECT_EQ(dirtyResult.mutations[0].scope, ReparseScope::TextNode);
+  EXPECT_EQ(SourceText(document, dirtyResult.diagnostic->range), "a&#65b");
+  EXPECT_EQ(document.source(), R"(<svg><text>a&#65b</text></svg>)");
+  EXPECT_THAT(data.value(), testing::Optional(RcString("aAb")));
+  EXPECT_THAT(text.value(), testing::Optional(RcString("aAb")));
+
+  ApplySourceEditResult recoveryResult = document.applySourceEdit(XMLEditIntent{
+      .range =
+          SourceRange{FileOffset::Offset(entityOffset + 4), FileOffset::Offset(entityOffset + 4)},
+      .replacement = ";",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(recoveryResult.applied);
+  EXPECT_EQ(recoveryResult.scope, ReparseScope::TextNode);
+  EXPECT_EQ(recoveryResult.diagnostic, std::nullopt);
+  ASSERT_EQ(recoveryResult.mutations.size(), 2u);
+  EXPECT_EQ(recoveryResult.mutations[0].node, data);
+  EXPECT_THAT(recoveryResult.mutations[0].value, testing::Optional(RcString("aAb")));
+  EXPECT_EQ(recoveryResult.mutations[1].kind, XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(recoveryResult.mutations[1].node, data);
+  EXPECT_EQ(recoveryResult.mutations[1].diagnostic, std::nullopt);
+  EXPECT_EQ(recoveryResult.mutations[1].scope, ReparseScope::TextNode);
+  EXPECT_EQ(document.source(), kXml);
+  EXPECT_THAT(data.value(), testing::Optional(RcString("aAb")));
+  EXPECT_THAT(text.value(), testing::Optional(RcString("aAb")));
+}
+
+TEST_F(XMLParserTests, ApplySourceEditUpdatesCDataValueLocally) {
+  constexpr std::string_view kXml = R"(<svg><![CDATA[x<y]]></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode cdata = document.root().firstChild()->firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("x<y");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 3)},
+      .replacement = "a&b",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::NodeValueChanged);
+  EXPECT_EQ(result.mutations[0].node, cdata);
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("a&b")));
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::TextNode);
+
+  EXPECT_EQ(document.source(), R"(<svg><![CDATA[a&b]]></svg>)");
+  EXPECT_THAT(cdata.value(), testing::Optional(RcString("a&b")));
+  ASSERT_TRUE(cdata.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *cdata.getValueLocation()), "a&b");
+}
+
+TEST_F(XMLParserTests, ApplySourceEditUpdatesCommentValueLocally) {
+  constexpr std::string_view kXml = R"(<svg><!-- hello --></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml, XMLParser::Options::ParseAll());
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode comment = document.root().firstChild()->firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("hello");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 5)},
+      .replacement = "bye",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].node, comment);
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString(" bye ")));
+
+  EXPECT_EQ(document.source(), R"(<svg><!-- bye --></svg>)");
+  EXPECT_THAT(comment.value(), testing::Optional(RcString(" bye ")));
+  ASSERT_TRUE(comment.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *comment.getValueLocation()), " bye ");
+}
+
+TEST_F(XMLParserTests, ApplySourceEditUpdatesProcessingInstructionValueLocally) {
+  constexpr std::string_view kXml = R"(<svg><?target hello?></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml, XMLParser::Options::ParseAll());
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode processingInstruction = document.root().firstChild()->firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("hello");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 5)},
+      .replacement = "world",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  EXPECT_EQ(result.diagnostic, std::nullopt);
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].node, processingInstruction);
+  EXPECT_THAT(result.mutations[0].value, testing::Optional(RcString("world")));
+
+  EXPECT_EQ(document.source(), R"(<svg><?target world?></svg>)");
+  EXPECT_THAT(processingInstruction.value(), testing::Optional(RcString("world")));
+  ASSERT_TRUE(processingInstruction.getValueLocation().has_value());
+  EXPECT_EQ(SourceText(document, *processingInstruction.getValueLocation()), "world");
+}
+
+TEST_F(XMLParserTests, ApplySourceEditKeepsTextValueWhenTextEditChangesStructure) {
+  constexpr std::string_view kXml = R"(<svg><text>Hello world</text></svg>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode text = document.root().firstChild()->firstChild().value();
+  XMLNode data = text.firstChild().value();
+
+  const std::size_t valueOffset = document.source().find("world");
+  ASSERT_NE(valueOffset, std::string_view::npos);
+
+  ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 5)},
+      .replacement = "<tspan/>",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, ReparseScope::TextNode);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  ASSERT_EQ(result.mutations.size(), 1u);
+  EXPECT_EQ(result.mutations[0].kind, XMLMutation::Kind::SourceDiagnosticChanged);
+  EXPECT_EQ(result.mutations[0].node, data);
+  EXPECT_EQ(result.mutations[0].diagnostic, result.diagnostic);
+  EXPECT_EQ(result.mutations[0].scope, ReparseScope::TextNode);
+  EXPECT_EQ(document.source(), R"(<svg><text>Hello <tspan/></text></svg>)");
+  EXPECT_THAT(data.value(), testing::Optional(RcString("Hello world")));
+  EXPECT_THAT(text.value(), testing::Optional(RcString("Hello world")));
+}
+
+TEST_F(XMLParserTests, ProgrammaticDocumentDoesNotRequireSourceStore) {
+  XMLDocument document;
+
+  EXPECT_FALSE(document.hasSourceStore());
+  EXPECT_EQ(document.source(), "");
+  EXPECT_EQ(document.sourceVersion(), 0u);
+  EXPECT_EQ(document.sourceStore(), nullptr);
+}
 
 TEST_F(XMLParserTests, Simple) {
   auto result = XMLParser::Parse(

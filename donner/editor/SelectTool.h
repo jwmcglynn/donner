@@ -17,6 +17,7 @@
 /// `EditorCommand::SetTransform` — never directly.
 
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "donner/base/Box.h"
@@ -55,8 +56,33 @@ public:
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
-  /// Enable the experimental compositor-backed drag preview path.
-  void setCompositedDragPreviewEnabled(bool enabled) { compositedDragPreviewEnabled_ = enabled; }
+  /// Snapshot-safe re-drag start (design doc 0033 §M8). When the user
+  /// clicks inside the bounds of the single currently-selected element,
+  /// start a drag of that element WITHOUT calling `EditorApp::hitTest`
+  /// — so the call is safe to run even while the async-renderer worker
+  /// is mid-render (hitTest would race the worker's
+  /// `prepareDocumentForRendering`).
+  ///
+  /// `selectionBoundsDoc` is the **caller-supplied** AABB list for the
+  /// current selection (in document space). EditorShell passes the
+  /// pre-snapshotted bounds from `SelectionBoundsCache::displayedBoundsDoc`
+  /// — that cache is refreshed on idle frames, so reading it during a
+  /// busy render is race-free (no live `SnapshotSelectionWorldBounds`
+  /// call inside this function). `onMouseDown` passes a freshly-computed
+  /// live snapshot since its caller has already gated on `!isBusy()`.
+  ///
+  /// Returns true if a drag was started; false if the caller must fall
+  /// back to the full `onMouseDown` path (multi-select, shift-click,
+  /// click outside the selection's snapshotted bounds, empty bounds
+  /// span, etc.).
+  ///
+  /// `onMouseDown` itself calls this first to avoid duplicating logic
+  /// — so plain clicks on the selection always take the no-hit-test
+  /// path regardless of busy state. The split exists so EditorShell
+  /// can run it BEFORE checking `isBusy()` for the click handler.
+  [[nodiscard]] bool tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
+                                              MouseModifiers modifiers,
+                                              std::span<const Box2d> selectionBoundsDoc);
 
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).
@@ -139,12 +165,6 @@ private:
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
-  bool compositedDragPreviewEnabled_ = false;
 };
-
-/// Render-mode toggles are safe whenever there is no in-progress drag or marquee gesture.
-[[nodiscard]] inline bool CanToggleCompositedRendering(const SelectTool& tool) {
-  return !tool.isDragging() && !tool.isMarqueeing();
-}
 
 }  // namespace donner::editor

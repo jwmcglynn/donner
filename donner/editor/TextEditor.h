@@ -5,10 +5,12 @@
 #include <chrono>
 #include <functional>
 #include <map>
+#include <optional>
 #include <regex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -246,6 +248,16 @@ public:
    */
   void setText(std::string_view text, bool preserveScroll = false);
 
+  /**
+   * Apply source bytes that changed outside the editor without recording a user edit.
+   *
+   * @param offset Byte offset in the current buffer.
+   * @param removedLength Number of bytes to remove.
+   * @param replacement Replacement bytes to insert.
+   */
+  void applyExternalSourceEdit(std::size_t offset, std::size_t removedLength,
+                               std::string_view replacement);
+
   /// True if the editor needs to be re-rendered.
   bool needsRerender() const { return scrollToTop_; }
 
@@ -254,6 +266,15 @@ public:
    * @return String containing entire editor contents
    */
   std::string getText() const;
+
+  /**
+   * Resolve a full-buffer byte offset to editor coordinates.
+   *
+   * @param offset Byte offset in \ref getText().
+   */
+  Coordinates getCoordinatesAtByteOffset(std::size_t offset) const {
+    return core_.getCoordinatesAtByteOffset(offset);
+  }
 
   /**
    * Get currently selected text.
@@ -266,6 +287,12 @@ public:
   bool isTextChanged() const { return core_.isTextChanged(); }
   bool isCursorPositionChanged() const { return cursorPositionChanged_; }
   void resetTextChanged() { core_.resetTextChanged(); }
+  /// True if user-facing edits have pending byte-level source intents.
+  bool hasPendingSourceEditIntents() const { return core_.hasPendingSourceEditIntents(); }
+  /// Consume pending byte-level source intents captured from user-facing edits.
+  std::vector<SourceEditIntent> takePendingSourceEditIntents() {
+    return core_.takePendingSourceEditIntents();
+  }
 
   // Accessors
   const LanguageDefinition& getLanguageDefinition() const { return core_.getLanguageDefinition(); }
@@ -569,6 +596,34 @@ public:
   void colorizeInternal();
 
   // Autocomplete
+  /// Request payload for structured autocomplete providers.
+  struct AutocompleteRequest {
+    std::string_view source;       //!< Full editor source text.
+    std::size_t cursorOffset = 0;  //!< Cursor byte offset in \ref source.
+  };
+
+  /// A single autocomplete suggestion.
+  struct AutocompleteSuggestion {
+    RcString displayText;  //!< Text shown in the autocomplete popup.
+    RcString insertText;   //!< Text inserted when selected.
+  };
+
+  /// Response from a structured autocomplete provider.
+  struct AutocompleteResponse {
+    std::size_t replaceStartOffset = 0;  //!< Inclusive source byte offset to replace.
+    std::size_t replaceEndOffset = 0;    //!< Exclusive source byte offset to replace.
+    std::vector<AutocompleteSuggestion> suggestions;
+  };
+
+  /**
+   * Provider callback for syntax-aware autocomplete.
+   *
+   * Return `std::nullopt` when the provider does not handle the current source. Return an empty
+   * response to suppress generic word autocomplete for handled contexts that have no suggestions.
+   */
+  using AutocompleteProvider =
+      std::function<std::optional<AutocompleteResponse>(const AutocompleteRequest&)>;
+
   void clearAutocompleteData() {}
   void clearAutocompleteEntries() {
     autocompleteEntries_.clear();
@@ -586,6 +641,15 @@ public:
                             std::string_view insertText) {
     autocompleteSearchTerms_.emplace_back(searchTerm);
     autocompleteEntries_.emplace_back(displayText, insertText);
+  }
+
+  /**
+   * Install a structured autocomplete provider.
+   *
+   * @param provider Provider callback, or empty to use only generic word autocomplete.
+   */
+  void setAutocompleteProvider(AutocompleteProvider provider) {
+    autocompleteProvider_ = std::move(provider);
   }
 
   // Static utilities
@@ -888,11 +952,15 @@ private:
   bool autocomplete_ = true;           //!< Autocomplete enabled
   std::string autocompleteWord_;       //!< Current word being completed
   std::vector<std::pair<RcString, RcString>> autocompleteSuggestions_;  //!< Current suggestions
-  int autocompleteIndex_;             //!< Selected suggestion index
-  bool autocompleteOpened_ = false;   //!< Autocomplete popup is open
-  bool autocompleteSwitched_;         //!< Allow enter to select
-  std::string autocompleteObject_;    //!< Object for member completion
-  Coordinates autocompletePosition_;  //!< Position of completion
+  int autocompleteIndex_;                       //!< Selected suggestion index
+  bool autocompleteOpened_ = false;             //!< Autocomplete popup is open
+  bool autocompleteSwitched_;                   //!< Allow enter to select
+  std::string autocompleteObject_;              //!< Object for member completion
+  Coordinates autocompletePosition_;            //!< Position of completion
+  AutocompleteProvider autocompleteProvider_;   //!< Syntax-aware autocomplete source
+  bool autocompleteReplacementActive_ = false;  //!< Provider supplied an explicit replace range
+  std::size_t autocompleteReplacementStartOffset_ = 0;  //!< Provider replacement start
+  std::size_t autocompleteReplacementEndOffset_ = 0;    //!< Provider replacement end
 
   // Keyboard shortcuts
   std::vector<Shortcut> shortcuts_;  //!< Configured shortcuts

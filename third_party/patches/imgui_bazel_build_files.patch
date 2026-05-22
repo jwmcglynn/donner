@@ -2,9 +2,9 @@ Subject: [PATCH] Add bazel build files
 Base-commit: 126569ad5b3a2c5329cc8ee914dd5b2075f4dd50
 
 ---
- BUILD.bazel  | 56 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++
- MODULE.bazel | 14 ++++++++++++++
- 2 files changed, 70 insertions(+)
+ BUILD.bazel  | 69 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ MODULE.bazel | 15 +++++++++++
+ 2 files changed, 84 insertions(+)
  create mode 100644 BUILD.bazel
  create mode 100644 MODULE.bazel
 
@@ -13,11 +13,12 @@ new file mode 100644
 index 00000000..12345678
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,69 @@
 +""" Builds imgui.
 +"""
 +
 +load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library")
++load("@bazel_skylib//lib:selects.bzl", "selects")
 +
 +package(default_visibility = ["//visibility:public"])
 +
@@ -47,13 +48,25 @@ index 00000000..12345678
 +    copts = [
 +        "-Wno-nontrivial-memcall",
 +        "-Wno-uninitialized-const-pointer",
-+    ],
++    ] + selects.with_or({
++        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
++        "//conditions:default": [
++            "-DIMGUI_IMPL_OPENGL_LOADER_CUSTOM",
++            "-include",
++            "glad/glad.h",
++        ],
++    }),
 +    defines = ["IMGUI_ENABLE_OSX_DEFAULT_CLIPBOARD_FUNCTIONS"],
 +    includes = ["backends"],
 +    visibility = ["//visibility:public"],
 +    deps = [
 +        "@glfw",
-+    ],
++    ] + selects.with_or({
++        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
++        "//conditions:default": [
++            "@donner//third_party/glad",
++        ],
++    }),
 +)
 +
 +cc_binary(
@@ -75,7 +88,7 @@ new file mode 100644
 index 00000000..4c85d76a
 --- /dev/null
 +++ b/MODULE.bazel
-@@ -0,0 +1,14 @@
+@@ -0,0 +1,15 @@
 +module(
 +    name = "imgui",
 +    version = "0.0.0",
@@ -83,6 +96,7 @@ index 00000000..4c85d76a
 +
 +bazel_dep(name = "rules_cc", version = "0.0.9")
 +bazel_dep(name = "platforms", version = "0.0.10")
++bazel_dep(name = "bazel_skylib", version = "1.7.1")
 +bazel_dep(name = "glfw", version = "0.0.0")
 +
 +bazel_dep(name = "donner", version = "0.0.0")

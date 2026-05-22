@@ -1,3 +1,4 @@
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "donner/editor/EditorShell.h"
 
 #include <algorithm>
@@ -6,15 +7,18 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string_view>
 
 #include "GLFW/glfw3.h"
-#include "donner/base/FileOffset.h"
-#include "donner/base/xml/XMLNode.h"
+#include "donner/editor/DocumentSave.h"
+#include "donner/editor/DragCoalesce.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "embed_resources/FiraCodeFont.h"
@@ -25,11 +29,18 @@ namespace donner::editor {
 namespace {
 
 constexpr float kSourcePaneWidth = 560.0f;
-constexpr float kInspectorPaneWidth = 320.0f;
-constexpr float kTreeViewHeightFraction = 0.4f;
+constexpr float kTreeViewHeightFraction = 0.33f;
 constexpr float kKeyboardZoomStep = 1.5f;
+constexpr float kRightPaneSplitterThickness = 6.0f;
+constexpr float kLayerPanelSplitterThickness = 6.0f;
+constexpr float kLayerPanelDragHandleHeight = 26.0f;
+constexpr float kMinRightPaneWidth = 220.0f;
+constexpr float kMaxRightPaneWidth = 900.0f;
+constexpr float kMinInspectorPaneHeight = 96.0f;
+constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
+constexpr int kMaxSaveSyncFlushPasses = 4;
 
 std::optional<std::string> LoadFile(const std::string& filename) {
   std::ifstream file(filename, std::ios::binary);
@@ -51,27 +62,6 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
                            static_cast<double>(intrinsic.y));
   }
   return Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
-}
-
-Coordinates FileOffsetToEditorCoordinates(const FileOffset& offset) {
-  if (!offset.lineInfo.has_value()) {
-    return Coordinates(0, 0);
-  }
-  return Coordinates(static_cast<int>(offset.lineInfo->line) - 1,
-                     static_cast<int>(offset.lineInfo->offsetOnLine));
-}
-
-void HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& element) {
-  auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
-  if (!xmlNode.has_value()) {
-    return;
-  }
-  auto range = xmlNode->getNodeLocation();
-  if (!range.has_value()) {
-    return;
-  }
-  textEditor.selectAndFocus(FileOffsetToEditorCoordinates(range->start),
-                            FileOffsetToEditorCoordinates(range->end));
 }
 
 }  // namespace
@@ -96,12 +86,29 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     return;
   }
 
-  selectTool_.setCompositedDragPreviewEnabled(options_.experimentalMode);
-
   textEditor_.setLanguageDefinition(TextEditor::LanguageDefinition::SVG());
   textEditor_.setText(*initialSource);
   textEditor_.resetTextChanged();
   textEditor_.setActiveAutocomplete(true);
+  textEditor_.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+                                          -> std::optional<TextEditor::AutocompleteResponse> {
+    XmlAutocompleteContext context =
+        DetectXmlAutocompleteContext(request.source, request.cursorOffset);
+    if (context.kind == XmlAutocompleteContextKind::Unknown) {
+      return std::nullopt;
+    }
+
+    TextEditor::AutocompleteResponse response;
+    response.replaceStartOffset = context.replaceStartOffset;
+    response.replaceEndOffset = context.replaceEndOffset;
+    for (const XmlAutocompleteSuggestion& suggestion : BuildXmlAutocompleteSuggestions(context)) {
+      response.suggestions.push_back(TextEditor::AutocompleteSuggestion{
+          .displayText = RcString(suggestion.displayText),
+          .insertText = RcString(suggestion.insertText),
+      });
+    }
+    return response;
+  });
 
   ImGuiIO& io = ImGui::GetIO();
   ImFontConfig fontCfg;
@@ -120,7 +127,6 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
       static_cast<float>(14.0 * displayScale), &fontCfg);
 
-  app_.setStructuredEditingEnabled(true);
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
@@ -153,7 +159,6 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     recorderOptions.windowWidth = winSize.x;
     recorderOptions.windowHeight = winSize.y;
     recorderOptions.displayScale = window_.displayScale();
-    recorderOptions.experimentalMode = options_.experimentalMode;
     reproRecorder_ = std::make_unique<repro::ReproRecorder>(std::move(recorderOptions));
     std::fprintf(stderr, "[repro] recording UI inputs to %s\n", options_.reproOutputPath->c_str());
   }
@@ -167,6 +172,47 @@ EditorShell::~EditorShell() {
       std::fprintf(stderr, "[repro] flush failed — recording lost\n");
     }
   }
+}
+
+void EditorShell::overrideViewportForReplay(const ViewportState& viewport) {
+  pendingViewportReplayOverride_ = viewport;
+}
+
+std::optional<std::string> EditorShell::selectedElementLabelForReadback() const {
+  const std::optional<svg::SVGElement>& selected = app_.selectedElement();
+  if (!selected.has_value()) {
+    return std::nullopt;
+  }
+
+  const std::string_view tagName = selected->tagName().name;
+  std::string label = "<";
+  label.append(tagName.data(), tagName.size());
+  label.push_back('>');
+
+  const RcString id = selected->id();
+  const std::string_view idSv = id;
+  if (!idSv.empty()) {
+    label.push_back(' ');
+    label.push_back('#');
+    label.append(idSv.data(), idSv.size());
+  }
+  return label;
+}
+
+LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() const {
+  const auto& viewport = interactionController_.viewport();
+  const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();
+  const bool workerBusy = renderCoordinator_.asyncRenderer().isBusy();
+  const Vector2i documentCanvas = (!workerBusy && app_.hasDocument())
+                                      ? app_.document().document().canvasSize()
+                                      : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
+  const Vector2i compositorCanvas = renderCoordinator_.asyncRenderer().compositorState().canvasSize;
+  const CanvasFreshness freshness =
+      ClassifyCanvasFreshness(viewportDesiredCanvas, documentCanvas, compositorCanvas);
+  return LayerInspectorStatusReadback{
+      .canvasFreshness = freshness,
+      .statusSuffix = std::string(CanvasFreshnessStatusSuffix(freshness)),
+  };
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
@@ -187,19 +233,87 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   app_.setCurrentFilePath(std::string(path));
   app_.setCleanSourceText(canonicalSource);
   lastHighlightedSelection_.reset();
+  lastPostedScreenPoint_.reset();
   renderCoordinator_.resetForLoadedDocument();
   textures_.resetComposited();
   textures_.clearOverlay();
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   dialogPresenter_.clearOpenFileError();
+  dialogPresenter_.clearSaveFileError();
   return true;
 }
 
-void EditorShell::applyExperimentalModeChange(bool enabled) {
-  options_.experimentalMode = enabled;
-  selectTool_.setCompositedDragPreviewEnabled(enabled);
-  renderCoordinator_.experimentalDragPresentation() = ExperimentalDragPresentation{};
-  textures_.resetComposited();
+bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
+  documentSyncController_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/1.0f);
+
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    *error = "Cannot save while the renderer is applying pending edits.";
+    return false;
+  }
+
+  for (int pass = 0; pass < kMaxSaveSyncFlushPasses; ++pass) {
+    if (!app_.flushFrame()) {
+      break;
+    }
+    renderCoordinator_.refreshSelectionBoundsCache(app_);
+    documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
+    documentSyncController_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/1.0f);
+  }
+
+  if (!app_.document().queue().empty()) {
+    *error = "Cannot save while document edits are still pending.";
+    return false;
+  }
+
+  return true;
+}
+
+bool EditorShell::trySavePath(std::string_view path, std::string* error) {
+  if (path.empty()) {
+    *error = "Choose a file path.";
+    return false;
+  }
+  if (!app_.hasDocument()) {
+    *error = "No SVG document is loaded.";
+    return false;
+  }
+  if (!synchronizeSourceBeforeSave(error)) {
+    return false;
+  }
+  if (!app_.document().document().hasSourceStore()) {
+    *error = "The current document has no XML source store.";
+    return false;
+  }
+
+  const DocumentSaveResult result = SaveSourceToPath(std::filesystem::path(std::string(path)),
+                                                     app_.document().document().source());
+  if (!result.ok()) {
+    *error = result.message;
+    return false;
+  }
+
+  app_.setCurrentFilePath(std::string(path));
+  app_.setCleanSourceText(textEditor_.getText());
+  documentSyncController_.resetForLoadedDocument(textEditor_.getText());
+  dialogPresenter_.clearSaveFileError();
+  updateWindowTitle();
+  return true;
+}
+
+void EditorShell::requestSaveAs(std::string error) {
+  dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
+}
+
+void EditorShell::requestSave() {
+  if (!app_.currentFilePath().has_value()) {
+    requestSaveAs();
+    return;
+  }
+
+  std::string error;
+  if (!trySavePath(*app_.currentFilePath(), &error)) {
+    requestSaveAs(std::move(error));
+  }
 }
 
 void EditorShell::updateWindowTitle() {
@@ -232,6 +346,14 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_Q, /*repeat=*/false)) {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
+  }
+
+  if (!anyPopupOpen && cmd && ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false)) {
+    if (shift) {
+      requestSaveAs();
+    } else {
+      requestSave();
+    }
   }
 
   if (!sourcePaneFocused) {
@@ -313,14 +435,17 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                          : std::nullopt);
   interactionController_.updateDevicePixelRatio(window_.contentScale().x);
 
+  if (pendingViewportReplayOverride_.has_value()) {
+    interactionController_.viewport() = *pendingViewportReplayOverride_;
+    pendingViewportReplayOverride_.reset();
+    viewportInitialized_ = true;
+  }
+
   if (!viewportInitialized_ && interactionController_.viewport().paneSize.x > 0.0 &&
       interactionController_.viewport().paneSize.y > 0.0 && app_.hasDocument()) {
     interactionController_.resetToActualSize();
     viewportInitialized_ = true;
   }
-
-  renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                        options_.experimentalMode, textures_);
 
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
@@ -340,22 +465,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   interactionController_.consumeScrollEvents(inputBridge_.events(), paneRect, modalCapturingInput,
                                              kWheelZoomStep, kTrackpadPanPixelsPerScrollUnit);
 
-  const auto activeDragPreview = selectTool_.activeDragPreview();
-  const auto displayedDragPreview =
-      renderCoordinator_.experimentalDragPresentation().presentationPreview(activeDragPreview);
-
-  RenderPanePresenterState paneState{
-      .viewport = interactionController_.viewport(),
-      .frameHistory = interactionController_.frameHistory(),
-      .textures = textures_,
-      .experimentalDragPresentation = renderCoordinator_.experimentalDragPresentation(),
-      .activeDragPreview = activeDragPreview,
-      .displayedDragPreview = displayedDragPreview,
-      .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
-      .experimentalMode = options_.experimentalMode,
-  };
-  renderPanePresenter_.render(paneState);
-
   const auto screenToDocument = [&](const ImVec2& screenPoint) -> Vector2d {
     return interactionController_.viewport().screenToDocument(
         Vector2d(screenPoint.x, screenPoint.y));
@@ -368,26 +477,86 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
   }
 
-  if (interactionController_.pendingClick().has_value() &&
-      !renderCoordinator_.asyncRenderer().isBusy()) {
-    selectTool_.onMouseDown(app_, interactionController_.pendingClick()->documentPoint,
-                            interactionController_.pendingClick()->modifiers);
+  // Design doc 0033 §M8 — click→drag handoff doesn't wait for raster.
+  //
+  // Fast path: if the user clicks inside the bounds of the currently-
+  // selected element, we can start the re-drag IMMEDIATELY without
+  // gating on `!isBusy()`. The check uses `SelectionBoundsCache::
+  // displayedBoundsDoc` — populated on idle frames — so the call
+  // doesn't touch the registry the worker is mid-mutating. The
+  // previous M8 attempt failed because it called the live
+  // `SnapshotSelectionWorldBounds` during the busy window; the
+  // cache-based check fixes the race.
+  //
+  // Slow path: anything else (selection change, marquee, shift-click,
+  // empty cache, multi-select) still waits for `!isBusy()` and goes
+  // through the full `onMouseDown` flow. The follow-up registry-
+  // reading work (`refreshSelectionBoundsCache`, overlay rasterize,
+  // render request) is deferred to the next idle frame for both
+  // paths, so the user sees the click acknowledged immediately even
+  // when the chrome catches up a frame later.
+  if (interactionController_.pendingClick().has_value()) {
+    const auto& pendingClick = *interactionController_.pendingClick();
+    const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
+    const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
+    const bool tookFastRedrag =
+        cacheMatchesSelection && selectTool_.tryStartRedragOnSelected(
+                                     app_, pendingClick.documentPoint, pendingClick.modifiers,
+                                     boundsCache.displayedBoundsDoc);
+    if (tookFastRedrag) {
+      lastPostedScreenPoint_.reset();
+      interactionController_.clearPendingClick();
+      pendingClickFollowupAfterIdle_ = true;
+    } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
+      // Slow path: full `onMouseDown` (hitTest + selection change +
+      // possible drag start). Race-safe only when the worker is idle.
+      lastPostedScreenPoint_.reset();
+      selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+      renderCoordinator_.refreshSelectionBoundsCache(app_);
+      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
+                                            textures_);
+      renderCoordinator_.rasterizeOverlayForCurrentSelection(
+          app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
+      interactionController_.clearPendingClick();
+    } else {
+      // Worker is busy with a (likely-stale) prewarm render at the
+      // previous canvas size or zoom. Cancel it so the next idle frame
+      // can run the slow-path mouseDown immediately, rather than
+      // waiting up to seconds for the in-flight prewarm to finish at
+      // high zoom. The render in flight is dispensable — it was a
+      // selection prewarm, not a drag, and the click is about to
+      // supersede the selection state anyway.
+      renderCoordinator_.asyncRenderer().cancelInFlight();
+    }
+  }
+
+  // After-idle follow-up for the M8 fast-path click. This reads the
+  // live registry, so it must wait for the worker to land. Keep the
+  // follow-up to cache refresh only: posting a render here would run
+  // before this same frame's drag move is applied, leaving the overlay
+  // one interaction step behind the composited pixels during re-drag.
+  if (pendingClickFollowupAfterIdle_ && !renderCoordinator_.asyncRenderer().isBusy()) {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
-    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                          options_.experimentalMode, textures_);
-    renderCoordinator_.rasterizeOverlayForCurrentSelection(app_, interactionController_.viewport(),
-                                                           textures_, selectTool_.marqueeRect());
-    interactionController_.clearPendingClick();
+    pendingClickFollowupAfterIdle_ = false;
   }
 
   if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
-      selectTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+      const ImVec2 currentScreen = ImGui::GetMousePos();
+      if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
+                                     renderCoordinator_.asyncRenderer().isBusy())) {
+        selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true);
+        lastPostedScreenPoint_ = currentScreen;
+        if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
+          renderCoordinator_.refreshSelectionBoundsCache(app_);
+        }
+      }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
-      if (options_.experimentalMode && previewBeforeRelease.has_value()) {
+      lastPostedScreenPoint_.reset();
+      if (previewBeforeRelease.has_value()) {
         // The DOM was already updated every drag frame via
         // `SelectTool::onMouseMove` → `applyMutation`, so drag release
         // needs to do nothing beyond recording undo history (already done
@@ -409,19 +578,29 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
   }
 
-  if (options_.experimentalMode && !renderCoordinator_.asyncRenderer().isBusy() &&
-      app_.hasDocument()) {
+  if (!renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument()) {
     renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                          options_.experimentalMode, textures_);
+                                          textures_);
   }
 
-  highlightSelectionSourceIfNeeded();
+  const auto activeDragPreview = selectTool_.activeDragPreview();
+  const auto displayedDragPreview =
+      renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
+  RenderPanePresenterState paneState{
+      .viewport = interactionController_.viewport(),
+      .frameHistory = interactionController_.frameHistory(),
+      .textures = textures_,
+      .activeDragPreview = activeDragPreview,
+      .displayedDragPreview = displayedDragPreview,
+      .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
+  };
+  renderPanePresenter_.render(paneState);
+
   ImGui::End();
 }
 
-void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float treePaneHeight,
-                                 float inspectorPaneY, float inspectorPaneHeight,
-                                 ImGuiWindowFlags paneFlags) {
+void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
+                                 const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags) {
   const auto& selectionBeforeTree = app_.selectedElement();
   if (selectionBeforeTree != lastTreeSelection_) {
     treeviewPendingScroll_ = selectionBeforeTree.has_value() && !treeSelectionOriginatedInTree_;
@@ -440,7 +619,7 @@ void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float tree
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, treePaneHeight), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.treePaneHeight), ImGuiCond_Always);
   ImGui::Begin("Tree View", nullptr, paneFlags);
   TreeViewState treeState{
       .scrollTarget = selectionBeforeTree,
@@ -455,21 +634,197 @@ void EditorShell::renderSidebars(float rightPaneX, float paneOriginY, float tree
   ImGui::End();
   lastTreeSelection_ = app_.selectedElement();
 
-  ImGui::SetNextWindowPos(ImVec2(rightPaneX, inspectorPaneY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(kInspectorPaneWidth, inspectorPaneHeight), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.inspectorPaneY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.inspectorPaneHeight), ImGuiCond_Always);
   ImGui::Begin("Inspector", nullptr, paneFlags);
   sidebarPresenter_.renderInspector(interactionController_.viewport());
   ImGui::End();
+
+  if (layerPanelDetached_) {
+    return;
+  }
+
+  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelPaneY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.layerPanelHeight), ImGuiCond_Always);
+  ImGui::Begin("Layers##docked_layers", nullptr, paneFlags);
+  renderDockedLayerPanelDragHandle();
+  if (!layerPanelDetached_) {
+    renderLayerPanelContents();
+  }
+  ImGui::End();
 }
 
-void EditorShell::highlightSelectionSourceIfNeeded() {
+void EditorShell::renderLayerPanelContents() {
+  const auto compositeTiles = renderCoordinator_.asyncRenderer().compositorCompositeTiles();
+  const auto compositorState = renderCoordinator_.asyncRenderer().compositorState();
+  const auto workerCompositorEntity = renderCoordinator_.asyncRenderer().workerCompositorEntity();
+  const auto& viewport = interactionController_.viewport();
+  const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();
+  // `SVGDocument::canvasSize()` walks the registry (ComputedAbsoluteTransform /
+  // SizedElement / ViewBox) — racy against the worker's
+  // `prepareDocumentForRendering` which rebuilds those components in place.
+  // When the worker is busy we have to read the cached value the worker
+  // stamped at the end of its last completed render; reading live trips a
+  // SIGSEGV inside `LayoutSystem::calculateCanvasScaledDocumentSize` when
+  // the entt sparse-set page is mid-rebuild.
+  const bool workerBusy = renderCoordinator_.asyncRenderer().isBusy();
+  const Vector2i documentCanvas = (!workerBusy && app_.hasDocument())
+                                      ? app_.document().document().canvasSize()
+                                      : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
+  const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
+  layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
+                              viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
+                              documentCanvas, fastPath);
+}
+
+void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight) {
+  const float splitterCenterX = windowWidth - rightPaneWidth_;
+  const float splitterLeft = splitterCenterX - kRightPaneSplitterThickness * 0.5f;
+
+  ImGui::SetNextWindowPos(ImVec2(splitterLeft, paneOriginY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(kRightPaneSplitterThickness, paneHeight), ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  constexpr ImGuiWindowFlags kSplitterFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
+  ImGui::Begin("##right_pane_splitter", nullptr, kSplitterFlags);
+  ImGui::InvisibleButton("##right_pane_splitter_handle",
+                         ImVec2(kRightPaneSplitterThickness, paneHeight));
+  if (ImGui::IsItemActive()) {
+    const float deltaX = ImGui::GetIO().MouseDelta.x;
+    // Dragging the splitter LEFT (negative deltaX) widens the right pane.
+    rightPaneWidth_ = std::clamp(rightPaneWidth_ - deltaX, kMinRightPaneWidth, kMaxRightPaneWidth);
+  }
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  }
+  ImGui::End();
+  ImGui::PopStyleVar(2);
+}
+
+void EditorShell::renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
+                                           const RightSidebarLayout& layout) {
+  ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelSplitterY), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, kLayerPanelSplitterThickness), ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  constexpr ImGuiWindowFlags kSplitterFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
+  ImGui::Begin("##layer_panel_splitter", nullptr, kSplitterFlags);
+  ImGui::InvisibleButton("##layer_panel_splitter_handle",
+                         ImVec2(rightPaneWidth, kLayerPanelSplitterThickness));
+  if (ImGui::IsItemActive()) {
+    layerPanelHeightFraction_ = ResizeLayerPanelHeightFraction(
+        layerPanelHeightFraction_, layout.lowerPaneHeight, layout.minLayerPanelHeight,
+        layout.maxLayerPanelHeight, ImGui::GetIO().MouseDelta.y);
+  }
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+  }
+
+  const bool splitterActive = ImGui::IsItemActive();
+  const bool splitterHovered = ImGui::IsItemHovered();
+  const ImU32 color = ImGui::GetColorU32(splitterActive    ? ImGuiCol_SeparatorActive
+                                         : splitterHovered ? ImGuiCol_SeparatorHovered
+                                                           : ImGuiCol_Separator);
+  ImGui::GetWindowDrawList()->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                                            color);
+  ImGui::End();
+  ImGui::PopStyleVar(2);
+}
+
+void EditorShell::renderDockedLayerPanelDragHandle() {
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const ImVec2 start = ImGui::GetCursorScreenPos();
+  const ImVec2 size(ImGui::GetContentRegionAvail().x, kLayerPanelDragHandleHeight);
+  ImGui::InvisibleButton("##layer_panel_detach_handle", size);
+
+  const bool handleActive = ImGui::IsItemActive();
+  const bool handleHovered = ImGui::IsItemHovered();
+  if (handleHovered || handleActive) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+  }
+
+  const ImU32 background = ImGui::GetColorU32(handleActive    ? ImGuiCol_HeaderActive
+                                              : handleHovered ? ImGuiCol_HeaderHovered
+                                                              : ImGuiCol_Header);
+  const ImU32 textColor = ImGui::GetColorU32(ImGuiCol_Text);
+  const ImVec2 end(start.x + size.x, start.y + size.y);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(start, end, background);
+  drawList->AddText(ImVec2(start.x + style.FramePadding.x, start.y + style.FramePadding.y),
+                    textColor, "Layers");
+
+  const char* handleText = "::";
+  const ImVec2 handleTextSize = ImGui::CalcTextSize(handleText);
+  drawList->AddText(
+      ImVec2(end.x - handleTextSize.x - style.FramePadding.x, start.y + style.FramePadding.y),
+      textColor, handleText);
+
+  if (handleActive && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f)) {
+    layerPanelDetached_ = true;
+    layerPanelDetachDragActive_ = true;
+    layerPanelFloatingNeedsPlacement_ = true;
+    layerPanelFloatingPos_ = ImGui::GetWindowPos();
+    layerPanelFloatingSize_ = ImGui::GetWindowSize();
+  }
+}
+
+void EditorShell::renderFloatingLayerPanel() {
+  if (!layerPanelDetached_) {
+    return;
+  }
+
+  if (layerPanelDetachDragActive_) {
+    const ImGuiIO& io = ImGui::GetIO();
+    layerPanelFloatingPos_.x += io.MouseDelta.x;
+    layerPanelFloatingPos_.y += io.MouseDelta.y;
+    if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+      layerPanelDetachDragActive_ = false;
+    }
+  }
+
+  if (layerPanelFloatingNeedsPlacement_ || layerPanelDetachDragActive_) {
+    ImGui::SetNextWindowPos(layerPanelFloatingPos_, ImGuiCond_Always);
+  }
+  if (layerPanelFloatingNeedsPlacement_) {
+    ImGui::SetNextWindowSize(layerPanelFloatingSize_, ImGuiCond_Always);
+  }
+
+  bool layerPanelOpen = true;
+  constexpr ImGuiWindowFlags kFloatingFlags = ImGuiWindowFlags_NoCollapse;
+  ImGui::Begin("Layers##floating_layers", &layerPanelOpen, kFloatingFlags);
+  layerPanelFloatingNeedsPlacement_ = false;
+  layerPanelFloatingPos_ = ImGui::GetWindowPos();
+  layerPanelFloatingSize_ = ImGui::GetWindowSize();
+
+  if (!layerPanelOpen || ImGui::Button("Dock")) {
+    layerPanelDetached_ = false;
+    layerPanelDetachDragActive_ = false;
+    layerPanelFloatingNeedsPlacement_ = false;
+    ImGui::End();
+    return;
+  }
+
+  renderLayerPanelContents();
+  ImGui::End();
+}
+
+bool EditorShell::highlightSelectionSourceIfNeeded() {
   const auto& selectionNow = app_.selectedElement();
   if (selectionNow != lastHighlightedSelection_) {
     if (selectionNow.has_value()) {
-      HighlightElementSource(textEditor_, *selectionNow);
+      std::ignore = HighlightElementSource(textEditor_, *selectionNow);
     }
     lastHighlightedSelection_ = selectionNow;
+    return true;
   }
+
+  return false;
 }
 
 void EditorShell::runFrame() {
@@ -479,7 +834,33 @@ void EditorShell::runFrame() {
     // state for the frame has been populated by
     // `ImGui_ImplGlfw_NewFrame` (called in `window_.beginFrame()`
     // upstream of `runFrame`); nothing below has touched it yet.
-    reproRecorder_->snapshotFrame();
+    //
+    // The viewport snapshot is the OUTCOME of any previous frame's
+    // viewport mutation (pinch-zoom, keyboard zoom, pan). Capturing
+    // it every frame is what lets `RnrReplayTest`'s
+    // `ApplyRecordedViewport` reconstruct zoom changes during
+    // playback, even for gestures (macOS trackpad pinch via
+    // `PinchEventMonitor`) that bypass ImGui's input boundary and
+    // therefore aren't visible to the recorder as discrete events.
+    const ViewportState& vp = interactionController_.viewport();
+    repro::FrameContext frameContext;
+    frameContext.viewport = repro::ReproViewport{
+        .paneOriginX = vp.paneOrigin.x,
+        .paneOriginY = vp.paneOrigin.y,
+        .paneSizeW = vp.paneSize.x,
+        .paneSizeH = vp.paneSize.y,
+        .devicePixelRatio = vp.devicePixelRatio,
+        .zoom = vp.zoom,
+        .panDocX = vp.panDocPoint.x,
+        .panDocY = vp.panDocPoint.y,
+        .panScreenX = vp.panScreenPoint.x,
+        .panScreenY = vp.panScreenPoint.y,
+        .viewBoxX = vp.documentViewBox.topLeft.x,
+        .viewBoxY = vp.documentViewBox.topLeft.y,
+        .viewBoxW = vp.documentViewBox.size().x,
+        .viewBoxH = vp.documentViewBox.size().y,
+    };
+    reproRecorder_->snapshotFrame(frameContext);
   }
   interactionController_.noteFrameDelta(ImGui::GetIO().DeltaTime * 1000.0f);
   updateWindowTitle();
@@ -500,14 +881,27 @@ void EditorShell::runFrame() {
   const float menuBarHeight = ImGui::GetFrameHeight();
   const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - menuBarHeight);
+  rightPaneWidth_ =
+      std::clamp(rightPaneWidth_, kMinRightPaneWidth,
+                 std::max(kMinRightPaneWidth,
+                          std::min(kMaxRightPaneWidth, static_cast<float>(windowSize.x) -
+                                                           kSourcePaneWidth - kMinRightPaneWidth)));
   const float renderPaneWidth =
-      std::max(0.0f, static_cast<float>(windowSize.x) - kSourcePaneWidth - kInspectorPaneWidth);
-  const float rightPaneX = static_cast<float>(windowSize.x) - kInspectorPaneWidth;
+      std::max(0.0f, static_cast<float>(windowSize.x) - kSourcePaneWidth - rightPaneWidth_);
+  const float rightPaneX = static_cast<float>(windowSize.x) - rightPaneWidth_;
   const float rightPaneGap = ImGui::GetStyle().ItemSpacing.y;
-  const float rightPaneContentHeight = std::max(0.0f, paneHeight - rightPaneGap);
-  const float treePaneHeight = rightPaneContentHeight * kTreeViewHeightFraction;
-  const float inspectorPaneY = paneOriginY + treePaneHeight + rightPaneGap;
-  const float inspectorPaneHeight = std::max(0.0f, paneHeight - treePaneHeight - rightPaneGap);
+  const RightSidebarLayout rightSidebarLayout = ComputeRightSidebarLayout({
+      .paneOriginY = paneOriginY,
+      .paneHeight = paneHeight,
+      .rightPaneGap = rightPaneGap,
+      .treeViewHeightFraction = kTreeViewHeightFraction,
+      .layerPanelHeightFraction = layerPanelHeightFraction_,
+      .layerPanelDetached = layerPanelDetached_,
+      .layerPanelSplitterThickness = kLayerPanelSplitterThickness,
+      .minLayerPanelHeight = kMinLayerPanelHeight,
+      .minInspectorPaneHeight = kMinInspectorPaneHeight,
+  });
+  layerPanelHeightFraction_ = rightSidebarLayout.layerPanelHeightFraction;
   const Vector2d renderPaneOrigin(kSourcePaneWidth, paneOriginY);
   const Vector2d renderPaneSize(renderPaneWidth, paneHeight);
 
@@ -520,12 +914,9 @@ void EditorShell::runFrame() {
 
   MenuBarState menuState{
       .sourcePaneFocused = textEditor_.isFocused(),
+      .canSave = app_.hasDocument(),
       .canUndo = app_.canUndo(),
       .canRedo = app_.undoTimeline().entryCount() > 0,
-      .experimentalMode = options_.experimentalMode,
-      .canToggleCompositedRendering = CanToggleCompositedRendering(selectTool_),
-      .tightBoundedSegmentsEnabled =
-          renderCoordinator_.asyncRenderer().tightBoundedSegmentsEnabled(),
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -533,6 +924,12 @@ void EditorShell::runFrame() {
   }
   if (menuActions.openFile) {
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+  if (menuActions.saveFile) {
+    requestSave();
+  }
+  if (menuActions.saveFileAs) {
+    requestSaveAs();
   }
   if (menuActions.quit) {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
@@ -566,23 +963,25 @@ void EditorShell::runFrame() {
   if (menuActions.actualSize) {
     interactionController_.resetToActualSize();
   }
-  if (menuActions.toggleCompositedRendering) {
-    applyExperimentalModeChange(!options_.experimentalMode);
-  }
-  if (menuActions.toggleTightBoundedSegments) {
-    auto& asyncRenderer = renderCoordinator_.asyncRenderer();
-    asyncRenderer.setTightBoundedSegmentsEnabled(!asyncRenderer.tightBoundedSegmentsEnabled());
-  }
 
   dialogPresenter_.render(
-      [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); });
+      [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
+      [this](std::string_view path, std::string* error) { return trySavePath(path, error); });
 
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
+  std::ignore = highlightSelectionSourceIfNeeded();
   renderSourcePane(paneOriginY, paneHeight, codeFont_);
   renderRenderPane(renderPaneOrigin, renderPaneSize, kPaneFlags);
-  renderSidebars(rightPaneX, paneOriginY, treePaneHeight, inspectorPaneY, inspectorPaneHeight,
-                 kPaneFlags);
+  renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, rightSidebarLayout, kPaneFlags);
+  if (highlightSelectionSourceIfNeeded()) {
+    window_.wakeEventLoop();
+  }
+  renderRightPaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight);
+  if (!layerPanelDetached_) {
+    renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
+  }
+  renderFloatingLayerPanel();
 }
 
 }  // namespace donner::editor

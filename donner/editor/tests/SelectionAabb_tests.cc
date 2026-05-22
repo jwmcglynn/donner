@@ -41,7 +41,6 @@ TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsMovesWithDrag) {
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
 
   SelectTool tool;
-  tool.setCompositedDragPreviewEnabled(true);
 
   tool.onMouseDown(app, Vector2d(40.0, 40.0), MouseModifiers{});
   ASSERT_TRUE(app.hasSelection());

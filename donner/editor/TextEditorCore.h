@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
+#include "donner/editor/SourceEditIntent.h"
 #include "donner/editor/TextBuffer.h"
 
 namespace donner::editor {
@@ -185,14 +186,42 @@ public:
   /// writeback after a transform drag) so the user's scroll position
   /// isn't yanked out from under them.
   void setText(std::string_view text, bool preserveScroll = false);
+
+  /**
+   * Apply a source-view update that originated outside the text editor.
+   *
+   * This mutates the visible buffer and recolorizes the affected region, but it does not append an
+   * undo record, does not create a pending \ref SourceEditIntent, and leaves \ref isTextChanged
+   * false. Use this for XML-owned canvas writebacks that are being mirrored into the source pane.
+   *
+   * @param offset Byte offset in the current buffer.
+   * @param removedLength Number of bytes to remove at \p offset.
+   * @param replacement Replacement bytes to insert at \p offset.
+   */
+  void applyExternalSourceEdit(std::size_t offset, std::size_t removedLength,
+                               std::string_view replacement);
+
   std::string getText() const;
   std::string getText(const Coordinates& start, const Coordinates& end) const;
+
+  /**
+   * Resolve a full-buffer byte offset to editor coordinates.
+   *
+   * @param offset Byte offset in \ref getText().
+   */
+  Coordinates getCoordinatesAtByteOffset(std::size_t offset) const {
+    return text_.getCoordinatesAtByteOffset(offset);
+  }
 
   bool isTextChanged() const { return textChanged_; }
   void resetTextChanged() {
     textChanged_ = false;
     changedLines_.clear();
   }
+  /// True if user-facing edits have pending byte-level source intents.
+  bool hasPendingSourceEditIntents() const { return !pendingSourceEditIntents_.empty(); }
+  /// Consume pending byte-level source intents captured from user-facing edits.
+  std::vector<SourceEditIntent> takePendingSourceEditIntents();
 
   // ---------------------------------------------------------------------
   // Cursor / selection
@@ -398,6 +427,8 @@ public:
   void handleMidLineDelete(Coordinates pos, UndoRecord& undo);
   void handleStartOfLineDelete(const Coordinates& pos, UndoRecord& undo);
   void handleMidLineBackspace(const Coordinates& pos, UndoRecord& undo);
+  void recordSourceEditIntent(const UndoRecord& record, SourceEditIntentKind kind);
+  void appendSourceEditIntent(SourceEditIntent intent);
   void handleMultiLineTab(UndoState& state, bool shift);
 
   void updateChangeTracking();
@@ -431,6 +462,8 @@ private:
   EditorState state_;
   UndoBuffer undoBuffer_;
   int undoIndex_ = 0;
+  std::vector<SourceEditIntent> pendingSourceEditIntents_;
+  std::uint64_t sourceEditIntentVersion_ = 0;
   int replaceIndex_ = 0;
 
   Coordinates interactiveStart_;

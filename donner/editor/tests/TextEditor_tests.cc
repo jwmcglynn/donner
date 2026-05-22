@@ -399,6 +399,24 @@ TEST_F(TextEditorTests, CutWithSelection) {
   EXPECT_STREQ(clipboard, "Hello");
 }
 
+TEST_F(TextEditorTests, CutCapturesDeleteIntentAndUndoRestoresText) {
+  editor.setText("Hello world");
+  editor.resetTextChanged();
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
+
+  editor.cut();
+
+  std::vector<SourceEditIntent> intents = editor.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].offset, 0u);
+  EXPECT_EQ(intents[0].removedLength, 5u);
+  EXPECT_EQ(intents[0].replacement, "");
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Delete);
+
+  editor.undo();
+  EXPECT_EQ(editor.getText(), "Hello world");
+}
+
 TEST_F(TextEditorTests, CutWithoutSelectionDoesNothing) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 2));
@@ -408,18 +426,55 @@ TEST_F(TextEditorTests, CutWithoutSelectionDoesNothing) {
 
 TEST_F(TextEditorTests, PasteInsertsClipboardText) {
   editor.setText("Hello");
+  editor.resetTextChanged();
   ImGui::SetClipboardText(" world");
   editor.setCursorPosition(Coordinates(0, 5));
   editor.paste();
   EXPECT_EQ(editor.getText(), "Hello world") << "paste should insert clipboard text at cursor";
+
+  std::vector<SourceEditIntent> intents = editor.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].offset, 5u);
+  EXPECT_EQ(intents[0].removedLength, 0u);
+  EXPECT_EQ(intents[0].replacement, " world");
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Insert);
 }
 
 TEST_F(TextEditorTests, PasteWithSelectionReplacesSelection) {
   editor.setText("Hello world");
+  editor.resetTextChanged();
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
   ImGui::SetClipboardText("Hi");
   editor.paste();
   EXPECT_EQ(editor.getText(), "Hi world") << "paste with selection should replace selection";
+
+  std::vector<SourceEditIntent> intents = editor.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].offset, 0u);
+  EXPECT_EQ(intents[0].removedLength, 5u);
+  EXPECT_EQ(intents[0].replacement, "Hi");
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Replace);
+
+  editor.undo();
+  EXPECT_EQ(editor.getText(), "Hello world");
+}
+
+TEST_F(TextEditorTests, ProcessReplaceCapturesReplaceIntentAndUndoRestoresText) {
+  editor.setText("red blue red");
+  editor.resetTextChanged();
+
+  editor.processReplace("red", "green");
+
+  EXPECT_EQ(editor.getText(), "green blue red");
+  std::vector<SourceEditIntent> intents = editor.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].offset, 0u);
+  EXPECT_EQ(intents[0].removedLength, 3u);
+  EXPECT_EQ(intents[0].replacement, "green");
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Replace);
+
+  editor.undo();
+  EXPECT_EQ(editor.getText(), "red blue red");
 }
 
 // ============================================================================

@@ -12,6 +12,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -259,9 +260,8 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
     // Mark dirty flags based on the attribute type.
     if (actualName == "transform") {
-      markDirty(handle_, components::DirtyFlagsComponent::Transform |
-                             components::DirtyFlagsComponent::WorldTransform |
-                             components::DirtyFlagsComponent::RenderInstance);
+      components::LayoutSystem().invalidate(handle_);
+      markDirty(handle_, components::DirtyFlagsComponent::RenderInstance);
       propagateWorldTransformDirtyToDescendants(handle_);
     } else {
       // For CSS properties (fill, stroke, opacity, etc.) and element-specific attributes
@@ -296,34 +296,64 @@ SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
 }
 
 void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value) {
+  SVGDocument document = ownerDocument();
+  (void)document.setElementAttribute(*this, name, value);
+}
+
+std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
+    const xml::XMLQualifiedNameRef& name, std::string_view value) {
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
-    return setId(value);
+    setId(value);
+    return std::nullopt;
   } else if (name == xml::XMLQualifiedNameRef("class")) {
-    return setClassName(value);
+    setClassName(value);
+    return std::nullopt;
   } else if (name == xml::XMLQualifiedNameRef("style")) {
-    return setStyle(value);
+    setStyle(value);
+    return std::nullopt;
   }
 
   // If it's not in the list above, it may be presentation attribute.
   // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
   // Only parse empty namespaces for now.
   if (name.namespacePrefix.empty()) {
-    const auto trySetResult = trySetPresentationAttribute(name.name, value);
-    if (trySetResult.hasResult() && trySetResult.result()) {
+    auto trySetResult = trySetPresentationAttribute(name.name, value);
+    const bool attributeWasSet = trySetResult.hasResult() && trySetResult.result();
+    if (attributeWasSet) {
+      if (name.name == "transform") {
+        // Source/XML transform edits are settled document changes, not active drag frames.
+        // Keep canvas drag mutations on the transform-only fast path, but force XML-sourced
+        // transform changes through the normal dirty reraster path so filtered layer pixels
+        // settle exactly.
+        markDirty(handle_, components::DirtyFlagsComponent::Paint);
+      }
       // Early-return since if this succeeds, the attribute has already been stored.
-      return;
+      return std::nullopt;
+    }
+
+    if (trySetResult.hasError()) {
+      markNeedsFullStyleRecompute(handle_);
+      handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+          *handle_.registry(), name, RcString(value));
+      return std::move(trySetResult).error();
     }
   }
 
   // Otherwise store as a generic attribute.
   markNeedsFullStyleRecompute(handle_);
-  return handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
       *handle_.registry(), name, RcString(value));
+  return std::nullopt;
 }
 
 void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {
+  SVGDocument document = ownerDocument();
+  (void)document.removeElementAttribute(*this, name);
+}
+
+void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name) {
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -399,6 +429,12 @@ std::optional<SVGElement> SVGElement::nextSibling() const {
 }
 
 void SVGElement::insertBefore(const SVGElement& newNode, std::optional<SVGElement> referenceNode) {
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
+    (void)document.insertElement(*this, newNode, referenceNode);
+    return;
+  }
+
   handle_.get<donner::components::TreeComponent>().insertBefore(
       registry(), newNode.handle_.entity(),
       referenceNode ? referenceNode->handle_.entity() : entt::null);
@@ -409,6 +445,12 @@ void SVGElement::insertBefore(const SVGElement& newNode, std::optional<SVGElemen
 }
 
 void SVGElement::appendChild(const SVGElement& child) {
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
+    (void)document.insertElement(*this, child, std::nullopt);
+    return;
+  }
+
   handle_.get<donner::components::TreeComponent>().appendChild(registry(),
                                                                child.entityHandle().entity());
   markNeedsFullRebuild(handle_);
@@ -417,6 +459,15 @@ void SVGElement::appendChild(const SVGElement& child) {
 }
 
 void SVGElement::replaceChild(const SVGElement& newChild, const SVGElement& oldChild) {
+  SVGDocument document = ownerDocument();
+  if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
+    xml::ApplySourceEditResult insertResult = document.insertElement(*this, newChild, oldChild);
+    if (!insertResult.diagnostic.has_value()) {
+      (void)document.removeElement(oldChild);
+    }
+    return;
+  }
+
   handle_.get<donner::components::TreeComponent>().replaceChild(
       registry(), newChild.handle_.entity(), oldChild.entityHandle().entity());
   markNeedsFullRebuild(handle_);
@@ -425,6 +476,15 @@ void SVGElement::replaceChild(const SVGElement& newChild, const SVGElement& oldC
 }
 
 void SVGElement::removeChild(const SVGElement& child) {
+  const std::optional<SVGElement> childParent = child.parentElement();
+  if (childParent.has_value() && *childParent == *this) {
+    SVGDocument document = ownerDocument();
+    if (document.hasSourceStore()) {
+      (void)document.removeElement(child);
+      return;
+    }
+  }
+
   handle_.get<donner::components::TreeComponent>().removeChild(registry(),
                                                                child.entityHandle().entity());
   markNeedsFullRebuild(handle_);
@@ -432,12 +492,8 @@ void SVGElement::removeChild(const SVGElement& child) {
 }
 
 void SVGElement::remove() {
-  // Mark parent dirty before removing from tree (after remove, parent link is gone).
-  if (auto parent = parentElement()) {
-    markNeedsFullRebuild(parent->handle_);
-    markDirty(parent->handle_, components::DirtyFlagsComponent::All);
-  }
-  handle_.get<donner::components::TreeComponent>().remove(registry());
+  SVGDocument document = ownerDocument();
+  (void)document.removeElement(*this);
 }
 
 std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {

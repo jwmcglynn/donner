@@ -14,8 +14,12 @@
 #include <GLFW/glfw3.h>
 #endif
 
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <string_view>
+#include <vector>
 
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
@@ -35,6 +39,35 @@ void GlfwErrorCallback(int error, const char* description) {
   }
 #endif
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
+}
+
+void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
+  ImGuiIO& io = ImGui::GetIO();
+  io.DeltaTime = static_cast<float>(std::max(0.001, inputOverride.deltaSeconds));
+  const float mouseX = static_cast<float>(inputOverride.mousePosition.x);
+  const float mouseY = static_cast<float>(inputOverride.mousePosition.y);
+  io.MousePos = ImVec2(mouseX, mouseY);
+  io.AddMousePosEvent(mouseX, mouseY);
+  io.AddFocusEvent(true);
+  for (int i = 0;
+       i < static_cast<int>(inputOverride.mouseDown.size()) && i < IM_ARRAYSIZE(io.MouseDown);
+       ++i) {
+    io.MouseDown[i] = inputOverride.mouseDown[i];
+    io.AddMouseButtonEvent(i, inputOverride.mouseDown[i]);
+  }
+  io.KeyCtrl = inputOverride.keyCtrl;
+  io.KeyShift = inputOverride.keyShift;
+  io.KeyAlt = inputOverride.keyAlt;
+  io.KeySuper = inputOverride.keySuper;
+  io.AddKeyEvent(ImGuiKey_LeftCtrl, inputOverride.keyCtrl);
+  io.AddKeyEvent(ImGuiKey_LeftShift, inputOverride.keyShift);
+  io.AddKeyEvent(ImGuiKey_LeftAlt, inputOverride.keyAlt);
+  io.AddKeyEvent(ImGuiKey_LeftSuper, inputOverride.keySuper);
+  io.MouseWheelH = inputOverride.mouseWheelH;
+  io.MouseWheel = inputOverride.mouseWheel;
+  if (inputOverride.mouseWheelH != 0.0f || inputOverride.mouseWheel != 0.0f) {
+    io.AddMouseWheelEvent(inputOverride.mouseWheelH, inputOverride.mouseWheel);
+  }
 }
 
 #ifdef __EMSCRIPTEN__
@@ -87,8 +120,22 @@ UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
 EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(options)) {
   glfwSetErrorCallback(&GlfwErrorCallback);
 
+  bool useNullPlatform = false;
 #ifdef __EMSCRIPTEN__
   glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_EMSCRIPTEN);
+#else
+#if defined(__linux__)
+  // Use GLFW's windowless "null" platform (OSMesa software GL) for offscreen
+  // framebuffer-readback replay on Linux. We also fall back to it automatically
+  // when there is no X11/Wayland display, so headless runs degrade gracefully.
+  useNullPlatform = options_.offscreen;
+  const bool hasDisplay =
+      std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr;
+  useNullPlatform = useNullPlatform || !hasDisplay;
+  if (useNullPlatform) {
+    glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
+  }
+#endif
 #endif
   if (glfwInit() == GLFW_FALSE) {
     std::fprintf(stderr, "EditorWindow: glfwInit() failed\n");
@@ -105,6 +152,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #else
   // OpenGL 3.3 core is plenty — matches what imgui_impl_opengl3 targets
   // by default and what glad was generated for.
+  glfwWindowHint(GLFW_VISIBLE, options_.visible ? GLFW_TRUE : GLFW_FALSE);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -125,9 +173,19 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #else
       options_.initialHeight;
 #endif
-  window_ =
-      glfwCreateWindow(initialWidth, initialHeight, options_.title.c_str(), /*monitor=*/nullptr,
-                       /*share=*/nullptr);
+  const double offscreenScale = (options_.offscreen && options_.offscreenContentScale > 0.0)
+                                    ? options_.offscreenContentScale
+                                    : 1.0;
+  // The null platform reports no HiDPI scale, so allocate it at the emulated
+  // framebuffer size up front. Native platforms are resized after creation once
+  // their real framebuffer/logical scale is known.
+  const int createWidth =
+      useNullPlatform ? static_cast<int>(std::lround(initialWidth * offscreenScale)) : initialWidth;
+  const int createHeight = useNullPlatform
+                               ? static_cast<int>(std::lround(initialHeight * offscreenScale))
+                               : initialHeight;
+  window_ = glfwCreateWindow(createWidth, createHeight, options_.title.c_str(), /*monitor=*/nullptr,
+                             /*share=*/nullptr);
   if (window_ == nullptr) {
     std::fprintf(stderr, "EditorWindow: glfwCreateWindow() failed\n");
     glfwTerminate();
@@ -146,6 +204,28 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     window_ = nullptr;
     glfwTerminate();
     return;
+  }
+
+  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
+    int nativeLogicalWidth = 0;
+    int nativeLogicalHeight = 0;
+    glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
+    int nativeFramebufferWidth = 0;
+    int nativeFramebufferHeight = 0;
+    glfwGetFramebufferSize(window_, &nativeFramebufferWidth, &nativeFramebufferHeight);
+    const double nativeScaleX =
+        nativeLogicalWidth > 0 && nativeFramebufferWidth > 0
+            ? static_cast<double>(nativeFramebufferWidth) / static_cast<double>(nativeLogicalWidth)
+            : 1.0;
+    const double nativeScaleY = nativeLogicalHeight > 0 && nativeFramebufferHeight > 0
+                                    ? static_cast<double>(nativeFramebufferHeight) /
+                                          static_cast<double>(nativeLogicalHeight)
+                                    : nativeScaleX;
+    const int emulatedLogicalWidth = static_cast<int>(std::lround(
+        static_cast<double>(initialWidth) * offscreenScale / std::max(nativeScaleX, 0.001)));
+    const int emulatedLogicalHeight = static_cast<int>(std::lround(
+        static_cast<double>(initialHeight) * offscreenScale / std::max(nativeScaleY, 0.001)));
+    glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
   }
 #endif
 
@@ -167,8 +247,16 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #else
   glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
 #endif
-  const Vector2d scale = contentScale();
-  uiScaleConfig_ = ComputeUiScaleConfig(logicalWindowWidth, framebufferWidth, scale.x);
+  if (offscreenScale != 1.0) {
+    // Offscreen replay may resize the native window to emulate the recorded
+    // framebuffer scale, so reapply the scale every frame (see beginFrameImpl)
+    // because ImGui_ImplGlfw_NewFrame would otherwise reset it.
+    uiScaleConfig_.displayScale = offscreenScale;
+    frameDisplayScaleOverride_ = offscreenScale;
+  } else {
+    const Vector2d scale = contentScale();
+    uiScaleConfig_ = ComputeUiScaleConfig(logicalWindowWidth, framebufferWidth, scale.x);
+  }
   io.DisplayFramebufferScale = ImVec2(static_cast<float>(uiScaleConfig_.displayScale),
                                       static_cast<float>(uiScaleConfig_.displayScale));
   io.FontGlobalScale = uiScaleConfig_.fontGlobalScale();
@@ -289,13 +377,47 @@ void EditorWindow::wakeEventLoop() {
 }
 
 void EditorWindow::beginFrame() {
+  beginFrameImpl(nullptr);
+}
+
+void EditorWindow::beginFrameWithInput(const EditorWindowInputOverride& inputOverride) {
+  beginFrameImpl(&inputOverride);
+}
+
+void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride) {
   ZoneScopedN("EditorWindow::beginFrame");
   ImGui_ImplOpenGL3_NewFrame();
   ImGui_ImplGlfw_NewFrame();
+  if (frameDisplayScaleOverride_ > 0.0) {
+    // The null platform reports a 1:1 framebuffer/window ratio, so ImGui's GLFW
+    // backend just reset DisplayFramebufferScale to 1. Restore the emulated
+    // HiDPI scale and the matching logical DisplaySize for this frame.
+    ImGuiIO& io = ImGui::GetIO();
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
+    io.DisplaySize = ImVec2(static_cast<float>(framebufferWidth / frameDisplayScaleOverride_),
+                            static_cast<float>(framebufferHeight / frameDisplayScaleOverride_));
+    io.DisplayFramebufferScale = ImVec2(static_cast<float>(frameDisplayScaleOverride_),
+                                        static_cast<float>(frameDisplayScaleOverride_));
+  }
+  if (inputOverride != nullptr) {
+    ApplyInputOverride(*inputOverride);
+  }
   ImGui::NewFrame();
 }
 
 void EditorWindow::endFrame() {
+  endFrameImpl(nullptr);
+}
+
+svg::RendererBitmap EditorWindow::endFrameAndReadPixels() {
+  svg::RendererBitmap readback;
+  endFrameImpl(&readback);
+  return readback;
+}
+
+void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   ZoneScopedN("EditorWindow::endFrame");
   {
     ZoneScopedN("ImGui::Render");
@@ -316,6 +438,26 @@ void EditorWindow::endFrame() {
   {
     ZoneScopedN("ImGui_ImplOpenGL3_RenderDrawData");
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+  }
+  if (readback != nullptr && displayW > 0 && displayH > 0) {
+    ZoneScopedN("glReadPixels");
+    constexpr int kChannels = 4;
+    const std::size_t rowBytes = static_cast<std::size_t>(displayW) * kChannels;
+    std::vector<uint8_t> bottomUp(rowBytes * static_cast<std::size_t>(displayH));
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+#ifndef __EMSCRIPTEN__
+    glReadBuffer(GL_BACK);
+#endif
+    glReadPixels(0, 0, displayW, displayH, GL_RGBA, GL_UNSIGNED_BYTE, bottomUp.data());
+    readback->dimensions = Vector2i(displayW, displayH);
+    readback->rowBytes = rowBytes;
+    readback->alphaType = svg::AlphaType::Premultiplied;
+    readback->pixels.resize(bottomUp.size());
+    for (int y = 0; y < displayH; ++y) {
+      const uint8_t* src = bottomUp.data() + static_cast<std::size_t>(displayH - 1 - y) * rowBytes;
+      uint8_t* dst = readback->pixels.data() + static_cast<std::size_t>(y) * rowBytes;
+      std::memcpy(dst, src, rowBytes);
+    }
   }
 #ifndef __EMSCRIPTEN__
   // emscripten-glfw intentionally doesn't implement `glfwSwapBuffers`;

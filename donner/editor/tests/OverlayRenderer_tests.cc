@@ -3,6 +3,7 @@
 #include "donner/base/Transform.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "gtest/gtest.h"
@@ -662,6 +663,96 @@ TEST(OverlayRendererTest, ToleratesStaleSelectionAfterReload) {
   renderer.draw(app.document().document());
   OverlayRenderer::drawChrome(renderer, app);
   SUCCEED();
+}
+
+// Design doc 0033 §M7: `captureChromeSnapshot` + `drawChromeFromSnapshot`
+// must produce byte-identical pixels to the live `drawChromeWithTransform`
+// path. Pins the invariant — any future divergence (e.g. a missed paint
+// or a stroke-width regression) trips this test before it ships.
+TEST(OverlayRendererTest, SnapshotProducesByteIdenticalPixelsAsLivePath) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.document().document().setCanvasSize(200, 200);
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  const std::vector<svg::SVGElement> selection = app.selectedElements();
+
+  // Live path — routes through capture+draw internally now.
+  svg::Renderer liveRenderer;
+  liveRenderer.beginFrame(viewport);
+  OverlayRenderer::drawChromeWithTransform(liveRenderer,
+                                           std::span<const svg::SVGElement>(selection),
+                                           /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
+  liveRenderer.endFrame();
+  const auto liveBitmap = liveRenderer.takeSnapshot();
+
+  // Snapshot path — explicitly invoked.
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(selection), /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
+  svg::Renderer snapshotRenderer;
+  snapshotRenderer.beginFrame(viewport);
+  OverlayRenderer::drawChromeFromSnapshot(snapshotRenderer, snapshot);
+  snapshotRenderer.endFrame();
+  const auto snapshotBitmap = snapshotRenderer.takeSnapshot();
+
+  ASSERT_EQ(liveBitmap.dimensions, snapshotBitmap.dimensions);
+  ASSERT_EQ(liveBitmap.pixels.size(), snapshotBitmap.pixels.size());
+  EXPECT_EQ(liveBitmap.pixels, snapshotBitmap.pixels)
+      << "Live and snapshot chrome paths must produce identical pixels.";
+}
+
+// Critical race-safety property: a snapshot captured at frame N must
+// remain visually correct even if the registry mutates between capture
+// and draw. Without this guarantee, the worker mutating the document
+// mid-chrome-rasterize would produce garbage or a crash. Today this
+// holds because the snapshot holds path data by value — no registry
+// pointers survive past `captureChromeSnapshot`.
+TEST(OverlayRendererTest, SnapshotSurvivesDocumentMutationBetweenCaptureAndDraw) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.document().document().setCanvasSize(200, 200);
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  const std::vector<svg::SVGElement> selection = app.selectedElements();
+
+  // Capture at the original position.
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(selection), /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
+
+  // Take a reference rasterize before mutating anything, so we have a
+  // pixel-exact "what does this snapshot's output look like" baseline.
+  svg::Renderer baselineRenderer;
+  baselineRenderer.beginFrame(viewport);
+  OverlayRenderer::drawChromeFromSnapshot(baselineRenderer, snapshot);
+  baselineRenderer.endFrame();
+  const auto baselineBitmap = baselineRenderer.takeSnapshot();
+
+  // Mutate the document AFTER capture. If the snapshot held registry
+  // pointers, the next draw could pick up the mutated transform; the
+  // test pins that it does NOT.
+  rect->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(50.0, 75.0));
+
+  svg::Renderer postMutationRenderer;
+  postMutationRenderer.beginFrame(viewport);
+  OverlayRenderer::drawChromeFromSnapshot(postMutationRenderer, snapshot);
+  postMutationRenderer.endFrame();
+  const auto postMutationBitmap = postMutationRenderer.takeSnapshot();
+
+  ASSERT_EQ(baselineBitmap.pixels.size(), postMutationBitmap.pixels.size());
+  EXPECT_EQ(baselineBitmap.pixels, postMutationBitmap.pixels)
+      << "Snapshot draw must be unaffected by post-capture registry mutations.";
 }
 
 }  // namespace

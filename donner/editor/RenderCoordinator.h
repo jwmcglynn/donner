@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -8,9 +9,10 @@
 
 #include "donner/base/Box.h"
 #include "donner/editor/AsyncRenderer.h"
-#include "donner/editor/ExperimentalDragPresentation.h"
+#include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/ViewportInteractionController.h"
 
@@ -24,17 +26,15 @@ class RenderCoordinator {
 public:
   RenderCoordinator() = default;
 
-  [[nodiscard]] AsyncRenderer& asyncRenderer() { return asyncRenderer_; }
-  [[nodiscard]] const AsyncRenderer& asyncRenderer() const { return asyncRenderer_; }
-  [[nodiscard]] svg::Renderer& renderer() { return renderer_; }
+  [[nodiscard]] AsyncRenderer& asyncRenderer() { return renderWorker_.asyncRenderer; }
+  [[nodiscard]] const AsyncRenderer& asyncRenderer() const { return renderWorker_.asyncRenderer; }
+  [[nodiscard]] svg::Renderer& renderer() { return renderWorker_.renderer; }
   [[nodiscard]] const SelectionBoundsCache& selectionBoundsCache() const {
     return selectionBoundsCache_;
   }
-  [[nodiscard]] ExperimentalDragPresentation& experimentalDragPresentation() {
-    return experimentalDragPresentation_;
-  }
-  [[nodiscard]] const ExperimentalDragPresentation& experimentalDragPresentation() const {
-    return experimentalDragPresentation_;
+  [[nodiscard]] CompositedPresentation& compositedPresentation() { return compositedPresentation_; }
+  [[nodiscard]] const CompositedPresentation& compositedPresentation() const {
+    return compositedPresentation_;
   }
   [[nodiscard]] std::uint64_t displayedDocVersion() const { return displayedDocVersion_; }
 
@@ -57,23 +57,21 @@ public:
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          bool experimentalMode, GlTextureCache& textures);
+                          GlTextureCache& textures);
 
 private:
-  [[nodiscard]] Entity selectedExperimentalEntity(EditorApp& app, bool experimentalMode) const;
+  [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
 
-  // `renderer_` must be declared before `asyncRenderer_`. The `AsyncRenderer`
-  // worker holds a `RendererInterface*` to this `renderer_` for the whole
-  // drag session (via `CompositorController::renderer_`), and its destructor
-  // joins the worker thread. C++ destroys non-static members in reverse
-  // declaration order, so declaring `asyncRenderer_` LAST guarantees it is
-  // destroyed FIRST — joining the worker while `renderer_` is still alive.
-  // The reverse ordering caused exit-time SIGSEGVs inside
-  // `CompositorController::composeLayers`' `drawBitmap` lambda when the
-  // worker was mid-render while `renderer_` was torn down first.
-  svg::Renderer renderer_;
+  struct RenderWorkerBundle {
+    // Members are destroyed in reverse declaration order. The async worker
+    // joins before the renderer it references is destroyed.
+    svg::Renderer renderer;
+    AsyncRenderer asyncRenderer;
+  };
+
+  RenderWorkerBundle renderWorker_;
   svg::Renderer overlayRenderer_;
-  ExperimentalDragPresentation experimentalDragPresentation_;
+  CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
 
   std::optional<svg::RendererBitmap> pendingOverlayBitmap_;
@@ -88,13 +86,12 @@ private:
   /// the cached overlay when the marquee geometry changes.
   std::optional<Box2d> lastOverlayMarqueeRectDoc_;
 
-  std::uint64_t lastRenderedVersion_ = 0;
-  Vector2i lastRenderedCanvasSize_ = Vector2i::Zero();
-
-  // Declared last so it is destroyed first — see the comment on
-  // `renderer_` above. Its destructor joins the worker thread, which
-  // must happen while `renderer_` is still alive.
-  AsyncRenderer asyncRenderer_;
+  PresentationRenderScheduler renderScheduler_;
+  /// Most recent desired canvas size requested by `maybeRequestRender`.
+  /// Used to debounce continuous pinch-zoom before committing through
+  /// `SVGDocument::setCanvasSize`.
+  Vector2i pendingCanvasSize_ = Vector2i::Zero();
+  std::chrono::steady_clock::time_point pendingCanvasSizeSince_{};
 };
 
 }  // namespace donner::editor

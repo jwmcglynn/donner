@@ -266,8 +266,7 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
 
     const CompositorLayer* layer = compositor.findLayerForTest(entity);
     ASSERT_NE(layer, nullptr);
-    ASSERT_TRUE(layer->hasValidBitmap())
-        << "post-warm layer bitmap should be valid";
+    ASSERT_TRUE(layer->hasValidBitmap()) << "post-warm layer bitmap should be valid";
     const std::optional<Transform2d> stampAfterWarm = layer->bitmapEntityFromWorldTransform();
     ASSERT_TRUE(stampAfterWarm.has_value());
 
@@ -305,8 +304,7 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
            "produced an affine with scale/shear drift and would have marked "
            "the layer dirty for re-rasterize";
     const Vector2d delta = canvasFromBitmap.translation();
-    EXPECT_NEAR(delta.x, 25.0 * canvasScale, 1e-6)
-        << "delta should be in canvas-pixel space";
+    EXPECT_NEAR(delta.x, 25.0 * canvasScale, 1e-6) << "delta should be in canvas-pixel space";
     EXPECT_NEAR(delta.y, 0.0, 1e-6);
   }
 }
@@ -559,8 +557,129 @@ TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {
   // e.g. a viewport change stays cheap.
   compositor.renderFrame(viewport_);
   EXPECT_GT(compositor.layerCount(), 0u) << "filter layer persists across frames";
-  EXPECT_EQ(compositor.layerBitmapOf(glowEntity).dimensions.x, 200);
-  EXPECT_EQ(compositor.layerBitmapOf(glowEntity).dimensions.y, 100);
+  // Mandatory-detected filter layer is rasterized at intrinsic size
+  // (design doc 0033 §M2A): its bitmap covers only the filter region,
+  // not the full canvas. Just check it's populated and ≤ canvas; the
+  // exact dims depend on the gaussian blur expansion math.
+  const auto& glowBitmap = compositor.layerBitmapOf(glowEntity);
+  EXPECT_FALSE(glowBitmap.empty());
+  EXPECT_LE(glowBitmap.dimensions.x, 200);
+  EXPECT_LE(glowBitmap.dimensions.y, 100);
+}
+
+TEST_F(CompositorGoldenTest, FilteredLayerBoundsStopAtLayerSubtree) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1000">
+      <defs>
+        <filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="4"/></filter>
+      </defs>
+      <rect width="1000" height="1000" fill="#101018"/>
+      <g id="glow" filter="url(#blur)">
+        <circle cx="100" cy="100" r="20" fill="#ffd84d"/>
+      </g>
+      <rect x="900" y="900" width="80" height="80" fill="#4bc3ff"/>
+    </svg>
+  )svg");
+
+  auto glow = document.querySelector("#glow");
+  ASSERT_TRUE(glow.has_value());
+  const Entity glowEntity = glow->entityHandle().entity();
+
+  RenderViewport largeViewport;
+  largeViewport.size = Vector2d(1000, 1000);
+  largeViewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(glowEntity));
+  compositor.renderFrame(largeViewport);
+
+  const RendererBitmap& glowBitmap = compositor.layerBitmapOf(glowEntity);
+  ASSERT_FALSE(glowBitmap.empty());
+  EXPECT_EQ(glowBitmap.dimensions.x, 52);
+  EXPECT_EQ(glowBitmap.dimensions.y, 52);
+
+  const Vector2d glowOffset = compositor.layerCanvasOffsetOf(glowEntity);
+  EXPECT_DOUBLE_EQ(glowOffset.x, 74.0);
+  EXPECT_DOUBLE_EQ(glowOffset.y, 74.0);
+}
+
+TEST_F(CompositorGoldenTest, RealSplashLightningBlurLayerUsesFilterBounds) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty());
+
+  SVGDocument document = parseDocument(splashSource);
+  auto glow = document.querySelector("#Lightning_glow_dark");
+  ASSERT_TRUE(glow.has_value());
+  const Entity glowEntity = glow->entityHandle().entity();
+
+  RenderViewport splashViewport;
+  splashViewport.size = Vector2d(892, 512);
+  splashViewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(splashViewport);
+
+  const RendererBitmap& glowBitmap = compositor.layerBitmapOf(glowEntity);
+  ASSERT_FALSE(glowBitmap.empty());
+  EXPECT_LT(glowBitmap.dimensions.x * glowBitmap.dimensions.y, (892 * 512) / 10);
+  EXPECT_LT(glowBitmap.dimensions.x, 160);
+  EXPECT_LT(glowBitmap.dimensions.y, 160);
+}
+
+TEST_F(CompositorGoldenTest, EmptyStaticSegmentsArePrunedFromPublicTileSnapshots) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect id="before" x="0" y="0" width="20" height="20" fill="green"/>
+      <rect id="a" x="30" y="0" width="20" height="20" fill="red"/>
+      <rect id="b" x="60" y="0" width="20" height="20" fill="blue"/>
+      <rect id="after" x="90" y="0" width="20" height="20" fill="yellow"/>
+    </svg>
+  )svg");
+
+  auto a = document.querySelector("#a");
+  auto b = document.querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->entityHandle().entity()));
+  compositor.renderFrame(viewport_);
+
+  const auto uploadTiles = compositor.snapshotTilesForUpload();
+  size_t uploadSegmentCount = 0;
+  size_t uploadLayerCount = 0;
+  for (const CompositorTile& tile : uploadTiles) {
+    if (tile.layerEntity == entt::null) {
+      ++uploadSegmentCount;
+      EXPECT_NE(tile.bitmapDims, Vector2i(1, 1));
+    } else {
+      ++uploadLayerCount;
+    }
+  }
+  EXPECT_EQ(uploadSegmentCount, 2u);
+  EXPECT_EQ(uploadLayerCount, 2u);
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  size_t inspectorSegmentCount = 0;
+  size_t inspectorLayerCount = 0;
+  for (const auto& tile : inspectorTiles) {
+    if (tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment) {
+      ++inspectorSegmentCount;
+      EXPECT_NE(tile.bitmapDims, Vector2i(1, 1));
+    } else if (tile.kind == CompositorController::CompositeTileSnapshot::Kind::Layer) {
+      ++inspectorLayerCount;
+    }
+  }
+  EXPECT_EQ(inspectorSegmentCount, 2u);
+  EXPECT_EQ(inspectorLayerCount, 2u);
 }
 
 TEST_F(CompositorGoldenTest, OpacityLessThanOneAutoPromotionMatchesFullRender) {
@@ -947,11 +1066,13 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
   checkClose(baselineGlowC, dragGlowC, "glow_foreground (further after drag target)");
 }
 
-// Translation-only drag must not re-rasterize bg/fg between frames. The
-// promise of the split-static-layers optimization is: bg and fg are
-// rasterized once per drag session and reused via GL texture blit. If they
-// got re-rendered every frame, the compositor would be doing full-document
-// work per pointer move.
+// Translation-only drag must not re-rasterize the static segment / non-
+// drag-layer tiles between frames. Post §M2C the editor blits segments
+// and non-drag layers directly — if their generations bumped per frame,
+// the editor would re-upload N textures every pointer move (the
+// equivalent of the pre-M2C "bg/fg flatten on every frame" regression).
+// We probe `snapshotTilesForUpload` and assert generations are stable
+// for non-drag tiles across translation-only drag frames.
 TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) {
   SVGDocument document = parseDocument(R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
@@ -971,18 +1092,18 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  // Snapshot the bitmaps after the first drag frame. The `.data()` address
-  // only changes when the vector is reassigned — so comparing it across
-  // renderFrame calls is a cheap, direct probe of whether the bitmap was
-  // re-rasterized.
-  const RendererBitmap& bgFrame1 = compositor.backgroundBitmap();
-  const RendererBitmap& fgFrame1 = compositor.foregroundBitmap();
-  ASSERT_FALSE(bgFrame1.empty());
-  ASSERT_FALSE(fgFrame1.empty());
-  const std::vector<uint8_t> bgPixelsFrame1 = bgFrame1.pixels;
-  const std::vector<uint8_t> fgPixelsFrame1 = fgFrame1.pixels;
-  const uint8_t* bgDataPtrFrame1 = bgFrame1.pixels.data();
-  const uint8_t* fgDataPtrFrame1 = fgFrame1.pixels.data();
+  // Capture per-tile generations after the first drag frame, keyed on the
+  // stable `tileId`. The drag-target layer's generation is allowed to bump
+  // (its `canvasFromBitmap` updates each fast-path frame); every other tile
+  // must stay stable.
+  auto tilesAfterFirstDrag = compositor.snapshotTilesForUpload();
+  std::unordered_map<uint64_t, uint64_t> nonDragGenerations;
+  for (const auto& tile : tilesAfterFirstDrag) {
+    if (!tile.isDragTarget) {
+      nonDragGenerations[tile.tileId] = tile.generation;
+    }
+  }
+  ASSERT_FALSE(nonDragGenerations.empty());
 
   // Simulate 10 more drag frames with only translation changes.
   for (int i = 2; i <= 11; ++i) {
@@ -990,14 +1111,129 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
     compositor.renderFrame(viewport_);
   }
 
-  const RendererBitmap& bgFinal = compositor.backgroundBitmap();
-  const RendererBitmap& fgFinal = compositor.foregroundBitmap();
-  EXPECT_EQ(bgFinal.pixels.data(), bgDataPtrFrame1)
-      << "bg bitmap re-allocated between drag frames — cache invalidated incorrectly";
-  EXPECT_EQ(fgFinal.pixels.data(), fgDataPtrFrame1)
-      << "fg bitmap re-allocated between drag frames — cache invalidated incorrectly";
-  EXPECT_EQ(bgFinal.pixels, bgPixelsFrame1);
-  EXPECT_EQ(fgFinal.pixels, fgPixelsFrame1);
+  const auto tilesAfterFinalDrag = compositor.snapshotTilesForUpload();
+  for (const auto& tile : tilesAfterFinalDrag) {
+    if (tile.isDragTarget) {
+      continue;
+    }
+    auto it = nonDragGenerations.find(tile.tileId);
+    ASSERT_NE(it, nonDragGenerations.end())
+        << "non-drag tile id " << tile.tileId
+        << " disappeared between drag frames — segment cache rebuilt mid-drag";
+    EXPECT_EQ(it->second, tile.generation)
+        << "non-drag tile id " << tile.tileId
+        << " re-rasterized between drag frames — cache invalidated incorrectly";
+  }
+}
+
+TEST_F(CompositorGoldenTest, DragTargetOnlySnapshotKeepsNonDragTileMetadata) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+  <rect width="200" height="100" fill="white"/>
+  <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+  <g filter="url(#blur)"><rect x="100" y="10" width="50" height="50" fill="yellow"/></g>
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="2"/></filter></defs>
+</svg>
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(viewport_);
+
+  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()).promotedLayer());
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
+  compositor.renderFrame(viewport_);
+
+  const auto fullTiles = compositor.snapshotTilesForUpload();
+  const auto dragTargetOnlyTiles =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::DragTargetOnly);
+
+  ASSERT_EQ(dragTargetOnlyTiles.size(), fullTiles.size());
+
+  bool sawDragTargetBitmap = false;
+  bool sawNonDragMetadataOnlyTile = false;
+  for (size_t i = 0; i < fullTiles.size(); ++i) {
+    const CompositorTile& full = fullTiles[i];
+    const CompositorTile& partial = dragTargetOnlyTiles[i];
+    EXPECT_EQ(partial.tileId, full.tileId);
+    EXPECT_EQ(partial.generation, full.generation);
+    EXPECT_EQ(partial.bitmapDims, full.bitmapDims);
+    EXPECT_EQ(partial.canvasOffsetPx, full.canvasOffsetPx);
+    EXPECT_EQ(partial.isDragTarget, full.isDragTarget);
+    if (partial.isDragTarget) {
+      sawDragTargetBitmap = true;
+      EXPECT_FALSE(partial.bitmap.empty());
+    } else {
+      sawNonDragMetadataOnlyTile = true;
+      EXPECT_TRUE(partial.bitmap.empty())
+          << "non-drag tile " << partial.tileId
+          << " should keep metadata without forcing a pixel payload";
+      EXPECT_GT(partial.bitmapDims.x, 0);
+      EXPECT_GT(partial.bitmapDims.y, 0);
+    }
+  }
+
+  EXPECT_TRUE(sawDragTargetBitmap);
+  EXPECT_TRUE(sawNonDragMetadataOnlyTile);
+}
+
+TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGenerations) {
+  SVGDocument document = parseDocument(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120">
+  <rect width="240" height="120" fill="white"/>
+  <g id="glow_a" filter="url(#blur)"><rect x="20" y="20" width="40" height="40" fill="yellow"/></g>
+  <rect id="target" x="90" y="30" width="50" height="50" fill="red"/>
+  <g id="glow_b" filter="url(#blur)"><rect x="170" y="20" width="40" height="40" fill="cyan"/></g>
+  <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="2"/></filter></defs>
+</svg>
+  )svg");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->entityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  compositor.setSkipMainComposeDuringSplit(true);
+
+  // Cold render promotes mandatory filter layers.
+  compositor.renderFrame(viewport_);
+
+  // Selection prewarm elevates the target and rasterizes the complete tile set.
+  ASSERT_TRUE(compositor.promoteEntity(targetEntity, InteractionHint::Selection).promotedLayer());
+  compositor.renderFrame(viewport_);
+
+  const auto preDragTiles = compositor.snapshotTilesForUpload();
+  std::unordered_map<uint64_t, uint64_t> preDragGenerations;
+  for (const CompositorTile& tile : preDragTiles) {
+    ASSERT_FALSE(tile.bitmap.empty()) << "prewarmed tile " << tile.tileId << " has no pixels";
+    preDragGenerations[tile.tileId] = tile.generation;
+  }
+  ASSERT_FALSE(preDragGenerations.empty());
+
+  // Starting an active drag on an already-elevated target changes only presentation
+  // geometry: the target's cached pixels are reused through canvasFromBitmap, and unrelated
+  // elevated/filter tiles plus static segments keep their existing textures.
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
+  ASSERT_TRUE(compositor.promoteEntity(targetEntity, InteractionHint::ActiveDrag).promotedLayer());
+  compositor.renderFrame(viewport_);
+
+  const auto activeDragTiles = compositor.snapshotTilesForUpload();
+  ASSERT_EQ(activeDragTiles.size(), preDragTiles.size());
+
+  bool sawTargetLayer = false;
+  for (const CompositorTile& tile : activeDragTiles) {
+    const auto it = preDragGenerations.find(tile.tileId);
+    ASSERT_NE(it, preDragGenerations.end())
+        << "new tile id appeared on drag start: " << tile.tileId;
+    EXPECT_EQ(tile.generation, it->second)
+        << "tile " << tile.tileId
+        << " advanced generation even though drag start changed only presentation geometry";
+    if (tile.layerEntity == targetEntity) {
+      sawTargetLayer = true;
+      EXPECT_TRUE(tile.isDragTarget);
+    }
+  }
+  EXPECT_TRUE(sawTargetLayer);
 }
 
 // A drag-release `SetTransformCommand` mutation must NOT trigger a full
@@ -1394,7 +1630,7 @@ TEST_F(CompositorGoldenTest, TooSmallCullingSkipsSubpixelPaths) {
 }
 
 // Zooming changes the viewport size the renderer rasterizes at, so the
-// cached bg/fg bitmaps from the previous zoom level must NOT be reused —
+// cached segment bitmaps from the previous zoom level must NOT be reused —
 // they're sized to the old canvas. Reusing them would stamp their pixels
 // into the top-left region of the new (larger) canvas, leaving the rest
 // transparent, which the editor's GL layer would then linearly-stretch
@@ -1420,8 +1656,16 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   smallViewport.size = Vector2d(200, 100);
   smallViewport.devicePixelRatio = 1.0;
   compositor.renderFrame(smallViewport);
-  ASSERT_FALSE(compositor.backgroundBitmap().empty());
-  EXPECT_EQ(compositor.backgroundBitmap().dimensions, Vector2i(200, 100));
+
+  // Capture the segment / non-drag-layer generations at the small canvas.
+  auto smallTiles = compositor.snapshotTilesForUpload();
+  std::unordered_map<uint64_t, uint64_t> generationsAtSmall;
+  for (const auto& tile : smallTiles) {
+    if (!tile.isDragTarget && !tile.bitmap.empty()) {
+      generationsAtSmall[tile.tileId] = tile.generation;
+    }
+  }
+  ASSERT_FALSE(generationsAtSmall.empty());
 
   // Simulate a zoom-in: the editor's RenderCoordinator calls setCanvasSize
   // before requestRender when the viewport's desiredCanvasSize changes, so
@@ -1432,9 +1676,20 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
   largeViewport.devicePixelRatio = 1.0;
   compositor.renderFrame(largeViewport);
 
-  EXPECT_EQ(compositor.backgroundBitmap().dimensions, Vector2i(400, 200))
-      << "bg bitmap should re-rasterize to match new canvas after zoom";
-  EXPECT_EQ(compositor.foregroundBitmap().dimensions, Vector2i(400, 200));
+  // Every non-drag tile that had a bitmap at the small canvas size must
+  // have its generation bumped after the canvas resize — the old bitmap is
+  // sized for 200×100 and re-using it would leave the new 400×200 canvas
+  // mostly transparent.
+  auto largeTiles = compositor.snapshotTilesForUpload();
+  for (const auto& tile : largeTiles) {
+    auto it = generationsAtSmall.find(tile.tileId);
+    if (it == generationsAtSmall.end() || tile.isDragTarget || tile.bitmap.empty()) {
+      continue;
+    }
+    EXPECT_NE(it->second, tile.generation)
+        << "non-drag tile id " << tile.tileId
+        << " kept its generation across canvas resize — would re-use a stale-sized bitmap";
+  }
 }
 
 // Regression: tight-bounded segment rasterize must produce pixel-identical
@@ -1717,6 +1972,10 @@ TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
   compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection);
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->entityHandle().entity());
+  // §M9: flush so the demote-then-promote-different-kind sequence
+  // rebuilds the layer (the path under test) rather than reusing
+  // the hysteresis-preserved one.
+  compositor.flushPendingDemotionsForTesting();
   compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag);
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
   compositor.renderFrame(viewport);
@@ -2252,6 +2511,12 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
     compositor.promoteEntity(target->entityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
     compositor.demoteEntity(target->entityHandle().entity());
+    // §M9: flush the hysteresis window so the demote actually fires
+    // before the kind-change re-promote — this test specifically
+    // probes the demote+promote layer-rebuild path (vs. the
+    // hysteresis-preserved layer reuse), so the hysteresis would
+    // otherwise mask the very transition under test.
+    compositor.flushPendingDemotionsForTesting();
     compositor.promoteEntity(target->entityHandle().entity(), InteractionHint::ActiveDrag);
     target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 0.0)));
     compositor.renderFrame(vp);
@@ -2331,6 +2596,11 @@ TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
   compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection);
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->entityHandle().entity());
+  // §M9: flush the hysteresis window so the demote actually fires
+  // before the kind-change re-promote — this test probes the
+  // demote+promote layer-rebuild path, which the M9 hysteresis would
+  // otherwise short-circuit.
+  compositor.flushPendingDemotionsForTesting();
   compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag);
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
   compositor.renderFrame(viewport);
@@ -2434,6 +2704,10 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
   ASSERT_TRUE(compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection));
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->entityHandle().entity());
+  // §M9: flush the hysteresis so the demote+re-promote cycle this
+  // test specifically probes still rebuilds the layer rather than
+  // taking the hysteresis fast path.
+  compositor.flushPendingDemotionsForTesting();
   ASSERT_TRUE(
       compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag));
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
@@ -2760,29 +3034,7 @@ TEST_F(CompositorGoldenTest, FilteredGroupWithChildrenRasterizesIncludingChildre
   EXPECT_LE(result.mismatchCount, result.totalPixels / 20u) << result;  // 5% AA tolerance
 }
 
-// Regression for donner_splash.svg bug: the user drags a letter/path that's
-// a CHILD of a `<g filter="url(#blur)">` group. Under the current compositor
-// behavior, the child path gets auto-promoted (or interaction-promoted via
-// drag) and rasterized standalone — outside of its parent's filter context.
-// The blur visually disappears because the child's layer bitmap has no blur
-// applied (the filter is on the group, not the child).
-//
-// This test reproduces the scenario explicitly: we promote a CHILD of a
-// filtered group and compare the composited output against the full-render
-// reference. If the filter context is lost, the two paths diverge.
-TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRefusesPromotion) {
-  // Regression for the splash-SVG drag bug reported in manual testing:
-  // dragging a blurred shape (path inside `<g filter="url(#blur)">`) caused
-  // the blur to disappear. Root cause: the editor's drag promotion path
-  // extracted the descendant into its own cached layer, losing the
-  // ancestor's filter context. The cached layer bitmap had un-blurred
-  // content; the composed output showed pure red where the blurred halo
-  // should have been.
-  //
-  // Fix: `promoteEntity` now walks ancestors and refuses promotion when
-  // any ancestor has a filter/mask/clip-path. The editor's drag path,
-  // when promoteEntity returns false, falls back to the full-render
-  // mutation path which handles the ancestor filter correctly.
+TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRequiresFullCanvasPreview) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -2801,19 +3053,13 @@ TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRefusesPromotion) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  // Simulate the editor's drag promotion: the user clicked on the child
-  // rect inside the filtered group. The controller must refuse to promote.
-  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
-      << "promotion of a descendant of `<g filter=...>` must be refused so "
-         "the ancestor's filter context isn't lost during composited drag";
-
-  // With promotion refused, `isPromoted` is false and `layerCount` is 0.
+  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+            CompositorController::PromoteResult::FullCanvasPreviewRequired);
   EXPECT_FALSE(compositor.isPromoted(target->entityHandle().entity()));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-// Parallel regression: ancestor with clip-path also refuses promotion.
-TEST_F(CompositorGoldenTest, ChildOfClippedGroupRefusesPromotion) {
+TEST_F(CompositorGoldenTest, ChildOfClippedGroupRequiresFullCanvasPreview) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -2832,12 +3078,11 @@ TEST_F(CompositorGoldenTest, ChildOfClippedGroupRefusesPromotion) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
-      << "clip-path ancestor context must not be extracted";
+  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+            CompositorController::PromoteResult::FullCanvasPreviewRequired);
 }
 
-// Parallel regression: ancestor with mask also refuses promotion.
-TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRefusesPromotion) {
+TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRequiresFullCanvasPreview) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -2856,8 +3101,8 @@ TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRefusesPromotion) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_FALSE(compositor.promoteEntity(target->entityHandle().entity()))
-      << "mask ancestor context must not be extracted";
+  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+            CompositorController::PromoteResult::FullCanvasPreviewRequired);
 }
 
 // Positive: a plain descendant (no compositing ancestor) still promotes.

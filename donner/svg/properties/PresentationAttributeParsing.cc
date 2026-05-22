@@ -1,5 +1,11 @@
 #include "donner/svg/properties/PresentationAttributeParsing.h"
 
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "donner/base/parser/NumberParser.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/StopComponent.h"
@@ -7,8 +13,114 @@
 #include "donner/svg/components/shape/EllipseComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/parser/Number2dParser.h"
 
 namespace donner::svg::parser {
+
+namespace {
+
+std::string_view ValueString(const PropertyParseFnParams& params) {
+  if (const std::string_view* value = std::get_if<std::string_view>(&params.valueOrComponents)) {
+    return *value;
+  }
+
+  return std::string_view();
+}
+
+ParseDiagnostic InvalidAttributeValue(std::string_view name, std::string_view value) {
+  std::string reason = "Invalid " + std::string(name) + " value '" + std::string(value) + "'";
+  return ParseDiagnostic::Error(RcString(reason), FileOffset::Offset(0));
+}
+
+ParseResult<bool> ParseFeColorMatrixPresentationAttribute(EntityHandle handle,
+                                                          std::string_view name,
+                                                          const PropertyParseFnParams& params) {
+  auto& component = handle.get<components::FEColorMatrixComponent>();
+
+  if (name == "type") {
+    if (params.explicitState != PropertyState::NotSet) {
+      component.type = components::FEColorMatrixComponent::Type::Matrix;
+      return true;
+    }
+
+    const std::string_view value = ValueString(params);
+    if (value == "matrix") {
+      component.type = components::FEColorMatrixComponent::Type::Matrix;
+    } else if (value == "saturate") {
+      component.type = components::FEColorMatrixComponent::Type::Saturate;
+    } else if (value == "hueRotate") {
+      component.type = components::FEColorMatrixComponent::Type::HueRotate;
+    } else if (value == "luminanceToAlpha") {
+      component.type = components::FEColorMatrixComponent::Type::LuminanceToAlpha;
+    } else {
+      return InvalidAttributeValue(name, value);
+    }
+
+    return true;
+  }
+
+  if (name == "values") {
+    if (params.explicitState != PropertyState::NotSet) {
+      component.values.clear();
+      return true;
+    }
+
+    std::vector<double> values;
+    std::string_view remaining = ValueString(params);
+    while (!remaining.empty()) {
+      while (!remaining.empty() &&
+             (remaining.front() == ' ' || remaining.front() == ',' || remaining.front() == '\t' ||
+              remaining.front() == '\n' || remaining.front() == '\r')) {
+        remaining.remove_prefix(1);
+      }
+
+      if (remaining.empty()) {
+        break;
+      }
+
+      const auto maybeNumber = donner::parser::NumberParser::Parse(remaining);
+      if (!maybeNumber.hasResult()) {
+        return InvalidAttributeValue(name, ValueString(params));
+      }
+
+      values.push_back(maybeNumber.result().number);
+      remaining.remove_prefix(maybeNumber.result().consumedChars);
+    }
+
+    component.values = std::move(values);
+    return true;
+  }
+
+  return false;
+}
+
+ParseResult<bool> ParseFeGaussianBlurPresentationAttribute(EntityHandle handle,
+                                                           std::string_view name,
+                                                           const PropertyParseFnParams& params) {
+  if (name != "stdDeviation") {
+    return false;
+  }
+
+  auto& component = handle.get<components::FEGaussianBlurComponent>();
+  if (params.explicitState != PropertyState::NotSet) {
+    component.stdDeviationX = 0.0;
+    component.stdDeviationY = 0.0;
+    return true;
+  }
+
+  const std::string_view value = ValueString(params);
+  const auto maybeNumber2d = parser::Number2dParser::Parse(value);
+  if (!maybeNumber2d.hasResult() || maybeNumber2d.result().consumedChars != value.size()) {
+    return InvalidAttributeValue(name, value);
+  }
+
+  const parser::Number2dParser::Result number2d = maybeNumber2d.result();
+  component.stdDeviationX = number2d.numberX;
+  component.stdDeviationY = number2d.numberY;
+  return true;
+}
+
+}  // namespace
 
 ParseResult<bool> ParsePresentationAttribute(ElementType type, EntityHandle handle,
                                              std::string_view name,
@@ -30,6 +142,10 @@ ParseResult<bool> ParsePresentationAttribute(ElementType type, EntityHandle hand
 
     case ElementType::FeFlood:
       return components::ParseFeFloodPresentationAttribute(handle, name, params);
+    case ElementType::FeColorMatrix:
+      return ParseFeColorMatrixPresentationAttribute(handle, name, params);
+    case ElementType::FeGaussianBlur:
+      return ParseFeGaussianBlurPresentationAttribute(handle, name, params);
     case ElementType::FeDropShadow:
       return components::ParseFeDropShadowPresentationAttribute(handle, name, params);
     case ElementType::FeDiffuseLighting:

@@ -17,6 +17,18 @@ TEST(EditorAppTest, EmptyByDefault) {
   EXPECT_FALSE(app.hasDocument());
   EXPECT_FALSE(app.hasSelection());
   EXPECT_FALSE(app.selectedElement().has_value());
+  EXPECT_TRUE(app.structuredEditingEnabled());
+}
+
+TEST(EditorAppTest, StructuredEditingKillSwitchCanBeDisabled) {
+  EditorApp app;
+  ASSERT_TRUE(app.structuredEditingEnabled());
+
+  app.setStructuredEditingEnabled(false);
+  EXPECT_FALSE(app.structuredEditingEnabled());
+
+  app.setStructuredEditingEnabled(true);
+  EXPECT_TRUE(app.structuredEditingEnabled());
 }
 
 TEST(EditorAppTest, LoadFromStringPopulatesDocument) {

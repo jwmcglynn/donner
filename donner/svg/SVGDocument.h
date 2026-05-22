@@ -1,11 +1,15 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <functional>
+#include <string_view>
+#include <utility>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/XMLDocument.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/core/ProcessingMode.h"
@@ -97,6 +101,70 @@ public:
     return SVGDocument(std::move(handle));
   }
 
+  /// Return true if the parsed SVG document has owned XML source text.
+  bool hasSourceStore() const;
+
+  /**
+   * Return the current XML source text owned by this parsed SVG document.
+   *
+   * Programmatically-created documents may not have source text; in that case this returns an
+   * empty view.
+   */
+  std::string_view source() const;
+
+  /// Return the current XML source version, or 0 for documents without source text.
+  std::uint64_t sourceVersion() const;
+
+  /**
+   * Apply an incremental source edit through the underlying XML document and update the SVG
+   * semantic projection from emitted XML mutations.
+   *
+   * @param intent Source edit request.
+   */
+  xml::ApplySourceEditResult applySourceEdit(const xml::XMLEditIntent& intent);
+
+  /**
+   * Set an element attribute and return any XML-owned source edit result.
+   *
+   * Source-backed documents mutate through the underlying XML document, then project emitted XML
+   * mutations back into SVG semantics. Programmatic documents without source text still mutate the
+   * SVG element and return an unapplied result.
+   *
+   * @param element Element whose attribute should be set.
+   * @param name Attribute name to set.
+   * @param value Raw unescaped attribute value.
+   */
+  xml::ApplySourceEditResult setElementAttribute(const SVGElement& element,
+                                                 const xml::XMLQualifiedNameRef& name,
+                                                 std::string_view value);
+
+  /**
+   * Remove an element attribute and return any XML-owned source edit result.
+   *
+   * @param element Element whose attribute should be removed.
+   * @param name Attribute name to remove.
+   */
+  xml::ApplySourceEditResult removeElementAttribute(const SVGElement& element,
+                                                    const xml::XMLQualifiedNameRef& name);
+
+  /**
+   * Insert an element into the document tree and return any XML-owned source edit result.
+   *
+   * @param parent Element that receives \p element as a child.
+   * @param element Element to insert.
+   * @param referenceElement Optional existing child to insert before.
+   */
+  xml::ApplySourceEditResult insertElement(
+      const SVGElement& parent, const SVGElement& element,
+      std::optional<SVGElement> referenceElement = std::nullopt);
+
+  /**
+   * Remove an element from the document tree and return any XML-owned source edit result.
+   *
+   * @param element Element to remove.
+   */
+  xml::ApplySourceEditResult removeElement(const SVGElement& element);
+
   /// Get the root ECS Entity of the document, for advanced use.
   EntityHandle rootEntityHandle() const;
 
@@ -179,6 +247,27 @@ public:
   std::optional<SVGElement> querySelector(std::string_view selector);
 
 private:
+  /// Rehydrate the underlying XML document facade from this SVG document's shared registry.
+  xml::XMLDocument xmlDocument() const;
+
+  /**
+   * Apply a single XML mutation to this SVG document's semantic projection.
+   *
+   * @param mutation XML mutation emitted by the source-edit layer.
+   */
+  std::optional<ParseDiagnostic> applyXMLMutation(const xml::XMLMutation& mutation);
+
+  /**
+   * Project an XML element subtree into SVG semantic components.
+   *
+   * Used after XML-owned element-subtree reparsing has already updated the DOM tree in place.
+   * Existing SVG entities keep their identity; newly cloned XML element nodes receive SVG
+   * components and attributes.
+   *
+   * @param node XML element subtree root.
+   */
+  std::optional<ParseDiagnostic> projectXMLSubtree(const xml::XMLNode& node);
+
   /// Owned reference to the registry, which contains all information about the loaded document.
   std::shared_ptr<Registry> registry_;
 };

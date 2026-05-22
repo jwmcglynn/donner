@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <fstream>
 
+#include "donner/editor/repro/ReproRecorder.h"
+
 namespace donner::editor::repro {
 
 namespace {
@@ -58,9 +60,119 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   EXPECT_FALSE(loaded->frames[0].mouseDocX.has_value());
   EXPECT_FALSE(loaded->frames[0].mouseDocY.has_value());
   EXPECT_FALSE(loaded->frames[0].viewport.has_value());
+  EXPECT_FALSE(loaded->metadata.expect.has_value());
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, RoundTripExpectationMetadata) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.metadata.expect = ReproExpectation{
+      .leftMouseDownOrdinal = 2,
+      .frameOffsetAfterLeftMouseDown = 1,
+      .minFrameIndex = 153,
+      .maxFrameIndex = 156,
+      .targetSelector = "#target",
+      .cropMode = "document-canvas",
+      .cropRect =
+          ReproExpectedCrop{
+              .x = 260,
+              .y = 620,
+              .width = 360,
+              .height = 260,
+          },
+  };
+
+  const auto path = TempFile("expect_metadata");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  EXPECT_EQ(*loaded->metadata.expect, *file.metadata.expect);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, RoundTripExpectationMetadataWithoutCrop) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.metadata.expect = ReproExpectation{
+      .leftMouseDownOrdinal = 2,
+      .frameOffsetAfterLeftMouseDown = 0,
+      .minFrameIndex = 203,
+      .maxFrameIndex = 203,
+      .targetSelector = "#Lightning_glow_dark",
+      .cropMode = "document-canvas",
+  };
+
+  const auto path = TempFile("expect_metadata_no_crop");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  EXPECT_EQ(*loaded->metadata.expect, *file.metadata.expect);
+  EXPECT_FALSE(loaded->metadata.expect->cropRect.has_value());
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, RoundTripExtendedExpectationMetadata) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.metadata.expect = ReproExpectation{
+      .proofKind = ReproExpectationProofKind::ActiveDragAlignment,
+      .leftMouseDownOrdinal = 2,
+      .frameOffsetAfterLeftMouseDown = 46,
+      .minFrameIndex = 249,
+      .maxFrameIndex = 250,
+      .targetSelector = "#Lightning_glow_dark",
+      .cropMode = "document-canvas",
+      .activeFrameIndex = 249,
+      .comparisonFrameIndex = 250,
+      .expectedSelectionLabel = "<g> #Lightning_glow_dark",
+      .statusStartFrameIndex = 153,
+      .statusMaxFrameIndex = 333,
+      .forbiddenStatusSubstring = "compositor not yet re-rasterized",
+  };
+
+  const auto path = TempFile("expect_metadata_extended");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  EXPECT_EQ(*loaded->metadata.expect, *file.metadata.expect);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, ExpectationMetadataDefaultsProofKindForOldFixtures) {
+  const auto path = TempFile("expect_metadata_old");
+  {
+    std::ofstream out(path);
+    out << "{\"v\":2,\"svg\":\"foo.svg\",\"wnd\":[1600,900],\"scale\":2,\"exp\":0,"
+           "\"expect\":{\"left_mouse_down_ordinal\":2,"
+           "\"frame_offset_after_left_mouse_down\":1,\"min_frame_index\":153,"
+           "\"max_frame_index\":156,\"target_selector\":\"#target\","
+           "\"crop_mode\":\"document-canvas\"}}\n";
+  }
+
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_TRUE(loaded->metadata.expect.has_value());
+  EXPECT_EQ(loaded->metadata.expect->proofKind, ReproExpectationProofKind::PresentedPixels);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, NewRecordingsDefaultLegacyExperimentalModeToFalse) {
+  ReproFile file;
+  EXPECT_FALSE(file.metadata.experimentalMode);
+
+  ReproRecorderOptions options;
+  EXPECT_FALSE(options.experimentalMode);
 }
 
 TEST(ReproFileTest, RoundTripWithAllEventKindsAndV2Fields) {

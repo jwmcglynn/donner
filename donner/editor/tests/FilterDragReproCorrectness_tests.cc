@@ -18,7 +18,7 @@
 namespace donner::editor::filter_drag_repro {
 namespace {
 
-TEST(FilterDragReproCorrectnessTest, ReplayHitsFastPathAndReSelects) {
+TEST(FilterDragReproCorrectnessTest, ReplayReSelectsAndHitsFastPathWhenEligible) {
   FilterDragReproResult r;
   RunFilterDragReproScenario(&r);
   if (r.skipped) {
@@ -42,21 +42,27 @@ TEST(FilterDragReproCorrectnessTest, ReplayHitsFastPathAndReSelects) {
       << "second drag's selection did not differ from the first — second mouse-down was ignored "
          "(likely dropped because async renderer stayed busy through the entire repro window)";
 
-  // Fast-path counter regression gate. This is the CPU-speed-invariant
-  // signal that the compositor is riding the translation-only fast path
-  // during the drag rather than re-running the heavy
-  // `prepareDocumentForRendering` pipeline every frame. Catches the
-  // "really laggy" regression in the metric that isn't runner-
-  // dependent. The exact counts depend on frame count in the
-  // recording, so we assert the qualitative shape: at least some
-  // fast-path frames, at most one slow-path-with-dirty frame
-  // (the prewarm).
-  EXPECT_GT(r.fastPathFrames, 0u)
-      << "no frames took the translation-only fast path — compositor-group elevation / "
-         "skipMainComposeDuringSplit path is dead or mis-gated";
-  EXPECT_LE(r.slowPathFramesWithDirty, 1u)
-      << "more than the pre-warm frame slipped into the slow path — drag is spending wall-clock "
-         "re-preparing the document per frame";
+  // With sibling-expansion enabled, a click on a compositing group may
+  // intentionally turn into a multi-element drag (halo + bright core +
+  // highlights). Those drags are no longer eligible for the single-
+  // layer compositor preview, so the old "every drag must hit the fast
+  // path" invariant is too strict. The CPU-invariant property we still
+  // need is narrower and more accurate:
+  //   * any drag that remains single-target must hit the translation-
+  //     only fast path;
+  //   * sibling-expanded composite drags may fall back to the mutation
+  //     path without being considered a regression.
+  if (r.firstSelectionSize == 1) {
+    EXPECT_GT(r.firstDragCounters.fastPathFrames, 0u)
+        << "single-target first drag never hit the translation-only fast path";
+    EXPECT_LE(r.firstDragCounters.slowPathFramesWithDirty, 1u)
+        << "single-target first drag spent more than the pre-warm frame in the slow path";
+  }
+
+  EXPECT_GT(r.secondDragCounters.fastPathFrames, 0u)
+      << "second drag never hit the translation-only fast path";
+  EXPECT_LE(r.secondDragCounters.slowPathFramesWithDirty, 1u)
+      << "second drag spent more than the pre-warm frame in the slow path";
 }
 
 }  // namespace

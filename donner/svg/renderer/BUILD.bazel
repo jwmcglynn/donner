@@ -200,6 +200,7 @@ donner_cc_library(
     visibility = [
         "//donner/editor:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
+        "//tools/mcp-servers/editor-control:__pkg__",
     ],
     deps = [
         "@stb//:image_write",

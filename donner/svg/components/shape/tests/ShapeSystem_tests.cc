@@ -278,6 +278,42 @@ TEST_F(ShapeSystemTest, GetShapeBoundsDisplayNone) {
   EXPECT_FALSE(bounds.has_value());
 }
 
+TEST_F(ShapeSystemTest, GetShapeBoundsDisplayNoneWithoutPrecomputedStyle) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="r" x="10" y="20" width="30" height="40" style="display:none"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#r");
+  ASSERT_TRUE(element.has_value());
+  auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
+  EXPECT_FALSE(bounds.has_value());
+}
+
+TEST_F(ShapeSystemTest, GetShapeBoundsComputesEmptyStylePlaceholder) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="r" x="10" y="20" width="30" height="40"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#r");
+  ASSERT_TRUE(element.has_value());
+  element->entityHandle().emplace_or_replace<ComputedStyleComponent>();
+
+  auto bounds = shapeSystem.getShapeBounds(element->entityHandle());
+  ASSERT_TRUE(bounds.has_value());
+  EXPECT_NEAR(bounds->topLeft.x, 10.0, 1.0);
+  EXPECT_NEAR(bounds->topLeft.y, 20.0, 1.0);
+  EXPECT_NEAR(bounds->bottomRight.x, 40.0, 1.0);
+  EXPECT_NEAR(bounds->bottomRight.y, 60.0, 1.0);
+
+  const auto* style = element->entityHandle().try_get<ComputedStyleComponent>();
+  ASSERT_THAT(style, NotNull());
+  EXPECT_TRUE(style->properties.has_value());
+}
+
 TEST_F(ShapeSystemTest, PathFillIntersects) {
   auto document = ParseAndComputeShapes(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">

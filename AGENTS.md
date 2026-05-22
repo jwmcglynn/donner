@@ -14,6 +14,8 @@ Modern C++20 SVG project. Source lives in `donner/`.
 - Use `enum class` with `operator<<` for debugging. Prefer `operator<=>` with explicit `operator==` (gtest bug workaround).
 - Use `auto` sparingly — only when type is obvious or for standard patterns (iterators, `ParseResult`).
 - Assert with `UTILS_RELEASE_ASSERT` / `UTILS_RELEASE_ASSERT_MSG` (release) or `assert(cond && "msg")` (debug).
+- **No C++ exceptions** — do not use `throw`, `try`, `catch`, or target-specific
+  `-fexceptions`; return explicit error/status values instead.
 - **No `std::any`** — use concrete types, `std::variant`, forward declarations, or existing handle/value wrappers.
 
 ## Architecture
@@ -72,6 +74,7 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
 - **All code changes should include tests.** Use gMock/gTest. Add fuzzers for parser paths when practical.
 - Fix root causes, not symptoms; include necessary error handling without asking. Mainline must stay green — investigate failures rather than dismissing them as pre-existing.
 - **No dead code, refactor in-place.** Modify existing types/functions/modules step by step — do NOT build a parallel new implementation alongside the old one with the intent to "switch over later." Orphaned `.cc`/`.h` whose only consumers are their own tests are dead code and must be deleted in the same commit that severs their last live caller. See `CLAUDE.md` §"No Dead Code, Refactor In-Place" for the policy that drives this.
+- **Prefer replacement over parallel paths.** When adding or switching behavior, such as moving a comparison path to pixelmatch, aggressively remove the old implementation, output fields, docs, and tests instead of keeping multiple code paths unless compatibility or rollback is explicitly required.
 - **Pixel-diff tests use `donner/editor/tests:bitmap_golden_compare` (`CompareBitmapToBitmap` / `CompareBitmapToGolden`) + pixelmatch.** No private `composeOver` helpers; no percentage-divergence thresholds — either identity or inspectable `actual_*`/`expected_*`/`diff_*.png` under `$TEST_UNDECLARED_OUTPUTS_DIR`. See `CLAUDE.md` §"Pixel-Diff Tests".
 - **Regression tests must fail at HEAD before the fix lands.** Commit the failing test on its own commit first so CI records a red→green transition. See `CLAUDE.md` §"Debugging Discipline" and §"Bug-Fix Commit Discipline".
 

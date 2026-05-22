@@ -3,61 +3,167 @@
 #include <algorithm>
 #include <vector>
 
+#include "donner/base/RcString.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/UndoTimeline.h"
+#include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGSVGElement.h"
 
 namespace donner::editor {
 
 namespace {
 
-/// Walk @p leaf's ancestor chain and return the outermost ancestor whose
-/// presentation attributes break the compositor's promotion invariants —
-/// `filter`, `mask`, or `clip-path` as an inline attribute. If the entire
-/// chain is clear, returns @p leaf unchanged.
+/// Elements that don't contribute geometry to the rendered tree.
+/// `<defs>` / `<title>` / `<desc>` / `<metadata>` / `<style>` / `<script>`
+/// live under an SVG document but paint nothing — they must be excluded
+/// when detecting "wrapping single-g containers" so the presence of a
+/// `<defs>` block doesn't prevent a top-level `<g>` from being recognised
+/// as the sole render child.
+bool IsNonRenderChild(const svg::SVGElement& element) {
+  const auto tag = element.tagName().name;
+  return tag == RcString("defs") || tag == RcString("title") || tag == RcString("desc") ||
+         tag == RcString("metadata") || tag == RcString("style") || tag == RcString("script");
+}
+
+/// Walk down from the document root through "wrapping" layers — each
+/// level where the element has exactly one render-contributing child
+/// that's a `<g>` — and return the deepest such container. The children
+/// of this container are the document's **top-level objects**: the
+/// logical units the editor treats as grouped for click/drag selection.
 ///
-/// Motivation: clicking a path that lives inside `<g filter="url(#blur)">`
-/// hit-tests to the path, but `CompositorController::promoteEntity` refuses
-/// to promote any descendant of a compositing-breaking ancestor (correctly
-/// — promoting the leaf would bake the path into its own bitmap and lose
-/// the ancestor filter's contribution). The compositor then falls through
-/// to the full-document render path at every drag frame, which on the
-/// splash costs ~250 ms per frame — "really laggy". Elevating the drag
-/// target to the filter group itself matches user intent ("move the blurred
-/// group") AND lets the compositor promote it into its own cached bitmap,
-/// so steady-state drag frames drop to ~15 ms via the translation-only
-/// fast path. Figma, Illustrator, and Inkscape all select the filter/mask
-/// group when the user clicks a descendant, for the same reasons.
+/// Rationale (design intent, post-#582): SVG artists routinely wrap
+/// their whole document in one or more `<g>` layers (scale, paint order,
+/// viewport coord reset, etc.) that carry no semantic weight. Treating
+/// those wrappers as selection targets means clicks on any visible path
+/// would select the entire document. Descending through them to reach
+/// the *real* top-level grouping (e.g. `<g id="Donner">`,
+/// `<g id="Lightning_glow_dark">`, `<g id="Big_lightning_glow">` on the
+/// splash) matches what Figma / Illustrator / Inkscape do — and what a
+/// user expects when they click on a composed object.
 ///
-/// We elevate to the OUTERMOST such ancestor so nested filter-group chains
-/// (`<g filter><g filter>…</g></g>`) still promote cleanly: the innermost
-/// group would itself be refused by `HasCompositingBreakingAncestor`.
-///
-/// We check inline attributes only, not resolved CSS-derived filters —
-/// intentional: `onMouseDown` fires on any click, including before the
-/// next `renderFrame` has had a chance to resolve styles. Inline
-/// attributes are available immediately after parse and catch the common
-/// case. Missing a CSS-applied filter here means that rare case still
-/// falls into the slow path; not a correctness issue, just a perf one.
-svg::SVGElement ElevateToCompositingGroupAncestor(svg::SVGElement leaf) {
-  svg::SVGElement best = leaf;
-  svg::SVGElement cursor = leaf;
+/// Stop conditions, each "top-level object(s) live here" signal:
+///   * current element has ≠ 1 render child (zero or multiple distinct
+///     objects at this level);
+///   * the lone render child isn't a `<g>` (a terminal geometry element
+///     like `<path>` is itself a top-level object);
+///   * the lone child carries `filter` / `mask` / `clip-path` / `id`, or
+///     any attribute the editor treats as semantic — those are the
+///     "this wrapper IS a logical object" markers.
+svg::SVGElement DeepestWrappingContainer(svg::SVGElement root) {
+  svg::SVGElement current = root;
+  while (true) {
+    std::optional<svg::SVGElement> soleRenderChild;
+    bool multipleRenderChildren = false;
+    for (auto child = current.firstChild(); child.has_value(); child = child->nextSibling()) {
+      if (IsNonRenderChild(*child)) {
+        continue;
+      }
+      if (soleRenderChild.has_value()) {
+        multipleRenderChildren = true;
+        break;
+      }
+      soleRenderChild = *child;
+    }
+    if (multipleRenderChildren || !soleRenderChild.has_value()) {
+      return current;
+    }
+
+    // Stop at non-`<g>` children (terminal geometry) and at `<g>`s that
+    // carry semantic attributes — a `<g id="Foo">` or `<g filter="…">`
+    // is itself a top-level object, not a wrapper.
+    const auto tag = soleRenderChild->tagName().name;
+    if (tag != RcString("g")) {
+      return current;
+    }
+    if (!soleRenderChild->id().empty()) {
+      return current;
+    }
+    if (soleRenderChild->hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
+        soleRenderChild->hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
+        soleRenderChild->hasAttribute(xml::XMLQualifiedNameRef("clip-path"))) {
+      return current;
+    }
+
+    current = *soleRenderChild;
+  }
+}
+
+/// True when @p element carries an inline `filter` / `mask` / `clip-path`
+/// attribute — the markers the editor treats as "this group is a
+/// compositing-aware object, not a plain transparent wrapper".
+bool HasCompositingAttribute(const svg::SVGElement& element) {
+  return element.hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
+         element.hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
+         element.hasAttribute(xml::XMLQualifiedNameRef("clip-path"));
+}
+
+/// Return the ancestor of @p hit that's a direct child of @p container, or
+/// @p hit unchanged if no such ancestor exists (the hit either IS the
+/// container or sits outside it entirely).
+svg::SVGElement TopLevelAncestor(svg::SVGElement hit, const svg::SVGElement& container) {
+  svg::SVGElement cursor = hit;
   while (auto parent = cursor.parentElement()) {
-    if (parent->hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
-        parent->hasAttribute(xml::XMLQualifiedNameRef("mask")) ||
-        parent->hasAttribute(xml::XMLQualifiedNameRef("clip-path"))) {
-      best = *parent;
+    if (*parent == container) {
+      return cursor;
     }
     cursor = *parent;
   }
-  return best;
+  return hit;
 }
 
 }  // namespace
+
+bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
+                                          MouseModifiers modifiers,
+                                          std::span<const Box2d> selectionBoundsDoc) {
+  if (modifiers.shift) {
+    return false;
+  }
+  const auto& currentSelection = editor.selectedElements();
+  if (currentSelection.size() != 1) {
+    return false;
+  }
+  // M8: bounds are caller-supplied so this path is race-safe during a
+  // busy render. EditorShell passes the pre-snapshotted bounds from
+  // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
+  // `onMouseDown` passes a freshly-computed live snapshot (its caller has
+  // already gated on `!isBusy()`).
+  if (selectionBoundsDoc.empty() || !selectionBoundsDoc.front().contains(documentPoint) ||
+      !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
+    return false;
+  }
+
+  // Reset any in-progress drag/marquee state before starting the new one
+  // — mirrors `onMouseDown`'s prologue. A previous mouse-down without
+  // a matching mouse-up means the user dragged off the window or a
+  // tool switch happened mid-drag.
+  dragState_.reset();
+  marqueeState_.reset();
+
+  // Reuse the currently-selected element as the drag target.
+  const svg::SVGElement element = currentSelection.front();
+  const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
+  const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
+  dragState_ = DragState{
+      .primary =
+          PerElementDrag{
+              .element = element,
+              .startTransform = primaryStartTransform,
+              .currentTransform = primaryStartTransform,
+              .writebackTarget = primaryWritebackTarget,
+              .sourceTransformAttributeValue = element.getAttribute("transform"),
+          },
+      .extras = {},
+      .startDocumentPoint = documentPoint,
+  };
+  return true;
+}
 
 void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                              MouseModifiers modifiers) {
@@ -69,6 +175,26 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   marqueeState_.reset();
 
   auto hit = editor.hitTest(documentPoint);
+
+  // Snapshot-safe fallback for clicks inside the selected element's
+  // bbox that miss its geometric path: clicking on the transparent
+  // interior of a `<g filter>`, between strokes, etc. Only fires when
+  // hitTest returned null AND not shift — when hitTest DOES return a
+  // hit, the click might be on a different element (deselect /
+  // re-select); we never want to hijack that.
+  //
+  // The race-safe variant (`tryStartRedragOnSelected`) is exposed
+  // publicly so EditorShell can run it before `!isBusy()` for the
+  // mid-render re-drag case — but on this code path the caller has
+  // already gated on `!isBusy()`, so a live `SnapshotSelectionWorldBounds`
+  // call is race-free.
+  if (!hit.has_value()) {
+    const auto liveBoundsDoc =
+        SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(editor.selectedElements()));
+    if (tryStartRedragOnSelected(editor, documentPoint, modifiers, liveBoundsDoc)) {
+      return;
+    }
+  }
 
   // Click on empty space → start a marquee. The marquee resolves to a
   // selection set on `onMouseUp`. While dragging it shows up as
@@ -98,15 +224,37 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     return;
   }
 
-  // Plain click on an element. If the hit-tested leaf is a descendant
-  // of a `<g filter>` / `<g mask>` / `<g clip-path>` group, elevate to
-  // that group — both because the user's intent is to move the visible
-  // filtered shape (not a single internal path that can't exist
-  // visually on its own post-filter) AND because the compositor can
-  // only promote the outermost compositing group into its own cached
-  // layer. Without elevation the drag falls back to full-document
-  // rendering at ~250 ms / frame on the splash.
-  svg::SVGElement element = ElevateToCompositingGroupAncestor(*hit);
+  // Plain click on an element. Two-step elevation:
+  //
+  //   1. Find the "top-level object" — the ancestor that sits directly
+  //      under the deepest `<g>`-only wrapping container (see
+  //      `DeepestWrappingContainer`). This skips past transparent
+  //      `<g class="cls-94">`-style outer wrappers that exist only to
+  //      group the paint order, so the editor treats their children
+  //      as the document's top-level objects.
+  //
+  //   2. Elevate the click to that top-level object ONLY IF it carries
+  //      a compositing attribute (`filter` / `mask` / `clip-path`).
+  //      Compositing attributes mark a `<g>` as a unit whose
+  //      descendants can't be individually dragged without visibly
+  //      breaking the composition (the filter output depends on the
+  //      whole subtree being rendered as one). Plain `<g>`s (no
+  //      compositing attribute) leave the selection on the clicked
+  //      leaf — a single Donner letter, a single cloud path, etc. —
+  //      matching what a vector editor's direct-select tool does.
+  //
+  // Auto-expansion to sibling composite layers was explicitly vetoed
+  // (issue #582 follow-up): if a document author wants siblings to
+  // move together they wrap them in a `<g>`; the editor shouldn't
+  // guess.
+  //
+  // TODO: double-click "focus into" to descend one level deeper in a
+  // filter-group — select the clicked path instead of the whole group.
+  // Requires double-click detection in the pointer-event protocol.
+  svg::SVGDocument& doc = editor.document().document();
+  const svg::SVGElement container = DeepestWrappingContainer(doc.svgElement());
+  const svg::SVGElement topLevel = TopLevelAncestor(*hit, container);
+  svg::SVGElement element = HasCompositingAttribute(topLevel) ? topLevel : *hit;
 
   // If the element is already in the current multi-selection, preserve
   // the selection and drag ALL selected elements in lockstep — classic
@@ -313,7 +461,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
 }
 
 std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() const {
-  if (!compositedDragPreviewEnabled_ || !dragState_.has_value()) {
+  if (!dragState_.has_value()) {
     return std::nullopt;
   }
   // Multi-element drags run through the mutation path (not compositor)

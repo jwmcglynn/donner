@@ -1,5 +1,11 @@
 #include "donner/editor/DocumentSyncController.h"
 
+#include <algorithm>
+#include <iterator>
+#include <optional>
+#include <string_view>
+#include <vector>
+
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
@@ -11,6 +17,110 @@ namespace {
 constexpr float kTextChangeDebounceSeconds = 0.15f;
 constexpr int kNoErrorLine = -1;
 
+struct SourceMirrorEdit {
+  std::size_t offset = 0;
+  std::size_t removedLength = 0;
+  std::string_view replacement;
+};
+
+std::optional<SourceMirrorEdit> BuildSingleSourceMirrorEdit(std::string_view oldSource,
+                                                            std::string_view newSource) {
+  if (oldSource == newSource) {
+    return std::nullopt;
+  }
+
+  std::size_t prefixLength = 0;
+  const std::size_t commonLimit = std::min(oldSource.size(), newSource.size());
+  while (prefixLength < commonLimit && oldSource[prefixLength] == newSource[prefixLength]) {
+    ++prefixLength;
+  }
+
+  std::size_t suffixLength = 0;
+  while (suffixLength < oldSource.size() - prefixLength &&
+         suffixLength < newSource.size() - prefixLength &&
+         oldSource[oldSource.size() - suffixLength - 1] ==
+             newSource[newSource.size() - suffixLength - 1]) {
+    ++suffixLength;
+  }
+
+  return SourceMirrorEdit{
+      .offset = prefixLength,
+      .removedLength = oldSource.size() - prefixLength - suffixLength,
+      .replacement = newSource.substr(prefixLength, newSource.size() - prefixLength - suffixLength),
+  };
+}
+
+std::string CanonicalizeForTextEditor(std::string_view source) {
+  std::string result(source);
+  if (!result.empty() && result.back() == '\n') {
+    result.pop_back();
+  }
+  return result;
+}
+
+void MarkMirroredDocumentSource(EditorApp& app, std::string_view source,
+                                std::string* previousSourceText,
+                                std::optional<std::string>* lastWritebackSourceText) {
+  previousSourceText->assign(source);
+  *lastWritebackSourceText = *previousSourceText;
+  app.syncDirtyFromSource(source);
+}
+
+bool MirrorDocumentSourceIntoTextEditor(EditorApp& app, TextEditor& textEditor,
+                                        std::string* previousSourceText,
+                                        std::optional<std::string>* lastWritebackSourceText) {
+  if (!app.hasDocument() || !app.document().document().hasSourceStore()) {
+    return false;
+  }
+
+  std::string source = CanonicalizeForTextEditor(app.document().document().source());
+  const std::string currentText = textEditor.getText();
+  if (currentText != source) {
+    if (std::optional<SourceMirrorEdit> edit = BuildSingleSourceMirrorEdit(currentText, source)) {
+      textEditor.applyExternalSourceEdit(edit->offset, edit->removedLength, edit->replacement);
+    }
+
+    if (textEditor.getText() != source) {
+      textEditor.setText(source, /*preserveScroll=*/true);
+      textEditor.resetTextChanged();
+    }
+  }
+  MarkMirroredDocumentSource(app, source, previousSourceText, lastWritebackSourceText);
+  return true;
+}
+
+bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
+                                        const std::vector<xml::XMLSourceDelta>& sourceDeltas,
+                                        std::string* previousSourceText,
+                                        std::optional<std::string>* lastWritebackSourceText) {
+  if (!app.hasDocument() || !app.document().document().hasSourceStore() || sourceDeltas.empty()) {
+    return false;
+  }
+
+  const std::string source = CanonicalizeForTextEditor(app.document().document().source());
+  for (const xml::XMLSourceDelta& delta : sourceDeltas) {
+    const std::string currentText = textEditor.getText();
+    if (delta.offset > currentText.size() ||
+        delta.removedLength > currentText.size() - delta.offset || delta.offset > source.size() ||
+        delta.insertedLength > source.size() - delta.offset) {
+      return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                                lastWritebackSourceText);
+    }
+
+    textEditor.applyExternalSourceEdit(
+        delta.offset, delta.removedLength,
+        std::string_view(source).substr(delta.offset, delta.insertedLength));
+  }
+
+  if (textEditor.getText() != source) {
+    return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                              lastWritebackSourceText);
+  }
+
+  MarkMirroredDocumentSource(app, source, previousSourceText, lastWritebackSourceText);
+  return true;
+}
+
 }  // namespace
 
 DocumentSyncController::DocumentSyncController(std::string initialSource)
@@ -21,6 +131,7 @@ void DocumentSyncController::resetForLoadedDocument(const std::string& source) {
   lastWritebackSourceText_.reset();
   pendingTransformWritebacks_.clear();
   pendingElementRemoveWritebacks_.clear();
+  pendingSourceEditIntents_.clear();
   lastShownErrorLine_ = kNoErrorLine;
   lastShownErrorReason_.clear();
   textChangePending_ = false;
@@ -47,14 +158,32 @@ void DocumentSyncController::syncParseErrorMarkers(EditorApp& app, TextEditor& t
   }
 }
 
+bool DocumentSyncController::mirrorSourceDeltas(
+    EditorApp& app, TextEditor& textEditor, const std::vector<xml::XMLSourceDelta>& sourceDeltas) {
+  return ApplyXMLSourceDeltasIntoTextEditor(app, textEditor, sourceDeltas, &previousSourceText_,
+                                            &lastWritebackSourceText_);
+}
+
 void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEditor,
                                              float deltaSeconds) {
   const auto dispatchTextChange = [&](std::string_view newSource) {
-    (void)DispatchSourceTextChange(app, newSource, &previousSourceText_, &lastWritebackSourceText_);
+    if (pendingSourceEditIntents_.empty()) {
+      (void)DispatchSourceTextChange(app, newSource, &previousSourceText_,
+                                     &lastWritebackSourceText_);
+      return;
+    }
+
+    (void)DispatchSourceEditIntents(app, pendingSourceEditIntents_, newSource, &previousSourceText_,
+                                    &lastWritebackSourceText_);
+    pendingSourceEditIntents_.clear();
   };
 
   if (textEditor.isTextChanged()) {
     const std::string newSource = textEditor.getText();
+    std::vector<SourceEditIntent> editIntents = textEditor.takePendingSourceEditIntents();
+    pendingSourceEditIntents_.insert(pendingSourceEditIntents_.end(),
+                                     std::make_move_iterator(editIntents.begin()),
+                                     std::make_move_iterator(editIntents.end()));
     app.syncDirtyFromSource(newSource);
     textEditor.resetTextChanged();
 
@@ -105,24 +234,28 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   }
 
   if (!pendingElementRemoveWritebacks_.empty()) {
-    std::string source = textEditor.getText();
-    const std::string sourcePrePatch = source;
-    bool changed = false;
-    for (const auto& pendingRemove : pendingElementRemoveWritebacks_) {
-      auto patch = buildElementRemoveWriteback(source, pendingRemove.target);
-      if (!patch.has_value()) {
-        continue;
+    if (mirrorSourceDeltas(app, textEditor, app.document().lastFlushResult().sourceDeltas) ||
+        MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+                                           &lastWritebackSourceText_)) {
+      pendingElementRemoveWritebacks_.clear();
+    } else {
+      std::string source = textEditor.getText();
+      bool changed = false;
+      for (const auto& pendingRemove : pendingElementRemoveWritebacks_) {
+        auto patch = buildElementRemoveWriteback(source, pendingRemove.target);
+        if (!patch.has_value()) {
+          continue;
+        }
+
+        applyPatches(source, {{*patch}});
+        changed = true;
       }
 
-      applyPatches(source, {{*patch}});
-      changed = true;
-    }
-
-    pendingElementRemoveWritebacks_.clear();
-    if (changed) {
-      textEditor.setText(source, /*preserveScroll=*/true);
-      QueueSourceWritebackReparse(app, source, sourcePrePatch, &previousSourceText_,
-                                  &lastWritebackSourceText_);
+      pendingElementRemoveWritebacks_.clear();
+      if (changed) {
+        textEditor.setText(source, /*preserveScroll=*/true);
+        QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
+      }
     }
   }
 
@@ -130,8 +263,46 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
     return;
   }
 
+  if (app.hasDocument() && app.document().document().hasSourceStore()) {
+    svg::SVGDocument& document = app.document().document();
+    bool mirroredSourceDeltas = false;
+    for (const auto& writeback : pendingTransformWritebacks_) {
+      std::optional<svg::SVGElement> element =
+          resolveAttributeWritebackTarget(document, writeback.target);
+      if (!element.has_value()) {
+        continue;
+      }
+
+      xml::ApplySourceEditResult result;
+      if (writeback.restoreSourceTransformAttributeValue) {
+        if (writeback.sourceTransformAttributeValue.has_value()) {
+          result = document.setElementAttribute(*element, "transform",
+                                                *writeback.sourceTransformAttributeValue);
+        } else {
+          result = document.removeElementAttribute(*element, "transform");
+        }
+      } else {
+        const RcString serialized = toSVGTransformString(writeback.transform);
+        if (std::string_view(serialized).empty()) {
+          result = document.removeElementAttribute(*element, "transform");
+        } else {
+          result = document.setElementAttribute(*element, "transform", serialized);
+        }
+      }
+
+      mirroredSourceDeltas =
+          mirrorSourceDeltas(app, textEditor, result.sourceDeltas) || mirroredSourceDeltas;
+    }
+
+    pendingTransformWritebacks_.clear();
+    if (!mirroredSourceDeltas) {
+      (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+                                               &lastWritebackSourceText_);
+    }
+    return;
+  }
+
   std::string source = textEditor.getText();
-  const std::string sourcePrePatch = source;
   std::vector<TextPatch> patches;
   patches.reserve(pendingTransformWritebacks_.size());
   for (const auto& writeback : pendingTransformWritebacks_) {
@@ -163,8 +334,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
 
   applyPatches(source, patches);
   textEditor.setText(source, /*preserveScroll=*/true);
-  QueueSourceWritebackReparse(app, source, sourcePrePatch, &previousSourceText_,
-                              &lastWritebackSourceText_);
+  QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
 }
 
 TextEditor::ErrorMarkers DocumentSyncController::ParseErrorToMarkers(const ParseDiagnostic& diag) {

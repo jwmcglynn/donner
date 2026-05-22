@@ -434,23 +434,15 @@ void TextEditor::autocompleteSelect() {
     return;
   }
 
-  UndoRecord undo;
-  undo.before = state_;
-
-  if (hasSelection()) {
-    undo.removed = getSelectedText();
-    undo.removedStart = state_.selectionStart;
-    undo.removedEnd = state_.selectionEnd;
-    deleteSelection();
+  const auto& entry = autocompleteSuggestions_[autocompleteIndex_];
+  if (autocompleteReplacementActive_) {
+    const Coordinates start = text_.getCoordinatesAtByteOffset(autocompleteReplacementStartOffset_);
+    const Coordinates end = text_.getCoordinatesAtByteOffset(autocompleteReplacementEndOffset_);
+    setSelection(start, end);
+    autocompleteReplacementActive_ = false;
   }
 
-  const auto& entry = autocompleteSuggestions_[autocompleteIndex_];
-  undo.added = entry.second;
-  undo.addedStart = getActualCursorCoordinates();
   insertText(entry.second, true);
-  undo.addedEnd = getActualCursorCoordinates();
-  undo.after = state_;
-  addUndo(undo);
 
   autocompleteOpened_ = false;
   autocompleteObject_.clear();
@@ -1688,6 +1680,41 @@ void TextEditor::buildMemberSuggestions(bool* keepAutocompleteOpen) {
 }
 
 void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
+  autocompleteReplacementActive_ = false;
+
+  if (autocompleteProvider_) {
+    const std::string source = getText();
+    const std::size_t cursorOffset = text_.getByteOffset(getCursorPosition());
+    std::optional<AutocompleteResponse> response =
+        autocompleteProvider_(AutocompleteRequest{source, cursorOffset});
+    if (response.has_value()) {
+      autocompleteSuggestions_.clear();
+      autocompleteIndex_ = 0;
+      autocompleteSwitched_ = false;
+
+      for (const AutocompleteSuggestion& suggestion : response->suggestions) {
+        autocompleteSuggestions_.emplace_back(suggestion.displayText, suggestion.insertText);
+      }
+
+      if (!autocompleteSuggestions_.empty()) {
+        autocompleteOpened_ = true;
+        autocompleteReplacementActive_ = true;
+        autocompleteReplacementStartOffset_ = std::min(response->replaceStartOffset, source.size());
+        autocompleteReplacementEndOffset_ = std::min(response->replaceEndOffset, source.size());
+        autocompletePosition_ =
+            text_.getCoordinatesAtByteOffset(autocompleteReplacementStartOffset_);
+
+        if (keepAutocompleteOpen != nullptr) {
+          *keepAutocompleteOpen = true;
+        }
+      } else {
+        autocompleteOpened_ = false;
+      }
+
+      return;
+    }
+  }
+
   autocompleteWord_ = getWordUnderCursor().str();
 
   if (!isValidAutocompleteWord(autocompleteWord_)) {
@@ -1890,9 +1917,10 @@ void TextEditor::processReplace(const std::string& findWord, const std::string& 
     auto selEnd = curPos;
     selEnd.column += findWord.size();
     setSelection(curPos, selEnd);
-    deleteSelection();
     insertText(replaceWord);
-    setCursorPosition(selEnd);
+    Coordinates replacementEnd = curPos;
+    replacementEnd.column += static_cast<int>(replaceWord.size());
+    setCursorPosition(replacementEnd);
     scrollToCursor_ = true;
 
     if (!replaceAll) {
@@ -2077,6 +2105,11 @@ void TextEditor::setText(std::string_view text, bool preserveScroll) {
   core_.setText(text, preserveScroll);
 }
 
+void TextEditor::applyExternalSourceEdit(std::size_t offset, std::size_t removedLength,
+                                         std::string_view replacement) {
+  core_.applyExternalSourceEdit(offset, removedLength, replacement);
+}
+
 void TextEditor::enterCharacter(ImWchar character, bool shift) {
   core_.enterCharacter(static_cast<char32_t>(character), shift);
 }
@@ -2247,17 +2280,8 @@ void TextEditor::cut() {
     return;
   }
 
-  UndoRecord undo;
-  undo.before = state_;
-  undo.removed = getSelectedText();
-  undo.removedStart = state_.selectionStart;
-  undo.removedEnd = state_.selectionEnd;
-
   copy();
-  deleteSelection();
-
-  undo.after = state_;
-  addUndo(undo);
+  insertText("");
 }
 
 void TextEditor::paste() {
@@ -2266,24 +2290,7 @@ void TextEditor::paste() {
     return;
   }
 
-  UndoRecord undo;
-  undo.before = state_;
-
-  if (hasSelection()) {
-    undo.removed = getSelectedText();
-    undo.removedStart = state_.selectionStart;
-    undo.removedEnd = state_.selectionEnd;
-    deleteSelection();
-  }
-
-  undo.added = clipText;
-  undo.addedStart = getActualCursorCoordinates();
-
   insertText(clipText, autoIndentOnPaste_);
-
-  undo.addedEnd = getActualCursorCoordinates();
-  undo.after = state_;
-  addUndo(undo);
 }
 
 bool TextEditor::canUndo() const {

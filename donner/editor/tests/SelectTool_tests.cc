@@ -1,6 +1,7 @@
 #include "donner/editor/SelectTool.h"
 
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "gtest/gtest.h"
 
@@ -13,9 +14,39 @@ constexpr std::string_view kTwoRectsSvg =
          <rect id="r2" x="100" y="100" width="40" height="40" fill="blue"/>
        </svg>)";
 
+constexpr std::string_view kCompositeSiblingSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+         <defs>
+           <filter id="halo">
+             <feGaussianBlur stdDeviation="1"/>
+           </filter>
+         </defs>
+         <g id="anchor" filter="url(#halo)">
+           <rect id="anchor_leaf" x="10" y="10" width="20" height="20" fill="black"/>
+         </g>
+         <g id="peer_contained">
+           <rect id="peer_contained_leaf" x="20" y="10" width="12" height="20" fill="cyan"/>
+         </g>
+         <g id="peer_excluded">
+           <rect id="peer_excluded_leaf" x="20" y="40" width="20" height="20" fill="white"/>
+         </g>
+       </svg>)svg";
+
+constexpr std::string_view kPlainGroupSiblingSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+         <g id="plain_group">
+           <rect id="plain_leaf" x="10" y="10" width="20" height="20" fill="black"/>
+         </g>
+         <g id="plain_peer">
+           <rect id="plain_peer_leaf" x="20" y="10" width="12" height="20" fill="cyan"/>
+         </g>
+       </svg>)";
+
 class SelectToolTest : public ::testing::Test {
 protected:
   void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
+
+  void loadSvg(std::string_view svg) { ASSERT_TRUE(app.loadFromString(svg)); }
 
   svg::SVGElement elementById(std::string_view id) {
     auto element = app.document().document().querySelector(id);
@@ -49,22 +80,6 @@ TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   EXPECT_TRUE(tool.isDragging());
 }
 
-TEST_F(SelectToolTest, CompositedRenderingToggleAllowedOnlyWithoutActiveGesture) {
-  EXPECT_TRUE(CanToggleCompositedRendering(tool));
-
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  EXPECT_FALSE(CanToggleCompositedRendering(tool));
-
-  tool.onMouseUp(app, Vector2d(15.0, 15.0));
-  EXPECT_TRUE(CanToggleCompositedRendering(tool));
-
-  tool.onMouseDown(app, Vector2d(180.0, 180.0), MouseModifiers{});
-  EXPECT_FALSE(CanToggleCompositedRendering(tool));
-
-  tool.onMouseUp(app, Vector2d(180.0, 180.0));
-  EXPECT_TRUE(CanToggleCompositedRendering(tool));
-}
-
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
   app.setSelection(elementById("#r1"));
   EXPECT_TRUE(app.hasSelection());
@@ -84,6 +99,53 @@ TEST_F(SelectToolTest, ClickOnDifferentElementSwitchesSelection) {
   EXPECT_TRUE(selectionIs("#r2"));
 }
 
+// Pins the elevation contract: clicking inside a `<g filter>` selects
+// the filter group itself, NOT the clicked leaf path. Sibling layers are
+// NOT swept into the selection — auto-expansion to composite peers was
+// explicitly vetoed (issue #582 follow-up): if a document author wants
+// siblings to move together they wrap them in a `<g>`; the editor
+// respects the DOM and doesn't guess.
+TEST_F(SelectToolTest, ClickInsideFilterGroupSelectsTheGroupNotSiblings) {
+  loadSvg(kCompositeSiblingSvg);
+
+  tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "anchor")
+      << "elevation lands on the filter-g, single-element selection";
+
+  tool.onMouseMove(app, Vector2d(42.0, 50.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(42.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_DOUBLE_EQ(transformOf("#anchor").data[4], 30.0);
+  EXPECT_DOUBLE_EQ(transformOf("#anchor").data[5], 30.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[4], 0.0)
+      << "contained sibling stays put — no auto-expansion";
+  EXPECT_DOUBLE_EQ(transformOf("#peer_contained").data[5], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#peer_excluded").data[5], 0.0);
+}
+
+TEST_F(SelectToolTest, NonCompositingGroupSelectsLeafNotGroup) {
+  loadSvg(kPlainGroupSiblingSvg);
+
+  tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "plain_leaf")
+      << "plain `<g>` is not a compositing object — select the leaf path";
+
+  tool.onMouseMove(app, Vector2d(32.0, 40.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(32.0, 40.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_DOUBLE_EQ(transformOf("#plain_leaf").data[4], 20.0);
+  EXPECT_DOUBLE_EQ(transformOf("#plain_leaf").data[5], 20.0);
+  EXPECT_DOUBLE_EQ(transformOf("#plain_peer").data[4], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#plain_peer").data[5], 0.0);
+}
+
 TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
@@ -99,7 +161,6 @@ TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
 }
 
 TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
-  tool.setCompositedDragPreviewEnabled(true);
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
 
@@ -595,7 +656,6 @@ TEST_F(SelectToolTest, MultiSelectDragDoesNotUseCompositedPreview) {
   // When compositing is enabled but the drag is multi-element, the preview
   // path falls back to DOM mutation — the drag-preview transport models only
   // a single moving layer.
-  tool.setCompositedDragPreviewEnabled(true);
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
 
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
@@ -613,7 +673,6 @@ TEST_F(SelectToolTest, MultiSelectDragDoesNotUseCompositedPreview) {
 
 TEST_F(SelectToolTest, SingleSelectDragWithCompositingUsesPreview) {
   // Regression guard for the flow that USES the composited preview.
-  tool.setCompositedDragPreviewEnabled(true);
   app.setSelection(elementById("#r1"));
 
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
@@ -717,6 +776,113 @@ TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
   const Vector2d translation = finalTransform.translation();
   EXPECT_NEAR(translation.x, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
   EXPECT_NEAR(translation.y, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
+}
+
+// Design doc 0033 §M8 — re-drag-of-selected fast path. `tryStartRedragOn
+// Selected` doesn't call `EditorApp::hitTest`; it works off
+// `SnapshotSelectionWorldBounds` of the currently-selected element.
+// EditorShell drops the `!isBusy()` gate for this path so the user
+// can re-grab a selected element even while a render is in flight.
+TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBounds) {
+  // Establish a single-element selection via the normal click path.
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(selectionIs("#r1"));
+  ASSERT_TRUE(tool.isDragging());
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_FALSE(tool.isDragging());
+
+  // Click inside the same element's bounds (still selected). The
+  // snapshot-safe re-drag path must start a drag without changing
+  // the selection. Pass freshly-snapshotted bounds the way the
+  // EditorShell does (in the real flow the bounds come from
+  // `SelectionBoundsCache::displayedBoundsDoc` — race-free even if
+  // the worker is currently rendering).
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{}, bounds));
+  EXPECT_TRUE(tool.isDragging());
+  EXPECT_TRUE(selectionIs("#r1"));
+}
+
+TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnShiftClick) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+
+  MouseModifiers shift{};
+  shift.shift = true;
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  // Shift-click must NOT start a re-drag — it toggles selection
+  // membership, which requires the full hitTest path.
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), shift, bounds));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenNothingSelected) {
+  // No prior selection.
+  EXPECT_FALSE(app.selectedElement().has_value());
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(15.0, 15.0), MouseModifiers{},
+                                             std::span<const Box2d>{}));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenClickIsOutsideSelectedBounds) {
+  // Select r1 at (10,10)..(30,30).
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  // Click on r2's territory (well outside r1).
+  EXPECT_FALSE(
+      tool.tryStartRedragOnSelected(app, Vector2d(110.0, 110.0), MouseModifiers{}, bounds));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+// Design doc 0033 §M8: the cache-based fast path must work with
+// pre-snapshotted bounds — the EditorShell drops the `!isBusy()`
+// gate for it, so a live `SnapshotSelectionWorldBounds` call would
+// race the worker. Passing an empty bounds span (e.g. when the
+// bounds cache hasn't been refreshed since selection changed) must
+// fall through cleanly.
+TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnEmptyCachedBounds) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  // Empty bounds span — the EditorShell hits this when the cache's
+  // `lastSelection` doesn't match the current selection (cache stale).
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{},
+                                             std::span<const Box2d>{}));
+  EXPECT_FALSE(tool.isDragging());
+}
+
+// The re-drag fast path is reachable from a plain `onMouseDown` too —
+// `SnapshotSelectionWorldBounds` returns the geometric bbox of the
+// selection (no filter expansion), so any click inside that bbox is
+// served by the no-hitTest path. This lets the user re-grab a
+// selected `<g>` even when the click lands on a transparent
+// interior pixel that `EditorApp::hitTest` wouldn't see.
+TEST_F(SelectToolTest, TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup) {
+  loadSvg(kCompositeSiblingSvg);
+  // Pick anchor via the normal hitTest path first to establish
+  // selection. anchor_leaf is at (10,10)..(30,30); a click squarely
+  // inside the rect selects #anchor.
+  tool.onMouseDown(app, Vector2d(15.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(selectionIs("#anchor"));
+  tool.onMouseUp(app, Vector2d(15.0, 20.0));
+
+  // Click inside #anchor's snapshotted world bounds. The fast path
+  // re-drags #anchor without consulting `editor.hitTest`. Without it,
+  // the M8 caller-side `!isBusy()` drop wouldn't have a safe re-drag
+  // path during busy renders.
+  const auto anchorBounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  EXPECT_TRUE(
+      tool.tryStartRedragOnSelected(app, Vector2d(15.0, 20.0), MouseModifiers{}, anchorBounds));
+  EXPECT_TRUE(tool.isDragging());
+  EXPECT_TRUE(selectionIs("#anchor"));
 }
 
 }  // namespace

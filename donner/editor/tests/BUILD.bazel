@@ -1,10 +1,50 @@
-load("//build_defs:rules.bzl", "donner_cc_test", "donner_perf_cc_test")
+load(
+    "//build_defs:rules.bzl",
+    "donner_cc_binary",
+    "donner_cc_library",
+    "donner_cc_test",
+    "donner_perf_cc_test",
+)
+
+donner_cc_library(
+    name = "bitmap_golden_compare",
+    testonly = 1,
+    srcs = ["BitmapGoldenCompare.cc"],
+    hdrs = ["BitmapGoldenCompare.h"],
+    deps = [
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:renderer_image_test_utils",
+        "@com_google_gtest//:gtest",
+        "@pixelmatch-cpp17",
+    ],
+)
+
+donner_cc_test(
+    name = "drag_coalesce_tests",
+    srcs = ["DragCoalesce_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:drag_coalesce",
+        "//donner/editor:imgui_headers",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
 
 donner_cc_test(
     name = "viewport_geometry_tests",
     srcs = ["ViewportGeometry_tests.cc"],
     deps = [
         "//donner/editor:viewport_geometry",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "editor_shell_layout_tests",
+    srcs = ["EditorShellLayout_tests.cc"],
+    deps = [
+        "//donner/editor:editor_shell_layout",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -24,6 +64,23 @@ donner_cc_test(
     deps = [
         "//donner/editor:keyboard_shortcut_policy",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "document_save_tests",
+    srcs = ["DocumentSave_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base",
+        "//donner/editor:document_save",
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/editor:text_editor",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -61,6 +118,20 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "source_selection_tests",
+    srcs = ["SourceSelection_tests.cc"],
+    data = ["//:donner_splash.svg"],
+    deps = [
+        "//donner/base/xml",
+        "//donner/editor:editor_app",
+        "//donner/editor:source_selection",
+        "//donner/editor:text_editor",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "render_pane_viewport_tests",
     srcs = ["RenderPaneViewport_tests.cc"],
     deps = [
@@ -92,10 +163,37 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "experimental_drag_presentation_tests",
-    srcs = ["ExperimentalDragPresentation_tests.cc"],
+    name = "presented_frame_composer_tests",
+    srcs = ["PresentedFrameComposer_tests.cc"],
     deps = [
-        "//donner/editor:experimental_drag_presentation",
+        "//donner/editor:presented_frame_composer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "layer_inspector_diagnostics_tests",
+    srcs = ["LayerInspectorDiagnostics_tests.cc"],
+    deps = [
+        "//donner/editor:layer_inspector_diagnostics",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "composited_presentation_tests",
+    srcs = ["CompositedPresentation_tests.cc"],
+    deps = [
+        "//donner/editor:composited_presentation",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "presentation_render_scheduler_tests",
+    srcs = ["PresentationRenderScheduler_tests.cc"],
+    deps = [
+        "//donner/editor:presentation_render_scheduler",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -128,13 +226,13 @@ donner_perf_cc_test(
         "FilterDragReproTestUtils.h",
     ],
     correctness_srcs = ["FilterDragReproCorrectness_tests.cc"],
-    wallclock_srcs = ["FilterDragReproWallclock_tests.cc"],
     data = [
         ":filter_drag_repro.rnr",
         "//:donner_splash.svg",
     ],
+    wallclock_srcs = ["FilterDragReproWallclock_tests.cc"],
     deps = [
-        "//donner/base:base",
+        "//donner/base",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:editor_app",
@@ -170,6 +268,44 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "editor_layer_stress_tests",
+    srcs = ["EditorLayerStress_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:async_renderer",
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/editor:selection_aabb",
+        "//donner/editor:text_patch",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "structured_editing_stress_tests",
+    srcs = ["StructuredEditingStress_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:async_renderer",
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:command_queue",
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:editor_app",
+        "//donner/editor:select_tool",
+        "//donner/editor:text_editor",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
 donner_perf_cc_test(
     name = "async_renderer_filter_group_perf_tests",
     srcs = [
@@ -177,10 +313,10 @@ donner_perf_cc_test(
         "AsyncRendererFilterGroupPerfTestUtils.h",
     ],
     correctness_srcs = ["AsyncRendererFilterGroupCorrectness_tests.cc"],
-    wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
     data = [
         "//:donner_splash.svg",
     ],
+    wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
     deps = [
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
@@ -196,6 +332,17 @@ donner_cc_test(
     deps = [
         "//donner/editor:editor_app",
         "//donner/editor:viewport_geometry",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "sidebar_presenter_tests",
+    srcs = ["SidebarPresenter_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:sidebar_presenter",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],
@@ -270,6 +417,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "xml_autocomplete_tests",
+    srcs = ["XmlAutocomplete_tests.cc"],
+    deps = [
+        "//donner/editor:xml_autocomplete",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "change_classifier_tests",
     srcs = ["ChangeClassifier_tests.cc"],
     deps = [
@@ -315,12 +471,104 @@ donner_cc_test(
     name = "drag_release_pop_back_tests",
     srcs = ["DragReleasePopBack_tests.cc"],
     deps = [
-        "//donner/editor:experimental_drag_presentation",
+        "//donner/editor:composited_presentation",
         "//donner/editor:select_tool",
         "//donner/svg",
         "//donner/svg/compositor",
         "//donner/svg/parser",
         "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+filegroup(
+    name = "filtered_element_flash_after_drags_2_rnr",
+    srcs = ["filtered-element-flash-after-drags-2.rnr"],
+    visibility = ["//tools/mcp-servers/editor-control:__pkg__"],
+)
+
+donner_cc_binary(
+    name = "editor_rnr_gl_replay",
+    srcs = ["EditorRnrGlReplay.cc"],
+    data = [
+        "drag_start_hang_repro.rnr",
+        "filter_post_drag_jump.rnr",
+        ":filtered_element_flash_after_drags_2_rnr",
+        "//:donner_splash.svg",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/editor/repro:gl_rnr_replay",
+    ],
+)
+
+donner_cc_test(
+    name = "gl_rnr_replay_tests",
+    size = "large",
+    timeout = "moderate",
+    srcs = ["GlRnrReplay_tests.cc"],
+    data = [
+        "drag_start_hang_repro.rnr",
+        "filter_post_drag_jump.rnr",
+        ":filtered_element_flash_after_drags_2_rnr",
+        "//:donner_splash.svg",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor/repro:gl_rnr_replay",
+        "//donner/editor/repro:repro_file",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:renderer_image_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+filegroup(
+    name = "rnr_replay_testdata",
+    srcs = [
+        "drag_start_hang_repro.rnr",
+        "filter_elm_disappear-2.rnr",
+        "filter_elm_disappear-3.rnr",
+        "filter_elm_disappear-4.rnr",
+        "filter_elm_disappear-5.rnr",
+        "filter_elm_disappear-6.rnr",
+        "filter_elm_disappear-7.rnr",
+        "filter_post_drag_jump.rnr",
+        "filter_snapback_repro.rnr",
+        "filtered-element-flash-after-drags-2.rnr",
+        "testdata/filter_disappear_rnr3_after_mup2.png",
+        "testdata/filter_disappear_single_drag_lgd_post.png",
+    ],
+)
+
+donner_cc_test(
+    name = "rnr_replay_tests",
+    srcs = ["RnrReplay_tests.cc"],
+    data = [
+        ":rnr_replay_testdata",
+        "//:donner_splash.svg",
+    ],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/editor:async_renderer",
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:composited_presentation",
+        "//donner/editor:editor_app",
+        "//donner/editor:imgui_headers",
+        "//donner/editor:select_tool",
+        "//donner/editor:viewport_state",
+        "//donner/editor/repro:repro_file",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest_main",
     ],
 )

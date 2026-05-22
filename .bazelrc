@@ -100,6 +100,7 @@ common:text-full --//donner/svg/renderer:text=true --//donner/svg/renderer:text_
 # WebAssembly (Emscripten) build. Usage:
 #   bazel build --config=wasm //donner/svg/renderer/wasm:donner_wasm
 common:wasm --//donner/svg/renderer:renderer_backend=tiny_skia
+common:wasm --//donner/svg/renderer/wasm:enable_wasm=true
 common:wasm --//donner/svg/renderer:text=false
 common:wasm --//donner/svg/renderer:text_full=false
 # Disable the perf-opt transition so that all targets use the emscripten

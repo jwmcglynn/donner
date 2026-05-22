@@ -159,4 +159,35 @@ TEST(TextBuffer, LineColumnHelpers) {
   EXPECT_EQ(buffer.getTotalLines(), 3);
 }
 
+TEST(TextBuffer, GetByteOffsetResolvesMultilineCoordinates) {
+  TextBuffer buffer;
+  buffer.setText(
+      "abc\n"
+      "defg\n"
+      "hi");
+
+  EXPECT_EQ(buffer.getByteOffset({0, 0}), 0u);
+  EXPECT_EQ(buffer.getByteOffset({0, 2}), 2u);
+  EXPECT_EQ(buffer.getByteOffset({1, 0}), 4u);
+  EXPECT_EQ(buffer.getByteOffset({1, 3}), 7u);
+  EXPECT_EQ(buffer.getByteOffset({2, 2}), 11u);
+  EXPECT_EQ(buffer.getByteOffset({3, 0}), buffer.getText().size());
+}
+
+TEST(TextBuffer, GetCoordinatesAtByteOffsetResolvesMultilineBoundaries) {
+  TextBuffer buffer;
+  buffer.setText(
+      "abc\n"
+      "\tde\n"
+      "fg");
+
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(0), Coordinates(0, 0));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(3), Coordinates(0, 3));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(4), Coordinates(1, 0));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(5), Coordinates(1, 2));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(7), Coordinates(1, 4));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(8), Coordinates(2, 0));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(buffer.getText().size()), Coordinates(2, 2));
+}
+
 }  // namespace donner::editor

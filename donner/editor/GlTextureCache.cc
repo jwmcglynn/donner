@@ -5,49 +5,21 @@
 namespace donner::editor {
 
 GlTextureCache::~GlTextureCache() {
-  if (flatTexture_ != 0) {
-    glDeleteTextures(1, &flatTexture_);
-  }
   if (overlayTexture_ != 0) {
     glDeleteTextures(1, &overlayTexture_);
   }
-  if (backgroundTexture_ != 0) {
-    glDeleteTextures(1, &backgroundTexture_);
-  }
-  if (promotedTexture_ != 0) {
-    glDeleteTextures(1, &promotedTexture_);
-  }
-  if (foregroundTexture_ != 0) {
-    glDeleteTextures(1, &foregroundTexture_);
+  for (auto& [_, entry] : tileTextures_) {
+    if (entry.texture != 0) {
+      glDeleteTextures(1, &entry.texture);
+    }
   }
 }
 
 void GlTextureCache::initialize() {
-  if (flatTexture_ == 0) {
-    glGenTextures(1, &flatTexture_);
-    InitializeTexture(flatTexture_);
-  }
   if (overlayTexture_ == 0) {
     glGenTextures(1, &overlayTexture_);
     InitializeTexture(overlayTexture_);
   }
-  if (backgroundTexture_ == 0) {
-    glGenTextures(1, &backgroundTexture_);
-    InitializeTexture(backgroundTexture_);
-  }
-  if (promotedTexture_ == 0) {
-    glGenTextures(1, &promotedTexture_);
-    InitializeTexture(promotedTexture_);
-  }
-  if (foregroundTexture_ == 0) {
-    glGenTextures(1, &foregroundTexture_);
-    InitializeTexture(foregroundTexture_);
-  }
-}
-
-void GlTextureCache::uploadFlat(const svg::RendererBitmap& bitmap) {
-  ZoneScopedN("GlTextureCache::uploadFlat");
-  UploadBitmap(flatTexture_, bitmap, &flatWidth_, &flatHeight_);
 }
 
 void GlTextureCache::uploadOverlay(const svg::RendererBitmap& bitmap) {
@@ -57,10 +29,77 @@ void GlTextureCache::uploadOverlay(const svg::RendererBitmap& bitmap) {
 
 void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& preview) {
   ZoneScopedN("GlTextureCache::uploadComposited");
-  UploadBitmap(backgroundTexture_, preview.backgroundBitmap, &backgroundWidth_, &backgroundHeight_);
-  UploadBitmap(promotedTexture_, preview.promotedBitmap, &promotedWidth_, &promotedHeight_);
-  UploadBitmap(foregroundTexture_, preview.foregroundBitmap, &foregroundWidth_, &foregroundHeight_);
-  promotedTranslationDoc_ = preview.promotedTranslationDoc;
+
+  // Track which ids appear in the new snapshot so we can evict
+  // textures whose tile has disappeared (drag-target switch demoted a
+  // layer, segment cache shrank, etc.).
+  std::unordered_set<std::string> liveIds;
+  liveIds.reserve(preview.tiles.size());
+
+  tiles_.clear();
+  tiles_.reserve(preview.tiles.size());
+
+  for (const auto& tile : preview.tiles) {
+    // Partial tile snapshots can carry metadata without a pixel payload.
+    // Preserve the already-uploaded texture for that tile id and update only
+    // its presentation geometry.
+    if (tile.bitmap.empty()) {
+      auto it = tileTextures_.find(tile.id);
+      if (it == tileTextures_.end()) {
+        continue;
+      }
+      liveIds.insert(tile.id);
+      TileView view;
+      view.texture = it->second.texture;
+      view.bitmapDimsPx = Vector2i(it->second.width, it->second.height);
+      view.canvasOffsetDoc = tile.canvasOffsetDoc;
+      view.bitmapDimsDoc = tile.bitmapDimsDoc;
+      view.dragTranslationDoc = tile.dragTranslationDoc;
+      view.isDragTarget = tile.isDragTarget;
+      tiles_.push_back(view);
+      continue;
+    }
+
+    liveIds.insert(tile.id);
+
+    auto& entry = tileTextures_[tile.id];
+    if (entry.texture == 0) {
+      glGenTextures(1, &entry.texture);
+      InitializeTexture(entry.texture);
+    }
+
+    // Re-upload only when the tile's generation advances OR the bitmap
+    // dimensions changed (e.g. canvas resize landed a fresh rasterize at
+    // a new size with the same generation seed — defensive).
+    const bool needsUpload = entry.uploadedGeneration != tile.generation ||
+                             entry.width != tile.bitmap.dimensions.x ||
+                             entry.height != tile.bitmap.dimensions.y;
+    if (needsUpload) {
+      UploadBitmap(entry.texture, tile.bitmap, &entry.width, &entry.height);
+      entry.uploadedGeneration = tile.generation;
+    }
+
+    TileView view;
+    view.texture = entry.texture;
+    view.bitmapDimsPx = tile.bitmap.dimensions;
+    view.canvasOffsetDoc = tile.canvasOffsetDoc;
+    view.bitmapDimsDoc = tile.bitmapDimsDoc;
+    view.dragTranslationDoc = tile.dragTranslationDoc;
+    view.isDragTarget = tile.isDragTarget;
+    tiles_.push_back(view);
+  }
+
+  // Evict textures whose tile id no longer appears.
+  for (auto it = tileTextures_.begin(); it != tileTextures_.end();) {
+    if (liveIds.find(it->first) == liveIds.end()) {
+      if (it->second.texture != 0) {
+        glDeleteTextures(1, &it->second.texture);
+      }
+      it = tileTextures_.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 void GlTextureCache::clearOverlay() {
@@ -69,13 +108,13 @@ void GlTextureCache::clearOverlay() {
 }
 
 void GlTextureCache::resetComposited() {
-  backgroundWidth_ = 0;
-  backgroundHeight_ = 0;
-  promotedWidth_ = 0;
-  promotedHeight_ = 0;
-  foregroundWidth_ = 0;
-  foregroundHeight_ = 0;
-  promotedTranslationDoc_ = Vector2d::Zero();
+  for (auto& [_, entry] : tileTextures_) {
+    if (entry.texture != 0) {
+      glDeleteTextures(1, &entry.texture);
+    }
+  }
+  tileTextures_.clear();
+  tiles_.clear();
 }
 
 void GlTextureCache::UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,

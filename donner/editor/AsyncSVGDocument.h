@@ -17,9 +17,11 @@
 #include <optional>
 #include <string_view>
 #include <unordered_map>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
+#include "donner/base/xml/XMLDocument.h"
 #include "donner/editor/CommandQueue.h"
 #include "donner/svg/SVGDocument.h"
 
@@ -36,6 +38,7 @@ public:
     bool appliedCommands = false;
     bool replacedDocument = false;
     bool preserveUndoOnReparse = false;
+    std::vector<xml::XMLSourceDelta> sourceDeltas;
   };
 
   AsyncSVGDocument();
@@ -65,7 +68,10 @@ public:
   /// `Structural` — the next `RenderRequest` carries the remap so the
   /// compositor can call `remapAfterStructuralReplace` instead of
   /// `resetAllLayers(documentReplaced=true)`, preserving cached layer
-  /// bitmaps and segments across the swap. If the trees differ (user
+  /// bitmaps and segments across the swap. The current editor canvas
+  /// size is also carried forward for structural replacements so the
+  /// next render does not dirty every cache with a redundant resize.
+  /// If the trees differ (user
   /// edited the source pane to change shape, etc.) the remap is empty
   /// and we fall back to the standard `setDocument` path.
   ReplaceKind setDocumentMaybeStructural(svg::SVGDocument newDocument);
@@ -89,6 +95,17 @@ public:
 
   /// Push a command onto the per-frame queue. UI thread only.
   void applyMutation(EditorCommand command) { queue_.push(std::move(command)); }
+
+  /**
+   * Apply an incremental source edit directly to the current document.
+   *
+   * Unlike \ref EditorCommand::Kind::ReplaceDocument, this preserves document identity and routes
+   * the edit through `donner/base/xml` so the XML source store owns both source bytes and emitted
+   * SVG mutations.
+   *
+   * @param intent Source edit request.
+   */
+  xml::ApplySourceEditResult applySourceEdit(const xml::XMLEditIntent& intent);
 
   /// Direct access to the command queue. Tools push via `applyMutation`;
   /// this accessor exists for tests and for the main loop's `flushFrame`.

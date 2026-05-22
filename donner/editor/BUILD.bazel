@@ -59,6 +59,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "source_selection",
+    srcs = ["SourceSelection.cc"],
+    hdrs = ["SourceSelection.h"],
+    deps = [
+        ":text_editor",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "render_pane_gesture",
     srcs = ["RenderPaneGesture.cc"],
     hdrs = ["RenderPaneGesture.h"],
@@ -151,7 +163,7 @@ donner_cc_library(
         ":tracy_wrapper",
         "//donner/base",
         "//donner/svg",
-        "//donner/svg/compositor:compositor",
+        "//donner/svg/compositor",
         "//donner/svg/renderer",
     ],
 )
@@ -207,6 +219,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
+        "//donner/svg/properties:property_parsing",
     ],
 )
 
@@ -223,9 +236,34 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "drag_coalesce",
+    hdrs = ["DragCoalesce.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "keyboard_shortcut_policy",
     hdrs = ["KeyboardShortcutPolicy.h"],
     deps = [],
+)
+
+donner_cc_library(
+    name = "document_save",
+    srcs = ["DocumentSave.cc"],
+    hdrs = ["DocumentSave.h"],
+    deps = [],
+)
+
+donner_cc_library(
+    name = "xml_autocomplete",
+    srcs = ["XmlAutocomplete.cc"],
+    hdrs = ["XmlAutocomplete.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+        "//donner/svg/properties:property_parsing",
+    ],
 )
 
 donner_cc_library(
@@ -237,6 +275,7 @@ donner_cc_library(
         ":editor_app",
         ":imgui_headers",
         ":select_tool",
+        ":source_edit_intent",
         ":source_sync",
         ":text_editor",
         ":text_patch",
@@ -251,8 +290,8 @@ donner_cc_library(
     deps = [
         ":imgui_headers",
         ":render_pane_gesture",
-        ":viewport_state",
         ":tool",
+        ":viewport_state",
         "//donner/base",
         "@imgui",
     ],
@@ -277,9 +316,39 @@ donner_cc_library(
         ":imgui_headers",
         ":viewport_state",
         "//donner/base",
+        "//donner/base/xml",
         "//donner/svg",
         "@imgui",
     ],
+)
+
+donner_cc_library(
+    name = "layer_inspector_diagnostics",
+    srcs = ["LayerInspectorDiagnostics.cc"],
+    hdrs = ["LayerInspectorDiagnostics.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "layer_inspector_panel",
+    srcs = ["LayerInspectorPanel.cc"],
+    hdrs = ["LayerInspectorPanel.h"],
+    deps = [
+        ":imgui_headers",
+        ":layer_inspector_diagnostics",
+        "//donner/base",
+        "//donner/svg/compositor",
+        "@imgui",
+    ] + select({
+        "//donner/editor/wasm:wasm_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
+        "//conditions:default": [
+            "//third_party/glad",
+        ],
+    }),
 )
 
 donner_cc_library(
@@ -293,17 +362,40 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "presented_frame_composer",
+    srcs = ["PresentedFrameComposer.cc"],
+    hdrs = ["PresentedFrameComposer.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "render_pane_presenter",
     srcs = ["RenderPanePresenter.cc"],
     hdrs = ["RenderPanePresenter.h"],
     deps = [
-        ":experimental_drag_presentation",
         ":gl_texture_cache",
         ":imgui_headers",
+        ":presented_frame_composer",
+        ":select_tool",
         ":selection_aabb",
         ":viewport_interaction_controller",
         "//donner/base",
         "@imgui",
+    ],
+)
+
+donner_cc_library(
+    name = "presentation_render_scheduler",
+    srcs = ["PresentationRenderScheduler.cc"],
+    hdrs = ["PresentationRenderScheduler.h"],
+    deps = [
+        ":async_renderer",
+        ":composited_presentation",
+        ":select_tool",
+        "//donner/base",
+        "//donner/svg/compositor",
     ],
 )
 
@@ -313,9 +405,10 @@ donner_cc_library(
     hdrs = ["RenderCoordinator.h"],
     deps = [
         ":async_renderer",
-        ":experimental_drag_presentation",
+        ":composited_presentation",
         ":gl_texture_cache",
         ":overlay_renderer",
+        ":presentation_render_scheduler",
         ":select_tool",
         ":selection_aabb",
         ":tracy_wrapper",
@@ -326,25 +419,39 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "editor_shell_layout",
+    srcs = ["EditorShellLayout.cc"],
+    hdrs = ["EditorShellLayout.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "editor_shell",
     srcs = ["EditorShell.cc"],
     hdrs = ["EditorShell.h"],
     deps = [
         ":dialog_presenter",
+        ":document_save",
         ":document_sync_controller",
+        ":drag_coalesce",
         ":editor_app",
         ":editor_input_bridge",
+        ":editor_shell_layout",
         ":gl_texture_cache",
-        ":keyboard_shortcut_policy",
         ":imgui_headers",
+        ":keyboard_shortcut_policy",
+        ":layer_inspector_diagnostics",
+        ":layer_inspector_panel",
         ":menu_bar_presenter",
         ":render_coordinator",
         ":render_pane_presenter",
         ":select_tool",
         ":sidebar_presenter",
+        ":source_selection",
         ":text_editor",
         ":tracy_wrapper",
         ":viewport_interaction_controller",
+        ":xml_autocomplete",
         "//donner/base",
         "//donner/base/xml",
         "//donner/editor/gui:editor_window",
@@ -364,12 +471,18 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "source_edit_intent",
+    hdrs = ["SourceEditIntent.h"],
+)
+
+donner_cc_library(
     name = "source_sync",
     srcs = ["SourceSync.cc"],
     hdrs = ["SourceSync.h"],
     deps = [
         ":change_classifier",
         ":editor_app",
+        ":source_edit_intent",
         "//donner/base",
         "//donner/svg",
     ],
@@ -398,8 +511,8 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "experimental_drag_presentation",
-    hdrs = ["ExperimentalDragPresentation.h"],
+    name = "composited_presentation",
+    hdrs = ["CompositedPresentation.h"],
     deps = [
         ":select_tool",
         "//donner/base",
@@ -415,6 +528,7 @@ donner_cc_library(
         ":command_queue",
         ":editor_app",
         ":imgui_headers",
+        ":selection_aabb",
         ":tool",
         ":undo_timeline",
         "//donner/base",
@@ -503,12 +617,12 @@ donner_cc_binary(
     }),
     deps = [
         ":editor_icon",
-        ":notice",
         ":editor_shell",
+        ":notice",
         ":tracy_wrapper",
-        "//donner/editor/gui:editor_window",
         "//donner/base",
         "//donner/base:failure_signal_handler",
+        "//donner/editor/gui:editor_window",
     ],
 )
 
@@ -570,6 +684,7 @@ donner_cc_library(
     srcs = ["TextEditorCore.cc"],
     hdrs = ["TextEditorCore.h"],
     deps = [
+        ":source_edit_intent",
         ":text_buffer",
         "//donner/base",
     ],
@@ -581,6 +696,7 @@ donner_cc_library(
     hdrs = ["TextEditor.h"],
     deps = [
         ":imgui_headers",
+        ":source_edit_intent",
         ":text_buffer",
         ":text_editor_core",
         "//donner/base",

@@ -2,6 +2,8 @@
 /// @file
 
 #include <map>
+#include <span>
+#include <string_view>
 
 #include "donner/base/EcsRegistry.h"  // For EntityHandle
 #include "donner/base/FillRule.h"
@@ -557,6 +559,24 @@ public:
    */
   ParseResult<bool> parsePresentationAttribute(std::string_view name, std::string_view value,
                                                EntityHandle handle = EntityHandle());
+
+  /**
+   * Returns all CSS property names understood by this registry.
+   *
+   * The names preserve registry insertion order and are suitable for editor tooling such as
+   * autocomplete.
+   *
+   * @return Known CSS property names.
+   */
+  static std::span<const std::string_view> propertyNames();
+
+  /**
+   * Returns true if a name is a valid SVG presentation attribute.
+   *
+   * @param name Attribute name.
+   * @return True when \p name can be parsed as a presentation attribute.
+   */
+  static bool isPresentationAttributeName(std::string_view name);
 
   /**
    * Returns true if a presentation attribute participates in inheritance.

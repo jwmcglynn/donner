@@ -2,7 +2,11 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/EditorCommand.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TextEditor.h"
@@ -81,7 +85,7 @@ TEST_F(DocumentSyncControllerTest, UndoingDragWritebackBackToBaselineClearsDirty
 
   controller_.applyPendingWritebacks(app_, tool, textEditor_);
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
-  ASSERT_TRUE(app_.flushFrame());
+  EXPECT_FALSE(app_.flushFrame());
   ASSERT_TRUE(app_.isDirty());
 
   app_.undo();
@@ -89,7 +93,56 @@ TEST_F(DocumentSyncControllerTest, UndoingDragWritebackBackToBaselineClearsDirty
 
   controller_.applyPendingWritebacks(app_, tool, textEditor_);
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  EXPECT_FALSE(app_.flushFrame());
   EXPECT_FALSE(app_.isDirty());
+}
+
+TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackMirrorsWithoutTextChangeEcho) {
+  SelectTool tool;
+
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.isTextChanged());
+  const std::uint64_t documentGeneration = app_.document().documentGeneration();
+
+  tool.onMouseDown(app_, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app_, Vector2d(25.0, 15.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app_, Vector2d(25.0, 15.0));
+  ASSERT_TRUE(app_.flushFrame());
+  EXPECT_FALSE(app_.document().lastFlushResult().replacedDocument);
+  EXPECT_EQ(app_.document().documentGeneration(), documentGeneration);
+
+  controller_.applyPendingWritebacks(app_, tool, textEditor_);
+
+  EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
+  EXPECT_FALSE(textEditor_.isTextChanged());
+  EXPECT_TRUE(app_.document().queue().empty());
+}
+
+TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaWithoutTextEcho) {
+  SelectTool tool;
+
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.isTextChanged());
+  const std::uint64_t documentGeneration = app_.document().documentGeneration();
+
+  std::optional<svg::SVGElement> rect = app_.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(*rect);
+  ASSERT_TRUE(target.has_value());
+
+  app_.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{.target = *target});
+  app_.applyMutation(EditorCommand::DeleteElementCommand(*rect));
+  ASSERT_TRUE(app_.flushFrame());
+  EXPECT_FALSE(app_.document().lastFlushResult().replacedDocument);
+  EXPECT_EQ(app_.document().documentGeneration(), documentGeneration);
+  ASSERT_EQ(app_.document().lastFlushResult().sourceDeltas.size(), 1u);
+
+  controller_.applyPendingWritebacks(app_, tool, textEditor_);
+
+  EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
+  EXPECT_FALSE(textEditor_.isTextChanged());
+  EXPECT_TRUE(app_.document().queue().empty());
+  EXPECT_FALSE(app_.document().document().querySelector("#r1").has_value());
 }
 
 TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTrailingNewline) {
@@ -124,7 +177,7 @@ TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTra
 
   controller.applyPendingWritebacks(app, tool, textEditor);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
-  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.flushFrame());
   ASSERT_TRUE(app.isDirty());
 
   app.undo();
@@ -132,6 +185,7 @@ TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTra
 
   controller.applyPendingWritebacks(app, tool, textEditor);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+  EXPECT_FALSE(app.flushFrame());
   EXPECT_FALSE(app.isDirty());
 }
 
@@ -156,7 +210,7 @@ TEST_F(DocumentSyncControllerTest, UndoingDragOnNonCanonicalTransformRestoresCle
 
   controller.applyPendingWritebacks(app, tool, textEditor);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
-  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.flushFrame());
   ASSERT_TRUE(app.isDirty());
 
   app.undo();
@@ -164,8 +218,123 @@ TEST_F(DocumentSyncControllerTest, UndoingDragOnNonCanonicalTransformRestoresCle
 
   controller.applyPendingWritebacks(app, tool, textEditor);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+  EXPECT_FALSE(app.flushFrame());
   EXPECT_EQ(textEditor.getText(), std::string(kNonCanonicalTransformSvg));
   EXPECT_FALSE(app.isDirty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, BatchedSiblingSourceEditsStayLocal) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="a" fill="red"/><circle id="b" fill="red"/></svg>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kSvg)};
+
+  std::string edited(kSvg);
+  const std::size_t firstRed = edited.find("red");
+  ASSERT_NE(firstRed, std::string::npos);
+  textEditor.setSelection(Coordinates(0, static_cast<int>(firstRed)),
+                          Coordinates(0, static_cast<int>(firstRed + 3)));
+  textEditor.insertText("blue");
+  edited.replace(firstRed, 3, "blue");
+
+  const std::size_t secondRed = edited.rfind("red");
+  ASSERT_NE(secondRed, std::string::npos);
+  textEditor.setSelection(Coordinates(0, static_cast<int>(secondRed)),
+                          Coordinates(0, static_cast<int>(secondRed + 3)));
+  textEditor.insertText("green");
+  edited.replace(secondRed, 3, "green");
+
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), edited);
+
+  auto rect = app.document().document().querySelector("#a");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->getAttribute("fill"), RcString("blue"));
+
+  auto circle = app.document().document().querySelector("#b");
+  ASSERT_TRUE(circle.has_value());
+  EXPECT_EQ(circle->getAttribute("fill"), RcString("green"));
+}
+
+TEST(DocumentSyncControllerStructuredTest, ElementSubtreeSourceInsertStaysLocal) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="layer"><rect id="a" width="10" height="10"/></g></svg>)";
+  constexpr std::string_view kInserted = R"(<circle id="b" cx="5" cy="6" r="3" fill="blue"/>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kSvg)};
+
+  const std::size_t insertOffset = std::string_view(kSvg).find("</g>");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+  textEditor.setCursorPosition(Coordinates(0, static_cast<int>(insertOffset)));
+  textEditor.insertText(kInserted);
+
+  std::string edited(kSvg);
+  edited.insert(insertOffset, kInserted);
+
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().document().source(), edited);
+
+  auto inserted = app.document().document().querySelector("#b");
+  ASSERT_TRUE(inserted.has_value());
+  EXPECT_EQ(inserted->getAttribute("fill"), RcString("blue"));
+}
+
+TEST(DocumentSyncControllerStructuredTest, MultiDeltaMoveMirrorsIntoTextPane) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="moved" fill="red" /><g id="target" /></svg>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.setCleanSourceText(kSvg);
+  const std::uint64_t documentGeneration = app.document().documentGeneration();
+
+  TextEditor textEditor;
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kSvg)};
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  auto moved = app.document().document().querySelector("#moved");
+  ASSERT_TRUE(moved.has_value());
+
+  xml::ApplySourceEditResult result = app.document().document().insertElement(*target, *moved);
+  ASSERT_TRUE(result.applied);
+  ASSERT_EQ(result.sourceDeltas.size(), 2u);
+  EXPECT_TRUE(std::ranges::any_of(result.sourceDeltas, [](const xml::XMLSourceDelta& delta) {
+    return delta.insertedLength > 0;
+  }));
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_FALSE(textEditor.isTextChanged());
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_EQ(app.document().documentGeneration(), documentGeneration);
+  EXPECT_NE(textEditor.getText().find(R"(<g id="target"><rect id="moved")"), std::string::npos);
+  EXPECT_TRUE(app.isDirty());
 }
 
 }  // namespace

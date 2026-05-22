@@ -50,7 +50,7 @@ struct ReproRecorderOptions {
   int windowHeight = 0;
   /// Initial HiDPI scale.
   double displayScale = 1.0;
-  /// Whether the editor was started with `--experimental`.
+  /// Legacy composited-mode metadata kept for old `.rnr` compatibility.
   bool experimentalMode = false;
 };
 

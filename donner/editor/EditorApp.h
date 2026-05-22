@@ -100,6 +100,9 @@ public:
     isDirty_ = false;
   }
 
+  /// The last source text known to be in sync with the DOM.
+  [[nodiscard]] std::string_view cleanSourceText() const { return cleanSourceText_; }
+
   /// Recompute the dirty flag from the current source text. This allows the
   /// editor to clear the dirty indicator when the user undoes or edits back
   /// to the last clean baseline.
@@ -220,8 +223,8 @@ public:
   /// Enable or disable the structured-editing incremental path (M5).
   /// When enabled, text edits that land inside a known attribute value
   /// dispatch to `SetAttributeCommand` instead of `ReplaceDocumentCommand`,
-  /// preserving tree identity. Defaults to `false` — the flag is flipped
-  /// after the fuzzing soak (M8 in the design doc).
+  /// preserving tree identity. Defaults to `true`; the flag remains as a
+  /// runtime escape hatch while the structured-editing rollout settles.
   void setStructuredEditingEnabled(bool enabled) { structuredEditingEnabled_ = enabled; }
 
   /// Whether the structured-editing incremental path is active.
@@ -300,7 +303,7 @@ private:
   std::optional<svg::DonnerController> controller_;
   std::uint64_t controllerVersion_ = 0;
 
-  bool structuredEditingEnabled_ = false;
+  bool structuredEditingEnabled_ = true;
 
   std::optional<CompletedTransformWriteback> pendingTransformWriteback_;
   std::vector<CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;

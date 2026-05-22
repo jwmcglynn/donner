@@ -35,6 +35,12 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Open...", "Cmd+O")) {
       actions.openFile = true;
     }
+    if (ImGui::MenuItem("Save", "Cmd+S", false, state.canSave)) {
+      actions.saveFile = true;
+    }
+    if (ImGui::MenuItem("Save As...", "Cmd+Shift+S", false, state.canSave)) {
+      actions.saveFileAs = true;
+    }
     ImGui::EndMenu();
   }
 
@@ -77,15 +83,6 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     }
     if (ImGui::MenuItem("Actual Size", "Cmd+0")) {
       actions.actualSize = true;
-    }
-    ImGui::Separator();
-    if (ImGui::MenuItem("Composited Rendering", nullptr, state.experimentalMode,
-                        state.canToggleCompositedRendering)) {
-      actions.toggleCompositedRendering = true;
-    }
-    if (ImGui::MenuItem("Tight-Bounded Segments (debug)", nullptr,
-                        state.tightBoundedSegmentsEnabled)) {
-      actions.toggleTightBoundedSegments = true;
     }
     ImGui::EndMenu();
   }

@@ -17,7 +17,10 @@ donner_cc_library(
     hdrs = [
         "RendererImageTestUtils.h",
     ],
-    visibility = ["//donner/svg:__subpackages__"],
+    visibility = [
+        "//donner/editor/tests:__pkg__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         "@com_google_gtest//:gtest",
         "@stb//:image",

@@ -65,7 +65,33 @@ std::optional<QuotedRange> findEnclosingQuotedValue(std::string_view source, std
     --pos;
     const char c = source[pos];
     if (c == '"' || c == '\'') {
-      // Candidate opening quote. Scan forward from pos+1 to find the matching close.
+      // Candidate quote. Must be an OPENING quote (preceded by `=` with
+      // optional whitespace) to count as the start of an attribute
+      // value. Without this check, a CLOSING quote of a prior
+      // attribute followed by an attribute insertion (e.g. inserting
+      // ` transform="..."` right before `/>`) would be mistaken as
+      // an opening quote, with the next `"` (the opening quote of the
+      // inserted value) treated as the matching close — falsely
+      // reporting `offset` as "inside an existing attribute value"
+      // and steering the classifier into the modification path
+      // instead of the insertion path.
+      bool isOpeningQuote = false;
+      std::size_t check = pos;
+      while (check > 0) {
+        --check;
+        const char prev = source[check];
+        if (prev == ' ' || prev == '\t' || prev == '\n' || prev == '\r') {
+          continue;
+        }
+        isOpeningQuote = (prev == '=');
+        break;
+      }
+      if (!isOpeningQuote) {
+        // Closing quote of a prior attribute (or stray `"` we can't
+        // interpret). `offset` is OUTSIDE any attribute value.
+        return std::nullopt;
+      }
+      // Confirmed opening quote. Scan forward from pos+1 to find the matching close.
       const char quote = c;
       std::size_t closePos = pos + 1;
       while (closePos < source.size() && source[closePos] != quote) {
@@ -151,6 +177,85 @@ std::string_view extractAttributeName(std::string_view source, std::size_t attrV
   return source.substr(pos, nameEnd - pos);
 }
 
+/// True when `offset` in `source` sits between `<elementname` and the
+/// matching `>` — i.e. inside the body of an element's opening tag,
+/// where new attributes can legally be inserted. Walks backward
+/// looking for `<` or `>`; finds `<` first → inside a tag, finds `>`
+/// first → outside.
+bool offsetIsInsideOpeningTag(std::string_view source, std::size_t offset) {
+  if (offset > source.size()) return false;
+  std::size_t pos = offset;
+  while (pos > 0) {
+    --pos;
+    const char c = source[pos];
+    if (c == '<') return true;
+    if (c == '>') return false;
+  }
+  return false;
+}
+
+/// An attribute-insertion's two payload pieces.
+struct InsertedAttribute {
+  std::string_view name;
+  std::string_view value;
+};
+
+/// Try to parse `inserted` as ` name="value"` (optional leading/
+/// trailing whitespace). Used for drag-release writebacks that ADD a
+/// brand-new attribute to an element's opening tag (e.g. inserting
+/// ` transform="translate(...)"` on an element that previously had no
+/// transform). Without this, the classifier returns structural and
+/// the full ReplaceDocumentCommand path runs — ~150–300 ms of
+/// `prepareDocumentForRendering` work for what's really a one-
+/// attribute mutation.
+///
+/// Conservative: requires the entire `inserted` text to match the
+/// `whitespace + name + '=' + "value" + whitespace` pattern. Anything
+/// else (multiple attributes inserted, comments, partial deletion,
+/// etc.) bails to structural so the full reparse path handles it
+/// correctly.
+std::optional<InsertedAttribute> tryParseAttributeInsertion(std::string_view inserted) {
+  const auto isWs = [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; };
+  const auto isNameStart = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || c == ':' ||
+           static_cast<unsigned char>(c) >= 0x80;
+  };
+  const auto isNameChar = [&isNameStart](char c) {
+    return isNameStart(c) || (c >= '0' && c <= '9') || c == '-' || c == '.';
+  };
+
+  std::size_t pos = 0;
+  while (pos < inserted.size() && isWs(inserted[pos])) ++pos;
+  if (pos >= inserted.size() || !isNameStart(inserted[pos])) return std::nullopt;
+
+  const std::size_t nameStart = pos;
+  while (pos < inserted.size() && isNameChar(inserted[pos])) ++pos;
+  const std::size_t nameEnd = pos;
+
+  while (pos < inserted.size() && isWs(inserted[pos])) ++pos;
+  if (pos >= inserted.size() || inserted[pos] != '=') return std::nullopt;
+  ++pos;
+  while (pos < inserted.size() && isWs(inserted[pos])) ++pos;
+  if (pos >= inserted.size()) return std::nullopt;
+  const char quote = inserted[pos];
+  if (quote != '"' && quote != '\'') return std::nullopt;
+  ++pos;
+
+  const std::size_t valueStart = pos;
+  while (pos < inserted.size() && inserted[pos] != quote) ++pos;
+  if (pos >= inserted.size()) return std::nullopt;  // Unterminated value.
+  const std::size_t valueEnd = pos;
+  ++pos;
+
+  while (pos < inserted.size() && isWs(inserted[pos])) ++pos;
+  if (pos != inserted.size()) return std::nullopt;  // Trailing junk.
+
+  return InsertedAttribute{
+      inserted.substr(nameStart, nameEnd - nameStart),
+      inserted.substr(valueStart, valueEnd - valueStart),
+  };
+}
+
 }  // namespace
 
 ClassifyResult classifyTextChange(svg::SVGDocument& document, std::string_view oldSource,
@@ -181,6 +286,32 @@ ClassifyResult classifyTextChange(svg::SVGDocument& document, std::string_view o
   }
 
   if (!quoted.has_value()) {
+    // Not inside an existing quoted value — try the
+    // attribute-INSERTION path. Drag-release writebacks on an
+    // element that previously had no `transform` attribute insert
+    // ` transform="..."` into the opening tag. Recognizing that as
+    // a `SetAttributeCommand` (rather than falling through to
+    // ReplaceDocumentCommand → full reparse) saves the post-drag
+    // `prepareDocumentForRendering` walk.
+    const bool isPureInsertion =
+        diff.changeEndOld == diff.changeStart && diff.changeEndNew > diff.changeStart;
+    if (isPureInsertion && offsetIsInsideOpeningTag(oldSource, diff.changeStart)) {
+      const std::string_view inserted =
+          newSource.substr(diff.changeStart, diff.changeEndNew - diff.changeStart);
+      const auto attr = tryParseAttributeInsertion(inserted);
+      if (attr.has_value()) {
+        // The insertion point sits between `<elementname` and the
+        // matching `>`. Subtracting 1 lands us on a byte that's
+        // definitely inside the element's source range (the `>`
+        // boundary is exclusive in XMLNode's location).
+        const std::size_t lookupOffset = diff.changeStart > 0 ? diff.changeStart - 1 : 0;
+        auto element = findSvgElementAtOffset(document.svgElement(), lookupOffset);
+        if (element.has_value()) {
+          return ClassifyResult{EditorCommand::SetAttributeCommand(
+              *element, std::string(attr->name), std::string(attr->value))};
+        }
+      }
+    }
     return {};  // Structural change — outside any attribute value.
   }
 

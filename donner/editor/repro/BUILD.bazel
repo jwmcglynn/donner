@@ -6,8 +6,34 @@ donner_cc_library(
     hdrs = ["ReproFile.h"],
     visibility = [
         "//donner/editor:__subpackages__",
+        "//tools/mcp-servers/editor-control:__pkg__",
     ],
     deps = [],
+)
+
+donner_cc_library(
+    name = "gl_rnr_replay",
+    srcs = ["GlRnrReplay.cc"],
+    hdrs = ["GlRnrReplay.h"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = [
+        "//donner/editor:__subpackages__",
+        "//tools/mcp-servers/editor-control:__pkg__",
+    ],
+    deps = [
+        ":repro_file",
+        "//donner/base",
+        "//donner/editor:editor_shell",
+        "//donner/editor:layer_inspector_diagnostics",
+        "//donner/editor:viewport_state",
+        "//donner/editor/gui:editor_window",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_interface",
+    ],
 )
 
 donner_cc_library(
@@ -29,6 +55,7 @@ donner_cc_test(
     srcs = ["ReproFile_tests.cc"],
     deps = [
         ":repro_file",
+        ":repro_recorder",
         "@com_google_gtest//:gtest_main",
     ],
 )
