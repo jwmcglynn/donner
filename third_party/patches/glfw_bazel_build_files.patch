@@ -2,9 +2,9 @@ Subject: [PATCH] Add bazel build files
 Base-commit: b35641f4a3c62aa86a0b3c983d163bc0fe36026d
 
 ---
- BUILD.bazel  | 155 +++++++++++++++++++++++++++++++++++++++++++++++++++
+ BUILD.bazel  | 144 +++++++++++++++++++++++++++++++++++++++++++++++++++
  MODULE.bazel |  10 +++++
- 2 files changed, 165 insertions(+)
+ 2 files changed, 154 insertions(+)
  create mode 100644 BUILD.bazel
  create mode 100644 MODULE.bazel
 
@@ -13,7 +13,7 @@ new file mode 100644
 index 00000000..952ce1c3
 --- /dev/null
 +++ b/BUILD.bazel
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,144 @@
 +load("@rules_cc//cc:defs.bzl", "cc_library")
 +load("@bazel_skylib//lib:selects.bzl", "selects")
 +
@@ -89,18 +89,7 @@ index 00000000..952ce1c3
 +        "include/GLFW/glfw3.h",
 +        "include/GLFW/glfw3native.h",
 +    ] + glob(["src/*.h"]),
-+    copts = ["-std=c99"] + selects.with_or({
-+        # GLFW's null platform dlopen()s OSMesa by bare soname; on macOS it only
-+        # tries "libOSMesa.8.dylib" (osmesa_context.c) with no search-path
-+        # fallback, and SIP strips DYLD_* across the test sandbox. Point the
-+        # compile-time override at the absolute Homebrew path so dlopen takes the
-+        # absolute-path branch and skips dyld search entirely. macos-15 GitHub
-+        # runners are Apple Silicon, so the brew prefix is fixed at /opt/homebrew.
-+        "@bazel_tools//src/conditions:darwin": [
-+            "-D_GLFW_OSMESA_LIBRARY=\\\"/opt/homebrew/opt/mesa/lib/libOSMesa.dylib\\\"",
-+        ],
-+        "//conditions:default": [],
-+    }),
++    copts = ["-std=c99"],
 +    defines = selects.with_or({
 +        "@bazel_tools//src/conditions:darwin": ["_GLFW_COCOA"],
 +        "@bazel_tools//src/conditions:windows": ["_GLFW_WIN32"],

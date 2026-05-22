@@ -311,28 +311,6 @@ jobs:
             brew install --quiet llvm@19
             echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
 
-      # OSMesa software GL for the headless editor replay tests
-      # (//donner/editor/tests:gl_rnr_replay_tests). GLFW's null platform
-      # dlopen()s OSMesa at runtime; the glfw bazel patch hardcodes the
-      # compile-time path /opt/homebrew/opt/mesa/lib/libOSMesa.dylib, so this
-      # step just has to make that file exist. Fail loudly if a future mesa
-      # formula stops shipping OSMesa, instead of letting the GL test crash
-      # with an opaque "OSMesa: Library not found".
-      - name: Install OSMesa (Homebrew mesa)
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          retry_wait_seconds: 15
-          command: |
-            brew install --quiet mesa
-            lib="$(brew --prefix mesa)/lib/libOSMesa.dylib"
-            if [[ ! -e "$lib" ]]; then
-              echo "::error title=OSMesa missing::Homebrew mesa did not install $lib (the path baked into the glfw bazel patch for gl_rnr_replay_tests' GLFW null platform). Check the mesa formula's OSMesa output." >&2
-              ls -l "$(brew --prefix mesa)/lib/" | grep -i osmesa || true
-              exit 1
-            fi
-
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
         with:

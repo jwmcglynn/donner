@@ -285,12 +285,13 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       .initialWidth = initialWidth,
       .initialHeight = initialHeight,
       .visible = options.visible,
-      // Capture replays render offscreen (GLFW null platform + OSMesa) so they
-      // run identically on headless CI and dev boxes across OSes; an interactive
-      // (visible) replay keeps the native windowed platform.
+      // Capture replays hide their window by default. Linux uses GLFW's null
+      // platform + OSMesa for framebuffer readback; macOS keeps the native
+      // GPU-backed Cocoa context. An interactive (visible) replay keeps the
+      // native windowed platform.
       .offscreen = !options.visible,
-      // Reproduce the recorded HiDPI scale when running headless (null platform),
-      // so framebuffer crops line up with captures taken on the recording host.
+      // Reproduce the recorded HiDPI scale during hidden replay so framebuffer
+      // crops line up with captures taken on the recording host.
       .offscreenContentScale = recordedScale,
   });
   if (!window.valid()) {

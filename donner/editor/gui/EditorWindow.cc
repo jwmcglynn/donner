@@ -124,21 +124,18 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #ifdef __EMSCRIPTEN__
   glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_EMSCRIPTEN);
 #else
-  // Use GLFW's windowless "null" platform (OSMesa software GL) for offscreen
-  // framebuffer-readback replay. On Linux we also fall back to it automatically
-  // when there is no X11/Wayland display, so headless runs degrade gracefully;
-  // other platforms only switch when offscreen is requested explicitly (their
-  // display detection isn't a simple env var, and forcing null would break the
-  // native path on real displays).
-  useNullPlatform = options_.offscreen;
 #if defined(__linux__)
+  // Use GLFW's windowless "null" platform (OSMesa software GL) for offscreen
+  // framebuffer-readback replay on Linux. We also fall back to it automatically
+  // when there is no X11/Wayland display, so headless runs degrade gracefully.
+  useNullPlatform = options_.offscreen;
   const bool hasDisplay =
       std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr;
   useNullPlatform = useNullPlatform || !hasDisplay;
-#endif
   if (useNullPlatform) {
     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
   }
+#endif
 #endif
   if (glfwInit() == GLFW_FALSE) {
     std::fprintf(stderr, "EditorWindow: glfwInit() failed\n");
@@ -176,14 +173,17 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #else
       options_.initialHeight;
 #endif
-  // The null platform reports no HiDPI scale, so emulate the requested content
-  // scale by allocating the framebuffer (== window size on the null platform) at
-  // the scaled resolution. Real platforms apply HiDPI scaling themselves.
-  const double offscreenScale = (useNullPlatform && options_.offscreenContentScale > 0.0)
+  const double offscreenScale = (options_.offscreen && options_.offscreenContentScale > 0.0)
                                     ? options_.offscreenContentScale
                                     : 1.0;
-  const int createWidth = static_cast<int>(std::lround(initialWidth * offscreenScale));
-  const int createHeight = static_cast<int>(std::lround(initialHeight * offscreenScale));
+  // The null platform reports no HiDPI scale, so allocate it at the emulated
+  // framebuffer size up front. Native platforms are resized after creation once
+  // their real framebuffer/logical scale is known.
+  const int createWidth =
+      useNullPlatform ? static_cast<int>(std::lround(initialWidth * offscreenScale)) : initialWidth;
+  const int createHeight = useNullPlatform
+                               ? static_cast<int>(std::lround(initialHeight * offscreenScale))
+                               : initialHeight;
   window_ = glfwCreateWindow(createWidth, createHeight, options_.title.c_str(), /*monitor=*/nullptr,
                              /*share=*/nullptr);
   if (window_ == nullptr) {
@@ -204,6 +204,28 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     window_ = nullptr;
     glfwTerminate();
     return;
+  }
+
+  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
+    int nativeLogicalWidth = 0;
+    int nativeLogicalHeight = 0;
+    glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
+    int nativeFramebufferWidth = 0;
+    int nativeFramebufferHeight = 0;
+    glfwGetFramebufferSize(window_, &nativeFramebufferWidth, &nativeFramebufferHeight);
+    const double nativeScaleX =
+        nativeLogicalWidth > 0 && nativeFramebufferWidth > 0
+            ? static_cast<double>(nativeFramebufferWidth) / static_cast<double>(nativeLogicalWidth)
+            : 1.0;
+    const double nativeScaleY = nativeLogicalHeight > 0 && nativeFramebufferHeight > 0
+                                    ? static_cast<double>(nativeFramebufferHeight) /
+                                          static_cast<double>(nativeLogicalHeight)
+                                    : nativeScaleX;
+    const int emulatedLogicalWidth = static_cast<int>(std::lround(
+        static_cast<double>(initialWidth) * offscreenScale / std::max(nativeScaleX, 0.001)));
+    const int emulatedLogicalHeight = static_cast<int>(std::lround(
+        static_cast<double>(initialHeight) * offscreenScale / std::max(nativeScaleY, 0.001)));
+    glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
   }
 #endif
 
@@ -226,9 +248,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
 #endif
   if (offscreenScale != 1.0) {
-    // Null platform: the framebuffer/window ratio is always 1, so derive the
-    // display scale from the emulated value and reapply it every frame (see
-    // beginFrameImpl) because ImGui_ImplGlfw_NewFrame would otherwise reset it.
+    // Offscreen replay may resize the native window to emulate the recorded
+    // framebuffer scale, so reapply the scale every frame (see beginFrameImpl)
+    // because ImGui_ImplGlfw_NewFrame would otherwise reset it.
     uiScaleConfig_.displayScale = offscreenScale;
     frameDisplayScaleOverride_ = offscreenScale;
   } else {

@@ -56,16 +56,14 @@ struct EditorWindowOptions {
   /// Whether the native desktop window should be shown. Hidden windows still
   /// create a real OpenGL context and are useful for framebuffer replay tests.
   bool visible = true;
-  /// Force GLFW's windowless "null" platform (OSMesa software GL) for offscreen
-  /// rendering, even when a display is available. When false, the null platform
-  /// is still selected automatically if no display (`DISPLAY`/`WAYLAND_DISPLAY`)
-  /// is present, so framebuffer-readback replay tests run on headless CI.
+  /// Request an offscreen framebuffer-readback replay surface. Linux uses GLFW's
+  /// windowless "null" platform (OSMesa software GL), even when a display is
+  /// available. macOS keeps a native GPU-backed Cocoa context and relies on
+  /// `visible = false` for hidden replay windows.
   bool offscreen = false;
-  /// Content/display scale to emulate when running on the windowless null
-  /// platform, which reports no HiDPI scale of its own. Replay sets this to the
-  /// recorded scale so headless framebuffer readback reproduces the pixel
-  /// geometry of captures taken on a HiDPI machine. Ignored on real display
-  /// platforms, which use the OS-reported content scale instead.
+  /// Content/display scale to emulate for hidden replay windows. Replay sets
+  /// this to the recorded scale so framebuffer readback reproduces the pixel
+  /// geometry of captures taken on a HiDPI machine.
   double offscreenContentScale = 1.0;
   /// Background clear color (RGBA, 0..1). Matches the viewport surround
   /// when the document doesn't fill the whole window.
