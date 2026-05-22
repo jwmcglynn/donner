@@ -4,6 +4,64 @@ load("//build_defs:rules.bzl", "donner_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
+objc_library(
+    name = "editor_wgpu_surface_macos",
+    srcs = ["EditorWgpuSurface_macos.mm"],
+    hdrs = ["EditorWgpuSurface.h"],
+    sdk_frameworks = [
+        "Cocoa",
+        "QuartzCore",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "@glfw",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_wgpu_surface_linux",
+    srcs = ["EditorWgpuSurface_linux.cc"],
+    hdrs = ["EditorWgpuSurface.h"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "@glfw",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_wgpu_surface",
+    hdrs = ["EditorWgpuSurface.h"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = select({
+        "@platforms//os:macos": [":editor_wgpu_surface_macos"],
+        "@platforms//os:linux": [":editor_wgpu_surface_linux"],
+        "//conditions:default": [],
+    }) + [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
 donner_cc_library(
     name = "editor_window",
     srcs = ["EditorWindow.cc"],
@@ -23,8 +81,8 @@ donner_cc_library(
             "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
+            ":editor_wgpu_surface",
             "//donner/svg/renderer/geode:geode_device",
-            "//donner/svg/renderer/geode:geode_glfw_surface",
             "//donner/svg/renderer/geode:geode_wgpu_util",
             "//third_party/webgpu-cpp:webgpu_cpp",
             "@glfw",

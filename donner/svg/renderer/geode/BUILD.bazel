@@ -173,59 +173,6 @@ donner_cc_test(
     ],
 )
 
-objc_library(
-    name = "geode_glfw_surface_macos",
-    srcs = ["GeodeGlfwSurface_macos.mm"],
-    hdrs = ["GeodeGlfwSurface.h"],
-    sdk_frameworks = [
-        "Cocoa",
-        "QuartzCore",
-    ],
-    target_compatible_with = _GEODE_ONLY + select({
-        "@platforms//os:macos": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    deps = [
-        "//third_party/webgpu-cpp:webgpu_cpp",
-        "@glfw",
-    ],
-)
-
-donner_cc_library(
-    name = "geode_glfw_surface_linux",
-    srcs = ["GeodeGlfwSurface_linux.cc"],
-    hdrs = ["GeodeGlfwSurface.h"],
-    target_compatible_with = _GEODE_ONLY + select({
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    deps = [
-        "//third_party/webgpu-cpp:webgpu_cpp",
-        "@glfw",
-    ],
-)
-
-donner_cc_library(
-    name = "geode_glfw_surface",
-    hdrs = ["GeodeGlfwSurface.h"],
-    target_compatible_with = _GEODE_ONLY + select({
-        "@platforms//os:macos": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
-    visibility = [
-        "//donner/editor/gui:__pkg__",
-        "//examples:__pkg__",
-    ],
-    deps = select({
-        "@platforms//os:macos": [":geode_glfw_surface_macos"],
-        "@platforms//os:linux": [":geode_glfw_surface_linux"],
-        "//conditions:default": [],
-    }) + [
-        "//third_party/webgpu-cpp:webgpu_cpp",
-    ],
-)
-
 donner_multi_transitioned_test(
     name = "geode_device_tests",
     # Tight timeout — device-creation tests should never take more than

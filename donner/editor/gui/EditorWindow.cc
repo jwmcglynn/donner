@@ -34,8 +34,8 @@ extern "C" {
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
 #ifdef DONNER_EDITOR_WGPU
+#include "donner/editor/gui/EditorWgpuSurface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeGlfwSurface.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
 
@@ -347,7 +347,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwTerminate();
     return;
   }
-  wgpuState_->surface = geode::CreateSurfaceFromGlfwWindow(wgpuState_->instance, window_);
+  wgpuState_->surface = CreateWgpuSurfaceFromGlfwWindow(wgpuState_->instance, window_);
   if (!wgpuState_->surface) {
     std::fprintf(stderr, "EditorWindow: failed to create WebGPU surface\n");
     glfwDestroyWindow(window_);

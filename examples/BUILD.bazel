@@ -87,6 +87,64 @@ donner_cc_binary(
 # into the window's swap-chain texture every frame. Gated behind the
 # `geode_enabled` flag (see //donner/svg/renderer/geode:BUILD.bazel) so the
 # default build does not pull in wgpu-native.
+objc_library(
+    name = "geode_embed_surface_macos",
+    srcs = ["geode_embed_surface_macos.mm"],
+    hdrs = ["geode_embed_surface.h"],
+    sdk_frameworks = [
+        "Cocoa",
+        "QuartzCore",
+    ],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "@glfw",
+    ],
+)
+
+cc_library(
+    name = "geode_embed_surface_linux",
+    srcs = ["geode_embed_surface_linux.cc"],
+    hdrs = ["geode_embed_surface.h"],
+    target_compatible_with = select({
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+        "@glfw",
+    ],
+)
+
+cc_library(
+    name = "geode_embed_surface",
+    hdrs = ["geode_embed_surface.h"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }) + select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = select({
+        "@platforms//os:macos": [":geode_embed_surface_macos"],
+        "@platforms//os:linux": [":geode_embed_surface_linux"],
+        "//conditions:default": [],
+    }) + [
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
 donner_cc_binary(
     name = "geode_embed",
     srcs = ["geode_embed.cc"],
@@ -99,10 +157,10 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":geode_embed_surface",
         "//:donner",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer/geode:geode_device",
-        "//donner/svg/renderer/geode:geode_glfw_surface",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
         "@glfw",
