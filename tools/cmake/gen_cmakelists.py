@@ -130,6 +130,8 @@ SKIPPED_TARGETS: Set[str] = {
     # geode_embed depends on @glfw plus the Bazel-only --config=geode renderer
     # and is not part of the CMake build.
     "//examples:geode_embed",
+    "//examples:geode_embed_surface",
+    "//examples:geode_embed_surface_linux",
 }
 
 # Bazel toolchain-internal deps that are not real C++ libraries and should not
