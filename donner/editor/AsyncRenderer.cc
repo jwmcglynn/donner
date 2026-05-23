@@ -186,13 +186,11 @@ void AsyncRenderer::setWakeCallback(std::function<void()> callback) {
 }
 
 void AsyncRenderer::workerLoop() {
-  // Construct the Renderer on the worker thread so all its backend-owned
-  // resources (WebGPU device/queue/textures under Geode, etc.) are
-  // created and used from a single thread. Under
-  // Emscripten pthreads this is load-bearing: `WebGPU.Internals.jsObjects`
-  // is per-worker, and crossing thread boundaries triggers a
-  // `getJsObject` assert on the first `wgpuDeviceCreateTexture`.
-  svg::Renderer renderer;
+#ifdef __EMSCRIPTEN__
+  // Emscripten's WebGPU object table is per-worker. Construct and use the
+  // renderer on this pthread so wgpu handles never cross JS worker boundaries.
+  svg::Renderer workerRenderer;
+#endif
 
   while (true) {
     std::optional<RenderRequest> requestStorage;
@@ -204,8 +202,8 @@ void AsyncRenderer::workerLoop() {
                std::holds_alternative<ShutdownState>(workerState_);
       });
       if (std::holds_alternative<ShutdownState>(workerState_)) {
-        // `renderer` is destroyed here as the local unwinds, i.e. on
-        // the worker thread — mirroring its construction.
+        // `workerRenderer` is destroyed here in Emscripten builds, i.e. on
+        // the worker thread, mirroring its construction.
         return;
       }
       if (std::holds_alternative<CancellingState>(workerState_)) {
@@ -227,7 +225,13 @@ void AsyncRenderer::workerLoop() {
       rendering->pendingRequest.reset();
     }
     RenderRequest& request = *requestStorage;
+#ifdef __EMSCRIPTEN__
+    svg::Renderer& requestRenderer = workerRenderer;
+#else
+    // Native Geode editor builds intentionally use the request renderer so
+    // worker texture snapshots are created on the same WGPU device as ImGui.
     svg::Renderer& requestRenderer = request.lease.renderer();
+#endif
     svg::SVGDocument& requestDocument = request.lease.document();
 
     // §M4: every iteration starts with a fresh (non-cancelled) token.

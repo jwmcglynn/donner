@@ -67,6 +67,7 @@ donner_cc_library(
     srcs = ["EditorWindow.cc"],
     hdrs = ["EditorWindow.h"],
     defines = select({
+        "//donner/editor:wasm_geode_enabled": [],
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
@@ -77,6 +78,9 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_interface",
         "@imgui",
     ] + select({
+        "//donner/editor:wasm_geode_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
         "//donner/editor/wasm:wasm_enabled": [
             "//third_party/emscripten-glfw",
         ],
