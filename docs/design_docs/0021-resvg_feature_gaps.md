@@ -43,10 +43,11 @@ whole text suite gated off) + **23 per-test pixel divergences**. Closing those i
 the parity goal, and it leads this backlog.
 
 The structural stubs are gone — `drawText`, `pushFilterLayer`, clip, mask, blend
-modes, markers, patterns, gradients, and images are all implemented. Parity is now
-dominated by a **systematic text-positioning divergence** (G1 — ~162 of 252 text
-tests fail, clustered ~697 px, not AA) and a **handful of filter-primitive bugs**,
-not missing features.
+modes, markers, patterns, gradients, and images are all implemented. Of 252 text
+tests, 162 fail on Geode; that splits into **4× MSAA edge-coverage quantization**
+(the bulk — accepted, Geode stays at 4× for perf) and **real structural bugs**
+(G1-struct — `drawText` renders no text stroke/decoration, plus CJK/vertical/
+rotate+pattern cases), alongside a **handful of filter-primitive bugs** (G2).
 
 > Source of truth for the per-test divergences: the 8 `disableBackend(Geode, …)`
 > gates in [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc)
@@ -63,51 +64,63 @@ not missing features.
 > **candidate masked bug** and needs re-auditing — passing-with-a-fat-threshold is
 > not parity. This audit is part of the parity work (G2/G5 below), not separate.
 
-### G1: Geode systematic text-positioning divergence — highest leverage
+### G1: Geode text parity — split into edge-sampling (accepted) + structural bugs
 
-**Status:** investigated 2026-05-15. Repro committed —
-`GeodeTextAnchorParityRepro.EndOnTextPositionalBug` in
+**Status:** investigated 2026-05-15 to ground truth (full geode text run, pixel
+analysis, code read). Repro committed —
+`GeodeTextDecorationRepro.UnderlineNotRenderedOnGeode` in
 [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc)
-(red on Geode, skips on CPU backends).
+(red on Geode, authored + green on both CPU text tiers).
 
-**Landscape (full geode text run — `Text` gate flipped, then reverted):** of 252
-text tests, **88 pass / 162 fail**. Failure magnitudes cluster high — median
-**697 px**, mean ~1660, max ~105k; ~300 of the failing diffs exceed 600 px. So the
-folklore is half-right (most text *does* fail) but wrong about the cause.
+**Methodology (corrected):** measure parity as geode-vs-**tiny-skia**, not
+geode-vs-resvg-golden. tiny-skia passes **all 252** text tests with the suite's
+per-test thresholds; geode fails **162** of the same tests with the same params —
+so all 162 are **geode-specific**. (My earlier "most text passes" was a sampling
+artifact; the full run is 88 pass / 162 fail.)
 
-> ⚠️ Correction: an earlier read of this entry claimed "most text passes" — that
-> was a sampling artifact from looking only at `font-weight` + `text-anchor`. The
-> full run refutes it. Most geode text currently fails.
+The 162 split into two very different buckets:
 
-**It is not AA.** The suite compares with `includeAA=false`, so pixelmatch already
-excludes anti-aliased pixels — these are real differences. The gate comment in
-[`RendererTestBackendGeode.cc`](../../donner/svg/renderer/tests/RendererTestBackendGeode.cc)
-("~600-800 px of 4× MSAA AA drift … not closable by threshold") self-contradicts:
-"edge pixels frequently **fully off, not partial**" — fully-off ≠ anti-aliasing.
-The diffs are **systematic edge mismatches on correctly-placed text runs**: a
-sub-pixel positional/metrics offset.
+#### G1-edge: 4× MSAA edge-coverage quantization (the bulk) — accepted, not fixed
 
-**One bug or several?** The tight clustering around ~697 px — plus the 88 passes
-being short text at clean positions (`font-weight/650` → 3 px) — points to a
-**single dominant positional offset** that only vanishes when glyphs land on the
-pixel grid. The long tail (max ~105k) means at least one separate gross failure.
-Confirm via the repro bisect before assuming one fix clears all 162.
+The majority of failures (median ~697 px) are **edge-coverage quantization**.
+Proven on `text-anchor/end-on-text`: the text bbox is **pixel-identical** to the
+reference (`x[21..246] y[164..250]`, same size, ink within 1%), and geode's edge
+alpha is **quantized to 64-steps (0/64/128/191/255)** = exactly 4 MSAA samples,
+vs the reference's smooth coverage. This is the one place "edge sampling" is the
+*proven* cause (per [CLAUDE.md §"Anti-Aliasing Is Never the Root Cause"](../../CLAUDE.md),
+proven by a 1px edge band + quantified — not assumed).
 
-**Impact:** ~162 failing text tests, likely dominated by one positioning bug.
+**Decision: Geode stays at 4× MSAA for performance.** So G1-edge is *not* a bug to
+fix — when un-gating, these tests get a documented per-test threshold widening
+attributable to the 4× sample count (a proven, deliberate tradeoff, not AA
+hand-waving). Glyphs at integer positions already pass (`font-weight/650` → 3 px);
+only fractional-position edges diverge.
 
-**Plan (corrected after the full run):**
-1. ✅ Repro committed (red baseline above).
-2. **Root-cause + fix the positioning offset**: bisect the repro through
-   `drawText`→Slug ([`RendererGeode.cc:3072`](../../donner/svg/renderer/RendererGeode.cc))
-   — glyph origin, advance, scale, device transform. Re-run the full text set
-   afterward to see how many of the 162 clear.
-3. **Then un-gate**: once most text passes, flip `Text` → `true` and add narrow
-   per-test gates only for whatever genuinely remains. Un-gating *before* the fix
-   would just create ~162 per-test gates — not a win. (Sequence corrected from
-   "un-gate then fix": the landscape doesn't support un-gating first.)
+#### G1-struct: real structural bugs (the tail) — these get fixed
 
-Do **not** assume a sample-count/MSAA change addresses this; #537 (Intel-Vulkan
-coverage band) is unrelated.
+Genuinely missing/broken rendering, far too large for edge coverage:
+
+- **`drawText` only fills glyph outlines** — it renders neither text **stroke**
+  nor text-**decoration** (underline/overline/line-through), while
+  `RendererTinySkia::drawText` renders both (see its "Draw text-decoration lines"
+  block). This is the biggest single gap: the whole `text/text-decoration`
+  category (~44 tests) fails on the missing line. **← active: repro committed.**
+- `text/text/rotate…underline…pattern` → ~105k px (pattern-on-rotated-text).
+- `text/text/xml_lang_ja` (CJK) → ~19k px (CJK font fallback / bitmap-only glyphs,
+  which `drawText` skips at `RendererGeode.cc:3162`).
+- `text/writing-mode=tb` (vertical) → ~2.3k px.
+
+**Plan:**
+1. ✅ Repro committed (text-decoration underline, red on Geode).
+2. **Fix `drawText` decorations** (port underline/overline/line-through from
+   tiny-skia: font underline/strikeout metrics → rect → `fillPath`). Then text
+   stroke. Re-run the text set; expect the decoration category to clear.
+3. Work the remaining G1-struct tail (CJK, vertical, rotate+pattern) as separate
+   repros + fixes.
+4. **Un-gate**: flip `Text` → `true`; passing tests run, G1-edge tests get the
+   documented 4×-MSAA threshold, remaining G1-struct failures keep narrow gates
+   linked to their repro. (Un-gating before the structural fixes would just create
+   ~162 per-test gates.)
 
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 
