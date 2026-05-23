@@ -378,13 +378,13 @@ void GeodeDevice::initSharedPipelines() {
 
 void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {
   if (buffer) {
-    pendingBuffers_.push_back(std::move(buffer));
+    pendingBuffers_.push_back(ScopedWgpuHandle<wgpu::Buffer>(std::move(buffer)));
   }
 }
 
 void GeodeDevice::deferDestroy(wgpu::Texture texture) {
   if (texture) {
-    pendingTextures_.push_back(std::move(texture));
+    pendingTextures_.push_back(ScopedWgpuHandle<wgpu::Texture>(std::move(texture)));
   }
 }
 

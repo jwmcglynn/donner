@@ -22,6 +22,7 @@ extern "C" {
 #include <GLFW/glfw3.h>
 #endif
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -57,6 +58,34 @@ void GlfwErrorCallback(int error, const char* description) {
 }
 
 #ifdef DONNER_EDITOR_WGPU
+void OnEditorWgpuUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type,
+                                 WGPUStringView message, void* /*userdata1*/, void* /*userdata2*/) {
+  std::fprintf(stderr, "[Editor/WGPU] Uncaptured error (type=%d): %.*s\n", static_cast<int>(type),
+               static_cast<int>(message.length), message.data ? message.data : "");
+}
+
+class SurfacePresentGuard {
+public:
+  explicit SurfacePresentGuard(wgpu::Surface& surface) : surface_(surface) {}
+  ~SurfacePresentGuard() { present(); }
+
+  SurfacePresentGuard(const SurfacePresentGuard&) = delete;
+  SurfacePresentGuard& operator=(const SurfacePresentGuard&) = delete;
+
+  void present() {
+    if (!active_ || !surface_) {
+      return;
+    }
+
+    surface_.present();
+    active_ = false;
+  }
+
+private:
+  wgpu::Surface& surface_;
+  bool active_ = true;
+};
+
 wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
   for (size_t i = 0; i < caps.formatCount; ++i) {
     const auto format = caps.formats[i];
@@ -367,6 +396,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
   wgpu::DeviceDescriptor deviceDesc = {};
   deviceDesc.label = wgpu::StringView{std::string_view{"DonnerEditorWGPUDevice"}};
+  deviceDesc.uncapturedErrorCallbackInfo.callback = OnEditorWgpuUncapturedError;
+  deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
+  deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
   wgpuState_->device = wgpuState_->adapter.requestDevice(deviceDesc);
   if (!wgpuState_->device) {
     std::fprintf(stderr, "EditorWindow: failed to create WebGPU device\n");
@@ -719,7 +751,16 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   }
 
   wgpu::SurfaceTexture surfaceTexture;
+  const auto acquireStart = std::chrono::steady_clock::now();
   wgpuState_->surface.getCurrentTexture(&surfaceTexture);
+  const auto acquireMs =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquireStart)
+          .count();
+  if (acquireMs > 250.0) {
+    std::fprintf(stderr,
+                 "[Editor/WGPU] surface.getCurrentTexture took %.1fms (status=%d, size=%dx%d)\n",
+                 acquireMs, static_cast<int>(surfaceTexture.status), displayW, displayH);
+  }
   if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
       surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
     donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
@@ -728,6 +769,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   }
 
   donner::geode::ScopedWgpuHandle<wgpu::Texture> target(wgpu::Texture(surfaceTexture.texture));
+  SurfacePresentGuard presentGuard(wgpuState_->surface);
   const bool shouldReadback = readback != nullptr && options_.enableFramebufferReadback &&
                               SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
   const uint32_t readbackWidth = static_cast<uint32_t>(displayW);
@@ -796,7 +838,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     readbackBuffer.get().unmap();
   }
-  wgpuState_->surface.present();
+  presentGuard.present();
 #else
   glViewport(0, 0, displayW, displayH);
   glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],

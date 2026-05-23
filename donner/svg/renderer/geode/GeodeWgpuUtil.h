@@ -19,6 +19,7 @@
 
 #include <string_view>
 #include <utility>
+#include <vector>
 #include <webgpu/webgpu.hpp>
 
 namespace donner::geode {
@@ -105,6 +106,60 @@ public:
 
 private:
   Handle handle_;
+};
+
+/**
+ * Scoped owner for short-lived WebGPU resources used while recording a command
+ * encoder.
+ *
+ * The returned `wgpu::` values are borrowed aliases that remain valid while the
+ * arena is alive. This is useful for render-pass helpers that need handles to
+ * survive until the enclosing encoder is finished, but do not need bespoke
+ * ownership fields for every per-draw texture view / bind group / buffer.
+ */
+class ScopedWgpuResourceArena {
+public:
+  /// Retain a buffer handle and return a borrowed alias.
+  [[nodiscard]] wgpu::Buffer retain(wgpu::Buffer handle) {
+    return retainImpl(buffers_, std::move(handle));
+  }
+
+  /// Retain a texture handle and return a borrowed alias.
+  [[nodiscard]] wgpu::Texture retain(wgpu::Texture handle) {
+    return retainImpl(textures_, std::move(handle));
+  }
+
+  /// Retain a texture-view handle and return a borrowed alias.
+  [[nodiscard]] wgpu::TextureView retain(wgpu::TextureView handle) {
+    return retainImpl(textureViews_, std::move(handle));
+  }
+
+  /// Retain a sampler handle and return a borrowed alias.
+  [[nodiscard]] wgpu::Sampler retain(wgpu::Sampler handle) {
+    return retainImpl(samplers_, std::move(handle));
+  }
+
+  /// Retain a bind-group handle and return a borrowed alias.
+  [[nodiscard]] wgpu::BindGroup retain(wgpu::BindGroup handle) {
+    return retainImpl(bindGroups_, std::move(handle));
+  }
+
+private:
+  template <typename Handle>
+  static Handle retainImpl(std::vector<ScopedWgpuHandle<Handle>>& storage, Handle handle) {
+    if (!handle) {
+      return Handle();
+    }
+    Handle borrowed = handle;
+    storage.push_back(ScopedWgpuHandle<Handle>(std::move(handle)));
+    return borrowed;
+  }
+
+  std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
+  std::vector<ScopedWgpuHandle<wgpu::Texture>> textures_;
+  std::vector<ScopedWgpuHandle<wgpu::TextureView>> textureViews_;
+  std::vector<ScopedWgpuHandle<wgpu::Sampler>> samplers_;
+  std::vector<ScopedWgpuHandle<wgpu::BindGroup>> bindGroups_;
 };
 
 }  // namespace donner::geode

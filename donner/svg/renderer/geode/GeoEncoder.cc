@@ -198,10 +198,10 @@ struct GeoEncoder::Impl {
   /// holds the handle until the `Arena` itself is destroyed (at
   /// encoder destruction, after `finish()` has submitted all work).
   struct Arena {
-    wgpu::Buffer buffer;
+    ScopedWgpuHandle<wgpu::Buffer> buffer;
     uint64_t capacity = 0;
     uint64_t offset = 0;  // Next unused byte within `buffer`.
-    std::vector<wgpu::Buffer> retired;
+    std::vector<ScopedWgpuHandle<wgpu::Buffer>> retired;
     wgpu::BufferUsage usage = wgpu::BufferUsage::CopyDst;
     const char* label = "GeodeArena";
   };
@@ -246,25 +246,25 @@ struct GeoEncoder::Impl {
       desc.label = wgpuLabel(arena.label);
       desc.size = newCap;
       desc.usage = arena.usage;
-      arena.buffer = device->device().createBuffer(desc);
+      arena.buffer.reset(device->device().createBuffer(desc));
       device->countBuffer();
       arena.capacity = newCap;
       arena.offset = 0;
       alignedOffset = 0;
     }
-    device->queue().writeBuffer(arena.buffer, alignedOffset, data, size);
+    device->queue().writeBuffer(arena.buffer.get(), alignedOffset, data, size);
     arena.offset = alignedOffset + size;
-    return {&arena.buffer, alignedOffset, size};
+    return {&arena.buffer.get(), alignedOffset, size};
   }
   // When sampleCount == 4: multisampled color attachment. All draws land
   // here and the hardware resolves into `target` at the end of each pass.
   // When sampleCount == 1: unused (null) — draws go directly to `target`.
   wgpu::Texture msaaTarget;
-  wgpu::TextureView msaaTargetView;
+  ScopedWgpuHandle<wgpu::TextureView> msaaTargetView;
   // 1-sample resolve / direct-render texture. External code (image blit,
   // readback) samples / copies from this texture, never the MSAA color.
   wgpu::Texture target;
-  wgpu::TextureView targetView;
+  ScopedWgpuHandle<wgpu::TextureView> targetView;
   ScopedWgpuHandle<wgpu::CommandEncoder> ownedCommandEncoder;
   wgpu::CommandEncoder commandEncoder;
   uint32_t targetWidth;
@@ -313,7 +313,7 @@ struct GeoEncoder::Impl {
   // so main-pass draw code picks back up exactly where it left off
   // when the mask pass ends.
   bool maskPassOpen = false;
-  wgpu::RenderPassEncoder maskPass;
+  ScopedWgpuHandle<wgpu::RenderPassEncoder> maskPass;
   // Transform active when the mask pass was opened, so mask draws use
   // the same device-pixel space as the parent content. The mask pass
   // always renders into the mask texture the caller passed in, which
@@ -323,7 +323,12 @@ struct GeoEncoder::Impl {
   // Pending draws are recorded into a render pass that's lazily opened.
   // The first clear/fill triggers `beginPass()`; finish() ends it.
   bool passOpen = false;
-  wgpu::RenderPassEncoder pass;
+  ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;
+
+  // Per-encoder resources created while recording draw calls. They are
+  // released together when the encoder is destroyed, after `finish()` has
+  // ended the open pass and submitted the command buffer in owning mode.
+  ScopedWgpuResourceArena transientResources;
 
   // Default load op = clear-to-transparent until clear() is called explicitly.
   wgpu::Color clearColor = {0.0, 0.0, 0.0, 0.0};
@@ -395,9 +400,9 @@ struct GeoEncoder::Impl {
       uint32_t maxH = targetHeight - y;
       uint32_t w = std::min(scissorW, maxW);
       uint32_t h = std::min(scissorH, maxH);
-      pass.setScissorRect(x, y, w, h);
+      pass.get().setScissorRect(x, y, w, h);
     } else {
-      pass.setScissorRect(0, 0, targetWidth, targetHeight);
+      pass.get().setScissorRect(0, 0, targetWidth, targetHeight);
     }
   }
 
@@ -426,12 +431,12 @@ struct GeoEncoder::Impl {
       // state for a subsequent pass (see `setLoadPreserve()` — we may
       // reopen a pass to continue drawing on top of the previous MSAA
       // contents, e.g., after a nested-layer composite).
-      color.view = msaaTargetView;
-      color.resolveTarget = targetView;
+      color.view = msaaTargetView.get();
+      color.resolveTarget = targetView.get();
     } else {
       // 1-sample (alpha-coverage path): draw directly into the target
       // texture — no MSAA intermediate, no hardware resolve.
-      color.view = targetView;
+      color.view = targetView.get();
     }
     color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
@@ -446,7 +451,7 @@ struct GeoEncoder::Impl {
     desc.colorAttachmentCount = 1;
     desc.colorAttachments = &color;
     desc.label = wgpuLabel("GeoEncoderPass");
-    pass = commandEncoder.beginRenderPass(desc);
+    pass.reset(commandEncoder.beginRenderPass(desc));
     // Pipelines are set per-draw — `fillPath` / `fillPathLinearGradient` /
     // `drawImage` each rebind their own pipeline before issuing a draw call.
     // Re-binding only happens when the bound pipeline differs from the next
@@ -470,7 +475,7 @@ struct GeoEncoder::Impl {
   bool currentPipelineIsGradient = false;
   void bindSolidPipeline() {
     if (currentPipeline != BoundPipeline::kSolid) {
-      pass.setPipeline(pipeline->pipeline());
+      pass.get().setPipeline(pipeline->pipeline());
       device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kSolid;
       currentPipelineIsGradient = false;
@@ -478,7 +483,7 @@ struct GeoEncoder::Impl {
   }
   void bindGradientPipeline() {
     if (currentPipeline != BoundPipeline::kGradient) {
-      pass.setPipeline(gradientPipeline->pipeline());
+      pass.get().setPipeline(gradientPipeline->pipeline());
       device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kGradient;
       currentPipelineIsGradient = true;
@@ -486,7 +491,7 @@ struct GeoEncoder::Impl {
   }
   void bindImagePipeline(const wgpu::RenderPipeline& imageRenderPipeline) {
     if (currentPipeline != BoundPipeline::kImage) {
-      pass.setPipeline(imageRenderPipeline);
+      pass.get().setPipeline(imageRenderPipeline);
       device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kImage;
       currentPipelineIsGradient = false;
@@ -559,13 +564,13 @@ void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
   impl.imagePipeline = &imagePipeline;
   impl.sampleCount = device.sampleCount();
   impl.target = resolveTarget;
-  impl.targetView = resolveTarget.createView();
+  impl.targetView.reset(resolveTarget.createView());
   impl.targetWidth = resolveTarget.getWidth();
   impl.targetHeight = resolveTarget.getHeight();
 
   if (impl.sampleCount > 1) {
     impl.msaaTarget = msaaTarget;
-    impl.msaaTargetView = msaaTarget.createView();
+    impl.msaaTargetView.reset(msaaTarget.createView());
   }
   // When sampleCount == 1 the msaaTarget / msaaTargetView stay null —
   // ensurePassOpen renders directly into targetView with no resolve.
@@ -746,7 +751,8 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
   // run on the next open.
   const bool mainPassWasOpen = impl_->passOpen;
   if (mainPassWasOpen) {
-    impl_->pass.end();
+    impl_->pass.get().end();
+    impl_->pass.reset();
     impl_->passOpen = false;
     impl_->loadPreserve = true;
   }
@@ -759,11 +765,11 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
 
   impl_->maskPassSavedTransform = impl_->transform;
 
-  wgpu::TextureView resolveView = resolveMask.createView();
+  wgpu::TextureView resolveView = impl_->transientResources.retain(resolveMask.createView());
 
   wgpu::RenderPassColorAttachment color = {};
   if (impl_->sampleCount > 1) {
-    wgpu::TextureView msaaView = msaaMask.createView();
+    wgpu::TextureView msaaView = impl_->transientResources.retain(msaaMask.createView());
     color.view = msaaView;
     color.resolveTarget = resolveView;
   } else {
@@ -780,12 +786,12 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
   desc.colorAttachmentCount = 1;
   desc.colorAttachments = &color;
   desc.label = wgpuLabel("GeoEncoderMaskPass");
-  impl_->maskPass = impl_->commandEncoder.beginRenderPass(desc);
-  impl_->maskPass.setPipeline(impl_->maskPipelineOwned->pipeline());
+  impl_->maskPass.reset(impl_->commandEncoder.beginRenderPass(desc));
+  impl_->maskPass.get().setPipeline(impl_->maskPipelineOwned->pipeline());
   impl_->device->countPipelineSwitch();
   // Full-target scissor so clip-path fills aren't clipped by any
   // outer scissor still cached in the encoder state.
-  impl_->maskPass.setScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
+  impl_->maskPass.get().setScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
   impl_->maskPassOpen = true;
 }
 
@@ -872,12 +878,12 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   bgDesc.layout = impl_->maskPipelineOwned->bindGroupLayout();
   bgDesc.entryCount = 5;
   bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
-  impl_->maskPass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
-  impl_->maskPass.setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->maskPass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->maskPass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
+  impl_->maskPass.get().setBindGroup(0, bindGroup, 0, nullptr);
+  impl_->maskPass.get().draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
   impl_->device->countDraw();
 }
 
@@ -885,7 +891,8 @@ void GeoEncoder::endMaskPass() {
   if (!impl_->maskPassOpen) {
     return;
   }
-  impl_->maskPass.end();
+  impl_->maskPass.get().end();
+  impl_->maskPass.reset();
   impl_->maskPassOpen = false;
   // Rebind pipeline tracker — the main pass will need to re-select a
   // pipeline on its next draw.
@@ -1056,14 +1063,15 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   sd.minFilter = wgpu::FilterMode::Linear;
   sd.magFilter = wgpu::FilterMode::Linear;
   sd.maxAnisotropy = 1;
-  wgpu::Sampler sampler = impl_->device->device().createSampler(sd);
+  wgpu::Sampler sampler =
+      impl_->transientResources.retain(impl_->device->device().createSampler(sd));
 
   FillDrawArgs args = {};
   args.path = &path;
   args.rule = rule;
   args.precomputedEncoded = precomputedEncoded;
   args.paintMode = 1u;
-  args.patternView = paint.tile.createView();
+  args.patternView = impl_->transientResources.retain(paint.tile.createView());
   args.patternSampler = sampler;
   args.patternFromPath = paint.patternFromPath;
   args.tileSize = paint.tileSize;
@@ -1188,13 +1196,13 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   bgDesc.layout = impl_->pipeline->bindGroupLayout();
   bgDesc.entryCount = 8;
   bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
   // 4. Record the draw call.
-  impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
-  impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), args.instanceCount, 0, 0);
+  impl_->pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
+  impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
+  impl_->pass.get().draw(static_cast<uint32_t>(encoded.vertices.size()), args.instanceCount, 0, 0);
   impl_->device->countDraw();
 }
 
@@ -1336,12 +1344,12 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   bgDesc.layout = impl_->gradientPipeline->bindGroupLayout();
   bgDesc.entryCount = 5;
   bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
-  impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
-  impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
+  impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
+  impl_->pass.get().draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
   impl_->device->countDraw();
 }
 
@@ -1433,12 +1441,12 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   bgDesc.layout = impl_->gradientPipeline->bindGroupLayout();
   bgDesc.entryCount = 5;
   bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
-  impl_->pass.setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
-  impl_->pass.setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->pass.draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
+  impl_->pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
+  impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
+  impl_->pass.get().draw(static_cast<uint32_t>(encoded.vertices.size()), 1, 0, 0);
   impl_->device->countDraw();
 }
 
@@ -1478,8 +1486,9 @@ void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
   qp.sourceIsPremultiplied = true;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, src,
-                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
+                                        src, mvp, impl_->targetWidth, impl_->targetHeight, qp,
+                                        impl_->transientResources);
 }
 
 void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
@@ -1518,8 +1527,9 @@ void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::
     qp.maskBounds = *maskBounds;
   }
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, content,
-                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
+                                        content, mvp, impl_->targetWidth, impl_->targetHeight, qp,
+                                        impl_->transientResources);
 }
 
 void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::Texture& dstSnapshot,
@@ -1560,8 +1570,9 @@ void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::T
   qp.dstSnapshotTexture = dstSnapshot;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, layer,
-                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
+                                        layer, mvp, impl_->targetWidth, impl_->targetHeight, qp,
+                                        impl_->transientResources);
 }
 
 void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
@@ -1591,9 +1602,9 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
   // Upload the image to a sampled texture.
-  wgpu::Texture texture = GeodeTextureEncoder::uploadRgba8Texture(
+  wgpu::Texture texture = impl_->transientResources.retain(GeodeTextureEncoder::uploadRgba8Texture(
       *impl_->device, image.data.data(), static_cast<uint32_t>(image.width),
-      static_cast<uint32_t>(image.height));
+      static_cast<uint32_t>(image.height)));
   if (!texture) {
     return;
   }
@@ -1612,8 +1623,9 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
       pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, texture,
-                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
+                                        texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,
+                                        impl_->transientResources);
 }
 
 void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect, double opacity,
@@ -1640,19 +1652,22 @@ void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect
   qp.sourceIsPremultiplied = true;
   qp.clipMaskView = impl_->activeClipMaskView;
 
-  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass, texture,
-                                        mvp, impl_->targetWidth, impl_->targetHeight, qp);
+  GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
+                                        texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,
+                                        impl_->transientResources);
 }
 
 void GeoEncoder::finish() {
   if (impl_->passOpen) {
-    impl_->pass.end();
+    impl_->pass.get().end();
+    impl_->pass.reset();
     impl_->passOpen = false;
   } else if (impl_->hasExplicitClear) {
     // No draws but a clear was requested — open and immediately close a pass
     // so the clear actually happens.
     impl_->ensurePassOpen();
-    impl_->pass.end();
+    impl_->pass.get().end();
+    impl_->pass.reset();
     impl_->passOpen = false;
   }
 

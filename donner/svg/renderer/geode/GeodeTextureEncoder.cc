@@ -114,7 +114,8 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
                                            const wgpu::RenderPassEncoder& pass,
                                            const wgpu::Texture& texture, const float mvp[16],
                                            uint32_t targetWidth, uint32_t targetHeight,
-                                           const QuadParams& params) {
+                                           const QuadParams& params,
+                                           ScopedWgpuResourceArena& resourceArena) {
   if (!texture) {
     return;
   }
@@ -150,7 +151,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   uniDesc.label = wgpuLabel("GeodeImageBlitUniforms");
   uniDesc.size = sizeof(Uniforms);
   uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer uniBuf = dev.createBuffer(uniDesc);
+  wgpu::Buffer uniBuf = resourceArena.retain(dev.createBuffer(uniDesc));
   device.countBuffer();
   queue.writeBuffer(uniBuf, 0, &u, sizeof(Uniforms));
 
@@ -162,10 +163,12 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   // view. When their owning feature flags are off, we bind the source
   // content texture view as a cheap dummy (the shader never samples it
   // because the corresponding mode guard is 0).
-  wgpu::TextureView view = texture.createView();
-  wgpu::TextureView maskView = params.maskTexture ? params.maskTexture.createView() : view;
-  wgpu::TextureView dstView =
-      params.dstSnapshotTexture ? params.dstSnapshotTexture.createView() : view;
+  wgpu::TextureView view = resourceArena.retain(texture.createView());
+  wgpu::TextureView maskView =
+      params.maskTexture ? resourceArena.retain(params.maskTexture.createView()) : view;
+  wgpu::TextureView dstView = params.dstSnapshotTexture
+                                  ? resourceArena.retain(params.dstSnapshotTexture.createView())
+                                  : view;
   wgpu::TextureView clipMaskView = params.clipMaskView ? params.clipMaskView : view;
   wgpu::BindGroupEntry entries[7] = {};
   entries[0].binding = 0;
@@ -189,7 +192,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   bgDesc.layout = pipeline.bindGroupLayout();
   bgDesc.entryCount = 7;
   bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup = dev.createBindGroup(bgDesc);
+  wgpu::BindGroup bindGroup = resourceArena.retain(dev.createBindGroup(bgDesc));
   device.countBindGroup();
 
   // The caller is expected to have invoked `GeoEncoder::bindImagePipeline`

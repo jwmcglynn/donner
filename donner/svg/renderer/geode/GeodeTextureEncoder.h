@@ -12,6 +12,7 @@ namespace donner::geode {
 
 class GeodeDevice;
 class GeodeImagePipeline;
+class ScopedWgpuResourceArena;
 
 /**
  * Reusable helpers for uploading pixel data to a `wgpu::Texture` and drawing
@@ -133,13 +134,16 @@ public:
    *   - Provide an MVP matrix built the same way as `GeoEncoder::Impl::buildMvp`
    *     (target-pixel → clip space, composed with the model-view transform).
    *
-   * Allocates fresh GPU resources (uniform buffer + bind group) per call —
-   * caching is a Phase 5 concern.
+   * Allocates fresh GPU resources (uniform buffer + bind group) per call and
+   * retains them in `resourceArena` until the caller finishes the enclosing
+   * command encoder.
+   *
+   * @param resourceArena Scoped owner for WebGPU handles created by the draw.
    */
   static void drawTexturedQuad(GeodeDevice& device, const GeodeImagePipeline& pipeline,
                                const wgpu::RenderPassEncoder& pass, const wgpu::Texture& texture,
                                const float mvp[16], uint32_t targetWidth, uint32_t targetHeight,
-                               const QuadParams& params);
+                               const QuadParams& params, ScopedWgpuResourceArena& resourceArena);
 };
 
 }  // namespace donner::geode

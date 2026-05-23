@@ -46,6 +46,7 @@ struct Tile;
 namespace donner::geode {
 
 class GeodeDevice;
+struct FilterResourceArena;
 
 /**
  * GPU filter-graph executor.
@@ -116,8 +117,8 @@ private:
   /// @param stdDeviationY Standard deviation in Y (pixels).
   /// @param edgeMode Edge handling mode (0=None, 1=Duplicate, 2=Wrap).
   /// @return The blurred texture.
-  wgpu::Texture applyGaussianBlur(const wgpu::Texture& input, double stdDeviationX,
-                                  double stdDeviationY, uint32_t edgeMode);
+  wgpu::Texture applyGaussianBlur(FilterResourceArena& arena, const wgpu::Texture& input,
+                                  double stdDeviationX, double stdDeviationY, uint32_t edgeMode);
 
   /// Run a single blur pass (horizontal or vertical).
   /// @param input Source texture for this pass.
@@ -127,8 +128,8 @@ private:
   /// @param axis 0 = horizontal, 1 = vertical.
   /// @param edgeMode Edge handling mode.
   /// @return Output texture for this pass.
-  wgpu::Texture runBlurPass(const wgpu::Texture& input, uint32_t width, uint32_t height,
-                            float stdDeviation, uint32_t axis, uint32_t edgeMode);
+  wgpu::Texture runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input, uint32_t width,
+                            uint32_t height, float stdDeviation, uint32_t axis, uint32_t edgeMode);
 
   /// One pass of a 3-pass box blur (used to approximate a Gaussian for sigma
   /// >= 2.0, matching tiny-skia's behaviour).
@@ -140,34 +141,35 @@ private:
   /// @param axis 0 = horizontal, 1 = vertical.
   /// @param edgeMode Edge handling mode.
   /// @return Output texture for this pass.
-  wgpu::Texture runBoxBlurPass(const wgpu::Texture& input, uint32_t width, uint32_t height,
-                               int32_t boxLeft, int32_t boxRight, uint32_t axis, uint32_t edgeMode);
+  wgpu::Texture runBoxBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
+                               uint32_t width, uint32_t height, int32_t boxLeft, int32_t boxRight,
+                               uint32_t axis, uint32_t edgeMode);
 
   /// Shift pixels by (dx, dy) via compute shader.
   /// @param input The input texture.
   /// @param primitive The feOffset parameters.
   /// @return The offset texture.
-  wgpu::Texture applyOffset(const wgpu::Texture& input,
+  wgpu::Texture applyOffset(FilterResourceArena& arena, const wgpu::Texture& input,
                             const svg::components::filter_primitive::Offset& primitive);
 
   /// Apply a 4x5 color matrix to each pixel via compute shader.
   /// @param input The input texture.
   /// @param primitive The feColorMatrix parameters.
   /// @return The transformed texture.
-  wgpu::Texture applyColorMatrix(const wgpu::Texture& input,
+  wgpu::Texture applyColorMatrix(FilterResourceArena& arena, const wgpu::Texture& input,
                                  const svg::components::filter_primitive::ColorMatrix& primitive);
 
   /// Extract SourceAlpha (0,0,0,A) from a SourceGraphic texture.
   /// @param input The source-graphic texture.
   /// @return A texture whose RGB are zero and alpha matches the input alpha.
-  wgpu::Texture applySourceAlpha(const wgpu::Texture& input);
+  wgpu::Texture applySourceAlpha(FilterResourceArena& arena, const wgpu::Texture& input);
 
   /// Fill the output with a constant flood color via compute shader.
   /// @param width Output texture width.
   /// @param height Output texture height.
   /// @param primitive The feFlood parameters.
   /// @return The flood-filled texture.
-  wgpu::Texture applyFlood(uint32_t width, uint32_t height,
+  wgpu::Texture applyFlood(FilterResourceArena& arena, uint32_t width, uint32_t height,
                            const svg::components::filter_primitive::Flood& primitive);
 
   /// Alpha-over composite of N input textures via sequential compute dispatches.
@@ -176,7 +178,7 @@ private:
   /// @param currentBuffer The "previous" output buffer.
   /// @param sourceGraphic The original source-graphic texture.
   /// @return The composited texture.
-  wgpu::Texture applyMerge(const svg::components::FilterNode& node,
+  wgpu::Texture applyMerge(FilterResourceArena& arena, const svg::components::FilterNode& node,
                            const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
                            const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
                            const wgpu::Texture* sourceAlpha);
@@ -187,15 +189,16 @@ private:
   /// @param width Output texture width.
   /// @param height Output texture height.
   /// @return The composited texture.
-  wgpu::Texture runMergePass(const wgpu::Texture& src, const wgpu::Texture& dst, uint32_t width,
-                             uint32_t height);
+  wgpu::Texture runMergePass(FilterResourceArena& arena, const wgpu::Texture& src,
+                             const wgpu::Texture& dst, uint32_t width, uint32_t height);
 
   /// Porter-Duff compositing of two inputs via compute shader.
   /// @param in1 First input texture (source).
   /// @param in2 Second input texture (destination/backdrop).
   /// @param primitive The feComposite parameters (operator + k1..k4).
   /// @return The composited texture.
-  wgpu::Texture applyComposite(const wgpu::Texture& in1, const wgpu::Texture& in2,
+  wgpu::Texture applyComposite(FilterResourceArena& arena, const wgpu::Texture& in1,
+                               const wgpu::Texture& in2,
                                const svg::components::filter_primitive::Composite& primitive);
 
   /// W3C Compositing 1 blend of two inputs via compute shader.
@@ -203,7 +206,8 @@ private:
   /// @param in2 Second input texture (backdrop).
   /// @param primitive The feBlend parameters (blend mode).
   /// @return The blended texture.
-  wgpu::Texture applyBlend(const wgpu::Texture& in1, const wgpu::Texture& in2,
+  wgpu::Texture applyBlend(FilterResourceArena& arena, const wgpu::Texture& in1,
+                           const wgpu::Texture& in2,
                            const svg::components::filter_primitive::Blend& primitive);
 
   /// Morphological erode / dilate via min / max rectangular kernel.
@@ -212,7 +216,7 @@ private:
   /// @param pixelRadiusX Horizontal radius in pixels.
   /// @param pixelRadiusY Vertical radius in pixels.
   /// @return The morphed texture.
-  wgpu::Texture applyMorphology(const wgpu::Texture& input,
+  wgpu::Texture applyMorphology(FilterResourceArena& arena, const wgpu::Texture& input,
                                 const svg::components::filter_primitive::Morphology& primitive,
                                 int pixelRadiusX, int pixelRadiusY);
 
@@ -221,7 +225,7 @@ private:
   /// @param primitive The feComponentTransfer parameters (4 channel functions).
   /// @return The transformed texture.
   wgpu::Texture applyComponentTransfer(
-      const wgpu::Texture& input,
+      FilterResourceArena& arena, const wgpu::Texture& input,
       const svg::components::filter_primitive::ComponentTransfer& primitive);
 
   /// NxM kernel convolution (feConvolveMatrix).
@@ -229,7 +233,7 @@ private:
   /// @param primitive The feConvolveMatrix parameters.
   /// @return The convolved texture.
   wgpu::Texture applyConvolveMatrix(
-      const wgpu::Texture& input,
+      FilterResourceArena& arena, const wgpu::Texture& input,
       const svg::components::filter_primitive::ConvolveMatrix& primitive);
 
   /// Perlin noise / fractal noise generator (feTurbulence).
@@ -238,7 +242,7 @@ private:
   /// @param primitive The feTurbulence parameters.
   /// @param deviceFromFilter Transform from filter/user space into device space.
   /// @return The noise texture.
-  wgpu::Texture applyTurbulence(uint32_t width, uint32_t height,
+  wgpu::Texture applyTurbulence(FilterResourceArena& arena, uint32_t width, uint32_t height,
                                 const svg::components::filter_primitive::Turbulence& primitive,
                                 const Transform2d& deviceFromFilter);
 
@@ -249,7 +253,7 @@ private:
   /// @param pixelScale Displacement scale in pixels.
   /// @return The displaced texture.
   wgpu::Texture applyDisplacementMap(
-      const wgpu::Texture& in1, const wgpu::Texture& in2,
+      FilterResourceArena& arena, const wgpu::Texture& in1, const wgpu::Texture& in2,
       const svg::components::filter_primitive::DisplacementMap& primitive, double pixelScale);
 
   /// Lambertian diffuse lighting (feDiffuseLighting).
@@ -259,7 +263,7 @@ private:
   /// @param scaleY User-to-pixel scale Y.
   /// @return The lit texture.
   wgpu::Texture applyDiffuseLighting(
-      const wgpu::Texture& input,
+      FilterResourceArena& arena, const wgpu::Texture& input,
       const svg::components::filter_primitive::DiffuseLighting& primitive,
       const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
       const Box2d& sampleSubregion);
@@ -271,7 +275,7 @@ private:
   /// @param scaleY User-to-pixel scale Y.
   /// @return The lit texture.
   wgpu::Texture applySpecularLighting(
-      const wgpu::Texture& input,
+      FilterResourceArena& arena, const wgpu::Texture& input,
       const svg::components::filter_primitive::SpecularLighting& primitive,
       const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
       const Box2d& sampleSubregion);
@@ -284,7 +288,7 @@ private:
   /// @param pixelDx Offset in pixel units (X).
   /// @param pixelDy Offset in pixel units (Y).
   /// @return The drop-shadowed texture.
-  wgpu::Texture applyDropShadow(const wgpu::Texture& input,
+  wgpu::Texture applyDropShadow(FilterResourceArena& arena, const wgpu::Texture& input,
                                 const svg::components::filter_primitive::DropShadow& primitive,
                                 double pixelStdDevX, double pixelStdDevY, double pixelDx,
                                 double pixelDy);
@@ -298,7 +302,8 @@ private:
   /// @param deviceFromFilter The combined CTM from filter/user-space to device pixels.
   ///   Used by fragment references to project through rotation/skew.
   /// @return The placed-image texture.
-  wgpu::Texture applyImage(const svg::components::filter_primitive::Image& primitive,
+  wgpu::Texture applyImage(FilterResourceArena& arena,
+                           const svg::components::filter_primitive::Image& primitive,
                            uint32_t width, uint32_t height,
                            const svg::components::FilterGraph& graph,
                            const svg::components::FilterNode& node,
@@ -311,8 +316,8 @@ private:
   /// @param srcW Source rectangle width in pixels.
   /// @param srcH Source rectangle height in pixels.
   /// @return The tiled texture.
-  wgpu::Texture applyTile(const wgpu::Texture& input, int32_t srcX, int32_t srcY, int32_t srcW,
-                          int32_t srcH);
+  wgpu::Texture applyTile(FilterResourceArena& arena, const wgpu::Texture& input, int32_t srcX,
+                          int32_t srcY, int32_t srcW, int32_t srcH);
 
   /// Clip a primitive's output to its user-space subregion via the inverse CTM.
   /// Pixels whose center maps outside the subregion are zeroed.
@@ -323,15 +328,17 @@ private:
   /// @param usrX1 User-space subregion right edge.
   /// @param usrY1 User-space subregion bottom edge.
   /// @return A new texture with out-of-subregion pixels cleared.
-  wgpu::Texture applySubregionClip(const wgpu::Texture& input, const Transform2d& filterFromDevice,
-                                   double usrX0, double usrY0, double usrX1, double usrY1);
+  wgpu::Texture applySubregionClip(FilterResourceArena& arena, const wgpu::Texture& input,
+                                   const Transform2d& filterFromDevice, double usrX0, double usrY0,
+                                   double usrX1, double usrY1);
 
   /// Convert a texture between sRGB and linearRGB color spaces.
   /// Used to implement `color-interpolation-filters: linearRGB` (the SVG default).
   /// @param input The input texture in premultiplied sRGB (or linear, for the reverse).
   /// @param srgbToLinear True to convert sRGB→linear, false for linear→sRGB.
   /// @return A new texture in the target color space.
-  wgpu::Texture applyColorSpaceConversion(const wgpu::Texture& input, bool srgbToLinear);
+  wgpu::Texture applyColorSpaceConversion(FilterResourceArena& arena, const wgpu::Texture& input,
+                                          bool srgbToLinear);
 
   GeodeDevice& device_;
 
