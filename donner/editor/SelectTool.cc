@@ -121,7 +121,8 @@ svg::SVGElement TopLevelAncestor(svg::SVGElement hit, const svg::SVGElement& con
 
 bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
                                           MouseModifiers modifiers,
-                                          std::span<const Box2d> selectionBoundsDoc) {
+                                          std::span<const Box2d> selectionBoundsDoc,
+                                          std::span<const Box2d> occludingBoundsDoc) {
   if (modifiers.shift) {
     return false;
   }
@@ -137,6 +138,11 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   if (selectionBoundsDoc.empty() || !selectionBoundsDoc.front().contains(documentPoint) ||
       !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
     return false;
+  }
+  for (const Box2d& occludingBounds : occludingBoundsDoc) {
+    if (occludingBounds.contains(documentPoint)) {
+      return false;
+    }
   }
 
   // Reset any in-progress drag/marquee state before starting the new one

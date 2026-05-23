@@ -114,5 +114,32 @@ TEST(SelectionAabbTest, SnapshotSkipsNonRenderedContainerDescendants) {
   EXPECT_EQ(bounds[0], Box2d::FromXYWH(80.0, 80.0, 40.0, 40.0));
 }
 
+TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsIncludesOnlyLaterPaintedGeometry) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <rect id="behind" x="1" y="1" width="2" height="3" fill="black"/>
+              <g id="selected">
+                <rect id="selected_child" x="20" y="20" width="40" height="40" fill="red"/>
+              </g>
+              <rect id="front_a" x="70" y="80" width="10" height="20" fill="blue"/>
+              <g id="front_group">
+                <rect id="front_b" x="100" y="110" width="30" height="40" fill="green"/>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto selected = app.document().document().querySelector("#selected");
+  ASSERT_TRUE(selected.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*selected};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionOccludingWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 2u);
+  EXPECT_EQ(bounds[0], Box2d::FromXYWH(70.0, 80.0, 10.0, 20.0));
+  EXPECT_EQ(bounds[1], Box2d::FromXYWH(100.0, 110.0, 30.0, 40.0));
+}
+
 }  // namespace
 }  // namespace donner::editor

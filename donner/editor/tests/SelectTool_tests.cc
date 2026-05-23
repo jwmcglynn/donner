@@ -44,6 +44,12 @@ constexpr std::string_view kPlainGroupSiblingSvg =
          </g>
        </svg>)";
 
+constexpr std::string_view kOverlappingRectsSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+         <rect id="back" x="10" y="10" width="90" height="90" fill="red"/>
+         <rect id="front" x="40" y="40" width="50" height="50" fill="blue"/>
+       </svg>)";
+
 class SelectToolTest : public ::testing::Test {
 protected:
   void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
@@ -902,6 +908,40 @@ TEST_F(SelectToolTest, TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup) 
       tool.tryStartRedragOnSelected(app, Vector2d(15.0, 20.0), MouseModifiers{}, anchorBounds));
   EXPECT_TRUE(tool.isDragging());
   EXPECT_TRUE(selectionIs("#anchor"));
+}
+
+// Regression repro: EditorShell runs the re-drag fast path before the
+// idle-gated full hit-test. If the click is inside the selected element's
+// cached bounds but a later-painted object is on top at that point, the fast
+// path must not keep dragging the behind selection. It should fall through to
+// the normal hit-test path so the front object can become selected.
+TEST_F(SelectToolTest, RedragFastPathDoesNotStealClickFromFrontOverlappingObject) {
+  loadSvg(kOverlappingRectsSvg);
+  app.setSelection(elementById("#back"));
+  ASSERT_TRUE(selectionIs("#back"));
+
+  const Vector2d overlapPoint(50.0, 50.0);
+  auto hit = app.hitTest(overlapPoint);
+  ASSERT_TRUE(hit.has_value());
+  ASSERT_EQ(hit->id(), "front") << "test setup requires #front to paint above #back";
+
+  SelectionBoundsCache boundsCache;
+  const std::uint64_t version = app.document().currentFrameVersion();
+  RefreshSelectionBoundsCache(boundsCache, std::span<const svg::SVGElement>(app.selectedElements()),
+                              version, version);
+  ASSERT_FALSE(boundsCache.displayedBoundsDoc.empty());
+  ASSERT_TRUE(boundsCache.displayedBoundsDoc.front().contains(overlapPoint));
+  ASSERT_FALSE(boundsCache.displayedOccludingBoundsDoc.empty());
+  ASSERT_TRUE(boundsCache.displayedOccludingBoundsDoc.front().contains(overlapPoint));
+
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, overlapPoint, MouseModifiers{},
+                                             boundsCache.displayedBoundsDoc,
+                                             boundsCache.displayedOccludingBoundsDoc))
+      << "a busy-frame re-drag fast path must not preempt a topmost hit-test candidate";
+  EXPECT_FALSE(tool.isDragging());
+
+  tool.onMouseDown(app, overlapPoint, MouseModifiers{});
+  EXPECT_TRUE(selectionIs("#front"));
 }
 
 }  // namespace

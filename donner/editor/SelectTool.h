@@ -68,18 +68,18 @@ public:
   /// is mid-render (hitTest would race the worker's
   /// `prepareDocumentForRendering`).
   ///
-  /// `selectionBoundsDoc` is the **caller-supplied** AABB list for the
-  /// current selection (in document space). EditorShell passes the
-  /// pre-snapshotted bounds from `SelectionBoundsCache::displayedBoundsDoc`
-  /// — that cache is refreshed on idle frames, so reading it during a
-  /// busy render is race-free (no live `SnapshotSelectionWorldBounds`
-  /// call inside this function). `onMouseDown` passes a freshly-computed
-  /// live snapshot since its caller has already gated on `!isBusy()`.
+  /// `selectionBoundsDoc` and `occludingBoundsDoc` are **caller-supplied**
+  /// AABB lists in document space. EditorShell passes the pre-snapshotted
+  /// bounds from `SelectionBoundsCache` — that cache is refreshed on idle
+  /// frames, so reading it during a busy render is race-free (no live
+  /// `SnapshotSelectionWorldBounds` call inside this function). `onMouseDown`
+  /// passes freshly-computed live selection bounds and no occlusion hints since
+  /// its caller has already gated on `!isBusy()`.
   ///
   /// Returns true if a drag was started; false if the caller must fall
   /// back to the full `onMouseDown` path (multi-select, shift-click,
-  /// click outside the selection's snapshotted bounds, empty bounds
-  /// span, etc.).
+  /// click outside the selection's snapshotted bounds, click inside
+  /// later-painted cached bounds, empty bounds span, etc.).
   ///
   /// `onMouseDown` itself calls this first to avoid duplicating logic
   /// — so plain clicks on the selection always take the no-hit-test
@@ -87,7 +87,8 @@ public:
   /// can run it BEFORE checking `isBusy()` for the click handler.
   [[nodiscard]] bool tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
                                               MouseModifiers modifiers,
-                                              std::span<const Box2d> selectionBoundsDoc);
+                                              std::span<const Box2d> selectionBoundsDoc,
+                                              std::span<const Box2d> occludingBoundsDoc = {});
 
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).

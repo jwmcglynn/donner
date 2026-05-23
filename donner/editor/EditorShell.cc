@@ -515,10 +515,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   // Design doc 0033 §M8 — click→drag handoff doesn't wait for raster.
   //
   // Fast path: if the user clicks inside the bounds of the currently-
-  // selected element, we can start the re-drag IMMEDIATELY without
-  // gating on `!isBusy()`. The check uses `SelectionBoundsCache::
-  // displayedBoundsDoc` — populated on idle frames — so the call
-  // doesn't touch the registry the worker is mid-mutating. The
+  // selected element and outside cached later-painted bounds, we can
+  // start the re-drag IMMEDIATELY without gating on `!isBusy()`. The
+  // check uses `SelectionBoundsCache` — populated on idle frames — so
+  // the call doesn't touch the registry the worker is mid-mutating. The
   // previous M8 attempt failed because it called the live
   // `SnapshotSelectionWorldBounds` during the busy window; the
   // cache-based check fixes the race.
@@ -535,9 +535,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
     const bool tookFastRedrag =
-        cacheMatchesSelection && selectTool_.tryStartRedragOnSelected(
-                                     app_, pendingClick.documentPoint, pendingClick.modifiers,
-                                     boundsCache.displayedBoundsDoc);
+        cacheMatchesSelection &&
+        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
+                                             pendingClick.modifiers, boundsCache.displayedBoundsDoc,
+                                             boundsCache.displayedOccludingBoundsDoc);
     if (tookFastRedrag) {
       lastPostedScreenPoint_.reset();
       interactionController_.clearPendingClick();
