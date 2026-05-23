@@ -43,10 +43,10 @@ whole text suite gated off) + **23 per-test pixel divergences**. Closing those i
 the parity goal, and it leads this backlog.
 
 The structural stubs are gone — `drawText`, `pushFilterLayer`, clip, mask, blend
-modes, markers, patterns, gradients, and images are all implemented. Geode text
-mostly renders correctly; parity is now dominated by a **localized `text-anchor`
-positional bug** (G1) and a **handful of filter-primitive bugs**, not missing
-features.
+modes, markers, patterns, gradients, and images are all implemented. Parity is now
+dominated by a **systematic text-positioning divergence** (G1 — ~162 of 252 text
+tests fail, clustered ~697 px, not AA) and a **handful of filter-primitive bugs**,
+not missing features.
 
 > Source of truth for the per-test divergences: the 8 `disableBackend(Geode, …)`
 > gates in [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc)
@@ -63,43 +63,51 @@ features.
 > **candidate masked bug** and needs re-auditing — passing-with-a-fat-threshold is
 > not parity. This audit is part of the parity work (G2/G5 below), not separate.
 
-### G1: Geode text-anchor positional bug (most text already passes) — highest leverage
+### G1: Geode systematic text-positioning divergence — highest leverage
 
 **Status:** investigated 2026-05-15. Repro committed —
 `GeodeTextAnchorParityRepro.EndOnTextPositionalBug` in
 [`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc)
 (red on Geode, skips on CPU backends).
 
-**Finding — the folklore was wrong.** The whole text/* category is hard-gated off
-Geode via `ActiveRendererSupportsFeature(Text)==false`
-([`RendererTestBackendGeode.cc`](../../donner/svg/renderer/tests/RendererTestBackendGeode.cc)),
-justified by a comment claiming "~600-800px of 4× MSAA AA drift on **every**
-realistic text test, not closable by threshold." Flipping the gate and measuring
-shows that is false:
-- **Most Geode text passes the default 100px budget** — `text/font-weight/650`
-  → 3px, `text/text-anchor/coordinates-list` → 10px.
-- The failures are **localized to `text-anchor=end` / inheritance** cases, at a
-  consistent **~700px** (end-on-text 726, end-with-letter-spacing 728,
-  inheritance-1/2/3 695/720/636), with **AA excluded** from the count (pixelmatch
-  `includeAA=false`) — non-AA by construction.
-- The diff is a **systematic edge mismatch on a single, correctly-anchored text
-  run** — the signature of a sub-pixel positional/metrics offset in the anchored
-  path, not anti-aliasing. (The gate comment even self-contradicts: "edge pixels
-  frequently fully off, not partial" — fully-off ≠ AA.)
+**Landscape (full geode text run — `Text` gate flipped, then reverted):** of 252
+text tests, **88 pass / 162 fail**. Failure magnitudes cluster high — median
+**697 px**, mean ~1660, max ~105k; ~300 of the failing diffs exceed 600 px. So the
+folklore is half-right (most text *does* fail) but wrong about the cause.
 
-**Impact:** the gate hides ~260 *passing* text tests behind one real bug.
+> ⚠️ Correction: an earlier read of this entry claimed "most text passes" — that
+> was a sampling artifact from looking only at `font-weight` + `text-anchor`. The
+> full run refutes it. Most geode text currently fails.
 
-**Plan (active workstream):**
+**It is not AA.** The suite compares with `includeAA=false`, so pixelmatch already
+excludes anti-aliased pixels — these are real differences. The gate comment in
+[`RendererTestBackendGeode.cc`](../../donner/svg/renderer/tests/RendererTestBackendGeode.cc)
+("~600-800 px of 4× MSAA AA drift … not closable by threshold") self-contradicts:
+"edge pixels frequently **fully off, not partial**" — fully-off ≠ anti-aliasing.
+The diffs are **systematic edge mismatches on correctly-placed text runs**: a
+sub-pixel positional/metrics offset.
+
+**One bug or several?** The tight clustering around ~697 px — plus the 88 passes
+being short text at clean positions (`font-weight/650` → 3 px) — points to a
+**single dominant positional offset** that only vanishes when glyphs land on the
+pixel grid. The long tail (max ~105k) means at least one separate gross failure.
+Confirm via the repro bisect before assuming one fix clears all 162.
+
+**Impact:** ~162 failing text tests, likely dominated by one positioning bug.
+
+**Plan (corrected after the full run):**
 1. ✅ Repro committed (red baseline above).
-2. **Un-gate the passing tests**: flip `Text` → `true`, let text/* run on Geode,
-   and add narrow per-test gates only for the text-anchor failures (linked here).
-   Large parity jump.
-3. **Fix the positional bug**: root-cause the anchored-text sub-pixel offset in
-   `drawText`→Slug ([`RendererGeode.cc:3072`](../../donner/svg/renderer/RendererGeode.cc));
-   `text-anchor=end` shifts the run by −advance, and that offset appears to round
-   differently than tiny-skia. Turn the repro green and drop the per-test gates.
-   Do **not** assume a sample-count/MSAA change addresses it; #537 (Intel-Vulkan
-   coverage band) is unrelated.
+2. **Root-cause + fix the positioning offset**: bisect the repro through
+   `drawText`→Slug ([`RendererGeode.cc:3072`](../../donner/svg/renderer/RendererGeode.cc))
+   — glyph origin, advance, scale, device transform. Re-run the full text set
+   afterward to see how many of the 162 clear.
+3. **Then un-gate**: once most text passes, flip `Text` → `true` and add narrow
+   per-test gates only for whatever genuinely remains. Un-gating *before* the fix
+   would just create ~162 per-test gates — not a win. (Sequence corrected from
+   "un-gate then fix": the landscape doesn't support un-gating first.)
+
+Do **not** assume a sample-count/MSAA change addresses this; #537 (Intel-Vulkan
+coverage band) is unrelated.
 
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 
