@@ -92,6 +92,7 @@ conventions automated agents should follow when editing design docs.
 | 0041 | [geode_analytical_aa](0041-geode_analytical_aa.md) | Developer reference | Geode anti-aliasing & coverage: 4× MSAA `sample_mask`; the accepted sub-pixel floor vs tiny's Skia-AAA; appendix of rejected AA approaches. |
 | 0041-2 | [path_authoring_and_boolean_operations](0041-2-path_authoring_and_boolean_operations.md) | Prototype | Illustrator-like path authoring, direct path editing, and Donner-level boolean path operations for the editor. |
 | 0042 | [geode_slug_conformance](0042-geode_slug_conformance.md) | Developer reference | Geode Slug implementation reference: encoder + shader pipeline, invariants, and known limitations. |
+| 0043 | [deterministic_replay_testing](0043-deterministic_replay_testing.md) | Design | Deterministic multi-thread replay framework and premortem for re-enabling #601-related tests. |
 
 ## Cross-reference: developer docs
 
