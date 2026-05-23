@@ -3196,16 +3196,33 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const css::RGBA spanFill = resolveSpanFill(runIndex);
     const bool hasFill = spanFill.a != 0;
 
-    // NOTE: text *stroke* (`stroke="…"` on <text>/<tspan>) is intentionally not
-    // drawn here yet. A first port stroked each glyph via
-    // `placed.strokeToFill(...)`, but the stroke came out ~2.5x too thick (the
-    // device scale) -- a glyph-space-vs-device-space width bug. Tracked as a
-    // G1-struct follow-up; see docs/design_docs/0021-resvg_feature_gaps.md.
+    // Resolve per-run stroke (solid only; gradient/pattern text stroke is a
+    // separate gap). A per-span stroke overrides the element-level stroke.
+    // Mirrors `RendererTinySkia::drawText`.
+    std::optional<css::RGBA> strokeColor;
+    std::optional<StrokeStyle> strokeStyle;
+    {
+      StrokeParams runStrokeParams = params.strokeParams;
+      std::optional<css::RGBA> color = impl_->resolveSolidStroke();
+      if (runIndex < text.spans.size()) {
+        const auto& span = text.spans[runIndex];
+        if (span.strokeWidth > 0.0) {
+          runStrokeParams.strokeWidth = span.strokeWidth;
+        }
+        if (!std::holds_alternative<PaintServer::None>(span.resolvedStroke)) {
+          color = impl_->resolveSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity);
+        }
+      }
+      if (runStrokeParams.strokeWidth > 0.0 && color.has_value() && color->a != 0) {
+        strokeColor = color;
+        strokeStyle = toStrokeStyle(runStrokeParams);
+      }
+    }
 
     const TextDecoration spanDecoration =
         runIndex < text.spans.size() ? text.spans[runIndex].textDecoration : params.textDecoration;
-    if (!hasFill && spanDecoration == TextDecoration::None) {
-      continue;  // Nothing to fill or decorate.
+    if (!hasFill && !strokeColor.has_value() && spanDecoration == TextDecoration::None) {
+      continue;  // Nothing to fill, stroke, or decorate.
     }
 
     for (const auto& glyph : run.glyphs) {
@@ -3236,6 +3253,15 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       const Path placed = transformPath(glyphPath, glyphFromLocal);
       if (hasFill) {
         impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
+      }
+      if (strokeColor.has_value()) {
+        // Closed glyph contours expand to same-winding outer+inner subpaths, so
+        // the stroked outline needs `strokeFillRuleFor` (EvenOdd for the ring),
+        // not a hardcoded NonZero -- see RendererGeode::drawPath's stroke notes.
+        const Path stroked = placed.strokeToFill(*strokeStyle);
+        if (!stroked.empty()) {
+          impl_->encoder->fillPath(stroked, *strokeColor, Impl::strokeFillRuleFor(stroked));
+        }
       }
     }
 
@@ -3282,8 +3308,21 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           decoFill = *c;
         }
       }
-      // (Decoration *stroke* is omitted for the same glyph-space stroke-width
-      // bug noted above; decoration fill is drawn below.)
+      // Decoration stroke (solid).
+      std::optional<css::RGBA> decoStrokeColor;
+      std::optional<StrokeStyle> decoStrokeStyle;
+      if (span.decorationStrokeWidth > 0.0 &&
+          !std::holds_alternative<PaintServer::None>(span.resolvedDecorationStroke)) {
+        if (auto c = impl_->resolveSolidPaint(span.resolvedDecorationStroke,
+                                              span.decorationStrokeOpacity * span.opacity)) {
+          if (c->a != 0) {
+            decoStrokeColor = c;
+            StrokeParams decoSp;
+            decoSp.strokeWidth = span.decorationStrokeWidth;
+            decoStrokeStyle = toStrokeStyle(decoSp);
+          }
+        }
+      }
 
       const auto drawDecoPath = [&](const Path& path) {
         if (path.empty()) {
@@ -3291,6 +3330,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         }
         if (decoFill.a != 0) {
           impl_->encoder->fillPath(path, decoFill, FillRule::NonZero);
+        }
+        if (decoStrokeColor.has_value()) {
+          const Path stroked = path.strokeToFill(*decoStrokeStyle);
+          if (!stroked.empty()) {
+            impl_->encoder->fillPath(stroked, *decoStrokeColor, Impl::strokeFillRuleFor(stroked));
+          }
         }
       };
 
