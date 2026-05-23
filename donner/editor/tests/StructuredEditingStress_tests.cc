@@ -671,6 +671,7 @@ protected:
           .entity = preview->entity,
           .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
           .translation = preview->translation,
+          .documentFromCachedDocument = preview->documentFromCachedDocument,
           .dragGeneration = preview->dragGeneration,
       };
     }

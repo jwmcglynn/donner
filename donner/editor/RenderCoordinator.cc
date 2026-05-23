@@ -44,6 +44,7 @@ std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
   return SelectTool::ActiveDragPreview{
       .entity = preview->entity,
       .translation = preview->translation,
+      .documentFromCachedDocument = preview->documentFromCachedDocument,
       .dragGeneration = preview->dragGeneration,
   };
 }
@@ -72,7 +73,31 @@ bool CanReuseOverlayForActiveDrag(
   return activeDragPreview.has_value() && presentedOverlayDragPreview.has_value() &&
          activeDragPreview->entity == presentedOverlayDragPreview->entity &&
          activeDragPreview->dragGeneration == presentedOverlayDragPreview->dragGeneration &&
+         activeDragPreview->documentFromCachedDocument.isTranslation() &&
+         presentedOverlayDragPreview->documentFromCachedDocument.isTranslation() &&
          textures.overlayWidth() > 0 && textures.overlayHeight() > 0;
+}
+
+bool SameTransform(const Transform2d& lhs, const Transform2d& rhs) {
+  for (std::size_t i = 0; i < 6; ++i) {
+    if (lhs.data[i] != rhs.data[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SameActiveBoundsPreview(const std::optional<SelectTool::ActiveTransformBoundsPreview>& lhs,
+                             const std::optional<SelectTool::ActiveTransformBoundsPreview>& rhs) {
+  if (lhs.has_value() != rhs.has_value()) {
+    return false;
+  }
+  if (!lhs.has_value()) {
+    return true;
+  }
+
+  return lhs->startBoundsDoc == rhs->startBoundsDoc &&
+         SameTransform(lhs->documentFromStartDocument, rhs->documentFromStartDocument);
 }
 
 }  // namespace
@@ -141,6 +166,7 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlayCanvasSize_ = Vector2i::Zero();
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   lastOverlayMarqueeRectDoc_.reset();
+  lastOverlayActiveBoundsPreview_.reset();
   renderScheduler_.reset();
 }
 
@@ -162,7 +188,8 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
     EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
     const std::optional<Box2d>& marqueeRectDoc, OverlayUploadMode uploadMode,
-    std::optional<SelectTool::ActiveDragPreview> representedDragPreview) {
+    std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
+    std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview) {
   ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     return false;
@@ -179,12 +206,19 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayRenderer_.beginFrame(overlayViewport);
   const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
   const auto& overlaySelection = app.selectedElements();
+  std::optional<SelectionChromeBoundsPreview> chromeBoundsPreview;
+  if (activeBoundsPreview.has_value()) {
+    chromeBoundsPreview = SelectionChromeBoundsPreview{
+        .startBoundsDoc = activeBoundsPreview->startBoundsDoc,
+        .documentFromStartDocument = activeBoundsPreview->documentFromStartDocument,
+    };
+  }
   // Overlay AABBs are computed from the same live DOM snapshot as the path
   // outlines. `selectionBoundsCache_` is maintained only for main-loop
   // selection-change detection and does not gate overlay geometry.
   OverlayRenderer::drawChromeWithTransform(overlayRenderer_,
                                            std::span<const svg::SVGElement>(overlaySelection),
-                                           marqueeRectDoc, canvasFromDoc);
+                                           marqueeRectDoc, canvasFromDoc, chromeBoundsPreview);
   overlayRenderer_.endFrame();
   if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
     pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
@@ -227,6 +261,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayCanvasSize_ = currentCanvasSize;
   lastOverlayVersion_ = currentVersion;
   lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
+  lastOverlayActiveBoundsPreview_ = activeBoundsPreview;
   return true;
 }
 
@@ -337,25 +372,28 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const auto& overlaySelection = app.selectedElements();
   const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec_;
   const std::optional<Box2d> marqueeRectDoc = selectTool.marqueeRect();
+  const auto activeBoundsPreview = selectTool.activeTransformBoundsPreview();
   // The marquee rect updates every mouse-move during a marquee drag and
   // doesn't bump the document version (no DOM mutation), so it needs
   // its own invalidation check. Comparing via `!=` on the optional<Box2d>
   // covers "marquee appeared", "marquee moved", and "marquee ended".
   const bool marqueeDiffers = marqueeRectDoc != lastOverlayMarqueeRectDoc_;
+  const bool activeBoundsPreviewDiffers =
+      !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_);
   const bool canvasDiffers = currentCanvasSize != lastOverlayCanvasSize_;
   const bool overlayVersionDiffers = currentVersion != lastOverlayVersion_;
   const bool activeDragCanReuseOverlay =
       !selectionDiffers && !marqueeDiffers && !canvasDiffers &&
       CanReuseOverlayForActiveDrag(dragPreview, presentedOverlayDragPreview_, textures);
   if ((!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value() ||
-       marqueeRectDoc.has_value()) &&
-      (selectionDiffers || marqueeDiffers || canvasDiffers ||
+       marqueeRectDoc.has_value() || activeBoundsPreviewDiffers) &&
+      (selectionDiffers || marqueeDiffers || canvasDiffers || activeBoundsPreviewDiffers ||
        (overlayVersionDiffers && !activeDragCanReuseOverlay))) {
     rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc,
                                         dragPreview.has_value()
                                             ? OverlayUploadMode::Immediate
                                             : OverlayUploadMode::MatchDisplayedVersion,
-                                        dragPreview);
+                                        dragPreview, activeBoundsPreview);
   }
 
   const PresentationRenderScheduleDecision schedule =

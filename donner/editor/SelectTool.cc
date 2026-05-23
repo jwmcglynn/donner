@@ -1,6 +1,7 @@
 #include "donner/editor/SelectTool.h"
 
 #include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -9,6 +10,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/SelectionAabb.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -18,6 +20,82 @@
 namespace donner::editor {
 
 namespace {
+
+constexpr double kDragThresholdDocUnits = 1.0;
+constexpr double kDragThresholdSq = kDragThresholdDocUnits * kDragThresholdDocUnits;
+constexpr double kMinScaleDenominator = 1e-9;
+
+bool IsFinite(double value) {
+  return std::isfinite(value);
+}
+
+bool IsFinite(const Transform2d& candidateDocumentFromDocument) {
+  for (double value : candidateDocumentFromDocument.data) {
+    if (!IsFinite(value)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+Vector2d CenterOf(const Box2d& box) {
+  return (box.topLeft + box.bottomRight) * 0.5;
+}
+
+Transform2d TransformDocumentAroundPoint(const Vector2d& fixedDocumentPoint,
+                                         const Transform2d& centeredDocumentFromDocument) {
+  return Transform2d::Translate(-fixedDocumentPoint) * centeredDocumentFromDocument *
+         Transform2d::Translate(fixedDocumentPoint);
+}
+
+double AngleFromCenter(const Vector2d& center, const Vector2d& point) {
+  const Vector2d delta = point - center;
+  return std::atan2(delta.y, delta.x);
+}
+
+std::optional<Transform2d> ResizeTransform(const Box2d& startBounds,
+                                           SelectionTransformCorner corner,
+                                           const Vector2d& documentPoint, bool preserveAspectRatio,
+                                           bool resizeFromCenter) {
+  const Vector2d center = CenterOf(startBounds);
+  const Vector2d startCorner = SelectionTransformCornerPoint(startBounds, corner);
+  const Vector2d anchor =
+      resizeFromCenter
+          ? center
+          : SelectionTransformCornerPoint(startBounds, OppositeSelectionTransformCorner(corner));
+  const Vector2d startVector = startCorner - anchor;
+  const Vector2d currentVector = documentPoint - anchor;
+  if (std::abs(startVector.x) < kMinScaleDenominator ||
+      std::abs(startVector.y) < kMinScaleDenominator) {
+    return std::nullopt;
+  }
+
+  double scaleX = currentVector.x / startVector.x;
+  double scaleY = currentVector.y / startVector.y;
+  if (preserveAspectRatio) {
+    const double uniformScale = std::abs(scaleX) >= std::abs(scaleY) ? scaleX : scaleY;
+    scaleX = uniformScale;
+    scaleY = uniformScale;
+  }
+
+  const Transform2d resizedDocumentFromStartDocument =
+      TransformDocumentAroundPoint(anchor, Transform2d::Scale(scaleX, scaleY));
+  if (!IsFinite(resizedDocumentFromStartDocument)) {
+    return std::nullopt;
+  }
+  return resizedDocumentFromStartDocument;
+}
+
+std::optional<Transform2d> RotateTransform(const Vector2d& center, double startAngleRadians,
+                                           const Vector2d& documentPoint) {
+  const double angleDelta = AngleFromCenter(center, documentPoint) - startAngleRadians;
+  const Transform2d rotatedDocumentFromStartDocument =
+      TransformDocumentAroundPoint(center, Transform2d::Rotate(angleDelta));
+  if (!IsFinite(rotatedDocumentFromStartDocument)) {
+    return std::nullopt;
+  }
+  return rotatedDocumentFromStartDocument;
+}
 
 /// Elements that don't contribute geometry to the rendered tree.
 /// `<defs>` / `<title>` / `<desc>` / `<metadata>` / `<style>` / `<script>`
@@ -181,6 +259,54 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   dragState_.reset();
   marqueeState_.reset();
 
+  const auto selectedBoundsDoc =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(editor.selectedElements()));
+  if (!selectedBoundsDoc.empty() && !editor.selectedElements().empty()) {
+    const SelectionTransformHandleIntent handleIntent = HitTestSelectionTransformHandles(
+        selectedBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit);
+    if (handleIntent.kind != SelectionTransformHandleKind::None) {
+      const auto& selection = editor.selectedElements();
+      const bool allGraphics = std::all_of(
+          selection.begin(), selection.end(),
+          [](const svg::SVGElement& element) { return element.isa<svg::SVGGraphicsElement>(); });
+      if (allGraphics) {
+        const auto makeDragParticipant = [](const svg::SVGElement& element) {
+          const Transform2d startTransform = element.cast<svg::SVGGraphicsElement>().transform();
+          return PerElementDrag{
+              .element = element,
+              .startTransform = startTransform,
+              .currentTransform = startTransform,
+              .writebackTarget = captureAttributeWritebackTarget(element),
+              .sourceTransformAttributeValue = element.getAttribute("transform"),
+          };
+        };
+
+        std::vector<PerElementDrag> extras;
+        extras.reserve(selection.size() - 1);
+        for (std::size_t i = 1; i < selection.size(); ++i) {
+          extras.push_back(makeDragParticipant(selection[i]));
+        }
+
+        const Box2d startBounds = CombinedSelectionBounds(selectedBoundsDoc);
+        const Vector2d center = CenterOf(startBounds);
+        dragState_ = DragState{
+            .primary = makeDragParticipant(selection.front()),
+            .extras = std::move(extras),
+            .gestureKind = handleIntent.kind == SelectionTransformHandleKind::Resize
+                               ? DragState::GestureKind::Resize
+                               : DragState::GestureKind::Rotate,
+            .corner = handleIntent.corner,
+            .startDocumentPoint = documentPoint,
+            .startBoundsDoc = startBounds,
+            .centerDocumentPoint = center,
+            .startAngleRadians = AngleFromCenter(center, documentPoint),
+            .generation = nextDragGeneration_++,
+        };
+        return;
+      }
+    }
+  }
+
   auto hit = editor.hitTest(documentPoint);
 
   // Snapshot-safe fallback for clicks inside the selected element's
@@ -313,6 +439,11 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 }
 
 void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) {
+  onMouseMove(editor, documentPoint, buttonHeld, MouseModifiers{});
+}
+
+void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
+                             MouseModifiers modifiers) {
   if (!buttonHeld) {
     return;
   }
@@ -336,23 +467,35 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   // checked against the squared delta magnitude in document units; once
   // the drag has actually moved past it the element tracks the cursor
   // exactly from that point on.
-  constexpr double kDragThresholdDocUnits = 1.0;
-  constexpr double kDragThresholdSq = kDragThresholdDocUnits * kDragThresholdDocUnits;
   if (!dragState_->hasMoved && deltaDoc.lengthSquared() < kDragThresholdSq) {
     return;
   }
 
-  // donner's Transform2 uses "row-major post-multiply" semantics: in
-  // `R * T * A`, A is applied first and R last. To translate the element
-  // in *parent* space (document space, since we assume top-level
-  // elements), the new local transform is the old local transform
-  // followed by a parent-space translation:
-  //
-  //   new_local = Translate(delta) * old_local
-  const Transform2d primaryNewTransform =
-      Transform2d::Translate(deltaDoc) * dragState_->primary.startTransform;
+  std::optional<Transform2d> documentFromStartDocument;
+  switch (dragState_->gestureKind) {
+    case DragState::GestureKind::Move:
+      // Donner's Transform2 uses row-vector post-multiply semantics, so
+      // `start * Translate(delta)` applies the element's existing transform
+      // first and then moves the resulting document-space geometry by delta.
+      documentFromStartDocument = Transform2d::Translate(deltaDoc);
+      break;
+    case DragState::GestureKind::Resize:
+      documentFromStartDocument = ResizeTransform(dragState_->startBoundsDoc, dragState_->corner,
+                                                  documentPoint, modifiers.shift, modifiers.option);
+      break;
+    case DragState::GestureKind::Rotate:
+      documentFromStartDocument = RotateTransform(dragState_->centerDocumentPoint,
+                                                  dragState_->startAngleRadians, documentPoint);
+      break;
+  }
+  if (!documentFromStartDocument.has_value()) {
+    return;
+  }
 
   dragState_->currentDocumentDelta = deltaDoc;
+  dragState_->currentDocumentFromStartDocument = *documentFromStartDocument;
+  const Transform2d primaryNewTransform =
+      dragState_->primary.startTransform * *documentFromStartDocument;
   dragState_->primary.currentTransform = primaryNewTransform;
   dragState_->hasMoved = true;
 
@@ -369,7 +512,7 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   editor.applyMutation(
       EditorCommand::SetTransformCommand(dragState_->primary.element, primaryNewTransform));
   for (auto& extra : dragState_->extras) {
-    extra.currentTransform = Transform2d::Translate(deltaDoc) * extra.startTransform;
+    extra.currentTransform = extra.startTransform * *documentFromStartDocument;
     editor.applyMutation(EditorCommand::SetTransformCommand(extra.element, extra.currentTransform));
   }
 }
@@ -418,6 +561,19 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
   // at the final position; we only need to record the undo snapshot
   // and latch the writeback target here.
   if (dragState_->hasMoved) {
+    const bool multiElement = !dragState_->extras.empty();
+    const char* undoLabel = multiElement ? "Move elements" : "Move element";
+    switch (dragState_->gestureKind) {
+      case DragState::GestureKind::Move:
+        undoLabel = multiElement ? "Move elements" : "Move element";
+        break;
+      case DragState::GestureKind::Resize:
+        undoLabel = multiElement ? "Resize elements" : "Resize element";
+        break;
+      case DragState::GestureKind::Rotate:
+        undoLabel = multiElement ? "Rotate elements" : "Rotate element";
+        break;
+    }
     UndoSnapshot before{
         .element = dragState_->primary.element,
         .transform = dragState_->primary.startTransform,
@@ -427,8 +583,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
     UndoSnapshot after{.element = dragState_->primary.element,
                        .transform = dragState_->primary.currentTransform,
                        .writebackTarget = dragState_->primary.writebackTarget};
-    editor.undoTimeline().record(dragState_->extras.empty() ? "Move element" : "Move elements",
-                                 std::move(before), std::move(after));
+    editor.undoTimeline().record(undoLabel, std::move(before), std::move(after));
 
     // Record undo for each extra element so a single Ctrl+Z reverts the
     // whole multi-element drag — one timeline entry per element keeps the
@@ -443,7 +598,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
       UndoSnapshot extraAfter{.element = extra.element,
                               .transform = extra.currentTransform,
                               .writebackTarget = extra.writebackTarget};
-      editor.undoTimeline().record("Move elements", std::move(extraBefore), std::move(extraAfter));
+      editor.undoTimeline().record(undoLabel, std::move(extraBefore), std::move(extraAfter));
     }
 
     if (dragState_->primary.writebackTarget.has_value()) {
@@ -479,9 +634,24 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
     return std::nullopt;
   }
 
-  return ActiveDragPreview{.entity = dragState_->primary.element.entityHandle().entity(),
-                           .translation = dragState_->currentDocumentDelta,
-                           .dragGeneration = dragState_->generation};
+  return ActiveDragPreview{
+      .entity = dragState_->primary.element.entityHandle().entity(),
+      .translation = dragState_->currentDocumentDelta,
+      .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
+      .dragGeneration = dragState_->generation};
+}
+
+std::optional<SelectTool::ActiveTransformBoundsPreview> SelectTool::activeTransformBoundsPreview()
+    const {
+  if (!dragState_.has_value() || !dragState_->hasMoved ||
+      dragState_->gestureKind != DragState::GestureKind::Rotate) {
+    return std::nullopt;
+  }
+
+  return ActiveTransformBoundsPreview{
+      .startBoundsDoc = dragState_->startBoundsDoc,
+      .documentFromStartDocument = dragState_->currentDocumentFromStartDocument,
+  };
 }
 
 std::optional<Box2d> SelectTool::marqueeRect() const {

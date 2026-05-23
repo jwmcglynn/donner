@@ -423,6 +423,11 @@ void AsyncRenderer::workerLoop() {
         return Vector2d(scaleX != 0.0 ? canvas.x / scaleX : 0.0,
                         scaleY != 0.0 ? canvas.y / scaleY : 0.0);
       };
+      const Transform2d canvasFromDocument = requestDocument.canvasFromDocumentTransform();
+      const Transform2d documentFromCanvas = canvasFromDocument.inverse();
+      const auto documentFromCachedDocument = [&](const Transform2d& canvasFromCachedCanvas) {
+        return canvasFromDocument * canvasFromCachedCanvas * documentFromCanvas;
+      };
       const auto publishedTextureMatches = [this](const std::string& tileId,
                                                   RenderResult::CompositedTile::Kind kind,
                                                   std::uint64_t generation,
@@ -498,7 +503,8 @@ void AsyncRenderer::workerLoop() {
         tile.bitmapDimsDoc = canvasToDoc(
             Vector2d(static_cast<double>(ct.bitmapDims.x), static_cast<double>(ct.bitmapDims.y)));
         if (ct.layerEntity != entt::null) {
-          tile.dragTranslationDoc = canvasToDoc(ct.canvasFromBitmap.translation());
+          tile.documentFromCachedDocument = documentFromCachedDocument(ct.canvasFromBitmap);
+          tile.dragTranslationDoc = tile.documentFromCachedDocument.translation();
         }
         tile.isDragTarget = ct.isDragTarget;
         if (!metadataOnly) {

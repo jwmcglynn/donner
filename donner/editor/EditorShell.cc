@@ -15,6 +15,7 @@
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TracyWrapper.h"
@@ -41,6 +42,24 @@ constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
 constexpr int kMaxSaveSyncFlushPasses = 4;
+
+ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
+  if (intent.kind == SelectionTransformHandleKind::Rotate) {
+    return ImGuiMouseCursor_ResizeAll;
+  }
+
+  if (intent.kind != SelectionTransformHandleKind::Resize) {
+    return ImGuiMouseCursor_Arrow;
+  }
+
+  switch (intent.corner) {
+    case SelectionTransformCorner::TopLeft:
+    case SelectionTransformCorner::BottomRight: return ImGuiMouseCursor_ResizeNWSE;
+    case SelectionTransformCorner::TopRight:
+    case SelectionTransformCorner::BottomLeft: return ImGuiMouseCursor_ResizeNESW;
+  }
+  return ImGuiMouseCursor_ResizeAll;
+}
 
 std::optional<std::string> LoadFile(const std::string& filename) {
   std::ifstream file(filename, std::ios::binary);
@@ -506,9 +525,26 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   };
 
   const bool toolEligible = paneHovered && !interactionController_.panning() && !spaceHeld;
+  const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint) {
+    const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
+    if (boundsCache.lastSelection != app_.selectedElements()) {
+      return SelectionTransformHandleIntent{};
+    }
+    return HitTestSelectionTransformHandles(boundsCache.displayedBoundsDoc, documentPoint,
+                                            interactionController_.viewport().pixelsPerDocUnit());
+  };
+  if (toolEligible && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    const SelectionTransformHandleIntent hoverIntent =
+        cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
+    if (hoverIntent.kind != SelectionTransformHandleKind::None) {
+      ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverIntent));
+    }
+  }
   if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     MouseModifiers modifiers;
     modifiers.shift = ImGui::GetIO().KeyShift;
+    modifiers.option = ImGui::GetIO().KeyAlt;
+    modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
   }
 
@@ -534,8 +570,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     const auto& pendingClick = *interactionController_.pendingClick();
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
+    const SelectionTransformHandleIntent pendingHandleIntent =
+        cacheMatchesSelection ? cachedHandleIntentAt(pendingClick.documentPoint)
+                              : SelectionTransformHandleIntent{};
     const bool tookFastRedrag =
-        cacheMatchesSelection &&
+        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
         selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
                                              pendingClick.modifiers, boundsCache.displayedBoundsDoc,
                                              boundsCache.displayedOccludingBoundsDoc);
@@ -554,7 +593,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
           app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
           RenderCoordinator::OverlayUploadMode::MatchDisplayedVersion,
-          selectTool_.activeDragPreview());
+          selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
       interactionController_.clearPendingClick();
     } else {
       // Worker is busy with a (likely-stale) prewarm render at the
@@ -583,29 +622,35 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const ImVec2 currentScreen = ImGui::GetMousePos();
       if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
                                      renderCoordinator_.asyncRenderer().isBusy())) {
-        selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true);
+        MouseModifiers modifiers;
+        modifiers.shift = ImGui::GetIO().KeyShift;
+        modifiers.option = ImGui::GetIO().KeyAlt;
+        modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+        selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true,
+                                modifiers);
         lastPostedScreenPoint_ = currentScreen;
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
           renderCoordinator_.refreshSelectionBoundsCache(app_);
+          renderCoordinator_.rasterizeOverlayForCurrentSelection(
+              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
+              selectTool_.activeTransformBoundsPreview());
         }
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
+      const bool previewHadVisualChange =
+          previewBeforeRelease.has_value() &&
+          (!previewBeforeRelease->documentFromCachedDocument.isIdentity() ||
+           previewBeforeRelease->translation != Vector2d::Zero());
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
       lastPostedScreenPoint_.reset();
       if (previewBeforeRelease.has_value()) {
-        // The DOM was already updated every drag frame via
-        // `SelectTool::onMouseMove` → `applyMutation`, so drag release
-        // needs to do nothing beyond recording undo history (already done
-        // in `onMouseUp`). The compositor has the dragged entity's DOM
-        // position baked in; its cached bitmap is reused via an internal
-        // compose-offset delta for pure-translation drags (see
-        // `CompositorController::rasterizeLayer` + fast path), which
-        // means the display is byte-for-byte identical to a fresh render
-        // of the mutated DOM at identity composition. No "settling" hack
-        // needed — the compositor view IS the settled view.
-        if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
+        if (!renderCoordinator_.asyncRenderer().isBusy() &&
+            (app_.flushFrame() || previewHadVisualChange)) {
+          renderCoordinator_.compositedPresentation().beginSettling(
+              previewBeforeRelease, app_.document().currentFrameVersion());
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
               app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),

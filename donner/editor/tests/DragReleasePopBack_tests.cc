@@ -414,7 +414,11 @@ TEST(DragReleasePopBackTest, CpuSnapshotShowsCorrectImageAfterSettling) {
   // the tile path.
   CompositedPresentation state;
   state.noteCachedTextures(entity, 1, Vector2i(200, 100));
-  state.beginSettling(SelectTool::ActiveDragPreview{entity, Vector2d(100, 0)}, 2);
+  state.beginSettling(
+      SelectTool::ActiveDragPreview{.entity = entity,
+                                    .translation = Vector2d(100, 0),
+                                    .documentFromCachedDocument = Transform2d::Translate(100, 0)},
+      2);
   state.noteFullRenderLanded(/*landedVersion=*/2);
 
   EXPECT_TRUE(Snapshot(state).hasCachedTextures);

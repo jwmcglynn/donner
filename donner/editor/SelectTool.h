@@ -26,6 +26,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGElement.h"
 
@@ -39,8 +40,20 @@ public:
     Entity entity = entt::null;
     /// Current drag translation in document coordinates.
     Vector2d translation = Vector2d::Zero();
+    /// Current affine transform from the cached document placement to
+    /// the active preview placement.
+    Transform2d documentFromCachedDocument = Transform2d();
     /// Monotonic id for one mouse-down/move/up drag gesture.
     std::uint64_t dragGeneration = 0;
+  };
+
+  /// Active transform chrome state for selection bounds presentation.
+  struct ActiveTransformBoundsPreview {
+    /// Selection AABB captured when the transform gesture started.
+    Box2d startBoundsDoc;
+    /// Current transform from gesture-start document space to active
+    /// document space.
+    Transform2d documentFromStartDocument = Transform2d();
   };
 
   /// Payload needed to write a completed drag back into the source pane.
@@ -59,6 +72,9 @@ public:
   void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                    MouseModifiers modifiers) override;
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
+  /// Mouse-move variant that samples live modifiers during resize gestures.
+  void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
+                   MouseModifiers modifiers);
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
   /// Snapshot-safe re-drag start (design doc 0033 §M8). When the user
@@ -116,6 +132,9 @@ public:
   /// Returns the current drag preview, if a drag is in progress.
   [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
 
+  /// Returns active oriented-bounds chrome for in-progress rotation.
+  [[nodiscard]] std::optional<ActiveTransformBoundsPreview> activeTransformBoundsPreview() const;
+
 private:
   /// Per-element bookkeeping for one participant in a drag. Carries the
   /// start transform (for computing `startTransform * translate(delta)`
@@ -137,6 +156,12 @@ private:
   };
 
   struct DragState {
+    enum class GestureKind {
+      Move,
+      Resize,
+      Rotate,
+    };
+
     /// Primary drag participant — the element that was under the cursor on
     /// mouse-down. Always populated. The compositor-preview fast path
     /// (when a single-element drag is composited) runs against this one.
@@ -149,11 +174,19 @@ private:
     /// them all" design-tool behavior.
     std::vector<PerElementDrag> extras;
 
+    GestureKind gestureKind = GestureKind::Move;
+    SelectionTransformCorner corner = SelectionTransformCorner::TopLeft;
     Vector2d startDocumentPoint;
+    Box2d startBoundsDoc;
+    Vector2d centerDocumentPoint = Vector2d::Zero();
+    double startAngleRadians = 0.0;
     /// Generation copied into \ref ActiveDragPreview for this gesture.
     std::uint64_t generation = 0;
     /// Current drag delta in document coordinates, used for compositor preview.
     Vector2d currentDocumentDelta = Vector2d::Zero();
+    /// Current affine transform from the gesture-start document geometry
+    /// to the active preview geometry.
+    Transform2d currentDocumentFromStartDocument = Transform2d();
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A
     /// click-without-drag shouldn't leave an undo entry behind.
     bool hasMoved = false;

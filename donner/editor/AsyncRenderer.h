@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -99,6 +100,9 @@ struct RenderRequest {
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
     /// Active drag translation represented by this request. Selection prewarms use zero.
     Vector2d translation = Vector2d::Zero();
+    /// Active affine transform represented by this request. Selection
+    /// prewarms use identity.
+    Transform2d documentFromCachedDocument = Transform2d();
     /// Monotonic id for the active drag gesture. Selection prewarms use zero.
     std::uint64_t dragGeneration = 0;
   };
@@ -188,6 +192,8 @@ struct RenderResult {
     /// adds this to `canvasOffsetDoc` so the dragged tile slides in
     /// real time without re-rasterizing.
     Vector2d dragTranslationDoc = Vector2d::Zero();
+    /// Affine transform from cached document placement to presented document placement.
+    Transform2d documentFromCachedDocument = Transform2d();
     /// True when this tile is the active drag target. Useful for
     /// pre-test inspection; the editor's blit math treats drag and
     /// non-drag tiles uniformly via `dragTranslationDoc`.

@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <sstream>
 
 #include "donner/base/MathUtils.h"
@@ -417,6 +418,16 @@ TEST(Path, TransformedBoundsScale) {
   Box2d transformed = path.transformedBounds(Transform2d::Scale({2, 3}));
   ExpectNear(transformed.topLeft, Vector2d(0, 0));
   ExpectNear(transformed.bottomRight, Vector2d(20, 60));
+}
+
+TEST(Path, TransformedBoundsUsesTightTransformedPathNotTransformedLocalAabb) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).lineTo({0, 10}).closePath().build();
+  const Box2d transformed =
+      path.transformedBounds(Transform2d::Rotate(MathConstants<double>::kPi / 4.0));
+
+  const double sqrtHalf = std::sqrt(0.5);
+  ExpectNear(transformed.topLeft, Vector2d(-10.0 * sqrtHalf, 0.0));
+  ExpectNear(transformed.bottomRight, Vector2d(100.0 * sqrtHalf, 100.0 * sqrtHalf));
 }
 
 // =============================================================================

@@ -99,7 +99,8 @@ public:
       EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
       const std::optional<Box2d>& marqueeRectDoc,
       OverlayUploadMode uploadMode = OverlayUploadMode::MatchDisplayedVersion,
-      std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt);
+      std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
+      std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt);
   /// Drain the latest async-render result into the editor's UI state.
   /// If a `frameHistory` is supplied, its latest slot is stamped with
   /// the backend (worker) ms reported by `AsyncRenderer` so the frame
@@ -142,6 +143,9 @@ private:
   /// the last overlay rasterize didn't include one. Used to invalidate
   /// the cached overlay when the marquee geometry changes.
   std::optional<Box2d> lastOverlayMarqueeRectDoc_;
+  /// Active rotation bounds baked into the overlay texture, or nullopt
+  /// when the last overlay used normal axis-aligned selection bounds.
+  std::optional<SelectTool::ActiveTransformBoundsPreview> lastOverlayActiveBoundsPreview_;
 
   PresentationRenderScheduler renderScheduler_;
   /// Most recent desired canvas size requested by `maybeRequestRender`.

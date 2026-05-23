@@ -2,8 +2,10 @@
 
 #include <gtest/gtest.h>
 
+#include "donner/base/MathUtils.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {
 namespace {
@@ -112,6 +114,42 @@ TEST(SelectionAabbTest, SnapshotSkipsNonRenderedContainerDescendants) {
   // Hidden rect inside <defs><clipPath> must not contribute; the
   // bounds are just the visible child.
   EXPECT_EQ(bounds[0], Box2d::FromXYWH(80.0, 80.0, 40.0, 40.0));
+}
+
+TEST(SelectionAabbTest, SnapshotUsesTightTransformedPathBounds) {
+  constexpr std::string_view kTriangleSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="-20 0 120 120">
+              <path id="triangle" d="M 0 0 L 100 0 L 0 10 Z" fill="red"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTriangleSvg));
+  auto triangle = app.document().document().querySelector("#triangle");
+  ASSERT_TRUE(triangle.has_value());
+  triangle->cast<svg::SVGGraphicsElement>().setTransform(
+      Transform2d::Rotate(MathConstants<double>::kPi / 4.0));
+
+  const std::vector<svg::SVGElement> selection = {*triangle};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 1u);
+  const Transform2d documentFromElement =
+      triangle->cast<svg::SVGGraphicsElement>().elementFromWorld();
+  Box2d expected = Box2d::CreateEmpty(documentFromElement.transformPosition(Vector2d(0.0, 0.0)));
+  expected.addPoint(documentFromElement.transformPosition(Vector2d(100.0, 0.0)));
+  expected.addPoint(documentFromElement.transformPosition(Vector2d(0.0, 10.0)));
+
+  EXPECT_NEAR(bounds[0].topLeft.x, expected.topLeft.x, 1e-6);
+  EXPECT_NEAR(bounds[0].topLeft.y, expected.topLeft.y, 1e-6);
+  EXPECT_NEAR(bounds[0].bottomRight.x, expected.bottomRight.x, 1e-6);
+  EXPECT_NEAR(bounds[0].bottomRight.y, expected.bottomRight.y, 1e-6);
+
+  const Box2d looseBounds =
+      documentFromElement.transformBox(Box2d::FromXYWH(0.0, 0.0, 100.0, 10.0));
+  EXPECT_LT(bounds[0].height(), looseBounds.height())
+      << "settled selection bounds must be the tight transformed path, not the selected "
+         "path's transformed local AABB";
 }
 
 TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsIncludesOnlyLaterPaintedGeometry) {

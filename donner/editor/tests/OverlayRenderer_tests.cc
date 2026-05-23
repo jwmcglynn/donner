@@ -11,6 +11,8 @@
 namespace donner::editor {
 namespace {
 
+constexpr double kPi = 3.14159265358979323846;
+
 constexpr std::string_view kTrivialSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
          <rect id="r1" x="20" y="30" width="40" height="50" fill="red"/>
@@ -125,6 +127,95 @@ TEST(OverlayRendererTest, OverlayRendersIntoStandaloneRendererFrame) {
   }
   EXPECT_TRUE(foundOpaquePixel) << "Overlay bitmap is completely transparent — chrome was "
                                    "never drawn";
+}
+
+TEST(OverlayRendererTest, DrawsWhiteCornerHandlesWithSelectionStroke) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  svg::Renderer overlayRenderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+  overlayRenderer.beginFrame(viewport);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  OverlayRenderer::drawChromeWithTransform(overlayRenderer, app.selectedElement(), canvasFromDoc);
+  overlayRenderer.endFrame();
+
+  const auto bitmap = overlayRenderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+
+  const auto pixelAt = [&](int x, int y, int channel) -> std::uint8_t {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + channel];
+  };
+
+  // Top-left selection corner is also the center of the top-left handle.
+  EXPECT_GT(pixelAt(20, 30, 0), 220);
+  EXPECT_GT(pixelAt(20, 30, 1), 220);
+  EXPECT_GT(pixelAt(20, 30, 2), 220);
+  EXPECT_GT(pixelAt(20, 30, 3), 220);
+
+  // At least one pixel on the handle border should carry the cyan selection
+  // stroke color. Exact coverage varies slightly with rasterizer AA.
+  bool foundCyanBorderPixel = false;
+  for (int y = 24; y <= 36; ++y) {
+    for (int x = 14; x <= 26; ++x) {
+      const bool onBorder = x <= 16 || x >= 24 || y <= 26 || y >= 34;
+      if (!onBorder) {
+        continue;
+      }
+
+      if (pixelAt(x, y, 0) < 120 && pixelAt(x, y, 1) > 130 && pixelAt(x, y, 2) > 170 &&
+          pixelAt(x, y, 3) > 120) {
+        foundCyanBorderPixel = true;
+      }
+    }
+  }
+  EXPECT_TRUE(foundCyanBorderPixel);
+}
+
+TEST(OverlayRendererTest, ActiveRotationUsesOrientedBoundsUntilGestureEnds) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  const Box2d startBounds = Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0);
+  const Vector2d center(40.0, 55.0);
+  const Transform2d rotatedDocumentFromStartDocument = Transform2d::Translate(-center) *
+                                                       Transform2d::Rotate(kPi / 2.0) *
+                                                       Transform2d::Translate(center);
+
+  const SelectionChromeSnapshot activeSnapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, canvasFromDoc,
+      SelectionChromeBoundsPreview{
+          .startBoundsDoc = startBounds,
+          .documentFromStartDocument = rotatedDocumentFromStartDocument,
+      });
+
+  ASSERT_TRUE(activeSnapshot.orientedBoundsDoc.has_value());
+  ASSERT_EQ(activeSnapshot.handleBoxesDoc.size(), 4u);
+  const Vector2d expectedTopLeft =
+      rotatedDocumentFromStartDocument.transformPosition(startBounds.topLeft);
+  EXPECT_NEAR(activeSnapshot.orientedBoundsDoc->cornersDoc[0].x, expectedTopLeft.x, 1e-6);
+  EXPECT_NEAR(activeSnapshot.orientedBoundsDoc->cornersDoc[0].y, expectedTopLeft.y, 1e-6);
+
+  const SelectionChromeSnapshot settledSnapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, canvasFromDoc);
+  EXPECT_FALSE(settledSnapshot.orientedBoundsDoc.has_value());
+  ASSERT_EQ(settledSnapshot.aabbsDoc.size(), 1u);
+  EXPECT_EQ(settledSnapshot.aabbsDoc.front(), startBounds);
 }
 
 // Calling the overlay-only render path repeatedly (the click→reselect
@@ -331,6 +422,46 @@ TEST(OverlayRendererTest, PathOutlineDrawnAtTransformedLocationNotInverted) {
   EXPECT_EQ(alphaAt(0, 10), 0)
       << "Pixel at the inverted-translate location is non-empty — overlay is drawing "
          "the path at the sign-flipped transform location.";
+}
+
+TEST(OverlayRendererTest, PathOutlineStrokeDoesNotInheritElementScale) {
+  constexpr std::string_view kScaledInternalLineSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <path id="scaled" d="M 5 5 L 30 30 M 5 15 L 30 15"
+                    fill="none" stroke="red" stroke-width="1"
+                    transform="scale(6)"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kScaledInternalLineSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto scaledPath = app.document().document().querySelector("#scaled");
+  ASSERT_TRUE(scaledPath.has_value());
+  app.setSelection(*scaledPath);
+
+  svg::Renderer overlayRenderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+  overlayRenderer.beginFrame(viewport);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  OverlayRenderer::drawChromeWithTransform(overlayRenderer, app.selectedElement(), canvasFromDoc);
+  overlayRenderer.endFrame();
+
+  const auto bitmap = overlayRenderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+
+  const auto alphaAt = [&](int x, int y) -> std::uint8_t {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + 3];
+  };
+
+  EXPECT_GT(alphaAt(60, 90), 0) << "scaled horizontal path outline should be visible";
+  EXPECT_EQ(alphaAt(60, 92), 0)
+      << "selection path chrome stroke should remain one screen pixel wide; it must not "
+         "be scaled by the selected element's transform";
 }
 
 // ---------------------------------------------------------------------------

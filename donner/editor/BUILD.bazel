@@ -59,6 +59,15 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "selection_transform_handles",
+    srcs = ["SelectionTransformHandles.cc"],
+    hdrs = ["SelectionTransformHandles.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "source_selection",
     srcs = ["SourceSelection.cc"],
     hdrs = ["SourceSelection.h"],
@@ -463,6 +472,7 @@ donner_cc_library(
         ":render_coordinator",
         ":render_pane_presenter",
         ":select_tool",
+        ":selection_transform_handles",
         ":sidebar_presenter",
         ":source_selection",
         ":text_editor",
@@ -546,6 +556,7 @@ donner_cc_library(
         ":editor_app",
         ":imgui_headers",
         ":selection_aabb",
+        ":selection_transform_handles",
         ":tool",
         ":undo_timeline",
         "//donner/base",
@@ -560,6 +571,7 @@ donner_cc_library(
     deps = [
         ":editor_app",
         ":selection_aabb",
+        ":selection_transform_handles",
         ":tracy_wrapper",
         "//donner/base",
         "//donner/css",

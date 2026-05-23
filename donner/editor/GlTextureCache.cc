@@ -167,6 +167,7 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
       view.canvasOffsetDoc = tile.canvasOffsetDoc;
       view.bitmapDimsDoc = tile.bitmapDimsDoc;
       view.dragTranslationDoc = tile.dragTranslationDoc;
+      view.documentFromCachedDocument = tile.documentFromCachedDocument;
       view.metadataOnly = true;
       view.isDragTarget = tile.isDragTarget;
       tiles_.push_back(view);
@@ -228,6 +229,7 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
     view.canvasOffsetDoc = tile.canvasOffsetDoc;
     view.bitmapDimsDoc = tile.bitmapDimsDoc;
     view.dragTranslationDoc = tile.dragTranslationDoc;
+    view.documentFromCachedDocument = tile.documentFromCachedDocument;
     view.isDragTarget = tile.isDragTarget;
     tiles_.push_back(view);
   }

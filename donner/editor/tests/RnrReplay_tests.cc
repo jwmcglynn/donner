@@ -103,9 +103,11 @@ void ApplyRecordedViewport(ViewportState& viewport, const repro::ReproViewport& 
                                              recordedViewport.viewBoxW, recordedViewport.viewBoxH);
 }
 
-MouseModifiers DecodeMouseModifiers(int modifierMask) {
+MouseModifiers DecodeMouseModifiers(int modifierMask, double pixelsPerDocUnit = 1.0) {
   MouseModifiers modifiers;
   modifiers.shift = (modifierMask & (1 << 1)) != 0;
+  modifiers.option = (modifierMask & (1 << 2)) != 0;
+  modifiers.pixelsPerDocUnit = pixelsPerDocUnit;
   return modifiers;
 }
 
@@ -210,6 +212,7 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
         .entity = preview->entity,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
         .translation = preview->translation,
+        .documentFromCachedDocument = preview->documentFromCachedDocument,
         .dragGeneration = preview->dragGeneration,
     };
   }
@@ -389,7 +392,9 @@ protected:
         switch (event.kind) {
           case repro::ReproEvent::Kind::MouseDown:
             if (event.mouseButton == 0) {
-              selectTool.onMouseDown(app, mouseDoc, DecodeMouseModifiers(frame.modifiers));
+              selectTool.onMouseDown(
+                  app, mouseDoc,
+                  DecodeMouseModifiers(frame.modifiers, viewport.pixelsPerDocUnit()));
               frameNeedsRender = true;
             }
             break;
@@ -415,7 +420,8 @@ protected:
       }
 
       if (nowHeld && leftButtonHeld) {
-        selectTool.onMouseMove(app, mouseDoc, /*buttonHeld=*/true);
+        selectTool.onMouseMove(app, mouseDoc, /*buttonHeld=*/true,
+                               DecodeMouseModifiers(frame.modifiers, viewport.pixelsPerDocUnit()));
         frameNeedsRender = true;
       }
       leftButtonHeld = nowHeld;
@@ -597,6 +603,7 @@ protected:
             .entity = dragPreview->entity,
             .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
             .translation = dragPreview->translation,
+            .documentFromCachedDocument = dragPreview->documentFromCachedDocument,
             .dragGeneration = dragPreview->dragGeneration,
         };
       } else if (needsCompositedPrewarm && prewarmEntity != entt::null) {
@@ -667,7 +674,7 @@ protected:
         if (event.kind == repro::ReproEvent::Kind::MouseDown && event.mouseButton == 0) {
           PendingClick click;
           click.documentPoint = mouseDoc;
-          click.modifiers = DecodeMouseModifiers(frame.modifiers);
+          click.modifiers = DecodeMouseModifiers(frame.modifiers, viewport.pixelsPerDocUnit());
           click.frameIndex = frame.index;
           click.queuedAt = std::chrono::steady_clock::now();
           pendingClick = click;
@@ -713,7 +720,8 @@ protected:
       }
 
       if (nowHeld && leftButtonHeld) {
-        selectTool.onMouseMove(app, mouseDoc, /*buttonHeld=*/true);
+        selectTool.onMouseMove(app, mouseDoc, /*buttonHeld=*/true,
+                               DecodeMouseModifiers(frame.modifiers, viewport.pixelsPerDocUnit()));
       }
       leftButtonHeld = nowHeld;
 

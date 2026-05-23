@@ -152,6 +152,7 @@ PresentedFrameTileGeometry PresentedGeometryFromTile(const GlTextureCache::TileV
       .canvasOffsetDoc = tile.canvasOffsetDoc,
       .bitmapDimsDoc = tile.bitmapDimsDoc,
       .dragTranslationDoc = tile.dragTranslationDoc,
+      .documentFromCachedDocument = tile.documentFromCachedDocument,
       .isDragTarget = tile.isDragTarget,
   };
 }
@@ -169,7 +170,24 @@ std::optional<PresentedDragBaseline> PresentedBaselineFromSelectPreviews(
       .entity = activePreview->entity,
       .representedTranslationDoc = displayedPreview->translation,
       .activeTranslationDoc = activePreview->translation,
+      .representedDocumentFromCachedDocument = displayedPreview->documentFromCachedDocument,
+      .activeDocumentFromCachedDocument = activePreview->documentFromCachedDocument,
   };
+}
+
+std::optional<PresentedDragBaseline> TranslationOverlayBaselineFromSelectPreviews(
+    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
+    const std::optional<SelectTool::ActiveDragPreview>& displayedPreview) {
+  if (!activePreview.has_value() || !displayedPreview.has_value() ||
+      !activePreview->documentFromCachedDocument.isTranslation() ||
+      !displayedPreview->documentFromCachedDocument.isTranslation()) {
+    return std::nullopt;
+  }
+  return PresentedBaselineFromSelectPreviews(activePreview, displayedPreview);
+}
+
+ImVec2 ToImVec2(const Vector2d& value) {
+  return ImVec2(static_cast<float>(value.x), static_cast<float>(value.y));
 }
 
 }  // namespace
@@ -201,16 +219,14 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       continue;
     }
     hasDragTargetTile = hasDragTargetTile || tile.isDragTarget;
-    const std::optional<PresentedTileRect> tileRect = ComputePresentedTileRect(
+    const std::optional<PresentedTileQuad> tileQuad = ComputePresentedTileQuad(
         PresentedGeometryFromTile(tile), screenFromCanvasTransform, dragBaseline);
-    if (!tileRect.has_value()) {
+    if (!tileQuad.has_value()) {
       continue;
     }
-    const ImVec2 tileOrigin(static_cast<float>(tileRect->topLeft.x),
-                            static_cast<float>(tileRect->topLeft.y));
-    const ImVec2 tileBottomRight(static_cast<float>(tileRect->bottomRight.x),
-                                 static_cast<float>(tileRect->bottomRight.y));
-    paneDrawList->AddImage(tile.texture, tileOrigin, tileBottomRight);
+    paneDrawList->AddImageQuad(tile.texture, ToImVec2(tileQuad->topLeft),
+                               ToImVec2(tileQuad->topRight), ToImVec2(tileQuad->bottomRight),
+                               ToImVec2(tileQuad->bottomLeft));
   }
 
   // All editor chrome — path outlines, selection AABBs, and the
@@ -221,19 +237,27 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   // backend (Geode) can optimize end-to-end.
   if (state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0) {
     const std::optional<PresentedDragBaseline> overlayBaseline =
-        hasDragTargetTile
-            ? PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.overlayDragPreview)
-            : std::nullopt;
-    const Vector2d overlayTranslationDoc = ResolvePresentedOverlayDragTranslation(overlayBaseline);
-    const ImVec2 overlayTranslationScreen(static_cast<float>(overlayTranslationDoc.x * pxPerDoc),
-                                          static_cast<float>(overlayTranslationDoc.y * pxPerDoc));
+        hasDragTargetTile ? TranslationOverlayBaselineFromSelectPreviews(state.activeDragPreview,
+                                                                         state.overlayDragPreview)
+                          : std::nullopt;
+    const Transform2d documentFromOverlayDocument =
+        ResolvePresentedOverlayDocumentTransform(overlayBaseline);
+    const Vector2d docTopLeft = state.viewport.documentViewBox.topLeft;
+    const Vector2d docTopRight(state.viewport.documentViewBox.bottomRight.x,
+                               state.viewport.documentViewBox.topLeft.y);
+    const Vector2d docBottomRight = state.viewport.documentViewBox.bottomRight;
+    const Vector2d docBottomLeft(state.viewport.documentViewBox.topLeft.x,
+                                 state.viewport.documentViewBox.bottomRight.y);
+    const auto overlayPoint = [&](const Vector2d& documentPoint) {
+      return state.viewport.documentToScreen(
+          documentFromOverlayDocument.transformPosition(documentPoint));
+    };
     paneDrawList->PushClipRect(imageOrigin, imageBottomRight,
                                /*intersect_with_current_clip_rect=*/true);
-    paneDrawList->AddImage(state.textures.overlayTexture(),
-                           ImVec2(imageOrigin.x + overlayTranslationScreen.x,
-                                  imageOrigin.y + overlayTranslationScreen.y),
-                           ImVec2(imageBottomRight.x + overlayTranslationScreen.x,
-                                  imageBottomRight.y + overlayTranslationScreen.y));
+    paneDrawList->AddImageQuad(state.textures.overlayTexture(), ToImVec2(overlayPoint(docTopLeft)),
+                               ToImVec2(overlayPoint(docTopRight)),
+                               ToImVec2(overlayPoint(docBottomRight)),
+                               ToImVec2(overlayPoint(docBottomLeft)));
     paneDrawList->PopClipRect();
   }
 

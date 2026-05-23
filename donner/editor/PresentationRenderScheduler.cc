@@ -35,6 +35,7 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
         .entity = input.activeDragPreview->entity,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
         .translation = input.activeDragPreview->translation,
+        .documentFromCachedDocument = input.activeDragPreview->documentFromCachedDocument,
         .dragGeneration = input.activeDragPreview->dragGeneration,
     };
   } else if (decision.needsCompositedPrewarm && input.selectedEntity != entt::null) {

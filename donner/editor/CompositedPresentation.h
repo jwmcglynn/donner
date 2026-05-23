@@ -260,6 +260,7 @@ public:
       return SelectTool::ActiveDragPreview{
           .entity = cache->entity,
           .translation = Vector2d::Zero(),
+          .documentFromCachedDocument = Transform2d(),
       };
     }
     return std::nullopt;
@@ -308,6 +309,7 @@ private:
     return SelectTool::ActiveDragPreview{
         .entity = cache.entity,
         .translation = Vector2d::Zero(),
+        .documentFromCachedDocument = Transform2d(),
     };
   }
 
@@ -321,6 +323,7 @@ private:
     return SelectTool::ActiveDragPreview{
         .entity = cache.entity,
         .translation = Vector2d::Zero(),
+        .documentFromCachedDocument = Transform2d(),
         .dragGeneration = activePreview.dragGeneration,
     };
   }

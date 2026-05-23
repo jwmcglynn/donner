@@ -1303,6 +1303,7 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
           .entity = preview->entity,
           .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
           .translation = preview->translation,
+          .documentFromCachedDocument = preview->documentFromCachedDocument,
           .dragGeneration = preview->dragGeneration,
       };
     } else if (request.selectedEntity != entt::null) {
@@ -1475,6 +1476,7 @@ TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache)
       .entity = backgroundEntity,
       .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
       .translation = selectTool.activeDragPreview()->translation,
+      .documentFromCachedDocument = selectTool.activeDragPreview()->documentFromCachedDocument,
       .dragGeneration = selectTool.activeDragPreview()->dragGeneration,
   };
   asyncRenderer.requestRender(request);
@@ -3110,6 +3112,54 @@ TEST(RenderCoordinatorTest, ActiveDragReusesOverlayForPureTranslation) {
   EXPECT_EQ(coordinator.presentedOverlayDragPreview()->translation, Vector2d::Zero())
       << "Pure translation drags should move the overlay texture at presentation time instead of "
          "rerasterizing chrome every frame.";
+}
+
+TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingTextureTransform) {
+  svg::Renderer rendererProbe;
+  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Overlay drag presentation is exercised by the Geode direct-texture path.";
+  }
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+  app.document().document().setCanvasSize(64, 64);
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(64.0, 64.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+
+  SelectTool selectTool;
+  selectTool.onMouseDown(app, Vector2d(24.0, 24.0), MouseModifiers{});
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, textures, std::nullopt, RenderCoordinator::OverlayUploadMode::Immediate,
+      selectTool.activeDragPreview()));
+  ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
+  EXPECT_TRUE(coordinator.presentedOverlayDragPreview()->documentFromCachedDocument.isIdentity());
+
+  selectTool.onMouseMove(app, Vector2d(32.0, 32.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  ASSERT_FALSE(selectTool.activeDragPreview()->documentFromCachedDocument.isTranslation());
+
+  coordinator.maybeRequestRender(app, selectTool, viewport, textures);
+
+  ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
+  EXPECT_FALSE(
+      coordinator.presentedOverlayDragPreview()->documentFromCachedDocument.isTranslation())
+      << "Affine resize/rotate drags should rerasterize chrome instead of stretching the previous "
+         "overlay texture at presentation time.";
 }
 
 TEST(RenderCoordinatorTest, ImmediateOverlayUploadAllowsEmptyOrFullCanvasContent) {

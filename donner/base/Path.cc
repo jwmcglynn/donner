@@ -76,15 +76,51 @@ Box2d Path::bounds() const {
 }
 
 Box2d Path::transformedBounds(const Transform2d& transform) const {
-  // Transform all points and compute bounds on the transformed path.
-  // For curves, this is an approximation (transforms the control points, not the exact curve).
-  // For tight bounds, transform then recompute, but for most uses this is sufficient.
   if (points_.empty()) {
     return Box2d();
   }
 
-  // Simple approach: transform the bounding box.
-  return transform.transformBox(bounds());
+  const auto transformedPoint = [&transform](const Vector2d& point) {
+    return transform.transformPosition(point);
+  };
+
+  Box2d box = Box2d::CreateEmpty(transformedPoint(points_[0]));
+
+  for (const auto& cmd : commands_) {
+    switch (cmd.verb) {
+      case Verb::MoveTo:
+      case Verb::LineTo: box.addPoint(transformedPoint(points_[cmd.pointIndex])); break;
+
+      case Verb::QuadTo: {
+        const Vector2d start = transformedPoint(
+            (cmd.pointIndex >= 2)
+                ? points_[cmd.pointIndex - 1]
+                : (cmd.pointIndex >= 1 ? points_[cmd.pointIndex - 1] : points_[0]));
+        const Vector2d control = transformedPoint(points_[cmd.pointIndex]);
+        const Vector2d end = transformedPoint(points_[cmd.pointIndex + 1]);
+        const Box2d qBounds = QuadraticBounds(start, control, end);
+        box.addPoint(qBounds.topLeft);
+        box.addPoint(qBounds.bottomRight);
+        break;
+      }
+
+      case Verb::CurveTo: {
+        const Vector2d start =
+            transformedPoint((cmd.pointIndex >= 1) ? points_[cmd.pointIndex - 1] : points_[0]);
+        const Vector2d c1 = transformedPoint(points_[cmd.pointIndex]);
+        const Vector2d c2 = transformedPoint(points_[cmd.pointIndex + 1]);
+        const Vector2d end = transformedPoint(points_[cmd.pointIndex + 2]);
+        const Box2d cBounds = CubicBounds(start, c1, c2, end);
+        box.addPoint(cBounds.topLeft);
+        box.addPoint(cBounds.bottomRight);
+        break;
+      }
+
+      case Verb::ClosePath: break;
+    }
+  }
+
+  return box;
 }
 
 namespace {

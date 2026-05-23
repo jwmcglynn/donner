@@ -16,6 +16,7 @@
 #include "glad/glad.h"
 #endif
 
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/ImGuiIncludes.h"
@@ -107,6 +108,7 @@ public:
     Vector2d canvasOffsetDoc = Vector2d::Zero();
     Vector2d bitmapDimsDoc = Vector2d::Zero();
     Vector2d dragTranslationDoc = Vector2d::Zero();
+    Transform2d documentFromCachedDocument = Transform2d();
     bool metadataOnly = false;
     bool isDragTarget = false;
   };
