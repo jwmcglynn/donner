@@ -24,6 +24,12 @@ constexpr std::string_view kNonCanonicalTransformSvg =
          <rect id="r1" x="10" y="10" width="20" height="20" transform="translate(10, 0)" fill="red"/>
        </svg>)svg";
 
+constexpr std::string_view kTwoRectSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="0" y="0" width="10" height="10"/>
+         <rect id="r2" x="20" y="0" width="10" height="10"/>
+       </svg>)";
+
 class DocumentSyncControllerTest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -116,6 +122,44 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackMirrorsWithoutTextCh
   EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
   EXPECT_FALSE(textEditor_.isTextChanged());
   EXPECT_TRUE(app_.document().queue().empty());
+}
+
+TEST_F(DocumentSyncControllerTest, AppTransformWritebacksDrainAllQueuedEntries) {
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kTwoRectSvg);
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  auto r1Target = captureAttributeWritebackTarget(*r1);
+  auto r2Target = captureAttributeWritebackTarget(*r2);
+  ASSERT_TRUE(r1Target.has_value());
+  ASSERT_TRUE(r2Target.has_value());
+
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = *r1Target, .transform = Transform2d::Translate(Vector2d(5.0, 0.0))});
+  app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+      .target = *r2Target, .transform = Transform2d::Translate(Vector2d(11.0, 0.0))});
+
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_FALSE(textEditor.isTextChanged());
+  r1 = app.document().document().querySelector("#r1");
+  r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  EXPECT_EQ(r1->getAttribute("transform"), std::optional<RcString>(RcString("translate(5)")));
+  EXPECT_EQ(r2->getAttribute("transform"), std::optional<RcString>(RcString("translate(11)")));
 }
 
 TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaWithoutTextEcho) {

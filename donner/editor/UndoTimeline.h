@@ -40,12 +40,18 @@ struct UndoSnapshot {
   /// When false, source writeback falls back to canonical serialization of
   /// `transform`.
   bool restoreSourceTransformAttributeValue = false;
+
+  /// Additional element snapshots that belong to the same user operation.
+  /// Multi-selection move/resize/rotate gestures use this so one UI undo
+  /// restores the whole manipulation instead of stepping through elements
+  /// one at a time.
+  std::vector<UndoSnapshot> extras;
 };
 
 /// Capture the current transform of an SVGElement as an undo snapshot.
 UndoSnapshot captureTransformSnapshot(const svg::SVGElement& element);
 
-/// Apply a previously captured snapshot back to its element.
+/// Apply a previously captured snapshot, including grouped extra element snapshots.
 void applySnapshot(const UndoSnapshot& snapshot);
 
 /// A single entry in the non-destructive undo timeline.
@@ -96,8 +102,15 @@ public:
   /// there is nothing to undo.
   std::optional<UndoSnapshot> undo();
 
+  /// Redo the most recently undone entry. Returns the snapshot the caller
+  /// should apply, or nullopt if there is nothing to redo.
+  std::optional<UndoSnapshot> redo();
+
   /// Whether there is an entry to undo (either in the current chain or by starting a new one).
   [[nodiscard]] bool canUndo() const;
+
+  /// Whether the most recent undo operation can be redone.
+  [[nodiscard]] bool canRedo() const;
 
   /// The label of the entry that would be undone next.
   [[nodiscard]] std::optional<std::string_view> nextUndoLabel() const;
@@ -126,6 +139,7 @@ private:
   bool inUndoChain_ = false;
   size_t undoCursor_ = 0;  ///< Entry index being reversed during the chain.
   size_t chainStart_ = 0;  ///< entries_.size() when the chain started.
+  std::vector<size_t> redoStack_;
 };
 
 }  // namespace donner::editor

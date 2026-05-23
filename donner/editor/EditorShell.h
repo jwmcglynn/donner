@@ -19,6 +19,7 @@
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
+#include "donner/editor/RotateCursorSet.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/TextEditor.h"
@@ -151,6 +152,7 @@ private:
   TextEditor textEditor_;
   GlTextureCache textures_;
   RenderCoordinator renderCoordinator_;
+  RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;
   ViewportInteractionController interactionController_;
   std::optional<ViewportState> pendingViewportReplayOverride_;

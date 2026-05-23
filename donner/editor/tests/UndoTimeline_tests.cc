@@ -94,6 +94,35 @@ TEST(UndoTimelineTest, UndoRestoresBeforeStateAndAppendsUndoEntry) {
   EXPECT_DOUBLE_EQ(graphics.transform().data[4], startXform.data[4]);
   EXPECT_DOUBLE_EQ(graphics.transform().data[5], startXform.data[5]);
   EXPECT_EQ(timeline.entryCount(), 2u);
+  EXPECT_TRUE(timeline.canRedo());
+}
+
+TEST(UndoTimelineTest, RedoRestoresMostRecentUndo) {
+  auto doc = ParseOrDie();
+  auto rect = FirstRect(doc);
+  auto graphics = rect.cast<svg::SVGGraphicsElement>();
+
+  UndoTimeline timeline;
+
+  const Transform2d a = graphics.transform();
+  const Transform2d b = Transform2d::Translate(Vector2d(30, 50));
+
+  graphics.setTransform(b);
+  timeline.record("Move", UndoSnapshot{.element = rect, .transform = a},
+                  UndoSnapshot{.element = rect, .transform = b});
+  EXPECT_FALSE(timeline.canRedo());
+
+  auto undone = timeline.undo();
+  ASSERT_TRUE(undone.has_value());
+  applySnapshot(*undone);
+  ASSERT_TRUE(timeline.canRedo());
+
+  auto redone = timeline.redo();
+  ASSERT_TRUE(redone.has_value());
+  applySnapshot(*redone);
+  EXPECT_DOUBLE_EQ(graphics.transform().data[4], b.data[4]);
+  EXPECT_DOUBLE_EQ(graphics.transform().data[5], b.data[5]);
+  EXPECT_FALSE(timeline.canRedo());
 }
 
 TEST(UndoTimelineTest, UndoOfUndoReappliesTheOriginalMove) {

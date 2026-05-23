@@ -583,23 +583,22 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
     UndoSnapshot after{.element = dragState_->primary.element,
                        .transform = dragState_->primary.currentTransform,
                        .writebackTarget = dragState_->primary.writebackTarget};
-    editor.undoTimeline().record(undoLabel, std::move(before), std::move(after));
-
-    // Record undo for each extra element so a single Ctrl+Z reverts the
-    // whole multi-element drag — one timeline entry per element keeps the
-    // existing timeline plumbing intact; the user sees them collapsed by
-    // the shared "Move elements" label if the timeline groups by label.
+    before.extras.reserve(dragState_->extras.size());
+    after.extras.reserve(dragState_->extras.size());
     for (const auto& extra : dragState_->extras) {
-      UndoSnapshot extraBefore{.element = extra.element,
-                               .transform = extra.startTransform,
-                               .writebackTarget = extra.writebackTarget,
-                               .sourceTransformAttributeValue = extra.sourceTransformAttributeValue,
-                               .restoreSourceTransformAttributeValue = true};
-      UndoSnapshot extraAfter{.element = extra.element,
-                              .transform = extra.currentTransform,
-                              .writebackTarget = extra.writebackTarget};
-      editor.undoTimeline().record(undoLabel, std::move(extraBefore), std::move(extraAfter));
+      before.extras.push_back(
+          UndoSnapshot{.element = extra.element,
+                       .transform = extra.startTransform,
+                       .writebackTarget = extra.writebackTarget,
+                       .sourceTransformAttributeValue = extra.sourceTransformAttributeValue,
+                       .restoreSourceTransformAttributeValue = true});
+      after.extras.push_back(UndoSnapshot{
+          .element = extra.element,
+          .transform = extra.currentTransform,
+          .writebackTarget = extra.writebackTarget,
+      });
     }
+    editor.undoTimeline().record(undoLabel, std::move(before), std::move(after));
 
     if (dragState_->primary.writebackTarget.has_value()) {
       std::vector<CompletedDragWriteback> extraWritebacks;

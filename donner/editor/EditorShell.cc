@@ -93,6 +93,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       textEditor_(),
       textures_(),
       renderCoordinator_(window.geodeDevice()),
+      rotateCursorSet_(),
       documentSyncController_(LoadFile(options_.svgPath).value_or("")),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
@@ -161,6 +162,9 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   app_.setCleanSourceText(textEditor_.getText());
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   textures_.initialize();
+  if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
+    std::fprintf(stderr, "[editor] custom rotate cursor unavailable; using fallback cursor\n");
+  }
 
   // On-demand render loop: the main thread sleeps in `window.waitEvents()`
   // between user inputs, so the worker thread has to nudge it when a
@@ -415,7 +419,7 @@ void EditorShell::handleGlobalShortcuts() {
       if (app_.canUndo()) {
         app_.undo();
       }
-    } else if (pressedZ && cmd && shift) {
+    } else if (pressedZ && cmd && shift && app_.canRedo()) {
       app_.redo();
     }
   }
@@ -537,8 +541,18 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     const SelectionTransformHandleIntent hoverIntent =
         cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
     if (hoverIntent.kind != SelectionTransformHandleKind::None) {
-      ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverIntent));
+      if (hoverIntent.kind == SelectionTransformHandleKind::Rotate &&
+          rotateCursorSet_.setRotateCursor(hoverIntent.corner)) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+      } else {
+        rotateCursorSet_.clearIfActive();
+        ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverIntent));
+      }
+    } else {
+      rotateCursorSet_.clearIfActive();
     }
+  } else if (!toolEligible) {
+    rotateCursorSet_.clearIfActive();
   }
   if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     MouseModifiers modifiers;
@@ -1005,7 +1019,7 @@ void EditorShell::runFrame() {
       .sourcePaneFocused = textEditor_.isFocused(),
       .canSave = app_.hasDocument(),
       .canUndo = app_.canUndo(),
-      .canRedo = app_.undoTimeline().entryCount() > 0,
+      .canRedo = app_.canRedo(),
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -1026,7 +1040,7 @@ void EditorShell::runFrame() {
   if (menuActions.undo && app_.canUndo()) {
     app_.undo();
   }
-  if (menuActions.redo) {
+  if (menuActions.redo && app_.canRedo()) {
     app_.redo();
   }
   if (menuActions.cut) {

@@ -326,11 +326,13 @@ TEST_F(SelectToolTest, RedoAfterUndoRestoresPostDragState) {
   ASSERT_TRUE(app.flushFrame());
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 0.0);
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[5], 0.0);
+  EXPECT_TRUE(app.canRedo());
 
   app.redo();
   ASSERT_TRUE(app.flushFrame());
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 25.0);
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[5], 20.0);
+  EXPECT_FALSE(app.canRedo());
 }
 
 TEST_F(SelectToolTest, UndoRedoCyclesStayConsistent) {
@@ -357,6 +359,19 @@ TEST_F(SelectToolTest, RedoWithNothingToRedoIsNoOp) {
   // Nothing in the timeline → redo is a no-op.
   app.redo();
   EXPECT_FALSE(app.flushFrame());
+}
+
+TEST_F(SelectToolTest, RedoWithoutPriorUndoDoesNotUndoCompletedDrag) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_FALSE(app.canRedo());
+
+  app.redo();
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 25.0);
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[5], 20.0);
 }
 
 TEST_F(SelectToolTest, TwoDifferentDragsBothUndoableInOrder) {
@@ -995,6 +1010,27 @@ TEST_F(SelectToolTest, CornerHandleResizesSelectionFromOppositeCorner) {
   EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Resize element");
 }
 
+TEST_F(SelectToolTest, ResizeUndoRedoRestoresBounds) {
+  loadSvg(kResizeRectSvg);
+  app.setSelection(elementById("#target"));
+
+  const Box2d startBounds = worldBoundsOf("#target");
+  tool.onMouseDown(app, Vector2d(60.0, 40.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(80.0, 50.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(80.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+  const Box2d resizedBounds = worldBoundsOf("#target");
+  ASSERT_NE(resizedBounds, startBounds);
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(worldBoundsOf("#target"), startBounds);
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(worldBoundsOf("#target"), resizedBounds);
+}
+
 TEST_F(SelectToolTest, ResizeGestureExposesAffinePreview) {
   loadSvg(kResizeRectSvg);
   app.setSelection(elementById("#target"));
@@ -1105,6 +1141,9 @@ TEST_F(SelectToolTest, MultiSelectionCornerResizeUsesCombinedBounds) {
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
   ASSERT_EQ(app.selectedElements().size(), 2u);
 
+  const Box2d r1StartBounds = worldBoundsOf("#r1");
+  const Box2d r2StartBounds = worldBoundsOf("#r2");
+
   tool.onMouseDown(app, Vector2d(140.0, 140.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(270.0, 270.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(270.0, 270.0));
@@ -1120,8 +1159,20 @@ TEST_F(SelectToolTest, MultiSelectionCornerResizeUsesCombinedBounds) {
   EXPECT_NEAR(r2Bounds.topLeft.y, 190.0, 1e-6);
   EXPECT_NEAR(r2Bounds.width(), 80.0, 1e-6);
   EXPECT_NEAR(r2Bounds.height(), 80.0, 1e-6);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u)
+      << "one UI undo should revert the whole multi-selection resize";
   ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
   EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Resize elements");
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(worldBoundsOf("#r1"), r1StartBounds);
+  EXPECT_EQ(worldBoundsOf("#r2"), r2StartBounds);
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(worldBoundsOf("#r1"), r1Bounds);
+  EXPECT_EQ(worldBoundsOf("#r2"), r2Bounds);
 }
 
 TEST_F(SelectToolTest, RotateZoneRotatesAroundSelectionCenter) {
@@ -1157,6 +1208,34 @@ TEST_F(SelectToolTest, ActiveRotationBoundsPreviewClearsOnMouseUp) {
   tool.onMouseUp(app, Vector2d(20.0, 44.0));
   EXPECT_FALSE(tool.activeTransformBoundsPreview().has_value())
       << "rotation chrome must switch back to axis-aligned bounds immediately on release";
+}
+
+TEST_F(SelectToolTest, RotateUndoRedoRestoresTransform) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+  const Transform2d startTransform = transformOf("#r1");
+
+  tool.onMouseDown(app, Vector2d(44.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(20.0, 44.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(20.0, 44.0));
+  ASSERT_TRUE(app.flushFrame());
+  const Transform2d rotatedTransform = transformOf("#r1");
+  ASSERT_FALSE(rotatedTransform.isIdentity());
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  const Transform2d undoTransform = transformOf("#r1");
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_NEAR(undoTransform.data[i], startTransform.data[i], 1e-6);
+  }
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  const Transform2d redoTransform = transformOf("#r1");
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_NEAR(redoTransform.data[i], rotatedTransform.data[i], 1e-6);
+  }
 }
 
 TEST_F(SelectToolTest, RotateAfterScaleUsesDocumentCenter) {

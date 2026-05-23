@@ -197,6 +197,9 @@ public:
   /// Whether there is an entry to undo.
   [[nodiscard]] bool canUndo() const { return undoTimeline_.canUndo(); }
 
+  /// Whether the most recently undone entry can be redone.
+  [[nodiscard]] bool canRedo() const { return undoTimeline_.canRedo(); }
+
   /// Undo the most recent entry. Pops the timeline's next entry and
   /// pushes the restored transform onto the command queue as a
   /// `SetTransformCommand` — the actual DOM mutation happens on the
@@ -206,14 +209,9 @@ public:
 
   /// Redo the most recently undone entry.
   ///
-  /// In the non-destructive `UndoTimeline` model, "redo" is mechanically
-  /// identical to "undo the most recent undo-entry": breaking the
-  /// current undo chain and then calling `undo()` again pops the
-  /// undo-entry the previous `undo()` call appended, which restores
-  /// the post-drag state.
-  ///
-  /// Like `undo()`, the restored transform is routed through the
-  /// command queue so the mutation seam is preserved.
+  /// Like `undo()`, the restored transform is routed through the command
+  /// queue so the mutation seam is preserved. No-op unless the most recent
+  /// timeline action was an undo.
   void redo();
 
   // ---------------------------------------------------------------------------
@@ -254,20 +252,27 @@ public:
   /// source on its next `applyPendingTransformWriteback()` call. SelectTool
   /// calls this when a drag completes; `undo()` / `redo()` call it so
   /// undoing a canvas drag restores both the DOM transform *and* the
-  /// source text in lock-step. New entries overwrite any still-pending
-  /// writeback — coalescing is fine because the latest transform value
-  /// is always the one we want.
+  /// source text in lock-step. Multiple entries are preserved so grouped
+  /// multi-selection undo/redo updates every participant.
   void enqueueTransformWriteback(CompletedTransformWriteback writeback) {
-    pendingTransformWriteback_ = std::move(writeback);
+    pendingTransformWritebacks_.push_back(std::move(writeback));
   }
 
-  /// Drain the most recently queued transform writeback, if any. Called
-  /// once per frame by `main.cc`. The writeback payload is stable across
-  /// frames — callers latch it themselves if they need to retry on a
-  /// busy frame.
+  /// Drain the oldest queued transform writeback, if any.
   [[nodiscard]] std::optional<CompletedTransformWriteback> consumeTransformWriteback() {
-    auto result = std::move(pendingTransformWriteback_);
-    pendingTransformWriteback_.reset();
+    if (pendingTransformWritebacks_.empty()) {
+      return std::nullopt;
+    }
+    auto result = std::move(pendingTransformWritebacks_.front());
+    pendingTransformWritebacks_.erase(pendingTransformWritebacks_.begin());
+    return result;
+  }
+
+  /// Drain all queued transform writebacks. Called once per frame by
+  /// `DocumentSyncController`.
+  [[nodiscard]] std::vector<CompletedTransformWriteback> consumeTransformWritebacks() {
+    auto result = std::move(pendingTransformWritebacks_);
+    pendingTransformWritebacks_.clear();
     return result;
   }
 
@@ -305,7 +310,7 @@ private:
 
   bool structuredEditingEnabled_ = true;
 
-  std::optional<CompletedTransformWriteback> pendingTransformWriteback_;
+  std::vector<CompletedTransformWriteback> pendingTransformWritebacks_;
   std::vector<CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
 
   std::optional<std::string> currentFilePath_;

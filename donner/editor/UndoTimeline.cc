@@ -21,6 +21,9 @@ UndoSnapshot captureTransformSnapshot(const svg::SVGElement& element) {
 void applySnapshot(const UndoSnapshot& snapshot) {
   auto graphicsElement = snapshot.element.cast<svg::SVGGraphicsElement>();
   graphicsElement.setTransform(snapshot.transform);
+  for (const UndoSnapshot& extra : snapshot.extras) {
+    applySnapshot(extra);
+  }
 }
 
 void UndoTimeline::beginTransaction(std::string_view label, UndoSnapshot before) {
@@ -41,6 +44,7 @@ void UndoTimeline::commitTransaction(UndoSnapshot after) {
       .before = std::move(pendingTransaction_->before),
       .after = std::move(after),
   });
+  redoStack_.clear();
   pendingTransaction_ = std::nullopt;
 }
 
@@ -55,6 +59,7 @@ void UndoTimeline::record(std::string_view label, UndoSnapshot before, UndoSnaps
       .before = std::move(before),
       .after = std::move(after),
   });
+  redoStack_.clear();
 }
 
 std::optional<UndoSnapshot> UndoTimeline::undo() {
@@ -82,6 +87,7 @@ std::optional<UndoSnapshot> UndoTimeline::undo() {
       .after = targetCopy.before,
       .undoOf = cursorAtEntry,
   });
+  redoStack_.push_back(entries_.size() - 1);
 
   // Move cursor backward for the next undo in this chain.
   if (undoCursor_ == 0) {
@@ -93,12 +99,39 @@ std::optional<UndoSnapshot> UndoTimeline::undo() {
   return targetCopy.before;
 }
 
+std::optional<UndoSnapshot> UndoTimeline::redo() {
+  if (!canRedo()) {
+    return std::nullopt;
+  }
+
+  const size_t redoEntryIndex = redoStack_.back();
+  redoStack_.pop_back();
+  if (redoEntryIndex >= entries_.size()) {
+    return std::nullopt;
+  }
+
+  const UndoEntry targetCopy = entries_[redoEntryIndex];
+  entries_.push_back(UndoEntry{
+      .label = "Redo: " + targetCopy.label,
+      .before = targetCopy.after,
+      .after = targetCopy.before,
+      .undoOf = redoEntryIndex,
+  });
+
+  inUndoChain_ = false;
+  return targetCopy.before;
+}
+
 bool UndoTimeline::canUndo() const {
   if (inUndoChain_) {
     return undoCursor_ != kCursorExhausted;
   }
 
   return !entries_.empty();
+}
+
+bool UndoTimeline::canRedo() const {
+  return !redoStack_.empty();
 }
 
 std::optional<std::string_view> UndoTimeline::nextUndoLabel() const {
@@ -119,6 +152,7 @@ void UndoTimeline::clear() {
   inUndoChain_ = false;
   undoCursor_ = 0;
   chainStart_ = 0;
+  redoStack_.clear();
 }
 
 void UndoTimeline::breakUndoChain() {
