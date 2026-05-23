@@ -516,50 +516,43 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
 }
 
 // ----------------------------------------------------------------------------
-// G1 Geode text-anchor parity repro
+// G1 Geode text-decoration parity repro
 // (see docs/design_docs/0021-resvg_feature_gaps.md §Geode parity).
 //
-// The Geode test backend reports Text=false (RendererTestBackendGeode.cc), which
-// hard-gates the entire text/* category off on Geode via requireFeature(Text).
-// That gate was justified by a claim that "every realistic text test produces
-// ~600-800 px of 4x-MSAA AA drift, not closable by threshold." That claim is
-// false:
-//   - Most Geode text renders within the default 100-px budget
-//     (text/font-weight 650 -> 3 px, text/text-anchor coordinates-list -> 10 px).
-//   - The real failures are localized to text-anchor=end / inheritance cases,
-//     all at a consistent ~700 px (end-on-text 726, end-with-letter-spacing 728,
-//     inheritance-1/2/3 695/720/636), with anti-aliased pixels EXCLUDED from the
-//     count (pixelmatch includeAA=false). They are non-AA by construction.
-//   - The diff is a systematic mismatch along every glyph edge of a single,
-//     correctly-anchored text run -- the signature of a sub-pixel positional /
-//     metrics offset in the anchored-text path, not anti-aliasing.
+// Root cause (confirmed in code + pixels): RendererGeode::drawText only fills
+// glyph outlines -- it renders neither text strokes nor text-decoration
+// (underline / overline / line-through), while RendererTinySkia::drawText
+// renders both (see RendererTinySkia.cc, "Draw text-decoration lines"). This is
+// the largest structural Geode text-parity gap: the whole text/text-decoration
+// category (~44 tests) fails because the decoration line is simply missing.
 //
-// This repro renders one anchored-text case directly on Geode (RendererGeode::
-// drawText is implemented regardless of the Text feature flag) and compares it
-// to the resvg golden, which tiny-skia matches within the default budget. It
-// FAILS today (~726 non-AA px) and must pass once the text-anchor positional
-// bug is fixed. Do NOT loosen the threshold to make it pass -- the threshold is
-// the regression signal (per CLAUDE.md, this divergence is a real bug, not AA).
+// This is NOT the 4x-MSAA edge-sampling difference that dominates the rest of
+// the text suite (that is a deliberate perf tradeoff -- Geode stays at 4x). The
+// repro is fill-only and integer-positioned so the glyph-edge MSAA difference
+// stays within the default budget; the missing underline is the only structural
+// divergence. tiny-skia authors and passes the golden; Geode fails until
+// drawText draws decorations.
+//
+// Authoring the golden (from tiny-skia):
+//   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
+//     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
+//       -- --gtest_filter='*GeodeTextDecorationRepro*'
 // ----------------------------------------------------------------------------
-class GeodeTextAnchorParityRepro : public ImageComparisonTestFixture {};
+class GeodeTextDecorationRepro : public ImageComparisonTestFixture {};
 
-TEST_F(GeodeTextAnchorParityRepro, EndOnTextPositionalBug) {
-  if (ActiveRendererBackend() != RendererBackend::Geode) {
-    GTEST_SKIP() << "Geode-only parity repro (CPU backends already match this golden).";
-  }
-
+TEST_F(GeodeTextDecorationRepro, UnderlineNotRenderedOnGeode) {
+  // Runs on both backends: tiny-skia authors/passes the golden, Geode fails on
+  // the missing underline. Fonts come from the resvg suite's fonts/ dir.
   const std::filesystem::path resvgRoot =
       Runfiles::instance().RlocationExternal("resvg-test-suite", "");
-  const std::filesystem::path svg = resvgRoot / "tests/text/text-anchor/end-on-text.svg";
-  const std::filesystem::path golden = resvgRoot / "tests/text/text-anchor/end-on-text.png";
+  const char* svg = "donner/svg/renderer/testdata/geode_text_decoration_underline.svg";
+  const char* golden = "donner/svg/renderer/testdata/golden/geode_text_decoration_underline.png";
 
-  SVGDocument document = loadSVG(svg.string().c_str(), resvgRoot);
+  SVGDocument document = loadSVG(svg, resvgRoot);
 
-  // Default threshold, anti-aliasing excluded (the fixture default). Geode
-  // currently diverges by ~726 non-AA px; the fix must bring it within the
-  // default 100-px budget like the CPU backends.
-  renderAndCompare(document, svg, golden.string().c_str(),
-                   Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels));
+  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
+  params.enableGoldenUpdateFromEnv();
+  renderAndCompare(document, svg, golden, params);
 }
 
 INSTANTIATE_TEST_SUITE_P(

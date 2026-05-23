@@ -1,0 +1,8 @@
+<svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg"
+     font-family="Noto Sans" font-size="48">
+    <!-- G1 repro: fill-only black text with text-decoration:underline, placed at
+         integer coordinates so the 4x-MSAA glyph-edge difference stays tiny and
+         the missing underline is the dominant divergence on Geode.
+         tiny-skia renders the underline; Geode's drawText does not. -->
+    <text x="20" y="60" fill="black" text-decoration="underline">Text</text>
+</svg>
