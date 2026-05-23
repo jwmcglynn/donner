@@ -515,6 +515,53 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
   renderAndCompare(document, testcase.svgFilename, goldenFilename.string().c_str());
 }
 
+// ----------------------------------------------------------------------------
+// G1 Geode text-anchor parity repro
+// (see docs/design_docs/0021-resvg_feature_gaps.md §Geode parity).
+//
+// The Geode test backend reports Text=false (RendererTestBackendGeode.cc), which
+// hard-gates the entire text/* category off on Geode via requireFeature(Text).
+// That gate was justified by a claim that "every realistic text test produces
+// ~600-800 px of 4x-MSAA AA drift, not closable by threshold." That claim is
+// false:
+//   - Most Geode text renders within the default 100-px budget
+//     (text/font-weight 650 -> 3 px, text/text-anchor coordinates-list -> 10 px).
+//   - The real failures are localized to text-anchor=end / inheritance cases,
+//     all at a consistent ~700 px (end-on-text 726, end-with-letter-spacing 728,
+//     inheritance-1/2/3 695/720/636), with anti-aliased pixels EXCLUDED from the
+//     count (pixelmatch includeAA=false). They are non-AA by construction.
+//   - The diff is a systematic mismatch along every glyph edge of a single,
+//     correctly-anchored text run -- the signature of a sub-pixel positional /
+//     metrics offset in the anchored-text path, not anti-aliasing.
+//
+// This repro renders one anchored-text case directly on Geode (RendererGeode::
+// drawText is implemented regardless of the Text feature flag) and compares it
+// to the resvg golden, which tiny-skia matches within the default budget. It
+// FAILS today (~726 non-AA px) and must pass once the text-anchor positional
+// bug is fixed. Do NOT loosen the threshold to make it pass -- the threshold is
+// the regression signal (per CLAUDE.md, this divergence is a real bug, not AA).
+// ----------------------------------------------------------------------------
+class GeodeTextAnchorParityRepro : public ImageComparisonTestFixture {};
+
+TEST_F(GeodeTextAnchorParityRepro, EndOnTextPositionalBug) {
+  if (ActiveRendererBackend() != RendererBackend::Geode) {
+    GTEST_SKIP() << "Geode-only parity repro (CPU backends already match this golden).";
+  }
+
+  const std::filesystem::path resvgRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
+  const std::filesystem::path svg = resvgRoot / "tests/text/text-anchor/end-on-text.svg";
+  const std::filesystem::path golden = resvgRoot / "tests/text/text-anchor/end-on-text.png";
+
+  SVGDocument document = loadSVG(svg.string().c_str(), resvgRoot);
+
+  // Default threshold, anti-aliasing excluded (the fixture default). Geode
+  // currently diverges by ~726 non-AA px; the fix must bring it within the
+  // default 100-px budget like the CPU backends.
+  renderAndCompare(document, svg, golden.string().c_str(),
+                   Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     FiltersEnableBackground, ImageComparisonTestFixture,
     ValuesIn(getTestsInCategory(
