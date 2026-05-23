@@ -86,6 +86,7 @@ conventions automated agents should follow when editing design docs.
 | 0035 | [filter_layer_compose_offset_bug](0035-filter_layer_compose_offset_bug.md)                 | Fixed                                                  | Root cause and coverage for the filtered-layer compose-offset/source-sync bug class.                                         |
 | 0036 | [composited_presentation_retrospective](0036-composited_presentation_retrospective.md)     | Retrospective                                          | Review of the filtered drag repro, flat-mode removal, fragile code paths, testing gaps, and cleanup actions.                 |
 | 0037 | [geode_presentation_glitch_investigation](0037-geode_presentation_glitch_investigation.md) | Investigation                                          | Handoff notes for the remaining Geode direct-texture drag/zoom overlay pops and texture-splat glitches.                      |
+| 0039 | [text_editor_focus_and_flash](0039-text_editor_focus_and_flash.md)                         | Draft                                                  | Source-pane relevant-nodes focus view (hide/dim non-ancestor elements) + changed-character flash highlight.                  |
 
 ## Cross-reference: developer docs
 
