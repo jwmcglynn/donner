@@ -67,7 +67,7 @@ donner_cc_library(
     srcs = ["EditorWindow.cc"],
     hdrs = ["EditorWindow.h"],
     defines = select({
-        "//donner/editor:wasm_geode_enabled": [],
+        "//donner/editor:wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
@@ -79,9 +79,13 @@ donner_cc_library(
         "@imgui",
     ] + select({
         "//donner/editor:wasm_geode_enabled": [
+            "//donner/svg/renderer/geode:geode_device",
+            "//donner/svg/renderer/geode:geode_wgpu_util",
             "//third_party/emscripten-glfw",
+            "//third_party/webgpu-cpp:webgpu_cpp",
+            "@imgui//:imgui_wgpu_backend",
         ],
-        "//donner/editor/wasm:wasm_enabled": [
+        "//donner/editor:wasm_tiny_skia_enabled": [
             "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [

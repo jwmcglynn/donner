@@ -1,9 +1,9 @@
 #pragma once
 /// @file
 ///
-/// `AsyncRenderer` owns a `svg::Renderer` and runs its `draw()` +
-/// `takeSnapshot()` on a dedicated worker thread so heavy renders
-/// don't block the UI thread.
+/// `AsyncRenderer` owns a `svg::Renderer` and runs compositor rendering plus
+/// any final presentation snapshot handoff on a dedicated worker thread so
+/// heavy renders don't block the UI thread.
 ///
 /// ## Threading model
 ///
@@ -146,7 +146,25 @@ struct RenderRequest {
   std::optional<DragPreview> dragPreview;
 };
 
-/// Bitmap plus the document version it was rendered from.
+/// Final full-canvas snapshot work needed after compositor rendering.
+struct PresentationSnapshotPlan {
+  /// Capture a CPU bitmap with `Renderer::takeSnapshot()`.
+  bool captureCpuSnapshot = false;
+  /// Capture a GPU texture snapshot with `Renderer::takeTextureSnapshot()`.
+  bool captureTextureSnapshot = false;
+};
+
+/**
+ * Choose final full-canvas snapshot work for a render result.
+ *
+ * @param hasCompositedPreview True when compositor tiles already provide the presented pixels.
+ * @param requiresTextureSnapshotPresentation True when presentation must remain on GPU textures.
+ * @return The final snapshot plan for this worker iteration.
+ */
+[[nodiscard]] PresentationSnapshotPlan ChoosePresentationSnapshotPlan(
+    bool hasCompositedPreview, bool requiresTextureSnapshotPresentation);
+
+/// Presentation payload plus the document version it was rendered from.
 struct RenderResult {
   /// One composite tile from the worker's `CompositorController::
   /// snapshotCompositorTiles()` snapshot (design doc 0033 §M2C). The
@@ -220,10 +238,11 @@ struct RenderResult {
   svg::RendererBitmap bitmap;
   std::optional<CompositedPreview> compositedPreview;
   std::uint64_t version = 0;
-  /// Wall-clock milliseconds the worker spent inside
-  /// `CompositorController::renderFrame` for this iteration. Reported so
-  /// the editor can plot backend render time alongside ImGui frame time
-  /// on the frame graph. Zero means no backend work was recorded.
+  /// Wall-clock milliseconds spent in the worker iteration after a request is
+  /// dequeued, including `CompositorController::renderFrame`, final
+  /// snapshot/readback work, and diagnostic snapshots that gate presentation.
+  /// Reported so the editor can plot worker latency alongside ImGui frame time
+  /// on the frame graph. Zero means no worker timing was recorded.
   double workerMs = 0.0;
 };
 

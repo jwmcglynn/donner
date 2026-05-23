@@ -51,6 +51,19 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
 
 }  // namespace
 
+PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
+                                                        bool requiresTextureSnapshotPresentation) {
+  if (requiresTextureSnapshotPresentation) {
+    return PresentationSnapshotPlan{
+        .captureTextureSnapshot = !hasCompositedPreview,
+    };
+  }
+
+  return PresentationSnapshotPlan{
+      .captureCpuSnapshot = true,
+  };
+}
+
 AsyncRenderer::AsyncRenderer() {
   thread_ = std::thread([this] { workerLoop(); });
 }
@@ -202,8 +215,10 @@ void AsyncRenderer::workerLoop() {
                std::holds_alternative<ShutdownState>(workerState_);
       });
       if (std::holds_alternative<ShutdownState>(workerState_)) {
+#ifdef __EMSCRIPTEN__
         // `workerRenderer` is destroyed here in Emscripten builds, i.e. on
         // the worker thread, mirroring its construction.
+#endif
         return;
       }
       if (std::holds_alternative<CancellingState>(workerState_)) {
@@ -228,8 +243,8 @@ void AsyncRenderer::workerLoop() {
 #ifdef __EMSCRIPTEN__
     svg::Renderer& requestRenderer = workerRenderer;
 #else
-    // Native Geode editor builds intentionally use the request renderer so
-    // worker texture snapshots are created on the same WGPU device as ImGui.
+    // Geode editor builds intentionally use the request renderer so worker texture snapshots are
+    // created on the same WGPU device as ImGui presentation.
     svg::Renderer& requestRenderer = request.lease.renderer();
 #endif
     svg::SVGDocument& requestDocument = request.lease.document();
@@ -243,6 +258,7 @@ void AsyncRenderer::workerLoop() {
     // Execute the render outside the lock so the UI thread can poll
     // `isBusy()` / `pollResult()` while we work.
     ZoneScopedN("AsyncRenderer::workerIteration");
+    const auto workerStart = std::chrono::steady_clock::now();
     std::optional<RenderResult::CompositedPreview> compositedPreview;
 
     // Compositor lifecycle is split into two independent decisions:
@@ -528,20 +544,14 @@ void AsyncRenderer::workerLoop() {
       };
     };
 
-    double workerMs = 0.0;
     bool renderCompleted = true;
-    const auto renderStart = std::chrono::steady_clock::now();
     {
       ZoneScopedN("Compositor::renderFrame");
-      // Wall-clock the core backend render so the editor can plot it
-      // on the frame graph next to the ImGui frame time. This measures
-      // the actual work the compositor performs per request, not the
-      // total worker iteration (which also pays for takeSnapshot and
-      // the result handoff). Scoped here so Tracy's zone cost isn't
-      // included either.
+      // The final worker timing below intentionally covers the whole
+      // presentation-gating iteration, including any readback or tile
+      // snapshot work after renderFrame. Keep this scoped timing in
+      // Tracy only for drilling into the compositor itself.
       renderCompleted = compositor_->renderFrame(viewport, cancelRender_);
-      const auto renderEnd = std::chrono::steady_clock::now();
-      workerMs = std::chrono::duration<double, std::milli>(renderEnd - renderStart).count();
     }
 
     // §M4: a cancelled render leaves compositor dirty flags ready for the next
@@ -576,16 +586,17 @@ void AsyncRenderer::workerLoop() {
     (void)request.selection;
     svg::RendererBitmap bitmap;
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
-    if (requestRenderer.requiresTextureSnapshotPresentation()) {
-      if (!compositedPreview.has_value()) {
-        ZoneScopedN("Renderer::takeTextureSnapshot");
-        fullCanvasTexture = requestRenderer.takeTextureSnapshot();
-        UTILS_RELEASE_ASSERT_MSG(
-            fullCanvasTexture != nullptr,
-            "Geode full-canvas presentation did not produce a GPU texture. Refusing CPU "
-            "readback/upload fallback in Geode presentation mode.");
-      }
-    } else {
+    const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
+        compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation());
+    if (snapshotPlan.captureTextureSnapshot) {
+      ZoneScopedN("Renderer::takeTextureSnapshot");
+      fullCanvasTexture = requestRenderer.takeTextureSnapshot();
+      UTILS_RELEASE_ASSERT_MSG(
+          fullCanvasTexture != nullptr,
+          "Geode full-canvas presentation did not produce a GPU texture. Refusing CPU "
+          "readback/upload fallback in Geode presentation mode.");
+    }
+    if (snapshotPlan.captureCpuSnapshot) {
       ZoneScopedN("Renderer::takeSnapshot");
       bitmap = requestRenderer.takeSnapshot();
     }
@@ -616,7 +627,6 @@ void AsyncRenderer::workerLoop() {
         done.result.bitmap = std::move(bitmap);
         done.result.compositedPreview = std::move(compositedPreview);
         done.result.version = request.version;
-        done.result.workerMs = workerMs;
         lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
         lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows();
         lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
@@ -624,6 +634,10 @@ void AsyncRenderer::workerLoop() {
         lastStateSnapshot_ = compositor_->snapshotState();
         lastWorkerCompositorEntity_ = compositorEntity_;
         lastDocumentCanvasSize_ = canvasSize;
+        const auto workerEnd = std::chrono::steady_clock::now();
+        const double workerMs =
+            std::chrono::duration<double, std::milli>(workerEnd - workerStart).count();
+        done.result.workerMs = workerMs;
         workerState_ = std::move(done);
         // Snapshot the callback under the lock so a concurrent
         // `setWakeCallback` swap can't tear the invocation. Fire it

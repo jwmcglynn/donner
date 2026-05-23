@@ -396,6 +396,36 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
             Vector2i(static_cast<int>(kViewportSize), static_cast<int>(kViewportSize)));
 }
 
+TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
+  std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
+  ASSERT_TRUE(host != nullptr);
+
+  geode::GeodeEmbedConfig config;
+  config.device = host->device();
+  config.queue = host->queue();
+  config.adapter = host->adapter();
+  config.textureFormat = wgpu::TextureFormat::BGRA8Unorm;
+  auto embeddedUnique = geode::GeodeDevice::CreateFromExternal(config);
+  ASSERT_NE(embeddedUnique, nullptr);
+
+  std::shared_ptr<geode::GeodeDevice> embedded(std::move(embeddedUnique));
+  RendererGeode renderer(embedded);
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(0, 200, 255, 255)));
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+  renderer.endFrame();
+
+  const RendererBitmap actual = renderer.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_EQ(actual.alphaType, AlphaType::Unpremultiplied);
+
+  const std::array<uint8_t, 4> center = pixelAt(actual, 32, 32);
+  EXPECT_LE(center[0], 2u) << "BGRA readback must be converted back to logical RGBA";
+  EXPECT_NEAR(static_cast<int>(center[1]), 200, 2);
+  EXPECT_NEAR(static_cast<int>(center[2]), 255, 2);
+  EXPECT_EQ(center[3], 255u);
+}
+
 /// Filling a path with a solid red paint should produce red pixels at the
 /// path's interior.
 TEST_F(RendererGeodeTest, DrawPathWithSolidFill) {

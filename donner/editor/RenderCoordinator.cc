@@ -66,18 +66,6 @@ std::optional<SelectTool::ActiveDragPreview> OverlayDragPreviewForSelection(
   };
 }
 
-bool CanReuseOverlayForActiveDrag(
-    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& presentedOverlayDragPreview,
-    const GlTextureCache& textures) {
-  return activeDragPreview.has_value() && presentedOverlayDragPreview.has_value() &&
-         activeDragPreview->entity == presentedOverlayDragPreview->entity &&
-         activeDragPreview->dragGeneration == presentedOverlayDragPreview->dragGeneration &&
-         activeDragPreview->documentFromCachedDocument.isTranslation() &&
-         presentedOverlayDragPreview->documentFromCachedDocument.isTranslation() &&
-         textures.overlayWidth() > 0 && textures.overlayHeight() > 0;
-}
-
 bool SameTransform(const Transform2d& lhs, const Transform2d& rhs) {
   for (std::size_t i = 0; i < 6; ++i) {
     if (lhs.data[i] != rhs.data[i]) {
@@ -220,16 +208,16 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
                                            std::span<const svg::SVGElement>(overlaySelection),
                                            marqueeRectDoc, canvasFromDoc, chromeBoundsPreview);
   overlayRenderer_.endFrame();
-  if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
-    pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
+  pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
+  if (pendingOverlayTexture_ != nullptr) {
+    pendingOverlayBitmap_.reset();
+  } else if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
     UTILS_RELEASE_ASSERT_MSG(
         pendingOverlayTexture_ != nullptr,
         "Geode overlay rasterization did not produce a GPU texture. Refusing CPU "
         "readback/upload fallback in Geode presentation mode.");
-    pendingOverlayBitmap_.reset();
   } else {
     pendingOverlayBitmap_ = overlayRenderer_.takeSnapshot();
-    pendingOverlayTexture_.reset();
   }
   pendingOverlayVersion_ = currentVersion;
   pendingOverlayDragPreview_ =
@@ -274,11 +262,11 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   const auto& result = *resultOpt;
-  // Forward the worker-measured backend time to the frame history so
-  // `RenderFrameGraph` can overlay backend render time on the UI frame
-  // graph. The frame history's latest slot corresponds to the current
-  // UI frame (pushed at the top of `EditorShell::runFrame` before
-  // poll) — a landed result belongs to that frame.
+  // Forward the worker-measured presentation latency to the frame history so
+  // `RenderFrameGraph` can overlay async worker time on the UI frame graph.
+  // The frame history's latest slot corresponds to the current UI frame
+  // (pushed at the top of `EditorShell::runFrame` before poll) — a landed
+  // result belongs to that frame.
   if (frameHistory != nullptr) {
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
@@ -382,13 +370,10 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_);
   const bool canvasDiffers = currentCanvasSize != lastOverlayCanvasSize_;
   const bool overlayVersionDiffers = currentVersion != lastOverlayVersion_;
-  const bool activeDragCanReuseOverlay =
-      !selectionDiffers && !marqueeDiffers && !canvasDiffers &&
-      CanReuseOverlayForActiveDrag(dragPreview, presentedOverlayDragPreview_, textures);
   if ((!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value() ||
        marqueeRectDoc.has_value() || activeBoundsPreviewDiffers) &&
       (selectionDiffers || marqueeDiffers || canvasDiffers || activeBoundsPreviewDiffers ||
-       (overlayVersionDiffers && !activeDragCanReuseOverlay))) {
+       overlayVersionDiffers)) {
     rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc,
                                         dragPreview.has_value()
                                             ? OverlayUploadMode::Immediate

@@ -270,11 +270,13 @@ public:
    */
   [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override;
 
-  /// Geode presentation is GPU-native on native WGPU editor builds.
+  /// Geode presentation is GPU-native when callers can sample WebGPU textures directly.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override {
 #ifdef __EMSCRIPTEN__
-    // The wasm editor presents through ImGui's WebGL backend, so WebGPU
-    // texture snapshots cannot be handed directly to the UI layer.
+    // Emscripten's WebGPU object table is per-worker. The editor's async
+    // renderer runs on a pthread, while ImGui presents on the main browser
+    // thread, so worker-created texture handles cannot be handed directly to
+    // ImGui. Use CPU snapshots for the worker handoff in wasm builds.
     return false;
 #else
     return true;

@@ -32,11 +32,11 @@ void RenderFrameGraph(const FrameHistory& history) {
   static float displayedBackendMs = 0.0f;
 
   msEma = msEma == 0.0f ? latestMs : 0.9f * msEma + 0.1f * latestMs;
-  // Feed the backend EMA only from non-zero samples — between drag
-  // bursts we go idle and stop emitting backend work; smoothing zero
-  // into the EMA would collapse the readout to near-zero even though
-  // the last actual render was 5-10 ms. Keep the EMA "sticky" at the
-  // most recent real measurement instead.
+  // Feed the worker EMA only from non-zero samples — between drag bursts we go
+  // idle and stop emitting worker results; smoothing zero into the EMA would
+  // collapse the readout to near-zero even though the last actual render was
+  // 5-10 ms. Keep the EMA "sticky" at the most recent real measurement
+  // instead.
   if (history.lastBackendMs > 0.0f) {
     backendMsEma = backendMsEma == 0.0f ? history.lastBackendMs
                                         : 0.9f * backendMsEma + 0.1f * history.lastBackendMs;
@@ -73,12 +73,11 @@ void RenderFrameGraph(const FrameHistory& history) {
                       ImVec2(x + barWidth, origin.y + kFrameGraphHeight), color);
   }
 
-  // Backend (async-renderer worker) time overlay. Only non-zero samples
-  // are plotted — zero means "no render result landed this frame" and
-  // we don't want a visible drop-to-zero between drag bursts. A thin
-  // cyan line segment connects consecutive non-zero samples; isolated
-  // points render as a single-pixel dot so a one-off render still
-  // shows up.
+  // Async worker/presentation time overlay. Only non-zero samples are plotted —
+  // zero means "no render result landed this frame" and we don't want a visible
+  // drop-to-zero between drag bursts. A thin cyan line segment connects
+  // consecutive non-zero samples; isolated points render as a single-pixel dot
+  // so a one-off render still shows up.
   constexpr ImU32 kBackendColor = IM_COL32(0, 220, 240, 220);
   const auto backendY = [&](float ms) {
     const float clamped = std::min(ms, scaleMs);
@@ -118,7 +117,7 @@ void RenderFrameGraph(const FrameHistory& history) {
   if (displayedBackendMs > 0.0f) {
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, kBackendColor);
-    ImGui::Text("  backend %.2f ms", displayedBackendMs);
+    ImGui::Text("  worker %.2f ms", displayedBackendMs);
     ImGui::PopStyleColor();
   }
 }

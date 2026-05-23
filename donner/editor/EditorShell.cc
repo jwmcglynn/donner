@@ -91,12 +91,13 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       app_(),
       selectTool_(),
       textEditor_(),
-      textures_(),
+      textures_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
       documentSyncController_(LoadFile(options_.svgPath).value_or("")),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
+      layerInspectorPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
@@ -243,8 +244,11 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
       .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
   };
-  const std::optional<SelectTool::ActiveDragPreview> activeDragPreview =
+  const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
       selectTool_.activeDragPreview();
+  const std::optional<SelectTool::ActiveDragPreview> activeDragPreview =
+      renderCoordinator_.compositedPresentation().activePreviewForPresentation(
+          liveActiveDragPreview);
   const std::optional<SelectTool::ActiveDragPreview> displayedDragPreview =
       renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
   readback.tiles.reserve(textures_.tiles().size());
@@ -661,6 +665,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
       lastPostedScreenPoint_.reset();
       if (previewBeforeRelease.has_value()) {
+        if (previewHadVisualChange) {
+          renderCoordinator_.compositedPresentation().beginSettling(
+              previewBeforeRelease, app_.document().currentFrameVersion());
+        }
         if (!renderCoordinator_.asyncRenderer().isBusy() &&
             (app_.flushFrame() || previewHadVisualChange)) {
           renderCoordinator_.compositedPresentation().beginSettling(
@@ -683,7 +691,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                           textures_);
   }
 
-  const auto activeDragPreview = selectTool_.activeDragPreview();
+  const auto liveActiveDragPreview = selectTool_.activeDragPreview();
+  const auto activeDragPreview =
+      renderCoordinator_.compositedPresentation().activePreviewForPresentation(
+          liveActiveDragPreview);
   const auto displayedDragPreview =
       renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
   RenderPanePresenterState paneState{

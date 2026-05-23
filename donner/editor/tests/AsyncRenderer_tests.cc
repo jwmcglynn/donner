@@ -40,6 +40,38 @@ bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
   return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
 }
 
+TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotWhenTilesExist) {
+  const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
+      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/true);
+
+  EXPECT_FALSE(plan.captureCpuSnapshot);
+  EXPECT_FALSE(plan.captureTextureSnapshot);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, TexturePresentationCapturesFallbackWhenTilesAreMissing) {
+  const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
+      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/true);
+
+  EXPECT_FALSE(plan.captureCpuSnapshot);
+  EXPECT_TRUE(plan.captureTextureSnapshot);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCanKeepDiagnosticSnapshotWithTiles) {
+  const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
+      /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/false);
+
+  EXPECT_TRUE(plan.captureCpuSnapshot);
+  EXPECT_FALSE(plan.captureTextureSnapshot);
+}
+
+TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTilesAreMissing) {
+  const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
+      /*hasCompositedPreview=*/false, /*requiresTextureSnapshotPresentation=*/false);
+
+  EXPECT_TRUE(plan.captureCpuSnapshot);
+  EXPECT_FALSE(plan.captureTextureSnapshot);
+}
+
 constexpr bool kAsyncRendererWallclockTestsEnabled =
 #ifdef DONNER_ASYNC_RENDERER_WALLCLOCK_TESTS
     true;
@@ -626,8 +658,7 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     // After a version change, the compositor should still produce valid composited output.
     ASSERT_TRUE(result->compositedPreview.has_value());
     EXPECT_TRUE(result->compositedPreview->valid());
-    // The CPU snapshot is also always produced for diagnostics.
-    EXPECT_FALSE(result->bitmap.empty());
+    EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
   }
 }
 
@@ -697,8 +728,15 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
   const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
   EXPECT_EQ(tile.kind, RenderResult::CompositedTile::Kind::Segment);
   EXPECT_EQ(tile.id, "full-canvas");
-  EXPECT_FALSE(tile.bitmap.empty());
-  EXPECT_EQ(tile.bitmap.dimensions, Vector2i(64, 64));
+  EXPECT_TRUE(HasPresentationPayload(tile));
+  if (renderer.requiresTextureSnapshotPresentation()) {
+    ASSERT_NE(tile.textureSnapshot, nullptr);
+    EXPECT_TRUE(tile.bitmap.empty());
+    EXPECT_EQ(tile.textureSnapshot->dimensions(), Vector2i(64, 64));
+  } else {
+    EXPECT_FALSE(tile.bitmap.empty());
+    EXPECT_EQ(tile.bitmap.dimensions, Vector2i(64, 64));
+  }
   EXPECT_EQ(tile.bitmapDimsPx, Vector2i(64, 64));
   EXPECT_EQ(tile.rasterCanvasSize, Vector2i(64, 64));
   EXPECT_EQ(tile.canvasOffsetDoc, Vector2d::Zero());
@@ -3065,7 +3103,7 @@ TEST(RenderCoordinatorTest, ImmediateOverlayUploadBypassesDisplayedVersionGate) 
       << "active-drag overlay mode must publish current-frame chrome immediately";
 }
 
-TEST(RenderCoordinatorTest, ActiveDragReusesOverlayForPureTranslation) {
+TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
   svg::Renderer rendererProbe;
   if (!rendererProbe.requiresTextureSnapshotPresentation()) {
     GTEST_SKIP() << "Overlay drag presentation is exercised by the Geode direct-texture path.";
@@ -3109,9 +3147,8 @@ TEST(RenderCoordinatorTest, ActiveDragReusesOverlayForPureTranslation) {
   coordinator.maybeRequestRender(app, selectTool, viewport, textures);
 
   ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
-  EXPECT_EQ(coordinator.presentedOverlayDragPreview()->translation, Vector2d::Zero())
-      << "Pure translation drags should move the overlay texture at presentation time instead of "
-         "rerasterizing chrome every frame.";
+  EXPECT_EQ(coordinator.presentedOverlayDragPreview()->translation, Vector2d(8.0, 0.0))
+      << "Pure translation drags should rerasterize overlay chrome for the current frame.";
 }
 
 TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingTextureTransform) {

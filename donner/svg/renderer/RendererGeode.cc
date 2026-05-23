@@ -76,6 +76,10 @@ constexpr wgpu::TextureFormat kFilterIntermediateFormat = wgpu::TextureFormat::R
 /// matching the CPU-renderer helper.
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 
+bool IsBgraTextureFormat(wgpu::TextureFormat format) {
+  return static_cast<WGPUTextureFormat>(format) == WGPUTextureFormat_BGRA8Unorm;
+}
+
 /// Apply a `Transform2d` to every control point of a `Path`, returning a
 /// new `Path` whose commands mirror the input but whose coordinates are
 /// pre-transformed. Needed because `GeoEncoder::fillPath` draws in the
@@ -3242,12 +3246,6 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
 }
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
-#ifdef __EMSCRIPTEN__
-  // Emscripten's editor UI uses WebGL, not ImGui's WGPU backend, so a
-  // WebGPU texture snapshot cannot be presented directly by the UI. Return
-  // null to let compositor/editor callers use `takeSnapshot()` CPU pixels.
-  return nullptr;
-#else
   if (!impl_->device || !impl_->target || impl_->hostTarget || impl_->pixelWidth <= 0 ||
       impl_->pixelHeight <= 0) {
     return nullptr;
@@ -3261,7 +3259,6 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
 
   return std::make_shared<RendererGeodeTextureSnapshot>(impl_->device, std::move(texture),
                                                         dimensions, impl_->textureFormat);
-#endif
 }
 
 RendererBitmap RendererGeode::takeSnapshot() const {
@@ -3352,14 +3349,16 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   // break cross-backend parity.
   bitmap.dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));
   bitmap.rowBytes = static_cast<size_t>(width) * 4u;
+  bitmap.alphaType = AlphaType::Unpremultiplied;
   bitmap.pixels.resize(bitmap.rowBytes * height);
+  const bool sourceIsBgra = IsBgraTextureFormat(impl_->textureFormat);
   for (uint32_t y = 0; y < height; ++y) {
     const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
     uint8_t* dstRow = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
     for (uint32_t x = 0; x < width; ++x) {
-      const uint8_t srcR = srcRow[x * 4 + 0];
+      const uint8_t srcR = sourceIsBgra ? srcRow[x * 4 + 2] : srcRow[x * 4 + 0];
       const uint8_t srcG = srcRow[x * 4 + 1];
-      const uint8_t srcB = srcRow[x * 4 + 2];
+      const uint8_t srcB = sourceIsBgra ? srcRow[x * 4 + 0] : srcRow[x * 4 + 2];
       const uint8_t srcA = srcRow[x * 4 + 3];
       if (srcA == 0u) {
         dstRow[x * 4 + 0] = 0u;

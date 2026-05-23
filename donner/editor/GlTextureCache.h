@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <vector>
 
-#if defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__) && !defined(DONNER_EDITOR_WGPU)
 #define GLFW_INCLUDE_ES3
 #include <GLES3/gl3.h>
 #elif !defined(DONNER_EDITOR_WGPU)
@@ -20,6 +20,10 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/ImGuiIncludes.h"
+
+namespace donner::geode {
+class GeodeDevice;
+}  // namespace donner::geode
 
 namespace donner::editor {
 
@@ -66,7 +70,7 @@ struct CompositedTileTextureIdentity {
  */
 class GlTextureCache {
 public:
-  GlTextureCache() = default;
+  explicit GlTextureCache(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
   ~GlTextureCache();
 
   GlTextureCache(const GlTextureCache&) = delete;
@@ -126,6 +130,7 @@ public:
 private:
 #ifdef DONNER_EDITOR_WGPU
   using NativeTextureHandle = ImTextureID;
+  struct WgpuUploadedTexture;
 #else
   using NativeTextureHandle = GLuint;
 #endif
@@ -133,6 +138,7 @@ private:
   static ImTextureID ToImTextureId(NativeTextureHandle texture);
 #ifdef DONNER_EDITOR_WGPU
   static ImTextureID ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
+  std::shared_ptr<WgpuUploadedTexture> uploadBitmapToWgpu(const svg::RendererBitmap& bitmap);
 #endif
 #ifndef DONNER_EDITOR_WGPU
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
@@ -143,6 +149,9 @@ private:
   struct CachedTextureEntry {
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+#ifdef DONNER_EDITOR_WGPU
+    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+#endif
     CompositedTileTextureIdentity identity;
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
@@ -153,6 +162,7 @@ private:
   struct RetiredSnapshot {
     NativeTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
+    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
   };
 
   using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
@@ -162,10 +172,15 @@ private:
   static void releaseImGuiTexture(NativeTextureHandle texture);
 
   void retireSnapshots(RetiredSnapshotBatch snapshots);
+
+  std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
 #endif
 
   NativeTextureHandle overlayTexture_ = 0;
   std::shared_ptr<const svg::RendererTextureSnapshot> overlayTextureSnapshot_;
+#ifdef DONNER_EDITOR_WGPU
+  std::shared_ptr<WgpuUploadedTexture> overlayUploadedTexture_;
+#endif
 
   int overlayWidth_ = 0;
   int overlayHeight_ = 0;

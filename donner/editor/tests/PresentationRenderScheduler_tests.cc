@@ -77,6 +77,30 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithStaleCacheRequestsDragCaptur
   EXPECT_EQ(decision.dragPreview->dragGeneration, 9u);
 }
 
+TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheDoesNotUploadAgain) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision warm =
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
+  scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize);
+  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
+
+  const SelectTool::ActiveDragPreview activeDrag{
+      .entity = Entity(7),
+      .translation = Vector2d(9.0, 0.0),
+      .dragGeneration = 14,
+  };
+  const PresentationRenderScheduleDecision decision =
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/8, activeDrag));
+
+  EXPECT_FALSE(decision.shouldRequestRender())
+      << "Active drag should transform cached promoted textures in the presenter; the DOM "
+         "version changes every mouse move and must not trigger a new bitmap upload.";
+  EXPECT_FALSE(decision.needsCompositedLayerCapture);
+  EXPECT_FALSE(decision.needsRegularRender);
+}
+
 TEST(PresentationRenderSchedulerTest, SettledSelectionRefreshRequestsSelectionHint) {
   PresentationRenderScheduler scheduler;
   CompositedPresentation presentation;
