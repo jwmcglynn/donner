@@ -3194,8 +3194,18 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     }
 
     const css::RGBA spanFill = resolveSpanFill(runIndex);
-    if (spanFill.a == 0) {
-      continue;
+    const bool hasFill = spanFill.a != 0;
+
+    // NOTE: text *stroke* (`stroke="…"` on <text>/<tspan>) is intentionally not
+    // drawn here yet. A first port stroked each glyph via
+    // `placed.strokeToFill(...)`, but the stroke came out ~2.5x too thick (the
+    // device scale) -- a glyph-space-vs-device-space width bug. Tracked as a
+    // G1-struct follow-up; see docs/design_docs/0021-resvg_feature_gaps.md.
+
+    const TextDecoration spanDecoration =
+        runIndex < text.spans.size() ? text.spans[runIndex].textDecoration : params.textDecoration;
+    if (!hasFill && spanDecoration == TextDecoration::None) {
+      continue;  // Nothing to fill or decorate.
     }
 
     for (const auto& glyph : run.glyphs) {
@@ -3224,7 +3234,197 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       }
 
       const Path placed = transformPath(glyphPath, glyphFromLocal);
-      impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
+      if (hasFill) {
+        impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
+      }
+    }
+
+    // Text-decoration lines (underline / overline / line-through). Mirrors
+    // `RendererTinySkia::drawText`; solid paint only (gradient decoration paint
+    // is a separate gap). Per CSS Text Decoration §3 the decoration uses the
+    // declaring element's paint + font metrics.
+    if (spanDecoration != TextDecoration::None && !run.glyphs.empty() &&
+        runIndex < text.spans.size()) {
+      const auto& span = text.spans[runIndex];
+
+      const float decoFontSizePx =
+          span.decorationFontSizePx > 0.0f ? span.decorationFontSizePx : spanFontSizePx;
+      const float decoScale = textEngine.scaleForPixelHeight(run.font, decoFontSizePx);
+      const float decoEmScale = textEngine.scaleForEmToPixels(run.font, decoFontSizePx);
+
+      const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
+      const int ascent = vmetrics.ascent;
+      const int descent = vmetrics.descent;
+
+      double fontUnderlinePos = 0.0;
+      double fontUnderlineThick = 0.0;
+      if (auto ul = textEngine.underlineMetrics(run.font)) {
+        fontUnderlinePos = ul->position;
+        fontUnderlineThick = ul->thickness;
+      }
+      double fontStrikePos = 0.0;
+      double fontStrikeThick = 0.0;
+      if (auto strike = textEngine.strikeoutMetrics(run.font)) {
+        fontStrikePos = strike->position;
+        fontStrikeThick = strike->thickness;
+      }
+
+      const double thickness = fontUnderlineThick > 0.0
+                                   ? fontUnderlineThick * decoEmScale
+                                   : static_cast<double>(ascent - descent) * decoScale / 18.0;
+
+      // Decoration fill colour (solid): declaring element's decoration fill,
+      // falling back to the span fill.
+      css::RGBA decoFill = spanFill;
+      if (!std::holds_alternative<PaintServer::None>(span.resolvedDecorationFill)) {
+        if (auto c = impl_->resolveSolidPaint(span.resolvedDecorationFill,
+                                              span.decorationFillOpacity * span.opacity)) {
+          decoFill = *c;
+        }
+      }
+      // (Decoration *stroke* is omitted for the same glyph-space stroke-width
+      // bug noted above; decoration fill is drawn below.)
+
+      const auto drawDecoPath = [&](const Path& path) {
+        if (path.empty()) {
+          return;
+        }
+        if (decoFill.a != 0) {
+          impl_->encoder->fillPath(path, decoFill, FillRule::NonZero);
+        }
+      };
+
+      const auto isRenderedGlyph = [](const auto& g) {
+        return g.glyphIndex != 0 && g.xAdvance > 0.0;
+      };
+      const bool hasRotation = std::any_of(run.glyphs.begin(), run.glyphs.end(),
+                                           [](const auto& g) { return g.rotateDegrees != 0.0; });
+
+      for (const TextDecoration decoType :
+           {TextDecoration::Underline, TextDecoration::Overline, TextDecoration::LineThrough}) {
+        if (!hasFlag(spanDecoration, decoType)) {
+          continue;
+        }
+
+        double decoThickness = thickness;
+        if (decoType == TextDecoration::LineThrough && fontStrikeThick > 0.0) {
+          decoThickness = fontStrikeThick * decoEmScale;
+        }
+
+        double decoOffsetY = 0.0;
+        if (decoType == TextDecoration::Underline) {
+          decoOffsetY = fontUnderlinePos != 0.0 ? -fontUnderlinePos * decoEmScale
+                                                : -static_cast<double>(descent) * decoScale * 0.4;
+        } else if (decoType == TextDecoration::Overline) {
+          decoOffsetY = -static_cast<double>(ascent) * decoScale;
+        } else {  // LineThrough
+          decoOffsetY = fontStrikePos != 0.0 ? -fontStrikePos * decoEmScale
+                                             : -static_cast<double>(ascent) * decoScale * 0.35;
+        }
+
+        double decoTopY = decoOffsetY - decoThickness / 2.0;
+
+        const bool hasMultipleDecorationLines =
+            (hasFlag(spanDecoration, TextDecoration::Underline) ? 1 : 0) +
+                (hasFlag(spanDecoration, TextDecoration::Overline) ? 1 : 0) +
+                (hasFlag(spanDecoration, TextDecoration::LineThrough) ? 1 : 0) >
+            1;
+        if (span.decorationDeclarationCount == 1 && hasMultipleDecorationLines) {
+          if (decoType == TextDecoration::Overline) {
+            decoTopY += decoThickness * 1.5;
+          } else if (decoType == TextDecoration::LineThrough) {
+            decoTopY -= decoThickness;
+          }
+        }
+
+        if (hasRotation) {
+          for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+            const auto& glyph = run.glyphs[gi];
+            if (!isRenderedGlyph(glyph)) {
+              continue;
+            }
+            double segmentWidth = glyph.xAdvance;
+            for (size_t nj = gi + 1; nj < run.glyphs.size(); ++nj) {
+              if (!isRenderedGlyph(run.glyphs[nj])) {
+                continue;
+              }
+              segmentWidth = std::min(segmentWidth, run.glyphs[nj].xPosition - glyph.xPosition);
+              break;
+            }
+            if (segmentWidth <= 0.0) {
+              continue;
+            }
+            const Path segPath = PathBuilder()
+                                     .moveTo(Vector2d(0.0, decoTopY))
+                                     .lineTo(Vector2d(segmentWidth, decoTopY))
+                                     .lineTo(Vector2d(segmentWidth, decoTopY + decoThickness))
+                                     .lineTo(Vector2d(0.0, decoTopY + decoThickness))
+                                     .closePath()
+                                     .build();
+            Transform2d segFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+            if (glyph.rotateDegrees != 0.0) {
+              segFromLocal =
+                  Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+                  segFromLocal;
+            }
+            drawDecoPath(transformPath(segPath, segFromLocal));
+          }
+        } else {
+          const auto firstGlyph =
+              std::find_if(run.glyphs.begin(), run.glyphs.end(), isRenderedGlyph);
+          const auto lastGlyph =
+              std::find_if(run.glyphs.rbegin(), run.glyphs.rend(), isRenderedGlyph);
+          if (firstGlyph == run.glyphs.end() || lastGlyph == run.glyphs.rend()) {
+            continue;
+          }
+          const double baselineY = firstGlyph->yPosition;
+          const bool sameBaseline =
+              std::all_of(run.glyphs.begin(), run.glyphs.end(), [&](const auto& g) {
+                return !isRenderedGlyph(g) || std::abs(g.yPosition - baselineY) < 1e-6;
+              });
+          if (sameBaseline) {
+            const double x0 = firstGlyph->xPosition;
+            const double x1 = lastGlyph->xPosition + lastGlyph->xAdvance;
+            const double y = baselineY + decoTopY;
+            drawDecoPath(PathBuilder()
+                             .moveTo(Vector2d(x0, y))
+                             .lineTo(Vector2d(x1, y))
+                             .lineTo(Vector2d(x1, y + decoThickness))
+                             .lineTo(Vector2d(x0, y + decoThickness))
+                             .closePath()
+                             .build());
+          } else {
+            PathBuilder decoBuilder;
+            for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+              const auto& glyph = run.glyphs[gi];
+              if (!isRenderedGlyph(glyph)) {
+                continue;
+              }
+              const double x0 = glyph.xPosition;
+              double x1 = glyph.xPosition + glyph.xAdvance;
+              for (size_t nj = gi + 1; nj < run.glyphs.size(); ++nj) {
+                if (!isRenderedGlyph(run.glyphs[nj])) {
+                  continue;
+                }
+                x1 = std::min(x1, run.glyphs[nj].xPosition);
+                break;
+              }
+              if (x1 <= x0) {
+                continue;
+              }
+              const double y = glyph.yPosition + decoTopY;
+              decoBuilder.moveTo(Vector2d(x0, y));
+              decoBuilder.lineTo(Vector2d(x1, y));
+              decoBuilder.lineTo(Vector2d(x1, y + decoThickness));
+              decoBuilder.lineTo(Vector2d(x0, y + decoThickness));
+              decoBuilder.closePath();
+            }
+            if (!decoBuilder.empty()) {
+              drawDecoPath(decoBuilder.build());
+            }
+          }
+        }
+      }
     }
   }
 #else
