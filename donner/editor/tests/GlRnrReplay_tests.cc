@@ -266,7 +266,17 @@ TEST(GlRnrReplayTest, ClickAfterZoomBeforeRerasterSelectsNewTarget) {
       << "stale compositor status persisted through the bounded replay window";
 }
 
-TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
+// TODO(#601): Re-enable once the multi-thread determinism test framework lands.
+// This compares the active-drag frame against the mouse-up frame, but `pace=true`
+// lets the async render worker land between the two frames nondeterministically
+// (chronically flaky on CI across all branches). Making the replay deterministic
+// further showed the residual diff is the *selection chrome* (the active-drag
+// transform-preview bounding box vs the settled committed box), which changes
+// intentionally after the drag settles — so pixel-identity including chrome is
+// not a true invariant. The content "no-jump" invariant for this recording is
+// already covered deterministically by
+// `RnrReplayTest.FilterPostDragJumpReplayMatchesGroundTruth`.
+TEST(GlRnrReplayTest, DISABLED_SecondDragActiveFrameMatchesMouseUpFrame) {
   constexpr std::string_view kRnrPath = "donner/editor/tests/filter_post_drag_jump.rnr";
   const std::filesystem::path rnrPath = RunfilePath(kRnrPath);
   std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(rnrPath);
@@ -305,7 +315,16 @@ TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
                                tests::PixelmatchIdentityParams());
 }
 
-TEST(GlRnrReplayTest, ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles) {
+// TODO(#601): Re-enable once the multi-thread determinism test framework lands.
+// The hard precondition `HasStaleSplitTiles(*guarded)` at frame 146 requires the
+// async render worker to still be several frames behind on the zoom re-raster — a
+// `pace=true` wall-clock race that is chronically flaky on CI (false ~50% of the
+// time, including on `main`). The guard invariant under test
+// (`ShouldUploadImmediateOverlayForPresentedTiles` rejecting stale split-tile
+// epochs) is already covered deterministically by `RenderCoordinatorTest`'s
+// `ImmediateOverlayUploadRequiresCurrentSplitCanvasEpoch` /
+// `SplitPreviewFromStaleCanvasEpochIsRejected` in AsyncRenderer_tests.cc.
+TEST(GlRnrReplayTest, DISABLED_ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles) {
   constexpr std::string_view kRnrPath = "zoom-out-drag-jump.rnr";
   constexpr std::uint64_t kBeforeFrame = 145;
   constexpr std::uint64_t kGuardedFrame = 146;
