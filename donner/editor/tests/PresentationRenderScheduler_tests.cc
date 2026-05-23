@@ -62,6 +62,7 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithStaleCacheRequestsDragCaptur
   const SelectTool::ActiveDragPreview activeDrag{
       .entity = Entity(7),
       .translation = Vector2d(4.0, 0.0),
+      .dragGeneration = 9,
   };
   const PresentationRenderScheduleDecision decision =
       scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1, activeDrag));
@@ -73,6 +74,7 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithStaleCacheRequestsDragCaptur
   EXPECT_EQ(decision.dragPreview->entity, Entity(7));
   EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::ActiveDrag);
   EXPECT_EQ(decision.dragPreview->translation, Vector2d(4.0, 0.0));
+  EXPECT_EQ(decision.dragPreview->dragGeneration, 9u);
 }
 
 TEST(PresentationRenderSchedulerTest, SettledSelectionRefreshRequestsSelectionHint) {

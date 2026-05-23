@@ -670,6 +670,8 @@ protected:
       request.dragPreview = RenderRequest::DragPreview{
           .entity = preview->entity,
           .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+          .translation = preview->translation,
+          .dragGeneration = preview->dragGeneration,
       };
     }
     return request;

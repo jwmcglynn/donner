@@ -127,6 +127,8 @@ std::optional<double> DrainOneRender(AsyncRenderer& asyncRenderer, svg::Renderer
     request.dragPreview = RenderRequest::DragPreview{
         .entity = preview->entity,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+        .translation = preview->translation,
+        .dragGeneration = preview->dragGeneration,
     };
   } else if (request.selectedEntity != entt::null) {
     request.dragPreview = RenderRequest::DragPreview{

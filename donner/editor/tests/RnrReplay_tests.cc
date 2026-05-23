@@ -209,6 +209,8 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
     request.dragPreview = RenderRequest::DragPreview{
         .entity = preview->entity,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+        .translation = preview->translation,
+        .dragGeneration = preview->dragGeneration,
     };
   }
 
@@ -594,6 +596,8 @@ protected:
         req.dragPreview = RenderRequest::DragPreview{
             .entity = dragPreview->entity,
             .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+            .translation = dragPreview->translation,
+            .dragGeneration = dragPreview->dragGeneration,
         };
       } else if (needsCompositedPrewarm && prewarmEntity != entt::null) {
         req.dragPreview = RenderRequest::DragPreview{

@@ -160,7 +160,8 @@ std::optional<PresentedDragBaseline> PresentedBaselineFromSelectPreviews(
     const std::optional<SelectTool::ActiveDragPreview>& activePreview,
     const std::optional<SelectTool::ActiveDragPreview>& displayedPreview) {
   if (!activePreview.has_value() || !displayedPreview.has_value() ||
-      activePreview->entity != displayedPreview->entity) {
+      activePreview->entity != displayedPreview->entity ||
+      activePreview->dragGeneration != displayedPreview->dragGeneration) {
     return std::nullopt;
   }
 

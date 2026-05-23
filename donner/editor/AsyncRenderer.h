@@ -99,6 +99,8 @@ struct RenderRequest {
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::ActiveDrag;
     /// Active drag translation represented by this request. Selection prewarms use zero.
     Vector2d translation = Vector2d::Zero();
+    /// Monotonic id for the active drag gesture. Selection prewarms use zero.
+    std::uint64_t dragGeneration = 0;
   };
 
   /**

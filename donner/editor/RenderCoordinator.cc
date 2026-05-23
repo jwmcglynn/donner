@@ -44,6 +44,7 @@ std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
   return SelectTool::ActiveDragPreview{
       .entity = preview->entity,
       .translation = preview->translation,
+      .dragGeneration = preview->dragGeneration,
   };
 }
 
@@ -70,6 +71,7 @@ bool CanReuseOverlayForActiveDrag(
     const GlTextureCache& textures) {
   return activeDragPreview.has_value() && presentedOverlayDragPreview.has_value() &&
          activeDragPreview->entity == presentedOverlayDragPreview->entity &&
+         activeDragPreview->dragGeneration == presentedOverlayDragPreview->dragGeneration &&
          textures.overlayWidth() > 0 && textures.overlayHeight() > 0;
 }
 

@@ -1302,6 +1302,8 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
       request.dragPreview = RenderRequest::DragPreview{
           .entity = preview->entity,
           .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+          .translation = preview->translation,
+          .dragGeneration = preview->dragGeneration,
       };
     } else if (request.selectedEntity != entt::null) {
       request.dragPreview = RenderRequest::DragPreview{
@@ -1473,6 +1475,7 @@ TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache)
       .entity = backgroundEntity,
       .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
       .translation = selectTool.activeDragPreview()->translation,
+      .dragGeneration = selectTool.activeDragPreview()->dragGeneration,
   };
   asyncRenderer.requestRender(request);
 
@@ -1494,6 +1497,7 @@ TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache)
       SelectTool::ActiveDragPreview{
           .entity = result->compositedPreview->representedDragPreview->entity,
           .translation = result->compositedPreview->representedDragPreview->translation,
+          .dragGeneration = result->compositedPreview->representedDragPreview->dragGeneration,
       });
 
   selectTool.onMouseMove(app, Vector2d(312.0, 204.0), /*buttonHeld=*/true);

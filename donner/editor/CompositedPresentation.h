@@ -245,7 +245,7 @@ public:
     // in flight, keep displaying the last cached document image without
     // applying the new entity's live drag offset to stale drag-target tiles.
     if (activePreview.has_value() && cache.has_value() && activePreview->entity == cache->entity) {
-      return representedPreviewForCache(*cache);
+      return representedPreviewForActiveCache(*cache, *activePreview);
     }
 
     if (const auto* settling = std::get_if<SettlingForRender>(&state_);
@@ -308,6 +308,20 @@ private:
     return SelectTool::ActiveDragPreview{
         .entity = cache.entity,
         .translation = Vector2d::Zero(),
+    };
+  }
+
+  static SelectTool::ActiveDragPreview representedPreviewForActiveCache(
+      const CachedTextures& cache, const SelectTool::ActiveDragPreview& activePreview) {
+    if (cache.representedPreview.has_value() && cache.representedPreview->entity == cache.entity &&
+        cache.representedPreview->dragGeneration == activePreview.dragGeneration) {
+      return *cache.representedPreview;
+    }
+
+    return SelectTool::ActiveDragPreview{
+        .entity = cache.entity,
+        .translation = Vector2d::Zero(),
+        .dragGeneration = activePreview.dragGeneration,
     };
   }
 

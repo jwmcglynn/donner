@@ -161,6 +161,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
           },
       .extras = {},
       .startDocumentPoint = documentPoint,
+      .generation = nextDragGeneration_++,
   };
   return true;
 }
@@ -301,6 +302,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
           },
       .extras = std::move(extras),
       .startDocumentPoint = documentPoint,
+      .generation = nextDragGeneration_++,
   };
 }
 
@@ -472,7 +474,8 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
   }
 
   return ActiveDragPreview{.entity = dragState_->primary.element.entityHandle().entity(),
-                           .translation = dragState_->currentDocumentDelta};
+                           .translation = dragState_->currentDocumentDelta,
+                           .dragGeneration = dragState_->generation};
 }
 
 std::optional<Box2d> SelectTool::marqueeRect() const {

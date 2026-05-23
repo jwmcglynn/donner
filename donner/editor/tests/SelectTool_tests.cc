@@ -1,5 +1,7 @@
 #include "donner/editor/SelectTool.h"
 
+#include <cstdint>
+
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -802,6 +804,23 @@ TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBou
   EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{}, bounds));
   EXPECT_TRUE(tool.isDragging());
   EXPECT_TRUE(selectionIs("#r1"));
+}
+
+TEST_F(SelectToolTest, DragPreviewGenerationChangesForRedragOnSameSelection) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(selectionIs("#r1"));
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  const std::uint64_t firstDragGeneration = tool.activeDragPreview()->dragGeneration;
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_FALSE(tool.isDragging());
+
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{}, bounds));
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+
+  EXPECT_GT(tool.activeDragPreview()->dragGeneration, firstDragGeneration)
+      << "Presentation caches need to distinguish consecutive drags of the same entity.";
 }
 
 TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnShiftClick) {

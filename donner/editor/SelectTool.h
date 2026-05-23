@@ -16,6 +16,7 @@
 /// All DOM mutations flow through `EditorApp::applyMutation()` as
 /// `EditorCommand::SetTransform` — never directly.
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <vector>
@@ -34,8 +35,12 @@ class SelectTool final : public Tool {
 public:
   /// Preview state for an in-progress drag, consumed by the async renderer.
   struct ActiveDragPreview {
+    /// Entity being dragged.
     Entity entity = entt::null;
+    /// Current drag translation in document coordinates.
     Vector2d translation = Vector2d::Zero();
+    /// Monotonic id for one mouse-down/move/up drag gesture.
+    std::uint64_t dragGeneration = 0;
   };
 
   /// Payload needed to write a completed drag back into the source pane.
@@ -144,6 +149,8 @@ private:
     std::vector<PerElementDrag> extras;
 
     Vector2d startDocumentPoint;
+    /// Generation copied into \ref ActiveDragPreview for this gesture.
+    std::uint64_t generation = 0;
     /// Current drag delta in document coordinates, used for compositor preview.
     Vector2d currentDocumentDelta = Vector2d::Zero();
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A
@@ -165,6 +172,7 @@ private:
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
+  std::uint64_t nextDragGeneration_ = 1;
 };
 
 }  // namespace donner::editor
