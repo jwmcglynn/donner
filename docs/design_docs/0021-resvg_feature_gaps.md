@@ -100,11 +100,15 @@ only fractional-position edges diverge.
 
 Genuinely missing/broken rendering, far too large for edge coverage:
 
-- **`drawText` only fills glyph outlines** — it renders neither text **stroke**
-  nor text-**decoration** (underline/overline/line-through), while
-  `RendererTinySkia::drawText` renders both (see its "Draw text-decoration lines"
-  block). This is the biggest single gap: the whole `text/text-decoration`
-  category (~44 tests) fails on the missing line. **← active: repro committed.**
+- **`drawText` decoration** — `drawText` rendered no text-decoration
+  (underline/overline/line-through), while `RendererTinySkia::drawText` does.
+  ✅ **Fixed** (decoration *fill*) — ported metrics → rect → `fillPath`; the repro
+  is green and the existing geode golden suite is unaffected.
+- **`drawText` text stroke** — `drawText` still draws no `stroke="…"` on text.
+  A first port (`placed.strokeToFill(...)`) rendered the stroke **~2.5× too thick**
+  (≈ the device scale) — a glyph-space-vs-device-space stroke-width bug, deferred
+  rather than shipped wrong. **← next.** Decoration *stroke* is gated behind the
+  same fix.
 - `text/text/rotate…underline…pattern` → ~105k px (pattern-on-rotated-text).
 - `text/text/xml_lang_ja` (CJK) → ~19k px (CJK font fallback / bitmap-only glyphs,
   which `drawText` skips at `RendererGeode.cc:3162`).
@@ -112,12 +116,15 @@ Genuinely missing/broken rendering, far too large for edge coverage:
 
 **Plan:**
 1. ✅ Repro committed (text-decoration underline, red on Geode).
-2. **Fix `drawText` decorations** (port underline/overline/line-through from
-   tiny-skia: font underline/strikeout metrics → rect → `fillPath`). Then text
-   stroke. Re-run the text set; expect the decoration category to clear.
-3. Work the remaining G1-struct tail (CJK, vertical, rotate+pattern) as separate
+2. ✅ **Decoration fill** rendered in `drawText` — repro green, no golden-suite
+   regression.
+3. **Fix text stroke** (the ~2.5× width bug): determine the correct space for the
+   stroke width relative to the em-scaled glyph path + `deviceFromLocalTransform`,
+   then re-enable glyph stroke + decoration stroke. (Note: stroked resvg
+   decoration tests stay red until this + the G1-edge threshold both land.)
+4. Work the remaining G1-struct tail (CJK, vertical, rotate+pattern) as separate
    repros + fixes.
-4. **Un-gate**: flip `Text` → `true`; passing tests run, G1-edge tests get the
+5. **Un-gate**: flip `Text` → `true`; passing tests run, G1-edge tests get the
    documented 4×-MSAA threshold, remaining G1-struct failures keep narrow gates
    linked to their repro. (Un-gating before the structural fixes would just create
    ~162 per-test gates.)
