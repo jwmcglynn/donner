@@ -104,11 +104,19 @@ Genuinely missing/broken rendering, far too large for edge coverage:
   (underline/overline/line-through), while `RendererTinySkia::drawText` does.
   ✅ **Fixed** (decoration *fill*) — ported metrics → rect → `fillPath`; the repro
   is green and the existing geode golden suite is unaffected.
-- **`drawText` text stroke** — `drawText` still draws no `stroke="…"` on text.
-  A first port (`placed.strokeToFill(...)`) rendered the stroke **~2.5× too thick**
-  (≈ the device scale) — a glyph-space-vs-device-space stroke-width bug, deferred
-  rather than shipped wrong. **← next.** Decoration *stroke* is gated behind the
-  same fix.
+- **`drawText` text + decoration stroke** — `drawText` drew no `stroke="…"` on
+  text. ✅ **Fixed** — re-enabled glyph + decoration stroke via
+  `placed.strokeToFill(...)`. (Two wrong hypotheses on the way, both ruled out by
+  measurement: it is *not* a "~2.5× too thick" width bug — element `strokeWidth=0`,
+  the stroke is span-driven and 2.5px is the correct device scale. The real bug was
+  the **fill rule**: closed contours expand to same-winding outer+inner subpaths,
+  so the ring needs `EvenOdd` (`Impl::strokeFillRuleFor`), not `NonZero` which
+  filled glyph interiors solid. Verified hollow ring; decoration tests 0 → 3.)
+- **Default-fill resolution for stroked text** — separate bug found via the stroke
+  work: a default-fill (`fill` unspecified) `<text stroke="…">` resolves `spanFill`
+  alpha=0 in `drawText`, so the **black fill is missing** and glyphs render as the
+  stroke ring only. Non-stroked default-fill text fills correctly, so it's specific
+  to the stroked path. **← next.**
 - `text/text/rotate…underline…pattern` → ~105k px (pattern-on-rotated-text).
 - `text/text/xml_lang_ja` (CJK) → ~19k px (CJK font fallback / bitmap-only glyphs,
   which `drawText` skips at `RendererGeode.cc:3162`).
@@ -118,13 +126,12 @@ Genuinely missing/broken rendering, far too large for edge coverage:
 1. ✅ Repro committed (text-decoration underline, red on Geode).
 2. ✅ **Decoration fill** rendered in `drawText` — repro green, no golden-suite
    regression.
-3. **Fix text stroke** (the ~2.5× width bug): determine the correct space for the
-   stroke width relative to the em-scaled glyph path + `deviceFromLocalTransform`,
-   then re-enable glyph stroke + decoration stroke. (Note: stroked resvg
-   decoration tests stay red until this + the G1-edge threshold both land.)
-4. Work the remaining G1-struct tail (CJK, vertical, rotate+pattern) as separate
+3. ✅ **Text + decoration stroke** rendered with the correct fill rule.
+4. **Fix default-fill resolution for stroked text** (the missing black fill above).
+   Once it lands, stroked decoration tests should fall to the G1-edge floor.
+5. Work the remaining G1-struct tail (CJK, vertical, rotate+pattern) as separate
    repros + fixes.
-5. **Un-gate**: flip `Text` → `true`; passing tests run, G1-edge tests get the
+6. **Un-gate**: flip `Text` → `true`; passing tests run, G1-edge tests get the
    documented 4×-MSAA threshold, remaining G1-struct failures keep narrow gates
    linked to their repro. (Un-gating before the structural fixes would just create
    ~162 per-test gates.)
