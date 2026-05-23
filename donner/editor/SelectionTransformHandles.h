@@ -1,0 +1,68 @@
+#pragma once
+/// @file
+
+#include <array>
+#include <span>
+
+#include "donner/base/Box.h"
+#include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
+
+namespace donner::editor {
+
+/// Corner handle identity for selection resize/rotate gestures.
+enum class SelectionTransformCorner {
+  TopLeft,
+  TopRight,
+  BottomRight,
+  BottomLeft,
+};
+
+/// Interaction kind under the pointer near selection transform handles.
+enum class SelectionTransformHandleKind {
+  None,
+  Resize,
+  Rotate,
+};
+
+/// Hit-test result for selection transform handles.
+struct SelectionTransformHandleIntent {
+  SelectionTransformHandleKind kind = SelectionTransformHandleKind::None;
+  SelectionTransformCorner corner = SelectionTransformCorner::TopLeft;
+
+  friend bool operator==(const SelectionTransformHandleIntent&,
+                         const SelectionTransformHandleIntent&) = default;
+};
+
+/// Visual handle boxes for one selection envelope, in document coordinates.
+struct SelectionTransformHandleBoxes {
+  std::array<Box2d, 4> boxes;
+};
+
+/// Return a combined AABB for a selection-bounds span.
+[[nodiscard]] Box2d CombinedSelectionBounds(std::span<const Box2d> selectionBoundsDoc);
+
+/// Return the point for a corner of @p bounds.
+[[nodiscard]] Vector2d SelectionTransformCornerPoint(const Box2d& bounds,
+                                                     SelectionTransformCorner corner);
+
+/// Return the opposite corner from @p corner.
+[[nodiscard]] SelectionTransformCorner OppositeSelectionTransformCorner(
+    SelectionTransformCorner corner);
+
+/// Build document-space handle boxes with screen-stable size under @p pixelsPerDocUnit.
+[[nodiscard]] SelectionTransformHandleBoxes SelectionTransformHandleBoxesForBounds(
+    const Box2d& boundsDoc, double pixelsPerDocUnit);
+
+/// Hit-test resize and rotate corner zones using document-space bounds and scale.
+///
+/// Resize wins over rotate when zones overlap. Rotate is intentionally outside
+/// the square handle, in a small ring around each corner.
+[[nodiscard]] SelectionTransformHandleIntent HitTestSelectionTransformHandles(
+    std::span<const Box2d> selectionBoundsDoc, const Vector2d& documentPoint,
+    double pixelsPerDocUnit);
+
+/// Return pixels per document unit from a document-to-canvas transform.
+[[nodiscard]] double PixelsPerDocUnitFromTransform(const Transform2d& canvasFromDoc);
+
+}  // namespace donner::editor

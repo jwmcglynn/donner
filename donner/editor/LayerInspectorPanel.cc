@@ -2,14 +2,18 @@
 
 #include <cinttypes>
 #include <cstdint>
+#include <cstring>
 #include <iterator>
 #include <unordered_set>
+#include <utility>
 
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #ifdef DONNER_EDITOR_WGPU
 #include "backends/imgui_impl_wgpu.h"
 #include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
 
 namespace donner::editor {
@@ -19,6 +23,16 @@ namespace {
 constexpr float kThumbnailDisplayHeight = 48.0f;
 #ifdef DONNER_EDITOR_WGPU
 constexpr std::size_t kRetiredSnapshotFrameLimit = 3;
+constexpr uint32_t kWgpuBytesPerRowAlignment = 256u;
+
+uint32_t AlignWgpuBytesPerRow(uint32_t value) {
+  return (value + kWgpuBytesPerRowAlignment - 1u) & ~(kWgpuBytesPerRowAlignment - 1u);
+}
+
+ImTextureID TextureViewToImTextureId(const wgpu::TextureView& textureView) {
+  const WGPUTextureView rawTextureView = textureView;
+  return static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(rawTextureView));
+}
 #endif
 
 const char* KindLabel(svg::compositor::CompositorController::CompositeTileSnapshot::Kind kind) {
@@ -46,6 +60,23 @@ const char* RefusalReasonLabel(svg::compositor::CompositorController::PromoteRef
 
 }  // namespace
 
+#ifdef DONNER_EDITOR_WGPU
+struct LayerInspectorPanel::WgpuUploadedTexture {
+  donner::geode::ScopedWgpuHandle<wgpu::Texture> texture;
+  donner::geode::ScopedWgpuHandle<wgpu::TextureView> view;
+};
+#endif
+
+LayerInspectorPanel::LayerInspectorPanel(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
+#ifdef DONNER_EDITOR_WGPU
+    : geodeDevice_(std::move(geodeDevice))
+#endif
+{
+#ifndef DONNER_EDITOR_WGPU
+  (void)geodeDevice;
+#endif
+}
+
 LayerInspectorPanel::~LayerInspectorPanel() {
 #ifdef DONNER_EDITOR_WGPU
   for (const auto& [_, entry] : textures_) {
@@ -71,28 +102,18 @@ LayerInspectorPanel::~LayerInspectorPanel() {
 LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
 #ifdef DONNER_EDITOR_WGPU
-  if (tile.textureSnapshot == nullptr || tile.bitmapDims.x <= 0 || tile.bitmapDims.y <= 0) {
-    auto it = textures_.find(tile.id);
-    if (it != textures_.end()) {
-      RetiredSnapshotBatch retiredSnapshots;
-      if (it->second.textureSnapshot != nullptr) {
-        retiredSnapshots.push_back(
-            RetireSnapshot(it->second.texture, std::move(it->second.textureSnapshot)));
-      }
-      textures_.erase(it);
-      retireSnapshots(std::move(retiredSnapshots));
-    }
-    return 0;
-  }
+  const bool hasTextureSnapshot = tile.textureSnapshot != nullptr;
+  const bool hasCpuThumbnail =
+      !tile.thumbnailPixels.empty() && tile.thumbnailDims.x > 0 && tile.thumbnailDims.y > 0;
 
-  const ThumbnailTextureHandle texture = ToImTextureId(tile.textureSnapshot.get());
-  if (texture == 0) {
+  if (!hasTextureSnapshot && !hasCpuThumbnail) {
     auto it = textures_.find(tile.id);
     if (it != textures_.end()) {
       RetiredSnapshotBatch retiredSnapshots;
-      if (it->second.textureSnapshot != nullptr) {
-        retiredSnapshots.push_back(
-            RetireSnapshot(it->second.texture, std::move(it->second.textureSnapshot)));
+      if (it->second.texture != 0) {
+        retiredSnapshots.push_back(RetireSnapshot(it->second.texture,
+                                                  std::move(it->second.textureSnapshot),
+                                                  std::move(it->second.uploadedTexture)));
       }
       textures_.erase(it);
       retireSnapshots(std::move(retiredSnapshots));
@@ -102,19 +123,71 @@ LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail
 
   auto& entry = textures_[tile.id];
   RetiredSnapshotBatch retiredSnapshots;
-  const bool acquiredSnapshot = entry.textureSnapshot != tile.textureSnapshot;
-  if (entry.textureSnapshot != nullptr && entry.textureSnapshot != tile.textureSnapshot) {
-    retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot)));
-  }
-  if (acquiredSnapshot) {
-    ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(texture);
+
+  if (hasTextureSnapshot) {
+    const ThumbnailTextureHandle texture = ToImTextureId(tile.textureSnapshot.get());
+    if (texture == 0) {
+      if (entry.texture != 0) {
+        retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
+                                                  std::move(entry.uploadedTexture)));
+      }
+      textures_.erase(tile.id);
+      retireSnapshots(std::move(retiredSnapshots));
+      return 0;
+    }
+
+    const bool acquiredSnapshot =
+        entry.textureSnapshot != tile.textureSnapshot || entry.uploadedTexture != nullptr;
+    if (acquiredSnapshot) {
+      if (entry.texture != 0) {
+        retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
+                                                  std::move(entry.uploadedTexture)));
+      }
+      ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(texture);
+      entry.texture = texture;
+      entry.textureSnapshot = tile.textureSnapshot;
+      entry.uploadedTexture.reset();
+    }
+
+    entry.uploadedGeneration = tile.generation;
+    entry.width = tile.bitmapDims.x;
+    entry.height = tile.bitmapDims.y;
+    retireSnapshots(std::move(retiredSnapshots));
+    return entry.texture;
   }
 
+  const bool needsUpload = entry.texture == 0 || entry.uploadedTexture == nullptr ||
+                           entry.uploadedGeneration != tile.generation ||
+                           entry.width != tile.thumbnailDims.x ||
+                           entry.height != tile.thumbnailDims.y;
+  if (!needsUpload) {
+    return entry.texture;
+  }
+
+  std::shared_ptr<WgpuUploadedTexture> uploadedTexture =
+      uploadThumbnailPixelsToWgpu(tile.thumbnailPixels, tile.thumbnailDims);
+  const ThumbnailTextureHandle texture =
+      uploadedTexture != nullptr ? TextureViewToImTextureId(uploadedTexture->view.get()) : 0;
+  if (texture == 0) {
+    if (entry.texture != 0) {
+      retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
+                                                std::move(entry.uploadedTexture)));
+    }
+    textures_.erase(tile.id);
+    retireSnapshots(std::move(retiredSnapshots));
+    return 0;
+  }
+
+  if (entry.texture != 0) {
+    retiredSnapshots.push_back(RetireSnapshot(entry.texture, std::move(entry.textureSnapshot),
+                                              std::move(entry.uploadedTexture)));
+  }
   entry.texture = texture;
-  entry.textureSnapshot = tile.textureSnapshot;
+  entry.textureSnapshot.reset();
+  entry.uploadedTexture = std::move(uploadedTexture);
   entry.uploadedGeneration = tile.generation;
-  entry.width = tile.bitmapDims.x;
-  entry.height = tile.bitmapDims.y;
+  entry.width = tile.thumbnailDims.x;
+  entry.height = tile.thumbnailDims.y;
   retireSnapshots(std::move(retiredSnapshots));
   return entry.texture;
 #else
@@ -169,9 +242,10 @@ void LayerInspectorPanel::evictAbsentTiles(
         glDeleteTextures(1, &it->second.texture);
       }
 #else
-      if (it->second.textureSnapshot != nullptr) {
-        retiredSnapshots.push_back(
-            RetireSnapshot(it->second.texture, std::move(it->second.textureSnapshot)));
+      if (it->second.texture != 0) {
+        retiredSnapshots.push_back(RetireSnapshot(it->second.texture,
+                                                  std::move(it->second.textureSnapshot),
+                                                  std::move(it->second.uploadedTexture)));
       }
 #endif
       it = textures_.erase(it);
@@ -359,11 +433,79 @@ LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::ToImTextureId(
   return static_cast<ThumbnailTextureHandle>(reinterpret_cast<std::uintptr_t>(textureView));
 }
 
+std::shared_ptr<LayerInspectorPanel::WgpuUploadedTexture>
+LayerInspectorPanel::uploadThumbnailPixelsToWgpu(const std::vector<uint8_t>& pixels,
+                                                 const Vector2i& dimensions) {
+  if (geodeDevice_ == nullptr || pixels.empty() || dimensions.x <= 0 || dimensions.y <= 0) {
+    return nullptr;
+  }
+
+  const uint32_t width = static_cast<uint32_t>(dimensions.x);
+  const uint32_t height = static_cast<uint32_t>(dimensions.y);
+  const uint32_t tightBytesPerRow = width * 4u;
+  const uint32_t paddedBytesPerRow = AlignWgpuBytesPerRow(tightBytesPerRow);
+  if (pixels.size() < static_cast<std::size_t>(tightBytesPerRow) * height) {
+    return nullptr;
+  }
+
+  wgpu::TextureDescriptor textureDesc = {};
+  textureDesc.label = donner::geode::wgpuLabel("EditorLayerThumbnail");
+  textureDesc.size = {width, height, 1};
+  textureDesc.mipLevelCount = 1;
+  textureDesc.sampleCount = 1;
+  textureDesc.dimension = wgpu::TextureDimension::_2D;
+  textureDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+  textureDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
+
+  auto uploaded = std::make_shared<WgpuUploadedTexture>();
+  uploaded->texture.reset(geodeDevice_->device().createTexture(textureDesc));
+  if (!uploaded->texture) {
+    return nullptr;
+  }
+  geodeDevice_->countTexture();
+
+  std::vector<uint8_t> uploadPixels;
+  const uint8_t* uploadData = pixels.data();
+  std::size_t uploadSize = pixels.size();
+  if (tightBytesPerRow != paddedBytesPerRow) {
+    uploadPixels.assign(static_cast<std::size_t>(paddedBytesPerRow) * height, 0u);
+    for (uint32_t y = 0; y < height; ++y) {
+      const uint8_t* src = pixels.data() + static_cast<std::size_t>(y) * tightBytesPerRow;
+      uint8_t* dst = uploadPixels.data() + static_cast<std::size_t>(y) * paddedBytesPerRow;
+      std::memcpy(dst, src, tightBytesPerRow);
+    }
+    uploadData = uploadPixels.data();
+    uploadSize = uploadPixels.size();
+  }
+
+  wgpu::TexelCopyTextureInfo dst = {};
+  dst.texture = uploaded->texture.get();
+  dst.mipLevel = 0;
+  dst.origin = {0, 0, 0};
+  dst.aspect = wgpu::TextureAspect::All;
+
+  wgpu::TexelCopyBufferLayout layout = {};
+  layout.offset = 0;
+  layout.bytesPerRow = paddedBytesPerRow;
+  layout.rowsPerImage = height;
+
+  wgpu::Extent3D writeSize = {width, height, 1};
+  geodeDevice_->queue().writeTexture(dst, uploadData, uploadSize, layout, writeSize);
+
+  uploaded->view.reset(uploaded->texture.get().createView());
+  if (!uploaded->view) {
+    return nullptr;
+  }
+  return uploaded;
+}
+
 LayerInspectorPanel::RetiredSnapshot LayerInspectorPanel::RetireSnapshot(
-    ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot) {
+    ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot,
+    std::shared_ptr<WgpuUploadedTexture> uploadedTexture) {
   return RetiredSnapshot{
       .texture = texture,
       .snapshot = std::move(snapshot),
+      .uploadedTexture = std::move(uploadedTexture),
   };
 }
 

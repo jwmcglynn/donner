@@ -30,6 +30,10 @@
 
 #include "donner/svg/compositor/CompositorController.h"
 
+namespace donner::geode {
+class GeodeDevice;
+}  // namespace donner::geode
+
 namespace donner::editor {
 
 /// Stateful — owns one preview resource per active composite tile (keyed on
@@ -39,7 +43,7 @@ namespace donner::editor {
 /// Construct and destroy on the presentation thread.
 class LayerInspectorPanel {
 public:
-  LayerInspectorPanel() = default;
+  explicit LayerInspectorPanel(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
   ~LayerInspectorPanel();
 
   LayerInspectorPanel(const LayerInspectorPanel&) = delete;
@@ -81,6 +85,7 @@ public:
 private:
 #ifdef DONNER_EDITOR_WGPU
   using ThumbnailTextureHandle = ImTextureID;
+  struct WgpuUploadedTexture;
 #else
   using ThumbnailTextureHandle = GLuint;
 #endif
@@ -88,6 +93,9 @@ private:
   struct ThumbnailTexture {
     ThumbnailTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+#ifdef DONNER_EDITOR_WGPU
+    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+#endif
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
     int height = 0;
@@ -106,16 +114,22 @@ private:
   struct RetiredSnapshot {
     ThumbnailTextureHandle texture = 0;
     std::shared_ptr<const svg::RendererTextureSnapshot> snapshot;
+    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
   };
 
   using RetiredSnapshotBatch = std::vector<RetiredSnapshot>;
 
   static ThumbnailTextureHandle ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
+  std::shared_ptr<WgpuUploadedTexture> uploadThumbnailPixelsToWgpu(
+      const std::vector<uint8_t>& pixels, const Vector2i& dimensions);
   static RetiredSnapshot RetireSnapshot(
-      ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot);
+      ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot,
+      std::shared_ptr<WgpuUploadedTexture> uploadedTexture);
   static void ReleaseImGuiTexture(ThumbnailTextureHandle texture);
 
   void retireSnapshots(RetiredSnapshotBatch snapshots);
+
+  std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
 #endif
 
   std::unordered_map<std::string, ThumbnailTexture> textures_;

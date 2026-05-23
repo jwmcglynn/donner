@@ -26,6 +26,10 @@ struct MouseModifiers {
   /// Shift held — used by `SelectTool` to toggle/extend selection
   /// rather than replacing it.
   bool shift = false;
+  /// Option/Alt held — used by transform handles to resize from center.
+  bool option = false;
+  /// Current viewport scale used for screen-pixel-stable hit testing.
+  double pixelsPerDocUnit = 1.0;
 };
 
 /// Abstract editor pointer tool. Implementations are stateless across

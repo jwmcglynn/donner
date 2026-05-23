@@ -4,8 +4,14 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 
+#ifdef DONNER_EDITOR_WGPU
+#include <webgpu/webgpu.h>
+
+#include <webgpu/webgpu.hpp>
+#else
 #define GLFW_INCLUDE_ES3
 #include <GLES3/gl3.h>
+#endif
 
 #include "GLFW/emscripten_glfw3.h"
 #elif defined(DONNER_EDITOR_WGPU)
@@ -22,6 +28,7 @@ extern "C" {
 #include <GLFW/glfw3.h>
 #endif
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -34,7 +41,9 @@ extern "C" {
 #include "donner/editor/ImGuiBackendIncludes.h"
 #include "donner/editor/TracyWrapper.h"
 #ifdef DONNER_EDITOR_WGPU
+#ifndef __EMSCRIPTEN__
 #include "donner/editor/gui/EditorWgpuSurface.h"
+#endif
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
@@ -57,6 +66,55 @@ void GlfwErrorCallback(int error, const char* description) {
 }
 
 #ifdef DONNER_EDITOR_WGPU
+void OnEditorWgpuUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type,
+                                 WGPUStringView message, void* /*userdata1*/, void* /*userdata2*/) {
+  std::fprintf(stderr, "[Editor/WGPU] Uncaptured error (type=%d): %.*s\n", static_cast<int>(type),
+               static_cast<int>(message.length), message.data ? message.data : "");
+}
+
+class SurfacePresentGuard {
+public:
+  explicit SurfacePresentGuard(wgpu::Surface& surface) : surface_(surface) {}
+  ~SurfacePresentGuard() { present(); }
+
+  SurfacePresentGuard(const SurfacePresentGuard&) = delete;
+  SurfacePresentGuard& operator=(const SurfacePresentGuard&) = delete;
+
+  void present() {
+    if (!active_ || !surface_) {
+      return;
+    }
+
+#ifdef __EMSCRIPTEN__
+    // Emscripten presents WebGPU canvas surfaces from the browser's rAF loop;
+    // calling wgpuSurfacePresent aborts in the JS glue.
+#else
+    surface_.present();
+#endif
+    active_ = false;
+  }
+
+private:
+  wgpu::Surface& surface_;
+  bool active_ = true;
+};
+
+wgpu::Surface CreateEditorWgpuSurface(const wgpu::Instance& instance, GLFWwindow* window) {
+#ifdef __EMSCRIPTEN__
+  (void)window;
+  WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSource =
+      WGPU_EMSCRIPTEN_SURFACE_SOURCE_CANVAS_HTML_SELECTOR_INIT;
+  canvasSource.selector.data = "#canvas";
+  canvasSource.selector.length = WGPU_STRLEN;
+
+  WGPUSurfaceDescriptor descriptor = WGPU_SURFACE_DESCRIPTOR_INIT;
+  descriptor.nextInChain = &canvasSource.chain;
+  return wgpu::Surface(wgpuInstanceCreateSurface(instance, &descriptor));
+#else
+  return CreateWgpuSurfaceFromGlfwWindow(instance, window);
+#endif
+}
+
 wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
   for (size_t i = 0; i < caps.formatCount; ++i) {
     const auto format = caps.formats[i];
@@ -76,9 +134,15 @@ constexpr uint32_t AlignTextureCopyBytesPerRow(uint32_t unpaddedBytesPerRow) {
 wgpu::TextureUsage SurfaceUsageForCapabilities(const wgpu::SurfaceCapabilities& caps,
                                                bool enableReadback) {
   WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
+#ifdef __EMSCRIPTEN__
+  if (enableReadback) {
+    usage |= WGPUTextureUsage_CopySrc;
+  }
+#else
   if (enableReadback && (caps.usages & WGPUTextureUsage_CopySrc) != 0) {
     usage |= WGPUTextureUsage_CopySrc;
   }
+#endif
   return wgpu::TextureUsage{usage};
 }
 
@@ -207,7 +271,31 @@ EM_JS(int, CanvasPixelHeight, (), {
 });
 
 EM_JS(int, CanvasCssWidth, (), { return Math.max(1, Math.floor(window.innerWidth)); });
+EM_JS(int, CanvasCssHeight, (), { return Math.max(1, Math.floor(window.innerHeight)); });
 EM_JS(double, BrowserDevicePixelRatio, (), { return window.devicePixelRatio || 1.0; });
+EM_JS(bool, WgpuReadbackStatsEnabled, (),
+      { return new URLSearchParams(window.location.search).has("wgpuReadbackStats"); });
+EM_JS(void, PublishWgpuReadbackStats,
+      (int renderSamples, int renderColored, int renderNonBlack, int renderMaxChannel,
+       int layerSamples, int layerColored, int layerNonBlack, int layerMaxChannel),
+      {
+        const previous = window.__donnerWgpuReadbackStats;
+        window.__donnerWgpuReadbackStats = {
+          frame : previous ? previous.frame + 1 : 1,
+          renderPane : {
+            samples : renderSamples,
+            coloredPixels : renderColored,
+            nonBlackPixels : renderNonBlack,
+            maxChannel : renderMaxChannel,
+          },
+          layerPreview : {
+            samples : layerSamples,
+            coloredPixels : layerColored,
+            nonBlackPixels : layerNonBlack,
+            maxChannel : layerMaxChannel,
+          },
+        };
+      });
 
 double CurrentDisplayScale() {
   const int logicalWidth = CanvasCssWidth();
@@ -217,6 +305,78 @@ double CurrentDisplayScale() {
   }
   return std::max(1.0, BrowserDevicePixelRatio());
 }
+
+#ifdef DONNER_EDITOR_WGPU
+struct WgpuReadbackStats {
+  int samples = 0;
+  int coloredPixels = 0;
+  int nonBlackPixels = 0;
+  int maxChannel = 0;
+};
+
+WgpuReadbackStats ComputeWgpuReadbackStatsForCssRegion(const svg::RendererBitmap& bitmap,
+                                                       double cssX, double cssY, double cssWidth,
+                                                       double cssHeight) {
+  if (bitmap.empty() || bitmap.rowBytes == 0u) {
+    return WgpuReadbackStats{};
+  }
+
+  const double displayScale = CurrentDisplayScale();
+  const int x0 = std::max(0, static_cast<int>(std::floor(cssX * displayScale)));
+  const int y0 = std::max(0, static_cast<int>(std::floor(cssY * displayScale)));
+  const int x1 =
+      std::min(bitmap.dimensions.x, static_cast<int>(std::ceil((cssX + cssWidth) * displayScale)));
+  const int y1 =
+      std::min(bitmap.dimensions.y, static_cast<int>(std::ceil((cssY + cssHeight) * displayScale)));
+  if (x1 <= x0 || y1 <= y0) {
+    return WgpuReadbackStats{};
+  }
+
+  WgpuReadbackStats stats;
+  for (int y = y0; y < y1; ++y) {
+    const uint8_t* row = bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes;
+    for (int x = x0; x < x1; ++x) {
+      const uint8_t* pixel = row + static_cast<std::size_t>(x) * 4u;
+      const int red = pixel[0];
+      const int green = pixel[1];
+      const int blue = pixel[2];
+      const int alpha = pixel[3];
+      const int maxRgb = std::max({red, green, blue});
+      const int minRgb = std::min({red, green, blue});
+      ++stats.samples;
+      stats.maxChannel = std::max(stats.maxChannel, maxRgb);
+      if (alpha > 0 && maxRgb > 12) {
+        ++stats.nonBlackPixels;
+      }
+      if (alpha > 0 && maxRgb > 50 && maxRgb - minRgb > 20) {
+        ++stats.coloredPixels;
+      }
+    }
+  }
+  return stats;
+}
+
+void PublishWgpuReadbackStatsForSmokeTests(const svg::RendererBitmap& bitmap) {
+  const double cssWidth = static_cast<double>(CanvasCssWidth());
+  const double cssHeight = static_cast<double>(CanvasCssHeight());
+
+  double renderPaneX = 560.0 + 20.0;
+  double renderPaneWidth = cssWidth - 560.0 - 420.0 - 40.0;
+  if (renderPaneWidth <= 0.0) {
+    renderPaneX = cssWidth * 0.35;
+    renderPaneWidth = cssWidth * 0.3;
+  }
+
+  const WgpuReadbackStats renderStats = ComputeWgpuReadbackStatsForCssRegion(
+      bitmap, renderPaneX, 80.0, renderPaneWidth, std::max(1.0, cssHeight - 220.0));
+  const WgpuReadbackStats layerStats = ComputeWgpuReadbackStatsForCssRegion(
+      bitmap, cssWidth - 420.0 + 8.0, cssHeight * 0.72, 90.0, cssHeight * 0.24);
+  PublishWgpuReadbackStats(renderStats.samples, renderStats.coloredPixels,
+                           renderStats.nonBlackPixels, renderStats.maxChannel, layerStats.samples,
+                           layerStats.coloredPixels, layerStats.nonBlackPixels,
+                           layerStats.maxChannel);
+}
+#endif
 #endif
 
 }  // namespace
@@ -287,6 +447,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // produces "Hint ... not currently supported on this platform"
   // warnings at startup.
   glfwWindowHint(GLFW_SCALE_FRAMEBUFFER, GLFW_TRUE);
+#ifdef DONNER_EDITOR_WGPU
+  glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
+#endif
   emscripten_glfw_set_next_window_canvas_selector("#canvas");
 #elif defined(DONNER_EDITOR_WGPU)
   glfwWindowHint(GLFW_VISIBLE, options_.visible ? GLFW_TRUE : GLFW_FALSE);
@@ -335,9 +498,13 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
 
 #ifdef __EMSCRIPTEN__
+#ifndef DONNER_EDITOR_WGPU
   glfwMakeContextCurrent(window_);
+#endif
   emscripten_glfw_make_canvas_resizable(window_, "window", nullptr);
-#elif defined(DONNER_EDITOR_WGPU)
+#endif
+
+#ifdef DONNER_EDITOR_WGPU
   wgpuState_ = std::make_unique<WgpuState>();
   wgpuState_->instance = wgpu::createInstance();
   if (!wgpuState_->instance) {
@@ -347,7 +514,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwTerminate();
     return;
   }
-  wgpuState_->surface = CreateWgpuSurfaceFromGlfwWindow(wgpuState_->instance, window_);
+  wgpuState_->surface = CreateEditorWgpuSurface(wgpuState_->instance, window_);
   if (!wgpuState_->surface) {
     std::fprintf(stderr, "EditorWindow: failed to create WebGPU surface\n");
     glfwDestroyWindow(window_);
@@ -367,6 +534,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
   wgpu::DeviceDescriptor deviceDesc = {};
   deviceDesc.label = wgpu::StringView{std::string_view{"DonnerEditorWGPUDevice"}};
+  deviceDesc.uncapturedErrorCallbackInfo.callback = OnEditorWgpuUncapturedError;
+  deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
+  deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
   wgpuState_->device = wgpuState_->adapter.requestDevice(deviceDesc);
   if (!wgpuState_->device) {
     std::fprintf(stderr, "EditorWindow: failed to create WebGPU device\n");
@@ -380,7 +550,11 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   wgpu::SurfaceCapabilities caps;
   wgpuState_->surface.getCapabilities(wgpuState_->adapter, &caps);
   wgpuState_->surfaceFormat = ChooseSurfaceFormat(caps);
-  wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, options_.enableFramebufferReadback);
+  bool enableSurfaceReadback = options_.enableFramebufferReadback;
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+  enableSurfaceReadback = enableSurfaceReadback || WgpuReadbackStatsEnabled();
+#endif
+  wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, enableSurfaceReadback);
   if (caps.alphaModeCount > 0) {
     wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
   } else {
@@ -390,7 +564,12 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 
   int surfaceWidth = 0;
   int surfaceHeight = 0;
+#ifdef __EMSCRIPTEN__
+  surfaceWidth = CanvasPixelWidth();
+  surfaceHeight = CanvasPixelHeight();
+#else
   glfwGetFramebufferSize(window_, &surfaceWidth, &surfaceHeight);
+#endif
   surfaceWidth = std::max(1, surfaceWidth);
   surfaceHeight = std::max(1, surfaceHeight);
   wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
@@ -408,7 +587,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   geode::GeodeEmbedConfig embedConfig;
   embedConfig.device = wgpuState_->device;
   embedConfig.queue = wgpuState_->queue;
+#ifndef __EMSCRIPTEN__
   embedConfig.adapter = wgpuState_->adapter;
+#endif
   embedConfig.textureFormat = wgpuState_->surfaceFormat;
   wgpuState_->geodeDevice = geode::GeodeDevice::CreateFromExternal(embedConfig);
   if (wgpuState_->geodeDevice == nullptr) {
@@ -420,6 +601,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     return;
   }
 #else
+#ifndef __EMSCRIPTEN__
   glfwMakeContextCurrent(window_);
   glfwSwapInterval(1);  // vsync
 
@@ -453,6 +635,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
   }
 #endif
+#endif
 
   // Dear ImGui setup. Matches the canonical example from the imgui docs.
   IMGUI_CHECKVERSION();
@@ -465,11 +648,10 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   int logicalWindowHeight = 0;
   glfwGetWindowSize(window_, &logicalWindowWidth, &logicalWindowHeight);
   int framebufferWidth = 0;
-  int framebufferHeight = 0;
 #ifdef __EMSCRIPTEN__
   framebufferWidth = CanvasPixelWidth();
-  framebufferHeight = CanvasPixelHeight();
 #else
+  int framebufferHeight = 0;
   glfwGetFramebufferSize(window_, &framebufferWidth, &framebufferHeight);
 #endif
   if (offscreenScale != 1.0) {
@@ -653,6 +835,16 @@ void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride
   ImGui_ImplOpenGL3_NewFrame();
 #endif
   ImGui_ImplGlfw_NewFrame();
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+  {
+    ImGuiIO& io = ImGui::GetIO();
+    const double displayScale = CurrentDisplayScale();
+    io.DisplaySize =
+        ImVec2(static_cast<float>(CanvasCssWidth()), static_cast<float>(CanvasCssHeight()));
+    io.DisplayFramebufferScale =
+        ImVec2(static_cast<float>(displayScale), static_cast<float>(displayScale));
+  }
+#endif
   if (frameDisplayScaleOverride_ > 0.0) {
     // The null platform reports a 1:1 framebuffer/window ratio, so ImGui's GLFW
     // backend just reset DisplayFramebufferScale to 1. Restore the emulated
@@ -697,8 +889,16 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   glfwGetFramebufferSize(window_, &displayW, &displayH);
 #endif
 #ifdef DONNER_EDITOR_WGPU
-  if (readback != nullptr) {
-    *readback = svg::RendererBitmap{};
+  svg::RendererBitmap smokeTestReadback;
+  svg::RendererBitmap* targetReadback = readback;
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+  const bool publishSmokeReadbackStats = WgpuReadbackStatsEnabled();
+  if (targetReadback == nullptr && publishSmokeReadbackStats) {
+    targetReadback = &smokeTestReadback;
+  }
+#endif
+  if (targetReadback != nullptr) {
+    *targetReadback = svg::RendererBitmap{};
   }
   if (wgpuState_ == nullptr || !wgpuState_->surface || !wgpuState_->device || displayW <= 0 ||
       displayH <= 0) {
@@ -719,7 +919,16 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   }
 
   wgpu::SurfaceTexture surfaceTexture;
+  const auto acquireStart = std::chrono::steady_clock::now();
   wgpuState_->surface.getCurrentTexture(&surfaceTexture);
+  const auto acquireMs =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquireStart)
+          .count();
+  if (acquireMs > 250.0) {
+    std::fprintf(stderr,
+                 "[Editor/WGPU] surface.getCurrentTexture took %.1fms (status=%d, size=%dx%d)\n",
+                 acquireMs, static_cast<int>(surfaceTexture.status), displayW, displayH);
+  }
   if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
       surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
     donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
@@ -728,8 +937,9 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   }
 
   donner::geode::ScopedWgpuHandle<wgpu::Texture> target(wgpu::Texture(surfaceTexture.texture));
-  const bool shouldReadback = readback != nullptr && options_.enableFramebufferReadback &&
-                              SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
+  SurfacePresentGuard presentGuard(wgpuState_->surface);
+  const bool shouldReadback =
+      targetReadback != nullptr && SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage);
   const uint32_t readbackWidth = static_cast<uint32_t>(displayW);
   const uint32_t readbackHeight = static_cast<uint32_t>(displayH);
   const uint32_t readbackBytesPerRow = AlignTextureCopyBytesPerRow(readbackWidth * 4u);
@@ -792,11 +1002,16 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
         readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));
     if (mapped != nullptr) {
       CopyMappedSurfaceToBitmap(mapped, readbackWidth, readbackHeight, readbackBytesPerRow,
-                                wgpuState_->surfaceFormat, readback);
+                                wgpuState_->surfaceFormat, targetReadback);
     }
     readbackBuffer.get().unmap();
   }
-  wgpuState_->surface.present();
+#if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
+  if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
+    PublishWgpuReadbackStatsForSmokeTests(*targetReadback);
+  }
+#endif
+  presentGuard.present();
 #else
   glViewport(0, 0, displayW, displayH);
   glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],

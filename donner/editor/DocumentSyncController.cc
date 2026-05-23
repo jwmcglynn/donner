@@ -224,8 +224,8 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
       });
     }
   }
-  if (auto completed = app.consumeTransformWriteback(); completed.has_value()) {
-    pendingTransformWritebacks_.push_back(std::move(*completed));
+  for (auto& completed : app.consumeTransformWritebacks()) {
+    pendingTransformWritebacks_.push_back(std::move(completed));
   }
 
   auto completedRemovals = app.consumeElementRemoveWritebacks();

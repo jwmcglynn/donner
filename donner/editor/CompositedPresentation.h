@@ -112,17 +112,41 @@ public:
     return std::holds_alternative<WaitingForChromeRefresh>(state_);
   }
 
+  /// Returns the active preview that should drive presenter-side tile transforms.
+  ///
+  /// During a live drag this is the tool's active preview. After mouse-up,
+  /// \ref SelectTool::activeDragPreview is empty, but the render pane must keep presenting the
+  /// released transform until a settled render replaces the cached tiles.
+  [[nodiscard]] std::optional<SelectTool::ActiveDragPreview> activePreviewForPresentation(
+      const std::optional<SelectTool::ActiveDragPreview>& activePreview) const {
+    if (activePreview.has_value()) {
+      return activePreview;
+    }
+
+    const auto* settling = std::get_if<SettlingForRender>(&state_);
+    if (settling != nullptr && settling->cache.has_value() &&
+        settling->cache->entity == settling->preview.entity) {
+      return settling->preview;
+    }
+
+    return std::nullopt;
+  }
+
   /// Returns true when an active drag needs a fresh composited capture.
   [[nodiscard]] bool needsCompositedLayerCapture(
       const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-      std::uint64_t currentVersion, const Vector2i& currentCanvasSize) const {
+      std::uint64_t /*currentVersion*/, const Vector2i& currentCanvasSize) const {
     if (!activePreview.has_value()) {
       return false;
     }
 
     const std::optional<CachedTextures> cache = currentCache();
+    // Drag transform writes bump the document version every mouse move, but
+    // the active preview already carries that affine delta for presenter-side
+    // texture placement. Recapture only when the cache cannot represent the
+    // selected entity in the current canvas epoch.
     return !cache.has_value() || cache->entity != activePreview->entity ||
-           cache->version != currentVersion || cache->canvasSize != currentCanvasSize;
+           cache->canvasSize != currentCanvasSize;
   }
 
   /// Returns true when a released drag should request a settled composited refresh.
@@ -245,7 +269,7 @@ public:
     // in flight, keep displaying the last cached document image without
     // applying the new entity's live drag offset to stale drag-target tiles.
     if (activePreview.has_value() && cache.has_value() && activePreview->entity == cache->entity) {
-      return representedPreviewForCache(*cache);
+      return representedPreviewForActiveCache(*cache, *activePreview);
     }
 
     if (const auto* settling = std::get_if<SettlingForRender>(&state_);
@@ -260,6 +284,7 @@ public:
       return SelectTool::ActiveDragPreview{
           .entity = cache->entity,
           .translation = Vector2d::Zero(),
+          .documentFromCachedDocument = Transform2d(),
       };
     }
     return std::nullopt;
@@ -308,6 +333,22 @@ private:
     return SelectTool::ActiveDragPreview{
         .entity = cache.entity,
         .translation = Vector2d::Zero(),
+        .documentFromCachedDocument = Transform2d(),
+    };
+  }
+
+  static SelectTool::ActiveDragPreview representedPreviewForActiveCache(
+      const CachedTextures& cache, const SelectTool::ActiveDragPreview& activePreview) {
+    if (cache.representedPreview.has_value() && cache.representedPreview->entity == cache.entity &&
+        cache.representedPreview->dragGeneration == activePreview.dragGeneration) {
+      return *cache.representedPreview;
+    }
+
+    return SelectTool::ActiveDragPreview{
+        .entity = cache.entity,
+        .translation = Vector2d::Zero(),
+        .documentFromCachedDocument = Transform2d(),
+        .dragGeneration = activePreview.dragGeneration,
     };
   }
 

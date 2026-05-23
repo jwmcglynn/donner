@@ -110,6 +110,59 @@ TEST(PresentedFrameComposerTest, ComputesTileRectFromDocumentGeometry) {
   EXPECT_EQ(rect->effectiveDragTranslationDoc, Vector2d(2.0, 3.0));
 }
 
+TEST(PresentedFrameComposerTest, ComputesTileQuadFromAffineActivePreview) {
+  PresentedFrameTileGeometry tile;
+  tile.canvasOffsetDoc = Vector2d(0.0, 0.0);
+  tile.bitmapDimsDoc = Vector2d(10.0, 10.0);
+  tile.isDragTarget = true;
+
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedDocumentFromCachedDocument = Transform2d(),
+      .activeDocumentFromCachedDocument = Transform2d::Scale(2.0),
+  };
+  const std::optional<PresentedTileQuad> quad =
+      ComputePresentedTileQuad(tile, Transform2d(), baseline);
+
+  ASSERT_TRUE(quad.has_value());
+  EXPECT_EQ(quad->topLeft, Vector2d(0.0, 0.0));
+  EXPECT_EQ(quad->topRight, Vector2d(20.0, 0.0));
+  EXPECT_EQ(quad->bottomRight, Vector2d(20.0, 20.0));
+  EXPECT_EQ(quad->bottomLeft, Vector2d(0.0, 20.0));
+}
+
+TEST(PresentedFrameComposerTest, RepresentedAffineTransformDoesNotDoubleApply) {
+  PresentedFrameTileGeometry tile;
+  tile.canvasOffsetDoc = Vector2d(0.0, 0.0);
+  tile.bitmapDimsDoc = Vector2d(10.0, 10.0);
+  tile.documentFromCachedDocument = Transform2d::Scale(2.0);
+  tile.isDragTarget = true;
+
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedDocumentFromCachedDocument = Transform2d::Scale(2.0),
+      .activeDocumentFromCachedDocument = Transform2d::Scale(2.0),
+  };
+  const std::optional<PresentedTileQuad> quad =
+      ComputePresentedTileQuad(tile, Transform2d(), baseline);
+
+  ASSERT_TRUE(quad.has_value());
+  EXPECT_EQ(quad->bottomRight, Vector2d(20.0, 20.0));
+}
+
+TEST(PresentedFrameComposerTest, OverlayAffineTransformUsesRepresentedToActiveDelta) {
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedDocumentFromCachedDocument = Transform2d::Scale(2.0),
+      .activeDocumentFromCachedDocument = Transform2d::Scale(3.0),
+  };
+
+  const Transform2d documentFromOverlayDocument =
+      ResolvePresentedOverlayDocumentTransform(baseline);
+
+  EXPECT_EQ(documentFromOverlayDocument.transformPosition(Vector2d(2.0, 2.0)), Vector2d(3.0, 3.0));
+}
+
 TEST(PresentedFrameComposerTest, ComputesTileRectFromNonZeroCanvasOrigin) {
   PresentedFrameTileGeometry tile;
   tile.canvasOffsetDoc = Vector2d(12.25, 24.75);

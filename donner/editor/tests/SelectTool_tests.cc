@@ -1,7 +1,10 @@
 #include "donner/editor/SelectTool.h"
 
+#include <cstdint>
+
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectionAabb.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "gtest/gtest.h"
 
@@ -42,6 +45,17 @@ constexpr std::string_view kPlainGroupSiblingSvg =
          </g>
        </svg>)";
 
+constexpr std::string_view kOverlappingRectsSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+         <rect id="back" x="10" y="10" width="90" height="90" fill="red"/>
+         <rect id="front" x="40" y="40" width="50" height="50" fill="blue"/>
+       </svg>)";
+
+constexpr std::string_view kResizeRectSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+         <rect id="target" x="20" y="20" width="40" height="20" fill="red"/>
+       </svg>)";
+
 class SelectToolTest : public ::testing::Test {
 protected:
   void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
@@ -58,6 +72,14 @@ protected:
     auto element = app.document().document().querySelector(id);
     EXPECT_TRUE(element.has_value());
     return element->cast<svg::SVGGraphicsElement>().transform();
+  }
+
+  Box2d worldBoundsOf(std::string_view id) {
+    auto element = app.document().document().querySelector(id);
+    EXPECT_TRUE(element.has_value());
+    auto bounds = element->cast<svg::SVGGeometryElement>().worldBounds();
+    EXPECT_TRUE(bounds.has_value());
+    return *bounds;
   }
 
   bool selectionIs(std::string_view id) {
@@ -304,11 +326,13 @@ TEST_F(SelectToolTest, RedoAfterUndoRestoresPostDragState) {
   ASSERT_TRUE(app.flushFrame());
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 0.0);
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[5], 0.0);
+  EXPECT_TRUE(app.canRedo());
 
   app.redo();
   ASSERT_TRUE(app.flushFrame());
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 25.0);
   EXPECT_DOUBLE_EQ(transformOf("#r1").data[5], 20.0);
+  EXPECT_FALSE(app.canRedo());
 }
 
 TEST_F(SelectToolTest, UndoRedoCyclesStayConsistent) {
@@ -335,6 +359,19 @@ TEST_F(SelectToolTest, RedoWithNothingToRedoIsNoOp) {
   // Nothing in the timeline → redo is a no-op.
   app.redo();
   EXPECT_FALSE(app.flushFrame());
+}
+
+TEST_F(SelectToolTest, RedoWithoutPriorUndoDoesNotUndoCompletedDrag) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_FALSE(app.canRedo());
+
+  app.redo();
+  EXPECT_FALSE(app.flushFrame());
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[4], 25.0);
+  EXPECT_DOUBLE_EQ(transformOf("#r1").data[5], 20.0);
 }
 
 TEST_F(SelectToolTest, TwoDifferentDragsBothUndoableInOrder) {
@@ -595,6 +632,25 @@ TEST_F(SelectToolTest, SingleSelectionStaysSingleWhenDragged) {
   EXPECT_NEAR(r2End.data[5] - r2Start.data[5], 0.0, 1e-6);
 }
 
+TEST_F(SelectToolTest, DragAfterScaleTranslatesInDocumentSpace) {
+  auto r1Handle = elementById("#r1").cast<svg::SVGGraphicsElement>();
+  r1Handle.setTransform(Transform2d::Scale(2.0));
+  app.setSelection(elementById("#r1"));
+
+  const Transform2d r1Start = transformOf("#r1");
+
+  tool.onMouseDown(app, Vector2d(40.0, 40.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 55.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 55.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d r1End = transformOf("#r1");
+  EXPECT_NEAR(r1End.data[0], 2.0, 1e-6);
+  EXPECT_NEAR(r1End.data[3], 2.0, 1e-6);
+  EXPECT_NEAR(r1End.data[4] - r1Start.data[4], 30.0, 1e-6);
+  EXPECT_NEAR(r1End.data[5] - r1Start.data[5], 15.0, 1e-6);
+}
+
 TEST_F(SelectToolTest, MultiSelectDragPreservesExtraElementTransforms) {
   // Give r2 a prior transform so we can verify its start transform is
   // captured and delta is composed relative to the right starting point.
@@ -804,6 +860,23 @@ TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBou
   EXPECT_TRUE(selectionIs("#r1"));
 }
 
+TEST_F(SelectToolTest, DragPreviewGenerationChangesForRedragOnSameSelection) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  ASSERT_TRUE(selectionIs("#r1"));
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+  const std::uint64_t firstDragGeneration = tool.activeDragPreview()->dragGeneration;
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_FALSE(tool.isDragging());
+
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 20.0), MouseModifiers{}, bounds));
+  ASSERT_TRUE(tool.activeDragPreview().has_value());
+
+  EXPECT_GT(tool.activeDragPreview()->dragGeneration, firstDragGeneration)
+      << "Presentation caches need to distinguish consecutive drags of the same entity.";
+}
+
 TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseOnShiftClick) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
@@ -883,6 +956,305 @@ TEST_F(SelectToolTest, TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup) 
       tool.tryStartRedragOnSelected(app, Vector2d(15.0, 20.0), MouseModifiers{}, anchorBounds));
   EXPECT_TRUE(tool.isDragging());
   EXPECT_TRUE(selectionIs("#anchor"));
+}
+
+// Regression repro: EditorShell runs the re-drag fast path before the
+// idle-gated full hit-test. If the click is inside the selected element's
+// cached bounds but a later-painted object is on top at that point, the fast
+// path must not keep dragging the behind selection. It should fall through to
+// the normal hit-test path so the front object can become selected.
+TEST_F(SelectToolTest, RedragFastPathDoesNotStealClickFromFrontOverlappingObject) {
+  loadSvg(kOverlappingRectsSvg);
+  app.setSelection(elementById("#back"));
+  ASSERT_TRUE(selectionIs("#back"));
+
+  const Vector2d overlapPoint(50.0, 50.0);
+  auto hit = app.hitTest(overlapPoint);
+  ASSERT_TRUE(hit.has_value());
+  ASSERT_EQ(hit->id(), "front") << "test setup requires #front to paint above #back";
+
+  SelectionBoundsCache boundsCache;
+  const std::uint64_t version = app.document().currentFrameVersion();
+  RefreshSelectionBoundsCache(boundsCache, std::span<const svg::SVGElement>(app.selectedElements()),
+                              version, version);
+  ASSERT_FALSE(boundsCache.displayedBoundsDoc.empty());
+  ASSERT_TRUE(boundsCache.displayedBoundsDoc.front().contains(overlapPoint));
+  ASSERT_FALSE(boundsCache.displayedOccludingBoundsDoc.empty());
+  ASSERT_TRUE(boundsCache.displayedOccludingBoundsDoc.front().contains(overlapPoint));
+
+  EXPECT_FALSE(tool.tryStartRedragOnSelected(app, overlapPoint, MouseModifiers{},
+                                             boundsCache.displayedBoundsDoc,
+                                             boundsCache.displayedOccludingBoundsDoc))
+      << "a busy-frame re-drag fast path must not preempt a topmost hit-test candidate";
+  EXPECT_FALSE(tool.isDragging());
+
+  tool.onMouseDown(app, overlapPoint, MouseModifiers{});
+  EXPECT_TRUE(selectionIs("#front"));
+}
+
+TEST_F(SelectToolTest, CornerHandleResizesSelectionFromOppositeCorner) {
+  loadSvg(kResizeRectSvg);
+  app.setSelection(elementById("#target"));
+
+  tool.onMouseDown(app, Vector2d(60.0, 40.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(80.0, 50.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(80.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#target");
+  EXPECT_NEAR(bounds.topLeft.x, 20.0, 1e-6);
+  EXPECT_NEAR(bounds.topLeft.y, 20.0, 1e-6);
+  EXPECT_NEAR(bounds.width(), 60.0, 1e-6);
+  EXPECT_NEAR(bounds.height(), 30.0, 1e-6);
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Resize element");
+}
+
+TEST_F(SelectToolTest, ResizeUndoRedoRestoresBounds) {
+  loadSvg(kResizeRectSvg);
+  app.setSelection(elementById("#target"));
+
+  const Box2d startBounds = worldBoundsOf("#target");
+  tool.onMouseDown(app, Vector2d(60.0, 40.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(80.0, 50.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(80.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+  const Box2d resizedBounds = worldBoundsOf("#target");
+  ASSERT_NE(resizedBounds, startBounds);
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(worldBoundsOf("#target"), startBounds);
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(worldBoundsOf("#target"), resizedBounds);
+}
+
+TEST_F(SelectToolTest, ResizeGestureExposesAffinePreview) {
+  loadSvg(kResizeRectSvg);
+  app.setSelection(elementById("#target"));
+
+  tool.onMouseDown(app, Vector2d(60.0, 40.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(80.0, 50.0), /*buttonHeld=*/true);
+
+  const auto preview = tool.activeDragPreview();
+  ASSERT_TRUE(preview.has_value());
+  EXPECT_EQ(preview->entity, elementById("#target").entityHandle().entity());
+  EXPECT_FALSE(preview->documentFromCachedDocument.isTranslation())
+      << "resize preview must carry an affine scale, not just a drag offset";
+
+  const Vector2d anchoredCorner =
+      preview->documentFromCachedDocument.transformPosition(Vector2d(20.0, 20.0));
+  const Vector2d activeCorner =
+      preview->documentFromCachedDocument.transformPosition(Vector2d(60.0, 40.0));
+  EXPECT_NEAR(anchoredCorner.x, 20.0, 1e-6);
+  EXPECT_NEAR(anchoredCorner.y, 20.0, 1e-6);
+  EXPECT_NEAR(activeCorner.x, 80.0, 1e-6);
+  EXPECT_NEAR(activeCorner.y, 50.0, 1e-6);
+
+  tool.onMouseUp(app, Vector2d(80.0, 50.0));
+}
+
+TEST_F(SelectToolTest, ShiftCornerResizePreservesAspectRatio) {
+  loadSvg(kResizeRectSvg);
+  app.setSelection(elementById("#target"));
+
+  MouseModifiers modifiers;
+  modifiers.shift = true;
+  tool.onMouseDown(app, Vector2d(60.0, 40.0), modifiers);
+  tool.onMouseMove(app, Vector2d(80.0, 45.0), /*buttonHeld=*/true, modifiers);
+  tool.onMouseUp(app, Vector2d(80.0, 45.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#target");
+  EXPECT_NEAR(bounds.width(), 60.0, 1e-6);
+  EXPECT_NEAR(bounds.height(), 30.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, OptionCornerResizeKeepsCenterFixed) {
+  loadSvg(kResizeRectSvg);
+  app.setSelection(elementById("#target"));
+
+  MouseModifiers modifiers;
+  modifiers.option = true;
+  tool.onMouseDown(app, Vector2d(60.0, 40.0), modifiers);
+  tool.onMouseMove(app, Vector2d(80.0, 50.0), /*buttonHeld=*/true, modifiers);
+  tool.onMouseUp(app, Vector2d(80.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#target");
+  const Vector2d center = (bounds.topLeft + bounds.bottomRight) * 0.5;
+  EXPECT_NEAR(center.x, 40.0, 1e-6);
+  EXPECT_NEAR(center.y, 30.0, 1e-6);
+  EXPECT_NEAR(bounds.width(), 80.0, 1e-6);
+  EXPECT_NEAR(bounds.height(), 40.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, ShiftCanToggleAspectConstraintDuringResize) {
+  loadSvg(kResizeRectSvg);
+  app.setSelection(elementById("#target"));
+
+  tool.onMouseDown(app, Vector2d(60.0, 40.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(80.0, 45.0), /*buttonHeld=*/true, MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_NEAR(worldBoundsOf("#target").width(), 60.0, 1e-6);
+  EXPECT_NEAR(worldBoundsOf("#target").height(), 25.0, 1e-6);
+
+  MouseModifiers shift;
+  shift.shift = true;
+  tool.onMouseMove(app, Vector2d(80.0, 45.0), /*buttonHeld=*/true, shift);
+  tool.onMouseUp(app, Vector2d(80.0, 45.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#target");
+  EXPECT_NEAR(bounds.width(), 60.0, 1e-6);
+  EXPECT_NEAR(bounds.height(), 30.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, OptionCanToggleCenterResizeDuringResize) {
+  loadSvg(kResizeRectSvg);
+  app.setSelection(elementById("#target"));
+
+  tool.onMouseDown(app, Vector2d(60.0, 40.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(80.0, 50.0), /*buttonHeld=*/true, MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  Vector2d center = (worldBoundsOf("#target").topLeft + worldBoundsOf("#target").bottomRight) * 0.5;
+  EXPECT_NEAR(center.x, 50.0, 1e-6);
+  EXPECT_NEAR(center.y, 35.0, 1e-6);
+
+  MouseModifiers option;
+  option.option = true;
+  tool.onMouseMove(app, Vector2d(80.0, 50.0), /*buttonHeld=*/true, option);
+  tool.onMouseUp(app, Vector2d(80.0, 50.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d bounds = worldBoundsOf("#target");
+  center = (bounds.topLeft + bounds.bottomRight) * 0.5;
+  EXPECT_NEAR(center.x, 40.0, 1e-6);
+  EXPECT_NEAR(center.y, 30.0, 1e-6);
+  EXPECT_NEAR(bounds.width(), 80.0, 1e-6);
+  EXPECT_NEAR(bounds.height(), 40.0, 1e-6);
+}
+
+TEST_F(SelectToolTest, MultiSelectionCornerResizeUsesCombinedBounds) {
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  const Box2d r1StartBounds = worldBoundsOf("#r1");
+  const Box2d r2StartBounds = worldBoundsOf("#r2");
+
+  tool.onMouseDown(app, Vector2d(140.0, 140.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(270.0, 270.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(270.0, 270.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d r1Bounds = worldBoundsOf("#r1");
+  const Box2d r2Bounds = worldBoundsOf("#r2");
+  EXPECT_NEAR(r1Bounds.topLeft.x, 10.0, 1e-6);
+  EXPECT_NEAR(r1Bounds.topLeft.y, 10.0, 1e-6);
+  EXPECT_NEAR(r1Bounds.width(), 40.0, 1e-6);
+  EXPECT_NEAR(r1Bounds.height(), 40.0, 1e-6);
+  EXPECT_NEAR(r2Bounds.topLeft.x, 190.0, 1e-6);
+  EXPECT_NEAR(r2Bounds.topLeft.y, 190.0, 1e-6);
+  EXPECT_NEAR(r2Bounds.width(), 80.0, 1e-6);
+  EXPECT_NEAR(r2Bounds.height(), 80.0, 1e-6);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 1u)
+      << "one UI undo should revert the whole multi-selection resize";
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Resize elements");
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(worldBoundsOf("#r1"), r1StartBounds);
+  EXPECT_EQ(worldBoundsOf("#r2"), r2StartBounds);
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_EQ(worldBoundsOf("#r1"), r1Bounds);
+  EXPECT_EQ(worldBoundsOf("#r2"), r2Bounds);
+}
+
+TEST_F(SelectToolTest, RotateZoneRotatesAroundSelectionCenter) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  tool.onMouseDown(app, Vector2d(44.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(20.0, 44.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(20.0, 44.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d transform = transformOf("#r1");
+  EXPECT_NEAR(transform.data[0], 0.0, 1e-6);
+  EXPECT_NEAR(transform.data[1], 1.0, 1e-6);
+  EXPECT_NEAR(transform.data[2], -1.0, 1e-6);
+  EXPECT_NEAR(transform.data[3], 0.0, 1e-6);
+  EXPECT_NEAR(transform.data[4], 40.0, 1e-6);
+  EXPECT_NEAR(transform.data[5], 0.0, 1e-6);
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Rotate element");
+}
+
+TEST_F(SelectToolTest, ActiveRotationBoundsPreviewClearsOnMouseUp) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  tool.onMouseDown(app, Vector2d(44.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(20.0, 44.0), /*buttonHeld=*/true);
+  EXPECT_TRUE(tool.activeTransformBoundsPreview().has_value());
+
+  tool.onMouseUp(app, Vector2d(20.0, 44.0));
+  EXPECT_FALSE(tool.activeTransformBoundsPreview().has_value())
+      << "rotation chrome must switch back to axis-aligned bounds immediately on release";
+}
+
+TEST_F(SelectToolTest, RotateUndoRedoRestoresTransform) {
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+  const Transform2d startTransform = transformOf("#r1");
+
+  tool.onMouseDown(app, Vector2d(44.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(20.0, 44.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(20.0, 44.0));
+  ASSERT_TRUE(app.flushFrame());
+  const Transform2d rotatedTransform = transformOf("#r1");
+  ASSERT_FALSE(rotatedTransform.isIdentity());
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  const Transform2d undoTransform = transformOf("#r1");
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_NEAR(undoTransform.data[i], startTransform.data[i], 1e-6);
+  }
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  const Transform2d redoTransform = transformOf("#r1");
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_NEAR(redoTransform.data[i], rotatedTransform.data[i], 1e-6);
+  }
+}
+
+TEST_F(SelectToolTest, RotateAfterScaleUsesDocumentCenter) {
+  auto r1Handle = elementById("#r1").cast<svg::SVGGraphicsElement>();
+  r1Handle.setTransform(Transform2d::Scale(2.0));
+  app.setSelection(elementById("#r1"));
+
+  tool.onMouseDown(app, Vector2d(60.0, 6.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(74.0, 60.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(74.0, 60.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d transform = transformOf("#r1");
+  const Vector2d localCenter = transform.transformPosition(Vector2d(20.0, 20.0));
+  const Vector2d localTopRight = transform.transformPosition(Vector2d(30.0, 10.0));
+  EXPECT_NEAR(localCenter.x, 40.0, 1e-6);
+  EXPECT_NEAR(localCenter.y, 40.0, 1e-6);
+  EXPECT_NEAR(localTopRight.x, 60.0, 1e-6);
+  EXPECT_NEAR(localTopRight.y, 60.0, 1e-6);
 }
 
 }  // namespace

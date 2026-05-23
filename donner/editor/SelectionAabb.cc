@@ -3,6 +3,7 @@
 #include <optional>
 
 #include "donner/svg/ElementType.h"
+#include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 
 namespace donner::editor {
@@ -45,6 +46,51 @@ void CollectRenderableGeometryImpl(const svg::SVGElement& root,
   }
 }
 
+void CollectLaterRenderableGeometryImpl(const svg::SVGElement& root,
+                                        const svg::SVGElement& selected, bool& afterSelected,
+                                        std::vector<svg::SVGGeometryElement>& out) {
+  if (IsNonRenderedContainer(root.type())) {
+    return;
+  }
+
+  if (root == selected) {
+    afterSelected = true;
+    return;
+  }
+
+  if (root.isa<svg::SVGGeometryElement>()) {
+    if (afterSelected) {
+      out.push_back(root.cast<svg::SVGGeometryElement>());
+    }
+    return;
+  }
+
+  for (auto child = root.firstChild(); child.has_value(); child = child->nextSibling()) {
+    CollectLaterRenderableGeometryImpl(*child, selected, afterSelected, out);
+  }
+}
+
+std::vector<svg::SVGGeometryElement> CollectLaterRenderableGeometry(
+    const svg::SVGElement& root, const svg::SVGElement& selected) {
+  std::vector<svg::SVGGeometryElement> out;
+  bool afterSelected = false;
+  CollectLaterRenderableGeometryImpl(root, selected, afterSelected, out);
+  return out;
+}
+
+std::vector<Box2d> SnapshotGeometryWorldBounds(
+    std::span<const svg::SVGGeometryElement> geometryElements) {
+  std::vector<Box2d> bounds;
+  bounds.reserve(geometryElements.size());
+  for (const auto& geometry : geometryElements) {
+    const auto wb = geometry.worldBounds();
+    if (wb.has_value()) {
+      bounds.push_back(*wb);
+    }
+  }
+  return bounds;
+}
+
 }  // namespace
 
 std::vector<svg::SVGGeometryElement> CollectRenderableGeometry(const svg::SVGElement& root) {
@@ -82,13 +128,28 @@ std::vector<Box2d> SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>
   return bounds;
 }
 
+std::vector<Box2d> SnapshotSelectionOccludingWorldBounds(
+    std::span<const svg::SVGElement> selection) {
+  if (selection.size() != 1u) {
+    return {};
+  }
+
+  svg::SVGElement selected = selection.front();
+  const svg::SVGElement root = selected.ownerDocument().svgElement();
+  const std::vector<svg::SVGGeometryElement> laterGeometry =
+      CollectLaterRenderableGeometry(root, selected);
+  return SnapshotGeometryWorldBounds(laterGeometry);
+}
+
 void PromoteSelectionBoundsIfReady(SelectionBoundsCache& cache, std::uint64_t displayedDocVersion) {
   if (cache.pendingVersion != displayedDocVersion) {
     return;
   }
 
   cache.displayedBoundsDoc = cache.pendingBoundsDoc;
+  cache.displayedOccludingBoundsDoc = cache.pendingOccludingBoundsDoc;
   cache.pendingBoundsDoc.clear();
+  cache.pendingOccludingBoundsDoc.clear();
   cache.pendingVersion = 0;
 }
 
@@ -99,10 +160,12 @@ void RefreshSelectionBoundsCache(SelectionBoundsCache& cache,
   cache.lastSelection.assign(selection.begin(), selection.end());
   cache.lastRefreshVersion = currentDocVersion;
   cache.pendingBoundsDoc = SnapshotSelectionWorldBounds(selection);
+  cache.pendingOccludingBoundsDoc = SnapshotSelectionOccludingWorldBounds(selection);
   cache.pendingVersion = currentDocVersion;
 
   if (selection.empty()) {
     cache.displayedBoundsDoc.clear();
+    cache.displayedOccludingBoundsDoc.clear();
   }
 
   PromoteSelectionBoundsIfReady(cache, displayedDocVersion);

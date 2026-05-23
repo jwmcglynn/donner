@@ -28,6 +28,55 @@ void ForEachGeometryElement(const svg::SVGElement& node, Visitor& visit) {
   }
 }
 
+svg::SVGElement ResolveSnapshotElement(AsyncSVGDocument& document, const UndoSnapshot& snapshot) {
+  svg::SVGElement liveElement = snapshot.element;
+  if (document.hasDocument() && snapshot.writebackTarget.has_value()) {
+    if (auto resolved =
+            resolveAttributeWritebackTarget(document.document(), *snapshot.writebackTarget);
+        resolved.has_value()) {
+      liveElement = *resolved;
+    }
+  }
+  return liveElement;
+}
+
+void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
+                           const UndoSnapshot& snapshot) {
+  svg::SVGElement liveElement = ResolveSnapshotElement(document, snapshot);
+
+  // Route the restored transform through the command queue so every
+  // DOM write — tool drags, text-pane re-parse, and undo — goes through
+  // the same mutation seam. The queue coalesces with any pending
+  // commands and applies on the next `flushFrame()`.
+  app.applyMutation(EditorCommand::SetTransformCommand(liveElement, snapshot.transform));
+
+  // Capture the source-text writeback target BEFORE the command drains
+  // so the path-based target resolves against the in-sync document.
+  // The writeback will be applied by `main.cc` after `flushFrame()`
+  // lands the undone transform on the element — at that point the
+  // transform the user sees on the canvas and the `transform=` value
+  // in the source must agree. Without this the DOM reverts but the
+  // source keeps the post-drag text, and the next edit lands on the
+  // wrong baseline.
+  if (snapshot.writebackTarget.has_value()) {
+    app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+        .target = *snapshot.writebackTarget,
+        .transform = snapshot.transform,
+        .sourceTransformAttributeValue = snapshot.sourceTransformAttributeValue,
+        .restoreSourceTransformAttributeValue = snapshot.restoreSourceTransformAttributeValue});
+  } else if (auto target = captureAttributeWritebackTarget(liveElement); target.has_value()) {
+    app.enqueueTransformWriteback(EditorApp::CompletedTransformWriteback{
+        .target = std::move(*target),
+        .transform = snapshot.transform,
+        .sourceTransformAttributeValue = snapshot.sourceTransformAttributeValue,
+        .restoreSourceTransformAttributeValue = snapshot.restoreSourceTransformAttributeValue});
+  }
+
+  for (const UndoSnapshot& extra : snapshot.extras) {
+    ApplyTimelineSnapshot(app, document, extra);
+  }
+}
+
 }  // namespace
 
 EditorApp::EditorApp() = default;
@@ -37,7 +86,7 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   refreshFirstSelectionCache();
   controller_.reset();
   undoTimeline_.clear();
-  pendingTransformWriteback_.reset();
+  pendingTransformWritebacks_.clear();
   pendingElementRemoveWritebacks_.clear();
   const bool result = document_.loadFromString(svgBytes);
   // A successful load resets the dirty state — the in-memory document
@@ -141,52 +190,16 @@ void EditorApp::undo() {
     return;
   }
 
-  svg::SVGElement liveElement = snapshot->element;
-  if (document_.hasDocument() && snapshot->writebackTarget.has_value()) {
-    if (auto resolved =
-            resolveAttributeWritebackTarget(document_.document(), *snapshot->writebackTarget);
-        resolved.has_value()) {
-      liveElement = *resolved;
-    }
-  }
-
-  // Route the restored transform through the command queue so every
-  // DOM write — tool drags, text-pane re-parse, and undo — goes through
-  // the same mutation seam. The queue coalesces with any pending
-  // commands and applies on the next `flushFrame()`.
-  applyMutation(EditorCommand::SetTransformCommand(liveElement, snapshot->transform));
-
-  // Capture the source-text writeback target BEFORE the command drains
-  // so the path-based target resolves against the in-sync document.
-  // The writeback will be applied by `main.cc` after `flushFrame()`
-  // lands the undone transform on the element — at that point the
-  // transform the user sees on the canvas and the `transform=` value
-  // in the source must agree. Without this the DOM reverts but the
-  // source keeps the post-drag text, and the next edit lands on the
-  // wrong baseline.
-  if (snapshot->writebackTarget.has_value()) {
-    enqueueTransformWriteback(CompletedTransformWriteback{
-        .target = *snapshot->writebackTarget,
-        .transform = snapshot->transform,
-        .sourceTransformAttributeValue = snapshot->sourceTransformAttributeValue,
-        .restoreSourceTransformAttributeValue = snapshot->restoreSourceTransformAttributeValue});
-  } else if (auto target = captureAttributeWritebackTarget(liveElement); target.has_value()) {
-    enqueueTransformWriteback(CompletedTransformWriteback{
-        .target = std::move(*target),
-        .transform = snapshot->transform,
-        .sourceTransformAttributeValue = snapshot->sourceTransformAttributeValue,
-        .restoreSourceTransformAttributeValue = snapshot->restoreSourceTransformAttributeValue});
-  }
+  ApplyTimelineSnapshot(*this, document_, *snapshot);
 }
 
 void EditorApp::redo() {
-  // "Redo" in the non-destructive timeline model is "break the active
-  // undo chain and undo again". Breaking the chain causes the next
-  // undo to start a fresh chain from the end of the timeline, which
-  // means the first entry it walks is the most recently-appended
-  // undo-entry — whose `before` state is the post-drag position.
-  undoTimeline_.breakUndoChain();
-  undo();
+  auto snapshot = undoTimeline_.redo();
+  if (!snapshot.has_value()) {
+    return;
+  }
+
+  ApplyTimelineSnapshot(*this, document_, *snapshot);
 }
 
 std::optional<svg::SVGGeometryElement> EditorApp::hitTest(const Vector2d& documentPoint) {

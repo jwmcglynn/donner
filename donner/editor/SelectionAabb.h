@@ -36,12 +36,28 @@ namespace donner::editor {
 [[nodiscard]] std::vector<Box2d> SnapshotSelectionWorldBounds(
     std::span<const svg::SVGElement> selection);
 
+/// Snapshot world-space bounds for renderable geometry painted after a
+/// single selected element. This is a conservative occlusion hint for the
+/// async-safe re-drag path: if the click falls inside one of these bounds,
+/// the editor should wait for the normal hit-test path instead of assuming
+/// the selected element owns the click.
+///
+/// Multi-selection produces no occlusion hints because the fast re-drag
+/// path is single-selection only.
+///
+/// @param selection Current selection handles.
+/// @return Document-space AABBs for later-painted renderable geometry.
+[[nodiscard]] std::vector<Box2d> SnapshotSelectionOccludingWorldBounds(
+    std::span<const svg::SVGElement> selection);
+
 /// Pending/displayed selection AABBs tracked across document-version changes.
 struct SelectionBoundsCache {
   std::vector<svg::SVGElement> lastSelection;
   std::vector<Box2d> pendingBoundsDoc;
+  std::vector<Box2d> pendingOccludingBoundsDoc;
   std::uint64_t pendingVersion = 0;
   std::vector<Box2d> displayedBoundsDoc;
+  std::vector<Box2d> displayedOccludingBoundsDoc;
   std::uint64_t lastRefreshVersion = std::numeric_limits<std::uint64_t>::max();
 };
 

@@ -15,8 +15,8 @@ bool IsFinite(const Vector2d& value) {
   return IsFinite(value.x) && IsFinite(value.y);
 }
 
-bool IsFinite(const Transform2d& transform) {
-  for (double value : transform.data) {
+bool IsFinite(const Transform2d& candidateDocumentFromDocument) {
+  for (double value : candidateDocumentFromDocument.data) {
     if (!IsFinite(value)) {
       return false;
     }
@@ -27,6 +27,19 @@ bool IsFinite(const Transform2d& transform) {
 bool IsValidRect(const Vector2d& topLeft, const Vector2d& bottomRight) {
   return IsFinite(topLeft) && IsFinite(bottomRight) && bottomRight.x > topLeft.x &&
          bottomRight.y > topLeft.y;
+}
+
+bool IsValidQuad(const PresentedTileQuad& quad) {
+  return IsFinite(quad.topLeft) && IsFinite(quad.topRight) && IsFinite(quad.bottomRight) &&
+         IsFinite(quad.bottomLeft);
+}
+
+Transform2d DocumentFromCachedWithTranslationFallback(const Transform2d& documentFromCachedDocument,
+                                                      const Vector2d& translationDoc) {
+  if (documentFromCachedDocument.isIdentity() && translationDoc != Vector2d::Zero()) {
+    return Transform2d::Translate(translationDoc);
+  }
+  return documentFromCachedDocument;
 }
 
 }  // namespace
@@ -43,6 +56,25 @@ Vector2d ResolvePresentedTileDragTranslation(
   return tile.dragTranslationDoc;
 }
 
+Transform2d ResolvePresentedTileDocumentTransform(
+    const PresentedFrameTileGeometry& tile,
+    const std::optional<PresentedDragBaseline>& dragBaseline) {
+  const Transform2d tileDocumentFromCachedDocument = DocumentFromCachedWithTranslationFallback(
+      tile.documentFromCachedDocument, tile.dragTranslationDoc);
+  if (tile.isDragTarget && dragBaseline.has_value()) {
+    const Transform2d representedDocumentFromCachedDocument =
+        DocumentFromCachedWithTranslationFallback(
+            dragBaseline->representedDocumentFromCachedDocument,
+            dragBaseline->representedTranslationDoc);
+    const Transform2d activeDocumentFromCachedDocument = DocumentFromCachedWithTranslationFallback(
+        dragBaseline->activeDocumentFromCachedDocument, dragBaseline->activeTranslationDoc);
+    return tileDocumentFromCachedDocument * representedDocumentFromCachedDocument.inverse() *
+           activeDocumentFromCachedDocument;
+  }
+
+  return tileDocumentFromCachedDocument;
+}
+
 Vector2d ResolvePresentedOverlayDragTranslation(
     const std::optional<PresentedDragBaseline>& dragBaseline) {
   if (!dragBaseline.has_value()) {
@@ -52,24 +84,75 @@ Vector2d ResolvePresentedOverlayDragTranslation(
   return dragBaseline->activeTranslationDoc - dragBaseline->representedTranslationDoc;
 }
 
-std::optional<PresentedTileRect> ComputePresentedTileRect(
+Transform2d ResolvePresentedOverlayDocumentTransform(
+    const std::optional<PresentedDragBaseline>& dragBaseline) {
+  if (!dragBaseline.has_value()) {
+    return Transform2d();
+  }
+
+  const Transform2d representedDocumentFromCachedDocument =
+      DocumentFromCachedWithTranslationFallback(dragBaseline->representedDocumentFromCachedDocument,
+                                                dragBaseline->representedTranslationDoc);
+  const Transform2d activeDocumentFromCachedDocument = DocumentFromCachedWithTranslationFallback(
+      dragBaseline->activeDocumentFromCachedDocument, dragBaseline->activeTranslationDoc);
+  return representedDocumentFromCachedDocument.inverse() * activeDocumentFromCachedDocument;
+}
+
+std::optional<PresentedTileQuad> ComputePresentedTileQuad(
     const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
     const std::optional<PresentedDragBaseline>& dragBaseline) {
   if (!IsFinite(outputFromCanvasTransform) || !IsFinite(tile.canvasOffsetDoc) ||
       !IsFinite(tile.bitmapDimsDoc) || !IsFinite(tile.dragTranslationDoc) ||
-      tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
+      !IsFinite(tile.documentFromCachedDocument) || tile.bitmapDimsDoc.x <= 0.0 ||
+      tile.bitmapDimsDoc.y <= 0.0) {
     return std::nullopt;
   }
 
   const Vector2d effectiveDragTranslationDoc =
       ResolvePresentedTileDragTranslation(tile, dragBaseline);
-  if (!IsFinite(effectiveDragTranslationDoc)) {
+  const Transform2d effectiveDocumentFromCachedDocument =
+      ResolvePresentedTileDocumentTransform(tile, dragBaseline);
+  if (!IsFinite(effectiveDragTranslationDoc) || !IsFinite(effectiveDocumentFromCachedDocument)) {
     return std::nullopt;
   }
 
-  const Vector2d originCanvas = tile.canvasOffsetDoc + effectiveDragTranslationDoc;
-  const Box2d canvasBox(originCanvas, originCanvas + tile.bitmapDimsDoc);
-  const Box2d outputBox = outputFromCanvasTransform.transformBox(canvasBox);
+  const Box2d canvasBox(tile.canvasOffsetDoc, tile.canvasOffsetDoc + tile.bitmapDimsDoc);
+  const Vector2d cachedTopLeft = canvasBox.topLeft;
+  const Vector2d cachedTopRight(canvasBox.bottomRight.x, canvasBox.topLeft.y);
+  const Vector2d cachedBottomRight = canvasBox.bottomRight;
+  const Vector2d cachedBottomLeft(canvasBox.topLeft.x, canvasBox.bottomRight.y);
+
+  const auto presentPoint = [&](const Vector2d& cachedPoint) {
+    return outputFromCanvasTransform.transformPosition(
+        effectiveDocumentFromCachedDocument.transformPosition(cachedPoint));
+  };
+  PresentedTileQuad quad{
+      .topLeft = presentPoint(cachedTopLeft),
+      .topRight = presentPoint(cachedTopRight),
+      .bottomRight = presentPoint(cachedBottomRight),
+      .bottomLeft = presentPoint(cachedBottomLeft),
+      .effectiveDocumentFromCachedDocument = effectiveDocumentFromCachedDocument,
+      .effectiveDragTranslationDoc = effectiveDragTranslationDoc,
+  };
+  if (!IsValidQuad(quad)) {
+    return std::nullopt;
+  }
+  return quad;
+}
+
+std::optional<PresentedTileRect> ComputePresentedTileRect(
+    const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
+    const std::optional<PresentedDragBaseline>& dragBaseline) {
+  const std::optional<PresentedTileQuad> quad =
+      ComputePresentedTileQuad(tile, outputFromCanvasTransform, dragBaseline);
+  if (!quad.has_value()) {
+    return std::nullopt;
+  }
+
+  Box2d outputBox = Box2d::CreateEmpty(quad->topLeft);
+  outputBox.addPoint(quad->topRight);
+  outputBox.addPoint(quad->bottomRight);
+  outputBox.addPoint(quad->bottomLeft);
   if (!IsValidRect(outputBox.topLeft, outputBox.bottomRight)) {
     return std::nullopt;
   }
@@ -77,7 +160,7 @@ std::optional<PresentedTileRect> ComputePresentedTileRect(
   return PresentedTileRect{
       .topLeft = outputBox.topLeft,
       .bottomRight = outputBox.bottomRight,
-      .effectiveDragTranslationDoc = effectiveDragTranslationDoc,
+      .effectiveDragTranslationDoc = quad->effectiveDragTranslationDoc,
   };
 }
 

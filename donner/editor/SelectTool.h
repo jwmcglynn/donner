@@ -16,6 +16,7 @@
 /// All DOM mutations flow through `EditorApp::applyMutation()` as
 /// `EditorCommand::SetTransform` — never directly.
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <vector>
@@ -25,6 +26,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGElement.h"
 
@@ -34,8 +36,24 @@ class SelectTool final : public Tool {
 public:
   /// Preview state for an in-progress drag, consumed by the async renderer.
   struct ActiveDragPreview {
+    /// Entity being dragged.
     Entity entity = entt::null;
+    /// Current drag translation in document coordinates.
     Vector2d translation = Vector2d::Zero();
+    /// Current affine transform from the cached document placement to
+    /// the active preview placement.
+    Transform2d documentFromCachedDocument = Transform2d();
+    /// Monotonic id for one mouse-down/move/up drag gesture.
+    std::uint64_t dragGeneration = 0;
+  };
+
+  /// Active transform chrome state for selection bounds presentation.
+  struct ActiveTransformBoundsPreview {
+    /// Selection AABB captured when the transform gesture started.
+    Box2d startBoundsDoc;
+    /// Current transform from gesture-start document space to active
+    /// document space.
+    Transform2d documentFromStartDocument = Transform2d();
   };
 
   /// Payload needed to write a completed drag back into the source pane.
@@ -54,6 +72,9 @@ public:
   void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                    MouseModifiers modifiers) override;
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
+  /// Mouse-move variant that samples live modifiers during resize gestures.
+  void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
+                   MouseModifiers modifiers);
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
   /// Snapshot-safe re-drag start (design doc 0033 §M8). When the user
@@ -63,18 +84,18 @@ public:
   /// is mid-render (hitTest would race the worker's
   /// `prepareDocumentForRendering`).
   ///
-  /// `selectionBoundsDoc` is the **caller-supplied** AABB list for the
-  /// current selection (in document space). EditorShell passes the
-  /// pre-snapshotted bounds from `SelectionBoundsCache::displayedBoundsDoc`
-  /// — that cache is refreshed on idle frames, so reading it during a
-  /// busy render is race-free (no live `SnapshotSelectionWorldBounds`
-  /// call inside this function). `onMouseDown` passes a freshly-computed
-  /// live snapshot since its caller has already gated on `!isBusy()`.
+  /// `selectionBoundsDoc` and `occludingBoundsDoc` are **caller-supplied**
+  /// AABB lists in document space. EditorShell passes the pre-snapshotted
+  /// bounds from `SelectionBoundsCache` — that cache is refreshed on idle
+  /// frames, so reading it during a busy render is race-free (no live
+  /// `SnapshotSelectionWorldBounds` call inside this function). `onMouseDown`
+  /// passes freshly-computed live selection bounds and no occlusion hints since
+  /// its caller has already gated on `!isBusy()`.
   ///
   /// Returns true if a drag was started; false if the caller must fall
   /// back to the full `onMouseDown` path (multi-select, shift-click,
-  /// click outside the selection's snapshotted bounds, empty bounds
-  /// span, etc.).
+  /// click outside the selection's snapshotted bounds, click inside
+  /// later-painted cached bounds, empty bounds span, etc.).
   ///
   /// `onMouseDown` itself calls this first to avoid duplicating logic
   /// — so plain clicks on the selection always take the no-hit-test
@@ -82,7 +103,8 @@ public:
   /// can run it BEFORE checking `isBusy()` for the click handler.
   [[nodiscard]] bool tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
                                               MouseModifiers modifiers,
-                                              std::span<const Box2d> selectionBoundsDoc);
+                                              std::span<const Box2d> selectionBoundsDoc,
+                                              std::span<const Box2d> occludingBoundsDoc = {});
 
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).
@@ -110,6 +132,9 @@ public:
   /// Returns the current drag preview, if a drag is in progress.
   [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
 
+  /// Returns active oriented-bounds chrome for in-progress rotation.
+  [[nodiscard]] std::optional<ActiveTransformBoundsPreview> activeTransformBoundsPreview() const;
+
 private:
   /// Per-element bookkeeping for one participant in a drag. Carries the
   /// start transform (for computing `startTransform * translate(delta)`
@@ -131,6 +156,12 @@ private:
   };
 
   struct DragState {
+    enum class GestureKind {
+      Move,
+      Resize,
+      Rotate,
+    };
+
     /// Primary drag participant — the element that was under the cursor on
     /// mouse-down. Always populated. The compositor-preview fast path
     /// (when a single-element drag is composited) runs against this one.
@@ -143,9 +174,19 @@ private:
     /// them all" design-tool behavior.
     std::vector<PerElementDrag> extras;
 
+    GestureKind gestureKind = GestureKind::Move;
+    SelectionTransformCorner corner = SelectionTransformCorner::TopLeft;
     Vector2d startDocumentPoint;
+    Box2d startBoundsDoc;
+    Vector2d centerDocumentPoint = Vector2d::Zero();
+    double startAngleRadians = 0.0;
+    /// Generation copied into \ref ActiveDragPreview for this gesture.
+    std::uint64_t generation = 0;
     /// Current drag delta in document coordinates, used for compositor preview.
     Vector2d currentDocumentDelta = Vector2d::Zero();
+    /// Current affine transform from the gesture-start document geometry
+    /// to the active preview geometry.
+    Transform2d currentDocumentFromStartDocument = Transform2d();
     /// Whether any `onMouseMove` has fired since `onMouseDown`. A
     /// click-without-drag shouldn't leave an undo entry behind.
     bool hasMoved = false;
@@ -165,6 +206,7 @@ private:
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
+  std::uint64_t nextDragGeneration_ = 1;
 };
 
 }  // namespace donner::editor

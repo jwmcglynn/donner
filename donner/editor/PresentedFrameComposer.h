@@ -17,6 +17,9 @@ struct PresentedFrameTileGeometry {
   Vector2d bitmapDimsDoc = Vector2d::Zero();
   /// Cached drag translation captured with the tile.
   Vector2d dragTranslationDoc = Vector2d::Zero();
+  /// Cached affine transform from the tile's rasterized document placement
+  /// to its presented document placement.
+  Transform2d documentFromCachedDocument = Transform2d();
   /// Whether this tile represents the current drag target.
   bool isDragTarget = false;
 };
@@ -29,6 +32,26 @@ struct PresentedDragBaseline {
   Vector2d representedTranslationDoc = Vector2d::Zero();
   /// Current active drag translation in document space.
   Vector2d activeTranslationDoc = Vector2d::Zero();
+  /// Document transform represented by the presented tiles.
+  Transform2d representedDocumentFromCachedDocument = Transform2d();
+  /// Current active document transform.
+  Transform2d activeDocumentFromCachedDocument = Transform2d();
+};
+
+/// Output-space quad for one presented tile.
+struct PresentedTileQuad {
+  /// Top-left corner in output coordinates.
+  Vector2d topLeft = Vector2d::Zero();
+  /// Top-right corner in output coordinates.
+  Vector2d topRight = Vector2d::Zero();
+  /// Bottom-right corner in output coordinates.
+  Vector2d bottomRight = Vector2d::Zero();
+  /// Bottom-left corner in output coordinates.
+  Vector2d bottomLeft = Vector2d::Zero();
+  /// Affine transform used to derive this quad.
+  Transform2d effectiveDocumentFromCachedDocument = Transform2d();
+  /// Drag translation used to derive this quad.
+  Vector2d effectiveDragTranslationDoc = Vector2d::Zero();
 };
 
 /// Output-space rectangle for one presented tile.
@@ -69,12 +92,44 @@ struct PresentedPixelRect {
     const std::optional<PresentedDragBaseline>& dragBaseline);
 
 /**
+ * Resolve the affine transform to apply while presenting a cached tile.
+ *
+ * @param tile Geometry for the tile being presented.
+ * @param dragBaseline Active drag baseline represented by the presented tiles.
+ * @return Transform from cached document placement to presented document placement.
+ */
+[[nodiscard]] Transform2d ResolvePresentedTileDocumentTransform(
+    const PresentedFrameTileGeometry& tile,
+    const std::optional<PresentedDragBaseline>& dragBaseline);
+
+/**
  * Resolve the screen-space-independent translation for a full-canvas overlay texture.
  *
  * @param dragBaseline Active drag baseline represented by the overlay texture.
  * @return Translation to add to the overlay texture's canvas-space placement.
  */
 [[nodiscard]] Vector2d ResolvePresentedOverlayDragTranslation(
+    const std::optional<PresentedDragBaseline>& dragBaseline);
+
+/**
+ * Resolve the affine transform from displayed overlay placement to active overlay placement.
+ *
+ * @param dragBaseline Active drag baseline represented by the overlay texture.
+ * @return Transform from displayed document placement to active document placement.
+ */
+[[nodiscard]] Transform2d ResolvePresentedOverlayDocumentTransform(
+    const std::optional<PresentedDragBaseline>& dragBaseline);
+
+/**
+ * Compute the output-space quad for a presented tile.
+ *
+ * @param tile Geometry for the tile being presented.
+ * @param outputFromCanvasTransform Transform from canvas/document coordinates to output space.
+ * @param dragBaseline Active drag baseline represented by the presented tiles.
+ * @return Output quad, or \c std::nullopt when tile or transform geometry is invalid.
+ */
+[[nodiscard]] std::optional<PresentedTileQuad> ComputePresentedTileQuad(
+    const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
     const std::optional<PresentedDragBaseline>& dragBaseline);
 
 /**

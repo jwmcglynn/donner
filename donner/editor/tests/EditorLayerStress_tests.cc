@@ -151,6 +151,9 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
       request.dragPreview = RenderRequest::DragPreview{
           .entity = preview->entity,
           .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+          .translation = preview->translation,
+          .documentFromCachedDocument = preview->documentFromCachedDocument,
+          .dragGeneration = preview->dragGeneration,
       };
     }
     return request;
@@ -281,6 +284,9 @@ protected:
       request.dragPreview = RenderRequest::DragPreview{
           .entity = preview->entity,
           .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+          .translation = preview->translation,
+          .documentFromCachedDocument = preview->documentFromCachedDocument,
+          .dragGeneration = preview->dragGeneration,
       };
     }
     return request;

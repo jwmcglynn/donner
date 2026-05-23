@@ -44,6 +44,8 @@ std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
   return SelectTool::ActiveDragPreview{
       .entity = preview->entity,
       .translation = preview->translation,
+      .documentFromCachedDocument = preview->documentFromCachedDocument,
+      .dragGeneration = preview->dragGeneration,
   };
 }
 
@@ -64,13 +66,26 @@ std::optional<SelectTool::ActiveDragPreview> OverlayDragPreviewForSelection(
   };
 }
 
-bool CanReuseOverlayForActiveDrag(
-    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
-    const std::optional<SelectTool::ActiveDragPreview>& presentedOverlayDragPreview,
-    const GlTextureCache& textures) {
-  return activeDragPreview.has_value() && presentedOverlayDragPreview.has_value() &&
-         activeDragPreview->entity == presentedOverlayDragPreview->entity &&
-         textures.overlayWidth() > 0 && textures.overlayHeight() > 0;
+bool SameTransform(const Transform2d& lhs, const Transform2d& rhs) {
+  for (std::size_t i = 0; i < 6; ++i) {
+    if (lhs.data[i] != rhs.data[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool SameActiveBoundsPreview(const std::optional<SelectTool::ActiveTransformBoundsPreview>& lhs,
+                             const std::optional<SelectTool::ActiveTransformBoundsPreview>& rhs) {
+  if (lhs.has_value() != rhs.has_value()) {
+    return false;
+  }
+  if (!lhs.has_value()) {
+    return true;
+  }
+
+  return lhs->startBoundsDoc == rhs->startBoundsDoc &&
+         SameTransform(lhs->documentFromStartDocument, rhs->documentFromStartDocument);
 }
 
 }  // namespace
@@ -139,6 +154,7 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlayCanvasSize_ = Vector2i::Zero();
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   lastOverlayMarqueeRectDoc_.reset();
+  lastOverlayActiveBoundsPreview_.reset();
   renderScheduler_.reset();
 }
 
@@ -160,7 +176,8 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
     EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
     const std::optional<Box2d>& marqueeRectDoc, OverlayUploadMode uploadMode,
-    std::optional<SelectTool::ActiveDragPreview> representedDragPreview) {
+    std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
+    std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview) {
   ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     return false;
@@ -177,23 +194,30 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayRenderer_.beginFrame(overlayViewport);
   const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
   const auto& overlaySelection = app.selectedElements();
+  std::optional<SelectionChromeBoundsPreview> chromeBoundsPreview;
+  if (activeBoundsPreview.has_value()) {
+    chromeBoundsPreview = SelectionChromeBoundsPreview{
+        .startBoundsDoc = activeBoundsPreview->startBoundsDoc,
+        .documentFromStartDocument = activeBoundsPreview->documentFromStartDocument,
+    };
+  }
   // Overlay AABBs are computed from the same live DOM snapshot as the path
   // outlines. `selectionBoundsCache_` is maintained only for main-loop
   // selection-change detection and does not gate overlay geometry.
   OverlayRenderer::drawChromeWithTransform(overlayRenderer_,
                                            std::span<const svg::SVGElement>(overlaySelection),
-                                           marqueeRectDoc, canvasFromDoc);
+                                           marqueeRectDoc, canvasFromDoc, chromeBoundsPreview);
   overlayRenderer_.endFrame();
-  if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
-    pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
+  pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
+  if (pendingOverlayTexture_ != nullptr) {
+    pendingOverlayBitmap_.reset();
+  } else if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
     UTILS_RELEASE_ASSERT_MSG(
         pendingOverlayTexture_ != nullptr,
         "Geode overlay rasterization did not produce a GPU texture. Refusing CPU "
         "readback/upload fallback in Geode presentation mode.");
-    pendingOverlayBitmap_.reset();
   } else {
     pendingOverlayBitmap_ = overlayRenderer_.takeSnapshot();
-    pendingOverlayTexture_.reset();
   }
   pendingOverlayVersion_ = currentVersion;
   pendingOverlayDragPreview_ =
@@ -225,6 +249,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayCanvasSize_ = currentCanvasSize;
   lastOverlayVersion_ = currentVersion;
   lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
+  lastOverlayActiveBoundsPreview_ = activeBoundsPreview;
   return true;
 }
 
@@ -237,11 +262,11 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   const auto& result = *resultOpt;
-  // Forward the worker-measured backend time to the frame history so
-  // `RenderFrameGraph` can overlay backend render time on the UI frame
-  // graph. The frame history's latest slot corresponds to the current
-  // UI frame (pushed at the top of `EditorShell::runFrame` before
-  // poll) — a landed result belongs to that frame.
+  // Forward the worker-measured presentation latency to the frame history so
+  // `RenderFrameGraph` can overlay async worker time on the UI frame graph.
+  // The frame history's latest slot corresponds to the current UI frame
+  // (pushed at the top of `EditorShell::runFrame` before poll) — a landed
+  // result belongs to that frame.
   if (frameHistory != nullptr) {
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
@@ -335,25 +360,25 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const auto& overlaySelection = app.selectedElements();
   const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec_;
   const std::optional<Box2d> marqueeRectDoc = selectTool.marqueeRect();
+  const auto activeBoundsPreview = selectTool.activeTransformBoundsPreview();
   // The marquee rect updates every mouse-move during a marquee drag and
   // doesn't bump the document version (no DOM mutation), so it needs
   // its own invalidation check. Comparing via `!=` on the optional<Box2d>
   // covers "marquee appeared", "marquee moved", and "marquee ended".
   const bool marqueeDiffers = marqueeRectDoc != lastOverlayMarqueeRectDoc_;
+  const bool activeBoundsPreviewDiffers =
+      !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_);
   const bool canvasDiffers = currentCanvasSize != lastOverlayCanvasSize_;
   const bool overlayVersionDiffers = currentVersion != lastOverlayVersion_;
-  const bool activeDragCanReuseOverlay =
-      !selectionDiffers && !marqueeDiffers && !canvasDiffers &&
-      CanReuseOverlayForActiveDrag(dragPreview, presentedOverlayDragPreview_, textures);
   if ((!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value() ||
-       marqueeRectDoc.has_value()) &&
-      (selectionDiffers || marqueeDiffers || canvasDiffers ||
-       (overlayVersionDiffers && !activeDragCanReuseOverlay))) {
+       marqueeRectDoc.has_value() || activeBoundsPreviewDiffers) &&
+      (selectionDiffers || marqueeDiffers || canvasDiffers || activeBoundsPreviewDiffers ||
+       overlayVersionDiffers)) {
     rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc,
                                         dragPreview.has_value()
                                             ? OverlayUploadMode::Immediate
                                             : OverlayUploadMode::MatchDisplayedVersion,
-                                        dragPreview);
+                                        dragPreview, activeBoundsPreview);
   }
 
   const PresentationRenderScheduleDecision schedule =

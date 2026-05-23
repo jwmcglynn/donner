@@ -1827,13 +1827,14 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
     worldFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
                           .worldFromEntityTransform;
   }
-  if (std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot()) {
-    layer.setTextureSnapshot(std::move(texture), worldFromEntity);
-  } else {
+  if (offscreen->requiresTextureSnapshotPresentation()) {
+    std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
     UTILS_RELEASE_ASSERT_MSG(
-        !offscreen->requiresTextureSnapshotPresentation(),
+        texture != nullptr,
         "Geode compositor layer rasterization did not produce a GPU texture. Refusing CPU "
         "readback/upload fallback in Geode presentation mode.");
+    layer.setTextureSnapshot(std::move(texture), worldFromEntity);
+  } else {
     layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
   }
   layer.setCanvasOffset(geometry.canvasOffset);
@@ -2014,15 +2015,15 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
                                Transform2d::Translate(-tightBoundsSnapped.topLeft));
-        if (std::shared_ptr<const RendererTextureSnapshot> texture =
-                offscreen->takeTextureSnapshot()) {
+        if (offscreen->requiresTextureSnapshotPresentation()) {
+          std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
+          UTILS_RELEASE_ASSERT_MSG(
+              texture != nullptr,
+              "Geode compositor segment rasterization did not produce a GPU texture. Refusing CPU "
+              "readback/upload fallback in Geode presentation mode.");
           staticSegments_[i] = RendererBitmap{};
           staticSegmentTextures_[i] = std::move(texture);
         } else {
-          UTILS_RELEASE_ASSERT_MSG(
-              !offscreen->requiresTextureSnapshotPresentation(),
-              "Geode compositor segment rasterization did not produce a GPU texture. Refusing CPU "
-              "readback/upload fallback in Geode presentation mode.");
           staticSegments_[i] = offscreen->takeSnapshot();
           staticSegmentTextures_[i].reset();
         }
@@ -2032,15 +2033,15 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
                                Transform2d());
-        if (std::shared_ptr<const RendererTextureSnapshot> texture =
-                offscreen->takeTextureSnapshot()) {
+        if (offscreen->requiresTextureSnapshotPresentation()) {
+          std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
+          UTILS_RELEASE_ASSERT_MSG(
+              texture != nullptr,
+              "Geode compositor segment rasterization did not produce a GPU texture. Refusing CPU "
+              "readback/upload fallback in Geode presentation mode.");
           staticSegments_[i] = RendererBitmap{};
           staticSegmentTextures_[i] = std::move(texture);
         } else {
-          UTILS_RELEASE_ASSERT_MSG(
-              !offscreen->requiresTextureSnapshotPresentation(),
-              "Geode compositor segment rasterization did not produce a GPU texture. Refusing CPU "
-              "readback/upload fallback in Geode presentation mode.");
           staticSegments_[i] = offscreen->takeSnapshot();
           staticSegmentTextures_[i].reset();
         }

@@ -338,6 +338,51 @@ TEST(EditorWindowTest, WgpuPresentsGeodePremultipliedTextureWithoutDarkening) {
   ImGui_ImplWGPU_RemoveTexture(textureId);
 }
 
+TEST(EditorWindowTest, WgpuPresentsUploadedStraightAlphaBitmapWithStraightBlend) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Straight Alpha WGPU Bitmap Upload Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid() || window.geodeDevice() == nullptr) {
+    GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
+  }
+
+  svg::RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(32, 32);
+  bitmap.rowBytes = static_cast<std::size_t>(bitmap.dimensions.x) * 4u;
+  bitmap.alphaType = svg::AlphaType::Unpremultiplied;
+  bitmap.pixels.resize(bitmap.rowBytes * static_cast<std::size_t>(bitmap.dimensions.y));
+  for (std::size_t offset = 0; offset + 3 < bitmap.pixels.size(); offset += 4u) {
+    bitmap.pixels[offset + 0] = 255u;
+    bitmap.pixels[offset + 1] = 0u;
+    bitmap.pixels[offset + 2] = 0u;
+    bitmap.pixels[offset + 3] = 128u;
+  }
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+  textures.uploadOverlay(bitmap);
+  ASSERT_NE(textures.overlayTexture(), 0);
+
+  window.beginFrame();
+  ImGui::GetBackgroundDrawList()->AddImage(textures.overlayTexture(), ImVec2(16.0f, 16.0f),
+                                           ImVec2(48.0f, 48.0f));
+  const svg::RendererBitmap actual = window.endFrameAndReadPixels();
+
+  ASSERT_FALSE(actual.empty());
+  const std::array<std::uint8_t, 4> center = PixelAt(actual, 32, 32);
+  EXPECT_NEAR(static_cast<int>(center[0]), 128, 3)
+      << "CPU bitmap uploads are straight-alpha RGBA; registering them as premultiplied makes "
+         "the WGPU presentation path skip the required source-alpha multiply.";
+  EXPECT_LE(center[1], 3);
+  EXPECT_LE(center[2], 3);
+  EXPECT_EQ(center[3], 255);
+}
+
 TEST(EditorWindowTest, WgpuPremultipliedTextureSurvivesOnePresentationOwnerRetiring) {
   EditorWindow window(EditorWindowOptions{
       .title = "Shared Premultiplied WGPU Texture Ownership Test",

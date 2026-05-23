@@ -25,6 +25,7 @@
 /// `Renderer::takeSnapshot()`. The renderer's frame pixmap survives across
 /// `endFrame` so additional canvas commands compose onto it directly.
 
+#include <array>
 #include <optional>
 #include <span>
 #include <vector>
@@ -42,10 +43,19 @@ namespace donner::editor {
 
 class EditorApp;
 
+/// Active transform bounds chrome. Used while rotating to draw the
+/// gesture-start selection box transformed into the current document space.
+struct SelectionChromeBoundsPreview {
+  /// Selection AABB captured when the gesture started.
+  Box2d startBoundsDoc;
+  /// Current transform from gesture-start document space to active document space.
+  Transform2d documentFromStartDocument = Transform2d();
+};
+
 /// Frozen view of everything `OverlayRenderer::drawChromeWithTransform`
 /// would normally read off the live registry: per-element path splines
-/// (in local space) + their canvas transforms, per-element AABBs in doc
-/// space, and the optional marquee rect.
+/// transformed into document space, per-element AABBs in document space,
+/// and the optional marquee rect.
 ///
 /// Captured once via `OverlayRenderer::captureChromeSnapshot` while the
 /// registry is safe to read (worker is idle), then handed to
@@ -56,15 +66,19 @@ class EditorApp;
 /// is mid-render, so the editor can paint selection chrome in a frame
 /// that the worker hasn't returned a result for yet.
 struct SelectionChromeSnapshot {
+  /// Four document-space corners of an oriented selection box.
+  struct OrientedBox {
+    std::array<Vector2d, 4> cornersDoc;
+  };
+
   /// One entry per renderable geometry leaf in the selection (groups
   /// are expanded into their geometry descendants, same as the live
   /// path). Empty when nothing's selected.
   struct PathItem {
-    /// Element-local path data — does not change with drag transforms.
-    Path spline;
-    /// `canvasFromElement` at capture time. Composes the element's
-    /// `elementFromWorld` with the snapshot's `canvasFromDoc`.
-    Transform2d canvasFromElement;
+    /// Document-space path data sampled at capture time. Keeping the path
+    /// in document space lets chrome stroke width depend only on viewport
+    /// scale, not on the selected element's own scale/rotation transform.
+    Path pathDoc;
   };
   std::vector<PathItem> paths;
 
@@ -76,6 +90,14 @@ struct SelectionChromeSnapshot {
 
   /// Optional marquee rectangle in document space.
   std::optional<Box2d> marqueeDoc;
+
+  /// Optional oriented bounds drawn instead of axis-aligned AABBs while
+  /// a rotation gesture is active.
+  std::optional<OrientedBox> orientedBoundsDoc;
+
+  /// Corner resize handles in document space. Empty when there is no
+  /// selection AABB.
+  std::vector<Box2d> handleBoxesDoc;
 
   /// `canvasFromDoc` at capture time. The draw phase needs this for
   /// drawing AABBs and the marquee (both live in doc space).
@@ -132,10 +154,10 @@ public:
   ///   drawn as a filled + stroked rectangle matching the prior
   ///   ImGui chrome style.
   /// @param canvasFromDoc Maps document coordinates into canvas pixels.
-  static void drawChromeWithTransform(svg::Renderer& renderer,
-                                      std::span<const svg::SVGElement> selection,
-                                      const std::optional<Box2d>& marqueeRectDoc,
-                                      const Transform2d& canvasFromDoc);
+  static void drawChromeWithTransform(
+      svg::Renderer& renderer, std::span<const svg::SVGElement> selection,
+      const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc,
+      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt);
 
   /// Back-compat overload without marquee. Kept for existing callers
   /// that don't need a marquee rect (older tests, worker-thread
@@ -155,7 +177,8 @@ public:
   /// subsequent registry mutation.
   [[nodiscard]] static SelectionChromeSnapshot captureChromeSnapshot(
       std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
-      const Transform2d& canvasFromDoc);
+      const Transform2d& canvasFromDoc,
+      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt);
 
   /// Race-free chrome rasterize: reads only the snapshot, never the
   /// registry. Safe to call while the async-renderer worker is

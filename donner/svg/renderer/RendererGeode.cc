@@ -76,6 +76,10 @@ constexpr wgpu::TextureFormat kFilterIntermediateFormat = wgpu::TextureFormat::R
 /// matching the CPU-renderer helper.
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 
+bool IsBgraTextureFormat(wgpu::TextureFormat format) {
+  return static_cast<WGPUTextureFormat>(format) == WGPUTextureFormat_BGRA8Unorm;
+}
+
 /// Apply a `Transform2d` to every control point of a `Path`, returning a
 /// new `Path` whose commands mirror the input but whose coordinates are
 /// pre-transformed. Needed because `GeoEncoder::fillPath` draws in the
@@ -617,8 +621,10 @@ struct RendererGeode::Impl {
     // The pattern tile being recorded.
     Box2d tileRect;                 // In pattern space (topLeft at origin).
     Transform2d targetFromPattern;  // Transform used when the tile is sampled.
-    wgpu::Texture tileTexture;      // Offscreen tile (1-sample resolve) being sampled later.
-    wgpu::Texture tileMsaaTexture;  // 4× MSAA companion used during tile recording.
+    geode::ScopedWgpuHandle<wgpu::Texture>
+        tileTexture;  // Offscreen tile (1-sample resolve) being sampled later.
+    geode::ScopedWgpuHandle<wgpu::Texture>
+        tileMsaaTexture;  // 4× MSAA companion used during tile recording.
     int tilePixelWidth = 0;
     int tilePixelHeight = 0;
     // Scale factor applied to all `setTransform` calls while this frame is
@@ -664,7 +670,7 @@ struct RendererGeode::Impl {
     }
   };
   struct TextureBucket {
-    std::vector<wgpu::Texture> free;
+    std::vector<geode::ScopedWgpuHandle<wgpu::Texture>> free;
     /// Monotonic frame index when this bucket was last touched by
     /// either `acquireTexture` or `releaseTexture`. Used by
     /// `evictStalePoolBuckets` to age out buckets whose size hasn't
@@ -696,7 +702,7 @@ struct RendererGeode::Impl {
     TextureBucket& bucket = texturePool[TextureKey::From(desc)];
     bucket.lastUsedFrame = currentFrameIndex;
     if (!bucket.free.empty()) {
-      wgpu::Texture texture = std::move(bucket.free.back());
+      wgpu::Texture texture = bucket.free.back().take();
       bucket.free.pop_back();
       return texture;
     }
@@ -725,9 +731,10 @@ struct RendererGeode::Impl {
     if (bucket.free.size() >= kMaxPoolEntriesPerKey) {
       // Bucket full — let the released texture go out of scope instead
       // of unbounded growth.
+      geode::ScopedWgpuHandle<wgpu::Texture> dropped(std::move(texture));
       return;
     }
-    bucket.free.push_back(std::move(texture));
+    bucket.free.push_back(geode::ScopedWgpuHandle<wgpu::Texture>(std::move(texture)));
   }
 
   /// Drop every bucket whose `lastUsedFrame` is older than
@@ -838,7 +845,7 @@ struct RendererGeode::Impl {
 
   /// A completed pattern tile ready to be sampled as fill or stroke paint.
   struct PatternPaintSlot {
-    wgpu::Texture tile;
+    geode::ScopedWgpuHandle<wgpu::Texture> tile;
     Vector2d tileSize;              // In pattern space.
     Transform2d targetFromPattern;  // destFromSource naming.
     // `deviceFromLocalTransform` snapshotted at the time the outer element kicked
@@ -1060,7 +1067,7 @@ struct RendererGeode::Impl {
     const Transform2d patternFromDevice = deviceFromPattern.inverse();
     const Transform2d patternFromPath = patternFromDevice * deviceFromLocalTransform;
     geode::GeoEncoder::PatternPaint p;
-    p.tile = slot.tile;
+    p.tile = slot.tile.get();
     p.tileSize = slot.tileSize;
     p.patternFromPath = patternFromPath;
     p.opacity = opacity;
@@ -1365,6 +1372,9 @@ struct RendererGeode::Impl {
       const double opacity = paint.fillOpacity;
       encoder->fillPathPattern(path, rule, buildPatternPaint(*patternFillPaint, opacity),
                                precomputedEncoded);
+      if (patternFillPaint->tile) {
+        device->deferDestroy(patternFillPaint->tile.take());
+      }
       patternFillPaint.reset();
       return;
     }
@@ -2462,22 +2472,28 @@ void RendererGeode::popFilterLayer() {
     vpDesc.mipLevelCount = 1;
     vpDesc.sampleCount = 1;
     vpDesc.dimension = wgpu::TextureDimension::_2D;
-    wgpu::Texture viewportTexture = impl_->device->device().createTexture(vpDesc);
+    geode::ScopedWgpuHandle<wgpu::Texture> viewportTexture(
+        impl_->device->device().createTexture(vpDesc));
+    if (viewportTexture) {
+      impl_->device->countTexture();
+    }
 
     if (viewportTexture) {
-      wgpu::CommandEncoder copyEncoder = impl_->device->device().createCommandEncoder();
+      geode::ScopedWgpuHandle<wgpu::CommandEncoder> copyEncoder(
+          impl_->device->device().createCommandEncoder());
       wgpu::TexelCopyTextureInfo src = {};
       src.texture = filteredTexture;
       src.origin = {static_cast<uint32_t>(frame.filterBufferOffsetX),
                     static_cast<uint32_t>(frame.filterBufferOffsetY), 0u};
       wgpu::TexelCopyTextureInfo dst = {};
-      dst.texture = viewportTexture;
+      dst.texture = viewportTexture.get();
       const wgpu::Extent3D extent = {vpW, vpH, 1u};
-      copyEncoder.copyTextureToTexture(src, dst, extent);
-      wgpu::CommandBuffer copyCmd = copyEncoder.finish();
-      impl_->device->queue().submit(1, &copyCmd);
+      copyEncoder.get().copyTextureToTexture(src, dst, extent);
+      geode::ScopedWgpuHandle<wgpu::CommandBuffer> copyCmd(copyEncoder.get().finish());
+      impl_->device->queue().submit(1, &copyCmd.get());
 
-      impl_->encoder->blitFullTarget(viewportTexture, 1.0);
+      impl_->encoder->blitFullTarget(viewportTexture.get(), 1.0);
+      impl_->device->deferDestroy(viewportTexture.take());
     }
   } else {
     // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
@@ -2486,6 +2502,9 @@ void RendererGeode::popFilterLayer() {
     // CTM snapshot before using it as a scissor. Skipping for this PR —
     // all current feGaussianBlur resvg tests pass without the clip.
     impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+  }
+  if (filteredTexture && filteredTexture != frame.layerTexture) {
+    impl_->device->deferDestroy(std::move(filteredTexture));
   }
   // Defer release to endFrame: `blitFullTarget` recorded a sample from
   // `filteredTexture` (which is `frame.layerTexture` when the filter
@@ -2696,7 +2715,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture tileTexture = impl_->device->device().createTexture(td);
+  geode::ScopedWgpuHandle<wgpu::Texture> tileTexture(impl_->device->device().createTexture(td));
   impl_->device->countTexture();
   if (!tileTexture) {
     return;
@@ -2705,7 +2724,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // 4× MSAA companion render target — shares the same encoder lifetime
   // as the tile; resolved into `tileTexture` at pass end. Skipped on
   // the alpha-coverage path (sampleCount == 1).
-  wgpu::Texture tileMsaaTexture;
+  geode::ScopedWgpuHandle<wgpu::Texture> tileMsaaTexture;
   if (impl_->device->sampleCount() > 1) {
     wgpu::TextureDescriptor tileMsaaDesc = {};
     tileMsaaDesc.label = wgpuLabel("RendererGeodePatternTileMSAA");
@@ -2715,12 +2734,14 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
     tileMsaaDesc.mipLevelCount = 1;
     tileMsaaDesc.sampleCount = 4;
     tileMsaaDesc.dimension = wgpu::TextureDimension::_2D;
-    tileMsaaTexture = impl_->device->device().createTexture(tileMsaaDesc);
+    tileMsaaTexture.reset(impl_->device->device().createTexture(tileMsaaDesc));
     impl_->device->countTexture();
     if (!tileMsaaTexture) {
       return;
     }
   }
+  const wgpu::Texture tileTextureHandle = tileTexture.get();
+  const wgpu::Texture tileMsaaTextureHandle = tileMsaaTexture.get();
 
   // Stash the currently-active encoder/target/transform state. A nested
   // encoder can't share a render pass with the outer one, so we finish any
@@ -2747,8 +2768,8 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   frame.savedPixelHeight = impl_->pixelHeight;
   frame.tileRect = tileRect;
   frame.targetFromPattern = targetFromPattern;
-  frame.tileTexture = tileTexture;
-  frame.tileMsaaTexture = tileMsaaTexture;
+  frame.tileTexture = std::move(tileTexture);
+  frame.tileMsaaTexture = std::move(tileMsaaTexture);
   frame.tilePixelWidth = tilePixelWidth;
   frame.tilePixelHeight = tilePixelHeight;
   // Map pattern-tile units onto tile-texture pixels: this factor is applied
@@ -2773,8 +2794,8 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // tile texture so the new encoder's MVP maps correctly.
   impl_->pixelWidth = tilePixelWidth;
   impl_->pixelHeight = tilePixelHeight;
-  impl_->target = tileTexture;
-  impl_->msaaTarget = tileMsaaTexture;
+  impl_->target = tileTextureHandle;
+  impl_->msaaTarget = tileMsaaTextureHandle;
   impl_->deviceFromLocalTransformStack.clear();
   // Initialise the current transform to the raster scale so direct draws
   // issued before the driver's next `setTransform` still land in the
@@ -2784,7 +2805,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
 
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      tileMsaaTexture, tileTexture, impl_->frameCommandEncoder.get());
+      tileMsaaTextureHandle, tileTextureHandle, impl_->frameCommandEncoder.get());
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
@@ -2807,6 +2828,9 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // for sampling by subsequent draws.
   if (impl_->encoder) {
     impl_->encoder->finish();
+  }
+  if (frame.tileMsaaTexture) {
+    impl_->device->deferDestroy(frame.tileMsaaTexture.take());
   }
 
   // Restore outer state.
@@ -2876,7 +2900,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // through the existing 4x4 matrix multiply and compares against the
   // tile's native dimensions.
   Impl::PatternPaintSlot slot;
-  slot.tile = frame.tileTexture;
+  slot.tile = std::move(frame.tileTexture);
   slot.tileSize = frame.tileRect.size();
   slot.targetFromPattern = frame.targetFromPattern;
   // `frame.savedDeviceFromLocalTransform` is the path→device transform that was live at
@@ -3002,6 +3026,9 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     impl_->encoder->fillPathPattern(strokedOutline, strokeDerived.fillRule,
                                     impl_->buildPatternPaint(*impl_->patternStrokePaint, opacity),
                                     strokeDerived.encoded);
+    if (impl_->patternStrokePaint->tile) {
+      impl_->device->deferDestroy(impl_->patternStrokePaint->tile.take());
+    }
     impl_->patternStrokePaint.reset();
     return;
   }
@@ -3322,14 +3349,16 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   // break cross-backend parity.
   bitmap.dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));
   bitmap.rowBytes = static_cast<size_t>(width) * 4u;
+  bitmap.alphaType = AlphaType::Unpremultiplied;
   bitmap.pixels.resize(bitmap.rowBytes * height);
+  const bool sourceIsBgra = IsBgraTextureFormat(impl_->textureFormat);
   for (uint32_t y = 0; y < height; ++y) {
     const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
     uint8_t* dstRow = bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes;
     for (uint32_t x = 0; x < width; ++x) {
-      const uint8_t srcR = srcRow[x * 4 + 0];
+      const uint8_t srcR = sourceIsBgra ? srcRow[x * 4 + 2] : srcRow[x * 4 + 0];
       const uint8_t srcG = srcRow[x * 4 + 1];
-      const uint8_t srcB = srcRow[x * 4 + 2];
+      const uint8_t srcB = sourceIsBgra ? srcRow[x * 4 + 0] : srcRow[x * 4 + 2];
       const uint8_t srcA = srcRow[x * 4 + 3];
       if (srcA == 0u) {
         dstRow[x * 4 + 0] = 0u;

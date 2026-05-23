@@ -22,6 +22,22 @@ load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
 # resolve outside dev builds.
 package(default_visibility = ["//visibility:public"])
 
+config_setting(
+    name = "wasm_geode_enabled",
+    flag_values = {
+        "//donner/editor/wasm:enable_wasm": "true",
+        "//donner/svg/renderer:renderer_backend": "geode",
+    },
+)
+
+config_setting(
+    name = "wasm_tiny_skia_enabled",
+    flag_values = {
+        "//donner/editor/wasm:enable_wasm": "true",
+        "//donner/svg/renderer:renderer_backend": "tiny_skia",
+    },
+)
+
 exports_files(
     ["main.cc"],
     visibility = ["//donner/editor/wasm:__pkg__"],
@@ -56,6 +72,36 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
     ],
+)
+
+donner_cc_library(
+    name = "selection_transform_handles",
+    srcs = ["SelectionTransformHandles.cc"],
+    hdrs = ["SelectionTransformHandles.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "rotate_cursor_set",
+    srcs = ["RotateCursorSet.cc"],
+    hdrs = ["RotateCursorSet.h"],
+    deps = [
+        ":rotate_cursor_svg",
+        ":selection_transform_handles",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+    ] + select({
+        ":wasm_tiny_skia_enabled": [
+            "//third_party/emscripten-glfw",
+        ],
+        "//conditions:default": [
+            "@glfw",
+        ],
+    }),
 )
 
 donner_cc_library(
@@ -173,6 +219,7 @@ donner_cc_library(
     srcs = ["GlTextureCache.cc"],
     hdrs = ["GlTextureCache.h"],
     defines = select({
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
@@ -183,7 +230,12 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
     ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
+        ":wasm_geode_enabled": [
+            "//donner/svg/renderer:renderer_geode",
+            "//third_party/emscripten-glfw",
+            "@imgui//:imgui_wgpu_backend",
+        ],
+        ":wasm_tiny_skia_enabled": [
             "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
@@ -205,7 +257,7 @@ donner_cc_library(
         ":render_pane_gesture",
         "//donner/editor/gui:editor_window",
     ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
+        ":wasm_tiny_skia_enabled": [
             "//third_party/emscripten-glfw",
         ],
         "@platforms//os:macos": [
@@ -345,6 +397,7 @@ donner_cc_library(
     srcs = ["LayerInspectorPanel.cc"],
     hdrs = ["LayerInspectorPanel.h"],
     defines = select({
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
     }),
@@ -355,11 +408,16 @@ donner_cc_library(
         "//donner/svg/compositor",
         "@imgui",
     ] + select({
-        "//donner/editor/wasm:wasm_enabled": [
+        ":wasm_geode_enabled": [
+            "//donner/svg/renderer:renderer_geode",
+            "//third_party/emscripten-glfw",
+            "@imgui//:imgui_wgpu_backend",
+        ],
+        ":wasm_tiny_skia_enabled": [
             "//third_party/emscripten-glfw",
         ],
         "//donner/svg/renderer:renderer_backend_geode": [
-            "//donner/svg/renderer",
+            "//donner/svg/renderer:renderer_geode",
             "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [
@@ -462,7 +520,9 @@ donner_cc_library(
         ":menu_bar_presenter",
         ":render_coordinator",
         ":render_pane_presenter",
+        ":rotate_cursor_set",
         ":select_tool",
+        ":selection_transform_handles",
         ":sidebar_presenter",
         ":source_selection",
         ":text_editor",
@@ -546,6 +606,7 @@ donner_cc_library(
         ":editor_app",
         ":imgui_headers",
         ":selection_aabb",
+        ":selection_transform_handles",
         ":tool",
         ":undo_timeline",
         "//donner/base",
@@ -560,6 +621,7 @@ donner_cc_library(
     deps = [
         ":editor_app",
         ":selection_aabb",
+        ":selection_transform_handles",
         ":tracy_wrapper",
         "//donner/base",
         "//donner/css",
@@ -581,6 +643,14 @@ filegroup(
 # exposes `donner::embedded::kEditorNoticeText` as a
 # `std::span<const unsigned char>`. The editor's Help → About dialog
 # displays this.
+embed_resources(
+    name = "rotate_cursor_svg",
+    header_output = "donner/editor/RotateCursorSvg.h",
+    resources = {
+        "kRotateCursorSvg": "rotate_cursor.svg",
+    },
+)
+
 embed_resources(
     name = "notice",
     header_output = "donner/editor/Notice.h",

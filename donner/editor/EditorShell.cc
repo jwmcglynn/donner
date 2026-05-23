@@ -15,6 +15,7 @@
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TracyWrapper.h"
@@ -41,6 +42,24 @@ constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
 constexpr int kMaxSaveSyncFlushPasses = 4;
+
+ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
+  if (intent.kind == SelectionTransformHandleKind::Rotate) {
+    return ImGuiMouseCursor_ResizeAll;
+  }
+
+  if (intent.kind != SelectionTransformHandleKind::Resize) {
+    return ImGuiMouseCursor_Arrow;
+  }
+
+  switch (intent.corner) {
+    case SelectionTransformCorner::TopLeft:
+    case SelectionTransformCorner::BottomRight: return ImGuiMouseCursor_ResizeNWSE;
+    case SelectionTransformCorner::TopRight:
+    case SelectionTransformCorner::BottomLeft: return ImGuiMouseCursor_ResizeNESW;
+  }
+  return ImGuiMouseCursor_ResizeAll;
+}
 
 std::optional<std::string> LoadFile(const std::string& filename) {
   std::ifstream file(filename, std::ios::binary);
@@ -72,11 +91,13 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       app_(),
       selectTool_(),
       textEditor_(),
-      textures_(),
+      textures_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
+      rotateCursorSet_(),
       documentSyncController_(LoadFile(options_.svgPath).value_or("")),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
+      layerInspectorPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
@@ -142,6 +163,9 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   app_.setCleanSourceText(textEditor_.getText());
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   textures_.initialize();
+  if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
+    std::fprintf(stderr, "[editor] custom rotate cursor unavailable; using fallback cursor\n");
+  }
 
   // On-demand render loop: the main thread sleeps in `window.waitEvents()`
   // between user inputs, so the worker thread has to nudge it when a
@@ -220,8 +244,11 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
       .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
   };
-  const std::optional<SelectTool::ActiveDragPreview> activeDragPreview =
+  const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
       selectTool_.activeDragPreview();
+  const std::optional<SelectTool::ActiveDragPreview> activeDragPreview =
+      renderCoordinator_.compositedPresentation().activePreviewForPresentation(
+          liveActiveDragPreview);
   const std::optional<SelectTool::ActiveDragPreview> displayedDragPreview =
       renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
   readback.tiles.reserve(textures_.tiles().size());
@@ -396,7 +423,7 @@ void EditorShell::handleGlobalShortcuts() {
       if (app_.canUndo()) {
         app_.undo();
       }
-    } else if (pressedZ && cmd && shift) {
+    } else if (pressedZ && cmd && shift && app_.canRedo()) {
       app_.redo();
     }
   }
@@ -506,19 +533,46 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   };
 
   const bool toolEligible = paneHovered && !interactionController_.panning() && !spaceHeld;
+  const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint) {
+    const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
+    if (boundsCache.lastSelection != app_.selectedElements()) {
+      return SelectionTransformHandleIntent{};
+    }
+    return HitTestSelectionTransformHandles(boundsCache.displayedBoundsDoc, documentPoint,
+                                            interactionController_.viewport().pixelsPerDocUnit());
+  };
+  if (toolEligible && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    const SelectionTransformHandleIntent hoverIntent =
+        cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
+    if (hoverIntent.kind != SelectionTransformHandleKind::None) {
+      if (hoverIntent.kind == SelectionTransformHandleKind::Rotate &&
+          rotateCursorSet_.setRotateCursor(hoverIntent.corner)) {
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+      } else {
+        rotateCursorSet_.clearIfActive();
+        ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverIntent));
+      }
+    } else {
+      rotateCursorSet_.clearIfActive();
+    }
+  } else if (!toolEligible) {
+    rotateCursorSet_.clearIfActive();
+  }
   if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     MouseModifiers modifiers;
     modifiers.shift = ImGui::GetIO().KeyShift;
+    modifiers.option = ImGui::GetIO().KeyAlt;
+    modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
   }
 
   // Design doc 0033 §M8 — click→drag handoff doesn't wait for raster.
   //
   // Fast path: if the user clicks inside the bounds of the currently-
-  // selected element, we can start the re-drag IMMEDIATELY without
-  // gating on `!isBusy()`. The check uses `SelectionBoundsCache::
-  // displayedBoundsDoc` — populated on idle frames — so the call
-  // doesn't touch the registry the worker is mid-mutating. The
+  // selected element and outside cached later-painted bounds, we can
+  // start the re-drag IMMEDIATELY without gating on `!isBusy()`. The
+  // check uses `SelectionBoundsCache` — populated on idle frames — so
+  // the call doesn't touch the registry the worker is mid-mutating. The
   // previous M8 attempt failed because it called the live
   // `SnapshotSelectionWorldBounds` during the busy window; the
   // cache-based check fixes the race.
@@ -534,10 +588,14 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     const auto& pendingClick = *interactionController_.pendingClick();
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
+    const SelectionTransformHandleIntent pendingHandleIntent =
+        cacheMatchesSelection ? cachedHandleIntentAt(pendingClick.documentPoint)
+                              : SelectionTransformHandleIntent{};
     const bool tookFastRedrag =
-        cacheMatchesSelection && selectTool_.tryStartRedragOnSelected(
-                                     app_, pendingClick.documentPoint, pendingClick.modifiers,
-                                     boundsCache.displayedBoundsDoc);
+        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
+                                             pendingClick.modifiers, boundsCache.displayedBoundsDoc,
+                                             boundsCache.displayedOccludingBoundsDoc);
     if (tookFastRedrag) {
       lastPostedScreenPoint_.reset();
       interactionController_.clearPendingClick();
@@ -553,7 +611,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
           app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
           RenderCoordinator::OverlayUploadMode::MatchDisplayedVersion,
-          selectTool_.activeDragPreview());
+          selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
       interactionController_.clearPendingClick();
     } else {
       // Worker is busy with a (likely-stale) prewarm render at the
@@ -582,29 +640,39 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const ImVec2 currentScreen = ImGui::GetMousePos();
       if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
                                      renderCoordinator_.asyncRenderer().isBusy())) {
-        selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true);
+        MouseModifiers modifiers;
+        modifiers.shift = ImGui::GetIO().KeyShift;
+        modifiers.option = ImGui::GetIO().KeyAlt;
+        modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+        selectTool_.onMouseMove(app_, screenToDocument(currentScreen), /*buttonHeld=*/true,
+                                modifiers);
         lastPostedScreenPoint_ = currentScreen;
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
           renderCoordinator_.refreshSelectionBoundsCache(app_);
+          renderCoordinator_.rasterizeOverlayForCurrentSelection(
+              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
+              selectTool_.activeTransformBoundsPreview());
         }
       }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
+      const bool previewHadVisualChange =
+          previewBeforeRelease.has_value() &&
+          (!previewBeforeRelease->documentFromCachedDocument.isIdentity() ||
+           previewBeforeRelease->translation != Vector2d::Zero());
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
       lastPostedScreenPoint_.reset();
       if (previewBeforeRelease.has_value()) {
-        // The DOM was already updated every drag frame via
-        // `SelectTool::onMouseMove` → `applyMutation`, so drag release
-        // needs to do nothing beyond recording undo history (already done
-        // in `onMouseUp`). The compositor has the dragged entity's DOM
-        // position baked in; its cached bitmap is reused via an internal
-        // compose-offset delta for pure-translation drags (see
-        // `CompositorController::rasterizeLayer` + fast path), which
-        // means the display is byte-for-byte identical to a fresh render
-        // of the mutated DOM at identity composition. No "settling" hack
-        // needed — the compositor view IS the settled view.
-        if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
+        if (previewHadVisualChange) {
+          renderCoordinator_.compositedPresentation().beginSettling(
+              previewBeforeRelease, app_.document().currentFrameVersion());
+        }
+        if (!renderCoordinator_.asyncRenderer().isBusy() &&
+            (app_.flushFrame() || previewHadVisualChange)) {
+          renderCoordinator_.compositedPresentation().beginSettling(
+              previewBeforeRelease, app_.document().currentFrameVersion());
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
               app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
@@ -623,7 +691,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                           textures_);
   }
 
-  const auto activeDragPreview = selectTool_.activeDragPreview();
+  const auto liveActiveDragPreview = selectTool_.activeDragPreview();
+  const auto activeDragPreview =
+      renderCoordinator_.compositedPresentation().activePreviewForPresentation(
+          liveActiveDragPreview);
   const auto displayedDragPreview =
       renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
   RenderPanePresenterState paneState{
@@ -959,7 +1030,7 @@ void EditorShell::runFrame() {
       .sourcePaneFocused = textEditor_.isFocused(),
       .canSave = app_.hasDocument(),
       .canUndo = app_.canUndo(),
-      .canRedo = app_.undoTimeline().entryCount() > 0,
+      .canRedo = app_.canRedo(),
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -980,7 +1051,7 @@ void EditorShell::runFrame() {
   if (menuActions.undo && app_.canUndo()) {
     app_.undo();
   }
-  if (menuActions.redo) {
+  if (menuActions.redo && app_.canRedo()) {
     app_.redo();
   }
   if (menuActions.cut) {

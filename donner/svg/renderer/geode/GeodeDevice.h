@@ -7,6 +7,7 @@
 #include <webgpu/webgpu.hpp>
 
 #include "donner/svg/renderer/geode/GeodeCounters.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
@@ -358,8 +359,8 @@ private:
 
   // Deferred-destroy queues: resources enqueued via deferDestroy() are held
   // alive until drainDeferredDestroys() drops them at the next frame boundary.
-  std::vector<wgpu::Buffer> pendingBuffers_;
-  std::vector<wgpu::Texture> pendingTextures_;
+  std::vector<ScopedWgpuHandle<wgpu::Buffer>> pendingBuffers_;
+  std::vector<ScopedWgpuHandle<wgpu::Texture>> pendingTextures_;
 };
 
 }  // namespace donner::geode

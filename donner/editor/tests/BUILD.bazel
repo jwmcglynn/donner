@@ -134,6 +134,24 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "selection_transform_handles_tests",
+    srcs = ["SelectionTransformHandles_tests.cc"],
+    deps = [
+        "//donner/editor:selection_transform_handles",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "rotate_cursor_set_tests",
+    srcs = ["RotateCursorSet_tests.cc"],
+    deps = [
+        "//donner/editor:rotate_cursor_set",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "source_selection_tests",
     srcs = ["SourceSelection_tests.cc"],
     data = ["//:donner_splash.svg"],

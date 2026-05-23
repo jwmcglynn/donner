@@ -515,7 +515,7 @@ protected:
                           std::string_view expectedId) {
     RecordAction(phase);
     ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": click while async renderer is busy";
-    selectTool_.onMouseDown(app_, documentPoint, MouseModifiers{});
+    selectTool_.onMouseDown(app_, documentPoint, ViewportMouseModifiers());
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
     EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase;
     selectTool_.onMouseUp(app_, documentPoint);
@@ -526,11 +526,12 @@ protected:
                           const Vector2d& endDocumentPoint, std::string_view expectedId) {
     RecordAction(phase);
     ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": drag while async renderer is busy";
-    selectTool_.onMouseDown(app_, startDocumentPoint, MouseModifiers{});
+    const MouseModifiers modifiers = ViewportMouseModifiers();
+    selectTool_.onMouseDown(app_, startDocumentPoint, modifiers);
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
     EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase;
 
-    selectTool_.onMouseMove(app_, endDocumentPoint, /*buttonHeld=*/true);
+    selectTool_.onMouseMove(app_, endDocumentPoint, /*buttonHeld=*/true, modifiers);
     ASSERT_TRUE(app_.flushFrame()) << phase;
     selectTool_.onMouseUp(app_, endDocumentPoint);
     controller_->applyPendingWritebacks(app_, selectTool_, textEditor_);
@@ -541,6 +542,12 @@ protected:
                         const Vector2d& endScreenPoint, std::string_view expectedId) {
     DragDocumentPoints(phase, viewport_.screenToDocument(startScreenPoint),
                        viewport_.screenToDocument(endScreenPoint), expectedId);
+  }
+
+  MouseModifiers ViewportMouseModifiers() const {
+    MouseModifiers modifiers;
+    modifiers.pixelsPerDocUnit = viewport_.pixelsPerDocUnit();
+    return modifiers;
   }
 
   void ReplaceSourceText(std::string_view phase, std::string_view oldText,
@@ -670,6 +677,9 @@ protected:
       request.dragPreview = RenderRequest::DragPreview{
           .entity = preview->entity,
           .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+          .translation = preview->translation,
+          .documentFromCachedDocument = preview->documentFromCachedDocument,
+          .dragGeneration = preview->dragGeneration,
       };
     }
     return request;

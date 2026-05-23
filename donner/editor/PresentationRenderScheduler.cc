@@ -26,7 +26,7 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
       needsSettledSelectionRefresh ||
       presentation.shouldPrewarm(input.selectedEntity, input.currentVersion,
                                  input.currentCanvasSize,
-                                 /*dragActive=*/false);
+                                 /*dragActive=*/input.activeDragPreview.has_value());
   decision.needsRegularRender = input.currentVersion != lastRenderedVersion_ ||
                                 input.currentCanvasSize != lastRenderedCanvasSize_;
 
@@ -35,12 +35,17 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
         .entity = input.activeDragPreview->entity,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
         .translation = input.activeDragPreview->translation,
+        .documentFromCachedDocument = input.activeDragPreview->documentFromCachedDocument,
+        .dragGeneration = input.activeDragPreview->dragGeneration,
     };
   } else if (decision.needsCompositedPrewarm && input.selectedEntity != entt::null) {
     decision.dragPreview = RenderRequest::DragPreview{
         .entity = input.selectedEntity,
         .interactionKind = svg::compositor::InteractionHint::Selection,
     };
+  }
+  if (input.activeDragPreview.has_value() && !decision.needsCompositedLayerCapture) {
+    decision.needsRegularRender = false;
   }
 
   return decision;
