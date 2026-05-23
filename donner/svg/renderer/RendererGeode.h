@@ -270,8 +270,16 @@ public:
    */
   [[nodiscard]] std::shared_ptr<const RendererTextureSnapshot> takeTextureSnapshot() override;
 
-  /// Geode presentation is GPU-native; editor handoff must not use CPU readback/upload.
-  [[nodiscard]] bool requiresTextureSnapshotPresentation() const override { return true; }
+  /// Geode presentation is GPU-native on native WGPU editor builds.
+  [[nodiscard]] bool requiresTextureSnapshotPresentation() const override {
+#ifdef __EMSCRIPTEN__
+    // The wasm editor presents through ImGui's WebGL backend, so WebGPU
+    // texture snapshots cannot be handed directly to the UI layer.
+    return false;
+#else
+    return true;
+#endif
+  }
 
 private:
   struct Impl;

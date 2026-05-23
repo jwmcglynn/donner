@@ -3242,6 +3242,12 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
 }
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
+#ifdef __EMSCRIPTEN__
+  // Emscripten's editor UI uses WebGL, not ImGui's WGPU backend, so a
+  // WebGPU texture snapshot cannot be presented directly by the UI. Return
+  // null to let compositor/editor callers use `takeSnapshot()` CPU pixels.
+  return nullptr;
+#else
   if (!impl_->device || !impl_->target || impl_->hostTarget || impl_->pixelWidth <= 0 ||
       impl_->pixelHeight <= 0) {
     return nullptr;
@@ -3255,6 +3261,7 @@ std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapsho
 
   return std::make_shared<RendererGeodeTextureSnapshot>(impl_->device, std::move(texture),
                                                         dimensions, impl_->textureFormat);
+#endif
 }
 
 RendererBitmap RendererGeode::takeSnapshot() const {
