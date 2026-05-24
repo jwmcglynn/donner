@@ -1,6 +1,6 @@
 # Design: Geode — GPU-Native Rendering Backend
 
-**Status:** Phases 0–3d + 5/6/7 landed on main (Phase 0 #481; Phase 1 #484 + #492; Phase 2 #497; Phase 3 clip/mask #506; Phase 5b MSAA #504; Phase 3d blend modes + miter + markers #541; Phase 5/6/7 completion + parity push #547); vendor story swapped from Dawn-from-source to prebuilt wgpu-native in #510; first real-GPU verification on 2026-04-17 (Intel Arc A380 / Mesa Xe-KMD Vulkan — smoke + 1-band path-fill green; multi-band paths hung on Xe-KMD sample_mask output; vendor-gated alpha-coverage shader fallback shipped in #536). `RendererGeode::drawText` (text → Slug fill) and `pushFilterLayer` (offscreen filter graph) are now **implemented**, not stubs; clip, mask, blend modes, markers, patterns, gradients, and images all run live. resvg-suite parity as of 2026-05-15: **1,345 passing / 0 failing / 291 skipped** (268 text gated off pending root-cause of a large per-glyph divergence — **not AA**; pixelmatch already excludes AA — plus 23 per-test pixel divergences) — see [0021 §Geode parity](0021-resvg_feature_gaps.md#geode-parity--priority-0). Remaining: the text-suite divergence (root cause unidentified), color-emoji/bitmap glyphs, and the filter-primitive divergences.
+**Status:** Phases 0–3d + 5/6/7 landed on main (Phase 0 #481; Phase 1 #484 + #492; Phase 2 #497; Phase 3 clip/mask #506; Phase 5b MSAA #504; Phase 3d blend modes + miter + markers #541; Phase 5/6/7 completion + parity push #547); vendor story swapped from Dawn-from-source to prebuilt wgpu-native in #510; first real-GPU verification on 2026-04-17 (Intel Arc A380 / Mesa Xe-KMD Vulkan — smoke + 1-band path-fill green; multi-band paths hung on Xe-KMD sample_mask output; vendor-gated alpha-coverage shader fallback shipped in #536). `RendererGeode::drawText` (text → Slug fill) and `pushFilterLayer` (offscreen filter graph) are now **implemented**, not stubs; clip, mask, blend modes, markers, patterns, gradients, and images all run live. resvg-suite parity as of 2026-05-15: **1,345 passing / 0 failing / 291 skipped** (268 text gated off pending the text-suite un-gate — root cause now **identified**: the bulk is the proven 4× MSAA edge floor (**not AA** in the hand-wavy sense — pixelmatch already excludes AA; this is a quantified 64-step edge-alpha quantization), and the doc's "large per-glyph divergence" was a wrong-metric artifact of measuring geode-vs-resvg-golden instead of geode-vs-tiny-skia — plus 23 per-test pixel divergences) — see [0021 §Geode parity](0021-resvg_feature_gaps.md#geode-parity--priority-0). The G1 structural tail is cleared (one real bug — pattern-on-text — fixed; default-fill/vertical/CJK were phantoms); un-gate proceeds via [Phase 4b Strategy B](#phase-4b-text-suite-un-gate-geode-vs-tiny-skia-comparison--strategy-b). Remaining: text-suite un-gate, color-emoji/bitmap glyphs, and the filter-primitive divergences.
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
 **Last updated:** 2026-05-15
@@ -1445,6 +1445,64 @@ cleanup.
   parity push finishes.
 - [ ] Optimize: instanced glyph rendering (per-character position/transform/color).
   Complementary to the cache above; requires the Phase 5 batch-draw refactor.
+
+### Phase 4b: Text-suite un-gate (geode-vs-tiny-skia comparison) — Strategy B
+
+**Goal:** run the resvg `text/*` suite (252 cases) on the Geode variant instead of
+skipping it via `geodeCategoryGate`'s `requireFeature(Text)`, measured at the *correct*
+parity metric. As of 2026-05-24 the G1-struct tail is essentially cleared: default-fill
+stroked text, `writing-mode=tb` vertical, and CJK `xml_lang_ja` were all **phantoms**
+(the doc's ~2.3k / ~19k figures were geode-vs-resvg-golden, not geode-vs-tiny-skia — see
+[0021 §G1](0021-resvg_feature_gaps.md#g1-geode-text-parity--split-into-edge-sampling-accepted--structural-bugs));
+the one genuine bug, pattern-on-rotated-text, is fixed (commit `1e2eb2b6f`). What remains
+is the un-gate *mechanism*.
+
+**Why not the obvious "flip the bit":** the suite compares the active backend against the
+static resvg golden using per-test budgets tuned for tiny-skia. Geode-vs-golden therefore
+folds in (a) the ~1313 px tiny-skia-vs-golden baseline offset those budgets already
+absorb for tiny-skia, plus (b) the proven 4× MSAA edge floor. Reusing
+`widenThresholdForGeode` (a blanket per-pixel threshold bump to 0.3) to swallow both is
+the [G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds) masking
+pattern — pixelmatch already excludes AA, so a 0.3 threshold hides *real* diffs (it is how
+the pattern-leak bug would have hidden had it been smaller).
+
+**Strategy B — compare Geode text output against a tiny-skia render, not the golden.**
+tiny-skia is the validated parity oracle: it passes all 252 text tests at the suite's
+strict per-test budgets, so geode-vs-tiny-skia + tiny-skia-vs-golden transitively
+validates Geode. Comparing directly removes the baseline contamination, leaving only the
+proven 4× edge floor, which a single documented tolerance covers.
+
+**Execution:**
+
+1. **Characterize (measure first).** Run all 252 `text/*` cases geode-vs-tiny-skia at
+   threshold 0 / max 0; bucket into *pass-clean* (< default budget), *edge-floor* (the 4×
+   quantization band, ~9–700 px hugging glyph edges), and *genuine-bug* (> floor,
+   off-edge — investigate each as its own repro). Every prior assumption this push
+   collapsed under exactly this measurement; do it before authoring any tolerance.
+2. **Add a geode-vs-tiny-skia comparison mode** to the text path of the suite: on the
+   Geode variant, for `text/*` (and the `*-on-text*` / `*-on-tspan*` filename gates),
+   render the reference via tiny-skia in-process and pixelmatch against the Geode render,
+   reusing `donner/editor/tests:bitmap_golden_compare` (`CompareBitmapToBitmap`). CPU
+   variants keep golden comparison unchanged.
+3. **Replace the Text `requireFeature` gate** in `geodeCategoryGate` with the
+   geode-vs-tiny-skia mode + a single *documented, quantified* 4× edge tolerance (named
+   for the proven sample-count tradeoff — not "AA drift"). No blanket
+   `widenThresholdForGeode` for text.
+4. **Narrow gates only for the genuine-bug bucket** (≈empty now per the cleared tail),
+   each linked to a committed repro. Un-gating before the structural fixes would have made
+   ~162 per-test gates; the tail is cleared, so this is now tractable.
+5. **Advertise `RendererBackendFeature::Text`** on Geode so the `*-on-text*`
+   cross-category cases un-gate too.
+
+**Risk:** changing the text oracle for the Geode variant means a tiny-skia text
+regression could mask a Geode one. Mitigated: tiny-skia text is independently gated at
+strict thresholds on its own variants, so a tiny-skia regression fails there first.
+
+**Out of scope (separate items):** color-emoji / bitmap glyphs ([G4](0021-resvg_feature_gaps.md#g4-color-emoji--bitmap-fonts-structural),
+`drawText` skips CBDT at `RendererGeode.cc:3162`); the CJK `xml:lang` font-fallback gap
+(CPU-tier, not Geode-specific); the latent vertical-text + `lengthAdjust=spacingAndGlyphs`
+transform-order divergence (`Scale*Rotate*Translate` vs tiny-skia's stretch-on-outline —
+no current test triggers it).
 
 ### Phase 5: ECS Cache Integration and Performance
 

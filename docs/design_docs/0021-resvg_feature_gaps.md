@@ -162,10 +162,14 @@ before fixing.
    doc's px figures are geode-vs-resvg; two of three "bugs" evaporated under the
    correct metric). Live candidates: CJK (`xml_lang_ja`, bitmap-glyph skip / G4) and
    rotate+pattern (~105k). Vertical is resolved (9 px floor). **← active.**
-6. **Un-gate**: flip `Text` → `true`; passing tests run, G1-edge tests get the
-   documented 4×-MSAA threshold, remaining G1-struct failures keep narrow gates
-   linked to their repro. (Un-gating before the structural fixes would just create
-   ~162 per-test gates.)
+6. **Un-gate** via **Strategy B** (geode-vs-tiny-skia runtime comparison, not the
+   golden) — full plan in [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-text-suite-un-gate-geode-vs-tiny-skia-comparison--strategy-b).
+   Rationale: reusing `widenThresholdForGeode` (blanket 0.3 per-pixel threshold) to
+   absorb the ~1313 px tiny-skia-vs-golden baseline + the 4× edge floor is the [G5](#g5-audit-the-aa-justified-geode-thresholds)
+   masking pattern. Comparing Geode directly against a tiny-skia render (the validated
+   oracle) removes the baseline contamination, leaving only the proven 4× floor under a
+   single documented tolerance. Step 1 of that plan is a full 252-test geode-vs-tiny-skia
+   characterization — the tail is cleared, so this is now tractable.
 
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 
