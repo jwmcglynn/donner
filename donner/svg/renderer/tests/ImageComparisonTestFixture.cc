@@ -13,6 +13,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
@@ -379,8 +380,8 @@ std::string escapeFilename(std::string filename) {
   return filename;
 }
 
-bool isActiveBackendAllowed(const ImageComparisonParams& params) {
-  switch (ActiveRendererBackend()) {
+bool isBackendAllowed(RendererBackend backend, const ImageComparisonParams& params) {
+  switch (backend) {
     case RendererBackend::TinySkia: return params.allowTinySkia;
     case RendererBackend::Geode: return params.allowGeode;
   }
@@ -388,7 +389,8 @@ bool isActiveBackendAllowed(const ImageComparisonParams& params) {
   return false;
 }
 
-std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFeatures) {
+std::optional<RendererBackendFeature> missingRequiredFeature(RendererBackend backend,
+                                                             uint32_t requiredFeatures) {
   constexpr RendererBackendFeature kFeatures[] = {
       RendererBackendFeature::Text,
       RendererBackendFeature::TextFull,
@@ -398,7 +400,7 @@ std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFe
 
   for (RendererBackendFeature feature : kFeatures) {
     if ((requiredFeatures & RendererBackendFeatureMask(feature)) != 0u &&
-        !ActiveRendererSupportsFeature(feature)) {
+        !RendererBackendSupportsFeature(backend, feature)) {
       return feature;
     }
   }
@@ -406,26 +408,27 @@ std::optional<RendererBackendFeature> missingRequiredFeature(uint32_t requiredFe
   return std::nullopt;
 }
 
-std::optional<std::string> skipReasonIfUnsupported(const ImageComparisonParams& params) {
+std::optional<std::string> skipReasonIfUnsupported(RendererBackend backend,
+                                                   const ImageComparisonParams& params) {
   if (params.shouldSkip()) {
     return params.reason.empty() ? std::string("Test case disabled") : std::string(params.reason);
   }
 
-  if (!isActiveBackendAllowed(params)) {
+  if (!isBackendAllowed(backend, params)) {
     const std::string_view reason = params.backendRequirementReason.empty()
                                         ? std::string_view("this test case")
                                         : params.backendRequirementReason;
-    return std::string(ActiveRendererBackendName()) + " backend does not support " +
+    return std::string(RendererBackendName(backend)) + " backend does not support " +
            std::string(reason);
   }
 
   const std::optional<RendererBackendFeature> missingFeature =
-      missingRequiredFeature(params.requiredFeatures);
+      missingRequiredFeature(backend, params.requiredFeatures);
   if (missingFeature.has_value()) {
     const std::string_view reason = params.backendRequirementReason.empty()
                                         ? RendererBackendFeatureName(*missingFeature)
                                         : params.backendRequirementReason;
-    return std::string(ActiveRendererBackendName()) + " backend does not support " +
+    return std::string(RendererBackendName(backend)) + " backend does not support " +
            std::string(reason);
   }
 
@@ -473,8 +476,33 @@ std::optional<TerminalPreviewConfig> PreviewConfigFromEnv(const ImageComparisonP
   return config;
 }
 
-std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTestcase>& info) {
-  std::string name = info.param.svgFilename.stem().string();
+std::string_view ComparisonModeName(ComparisonMode mode) {
+  switch (mode) {
+    case ComparisonMode::TinyGolden: return "TinyGolden";
+    case ComparisonMode::GeodeGolden: return "GeodeGolden";
+    case ComparisonMode::GeodeTinyParity: return "GeodeTinyParity";
+  }
+  return "Unknown";
+}
+
+const std::vector<ComparisonMode>& ActiveComparisonModes() {
+  static const std::vector<ComparisonMode> modes = [] {
+#ifdef DONNER_GEODE_BACKEND_AVAILABLE
+    // Geode build: golden vs tiny-skia (ground truth) AND golden vs geode
+    // (today's behavior). GeodeTinyParity is added in Phase 4b increment 4.
+    return std::vector<ComparisonMode>{ComparisonMode::TinyGolden, ComparisonMode::GeodeGolden};
+#else
+    return std::vector<ComparisonMode>{ComparisonMode::TinyGolden};
+#endif
+  }();
+  return modes;
+}
+
+std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTestParam>& info) {
+  const ImageComparisonTestcase& testcase = std::get<0>(info.param);
+  const ComparisonMode mode = std::get<1>(info.param);
+
+  std::string name = testcase.svgFilename.stem().string();
 
   // Sanitize the test name, notably replacing '-' with '_'.
   std::transform(name.begin(), name.end(), name.begin(), [](char c) {
@@ -485,7 +513,15 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
     }
   });
 
-  if (info.param.params.shouldSkip()) {
+  // Emit a mode suffix only when the build runs more than one mode, so the
+  // single-mode (CPU) build keeps the exact historical names that
+  // `--test_filter` patterns and golden tooling rely on.
+  if (ActiveComparisonModes().size() > 1) {
+    name += "_";
+    name += ComparisonModeName(mode);
+  }
+
+  if (testcase.params.shouldSkip()) {
     return "DISABLED_" + name;
   } else {
     return name;
@@ -611,14 +647,28 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
 void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
                                                   const std::filesystem::path& svgFilename,
                                                   const char* goldenImageFilename) {
-  renderAndCompare(document, svgFilename, goldenImageFilename, GetParam().params);
+  const ImageComparisonTestcase& testcase = std::get<0>(GetParam());
+  const ComparisonMode mode = std::get<1>(GetParam());
+
+  // The test case carries the *base* (tiny-skia / strict) params. Geode-backed
+  // modes additionally apply the deferred geode gate (feature gates + threshold
+  // widening) so the `TinyGolden` mode keeps strict golden thresholds.
+  ImageComparisonParams effectiveParams = testcase.params;
+  if (ModeUsesGeode(mode) && testcase.geodeGate && !effectiveParams.skip) {
+    testcase.geodeGate(effectiveParams);
+  }
+
+  renderAndCompare(document, svgFilename, goldenImageFilename, effectiveParams, mode);
 }
 
 void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
                                                   const std::filesystem::path& svgFilename,
                                                   const char* goldenImageFilename,
-                                                  const ImageComparisonParams& params) {
-  if (const std::optional<std::string> skipReason = skipReasonIfUnsupported(params);
+                                                  const ImageComparisonParams& params,
+                                                  ComparisonMode mode) {
+  const RendererBackend backend = BackendForMode(mode);
+
+  if (const std::optional<std::string> skipReason = skipReasonIfUnsupported(backend, params);
       skipReason.has_value()) {
     GTEST_SKIP() << *skipReason;
   }
@@ -632,7 +682,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   // should eventually be fixed.
   const char* const effectiveGoldenFilename = goldenImageFilename;
 
-  std::cout << "[  COMPARE ] " << svgFilename.string() << " [" << ActiveRendererBackendName()
+  std::cout << "[  COMPARE ] " << svgFilename.string() << " [" << RendererBackendName(backend)
             << "]: ";  // No endl yet, the line will be continued
 
   // The canvas size to draw into, as a recommendation instead of a strict guideline, since some
@@ -641,7 +691,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     document.setCanvasSize(params.canvasSize->x, params.canvasSize->y);
   }
 
-  const RendererBitmap snapshot = NormalizeSnapshot(RenderDocumentWithActiveBackend(document));
+  const RendererBitmap snapshot = NormalizeSnapshot(RenderDocumentWithBackend(document, backend));
   ASSERT_EQ(snapshot.rowBytes % 4u, 0u);
 
   const size_t strideInPixels = snapshot.rowBytes / 4u;
@@ -723,7 +773,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     const bool suppressVerboseOutput = suppressVerboseFailureOutputForLlm();
     if (!suppressVerboseOutput) {
       std::cout << "=> Re-rendering with verbose backend output\n";
-      (void)RenderDocumentWithActiveBackend(document, /*verbose=*/true);
+      (void)RenderDocumentWithBackend(document, backend, /*verbose=*/true);
     } else {
       printVerboseFailureOutputOverrideHint();
     }

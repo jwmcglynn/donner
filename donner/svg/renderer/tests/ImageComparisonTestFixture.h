@@ -5,16 +5,77 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <ostream>
 #include <string>
 #include <string_view>
+#include <tuple>
+#include <vector>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 namespace donner::svg {
+
+/**
+ * @brief Which renderer output a parameterized image-comparison run compares.
+ *
+ * The geode-enabled build runs each test under multiple modes (the matrix from
+ * docs/design_docs/0017 §Phase 4b); the pure-CPU build runs `TinyGolden` only.
+ */
+enum class ComparisonMode : uint8_t {
+  /// tiny-skia render vs the committed resvg golden (ground truth; every build).
+  TinyGolden,
+  /// geode render vs the committed golden (today's geode behavior; geode build).
+  GeodeGolden,
+  /// geode render vs an in-process tiny-skia render, golden ignored (the parity
+  /// metric that un-gates text). Defined here but NOT activated until Phase 4b
+  /// increment 4.
+  GeodeTinyParity,
+};
+
+/**
+ * @brief The renderer backend a comparison mode renders with.
+ *
+ * @param mode The comparison mode.
+ * @return The backend used to produce the "actual" image for the mode.
+ */
+constexpr RendererBackend BackendForMode(ComparisonMode mode) {
+  return mode == ComparisonMode::TinyGolden ? RendererBackend::TinySkia : RendererBackend::Geode;
+}
+
+/**
+ * @brief Whether a comparison mode renders with the geode backend.
+ *
+ * The geode feature/threshold gates apply to geode-backed modes only, never to
+ * `TinyGolden` (tiny-skia supports every feature at strict golden thresholds).
+ *
+ * @param mode The comparison mode.
+ * @return True if the mode uses the geode backend.
+ */
+constexpr bool ModeUsesGeode(ComparisonMode mode) {
+  return BackendForMode(mode) == RendererBackend::Geode;
+}
+
+/**
+ * @brief Short suffix appended to a test name to disambiguate modes.
+ *
+ * @param mode The comparison mode.
+ * @return Suffix string (e.g. "TinyGolden").
+ */
+std::string_view ComparisonModeName(ComparisonMode mode);
+
+/**
+ * @brief The comparison modes active for the current build.
+ *
+ * Pure-CPU build: `{ TinyGolden }`. Geode-enabled build:
+ * `{ TinyGolden, GeodeGolden }` (GeodeTinyParity is added in increment 4).
+ *
+ * @return The active modes, in run order.
+ */
+const std::vector<ComparisonMode>& ActiveComparisonModes();
 
 /**
  * @brief Default maximum number of mismatched pixels allowed in image comparisons.
@@ -296,7 +357,13 @@ struct ImageComparisonParams {
  */
 struct ImageComparisonTestcase {
   std::filesystem::path svgFilename;  //!< Path to the SVG file for this test case.
-  ImageComparisonParams params;       //!< Parameters for this specific test case.
+  ImageComparisonParams params;       //!< Base (tiny-skia / CPU) parameters for this test case.
+
+  /// Geode-only parameter mutator (feature gates + threshold widening). Applied
+  /// at runtime *only* for geode-backed modes, so the `TinyGolden` mode keeps
+  /// the strict golden thresholds. Empty when the category/file has no geode
+  /// gate. See `getTestsInCategory`.
+  std::function<void(ImageComparisonParams&)> geodeGate;
 
   /**
    * @brief Comparison operator for sorting test cases by filename.
@@ -314,14 +381,24 @@ struct ImageComparisonTestcase {
 };
 
 /**
- * @brief Generates a test name from the SVG filename in the test parameter info.
+ * @brief The parameterized fixture's GTest parameter: a test case + its mode.
  *
- * This is used by GTest to create human-readable test names for parameterized tests.
+ * `INSTANTIATE_TEST_SUITE_P` sites build this via
+ * `Combine(ValuesIn(getTestsInCategory(...)), ValuesIn(ActiveComparisonModes()))`.
+ */
+using ImageComparisonTestParam = std::tuple<ImageComparisonTestcase, ComparisonMode>;
+
+/**
+ * @brief Generates a test name from the SVG filename (and mode when >1 active).
  *
- * @param info Test parameter information containing the \ref ImageComparisonTestcase.
+ * The mode suffix is emitted only when the build runs more than one comparison
+ * mode, so single-mode (CPU) builds keep the exact historical test names that
+ * `--test_filter` patterns and golden tooling rely on.
+ *
+ * @param info Test parameter information containing the test case + mode.
  * @return A string suitable for use as a test name.
  */
-std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTestcase>& info);
+std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTestParam>& info);
 
 /**
  * @brief Terminal preview configuration derived from the environment.
@@ -351,7 +428,7 @@ std::string RenderTerminalComparisonGridForTesting(
  * to be tested with different comparison parameters. It provides helper methods for loading
  * SVG documents and performing the rendering and comparison.
  */
-class ImageComparisonTestFixture : public testing::TestWithParam<ImageComparisonTestcase> {
+class ImageComparisonTestFixture : public testing::TestWithParam<ImageComparisonTestParam> {
 protected:
   /**
    * @brief Loads an SVG document from the given filename.
@@ -367,7 +444,8 @@ protected:
   /**
    * @brief Renders the given SVG document and compares it against a golden image.
    *
-   * Uses default comparison parameters.
+   * Uses the test case's effective parameters and comparison mode from the GTest
+   * parameter. Only valid for parameterized (`TEST_P`) tests.
    *
    * @param document The \ref SVGDocument to render.
    * @param svgFilename The original path of the SVG file (used for naming output files).
@@ -380,13 +458,21 @@ protected:
    * @brief Renders the given SVG document and compares it against a golden image using specified
    * parameters.
    *
+   * The `mode` selects which backend renders the "actual" image; it defaults to
+   * the build's primary backend (TinySkia on CPU, Geode on the geode build) so
+   * non-parameterized `TEST_F` callers keep today's behavior.
+   *
    * @param document The \ref SVGDocument to render.
    * @param svgFilename The original path of the SVG file (used for naming output files).
    * @param goldenImageFilename The path to the golden image file.
    * @param params The \ref ImageComparisonParams to use for the comparison.
+   * @param mode The comparison mode (backend) to render with.
    */
   void renderAndCompare(SVGDocument& document, const std::filesystem::path& svgFilename,
-                        const char* goldenImageFilename, const ImageComparisonParams& params);
+                        const char* goldenImageFilename, const ImageComparisonParams& params,
+                        ComparisonMode mode = ActiveRendererBackend() == RendererBackend::Geode
+                                                  ? ComparisonMode::GeodeGolden
+                                                  : ComparisonMode::TinyGolden);
 };
 
 }  // namespace donner::svg
