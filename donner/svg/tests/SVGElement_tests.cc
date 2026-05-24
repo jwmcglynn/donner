@@ -983,6 +983,28 @@ TEST_F(SVGElementTests, ShadowTreesDoNotEnumerateChildren) {
   EXPECT_EQ(element.lastChild(), std::nullopt);
 }
 
+TEST_F(SVGElementTests, TraversalSkipsXmlTextNodes) {
+  auto document = parseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <rect id="rect1" x="10" y="10" width="10" height="10" />
+      <text id="label" x="20" y="20">hello<tspan id="span">world</tspan>tail</text>
+      <circle id="circle" cx="40" cy="40" r="5" />
+    </svg>
+  )");
+
+  auto svgElement = document.svgElement();
+  EXPECT_THAT(children(svgElement),
+              ElementsAre(ElementIdEq("rect1"), ElementIdEq("label"), ElementIdEq("circle")));
+
+  auto label = document.querySelector("#label");
+  ASSERT_THAT(label, testing::Ne(std::nullopt));
+  std::optional<SVGElement> span = label->firstChild();
+  ASSERT_THAT(span, Optional(ElementIdEq("span")));
+  EXPECT_THAT(label->lastChild(), Optional(ElementIdEq("span")));
+  EXPECT_THAT(span->nextSibling(), testing::Eq(std::nullopt));
+  EXPECT_THAT(span->previousSibling(), testing::Eq(std::nullopt));
+}
+
 TEST_F(SVGElementTests, IsKnownType) {
   auto unknown = create();  // by default "unknown" from create()
   EXPECT_FALSE(unknown.isKnownType());

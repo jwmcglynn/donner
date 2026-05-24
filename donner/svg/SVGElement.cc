@@ -119,6 +119,76 @@ void markDirtySubtree(EntityHandle handle, uint16_t flags) {
   }
 }
 
+std::optional<EntityHandle> ElementEntityHandle(Registry& registry, Entity entity) {
+  if (entity == entt::null) {
+    return std::nullopt;
+  }
+
+  EntityHandle handle(registry, entity);
+  return handle.all_of<components::ElementTypeComponent>() ? std::make_optional(handle)
+                                                           : std::nullopt;
+}
+
+std::optional<EntityHandle> FirstElementChild(EntityHandle handle) {
+  if (handle.all_of<components::ShadowTreeComponent>()) {
+    return std::nullopt;
+  }
+
+  const auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (Entity child = tree.firstChild(); child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
+    if (std::optional<EntityHandle> element = ElementEntityHandle(registry, child)) {
+      return element;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<EntityHandle> LastElementChild(EntityHandle handle) {
+  if (handle.all_of<components::ShadowTreeComponent>()) {
+    return std::nullopt;
+  }
+
+  const auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (Entity child = tree.lastChild(); child != entt::null;
+       child = registry.get<donner::components::TreeComponent>(child).previousSibling()) {
+    if (std::optional<EntityHandle> element = ElementEntityHandle(registry, child)) {
+      return element;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<EntityHandle> PreviousElementSibling(EntityHandle handle) {
+  const auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (Entity sibling = tree.previousSibling(); sibling != entt::null;
+       sibling = registry.get<donner::components::TreeComponent>(sibling).previousSibling()) {
+    if (std::optional<EntityHandle> element = ElementEntityHandle(registry, sibling)) {
+      return element;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<EntityHandle> NextElementSibling(EntityHandle handle) {
+  const auto& tree = handle.get<donner::components::TreeComponent>();
+  Registry& registry = *handle.registry();
+  for (Entity sibling = tree.nextSibling(); sibling != entt::null;
+       sibling = registry.get<donner::components::TreeComponent>(sibling).nextSibling()) {
+    if (std::optional<EntityHandle> element = ElementEntityHandle(registry, sibling)) {
+      return element;
+    }
+  }
+
+  return std::nullopt;
+}
+
 }  // namespace
 
 SVGElement::SVGElement(EntityHandle handle) : handle_(handle) {}
@@ -392,40 +462,35 @@ std::optional<SVGElement> SVGElement::parentElement() const {
 }
 
 std::optional<SVGElement> SVGElement::firstChild() const {
-  if (handle_.all_of<components::ShadowTreeComponent>()) {
-    // Don't enumerate children for shadow trees.
-    return std::nullopt;
+  if (std::optional<EntityHandle> handle = FirstElementChild(handle_)) {
+    return SVGElement(*handle);
   }
 
-  const auto& tree = handle_.get<donner::components::TreeComponent>();
-  return tree.firstChild() != entt::null
-             ? std::make_optional(SVGElement(toHandle(tree.firstChild())))
-             : std::nullopt;
+  return std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
-  if (handle_.all_of<components::ShadowTreeComponent>()) {
-    // Don't enumerate children for shadow trees.
-    return std::nullopt;
+  if (std::optional<EntityHandle> handle = LastElementChild(handle_)) {
+    return SVGElement(*handle);
   }
 
-  const auto& tree = handle_.get<donner::components::TreeComponent>();
-  return tree.lastChild() != entt::null ? std::make_optional(SVGElement(toHandle(tree.lastChild())))
-                                        : std::nullopt;
+  return std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::previousSibling() const {
-  const auto& tree = handle_.get<donner::components::TreeComponent>();
-  return tree.previousSibling() != entt::null
-             ? std::make_optional(SVGElement(toHandle(tree.previousSibling())))
-             : std::nullopt;
+  if (std::optional<EntityHandle> handle = PreviousElementSibling(handle_)) {
+    return SVGElement(*handle);
+  }
+
+  return std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::nextSibling() const {
-  const auto& tree = handle_.get<donner::components::TreeComponent>();
-  return tree.nextSibling() != entt::null
-             ? std::make_optional(SVGElement(toHandle(tree.nextSibling())))
-             : std::nullopt;
+  if (std::optional<EntityHandle> handle = NextElementSibling(handle_)) {
+    return SVGElement(*handle);
+  }
+
+  return std::nullopt;
 }
 
 void SVGElement::insertBefore(const SVGElement& newNode, std::optional<SVGElement> referenceNode) {

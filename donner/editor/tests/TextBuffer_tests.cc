@@ -71,6 +71,34 @@ TEST(TextBuffer, InsertTextAt) {
   EXPECT_EQ(buffer.getText(), "Hello there\n++ Line2");
 }
 
+TEST(TextBuffer, InsertTextAtSplitsCurrentLine) {
+  TextBuffer buffer;
+  buffer.setText("abcd");
+
+  Coordinates pos(0, 2);
+  buffer.insertTextAt(pos, "\n");
+
+  EXPECT_EQ(pos, Coordinates(1, 0));
+  EXPECT_EQ(buffer.getTotalLines(), 2);
+  EXPECT_EQ(buffer.getText(), "ab\ncd");
+}
+
+TEST(TextBuffer, InsertTextAtConsumesInvalidUtf8Byte) {
+  TextBuffer buffer;
+  buffer.setText("ab");
+
+  Coordinates pos(0, 1);
+  const std::string invalidUtf8("\xA7", 1);
+  buffer.insertTextAt(pos, invalidUtf8);
+
+  EXPECT_EQ(pos.line, 0);
+  EXPECT_EQ(pos.column, 2);
+  EXPECT_EQ(buffer.getText(), std::string("a") + invalidUtf8 + "b");
+  EXPECT_EQ(buffer.getLineCharacterCount(0), 3);
+  EXPECT_EQ(buffer.getLineMaxColumn(0), 3);
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(2), Coordinates(0, 2));
+}
+
 /**
  * Test deleting a range within a single line.
  */
