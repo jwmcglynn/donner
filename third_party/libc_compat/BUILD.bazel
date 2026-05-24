@@ -11,12 +11,25 @@ load("@rules_cc//cc:defs.bzl", "cc_library")
 cc_library(
     name = "libc_compat",
     srcs = ["libc_compat.c"],
-    # Must be linked into the final executable even when nothing visibly
-    # references it from our code — libc++.a is the consumer.
-    alwayslink = True,
     target_compatible_with = select({
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = ["//visibility:public"],
+    # Must be linked into the final executable even when nothing visibly
+    # references it from our code — libc++.a is the consumer.
+    alwayslink = True,
+)
+
+cc_library(
+    name = "libcxx_macos_compat",
+    srcs = ["libcxx_macos_compat.cc"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:public"],
+    # Must be linked into the final executable even when the missing libc++
+    # ABI symbol is referenced only by LLVM/libFuzzer runtime objects.
+    alwayslink = True,
 )
