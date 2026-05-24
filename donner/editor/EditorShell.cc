@@ -491,6 +491,7 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, ImFont* 
   syncSelectionFromSourceCursorIfNeeded();
   ImGui::PopFont();
   documentSyncController_.handleTextEdits(app_, textEditor_, ImGui::GetIO().DeltaTime);
+  updateSourceHoverPreview();
   ImGui::End();
 }
 
@@ -972,7 +973,7 @@ std::optional<StyleFocus> EditorShell::styleFocusAtSourceOffset(std::size_t sour
 }
 
 std::vector<svg::SVGElement> EditorShell::sourceHoverElements() const {
-  if (!app_.hasDocument() || textEditor_.isTextChanged()) {
+  if (!app_.hasDocument() || textEditor_.isTextChanged() || app_.document().hasPendingMutations()) {
     return {};
   }
 
@@ -1042,7 +1043,7 @@ void EditorShell::updateSourceHoverPreview() {
 }
 
 std::optional<StyleFocus> EditorShell::styleFocusAtSourceCursor() {
-  if (!app_.hasDocument() || textEditor_.isTextChanged()) {
+  if (!app_.hasDocument() || textEditor_.isTextChanged() || app_.document().hasPendingMutations()) {
     return std::nullopt;
   }
   const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());

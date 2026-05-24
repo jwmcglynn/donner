@@ -3,9 +3,13 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <string>
+#include <string_view>
 #include <vector>
 
+#include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGUnknownElement.h"
 
 namespace donner::editor {
@@ -70,6 +74,17 @@ constexpr std::string_view kSelectorListSvg =
   </style>
   <rect id="hit" class="hit"/>
   <rect id="miss" class="miss"/>
+</svg>)svg";
+
+constexpr std::string_view kStyleSourceMutationSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .hit { fill: red; }
+  </style>
+  <g id="layer">
+    <rect id="target" class="hit" x="0" y="0" width="10" height="10"/>
+    <rect id="sibling" class="hit" x="20" y="0" width="10" height="10"/>
+  </g>
 </svg>)svg";
 
 constexpr std::string_view kResourceReferrersSvg =
@@ -390,6 +405,76 @@ TEST(FocusViewTest, StyleFocusReportsImpactedElementsForCanvasSelection) {
   ASSERT_EQ(blockFocus->impactedElements.size(), 2u);
   EXPECT_EQ(blockFocus->impactedElements[0].id(), "hit");
   EXPECT_EQ(blockFocus->impactedElements[1].id(), "miss");
+}
+
+TEST(FocusViewTest, StyleOffsetFocusSurvivesStructuredSourceTypingMutations) {
+  struct MutationCase {
+    std::string_view name;
+    std::string_view oldText;
+    std::string_view newText;
+    bool expectParseError = false;
+  };
+
+  const MutationCase cases[] = {
+      {
+          .name = "replace styled element with same id and class",
+          .oldText = R"(<rect id="target" class="hit" x="0" y="0" width="10" height="10"/>)",
+          .newText = R"(<rect id="target" class="hit" x="2" y="3" width="12" height="14"/>)",
+      },
+      {
+          .name = "remove styled element attribute",
+          .oldText = R"( x="0")",
+          .newText = "",
+      },
+      {
+          .name = "delete styled sibling element",
+          .oldText = R"(<rect id="sibling" class="hit" x="20" y="0" width="10" height="10"/>)",
+          .newText = "",
+      },
+      {
+          .name = "type malformed selected element attribute",
+          .oldText = R"(width="10")",
+          .newText = R"(width="10)",
+          .expectParseError = true,
+      },
+  };
+
+  for (const MutationCase& mutationCase : cases) {
+    SCOPED_TRACE(mutationCase.name);
+
+    EditorApp app;
+    app.setStructuredEditingEnabled(true);
+    ASSERT_TRUE(app.loadFromString(kStyleSourceMutationSvg));
+
+    TextEditor textEditor;
+    textEditor.setText(kStyleSourceMutationSvg);
+    textEditor.resetTextChanged();
+    DocumentSyncController controller{std::string(kStyleSourceMutationSvg)};
+
+    std::optional<svg::SVGElement> selected = app.document().document().querySelector("#target");
+    ASSERT_TRUE(selected.has_value());
+    app.setSelection(*selected);
+
+    const std::string currentText = textEditor.getText();
+    const std::size_t editOffset = currentText.find(mutationCase.oldText);
+    ASSERT_NE(editOffset, std::string::npos);
+
+    textEditor.setSelection(
+        textEditor.getCoordinatesAtByteOffset(editOffset),
+        textEditor.getCoordinatesAtByteOffset(editOffset + mutationCase.oldText.size()));
+    textEditor.insertText(mutationCase.newText);
+    controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+    const std::string editedSource = textEditor.getText();
+    const std::optional<StyleFocus> focus = ComputeStyleFocusAtSourceOffset(
+        app.document().document(), OffsetForNeedle(editedSource, ".hit"));
+    if (!mutationCase.expectParseError) {
+      ASSERT_TRUE(focus.has_value());
+      EXPECT_FALSE(focus->impactedElements.empty());
+    } else {
+      EXPECT_TRUE(app.document().lastParseError().has_value());
+    }
+  }
 }
 
 TEST(FocusViewTest, SelectingGroupIncludesCssRuleLinksForDescendantElements) {

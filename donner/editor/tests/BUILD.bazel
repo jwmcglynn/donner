@@ -1,6 +1,7 @@
 load(
     "//build_defs:rules.bzl",
     "donner_cc_binary",
+    "donner_cc_fuzzer",
     "donner_cc_library",
     "donner_cc_test",
     "donner_perf_cc_test",
@@ -106,6 +107,7 @@ donner_cc_test(
     deps = [
         "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
+        "//donner/editor:selection_aabb",
         "//donner/editor:text_editor",
         "@com_google_gtest//:gtest_main",
         "@imgui",
@@ -169,10 +171,13 @@ donner_cc_test(
     name = "focus_view_tests",
     srcs = ["FocusView_tests.cc"],
     deps = [
+        "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
         "//donner/editor:focus_view",
+        "//donner/editor:text_editor",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -407,6 +412,23 @@ donner_cc_test(
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
         "@imgui",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "editor_state_machine_fuzzer",
+    srcs = ["EditorStateMachine_fuzzer.cc"],
+    corpus = "testdata/editor_state_machine_fuzzer_corpus",
+    deps = [
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:editor_app",
+        "//donner/editor:focus_view",
+        "//donner/editor:selection_aabb",
+        "//donner/editor:source_sync",
+        "//donner/editor:text_editor_core",
+        "//donner/editor:text_patch",
+        "//donner/svg",
+        "//donner/svg/renderer",
     ],
 )
 

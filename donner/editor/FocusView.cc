@@ -12,7 +12,10 @@
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
+#include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 
 namespace donner::editor {
@@ -127,6 +130,82 @@ std::optional<std::size_t> NodeStartOffset(std::string_view source,
   }
 
   return range->start;
+}
+
+bool HasTreeComponent(const svg::SVGElement& element) {
+  const EntityHandle handle = element.entityHandle();
+  return handle && handle.all_of<donner::components::TreeComponent>();
+}
+
+std::optional<svg::ElementType> SafeElementType(const svg::SVGElement& element) {
+  const EntityHandle handle = element.entityHandle();
+  if (!handle) {
+    return std::nullopt;
+  }
+
+  const auto* component = handle.try_get<svg::components::ElementTypeComponent>();
+  if (component == nullptr) {
+    return std::nullopt;
+  }
+
+  return component->type();
+}
+
+std::optional<xml::XMLQualifiedNameRef> SafeTagName(const svg::SVGElement& element) {
+  const EntityHandle handle = element.entityHandle();
+  if (!handle) {
+    return std::nullopt;
+  }
+
+  const auto* tree = handle.try_get<donner::components::TreeComponent>();
+  if (tree == nullptr) {
+    return std::nullopt;
+  }
+
+  return tree->tagName();
+}
+
+RcString SafeId(const svg::SVGElement& element) {
+  const EntityHandle handle = element.entityHandle();
+  if (!handle) {
+    return "";
+  }
+
+  const auto* component = handle.try_get<svg::components::IdComponent>();
+  return component != nullptr ? component->id() : RcString("");
+}
+
+bool HasLiveSvgTreeComponents(const svg::SVGElement& element) {
+  return HasTreeComponent(element) && SafeElementType(element).has_value();
+}
+
+std::optional<svg::SVGElement> SafeFirstChild(const svg::SVGElement& element) {
+  if (!HasLiveSvgTreeComponents(element)) {
+    return std::nullopt;
+  }
+
+  return element.firstChild();
+}
+
+std::optional<svg::SVGElement> SafeNextSibling(const svg::SVGElement& element) {
+  if (!HasTreeComponent(element)) {
+    return std::nullopt;
+  }
+
+  return element.nextSibling();
+}
+
+std::optional<svg::SVGElement> SafeParentElement(const svg::SVGElement& element) {
+  if (!HasTreeComponent(element)) {
+    return std::nullopt;
+  }
+
+  std::optional<svg::SVGElement> parent = element.parentElement();
+  if (parent.has_value() && !HasLiveSvgTreeComponents(*parent)) {
+    return std::nullopt;
+  }
+
+  return parent;
 }
 
 bool IsAsciiSpace(char ch) {
@@ -299,20 +378,26 @@ void AppendReferencedFragmentsInSubtree(std::string_view source, const svg::SVGE
     references->push_back(reference);
   }
 
-  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    AppendReferencedFragmentsInSubtree(source, *child, references);
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    AppendReferencedFragmentsInSubtree(source, current, references);
   }
 }
 
 std::optional<svg::SVGElement> FindElementById(const svg::SVGElement& root, std::string_view id) {
-  if (root.id() == id) {
+  if (!HasLiveSvgTreeComponents(root)) {
+    return std::nullopt;
+  }
+
+  if (SafeId(root) == id) {
     return root;
   }
 
-  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    if (std::optional<svg::SVGElement> result = FindElementById(*child, id)) {
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    if (std::optional<svg::SVGElement> result = FindElementById(current, id)) {
       return result;
     }
   }
@@ -348,9 +433,10 @@ bool IsNonRenderedStyleContainer(svg::ElementType type) {
 }
 
 bool HasNonRenderedStyleAncestor(const svg::SVGElement& element) {
-  for (std::optional<svg::SVGElement> ancestor = element.parentElement(); ancestor.has_value();
-       ancestor = ancestor->parentElement()) {
-    if (IsNonRenderedStyleContainer(ancestor->type())) {
+  for (std::optional<svg::SVGElement> ancestor = SafeParentElement(element); ancestor.has_value();
+       ancestor = SafeParentElement(*ancestor)) {
+    const std::optional<svg::ElementType> type = SafeElementType(*ancestor);
+    if (type.has_value() && IsNonRenderedStyleContainer(*type)) {
       return true;
     }
   }
@@ -359,11 +445,16 @@ bool HasNonRenderedStyleAncestor(const svg::SVGElement& element) {
 }
 
 bool IsRenderedStyleTarget(const svg::SVGElement& element) {
-  if (IsNonRenderedStyleContainer(element.type()) || HasNonRenderedStyleAncestor(element)) {
+  const std::optional<svg::ElementType> type = SafeElementType(element);
+  if (!type.has_value() || !HasTreeComponent(element)) {
     return false;
   }
 
-  switch (element.type()) {
+  if (IsNonRenderedStyleContainer(*type) || HasNonRenderedStyleAncestor(element)) {
+    return false;
+  }
+
+  switch (*type) {
     case svg::ElementType::Circle:
     case svg::ElementType::Ellipse:
     case svg::ElementType::G:
@@ -396,14 +487,19 @@ void AppendImpactedElementsForStyleRule(const svg::SVGElement& root,
     }
   }
 
-  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    AppendImpactedElementsForStyleRule(*child, sourceRule, styleSystem, impactedElements);
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    AppendImpactedElementsForStyleRule(current, sourceRule, styleSystem, impactedElements);
   }
 }
 
 bool AddFocusElement(const svg::SVGElement& element, FocusElementCollection* result,
                      std::vector<Entity>* visited) {
+  if (!HasLiveSvgTreeComponents(element)) {
+    return false;
+  }
+
   const Entity entity = element.entityHandle().entity();
   if (std::ranges::find(*visited, entity) != visited->end()) {
     return false;
@@ -416,6 +512,10 @@ bool AddFocusElement(const svg::SVGElement& element, FocusElementCollection* res
 
 void AddElementReferenceLink(std::size_t fromOffset, const svg::SVGElement& referenced,
                              FocusElementCollection* result) {
+  if (!HasLiveSvgTreeComponents(referenced)) {
+    return;
+  }
+
   const Entity referencedEntity = referenced.entityHandle().entity();
   const auto it = std::ranges::find_if(result->links, [&](const auto& link) {
     return link.first == fromOffset && link.second.entityHandle().entity() == referencedEntity;
@@ -432,9 +532,10 @@ void AddSourceReferenceLink(FocusReferenceLink link, std::vector<FocusReferenceL
 }
 
 bool HasAncestorNamed(const svg::SVGElement& element, std::string_view tagName) {
-  for (std::optional<svg::SVGElement> ancestor = element.parentElement(); ancestor.has_value();
-       ancestor = ancestor->parentElement()) {
-    if (std::string_view(ancestor->tagName().name) == tagName) {
+  for (std::optional<svg::SVGElement> ancestor = SafeParentElement(element); ancestor.has_value();
+       ancestor = SafeParentElement(*ancestor)) {
+    const std::optional<xml::XMLQualifiedNameRef> ancestorTagName = SafeTagName(*ancestor);
+    if (ancestorTagName.has_value() && std::string_view(ancestorTagName->name) == tagName) {
       return true;
     }
   }
@@ -443,7 +544,12 @@ bool HasAncestorNamed(const svg::SVGElement& element, std::string_view tagName) 
 }
 
 bool IsReferenceResourceElement(const svg::SVGElement& element) {
-  const std::string_view tagName = element.tagName().name;
+  const std::optional<xml::XMLQualifiedNameRef> tagNameRef = SafeTagName(element);
+  if (!SafeElementType(element).has_value() || !tagNameRef.has_value()) {
+    return false;
+  }
+
+  const std::string_view tagName = tagNameRef->name;
   return tagName == "clipPath" || tagName == "filter" || tagName == "linearGradient" ||
          tagName == "marker" || tagName == "mask" || tagName == "pattern" ||
          tagName == "radialGradient" || tagName == "symbol" || HasAncestorNamed(element, "defs");
@@ -451,6 +557,10 @@ bool IsReferenceResourceElement(const svg::SVGElement& element) {
 
 void MarkReverseExpandable(const svg::SVGElement& element,
                            std::vector<Entity>* reverseExpandableEntities) {
+  if (!HasLiveSvgTreeComponents(element)) {
+    return;
+  }
+
   const Entity entity = element.entityHandle().entity();
   if (std::ranges::find(*reverseExpandableEntities, entity) == reverseExpandableEntities->end()) {
     reverseExpandableEntities->push_back(entity);
@@ -515,6 +625,10 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
                                     FocusElementCollection* result,
                                     std::vector<CssRuleKey>* visitedCssRules,
                                     std::vector<FragmentReference>* references) {
+  if (!HasLiveSvgTreeComponents(root)) {
+    return;
+  }
+
   Registry& registry = *root.entityHandle().registry();
   const std::optional<std::size_t> selectorLinkSource = SelectorLinkSourceOffset(source, root);
   if (IsRenderedStyleTarget(root)) {
@@ -547,10 +661,11 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
     }
   }
 
-  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    AppendMatchedCssRulesInSubtree(source, lineStarts, *child, styleSystem, result, visitedCssRules,
-                                   references);
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    AppendMatchedCssRulesInSubtree(source, lineStarts, current, styleSystem, result,
+                                   visitedCssRules, references);
   }
 }
 
@@ -559,6 +674,10 @@ void AppendReverseAttributeReferences(std::string_view source, const svg::SVGEle
                                       const svg::SVGElement& targetElement,
                                       FocusElementCollection* result, std::vector<Entity>* visited,
                                       std::vector<Entity>* reverseExpandableEntities) {
+  if (!HasLiveSvgTreeComponents(root)) {
+    return;
+  }
+
   for (const FragmentReference& reference : ReferencedFragments(source, root)) {
     if (reference.fragmentId != targetId) {
       continue;
@@ -571,9 +690,10 @@ void AppendReverseAttributeReferences(std::string_view source, const svg::SVGEle
     MarkReverseExpandableIfResource(root, reverseExpandableEntities);
   }
 
-  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    AppendReverseAttributeReferences(source, *child, targetId, targetElement, result, visited,
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    AppendReverseAttributeReferences(source, current, targetId, targetElement, result, visited,
                                      reverseExpandableEntities);
   }
 }
@@ -585,6 +705,10 @@ void AppendReverseCssReferences(std::string_view source, const std::vector<std::
                                 FocusElementCollection* result, std::vector<Entity>* visited,
                                 std::vector<CssRuleKey>* visitedCssRules,
                                 std::vector<Entity>* reverseExpandableEntities) {
+  if (!HasLiveSvgTreeComponents(root)) {
+    return;
+  }
+
   Registry& registry = *root.entityHandle().registry();
   if (IsRenderedStyleTarget(root)) {
     for (const svg::components::MatchedStyleRule& matchedRule :
@@ -637,9 +761,10 @@ void AppendReverseCssReferences(std::string_view source, const std::vector<std::
     }
   }
 
-  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    AppendReverseCssReferences(source, lineStarts, *child, targetId, targetElement, styleSystem,
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    AppendReverseCssReferences(source, lineStarts, current, targetId, targetElement, styleSystem,
                                result, visited, visitedCssRules, reverseExpandableEntities);
   }
 }
@@ -684,7 +809,7 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
       AddFocusElement(*referenced, &result, &visited);
     }
 
-    const RcString currentId = current.id();
+    const RcString currentId = SafeId(current);
     if (currentId.empty() || !CanReverseExpand(current, reverseExpandableEntities) ||
         std::ranges::find(reverseProcessedIds, std::string_view(currentId)) !=
             reverseProcessedIds.end()) {
@@ -736,8 +861,8 @@ void AddNodeTagLineRanges(std::string_view source, const std::vector<std::size_t
 bool AddAncestorTagLineRanges(std::string_view source, const std::vector<std::size_t>& lineStarts,
                               const svg::SVGElement& element, FocusPartition* partition,
                               bool required) {
-  for (std::optional<svg::SVGElement> ancestor = element.parentElement(); ancestor.has_value();
-       ancestor = ancestor->parentElement()) {
+  for (std::optional<svg::SVGElement> ancestor = SafeParentElement(element); ancestor.has_value();
+       ancestor = SafeParentElement(*ancestor)) {
     std::optional<ByteRange> ancestorRange = NodeRange(source, *ancestor);
     if (!ancestorRange.has_value()) {
       return !required;
@@ -826,7 +951,7 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   std::vector<Entity> selectedEntities;
   selectedEntities.reserve(selectedElements.size());
   for (const svg::SVGElement& selected : selectedElements) {
-    if (!NodeRange(source, selected).has_value()) {
+    if (!HasLiveSvgTreeComponents(selected) || !NodeRange(source, selected).has_value()) {
       return {};
     }
 

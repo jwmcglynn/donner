@@ -3,12 +3,15 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <span>
+#include <string>
 
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextEditor.h"
 
 namespace donner::editor {
@@ -410,6 +413,203 @@ TEST(DocumentSyncControllerStructuredTest, ElementSubtreeSourceInsertStaysLocal)
   auto inserted = app.document().document().querySelector("#b");
   ASSERT_TRUE(inserted.has_value());
   EXPECT_EQ(inserted->getAttribute("fill"), RcString("blue"));
+}
+
+TEST(DocumentSyncControllerStructuredTest, SelectedElementSourceDeleteClearsSelectionBeforeBounds) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  auto selected = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  const std::string currentText = textEditor.getText();
+  const std::string selectedSource = R"(<rect id="r1" x="0" y="0" width="10" height="10"/>)";
+  const std::size_t deleteOffset = currentText.find(selectedSource);
+  ASSERT_NE(deleteOffset, std::string::npos);
+
+  textEditor.setSelection(
+      textEditor.getCoordinatesAtByteOffset(deleteOffset),
+      textEditor.getCoordinatesAtByteOffset(deleteOffset + selectedSource.size()));
+  textEditor.insertText("");
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+  EXPECT_TRUE(app.selectedElements().empty());
+  SelectionBoundsCache cache;
+  RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(app.selectedElements()),
+                              app.document().currentFrameVersion(),
+                              app.document().currentFrameVersion());
+  EXPECT_TRUE(cache.pendingBoundsDoc.empty());
+  EXPECT_TRUE(cache.pendingOccludingBoundsDoc.empty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, SelectedElementSourceAttributeEditsKeepBoundsSafe) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  auto selected = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  constexpr std::string_view kOldWidth = R"(width="10")";
+  constexpr std::string_view kNewWidth = R"(width="24")";
+  const std::string currentText = textEditor.getText();
+  const std::size_t editOffset = currentText.find(kOldWidth);
+  ASSERT_NE(editOffset, std::string::npos);
+
+  textEditor.setSelection(textEditor.getCoordinatesAtByteOffset(editOffset),
+                          textEditor.getCoordinatesAtByteOffset(editOffset + kOldWidth.size()));
+  textEditor.insertText(kNewWidth);
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front().id(), "r1");
+  SelectionBoundsCache cache;
+  RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(app.selectedElements()),
+                              app.document().currentFrameVersion(),
+                              app.document().currentFrameVersion());
+  EXPECT_FALSE(cache.displayedBoundsDoc.empty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, SourceInsertNearSelectionKeepsBoundsSafe) {
+  constexpr std::string_view kSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="layer"><rect id="a" x="0" y="0" width="10" height="10"/></g></svg>)";
+  constexpr std::string_view kInserted = R"(<circle id="b" cx="5" cy="6" r="3" fill="blue"/>)";
+
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kSvg)};
+
+  auto selected = app.document().document().querySelector("#a");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  const std::size_t insertOffset = std::string_view(kSvg).find("</g>");
+  ASSERT_NE(insertOffset, std::string_view::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(insertOffset));
+  textEditor.insertText(kInserted);
+
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front().id(), "a");
+  SelectionBoundsCache cache;
+  RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(app.selectedElements()),
+                              app.document().currentFrameVersion(),
+                              app.document().currentFrameVersion());
+  EXPECT_FALSE(cache.displayedBoundsDoc.empty());
+}
+
+TEST(DocumentSyncControllerStructuredTest, SourceTypingMutationStressKeepsSelectionBoundsSafe) {
+  struct MutationCase {
+    std::string_view name;
+    std::string_view selectedId;
+    std::string_view oldText;
+    std::string_view newText;
+    bool expectSelection = true;
+    bool expectParseError = false;
+  };
+
+  const MutationCase cases[] = {
+      {
+          .name = "insert attribute in selected opening tag",
+          .selectedId = "r1",
+          .oldText = R"(id="r1")",
+          .newText = R"(id="r1" data-note="typed")",
+      },
+      {
+          .name = "remove selected x attribute",
+          .selectedId = "r1",
+          .oldText = R"( x="0")",
+          .newText = "",
+      },
+      {
+          .name = "replace selected element with same id",
+          .selectedId = "r1",
+          .oldText = R"(<rect id="r1" x="0" y="0" width="10" height="10"/>)",
+          .newText = R"(<rect id="r1" x="3" y="4" width="18" height="16" fill="blue"/>)",
+      },
+      {
+          .name = "delete selected element",
+          .selectedId = "r1",
+          .oldText = R"(<rect id="r1" x="0" y="0" width="10" height="10"/>)",
+          .newText = "",
+          .expectSelection = false,
+      },
+      {
+          .name = "type malformed attribute value",
+          .selectedId = "r1",
+          .oldText = R"(width="10")",
+          .newText = R"(width="10)",
+          .expectSelection = false,
+          .expectParseError = true,
+      },
+  };
+
+  for (const MutationCase& mutationCase : cases) {
+    SCOPED_TRACE(mutationCase.name);
+
+    EditorApp app;
+    app.setStructuredEditingEnabled(true);
+    ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+
+    TextEditor textEditor;
+    textEditor.setText(kTwoRectSvg);
+    textEditor.resetTextChanged();
+    DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+    auto selected =
+        app.document().document().querySelector("#" + std::string(mutationCase.selectedId));
+    ASSERT_TRUE(selected.has_value());
+    app.setSelection(*selected);
+
+    const std::string currentText = textEditor.getText();
+    const std::size_t editOffset = currentText.find(mutationCase.oldText);
+    ASSERT_NE(editOffset, std::string::npos);
+
+    textEditor.setSelection(
+        textEditor.getCoordinatesAtByteOffset(editOffset),
+        textEditor.getCoordinatesAtByteOffset(editOffset + mutationCase.oldText.size()));
+    textEditor.insertText(mutationCase.newText);
+    controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+    SelectionBoundsCache cacheBeforeFlush;
+    RefreshSelectionBoundsCache(
+        cacheBeforeFlush, std::span<const svg::SVGElement>(app.selectedElements()),
+        app.document().currentFrameVersion(), app.document().currentFrameVersion());
+
+    if (!app.document().queue().empty()) {
+      (void)app.flushFrame();
+      SelectionBoundsCache cacheAfterFlush;
+      RefreshSelectionBoundsCache(
+          cacheAfterFlush, std::span<const svg::SVGElement>(app.selectedElements()),
+          app.document().currentFrameVersion(), app.document().currentFrameVersion());
+    }
+
+    if (mutationCase.expectSelection) {
+      EXPECT_FALSE(app.selectedElements().empty());
+    } else {
+      EXPECT_TRUE(app.selectedElements().empty());
+    }
+    EXPECT_EQ(app.document().lastParseError().has_value(), mutationCase.expectParseError);
+  }
 }
 
 TEST(DocumentSyncControllerStructuredTest, MultiDeltaMoveMirrorsIntoTextPane) {

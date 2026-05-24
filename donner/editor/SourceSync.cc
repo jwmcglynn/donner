@@ -3,8 +3,10 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "donner/base/FileOffset.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
 
 namespace donner::editor {
@@ -21,6 +23,38 @@ struct StructuredApplyResult {
   bool applied = false;
   bool needsDocumentReplace = false;
 };
+
+std::vector<AttributeWritebackTarget> CaptureSelectionTargets(const EditorApp& app) {
+  std::vector<AttributeWritebackTarget> targets;
+  targets.reserve(app.selectedElements().size());
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    if (std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(element);
+        target.has_value()) {
+      targets.push_back(std::move(*target));
+    }
+  }
+
+  return targets;
+}
+
+void RemapSelectionAfterStructuredSourceEdit(EditorApp& app,
+                                             const std::vector<AttributeWritebackTarget>& targets) {
+  if (targets.empty() && app.selectedElements().empty()) {
+    return;
+  }
+
+  std::vector<svg::SVGElement> remappedSelection;
+  remappedSelection.reserve(targets.size());
+  for (const AttributeWritebackTarget& target : targets) {
+    if (std::optional<svg::SVGElement> element =
+            resolveAttributeWritebackTarget(app.document().document(), target);
+        element.has_value()) {
+      remappedSelection.push_back(*element);
+    }
+  }
+
+  app.setSelection(std::move(remappedSelection));
+}
 
 std::optional<SourceTextEdit> BuildSingleSourceTextEdit(std::string_view oldSource,
                                                         std::string_view newSource) {
@@ -66,6 +100,8 @@ StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_v
     return {};
   }
 
+  const std::vector<AttributeWritebackTarget> selectionTargets = CaptureSelectionTargets(app);
+
   svg::SVGDocument& document = app.document().document();
   if (!document.hasSourceStore() || document.source() != previousSource) {
     return {};
@@ -80,6 +116,12 @@ StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_v
 
   if (!result.applied) {
     return {};
+  }
+
+  if (result.diagnostic.has_value()) {
+    app.setSelection(std::nullopt);
+  } else {
+    RemapSelectionAfterStructuredSourceEdit(app, selectionTargets);
   }
 
   return StructuredApplyResult{

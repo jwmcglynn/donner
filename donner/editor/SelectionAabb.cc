@@ -2,9 +2,11 @@
 
 #include <optional>
 
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 
 namespace donner::editor {
 
@@ -30,8 +32,35 @@ bool IsNonRenderedContainer(svg::ElementType type) {
   }
 }
 
+bool HasLiveSvgTreeComponents(const svg::SVGElement& element) {
+  const EntityHandle handle = element.entityHandle();
+  return handle &&
+         handle.all_of<donner::components::TreeComponent, svg::components::ElementTypeComponent>();
+}
+
+std::optional<svg::SVGElement> SafeFirstChild(const svg::SVGElement& element) {
+  if (!HasLiveSvgTreeComponents(element)) {
+    return std::nullopt;
+  }
+
+  return element.firstChild();
+}
+
+std::optional<svg::SVGElement> SafeNextSibling(const svg::SVGElement& element) {
+  const EntityHandle handle = element.entityHandle();
+  if (!handle || !handle.all_of<donner::components::TreeComponent>()) {
+    return std::nullopt;
+  }
+
+  return element.nextSibling();
+}
+
 void CollectRenderableGeometryImpl(const svg::SVGElement& root,
                                    std::vector<svg::SVGGeometryElement>& out) {
+  if (!HasLiveSvgTreeComponents(root)) {
+    return;
+  }
+
   if (IsNonRenderedContainer(root.type())) {
     return;
   }
@@ -41,14 +70,20 @@ void CollectRenderableGeometryImpl(const svg::SVGElement& root,
     // for outline purposes — stop here.
     return;
   }
-  for (auto child = root.firstChild(); child.has_value(); child = child->nextSibling()) {
-    CollectRenderableGeometryImpl(*child, out);
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    CollectRenderableGeometryImpl(current, out);
   }
 }
 
 void CollectLaterRenderableGeometryImpl(const svg::SVGElement& root,
                                         const svg::SVGElement& selected, bool& afterSelected,
                                         std::vector<svg::SVGGeometryElement>& out) {
+  if (!HasLiveSvgTreeComponents(root)) {
+    return;
+  }
+
   if (IsNonRenderedContainer(root.type())) {
     return;
   }
@@ -65,8 +100,10 @@ void CollectLaterRenderableGeometryImpl(const svg::SVGElement& root,
     return;
   }
 
-  for (auto child = root.firstChild(); child.has_value(); child = child->nextSibling()) {
-    CollectLaterRenderableGeometryImpl(*child, selected, afterSelected, out);
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    CollectLaterRenderableGeometryImpl(current, selected, afterSelected, out);
   }
 }
 
@@ -135,6 +172,10 @@ std::vector<Box2d> SnapshotSelectionOccludingWorldBounds(
   }
 
   svg::SVGElement selected = selection.front();
+  if (!HasLiveSvgTreeComponents(selected)) {
+    return {};
+  }
+
   const svg::SVGElement root = selected.ownerDocument().svgElement();
   const std::vector<svg::SVGGeometryElement> laterGeometry =
       CollectLaterRenderableGeometry(root, selected);
