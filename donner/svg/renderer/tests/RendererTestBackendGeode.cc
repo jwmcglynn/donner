@@ -21,17 +21,7 @@ std::shared_ptr<geode::GeodeDevice> SharedTestDevice() {
   return device;
 }
 
-}  // namespace
-
-RendererBackend ActiveRendererBackend() {
-  return RendererBackend::Geode;
-}
-
-std::string_view ActiveRendererBackendName() {
-  return RendererBackendName(ActiveRendererBackend());
-}
-
-bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
+bool GeodeSupportsFeature(RendererBackendFeature feature) {
   switch (feature) {
     // FilterEffects reports `false` here so the resvg_test_suite
     // `filters/*` categories skip cleanly on Geode via the category
@@ -67,7 +57,7 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
   return false;
 }
 
-std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose) {
+std::unique_ptr<RendererInterface> GeodeCreateInstance(bool verbose) {
   // Callers that want a renderer they own get a fresh one. Now that
   // `GeodeDevice` owns the expensive pipelines (issue #575), this is
   // ~free: the per-instance allocations are just small ECS-side
@@ -76,35 +66,44 @@ std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose) {
 }
 
 /// Returns a process-wide shared `RendererGeode`. Created on first call,
-/// reused for every subsequent `RenderDocumentWithActiveBackend` /
-/// `RenderDocumentWithActiveBackendForAscii`. Sharing eliminates the
-/// per-test `RendererGeode` allocation churn that would otherwise
-/// accumulate ~2 textures + ~8 buffers per test in wgpu-native's
-/// internal tracking — enough to trip the driver's
-/// `maxMemoryAllocationCount` on Mesa lavapipe / llvmpipe after a few
-/// hundred tests (issue #575). `beginFrame()` fully resets per-frame
-/// state, so a shared renderer behaves identically to a fresh one as
-/// long as each `draw()` call is self-contained (no carried layer /
-/// clip / filter stack), which the image-comparison fixture
+/// reused for every subsequent render. Sharing eliminates the per-test
+/// `RendererGeode` allocation churn that would otherwise accumulate
+/// ~2 textures + ~8 buffers per test in wgpu-native's internal tracking —
+/// enough to trip the driver's `maxMemoryAllocationCount` on Mesa lavapipe /
+/// llvmpipe after a few hundred tests (issue #575). `beginFrame()` fully
+/// resets per-frame state, so a shared renderer behaves identically to a
+/// fresh one as long as each `draw()` call is self-contained (no carried
+/// layer / clip / filter stack), which the image-comparison fixture
 /// guarantees.
 RendererGeode& SharedTestRenderer(bool verbose = false) {
   static auto* renderer = new RendererGeode(SharedTestDevice(), verbose);
   return *renderer;
 }
 
-RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbose) {
+RendererBitmap GeodeRender(SVGDocument& document, bool verbose) {
   RendererGeode& renderer = SharedTestRenderer(verbose);
   renderer.draw(document);
   return renderer.takeSnapshot();
 }
 
-RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document) {
+RendererBitmap GeodeRenderForAscii(SVGDocument& document) {
   // Geode has no anti-aliasing toggle — ASCII snapshots aren't supported,
   // but routing through the same shared renderer keeps the driver
   // resource budget bounded.
   RendererGeode& renderer = SharedTestRenderer();
   renderer.draw(document);
   return renderer.takeSnapshot();
+}
+
+}  // namespace
+
+void RegisterGeodeBackend() {
+  RegisterBackendOps(RendererBackend::Geode, BackendOps{
+                                                 .render = &GeodeRender,
+                                                 .renderForAscii = &GeodeRenderForAscii,
+                                                 .supportsFeature = &GeodeSupportsFeature,
+                                                 .createInstance = &GeodeCreateInstance,
+                                             });
 }
 
 }  // namespace donner::svg

@@ -182,7 +182,9 @@ donner_perf_sensitive_cc_library(
     name = "filter_graph_executor",
     srcs = ["FilterGraphExecutor.cc"],
     hdrs = ["FilterGraphExecutor.h"],
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    # Pure-CPU; buildable under the geode config too so the geode test binary
+    # can link the tiny-skia backend for parity (see 0017 §Phase 4b).
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":pixel_format_utils",
@@ -261,7 +263,9 @@ donner_perf_sensitive_cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "tiny_skia_deps",
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    # Pure-CPU vendored lib; buildable under geode too so the geode test binary
+    # can link the tiny-skia backend for parity (see 0017 §Phase 4b).
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     deps = [
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
     ],
@@ -269,7 +273,9 @@ donner_perf_sensitive_cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "tiny_skia_filter_deps",
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    # Pure-CPU vendored lib; buildable under geode too so the geode test binary
+    # can link the tiny-skia backend for parity (see 0017 §Phase 4b).
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     deps = [
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
@@ -331,7 +337,12 @@ donner_perf_sensitive_cc_library(
         ":filters_enabled": ["DONNER_FILTERS_ENABLED"],
         "//conditions:default": [],
     }),
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia"]),
+    # The tiny-skia renderer is a pure-CPU library (no wgpu); it builds under
+    # both the tiny-skia and geode configs so the geode-enabled test binary can
+    # link both backends and run geode-vs-tiny-skia parity in one process
+    # (see docs/design_docs/0017-geode_renderer.md §Phase 4b). Selecting the
+    # geode *backend* for production rendering still routes through `:renderer`.
+    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
     visibility = ["//visibility:public"],
     deps = [
         ":pixel_format_utils",

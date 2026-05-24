@@ -3,15 +3,9 @@
 
 namespace donner::svg {
 
-RendererBackend ActiveRendererBackend() {
-  return RendererBackend::TinySkia;
-}
+namespace {
 
-std::string_view ActiveRendererBackendName() {
-  return RendererBackendName(ActiveRendererBackend());
-}
-
-bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
+bool TinySkiaSupportsFeature(RendererBackendFeature feature) {
   switch (feature) {
 #ifdef DONNER_FILTERS_ENABLED
     case RendererBackendFeature::FilterEffects: return true;
@@ -34,21 +28,32 @@ bool ActiveRendererSupportsFeature(RendererBackendFeature feature) {
   return false;
 }
 
-std::unique_ptr<RendererInterface> CreateActiveRendererInstance(bool verbose) {
+std::unique_ptr<RendererInterface> TinySkiaCreateInstance(bool verbose) {
   return std::make_unique<RendererTinySkia>(verbose);
 }
 
-RendererBitmap RenderDocumentWithActiveBackend(SVGDocument& document, bool verbose) {
+RendererBitmap TinySkiaRender(SVGDocument& document, bool verbose) {
   RendererTinySkia renderer(verbose);
   renderer.draw(document);
   return renderer.takeSnapshot();
 }
 
-RendererBitmap RenderDocumentWithActiveBackendForAscii(SVGDocument& document) {
+RendererBitmap TinySkiaRenderForAscii(SVGDocument& document) {
   RendererTinySkia renderer;
   renderer.setAntialias(false);
   renderer.draw(document);
   return renderer.takeSnapshot();
+}
+
+}  // namespace
+
+void RegisterTinySkiaBackend() {
+  RegisterBackendOps(RendererBackend::TinySkia, BackendOps{
+                                                    .render = &TinySkiaRender,
+                                                    .renderForAscii = &TinySkiaRenderForAscii,
+                                                    .supportsFeature = &TinySkiaSupportsFeature,
+                                                    .createInstance = &TinySkiaCreateInstance,
+                                                });
 }
 
 }  // namespace donner::svg
