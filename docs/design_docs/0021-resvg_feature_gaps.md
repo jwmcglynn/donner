@@ -162,14 +162,16 @@ before fixing.
    doc's px figures are geode-vs-resvg; two of three "bugs" evaporated under the
    correct metric). Live candidates: CJK (`xml_lang_ja`, bitmap-glyph skip / G4) and
    rotate+pattern (~105k). Vertical is resolved (9 px floor). **← active.**
-6. **Un-gate** via **Strategy B** (geode-vs-tiny-skia runtime comparison, not the
-   golden) — full plan in [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-text-suite-un-gate-geode-vs-tiny-skia-comparison--strategy-b).
-   Rationale: reusing `widenThresholdForGeode` (blanket 0.3 per-pixel threshold) to
-   absorb the ~1313 px tiny-skia-vs-golden baseline + the 4× edge floor is the [G5](#g5-audit-the-aa-justified-geode-thresholds)
-   masking pattern. Comparing Geode directly against a tiny-skia render (the validated
-   oracle) removes the baseline contamination, leaving only the proven 4× floor under a
-   single documented tolerance. Step 1 of that plan is a full 252-test geode-vs-tiny-skia
-   characterization — the tail is cleared, so this is now tractable.
+6. **Un-gate** via an **additive in-process backend matrix** — full plan in
+   [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison).
+   One geode-enabled binary runs three comparison modes per test (`TinyGolden`,
+   `GeodeGolden`, and a new `GeodeTinyParity` that ignores the golden). Parity un-gates
+   text at a documented **~800 px max-count** tolerance (the proven 4× MSAA edge floor —
+   *not* a `widenThresholdForGeode` per-pixel bump, which would mask solid-region bugs and
+   is the [G5](#g5-audit-the-aa-justified-geode-thresholds) pattern). Characterization done
+   (2026-05-24): of 250 runnable text tests, 86 pass-clean / 155 edge-floor (≤763 px) /
+   **9 genuine bugs** (≥1599 px) — the 9 get narrow per-test gates + repros, listed in
+   0017 §Phase 4b.
 
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 
