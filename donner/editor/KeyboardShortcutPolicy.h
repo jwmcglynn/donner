@@ -12,4 +12,11 @@ namespace donner::editor {
   return deleteKey && hasSelection && !anyPopupOpen && !sourcePaneFocused;
 }
 
+/// Source focus mode can be toggled globally with Cmd/Ctrl+Enter as long as no modal popup owns
+/// keyboard input.
+[[nodiscard]] inline bool CanToggleSourceFocusModeFromShortcut(bool enterKey, bool commandDown,
+                                                               bool anyPopupOpen) {
+  return enterKey && commandDown && !anyPopupOpen;
+}
+
 }  // namespace donner::editor

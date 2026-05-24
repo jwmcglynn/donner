@@ -171,6 +171,19 @@ protected:
     return editor.focusReferenceConnectorLayout(link, linkIndex);
   }
 
+  [[nodiscard]] ImVec2 ScreenPointAtCoordinates(const Coordinates& position) const {
+    return editor.coordinatesToScreenPos(position);
+  }
+
+  [[nodiscard]] float TextBaselineOffsetY() const {
+    const ImFont* font = ImGui::GetFont();
+    if (font == nullptr || font->FontSize <= 0.0f) {
+      return ImGui::GetTextLineHeight();
+    }
+
+    return font->Ascent * (ImGui::GetFontSize() / font->FontSize);
+  }
+
   [[nodiscard]] std::vector<ActiveFlash> ActiveSourceFlashes() const {
     return editor.flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now());
   }
@@ -218,6 +231,41 @@ TEST_F(TextEditorTests, MouseClickMarksCursorPositionChangedByMouse) {
   EXPECT_TRUE(editor.isCursorPositionChanged());
   EXPECT_TRUE(editor.didMouseChangeCursorPosition());
   EXPECT_NE(editor.getCursorPosition(), Coordinates(0, 0));
+}
+
+TEST_F(TextEditorTests, HoveredTextPositionTracksMouseWithoutMovingCursor) {
+  editor.setText("Hello world");
+  editor.setCursorPosition(Coordinates(0, 0));
+  RenderEditorFrame();
+
+  const ImVec2 hoverPos =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/6);
+  RenderEditorFrameWithMouse(hoverPos, false);
+
+  ASSERT_TRUE(editor.hoveredTextPosition().has_value());
+  EXPECT_EQ(*editor.hoveredTextPosition(), Coordinates(0, 6));
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0));
+  EXPECT_FALSE(editor.isCursorPositionChanged());
+  EXPECT_FALSE(editor.didMouseChangeCursorPosition());
+}
+
+TEST_F(TextEditorTests, HoverSourceRangesAreClampedAndDeduplicated) {
+  editor.setText("abcdef");
+
+  EXPECT_TRUE(editor.setHoverSourceRanges({
+      SourceByteRange{.start = 2, .end = 5},
+      SourceByteRange{.start = 2, .end = 5},
+      SourceByteRange{.start = 5, .end = 100},
+      SourceByteRange{.start = 4, .end = 4},
+  }));
+
+  ASSERT_EQ(editor.hoverSourceRanges().size(), 2u);
+  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 2, .end = 5}));
+  EXPECT_EQ(editor.hoverSourceRanges()[1], (SourceByteRange{.start = 5, .end = 6}));
+
+  EXPECT_FALSE(editor.setHoverSourceRanges(editor.hoverSourceRanges()));
+  EXPECT_TRUE(editor.clearHoverSourceRanges());
+  EXPECT_TRUE(editor.hoverSourceRanges().empty());
 }
 
 TEST_F(TextEditorTests, MoveLeftRetractsCursor) {
@@ -753,7 +801,7 @@ TEST_F(TextEditorTests, SourceFocusModeContextMenuStateAndToggleRequestAreConsum
   EXPECT_FALSE(SourceFocusModeContextMenuVisible());
 }
 
-TEST_F(TextEditorTests, FocusReferenceConnectorsRouteThroughDistinctLeftGutterLanes) {
+TEST_F(TextEditorTests, FocusReferenceConnectorsRouteThroughDistinctRightSideLanes) {
   editor.setText(
       "  <defs>\n"
       "    <linearGradient id=\"grad\"/>\n"
@@ -780,10 +828,16 @@ TEST_F(TextEditorTests, FocusReferenceConnectorsRouteThroughDistinctLeftGutterLa
   ASSERT_TRUE(rectLayout.has_value());
   ASSERT_TRUE(circleLayout.has_value());
 
-  EXPECT_LT(rectLayout->laneStart.x, rectLayout->start.x);
+  EXPECT_GT(rectLayout->laneStart.x, rectLayout->start.x);
   EXPECT_FLOAT_EQ(rectLayout->laneStart.x, rectLayout->laneEnd.x);
-  EXPECT_LT(rectLayout->laneEnd.x, rectLayout->tip.x);
+  EXPECT_GT(rectLayout->laneEnd.x, rectLayout->tip.x);
   EXPECT_NE(rectLayout->laneStart.x, circleLayout->laneStart.x);
+
+  const float baselineY = TextBaselineOffsetY();
+  const ImVec2 rectSourceTop = ScreenPointAtCoordinates(Coordinates(3, 19));
+  const ImVec2 gradientTargetTop = ScreenPointAtCoordinates(Coordinates(1, 4));
+  EXPECT_FLOAT_EQ(rectLayout->start.y, rectSourceTop.y + baselineY);
+  EXPECT_FLOAT_EQ(rectLayout->tip.y, gradientTargetTop.y + baselineY);
 
   EXPECT_NE(rectLayout->color, circleLayout->color);
   const float alpha = ImGui::ColorConvertU32ToFloat4(rectLayout->color).w;

@@ -1,5 +1,7 @@
 #include "donner/editor/OverlayRenderer.h"
 
+#include <array>
+
 #include "donner/base/Transform.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -70,6 +72,25 @@ TEST(OverlayRendererTest, EmitsChromeForSelectedElement) {
   EXPECT_FALSE(bitmap.empty());
   EXPECT_GT(bitmap.dimensions.x, 0);
   EXPECT_GT(bitmap.dimensions.y, 0);
+}
+
+TEST(OverlayRendererTest, CaptureSnapshotIncludesSourceHoverChromeWithoutSelection) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+
+  const std::array<svg::SVGElement, 1> hoverElements{*rect};
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(), std::nullopt, Transform2d(), std::nullopt,
+      std::span<const svg::SVGElement>(hoverElements));
+
+  EXPECT_TRUE(snapshot.paths.empty());
+  EXPECT_TRUE(snapshot.aabbsDoc.empty());
+  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_FALSE(snapshot.hoverPaths.empty());
+  EXPECT_FALSE(snapshot.hoverAabbsDoc.empty());
 }
 
 // The editor draws selection chrome into a *second* renderer's frame

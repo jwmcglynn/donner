@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -142,6 +143,11 @@ private:
   void renderFloatingLayerPanel();
   void renderLayerPanelContents();
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
+  [[nodiscard]] std::vector<svg::SVGElement> sourceHoverElements() const;
+  [[nodiscard]] std::vector<SourceByteRange> sourceHoverRangesForElements(
+      const std::vector<svg::SVGElement>& elements) const;
+  void updateSourceHoverPreview();
+  [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceOffset(std::size_t sourceOffset) const;
   [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceCursor();
   void applyStyleFocus(StyleFocus styleFocus);
   void syncSelectionFromSourceCursorIfNeeded();

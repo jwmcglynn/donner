@@ -610,7 +610,9 @@ void TextEditor::handleKeyboardInputs() {
 
         case ShortcutId::NewLine:
         case ShortcutId::Indent:
-        case ShortcutId::Unindent: additionalChecks = !autocompleteOpened_ && editorFocused; break;
+        case ShortcutId::Unindent:
+          additionalChecks = !autocompleteOpened_ && editorFocused && !io.KeySuper;
+          break;
 
         default: break;
       }
@@ -873,6 +875,35 @@ bool TextEditor::tryExpandFocusHiddenPlaceholderAt(const ImVec2& position) {
   return true;
 }
 
+void TextEditor::updateHoveredTextPosition() {
+  hoveredTextPosition_.reset();
+  if (!ImGui::IsWindowHovered() || ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+      ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+    return;
+  }
+
+  const ImVec2 mousePos = ImGui::GetMousePos();
+  const ImVec2 local{mousePos.x - uiCursorPos_.x, mousePos.y - uiCursorPos_.y};
+  if (local.x < textStart_ || local.y < 0.0f || charAdvance_.x <= 0.0f || charAdvance_.y <= 0.0f) {
+    return;
+  }
+
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    const int visualIndex = static_cast<int>(std::floor(local.y / charAdvance_.y));
+    if (visualIndex < 0 || visualIndex >= static_cast<int>(visualLines_.size()) ||
+        visualLines_[visualIndex].focusHiddenPlaceholder) {
+      return;
+    }
+  } else {
+    const int lineNo = static_cast<int>(std::floor(local.y / charAdvance_.y));
+    if (lineNo < 0 || lineNo >= text_.getTotalLines()) {
+      return;
+    }
+  }
+
+  hoveredTextPosition_ = screenPosToCoordinates(mousePos);
+}
+
 void TextEditor::rebuildVisualLines(const ImVec2& contentSize) {
   const int maxColumns =
       std::max(12, static_cast<int>((contentSize.x - textStart_ - 12.0f) / charAdvance_.x));
@@ -972,6 +1003,7 @@ void TextEditor::renderInternal(std::string_view title) {
   focused_ = ImGui::IsWindowFocused() || findFocused_ || replaceFocused_;
 
   const auto contentSize = ImGui::GetWindowContentRegionMax();
+  contentRegionMax_ = contentSize;
   auto* drawList = ImGui::GetWindowDrawList();
   float longestLine = textStart_;
   tickSourceFlashes();
@@ -1331,40 +1363,46 @@ void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2
                                       const ImVec2& contentSize, ImDrawList* drawList) {
   renderLineBackground(visualLine.lineNo, lineStart, contentSize, drawList);
 
-  const std::vector<ActiveFlash> flashes =
-      flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now());
-  if (flashes.empty()) {
-    return;
-  }
-
   const float textStartX =
       lineStart.x + textStart_ + static_cast<float>(visualLine.indentColumns) * charAdvance_.x;
-  for (const ActiveFlash& flash : flashes) {
-    const Coordinates flashStart = getCoordinatesAtByteOffset(flash.byteRange.start);
-    const Coordinates flashEnd = getCoordinatesAtByteOffset(flash.byteRange.end);
-    if (flashEnd.line < visualLine.lineNo || flashStart.line > visualLine.lineNo) {
-      continue;
+
+  const auto drawSourceRange = [&](SourceByteRange byteRange, ImU32 color) {
+    const Coordinates rangeStart = getCoordinatesAtByteOffset(byteRange.start);
+    const Coordinates rangeEnd = getCoordinatesAtByteOffset(byteRange.end);
+    if (rangeEnd.line < visualLine.lineNo || rangeStart.line > visualLine.lineNo) {
+      return;
     }
 
     int startColumn = visualLine.startColumn;
     int endColumn = visualLine.endColumn;
-    if (flashStart.line == visualLine.lineNo) {
-      startColumn = std::max(startColumn, flashStart.column);
+    if (rangeStart.line == visualLine.lineNo) {
+      startColumn = std::max(startColumn, rangeStart.column);
     }
-    if (flashEnd.line == visualLine.lineNo) {
-      endColumn = std::min(endColumn, flashEnd.column);
+    if (rangeEnd.line == visualLine.lineNo) {
+      endColumn = std::min(endColumn, rangeEnd.column);
     }
     if (endColumn <= startColumn) {
-      continue;
+      return;
     }
 
-    const float alpha = std::clamp(0.18f + 0.32f * flash.intensity, 0.0f, 0.5f);
-    const ImU32 color = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 0.78f, 0.16f, alpha));
     const ImVec2 start{textStartX + (startColumn - visualLine.startColumn) * charAdvance_.x,
                        lineStart.y};
     const ImVec2 end{textStartX + (endColumn - visualLine.startColumn) * charAdvance_.x,
                      lineStart.y + charAdvance_.y};
-    drawList->AddRectFilled(start, end, color);
+    drawList->AddRectFilled(start, end, color, 2.0f * uiScale_);
+  };
+
+  const ImU32 hoverColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.22f, 0.62f, 1.0f, 0.13f));
+  for (const SourceByteRange& range : hoverSourceRanges_) {
+    drawSourceRange(range, hoverColor);
+  }
+
+  const std::vector<ActiveFlash> flashes =
+      flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now());
+  for (const ActiveFlash& flash : flashes) {
+    const float alpha = std::clamp(0.18f + 0.32f * flash.intensity, 0.0f, 0.5f);
+    const ImU32 color = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 0.78f, 0.16f, alpha));
+    drawSourceRange(flash.byteRange, color);
   }
 }
 
@@ -1465,6 +1503,15 @@ ImU32 PastelReferenceColor(const FocusReferenceLink& link, int linkIndex, float 
   return ImGui::ColorConvertFloat4ToU32(ImVec4(red, green, blue, std::clamp(alpha, 0.0f, 1.0f)));
 }
 
+float TextBaselineOffsetY() {
+  const ImFont* font = ImGui::GetFont();
+  if (font == nullptr || font->FontSize <= 0.0f) {
+    return ImGui::GetTextLineHeight();
+  }
+
+  return font->Ascent * (ImGui::GetFontSize() / font->FontSize);
+}
+
 }  // namespace
 
 std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusReferenceConnectorLayout(
@@ -1474,20 +1521,26 @@ std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusRefere
   }
 
   FocusReferenceConnectorLayout layout;
+  const float baselineY = TextBaselineOffsetY();
   layout.start = coordinatesToScreenPos(Coordinates(link.from.line, link.from.column));
   layout.start.x += charAdvance_.x * 0.5f;
-  layout.start.y += charAdvance_.y * 0.5f;
+  layout.start.y += baselineY;
 
   layout.tip = coordinatesToScreenPos(Coordinates(link.to.line, link.to.column));
   layout.tip.x -= 2.0f * uiScale_;
-  layout.tip.y += charAdvance_.y * 0.5f;
+  layout.tip.y += baselineY;
 
   constexpr int kLaneCount = 5;
   const int laneIndex = ((linkIndex % kLaneCount) + kLaneCount) % kLaneCount;
-  const float textLeftX = uiCursorPos_.x + textStart_ - lastScrollX_;
-  const float laneRightX = textLeftX - 0.7f * charAdvance_.x;
   const float laneSpacing = std::max(2.0f * uiScale_, 0.35f * charAdvance_.x);
-  const float laneX = laneRightX - static_cast<float>(laneIndex) * laneSpacing;
+  const float scrollbarReserve = std::max(ImGui::GetStyle().ScrollbarSize, 12.0f * uiScale_);
+  const float contentRightX =
+      uiCursorPos_.x +
+      (contentRegionMax_.x > 0.0f ? contentRegionMax_.x : std::max(windowWidth_, textStart_)) -
+      scrollbarReserve - 0.8f * charAdvance_.x;
+  const float endpointRightX = std::max(layout.start.x, layout.tip.x) + 1.5f * charAdvance_.x;
+  const float laneX =
+      std::max(contentRightX - static_cast<float>(laneIndex) * laneSpacing, endpointRightX);
 
   layout.laneStart = ImVec2(laneX, layout.start.y);
   layout.laneEnd = ImVec2(laneX, layout.tip.y);
@@ -1614,6 +1667,27 @@ void TextEditor::setFocusPartition(const FocusPartition& partition) {
 
   focusPartition_ = partition;
   focusPartitionActive_ = !partition.empty();
+}
+
+bool TextEditor::setHoverSourceRanges(std::vector<SourceByteRange> ranges) {
+  const std::size_t bufferSize = getText().size();
+  for (SourceByteRange& range : ranges) {
+    range.start = std::min(range.start, bufferSize);
+    range.end = std::min(range.end, bufferSize);
+  }
+  std::erase_if(ranges, [](const SourceByteRange& range) { return range.end <= range.start; });
+  std::sort(ranges.begin(), ranges.end(),
+            [](const SourceByteRange& lhs, const SourceByteRange& rhs) {
+              return lhs.start != rhs.start ? lhs.start < rhs.start : lhs.end < rhs.end;
+            });
+  ranges.erase(std::unique(ranges.begin(), ranges.end()), ranges.end());
+
+  if (hoverSourceRanges_ == ranges) {
+    return false;
+  }
+
+  hoverSourceRanges_ = std::move(ranges);
+  return true;
 }
 
 void TextEditor::clearFocusPartition() {
@@ -2604,6 +2678,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   withinRender_ = true;
   cursorPositionChanged_ = false;
   cursorPositionChangedByMouse_ = false;
+  hoveredTextPosition_.reset();
 
   findOrigin_ = ImGui::GetCursorScreenPos();
   windowWidth_ = ImGui::GetWindowWidth();
@@ -2625,6 +2700,7 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
   uiCursorPos_ = ImGui::GetCursorScreenPos();
   visualLayoutMaxColumns_ = 0;
   rebuildVisualLines(ImGui::GetWindowContentRegionMax());
+  updateHoveredTextPosition();
 
   if (handleKeyboardInputs_) {
     handleKeyboardInputs();

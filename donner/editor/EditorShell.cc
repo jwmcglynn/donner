@@ -412,6 +412,8 @@ void EditorShell::handleGlobalShortcuts() {
   const bool cmd = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
   const bool shift = ImGui::GetIO().KeyShift;
   const bool pressedZ = ImGui::IsKeyPressed(ImGuiKey_Z, /*repeat=*/false);
+  const bool pressedEnter = ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/false) ||
+                            ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false);
   const bool sourcePaneFocused = textEditor_.isFocused();
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
@@ -456,6 +458,10 @@ void EditorShell::handleGlobalShortcuts() {
     interactionController_.resetToActualSize();
   }
 
+  if (CanToggleSourceFocusModeFromShortcut(pressedEnter, cmd, anyPopupOpen)) {
+    toggleSourceFocusMode();
+  }
+
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
       app_.hasSelection()) {
     app_.setSelection(std::nullopt);
@@ -478,6 +484,7 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, ImFont* 
   ImGui::PushFont(codeFont);
   textEditor_.setSourceFocusModeContextMenu(sourceFocusMode_);
   textEditor_.render("##source");
+  updateSourceHoverPreview();
   if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
     toggleSourceFocusMode();
   }
@@ -954,6 +961,86 @@ bool EditorShell::highlightSelectionSourceIfNeeded() {
   return false;
 }
 
+std::optional<StyleFocus> EditorShell::styleFocusAtSourceOffset(std::size_t sourceOffset) const {
+  std::optional<StyleFocus> styleFocus =
+      ComputeStyleFocusAtSourceOffset(app_.document().document(), sourceOffset);
+  if (!styleFocus.has_value() && sourceOffset > 0) {
+    styleFocus = ComputeStyleFocusAtSourceOffset(app_.document().document(), sourceOffset - 1);
+  }
+
+  return styleFocus;
+}
+
+std::vector<svg::SVGElement> EditorShell::sourceHoverElements() const {
+  if (!app_.hasDocument() || textEditor_.isTextChanged()) {
+    return {};
+  }
+
+  const std::optional<Coordinates> hoverPosition = textEditor_.hoveredTextPosition();
+  if (!hoverPosition.has_value()) {
+    return {};
+  }
+
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  const std::string editorSource = textEditor_.getText();
+  if (editorSource != documentSource) {
+    return {};
+  }
+
+  const std::size_t hoverOffset = textEditor_.getByteOffsetAtCoordinates(*hoverPosition);
+  if (std::optional<StyleFocus> styleFocus = styleFocusAtSourceOffset(hoverOffset)) {
+    return styleFocus->impactedElements;
+  }
+
+  std::optional<svg::SVGElement> element =
+      FindElementNearSourceOffset(app_.document().document(), editorSource, hoverOffset);
+  if (!element.has_value()) {
+    return {};
+  }
+
+  return {*element};
+}
+
+std::vector<SourceByteRange> EditorShell::sourceHoverRangesForElements(
+    const std::vector<svg::SVGElement>& elements) const {
+  if (elements.empty() || !app_.hasDocument() || textEditor_.isTextChanged()) {
+    return {};
+  }
+
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  if (textEditor_.getText() != documentSource) {
+    return {};
+  }
+
+  std::vector<SourceByteRange> ranges;
+  ranges.reserve(elements.size());
+  for (const svg::SVGElement& element : elements) {
+    if (std::optional<SourceByteRange> range = ElementSourceByteRange(element, documentSource)) {
+      ranges.push_back(*range);
+    }
+  }
+  return ranges;
+}
+
+void EditorShell::updateSourceHoverPreview() {
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    const bool overlayChanged = renderCoordinator_.setSourceHoverElements({});
+    const bool sourceChanged = textEditor_.clearHoverSourceRanges();
+    if (overlayChanged || sourceChanged) {
+      window_.wakeEventLoop();
+    }
+    return;
+  }
+
+  const std::vector<svg::SVGElement> hoverElements = sourceHoverElements();
+  const bool overlayChanged = renderCoordinator_.setSourceHoverElements(hoverElements);
+  const bool sourceChanged =
+      textEditor_.setHoverSourceRanges(sourceHoverRangesForElements(hoverElements));
+  if (overlayChanged || sourceChanged) {
+    window_.wakeEventLoop();
+  }
+}
+
 std::optional<StyleFocus> EditorShell::styleFocusAtSourceCursor() {
   if (!app_.hasDocument() || textEditor_.isTextChanged()) {
     return std::nullopt;
@@ -965,13 +1052,7 @@ std::optional<StyleFocus> EditorShell::styleFocusAtSourceCursor() {
 
   const std::size_t cursorOffset =
       textEditor_.getByteOffsetAtCoordinates(textEditor_.getCursorPosition());
-  std::optional<StyleFocus> styleFocus =
-      ComputeStyleFocusAtSourceOffset(app_.document().document(), cursorOffset);
-  if (!styleFocus.has_value() && cursorOffset > 0) {
-    styleFocus = ComputeStyleFocusAtSourceOffset(app_.document().document(), cursorOffset - 1);
-  }
-
-  return styleFocus;
+  return styleFocusAtSourceOffset(cursorOffset);
 }
 
 void EditorShell::applyStyleFocus(StyleFocus styleFocus) {

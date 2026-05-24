@@ -28,6 +28,9 @@ namespace {
 /// regardless of zoom.
 constexpr double kSelectionStrokePixels = 1.0;
 
+/// Desired on-screen stroke thickness for source-hover chrome.
+constexpr double kHoverStrokePixels = 1.5;
+
 /// Marquee stroke thickness — matches the prior ImGui chrome exactly.
 constexpr double kMarqueeStrokePixels = 1.5;
 
@@ -53,6 +56,31 @@ svg::PaintParams MakeHandlePaint(double worldStrokeWidth) {
   paint.strokeParams.strokeWidth = worldStrokeWidth;
   paint.strokeParams.lineCap = svg::StrokeLinecap::Butt;
   paint.strokeParams.lineJoin = svg::StrokeLinejoin::Miter;
+  paint.strokeParams.miterLimit = 4.0;
+  return paint;
+}
+
+svg::PaintParams MakeSourceHoverShapePaint(double worldStrokeWidth) {
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0x30)));
+  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0xff, 0xff, 0xff, 0xd0)));
+  paint.fillOpacity = 1.0;
+  paint.strokeOpacity = 1.0;
+  paint.strokeParams.strokeWidth = worldStrokeWidth;
+  paint.strokeParams.lineCap = svg::StrokeLinecap::Round;
+  paint.strokeParams.lineJoin = svg::StrokeLinejoin::Round;
+  paint.strokeParams.miterLimit = 4.0;
+  return paint;
+}
+
+svg::PaintParams MakeSourceHoverBoundsPaint(double worldStrokeWidth) {
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::None{};
+  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xc8)));
+  paint.strokeOpacity = 1.0;
+  paint.strokeParams.strokeWidth = worldStrokeWidth;
+  paint.strokeParams.lineCap = svg::StrokeLinecap::Round;
+  paint.strokeParams.lineJoin = svg::StrokeLinejoin::Round;
   paint.strokeParams.miterLimit = 4.0;
   return paint;
 }
@@ -146,6 +174,20 @@ Path TransformPathToDocument(const Path& path, const Transform2d& documentFromEl
   return builder.build();
 }
 
+void AppendPathItems(std::span<const svg::SVGElement> elements,
+                     std::vector<SelectionChromeSnapshot::PathItem>* out) {
+  for (const auto& element : elements) {
+    for (const auto& geometry : CollectRenderableGeometry(element)) {
+      if (const auto spline = geometry.computedSpline(); spline.has_value()) {
+        SelectionChromeSnapshot::PathItem item;
+        const Transform2d documentFromElement = geometry.elementFromWorld();
+        item.pathDoc = TransformPathToDocument(*spline, documentFromElement);
+        out->push_back(std::move(item));
+      }
+    }
+  }
+}
+
 }  // namespace
 
 void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& editor) {
@@ -186,7 +228,8 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
 SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
     const Transform2d& canvasFromDoc,
-    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview) {
+    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+    std::span<const svg::SVGElement> sourceHover) {
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = canvasFromDoc;
   snapshot.marqueeDoc = marqueeRectDoc;
@@ -196,7 +239,13 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     return scale > 1e-9 ? pixels / scale : pixels;
   };
   snapshot.selectionStrokeWidthWorld = pixelToWorld(kSelectionStrokePixels);
+  snapshot.hoverStrokeWidthWorld = pixelToWorld(kHoverStrokePixels);
   snapshot.marqueeStrokeWidthWorld = pixelToWorld(kMarqueeStrokePixels);
+
+  if (!sourceHover.empty()) {
+    AppendPathItems(sourceHover, &snapshot.hoverPaths);
+    snapshot.hoverAabbsDoc = SnapshotSelectionWorldBounds(sourceHover);
+  }
 
   if (selection.empty()) {
     return snapshot;
@@ -205,16 +254,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   // Per-element path data + transforms. `computedSpline` and
   // `elementFromWorld` both read registry state — done here, before
   // returning, so the post-return snapshot is fully self-contained.
-  for (const auto& element : selection) {
-    for (const auto& geometry : CollectRenderableGeometry(element)) {
-      if (const auto spline = geometry.computedSpline(); spline.has_value()) {
-        SelectionChromeSnapshot::PathItem item;
-        const Transform2d documentFromElement = geometry.elementFromWorld();
-        item.pathDoc = TransformPathToDocument(*spline, documentFromElement);
-        snapshot.paths.push_back(std::move(item));
-      }
-    }
-  }
+  AppendPathItems(selection, &snapshot.paths);
 
   // AABBs are computed inline from the selection's current DOM transforms
   // so they track the same frame as the per-element path outlines above.
@@ -245,10 +285,31 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
 void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
                                              const SelectionChromeSnapshot& snapshot) {
   ZoneScopedN("OverlayRenderer::drawChromeFromSnapshot");
-  if (snapshot.paths.empty() && snapshot.aabbsDoc.empty() &&
-      !snapshot.orientedBoundsDoc.has_value() && snapshot.handleBoxesDoc.empty() &&
-      !snapshot.marqueeDoc.has_value()) {
+  if (snapshot.paths.empty() && snapshot.hoverPaths.empty() && snapshot.aabbsDoc.empty() &&
+      snapshot.hoverAabbsDoc.empty() && !snapshot.orientedBoundsDoc.has_value() &&
+      snapshot.handleBoxesDoc.empty() && !snapshot.marqueeDoc.has_value()) {
     return;
+  }
+
+  if (!snapshot.hoverPaths.empty()) {
+    const svg::PaintParams hoverShapePaint =
+        MakeSourceHoverShapePaint(snapshot.hoverStrokeWidthWorld);
+    renderer.setPaint(hoverShapePaint);
+    renderer.setTransform(snapshot.canvasFromDoc);
+    for (const auto& item : snapshot.hoverPaths) {
+      svg::PathShape shape;
+      shape.path = item.pathDoc;
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, hoverShapePaint.strokeParams);
+    }
+  } else if (!snapshot.hoverAabbsDoc.empty()) {
+    const svg::PaintParams hoverBoundsPaint =
+        MakeSourceHoverBoundsPaint(snapshot.hoverStrokeWidthWorld);
+    renderer.setPaint(hoverBoundsPaint);
+    renderer.setTransform(snapshot.canvasFromDoc);
+    for (const Box2d& aabb : snapshot.hoverAabbsDoc) {
+      renderer.drawRect(aabb, hoverBoundsPaint.strokeParams);
+    }
   }
 
   const svg::PaintParams selectionStrokePaint =
@@ -322,14 +383,15 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
 void OverlayRenderer::drawChromeWithTransform(
     svg::Renderer& renderer, std::span<const svg::SVGElement> selection,
     const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc,
-    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview) {
+    const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
+    std::span<const svg::SVGElement> sourceHover) {
   ZoneScopedN("OverlayRenderer::drawChrome");
   // Route the live path through capture + draw so M7's snapshot
   // implementation is the single source of truth. Same output, same
   // performance characteristics (the capture is straight-line registry
   // reads + a small allocation).
-  const SelectionChromeSnapshot snapshot =
-      captureChromeSnapshot(selection, marqueeRectDoc, canvasFromDoc, activeBoundsPreview);
+  const SelectionChromeSnapshot snapshot = captureChromeSnapshot(
+      selection, marqueeRectDoc, canvasFromDoc, activeBoundsPreview, sourceHover);
   drawChromeFromSnapshot(renderer, snapshot);
 }
 

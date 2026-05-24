@@ -110,6 +110,27 @@ bool HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& eleme
   return true;
 }
 
+std::optional<SourceByteRange> ElementSourceByteRange(const svg::SVGElement& element,
+                                                      std::string_view source) {
+  auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+  if (!xmlNode.has_value()) {
+    return std::nullopt;
+  }
+
+  auto range = xmlNode->getNodeLocation();
+  if (!range.has_value()) {
+    return std::nullopt;
+  }
+
+  const std::optional<std::size_t> start = ResolveFileOffset(source, range->start);
+  const std::optional<std::size_t> end = ResolveFileOffset(source, range->end);
+  if (!start.has_value() || !end.has_value() || *end <= *start) {
+    return std::nullopt;
+  }
+
+  return SourceByteRange{.start = *start, .end = *end};
+}
+
 std::optional<svg::SVGElement> FindElementAtSourceOffset(const svg::SVGDocument& document,
                                                          std::string_view source,
                                                          std::size_t offset) {
@@ -120,11 +141,11 @@ std::optional<svg::SVGElement> FindElementAtSourceOffset(const svg::SVGDocument&
   return FindElementAtSourceOffsetImpl(document.svgElement(), source, offset);
 }
 
-std::optional<svg::SVGElement> FindElementAtSourceCursor(const svg::SVGDocument& document,
-                                                         const TextEditor& textEditor) {
-  const std::size_t offset = textEditor.getByteOffsetAtCoordinates(textEditor.getCursorPosition());
-  const std::string source = textEditor.getText();
-  std::optional<svg::SVGElement> current = FindElementAtSourceOffset(document, source, offset);
+std::optional<svg::SVGElement> FindElementNearSourceOffset(const svg::SVGDocument& document,
+                                                           std::string_view source,
+                                                           std::size_t offset) {
+  std::optional<svg::SVGElement> current =
+      offset < source.size() ? FindElementAtSourceOffset(document, source, offset) : std::nullopt;
   if (offset == 0) {
     return current;
   }
@@ -139,6 +160,13 @@ std::optional<svg::SVGElement> FindElementAtSourceCursor(const svg::SVGDocument&
   }
 
   return current;
+}
+
+std::optional<svg::SVGElement> FindElementAtSourceCursor(const svg::SVGDocument& document,
+                                                         const TextEditor& textEditor) {
+  const std::size_t offset = textEditor.getByteOffsetAtCoordinates(textEditor.getCursorPosition());
+  const std::string source = textEditor.getText();
+  return FindElementNearSourceOffset(document, source, offset);
 }
 
 }  // namespace donner::editor

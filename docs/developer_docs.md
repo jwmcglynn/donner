@@ -12,6 +12,7 @@
 - \subpage Maintenance
 - \subpage Devtools
 - \subpage EditorVisualDebugging
+- \subpage EditorSourceFocus
 - \subpage AgentRoster
 - \subpage TerminalImageViewerGuide
 - \subpage ReSvgTestSuite

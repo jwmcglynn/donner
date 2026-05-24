@@ -75,6 +75,21 @@ TEST(SourceSelectionTest, FindsDeepestElementAtSourceOffset) {
   EXPECT_EQ(group->id(), "layer");
 }
 
+TEST(SourceSelectionTest, ReturnsElementSourceByteRange) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::string source(app.document().document().source());
+
+  auto rect = app.document().document().querySelector("#target");
+  ASSERT_TRUE(rect.has_value());
+
+  const std::optional<SourceByteRange> range = ElementSourceByteRange(*rect, source);
+  ASSERT_TRUE(range.has_value());
+  const std::string selected = source.substr(range->start, range->end - range->start);
+  EXPECT_NE(selected.find("<rect"), std::string::npos);
+  EXPECT_NE(selected.find("id=\"target\""), std::string::npos);
+}
+
 TEST(SourceSelectionTest, FindsElementAtTextEditorCursor) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
@@ -110,6 +125,23 @@ TEST(SourceSelectionTest, CursorImmediatelyAfterGroupOpeningTagSelectsGroup) {
 
   std::optional<svg::SVGElement> group =
       FindElementAtSourceCursor(app.document().document(), textEditor);
+  ASSERT_TRUE(group.has_value());
+  EXPECT_EQ(group->id(), "layer");
+}
+
+TEST(SourceSelectionTest, FindsElementNearSourceOffsetAfterGroupOpeningTag) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="layer"><rect id="target"/></g></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const std::string currentSource(app.document().document().source());
+
+  const std::size_t childStart = currentSource.find("<rect");
+  ASSERT_NE(childStart, std::string::npos);
+
+  std::optional<svg::SVGElement> group =
+      FindElementNearSourceOffset(app.document().document(), currentSource, childStart);
   ASSERT_TRUE(group.has_value());
   EXPECT_EQ(group->id(), "layer");
 }

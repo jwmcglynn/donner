@@ -300,6 +300,10 @@ public:
   bool isCursorPositionChanged() const { return cursorPositionChanged_; }
   /// Whether mouse input moved the cursor during the current render frame.
   bool didMouseChangeCursorPosition() const { return cursorPositionChangedByMouse_; }
+  /// Source coordinates currently hovered by the mouse, if the text area is hovered.
+  [[nodiscard]] std::optional<Coordinates> hoveredTextPosition() const {
+    return hoveredTextPosition_;
+  }
   void resetTextChanged() { core_.resetTextChanged(); }
   /// True if user-facing edits have pending byte-level source intents.
   bool hasPendingSourceEditIntents() const { return core_.hasPendingSourceEditIntents(); }
@@ -560,6 +564,14 @@ public:
   // Line highlighting
   void setHighlightedLines(const std::vector<int>& lines) { highlightedLines_ = lines; }
   void clearHighlightedLines() { highlightedLines_.clear(); }
+  /// Set subtle source ranges to highlight while the source mouse hover is active.
+  bool setHoverSourceRanges(std::vector<SourceByteRange> ranges);
+  /// Clear source-hover highlights.
+  bool clearHoverSourceRanges() { return setHoverSourceRanges({}); }
+  /// Active source-hover ranges.
+  [[nodiscard]] const std::vector<SourceByteRange>& hoverSourceRanges() const {
+    return hoverSourceRanges_;
+  }
 
   /// Install a source-focus partition. Hidden lines are folded from the view only.
   void setFocusPartition(const FocusPartition& partition);
@@ -1017,7 +1029,8 @@ private:
   // place; the shell reads them via aliased references.
   bool& scrollbarMarkers_;
   std::vector<int>& changedLines_;
-  std::vector<int> highlightedLines_;  //!< Lines to highlight
+  std::vector<int> highlightedLines_;               //!< Lines to highlight
+  std::vector<SourceByteRange> hoverSourceRanges_;  //!< Source ranges highlighted on hover
   FocusPartition focusPartition_;
   bool focusPartitionActive_ = false;
   FlashDecorations flashDecorations_;
@@ -1060,6 +1073,7 @@ private:
   bool focused_ = false;                                    //!< Editor has keyboard focus
   bool withinRender_ = false;                               //!< Currently rendering
   bool cursorPositionChangedByMouse_ = false;               //!< Mouse moved cursor this frame
+  std::optional<Coordinates> hoveredTextPosition_;          //!< Text coordinates under the mouse
   float textStart_ = 20.0f;                                 //!< X offset where text begins
   int leftMargin_ = kLineNumberSpace;                       //!< Left margin width
   bool handleKeyboardInputs_ = true;                        //!< Process keyboard input
@@ -1088,6 +1102,7 @@ private:
 
   // Layout and rendering. Interactive-selection trackers moved to core_.
   ImVec2 uiCursorPos_;             //!< Current UI cursor position
+  ImVec2 contentRegionMax_{};      //!< Last rendered content-region max, relative to current window
   ImVec2 findOrigin_;              //!< Search dialog origin
   float windowWidth_;              //!< Current window width
   ImVec2 rightClickPos_;           //!< Position of right click
@@ -1232,6 +1247,7 @@ private:
   [[nodiscard]] bool isFocusHiddenRangeExpanded(LineRange range) const;
   void expandFocusHiddenRange(LineRange range);
   [[nodiscard]] bool tryExpandFocusHiddenPlaceholderAt(const ImVec2& position);
+  void updateHoveredTextPosition();
   [[nodiscard]] int visualLineIndexForCoordinates(const Coordinates& position) const;
   [[nodiscard]] Coordinates visualScreenPosToCoordinates(const ImVec2& position) const;
 

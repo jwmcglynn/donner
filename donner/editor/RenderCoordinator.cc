@@ -151,11 +151,22 @@ void RenderCoordinator::resetForLoadedDocument() {
   pendingOverlayVersion_ = 0;
   displayedDocVersion_ = 0;
   lastOverlaySelectionVec_.clear();
+  sourceHoverElements_.clear();
+  lastOverlaySourceHoverVec_.clear();
   lastOverlayCanvasSize_ = Vector2i::Zero();
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   lastOverlayMarqueeRectDoc_.reset();
   lastOverlayActiveBoundsPreview_.reset();
   renderScheduler_.reset();
+}
+
+bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elements) {
+  if (sourceHoverElements_ == elements) {
+    return false;
+  }
+
+  sourceHoverElements_ = std::move(elements);
+  return true;
 }
 
 void RenderCoordinator::refreshSelectionBoundsCache(EditorApp& app) {
@@ -204,9 +215,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   // Overlay AABBs are computed from the same live DOM snapshot as the path
   // outlines. `selectionBoundsCache_` is maintained only for main-loop
   // selection-change detection and does not gate overlay geometry.
-  OverlayRenderer::drawChromeWithTransform(overlayRenderer_,
-                                           std::span<const svg::SVGElement>(overlaySelection),
-                                           marqueeRectDoc, canvasFromDoc, chromeBoundsPreview);
+  OverlayRenderer::drawChromeWithTransform(
+      overlayRenderer_, std::span<const svg::SVGElement>(overlaySelection), marqueeRectDoc,
+      canvasFromDoc, chromeBoundsPreview, std::span<const svg::SVGElement>(sourceHoverElements_));
   overlayRenderer_.endFrame();
   pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
   if (pendingOverlayTexture_ != nullptr) {
@@ -246,6 +257,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   }
 
   lastOverlaySelectionVec_ = overlaySelection;
+  lastOverlaySourceHoverVec_ = sourceHoverElements_;
   lastOverlayCanvasSize_ = currentCanvasSize;
   lastOverlayVersion_ = currentVersion;
   lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
@@ -359,6 +371,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 
   const auto& overlaySelection = app.selectedElements();
   const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec_;
+  const bool sourceHoverDiffers = sourceHoverElements_ != lastOverlaySourceHoverVec_;
   const std::optional<Box2d> marqueeRectDoc = selectTool.marqueeRect();
   const auto activeBoundsPreview = selectTool.activeTransformBoundsPreview();
   // The marquee rect updates every mouse-move during a marquee drag and
@@ -371,9 +384,9 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool canvasDiffers = currentCanvasSize != lastOverlayCanvasSize_;
   const bool overlayVersionDiffers = currentVersion != lastOverlayVersion_;
   if ((!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value() ||
-       marqueeRectDoc.has_value() || activeBoundsPreviewDiffers) &&
-      (selectionDiffers || marqueeDiffers || canvasDiffers || activeBoundsPreviewDiffers ||
-       overlayVersionDiffers)) {
+       marqueeRectDoc.has_value() || activeBoundsPreviewDiffers || sourceHoverDiffers) &&
+      (selectionDiffers || sourceHoverDiffers || marqueeDiffers || canvasDiffers ||
+       activeBoundsPreviewDiffers || overlayVersionDiffers)) {
     rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc,
                                         dragPreview.has_value()
                                             ? OverlayUploadMode::Immediate

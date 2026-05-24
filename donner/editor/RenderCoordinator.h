@@ -86,6 +86,11 @@ public:
   /// Return true when freshly rasterized overlay chrome is waiting for a
   /// matching async-render result before upload.
   [[nodiscard]] bool hasPendingOverlayForTesting() const { return pendingOverlayVersion_ != 0; }
+  /// Replace transient source-hover chrome elements.
+  ///
+  /// @param elements Elements to highlight as source-hover preview chrome.
+  /// @return true if the hover preview changed.
+  bool setSourceHoverElements(std::vector<svg::SVGElement> elements);
 
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
@@ -137,6 +142,8 @@ private:
   std::uint64_t displayedDocVersion_ = 0;
 
   std::vector<svg::SVGElement> lastOverlaySelectionVec_;
+  std::vector<svg::SVGElement> sourceHoverElements_;
+  std::vector<svg::SVGElement> lastOverlaySourceHoverVec_;
   Vector2i lastOverlayCanvasSize_ = Vector2i::Zero();
   std::uint64_t lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   /// Last marquee rect baked into the overlay texture, or nullopt if

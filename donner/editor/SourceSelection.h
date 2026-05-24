@@ -21,6 +21,16 @@ namespace donner::editor {
 bool HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& element);
 
 /**
+ * Return the serialized XML node byte range for an SVG element.
+ *
+ * @param element SVG element whose source node should be resolved.
+ * @param source Source text corresponding to the element's document.
+ * @return Half-open byte range for the node, or \c std::nullopt if no source range exists.
+ */
+std::optional<SourceByteRange> ElementSourceByteRange(const svg::SVGElement& element,
+                                                      std::string_view source);
+
+/**
  * Finds the deepest SVG element whose source range contains \p offset.
  *
  * @param document Source-backed SVG document to inspect.
@@ -31,6 +41,22 @@ bool HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& eleme
 std::optional<svg::SVGElement> FindElementAtSourceOffset(const svg::SVGDocument& document,
                                                          std::string_view source,
                                                          std::size_t offset);
+
+/**
+ * Finds the SVG element nearest a source caret-like offset.
+ *
+ * Unlike \ref FindElementAtSourceOffset, this treats positions immediately after an opening or
+ * closing tag as still referring to that tag's element. This is useful for cursor and hover
+ * interactions where the UI position can land on the character cell after the source token.
+ *
+ * @param document Source-backed SVG document to inspect.
+ * @param source Source text corresponding to \p document.
+ * @param offset Byte offset in \p source.
+ * @return Best SVG element at or immediately before \p offset, or \c std::nullopt.
+ */
+std::optional<svg::SVGElement> FindElementNearSourceOffset(const svg::SVGDocument& document,
+                                                           std::string_view source,
+                                                           std::size_t offset);
 
 /**
  * Finds the deepest SVG element at the text editor cursor.
