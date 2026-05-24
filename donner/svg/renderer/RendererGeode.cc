@@ -3131,6 +3131,16 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   const float textFontSizePx = static_cast<float>(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
+  // Element-level pattern fill: the driver stages a `patternFillPaint` slot
+  // (via renderPattern / endPatternTile) for a `<text fill="url(#pattern)">`,
+  // to be consumed by the next fill. Mirror `RendererTinySkia::drawText`, which
+  // fills the glyph outlines with the pattern (clipped to the glyphs). We must
+  // also reset the slot once below so it does not leak onto the next shape's
+  // `fillResolved` -- the bug this fixes was an unfilled glyph + the staged
+  // pattern bleeding onto the following element. Per-span pattern fill is a
+  // separate gap (matching the element-level handling here).
+  const bool hasPatternFill = impl_->patternFillPaint.has_value();
+
   // Resolve a default fill colour from the text-element-level paint
   // state. Per-span fills override below when present.
   std::optional<css::RGBA> defaultFill = impl_->resolveSolidFill();
@@ -3196,6 +3206,11 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const css::RGBA spanFill = resolveSpanFill(runIndex);
     const bool hasFill = spanFill.a != 0;
 
+    // A run inherits the element-level pattern fill when it has no solid fill of
+    // its own (a per-span solid/gradient fill overrides). `resolveSpanFill`
+    // returns alpha=0 for a pattern paint ref, so `!hasFill` is the marker.
+    const bool usePatternFill = hasPatternFill && !hasFill;
+
     // Resolve per-run stroke (solid only; gradient/pattern text stroke is a
     // separate gap). A per-span stroke overrides the element-level stroke.
     // Mirrors `RendererTinySkia::drawText`.
@@ -3221,7 +3236,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
     const TextDecoration spanDecoration =
         runIndex < text.spans.size() ? text.spans[runIndex].textDecoration : params.textDecoration;
-    if (!hasFill && !strokeColor.has_value() && spanDecoration == TextDecoration::None) {
+    if (!hasFill && !usePatternFill && !strokeColor.has_value() &&
+        spanDecoration == TextDecoration::None) {
       continue;  // Nothing to fill, stroke, or decorate.
     }
 
@@ -3251,7 +3267,16 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       }
 
       const Path placed = transformPath(glyphPath, glyphFromLocal);
-      if (hasFill) {
+      if (usePatternFill) {
+        // Fill the glyph outline with the staged pattern tile, same as a
+        // pattern-filled `<path>` (see Impl::fillResolved). The glyph path is
+        // already in the element's local space and `deviceFromLocalTransform`
+        // is set above, so `buildPatternPaint` composes the right sample space.
+        impl_->syncTransform();
+        impl_->encoder->fillPathPattern(
+            placed, FillRule::NonZero,
+            impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
+      } else if (hasFill) {
         impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
       }
       if (strokeColor.has_value()) {
@@ -3300,12 +3325,16 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
                                    : static_cast<double>(ascent - descent) * decoScale / 18.0;
 
       // Decoration fill colour (solid): declaring element's decoration fill,
-      // falling back to the span fill.
+      // falling back to the span fill. When the element uses a pattern fill and
+      // the decoration has no explicit solid fill of its own, the decoration
+      // inherits the pattern too (per CSS Text Decoration §3 + tiny-skia).
       css::RGBA decoFill = spanFill;
+      bool decoUsesPattern = usePatternFill;
       if (!std::holds_alternative<PaintServer::None>(span.resolvedDecorationFill)) {
         if (auto c = impl_->resolveSolidPaint(span.resolvedDecorationFill,
                                               span.decorationFillOpacity * span.opacity)) {
           decoFill = *c;
+          decoUsesPattern = false;
         }
       }
       // Decoration stroke (solid).
@@ -3328,7 +3357,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         if (path.empty()) {
           return;
         }
-        if (decoFill.a != 0) {
+        if (decoUsesPattern) {
+          impl_->syncTransform();
+          impl_->encoder->fillPathPattern(
+              path, FillRule::NonZero,
+              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
+        } else if (decoFill.a != 0) {
           impl_->encoder->fillPath(path, decoFill, FillRule::NonZero);
         }
         if (decoStrokeColor.has_value()) {
@@ -3471,6 +3505,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         }
       }
     }
+  }
+
+  // Consume the element-level pattern fill slot exactly once. Even if no run
+  // actually used it (e.g. every glyph was .notdef), it must be reset here so
+  // the staged pattern does not leak onto the next shape's `fillResolved`.
+  if (hasPatternFill) {
+    impl_->patternFillPaint.reset();
   }
 #else
   (void)registry;
