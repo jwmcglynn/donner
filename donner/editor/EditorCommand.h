@@ -56,11 +56,6 @@ struct EditorCommand {
     /// the registry, just orphaned. This is a "soft delete" so any
     /// in-flight references (stale selection, undo snapshots) stay
     /// valid. Not coalesced.
-    ///
-    /// Undo for DeleteElement is **not** supported in M2: the design
-    /// doc defers element create/delete snapshots to when path tools
-    /// return. Users wanting to undo a delete need to edit the source
-    /// pane directly.
     DeleteElement,
   };
 

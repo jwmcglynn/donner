@@ -9,11 +9,13 @@
 #include <fstream>
 #include <optional>
 #include <sstream>
+#include <string>
 #include <string_view>
 
 #include "GLFW/glfw3.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
+#include "donner/editor/FocusView.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/SourceSelection.h"
@@ -69,6 +71,14 @@ std::optional<std::string> LoadFile(const std::string& filename) {
   std::ostringstream out;
   out << file.rdbuf();
   return std::move(out).str();
+}
+
+std::string CanonicalizeForTextEditor(std::string_view source) {
+  std::string result(source);
+  if (!result.empty() && result.back() == '\n') {
+    result.pop_back();
+  }
+  return result;
 }
 
 Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
@@ -295,6 +305,7 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   app_.setCurrentFilePath(std::string(path));
   app_.setCleanSourceText(canonicalSource);
   lastHighlightedSelection_.reset();
+  textEditor_.clearFocusPartition();
   lastPostedScreenPoint_.reset();
   renderCoordinator_.resetForLoadedDocument();
   textures_.resetComposited();
@@ -453,16 +464,7 @@ void EditorShell::handleGlobalShortcuts() {
                          ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
   if (CanDeleteSelectedElementsFromShortcut(deleteKey, app_.hasSelection(), anyPopupOpen,
                                             sourcePaneFocused)) {
-    const std::vector<svg::SVGElement> selected = app_.selectedElements();
-    app_.setSelection(std::nullopt);
-    for (const auto& element : selected) {
-      if (auto target = captureAttributeWritebackTarget(element); target.has_value()) {
-        app_.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{
-            .target = *target,
-        });
-      }
-      app_.applyMutation(EditorCommand::DeleteElementCommand(element));
-    }
+    std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
   }
 }
 
@@ -473,7 +475,12 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, ImFont* 
   ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, paneHeight), ImGuiCond_Always);
   ImGui::Begin("Source", nullptr, kPaneFlags);
   ImGui::PushFont(codeFont);
+  textEditor_.setSourceFocusModeContextMenu(sourceFocusMode_);
   textEditor_.render("##source");
+  if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
+    toggleSourceFocusMode();
+  }
+  syncSelectionFromSourceCursorIfNeeded();
   ImGui::PopFont();
   documentSyncController_.handleTextEdits(app_, textEditor_, ImGui::GetIO().DeltaTime);
   ImGui::End();
@@ -929,14 +936,81 @@ void EditorShell::renderFloatingLayerPanel() {
 bool EditorShell::highlightSelectionSourceIfNeeded() {
   const auto& selectionNow = app_.selectedElement();
   if (selectionNow != lastHighlightedSelection_) {
-    if (selectionNow.has_value()) {
+    if (sourceSelectionOriginatedInText_) {
+      if (sourceFocusMode_) {
+        updateSourceFocusView(/*scrollToSelection=*/false);
+      } else {
+        textEditor_.clearFocusPartition();
+      }
+      sourceSelectionOriginatedInText_ = false;
+    } else if (sourceFocusMode_) {
+      updateSourceFocusView(/*scrollToSelection=*/true);
+    } else if (selectionNow.has_value()) {
       std::ignore = HighlightElementSource(textEditor_, *selectionNow);
+    } else {
+      textEditor_.clearFocusPartition();
     }
     lastHighlightedSelection_ = selectionNow;
     return true;
   }
 
   return false;
+}
+
+void EditorShell::syncSelectionFromSourceCursorIfNeeded() {
+  const bool sourceCursorNavigationActive =
+      textEditor_.isFocused() || textEditor_.didMouseChangeCursorPosition();
+  if (!textEditor_.isCursorPositionChanged() || !sourceCursorNavigationActive ||
+      !app_.hasDocument() || textEditor_.isTextChanged()) {
+    return;
+  }
+
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  if (textEditor_.getText() != documentSource) {
+    return;
+  }
+
+  std::optional<svg::SVGElement> element =
+      FindElementAtSourceCursor(app_.document().document(), textEditor_);
+  if (!element.has_value()) {
+    return;
+  }
+
+  if (app_.selectedElements().size() == 1u && app_.selectedElements().front() == *element) {
+    return;
+  }
+
+  app_.setSelection(*element);
+  sourceSelectionOriginatedInText_ = true;
+  if (sourceFocusMode_) {
+    updateSourceFocusView(/*scrollToSelection=*/false);
+  } else {
+    textEditor_.clearFocusPartition();
+  }
+  window_.wakeEventLoop();
+}
+
+void EditorShell::updateSourceFocusView(bool scrollToSelection) {
+  if (!sourceFocusMode_ || !app_.hasDocument() || !app_.selectedElement().has_value()) {
+    textEditor_.clearFocusPartition();
+    return;
+  }
+
+  const svg::SVGElement selected = *app_.selectedElement();
+  textEditor_.setFocusPartition(ComputeFocusPartition(app_.document().document(), selected));
+  if (scrollToSelection) {
+    std::ignore = HighlightElementSource(textEditor_, selected);
+  }
+}
+
+void EditorShell::setSourceFocusMode(bool enabled) {
+  sourceFocusMode_ = enabled;
+  updateSourceFocusView(/*scrollToSelection=*/enabled);
+  window_.wakeEventLoop();
+}
+
+void EditorShell::toggleSourceFocusMode() {
+  setSourceFocusMode(!sourceFocusMode_);
 }
 
 void EditorShell::runFrame() {
@@ -1031,6 +1105,7 @@ void EditorShell::runFrame() {
       .canSave = app_.hasDocument(),
       .canUndo = app_.canUndo(),
       .canRedo = app_.canRedo(),
+      .sourceFocusMode = sourceFocusMode_,
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -1077,6 +1152,9 @@ void EditorShell::runFrame() {
   if (menuActions.actualSize) {
     interactionController_.resetToActualSize();
   }
+  if (menuActions.toggleSourceFocusMode) {
+    toggleSourceFocusMode();
+  }
 
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
@@ -1096,6 +1174,9 @@ void EditorShell::runFrame() {
     renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
   }
   renderFloatingLayerPanel();
+  if (textEditor_.nextFlashWakeSeconds().has_value()) {
+    window_.wakeEventLoop();
+  }
 }
 
 }  // namespace donner::editor

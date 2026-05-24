@@ -67,6 +67,34 @@ TEST_F(DocumentSyncControllerTest, InitialTextDoesNotMarkDocumentDirty) {
   EXPECT_FALSE(textEditor_.isTextChanged());
 }
 
+TEST_F(DocumentSyncControllerTest, MultiCharacterUserSourceEditQueuesFlashWake) {
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.nextFlashWakeSeconds().has_value());
+
+  const std::size_t insertOffset = textEditor_.getText().find("<rect");
+  ASSERT_NE(insertOffset, std::string::npos);
+  textEditor_.setCursorPosition(textEditor_.getCoordinatesAtByteOffset(insertOffset));
+  textEditor_.insertText("<!-- note -->");
+
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  EXPECT_TRUE(textEditor_.nextFlashWakeSeconds().has_value());
+}
+
+TEST_F(DocumentSyncControllerTest, SingleCharacterUserSourceEditDoesNotQueueFlashWake) {
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.nextFlashWakeSeconds().has_value());
+
+  const std::size_t insertOffset = textEditor_.getText().find("<rect");
+  ASSERT_NE(insertOffset, std::string::npos);
+  textEditor_.setCursorPosition(textEditor_.getCoordinatesAtByteOffset(insertOffset));
+  textEditor_.insertText(" ");
+
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  EXPECT_FALSE(textEditor_.nextFlashWakeSeconds().has_value());
+}
+
 TEST_F(DocumentSyncControllerTest, RevertingTextToCleanBaselineClearsDirtyFlag) {
   textEditor_.setText(std::string(kTrivialSvg) + "\n<!-- edit -->\n");
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
@@ -187,6 +215,47 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaW
   EXPECT_FALSE(textEditor_.isTextChanged());
   EXPECT_TRUE(app_.document().queue().empty());
   EXPECT_FALSE(app_.document().document().querySelector("#r1").has_value());
+}
+
+TEST_F(DocumentSyncControllerTest, UiDeleteUndoRestoresDeletedElementAndSourceText) {
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kTwoRectSvg);
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  ASSERT_TRUE(app.deleteSelectionWithUndo(textEditor.getText()));
+  ASSERT_TRUE(app.canUndo());
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_EQ(textEditor.getText().find("id=\"r1\""), std::string::npos);
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_EQ(textEditor.getText(), std::string(kTwoRectSvg));
+  EXPECT_FALSE(app.isDirty());
+  ASSERT_TRUE(app.canRedo());
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_EQ(textEditor.getText().find("id=\"r1\""), std::string::npos);
 }
 
 TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTrailingNewline) {

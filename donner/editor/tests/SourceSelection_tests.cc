@@ -55,6 +55,83 @@ TEST(SourceSelectionTest, HighlightsElementRangeResolvedFromSourceStoreOffset) {
   EXPECT_NE(textEditor.getSelectedText().find("fill=\"red\""), std::string::npos);
 }
 
+TEST(SourceSelectionTest, FindsDeepestElementAtSourceOffset) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::string source(app.document().document().source());
+
+  const std::size_t rectOffset = source.find("id=\"target\"");
+  ASSERT_NE(rectOffset, std::string::npos);
+  std::optional<svg::SVGElement> rect =
+      FindElementAtSourceOffset(app.document().document(), source, rectOffset);
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->id(), "target");
+
+  const std::size_t groupBodyOffset = source.find("\n    <rect");
+  ASSERT_NE(groupBodyOffset, std::string::npos);
+  std::optional<svg::SVGElement> group =
+      FindElementAtSourceOffset(app.document().document(), source, groupBodyOffset + 1);
+  ASSERT_TRUE(group.has_value());
+  EXPECT_EQ(group->id(), "layer");
+}
+
+TEST(SourceSelectionTest, FindsElementAtTextEditorCursor) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::string source(app.document().document().source());
+
+  TextEditor textEditor;
+  textEditor.setText(source);
+
+  const std::size_t groupOffset = source.find("<g id=\"layer\"");
+  ASSERT_NE(groupOffset, std::string::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(groupOffset + 2));
+
+  std::optional<svg::SVGElement> group =
+      FindElementAtSourceCursor(app.document().document(), textEditor);
+  ASSERT_TRUE(group.has_value());
+  EXPECT_EQ(group->id(), "layer");
+}
+
+TEST(SourceSelectionTest, CursorImmediatelyAfterGroupOpeningTagSelectsGroup) {
+  constexpr std::string_view source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="layer"><rect id="target"/></g></svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const std::string currentSource(app.document().document().source());
+
+  TextEditor textEditor;
+  textEditor.setText(currentSource);
+
+  const std::size_t childStart = currentSource.find("<rect");
+  ASSERT_NE(childStart, std::string::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(childStart));
+
+  std::optional<svg::SVGElement> group =
+      FindElementAtSourceCursor(app.document().document(), textEditor);
+  ASSERT_TRUE(group.has_value());
+  EXPECT_EQ(group->id(), "layer");
+}
+
+TEST(SourceSelectionTest, CursorImmediatelyAfterGroupClosingTagSelectsGroup) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::string source(app.document().document().source());
+
+  TextEditor textEditor;
+  textEditor.setText(source);
+
+  const std::size_t closingTagEnd = source.find("</g>");
+  ASSERT_NE(closingTagEnd, std::string::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(closingTagEnd + 4));
+
+  std::optional<svg::SVGElement> group =
+      FindElementAtSourceCursor(app.document().document(), textEditor);
+  ASSERT_TRUE(group.has_value());
+  EXPECT_EQ(group->id(), "layer");
+}
+
 TEST(SourceSelectionTest, HighlightsEachDonnerSplashLetterNode) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {

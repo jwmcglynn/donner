@@ -75,6 +75,10 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
   }
 
   if (ImGui::BeginMenu("View")) {
+    if (ImGui::MenuItem("Source Focus Mode", nullptr, state.sourceFocusMode)) {
+      actions.toggleSourceFocusMode = true;
+    }
+    ImGui::Separator();
     if (ImGui::MenuItem("Zoom In", "Cmd+=")) {
       actions.zoomIn = true;
     }

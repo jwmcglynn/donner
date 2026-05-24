@@ -117,6 +117,31 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "focus_view",
+    srcs = ["FocusView.cc"],
+    hdrs = ["FocusView.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "flash_decorations",
+    srcs = ["FlashDecorations.cc"],
+    hdrs = ["FlashDecorations.h"],
+    deps = [],
+)
+
+donner_cc_library(
+    name = "soft_wrap",
+    srcs = ["SoftWrap.cc"],
+    hdrs = ["SoftWrap.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "render_pane_gesture",
     srcs = ["RenderPaneGesture.cc"],
     hdrs = ["RenderPaneGesture.h"],
@@ -512,6 +537,7 @@ donner_cc_library(
         ":editor_app",
         ":editor_input_bridge",
         ":editor_shell_layout",
+        ":focus_view",
         ":gl_texture_cache",
         ":imgui_headers",
         ":keyboard_shortcut_policy",
@@ -782,7 +808,10 @@ donner_cc_library(
     srcs = ["TextEditor.cc"],
     hdrs = ["TextEditor.h"],
     deps = [
+        ":flash_decorations",
+        ":focus_view",
         ":imgui_headers",
+        ":soft_wrap",
         ":source_edit_intent",
         ":text_buffer",
         ":text_editor_core",

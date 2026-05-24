@@ -10,6 +10,7 @@ struct MenuBarState {
   bool canSave = false;
   bool canUndo = false;
   bool canRedo = false;
+  bool sourceFocusMode = true;
 };
 
 struct MenuBarActions {
@@ -27,6 +28,7 @@ struct MenuBarActions {
   bool zoomIn = false;
   bool zoomOut = false;
   bool actualSize = false;
+  bool toggleSourceFocusMode = false;
 };
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.

@@ -16,6 +16,7 @@
 /// belongs). It is just enough surface for `SelectTool` to do its job.
 
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -125,6 +126,15 @@ public:
   /// Drain and apply any pending mutations. Called once per frame at the
   /// start of the main loop. Returns true if any commands were applied.
   bool flushFrame();
+
+  /**
+   * Delete the current selection and record a source-level undo entry.
+   *
+   * @param currentSourceText The source-pane text that is in sync with the
+   *   current document.
+   * @return true if there was a selection to delete.
+   */
+  bool deleteSelectionWithUndo(std::string_view currentSourceText);
 
   // ---------------------------------------------------------------------------
   // Selection

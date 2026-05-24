@@ -14,6 +14,9 @@
 #include <vector>
 
 #include "donner/base/RcString.h"
+#include "donner/editor/FlashDecorations.h"
+#include "donner/editor/FocusView.h"
+#include "donner/editor/SoftWrap.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditorCore.h"
 
@@ -277,6 +280,15 @@ public:
   }
 
   /**
+   * Resolve editor coordinates to a full-buffer byte offset.
+   *
+   * @param coordinates Coordinates in \ref getText().
+   */
+  std::size_t getByteOffsetAtCoordinates(const Coordinates& coordinates) const {
+    return text_.getByteOffset(coordinates);
+  }
+
+  /**
    * Get currently selected text.
    * @return String containing selected text, or empty if no selection
    */
@@ -286,6 +298,8 @@ public:
   bool isFocused() const { return focused_; }
   bool isTextChanged() const { return core_.isTextChanged(); }
   bool isCursorPositionChanged() const { return cursorPositionChanged_; }
+  /// Whether mouse input moved the cursor during the current render frame.
+  bool didMouseChangeCursorPosition() const { return cursorPositionChangedByMouse_; }
   void resetTextChanged() { core_.resetTextChanged(); }
   /// True if user-facing edits have pending byte-level source intents.
   bool hasPendingSourceEditIntents() const { return core_.hasPendingSourceEditIntents(); }
@@ -344,6 +358,22 @@ public:
 
   void setImGuiChildIgnored(bool value) { ignoreImGuiChild_ = value; }
   bool isImGuiChildIgnored() const { return ignoreImGuiChild_; }
+
+  /// Show a source-focus toggle in the editor context menu.
+  void setSourceFocusModeContextMenu(bool checked) {
+    sourceFocusModeContextMenuVisible_ = true;
+    sourceFocusModeContextMenuChecked_ = checked;
+  }
+
+  /// Hide the source-focus toggle from the editor context menu.
+  void clearSourceFocusModeContextMenu() { sourceFocusModeContextMenuVisible_ = false; }
+
+  /// Consume a source-focus toggle requested from the editor context menu.
+  [[nodiscard]] bool takeSourceFocusModeContextMenuToggleRequest() {
+    const bool result = sourceFocusModeContextMenuToggleRequested_;
+    sourceFocusModeContextMenuToggleRequested_ = false;
+    return result;
+  }
 
   /**
    * Show or hide whitespace characters in the editor.
@@ -531,6 +561,20 @@ public:
   void setHighlightedLines(const std::vector<int>& lines) { highlightedLines_ = lines; }
   void clearHighlightedLines() { highlightedLines_.clear(); }
 
+  /// Install a source-focus partition. Hidden lines are folded from the view only.
+  void setFocusPartition(const FocusPartition& partition);
+  /// Clear source-focus mode and reveal every line.
+  void clearFocusPartition();
+  /// Return true if a source-focus partition is currently active.
+  [[nodiscard]] bool hasFocusPartition() const { return focusPartitionActive_; }
+
+  /// Add a transient source flash over \p byteRange.
+  void flashSourceRange(SourceByteRange byteRange);
+  /// Return the next flash wake interval, or nullopt if no flash is active.
+  [[nodiscard]] std::optional<float> nextFlashWakeSeconds() const;
+  /// Remove expired flashes using the current steady-clock time.
+  void tickSourceFlashes();
+
   // Editor settings
   void setTabSize(int size) { core_.setTabSize(size); }
   int getTabSize() const { return core_.getTabSize(); }
@@ -552,6 +596,8 @@ public:
   void setSearchEnabled(bool value) { hasSearch_ = value; }
   void setHighlightBrackets(bool value) { highlightBrackets_ = value; }
   void setFoldEnabled(bool value) { foldEnabled_ = value; }
+  void setWordWrapEnabled(bool value) { wordWrapEnabled_ = value; }
+  [[nodiscard]] bool wordWrapEnabled() const { return wordWrapEnabled_; }
 
   // UI scaling
   void setUIScale(float scale) { uiScale_ = scale; }
@@ -931,6 +977,7 @@ private:
   int foldedLines_ = 0;                  //!< Number of folded lines.
   uint64_t foldLastIteration_ = 0;       //!< Last fold update iteration
   float lastScroll_ = 0.0f;              //!< Last scroll position
+  float lastScrollX_ = 0.0f;             //!< Last horizontal scroll position
 
   // Autocomplete
   std::vector<RcString> autocompleteSearchTerms_;  //!< Terms to match against
@@ -971,6 +1018,29 @@ private:
   bool& scrollbarMarkers_;
   std::vector<int>& changedLines_;
   std::vector<int> highlightedLines_;  //!< Lines to highlight
+  FocusPartition focusPartition_;
+  bool focusPartitionActive_ = false;
+  FlashDecorations flashDecorations_;
+
+  struct VisualLine {
+    int lineNo = 0;
+    int startColumn = 0;
+    int endColumn = 0;
+    int indentColumns = 0;
+    bool continuation = false;
+  };
+  std::vector<VisualLine> visualLines_;
+  int visualLayoutMaxColumns_ = 0;
+
+  struct FocusReferenceConnectorLayout {
+    ImVec2 start;
+    ImVec2 laneStart;
+    ImVec2 laneEnd;
+    ImVec2 tip;
+    ImU32 color = 0;
+  };
+  [[nodiscard]] std::optional<FocusReferenceConnectorLayout> focusReferenceConnectorLayout(
+      const FocusReferenceLink& link, int linkIndex) const;
 
   // Editor settings. `insertSpaces_`, `smartIndent_`, `tabSize_`,
   // `scrollToCursor_`, `scrollToTop_`, `textChanged_`, `colorizerEnabled_`,
@@ -979,18 +1049,23 @@ private:
   // `scrollbarMarkers_`, and `changedLines_` all moved into
   // `TextEditorCore`. The reference aliases below preserve the short
   // names used by the render / input-handling code.
-  bool horizontalScroll_ = true;       //!< Enable horizontal scrolling
-  bool showLineNumbers_ = true;        //!< Show line numbers
-  bool highlightLine_ = true;          //!< Highlight current line
-  bool highlightBrackets_ = false;     //!< Highlight matching brackets
-  bool focused_ = false;               //!< Editor has keyboard focus
-  bool withinRender_ = false;          //!< Currently rendering
-  float textStart_ = 20.0f;            //!< X offset where text begins
-  int leftMargin_ = kLineNumberSpace;  //!< Left margin width
-  bool handleKeyboardInputs_ = true;   //!< Process keyboard input
-  bool handleMouseInputs_ = true;      //!< Process mouse input
-  bool ignoreImGuiChild_ = false;      //!< Ignore ImGui child windows
-  bool showWhitespaces_ = false;       //!< Show whitespace characters
+  bool horizontalScroll_ = false;                           //!< Enable horizontal scrolling
+  bool wordWrapEnabled_ = true;                             //!< Enable source-pane soft wrapping
+  bool showLineNumbers_ = true;                             //!< Show line numbers
+  bool highlightLine_ = true;                               //!< Highlight current line
+  bool highlightBrackets_ = false;                          //!< Highlight matching brackets
+  bool focused_ = false;                                    //!< Editor has keyboard focus
+  bool withinRender_ = false;                               //!< Currently rendering
+  bool cursorPositionChangedByMouse_ = false;               //!< Mouse moved cursor this frame
+  float textStart_ = 20.0f;                                 //!< X offset where text begins
+  int leftMargin_ = kLineNumberSpace;                       //!< Left margin width
+  bool handleKeyboardInputs_ = true;                        //!< Process keyboard input
+  bool handleMouseInputs_ = true;                           //!< Process mouse input
+  bool ignoreImGuiChild_ = false;                           //!< Ignore ImGui child windows
+  bool showWhitespaces_ = false;                            //!< Show whitespace characters
+  bool sourceFocusModeContextMenuVisible_ = false;          //!< Show focus toggle in context menu
+  bool sourceFocusModeContextMenuChecked_ = false;          //!< Context menu focus toggle state
+  bool sourceFocusModeContextMenuToggleRequested_ = false;  //!< Context menu requested a toggle
 
   // Reference aliases into `core_` for fields accessed by the shell's
   // render / input-capture code. These are initialized in the ctor
@@ -1146,6 +1221,11 @@ private:
    * @param title Window title
    */
   void renderInternal(std::string_view title);
+  void rebuildVisualLines(const ImVec2& contentSize);
+  [[nodiscard]] bool isLineHiddenByFocus(int lineNo) const;
+  [[nodiscard]] bool isLineDimmedByFocus(int lineNo) const;
+  [[nodiscard]] int visualLineIndexForCoordinates(const Coordinates& position) const;
+  [[nodiscard]] Coordinates visualScreenPosToCoordinates(const ImVec2& position) const;
 
   /**
    * Handle editor scrolling.
@@ -1166,6 +1246,9 @@ private:
   void renderLine(int lineNo, const ImVec2& lineStart, const ImVec2& textStart,
                   const ImVec2& contentSize, float scrollX, ImDrawList* drawList,
                   float& longestLine);
+  void renderVisualLine(const VisualLine& visualLine, int visualLineIndex, const ImVec2& lineStart,
+                        const ImVec2& textStart, const ImVec2& contentSize, ImDrawList* drawList,
+                        float& longestLine);
 
   // TODO: Doc comments
   void renderErrorTooltip(int line, const std::string& message);
@@ -1175,6 +1258,9 @@ private:
    */
   void renderLineBackground(int lineNo, const ImVec2& start, const ImVec2& contentSize,
                             ImDrawList* drawList);
+  void renderLineBackground(const VisualLine& visualLine, const ImVec2& start,
+                            const ImVec2& contentSize, ImDrawList* drawList);
+  void renderFocusReferenceLinks(ImDrawList* drawList);
 
   /**
    * Render text selection for a line.
@@ -1189,11 +1275,15 @@ private:
    */
   void renderSelection(int lineNo, const Line& line, const ImVec2& lineStart,
                        const ImVec2& contentSize, ImDrawList* drawList);
+  void renderSelection(const VisualLine& visualLine, const Line& line, const ImVec2& lineStart,
+                       ImDrawList* drawList);
 
   /**
    * Render text content with syntax highlighting.
    */
   void renderText(const Line& line, const ImVec2& pos, ImDrawList* drawList);
+  void renderText(const VisualLine& visualLine, const Line& line, const ImVec2& pos,
+                  ImDrawList* drawList);
 
   /**
    * Render error markers and tooltips for a line.

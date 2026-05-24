@@ -1179,6 +1179,7 @@ void TextEditorCore::moveUp(int amount, bool select) {
   state_.cursorPosition.line = std::max(0, state_.cursorPosition.line - amount);
 
   if (oldPos != state_.cursorPosition) {
+    cursorPositionChanged_ = true;
     if (select) {
       if (oldPos == interactiveStart_) {
         interactiveStart_ = state_.cursorPosition;
@@ -1205,6 +1206,7 @@ void TextEditorCore::moveDown(int amount, bool select) {
       std::max(0, std::min(text_.getTotalLines() - 1, state_.cursorPosition.line + amount));
 
   if (state_.cursorPosition != oldPos) {
+    cursorPositionChanged_ = true;
     if (select) {
       if (oldPos == interactiveEnd_) {
         interactiveEnd_ = state_.cursorPosition;
@@ -1237,6 +1239,10 @@ void TextEditorCore::moveLeft(int amount, bool select, bool /*wordMode*/) {
         state_.cursorPosition.column = text_.getLineMaxColumn(state_.cursorPosition.line);
       }
     }
+  }
+
+  if (state_.cursorPosition != oldPos) {
+    cursorPositionChanged_ = true;
   }
 
   if (select) {
@@ -1275,6 +1281,10 @@ void TextEditorCore::moveRight(int amount, bool select, bool /*wordMode*/) {
         state_.cursorPosition.column = 0;
       }
     }
+  }
+
+  if (state_.cursorPosition != oldPos) {
+    cursorPositionChanged_ = true;
   }
 
   if (select) {

@@ -166,6 +166,35 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "focus_view_tests",
+    srcs = ["FocusView_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:focus_view",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "flash_decorations_tests",
+    srcs = ["FlashDecorations_tests.cc"],
+    deps = [
+        "//donner/editor:flash_decorations",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "soft_wrap_tests",
+    srcs = ["SoftWrap_tests.cc"],
+    deps = [
+        "//donner/editor:soft_wrap",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "render_pane_viewport_tests",
     srcs = ["RenderPaneViewport_tests.cc"],
     deps = [

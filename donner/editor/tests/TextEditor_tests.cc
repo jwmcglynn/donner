@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <vector>
+
 #include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
@@ -30,6 +32,135 @@ protected:
     }
   }
 
+  void RenderEditorFrame(const ImVec2& editorSize = ImVec2(240.0f, 180.0f)) {
+    editor.setHandleKeyboardInputs(false);
+    editor.setHandleMouseInputs(false);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(editorSize.x + 40.0f, editorSize.y + 40.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "TextEditorTestWindow", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    editor.render("##editor", editorSize);
+    ImGui::End();
+    ImGui::Render();
+  }
+
+  void RenderEditorFrameWithMouse(const ImVec2& mousePos, bool mouseDown,
+                                  const ImVec2& editorSize = ImVec2(240.0f, 180.0f)) {
+    editor.setHandleKeyboardInputs(false);
+    editor.setHandleMouseInputs(true);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+    io.AddMousePosEvent(mousePos.x, mousePos.y);
+    io.AddMouseButtonEvent(0, mouseDown);
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(editorSize.x + 40.0f, editorSize.y + 40.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "TextEditorTestWindow", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    editor.render("##editor", editorSize);
+    ImGui::End();
+    ImGui::Render();
+  }
+
+  [[nodiscard]] int VisualLineCount() const { return static_cast<int>(editor.visualLines_.size()); }
+
+  [[nodiscard]] int VisualLineStartColumn(int visualIndex) const {
+    return editor.visualLines_[visualIndex].startColumn;
+  }
+
+  [[nodiscard]] int VisualLineEndColumn(int visualIndex) const {
+    return editor.visualLines_[visualIndex].endColumn;
+  }
+
+  [[nodiscard]] int VisualLineIndentColumns(int visualIndex) const {
+    return editor.visualLines_[visualIndex].indentColumns;
+  }
+
+  [[nodiscard]] bool VisualLineIsContinuation(int visualIndex) const {
+    return editor.visualLines_[visualIndex].continuation;
+  }
+
+  [[nodiscard]] bool HorizontalScrollEnabled() const { return editor.horizontalScroll_; }
+
+  void RequestSourceFocusModeContextMenuToggle() {
+    editor.sourceFocusModeContextMenuToggleRequested_ = true;
+  }
+
+  [[nodiscard]] bool SourceFocusModeContextMenuVisible() const {
+    return editor.sourceFocusModeContextMenuVisible_;
+  }
+
+  [[nodiscard]] bool SourceFocusModeContextMenuChecked() const {
+    return editor.sourceFocusModeContextMenuChecked_;
+  }
+
+  [[nodiscard]] std::vector<int> VisualLineLogicalLines() const {
+    std::vector<int> lines;
+    lines.reserve(editor.visualLines_.size());
+    for (const auto& visualLine : editor.visualLines_) {
+      lines.push_back(visualLine.lineNo);
+    }
+    return lines;
+  }
+
+  [[nodiscard]] int FirstContinuationVisualLineForLine(int lineNo) const {
+    for (int i = 0; i < static_cast<int>(editor.visualLines_.size()); ++i) {
+      const auto& visualLine = editor.visualLines_[i];
+      if (visualLine.lineNo == lineNo && visualLine.continuation) {
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  [[nodiscard]] Coordinates CoordinatesAtVisualTextOffset(int visualIndex,
+                                                          int visualColumnOffset) const {
+    const auto& visualLine = editor.visualLines_[visualIndex];
+    const ImVec2 screenPos{
+        editor.uiCursorPos_.x + editor.textStart_ +
+            static_cast<float>(visualLine.indentColumns + visualColumnOffset) *
+                editor.charAdvance_.x,
+        editor.uiCursorPos_.y + static_cast<float>(visualIndex) * editor.charAdvance_.y +
+            editor.charAdvance_.y * 0.5f,
+    };
+    return editor.screenPosToCoordinates(screenPos);
+  }
+
+  [[nodiscard]] ImVec2 ScreenPointAtVisualTextOffset(int visualIndex,
+                                                     int visualColumnOffset) const {
+    const auto& visualLine = editor.visualLines_[visualIndex];
+    return ImVec2{
+        editor.uiCursorPos_.x + editor.textStart_ +
+            static_cast<float>(visualLine.indentColumns + visualColumnOffset) *
+                editor.charAdvance_.x,
+        editor.uiCursorPos_.y + static_cast<float>(visualIndex) * editor.charAdvance_.y +
+            editor.charAdvance_.y * 0.5f,
+    };
+  }
+
+  [[nodiscard]] bool HasActiveSourceFlash() const {
+    return editor.nextFlashWakeSeconds().has_value() &&
+           !editor.flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now()).empty();
+  }
+
+  [[nodiscard]] std::optional<TextEditor::FocusReferenceConnectorLayout> FocusReferenceLayout(
+      const FocusReferenceLink& link, int linkIndex) const {
+    return editor.focusReferenceConnectorLayout(link, linkIndex);
+  }
+
+  [[nodiscard]] std::vector<ActiveFlash> ActiveSourceFlashes() const {
+    return editor.flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now());
+  }
+
   ImGuiContext* imguiContext_ = nullptr;
   TextEditor editor;
 };
@@ -49,6 +180,30 @@ TEST_F(TextEditorTests, MoveRightAdvancesCursor) {
   editor.moveRight(1, false, false);
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 1))
       << "moveRight should advance cursor by 1 column";
+}
+
+TEST_F(TextEditorTests, KeyboardNavigationMarksCursorPositionChanged) {
+  editor.setText("Hello\nWorld");
+  RenderEditorFrame();
+
+  editor.moveDown(1, false);
+  EXPECT_TRUE(editor.isCursorPositionChanged());
+}
+
+TEST_F(TextEditorTests, MouseClickMarksCursorPositionChangedByMouse) {
+  editor.setText("Hello world");
+  editor.setCursorPosition(Coordinates(0, 0));
+  RenderEditorFrame();
+
+  const ImVec2 clickPos =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/6);
+
+  RenderEditorFrameWithMouse(clickPos, false);
+  RenderEditorFrameWithMouse(clickPos, true);
+
+  EXPECT_TRUE(editor.isCursorPositionChanged());
+  EXPECT_TRUE(editor.didMouseChangeCursorPosition());
+  EXPECT_NE(editor.getCursorPosition(), Coordinates(0, 0));
 }
 
 TEST_F(TextEditorTests, MoveLeftRetractsCursor) {
@@ -475,6 +630,121 @@ TEST_F(TextEditorTests, ProcessReplaceCapturesReplaceIntentAndUndoRestoresText) 
 
   editor.undo();
   EXPECT_EQ(editor.getText(), "red blue red");
+}
+
+// ============================================================================
+// RENDERED SOURCE VIEW TESTS
+// ============================================================================
+
+TEST_F(TextEditorTests, RenderBuildsWrappedVisualRowsForLongXmlLine) {
+  editor.setText(R"(  <rect id="target" x="10" y="20" width="30" height="40" fill="red"/>)");
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  ASSERT_GT(VisualLineCount(), 1);
+  const int continuationIndex = FirstContinuationVisualLineForLine(0);
+  ASSERT_NE(continuationIndex, -1);
+  EXPECT_TRUE(VisualLineIsContinuation(continuationIndex));
+  EXPECT_EQ(VisualLineIndentColumns(continuationIndex), 8);
+  EXPECT_FALSE(editor.isImGuiChildIgnored());
+  EXPECT_TRUE(editor.wordWrapEnabled());
+  EXPECT_FALSE(HorizontalScrollEnabled());
+}
+
+TEST_F(TextEditorTests, WrappedHitTestingMapsContinuationRowToLogicalColumn) {
+  editor.setText(R"(  <rect id="target" x="10" y="20" width="30" height="40" fill="red"/>)");
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  const int continuationIndex = FirstContinuationVisualLineForLine(0);
+  ASSERT_NE(continuationIndex, -1);
+  ASSERT_GT(VisualLineEndColumn(continuationIndex), VisualLineStartColumn(continuationIndex) + 2);
+
+  const Coordinates hit = CoordinatesAtVisualTextOffset(continuationIndex, 2);
+
+  EXPECT_EQ(hit, Coordinates(0, VisualLineStartColumn(continuationIndex) + 2));
+}
+
+TEST_F(TextEditorTests, FocusPartitionHidesLinesFromRenderedVisualLayout) {
+  editor.setText("root\nhidden-a\nhidden-b\ntarget\nclose");
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 3, .endLine = 4}},
+      .dimmed = {LineRange{.startLine = 0, .endLine = 1}, LineRange{.startLine = 4, .endLine = 5}},
+      .hidden = {LineRange{.startLine = 1, .endLine = 3}},
+  });
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 3, 4}));
+  ASSERT_GE(VisualLineCount(), 2);
+  EXPECT_EQ(CoordinatesAtVisualTextOffset(1, 2), Coordinates(3, 2));
+}
+
+TEST_F(TextEditorTests, ExternalSourceEditQueuesRenderedFlashDecoration) {
+  editor.setText("<svg></svg>");
+  editor.resetTextChanged();
+
+  editor.applyExternalSourceEdit(5, 0, "<g/>");
+  RenderEditorFrame(ImVec2(300.0f, 120.0f));
+
+  ASSERT_TRUE(HasActiveSourceFlash());
+  const std::vector<ActiveFlash> flashes = ActiveSourceFlashes();
+  ASSERT_EQ(flashes.size(), 1u);
+  EXPECT_EQ(flashes[0].byteRange, (SourceByteRange{.start = 5, .end = 9}));
+  EXPECT_GT(flashes[0].intensity, 0.0f);
+}
+
+TEST_F(TextEditorTests, SourceFocusModeContextMenuStateAndToggleRequestAreConsumable) {
+  editor.setSourceFocusModeContextMenu(true);
+
+  EXPECT_TRUE(SourceFocusModeContextMenuVisible());
+  EXPECT_TRUE(SourceFocusModeContextMenuChecked());
+  EXPECT_FALSE(editor.takeSourceFocusModeContextMenuToggleRequest());
+
+  RequestSourceFocusModeContextMenuToggle();
+  EXPECT_TRUE(editor.takeSourceFocusModeContextMenuToggleRequest());
+  EXPECT_FALSE(editor.takeSourceFocusModeContextMenuToggleRequest());
+
+  editor.clearSourceFocusModeContextMenu();
+  EXPECT_FALSE(SourceFocusModeContextMenuVisible());
+}
+
+TEST_F(TextEditorTests, FocusReferenceConnectorsRouteThroughDistinctLeftGutterLanes) {
+  editor.setText(
+      "  <defs>\n"
+      "    <linearGradient id=\"grad\"/>\n"
+      "  </defs>\n"
+      "  <rect fill=\"url(#grad)\"/>\n"
+      "  <circle stroke=\"url(#grad)\"/>\n");
+  const FocusReferenceLink rectLink{
+      .from = SourcePoint{.line = 3, .column = 19},
+      .to = SourcePoint{.line = 1, .column = 4},
+  };
+  const FocusReferenceLink circleLink{
+      .from = SourcePoint{.line = 4, .column = 23},
+      .to = SourcePoint{.line = 1, .column = 4},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 1, .endLine = 5}},
+      .referenceLinks = {rectLink, circleLink},
+  });
+
+  RenderEditorFrame(ImVec2(520.0f, 180.0f));
+
+  auto rectLayout = FocusReferenceLayout(rectLink, 0);
+  auto circleLayout = FocusReferenceLayout(circleLink, 1);
+  ASSERT_TRUE(rectLayout.has_value());
+  ASSERT_TRUE(circleLayout.has_value());
+
+  EXPECT_LT(rectLayout->laneStart.x, rectLayout->start.x);
+  EXPECT_FLOAT_EQ(rectLayout->laneStart.x, rectLayout->laneEnd.x);
+  EXPECT_LT(rectLayout->laneEnd.x, rectLayout->tip.x);
+  EXPECT_NE(rectLayout->laneStart.x, circleLayout->laneStart.x);
+
+  EXPECT_NE(rectLayout->color, circleLayout->color);
+  const float alpha = ImGui::ColorConvertU32ToFloat4(rectLayout->color).w;
+  EXPECT_GE(alpha, 0.45f);
+  EXPECT_LE(alpha, 0.55f);
 }
 
 // ============================================================================

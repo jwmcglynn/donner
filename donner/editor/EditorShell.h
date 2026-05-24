@@ -142,6 +142,10 @@ private:
   void renderFloatingLayerPanel();
   void renderLayerPanelContents();
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
+  void syncSelectionFromSourceCursorIfNeeded();
+  void updateSourceFocusView(bool scrollToSelection = false);
+  void setSourceFocusMode(bool enabled);
+  void toggleSourceFocusMode();
 
   gui::EditorWindow& window_;
   EditorShellOptions options_;
@@ -190,12 +194,14 @@ private:
   std::optional<ImVec2> lastPostedScreenPoint_;
   bool treeviewPendingScroll_ = false;
   bool treeSelectionOriginatedInTree_ = false;
+  bool sourceSelectionOriginatedInText_ = false;
   /// Design doc 0033 §M8: set when an M8 fast-path click consumed the
   /// pending click without going through the `!isBusy()`-gated post-
   /// onMouseDown cache refresh. The follow-up fires on the next idle
   /// frame so re-drag hit testing catches up without posting a
   /// pre-move render ahead of the drag update.
   bool pendingClickFollowupAfterIdle_ = false;
+  bool sourceFocusMode_ = true;
 
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;

@@ -12,13 +12,27 @@ UndoSnapshot captureTransformSnapshot(const svg::SVGElement& element) {
   // transform and does not round-trip through `setTransform`.
   auto graphicsElement = element.cast<svg::SVGGraphicsElement>();
   return UndoSnapshot{
+      .kind = UndoSnapshot::Kind::Transform,
       .element = element,
       .transform = graphicsElement.transform(),
       .writebackTarget = captureAttributeWritebackTarget(element),
   };
 }
 
+UndoSnapshot captureDocumentSourceSnapshot(const svg::SVGElement& anchorElement,
+                                           std::string_view source) {
+  return UndoSnapshot{
+      .kind = UndoSnapshot::Kind::DocumentSource,
+      .element = anchorElement,
+      .documentSource = std::string(source),
+  };
+}
+
 void applySnapshot(const UndoSnapshot& snapshot) {
+  if (snapshot.kind != UndoSnapshot::Kind::Transform) {
+    return;
+  }
+
   auto graphicsElement = snapshot.element.cast<svg::SVGGraphicsElement>();
   graphicsElement.setTransform(snapshot.transform);
   for (const UndoSnapshot& extra : snapshot.extras) {

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,12 +15,20 @@ namespace donner::editor {
 
 /**
  * Captured state of an element at a point in time.
- *
- * In M2 the editor only supports transform-level snapshots — `PathSpline`
- * and element create/delete snapshots return when path tools land. See
- * docs/design_docs/editor.md "Non-Goals" for the scoping decision.
  */
 struct UndoSnapshot {
+  /// The kind of state captured by this snapshot.
+  enum class Kind : std::uint8_t {
+    /// A graphics element's local transform.
+    Transform,
+
+    /// The full SVG source text for structural edits such as element deletion.
+    DocumentSource,
+  };
+
+  /// Snapshot payload kind.
+  Kind kind = Kind::Transform;
+
   /// The element this snapshot applies to.
   svg::SVGElement element;
 
@@ -41,6 +50,9 @@ struct UndoSnapshot {
   /// `transform`.
   bool restoreSourceTransformAttributeValue = false;
 
+  /// Full SVG source text for `Kind::DocumentSource` snapshots.
+  std::string documentSource;
+
   /// Additional element snapshots that belong to the same user operation.
   /// Multi-selection move/resize/rotate gestures use this so one UI undo
   /// restores the whole manipulation instead of stepping through elements
@@ -50,6 +62,10 @@ struct UndoSnapshot {
 
 /// Capture the current transform of an SVGElement as an undo snapshot.
 UndoSnapshot captureTransformSnapshot(const svg::SVGElement& element);
+
+/// Capture the full SVG source text for a structural undo snapshot.
+UndoSnapshot captureDocumentSourceSnapshot(const svg::SVGElement& anchorElement,
+                                           std::string_view source);
 
 /// Apply a previously captured snapshot, including grouped extra element snapshots.
 void applySnapshot(const UndoSnapshot& snapshot);
