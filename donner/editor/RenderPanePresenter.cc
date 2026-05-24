@@ -1,5 +1,6 @@
 #include "donner/editor/RenderPanePresenter.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "donner/editor/ImGuiIncludes.h"
@@ -191,9 +192,22 @@ ImVec2 ToImVec2(const Vector2d& value) {
 
 }  // namespace
 
+bool ShouldPresentCompositedTile(const GlTextureCache::TileView& tile,
+                                 bool suppressDragTargetTiles) {
+  if (tile.texture == 0) {
+    return false;
+  }
+
+  return !(suppressDragTargetTiles && tile.isDragTarget);
+}
+
 void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
-  const bool hasTiles = !state.textures.tiles().empty();
-  if (!hasTiles) {
+  const bool hasVisibleTiles =
+      std::ranges::any_of(state.textures.tiles(), [&](const GlTextureCache::TileView& tile) {
+        return ShouldPresentCompositedTile(tile, state.suppressDragTargetTiles);
+      });
+  const bool hasOverlay = state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0;
+  if (!hasVisibleTiles && !hasOverlay) {
     ImGui::TextUnformatted("(no rendered image)");
     return;
   }
@@ -214,7 +228,7 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.displayedDragPreview);
   bool hasDragTargetTile = false;
   for (const auto& tile : state.textures.tiles()) {
-    if (tile.texture == 0) {
+    if (!ShouldPresentCompositedTile(tile, state.suppressDragTargetTiles)) {
       continue;
     }
     hasDragTargetTile = hasDragTargetTile || tile.isDragTarget;

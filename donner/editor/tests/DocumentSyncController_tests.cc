@@ -13,6 +13,7 @@
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/svg/core/Display.h"
 
 namespace donner::editor {
 namespace {
@@ -70,7 +71,7 @@ TEST_F(DocumentSyncControllerTest, InitialTextDoesNotMarkDocumentDirty) {
   EXPECT_FALSE(textEditor_.isTextChanged());
 }
 
-TEST_F(DocumentSyncControllerTest, MultiCharacterUserSourceEditQueuesFlashWake) {
+TEST_F(DocumentSyncControllerTest, MultiCharacterUserSourceEditDoesNotQueueFlashWake) {
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
   ASSERT_FALSE(textEditor_.nextFlashWakeSeconds().has_value());
 
@@ -81,7 +82,7 @@ TEST_F(DocumentSyncControllerTest, MultiCharacterUserSourceEditQueuesFlashWake) 
 
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
 
-  EXPECT_TRUE(textEditor_.nextFlashWakeSeconds().has_value());
+  EXPECT_FALSE(textEditor_.nextFlashWakeSeconds().has_value());
 }
 
 TEST_F(DocumentSyncControllerTest, SingleCharacterUserSourceEditDoesNotQueueFlashWake) {
@@ -96,6 +97,65 @@ TEST_F(DocumentSyncControllerTest, SingleCharacterUserSourceEditDoesNotQueueFlas
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
 
   EXPECT_FALSE(textEditor_.nextFlashWakeSeconds().has_value());
+}
+
+TEST_F(DocumentSyncControllerTest, ThrottledCompletedStyleEditReportsWakeAndAppliesOnIdle) {
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  const std::size_t rectTagOffset = textEditor_.getText().find("<rect");
+  ASSERT_NE(rectTagOffset, std::string::npos);
+  const std::size_t insertOffset = rectTagOffset + std::string_view("<rect").size();
+  textEditor_.setCursorPosition(textEditor_.getCoordinatesAtByteOffset(insertOffset));
+
+  textEditor_.insertText(" ");
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  EXPECT_TRUE(controller_.nextTextSyncWakeSeconds().has_value());
+
+  textEditor_.insertText(R"(style="display:none")");
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  EXPECT_TRUE(controller_.nextTextSyncWakeSeconds().has_value());
+
+  auto rect = app_.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_FALSE(rect->getAttribute("style").has_value());
+
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
+  EXPECT_FALSE(controller_.nextTextSyncWakeSeconds().has_value());
+
+  rect = app_.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->getAttribute("style"), std::optional<RcString>(RcString("display:none")));
+  EXPECT_EQ(rect->getComputedStyle().display.getRequired(), svg::Display::None);
+}
+
+TEST_F(DocumentSyncControllerTest, PartialOpeningTagEditPreservesSelectionWhileInvalid) {
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  std::optional<svg::SVGElement> rect = app_.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app_.setSelection(*rect);
+
+  const std::size_t rectTagOffset = textEditor_.getText().find("<rect");
+  ASSERT_NE(rectTagOffset, std::string::npos);
+  const std::size_t insertOffset = rectTagOffset + std::string_view("<rect").size();
+  textEditor_.setCursorPosition(textEditor_.getCoordinatesAtByteOffset(insertOffset));
+
+  for (const char ch : std::string_view(" style=\"display:none\"")) {
+    textEditor_.insertText(std::string(1, ch));
+    controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+    ASSERT_TRUE(app_.hasSelection()) << "lost selection after typing '" << ch << "'";
+    ASSERT_EQ(app_.selectedElements().size(), 1u);
+    EXPECT_TRUE(app_.selectedElements().front() == *rect);
+
+    controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
+  }
+
+  EXPECT_FALSE(app_.document().lastParseError().has_value());
+  ASSERT_TRUE(app_.hasSelection());
+  EXPECT_TRUE(app_.selectedElements().front() == *rect);
+  EXPECT_NE(app_.document().document().source().find(R"(style="display:none")"),
+            std::string_view::npos);
 }
 
 TEST_F(DocumentSyncControllerTest, RevertingTextToCleanBaselineClearsDirtyFlag) {
@@ -152,6 +212,7 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackMirrorsWithoutTextCh
 
   EXPECT_EQ(textEditor_.getText(), app_.document().document().source());
   EXPECT_FALSE(textEditor_.isTextChanged());
+  EXPECT_TRUE(textEditor_.nextFlashWakeSeconds().has_value());
   EXPECT_TRUE(app_.document().queue().empty());
 }
 
@@ -558,7 +619,6 @@ TEST(DocumentSyncControllerStructuredTest, SourceTypingMutationStressKeepsSelect
           .selectedId = "r1",
           .oldText = R"(width="10")",
           .newText = R"(width="10)",
-          .expectSelection = false,
           .expectParseError = true,
       },
   };

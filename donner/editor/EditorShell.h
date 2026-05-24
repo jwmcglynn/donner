@@ -126,6 +126,8 @@ public:
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
   bool trySavePath(std::string_view path, std::string* error);
+  void resetPresentationForLoadedDocument(std::string_view canonicalSource);
+  void requestRevert();
   void requestSave();
   void requestSaveAs(std::string error = std::string());
   bool synchronizeSourceBeforeSave(std::string* error);
@@ -205,6 +207,9 @@ private:
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
   bool sourceFocusOriginatedInStyle_ = false;
+  /// Suppress source-pane reselection/scrolling when a source edit remaps the same selection while
+  /// the cursor remains inside the active focus partition.
+  bool preserveSourceEditFocusCursor_ = false;
   /// Design doc 0033 §M8: set when an M8 fast-path click consumed the
   /// pending click without going through the `!isBusy()`-gated post-
   /// onMouseDown cache refresh. The follow-up fires on the next idle

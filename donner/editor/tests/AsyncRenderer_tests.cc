@@ -3068,6 +3068,28 @@ TEST(RenderCoordinatorTest, TearingDownWithInFlightRenderDoesNotCrashOnExit) {
   coordinator.reset();
 }
 
+TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPromotedTilePresentation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  RenderCoordinator coordinator;
+  EXPECT_FALSE(coordinator.shouldSuppressDragTargetTiles(app));
+
+  target->setStyle("display:none");
+
+  EXPECT_TRUE(coordinator.shouldSuppressDragTargetTiles(app))
+      << "The live DOM has hidden the selected element, so stale promoted-layer pixels should not "
+         "be drawn even while selection chrome remains visible.";
+}
+
 TEST(RenderCoordinatorTest, ImmediateOverlayUploadBypassesDisplayedVersionGate) {
   svg::Renderer rendererProbe;
   if (!rendererProbe.requiresTextureSnapshotPresentation()) {

@@ -1690,6 +1690,16 @@ bool TextEditor::setHoverSourceRanges(std::vector<SourceByteRange> ranges) {
   return true;
 }
 
+bool TextEditor::isPositionInsideFocusRange(const Coordinates& position) const {
+  if (!focusPartitionActive_) {
+    return false;
+  }
+
+  const int lineNo = sanitizeCoordinates(position).line;
+  return LineRangeContains(focusPartition_.fullColor, lineNo) ||
+         LineRangeContains(focusPartition_.dimmed, lineNo);
+}
+
 void TextEditor::clearFocusPartition() {
   focusPartition_ = FocusPartition{};
   focusPartitionActive_ = false;

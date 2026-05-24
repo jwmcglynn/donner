@@ -579,6 +579,16 @@ public:
   void clearFocusPartition();
   /// Return true if a source-focus partition is currently active.
   [[nodiscard]] bool hasFocusPartition() const { return focusPartitionActive_; }
+  /**
+   * Return true if \p position is inside the active source-focus range.
+   *
+   * @param position Source editor coordinates to test.
+   */
+  [[nodiscard]] bool isPositionInsideFocusRange(const Coordinates& position) const;
+  /// Return true if the current cursor is inside the active source-focus range.
+  [[nodiscard]] bool isCursorInsideFocusRange() const {
+    return isPositionInsideFocusRange(getCursorPosition());
+  }
 
   /// Add a transient source flash over \p byteRange.
   void flashSourceRange(SourceByteRange byteRange);

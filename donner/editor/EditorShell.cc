@@ -302,19 +302,29 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   textEditor_.setText(*contents);
   textEditor_.resetTextChanged();
   const std::string canonicalSource = textEditor_.getText();
-  documentSyncController_.resetForLoadedDocument(canonicalSource);
   app_.setCurrentFilePath(std::string(path));
+  resetPresentationForLoadedDocument(canonicalSource);
+  return true;
+}
+
+void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
+  documentSyncController_.resetForLoadedDocument(std::string(canonicalSource));
   app_.setCleanSourceText(canonicalSource);
   lastHighlightedSelection_.clear();
+  lastTreeSelection_.reset();
   textEditor_.clearFocusPartition();
   lastPostedScreenPoint_.reset();
+  preserveSourceEditFocusCursor_ = false;
+  sourceSelectionOriginatedInText_ = false;
+  sourceFocusOriginatedInStyle_ = false;
+  treeSelectionOriginatedInTree_ = false;
+  treeviewPendingScroll_ = false;
   renderCoordinator_.resetForLoadedDocument();
   textures_.resetComposited();
   textures_.clearOverlay();
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   dialogPresenter_.clearOpenFileError();
   dialogPresenter_.clearSaveFileError();
-  return true;
 }
 
 bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
@@ -388,6 +398,23 @@ void EditorShell::requestSave() {
   if (!trySavePath(*app_.currentFilePath(), &error)) {
     requestSaveAs(std::move(error));
   }
+}
+
+void EditorShell::requestRevert() {
+  if (!app_.hasDocument() || !app_.isDirty() || app_.cleanSourceText().empty()) {
+    return;
+  }
+
+  const std::string source(app_.cleanSourceText());
+  if (!app_.revertToCleanSource()) {
+    return;
+  }
+
+  textEditor_.setText(source);
+  textEditor_.resetTextChanged();
+  resetPresentationForLoadedDocument(textEditor_.getText());
+  updateWindowTitle();
+  window_.wakeEventLoop();
 }
 
 void EditorShell::updateWindowTitle() {
@@ -490,7 +517,16 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, ImFont* 
   }
   syncSelectionFromSourceCursorIfNeeded();
   ImGui::PopFont();
+  const bool sourceEditShouldPreserveCursor =
+      textEditor_.isTextChanged() && sourceFocusMode_ && textEditor_.isCursorInsideFocusRange();
+  if (textEditor_.isTextChanged()) {
+    preserveSourceEditFocusCursor_ = sourceEditShouldPreserveCursor;
+  }
+  const std::vector<svg::SVGElement> selectionBeforeTextSync = app_.selectedElements();
   documentSyncController_.handleTextEdits(app_, textEditor_, ImGui::GetIO().DeltaTime);
+  if (sourceEditShouldPreserveCursor && app_.selectedElements() != selectionBeforeTextSync) {
+    sourceSelectionOriginatedInText_ = true;
+  }
   updateSourceHoverPreview();
   ImGui::End();
 }
@@ -575,6 +611,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     rotateCursorSet_.clearIfActive();
   }
   if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    preserveSourceEditFocusCursor_ = false;
     MouseModifiers modifiers;
     modifiers.shift = ImGui::GetIO().KeyShift;
     modifiers.option = ImGui::GetIO().KeyAlt;
@@ -721,6 +758,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .displayedDragPreview = displayedDragPreview,
       .overlayDragPreview = renderCoordinator_.presentedOverlayDragPreview(),
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
+      .suppressDragTargetTiles = renderCoordinator_.shouldSuppressDragTargetTiles(app_),
   };
   renderPanePresenter_.render(paneState);
 
@@ -756,6 +794,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   sidebarPresenter_.renderTreeView(liveAppForClicks, treeState);
   treeviewPendingScroll_ = treeState.pendingScroll;
   if (treeState.selectionChangedInTree) {
+    preserveSourceEditFocusCursor_ = false;
     treeSelectionOriginatedInTree_ = true;
     treeviewPendingScroll_ = false;
   }
@@ -944,12 +983,15 @@ void EditorShell::renderFloatingLayerPanel() {
 
 bool EditorShell::highlightSelectionSourceIfNeeded() {
   const auto& selectionNow = app_.selectedElements();
+  const bool preserveSourceEditCursor =
+      preserveSourceEditFocusCursor_ && sourceFocusMode_ && textEditor_.isCursorInsideFocusRange();
   if (selectionNow != lastHighlightedSelection_) {
-    if (sourceSelectionOriginatedInText_) {
+    if (sourceSelectionOriginatedInText_ || preserveSourceEditCursor) {
       if (!sourceFocusOriginatedInStyle_) {
         updateSourceFocusView(/*scrollToSelection=*/false);
       }
       sourceSelectionOriginatedInText_ = false;
+      preserveSourceEditFocusCursor_ = false;
     } else if (!selectionNow.empty()) {
       updateSourceFocusView(/*scrollToSelection=*/true);
     } else {
@@ -957,6 +999,11 @@ bool EditorShell::highlightSelectionSourceIfNeeded() {
     }
     lastHighlightedSelection_ = selectionNow;
     return true;
+  }
+
+  if (preserveSourceEditFocusCursor_ &&
+      (!sourceFocusMode_ || !textEditor_.isCursorInsideFocusRange())) {
+    preserveSourceEditFocusCursor_ = false;
   }
 
   return false;
@@ -990,7 +1037,8 @@ std::vector<svg::SVGElement> EditorShell::sourceHoverElements() const {
 
   const std::size_t hoverOffset = textEditor_.getByteOffsetAtCoordinates(*hoverPosition);
   if (std::optional<StyleFocus> styleFocus = styleFocusAtSourceOffset(hoverOffset)) {
-    return styleFocus->impactedElements;
+    return ExcludeSelectedSourceHoverElements(std::move(styleFocus->impactedElements),
+                                              app_.selectedElements());
   }
 
   std::optional<svg::SVGElement> element =
@@ -999,7 +1047,7 @@ std::vector<svg::SVGElement> EditorShell::sourceHoverElements() const {
     return {};
   }
 
-  return {*element};
+  return ExcludeSelectedSourceHoverElements({*element}, app_.selectedElements());
 }
 
 std::vector<SourceByteRange> EditorShell::sourceHoverRangesForElements(
@@ -1083,6 +1131,10 @@ void EditorShell::syncSelectionFromSourceCursorIfNeeded() {
   if (styleFocus.has_value()) {
     applyStyleFocus(std::move(*styleFocus));
     window_.wakeEventLoop();
+    return;
+  }
+
+  if (sourceFocusOriginatedInStyle_ && textEditor_.isCursorInsideFocusRange()) {
     return;
   }
 
@@ -1238,6 +1290,7 @@ void EditorShell::runFrame() {
   MenuBarState menuState{
       .sourcePaneFocused = textEditor_.isFocused(),
       .canSave = app_.hasDocument(),
+      .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
       .canUndo = app_.canUndo(),
       .canRedo = app_.canRedo(),
       .sourceFocusMode = sourceFocusMode_,
@@ -1254,6 +1307,9 @@ void EditorShell::runFrame() {
   }
   if (menuActions.saveFileAs) {
     requestSaveAs();
+  }
+  if (menuActions.revertFile) {
+    requestRevert();
   }
   if (menuActions.quit) {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
@@ -1309,7 +1365,8 @@ void EditorShell::runFrame() {
     renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
   }
   renderFloatingLayerPanel();
-  if (textEditor_.nextFlashWakeSeconds().has_value()) {
+  if (documentSyncController_.nextTextSyncWakeSeconds().has_value() ||
+      textEditor_.nextFlashWakeSeconds().has_value()) {
     window_.wakeEventLoop();
   }
 }

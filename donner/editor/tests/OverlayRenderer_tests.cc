@@ -1,6 +1,7 @@
 #include "donner/editor/OverlayRenderer.h"
 
 #include <array>
+#include <cstdint>
 
 #include "donner/base/Transform.h"
 #include "donner/editor/EditorApp.h"
@@ -364,6 +365,50 @@ TEST(OverlayRendererTest, PathOutlineFollowsElementTransform) {
   EXPECT_EQ(alphaAt(20, 30), 0)
       << "Pixel at the *un-transformed* rect interior is non-empty — looks like the "
          "old local-space path is still being drawn";
+}
+
+TEST(OverlayRendererTest, DisplayNoneSelectionStillDrawsPathOutline) {
+  constexpr std::string_view kHiddenSelectionSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+              <rect id="hidden" x="20" y="20" width="40" height="30"
+                    fill="red" style="display:none"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kHiddenSelectionSvg));
+  app.document().document().setCanvasSize(100, 100);
+
+  auto hidden = app.document().document().querySelector("#hidden");
+  ASSERT_TRUE(hidden.has_value());
+  app.setSelection(*hidden);
+
+  svg::Renderer overlayRenderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(100.0, 100.0);
+  viewport.devicePixelRatio = 1.0;
+  overlayRenderer.beginFrame(viewport);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  OverlayRenderer::drawChromeWithTransform(overlayRenderer, app.selectedElement(), canvasFromDoc);
+  overlayRenderer.endFrame();
+
+  const auto bitmap = overlayRenderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+
+  const auto alphaAt = [&](int x, int y) -> std::uint8_t {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + 3];
+  };
+
+  bool foundOutline = false;
+  for (int x = 20; x <= 60; ++x) {
+    if (alphaAt(x, 20) > 0) {
+      foundOutline = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(foundOutline)
+      << "A display:none selection should still expose its path overlay outline for source edits.";
 }
 
 // Regression for "dragging a shape moves the path outline in the

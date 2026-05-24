@@ -240,6 +240,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "render_pane_presenter_tests",
+    srcs = ["RenderPanePresenter_tests.cc"],
+    deps = [
+        "//donner/editor:render_pane_presenter",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "layer_inspector_diagnostics_tests",
     srcs = ["LayerInspectorDiagnostics_tests.cc"],
     deps = [

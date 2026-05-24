@@ -327,6 +327,45 @@ TEST(CompositedPresentationTest, FullRenderLandedDoesNotClearCachedTextures) {
   EXPECT_EQ(state.presentationPreview(std::nullopt)->entity, Entity(7));
 }
 
+TEST(CompositedPresentationTest, DiscardCachedTexturesForEntityClearsMatchingCache) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+
+  EXPECT_TRUE(state.discardCachedTexturesForEntity(Entity(7)));
+
+  EXPECT_FALSE(Snapshot(state).hasCachedTextures);
+  EXPECT_FALSE(state.presentationPreview(std::nullopt).has_value());
+}
+
+TEST(CompositedPresentationTest, DiscardCachedTexturesForEntityKeepsUnrelatedCache) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+
+  EXPECT_FALSE(state.discardCachedTexturesForEntity(Entity(9)));
+
+  EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+  EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
+}
+
+TEST(CompositedPresentationTest, DiscardCachedTexturesForEntityClearsSettlingState) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+  state.beginSettling(
+      SelectTool::ActiveDragPreview{
+          .entity = Entity(7),
+          .translation = Vector2d(3.0, 2.0),
+      },
+      /*targetVersion=*/4);
+
+  EXPECT_TRUE(state.discardCachedTexturesForEntity(Entity(7)));
+
+  const auto snapshot = Snapshot(state);
+  EXPECT_FALSE(snapshot.hasCachedTextures);
+  EXPECT_FALSE(snapshot.waitingForFullRender);
+  EXPECT_FALSE(snapshot.waitingForChromeRefresh);
+  EXPECT_FALSE(snapshot.settlingPreview.has_value());
+}
+
 // Selection-clear keeps the cached document image visible. It only removes
 // selection/settling state; the next document render atomically replaces the tiles.
 TEST(CompositedPresentationTest, SelectionClearKeepsCachedTexturesVisible) {

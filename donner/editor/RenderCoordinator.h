@@ -115,6 +115,13 @@ public:
                         FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
                           GlTextureCache& textures);
+  /**
+   * Return true when the live selection is `display:none` and the render pane should hide the
+   * cached promoted selection tile while leaving selection overlay chrome visible.
+   *
+   * @param app Editor application state containing the live selection.
+   */
+  [[nodiscard]] bool shouldSuppressDragTargetTiles(EditorApp& app) const;
 
 private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;

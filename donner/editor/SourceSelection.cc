@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLNode.h"
@@ -129,6 +131,22 @@ std::optional<SourceByteRange> ElementSourceByteRange(const svg::SVGElement& ele
   }
 
   return SourceByteRange{.start = *start, .end = *end};
+}
+
+std::vector<svg::SVGElement> ExcludeSelectedSourceHoverElements(
+    std::vector<svg::SVGElement> hoverElements, std::span<const svg::SVGElement> selectedElements) {
+  if (hoverElements.empty() || selectedElements.empty()) {
+    return hoverElements;
+  }
+
+  hoverElements.erase(std::remove_if(hoverElements.begin(), hoverElements.end(),
+                                     [selectedElements](const svg::SVGElement& element) {
+                                       return std::find(selectedElements.begin(),
+                                                        selectedElements.end(),
+                                                        element) != selectedElements.end();
+                                     }),
+                      hoverElements.end());
+  return hoverElements;
 }
 
 std::optional<svg::SVGElement> FindElementAtSourceOffset(const svg::SVGDocument& document,

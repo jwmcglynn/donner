@@ -18,7 +18,8 @@ context, and draws reference arrows between source refs and target elements.
 Moving the source cursor updates the canvas/tree selection when the cursor lands
 inside an SVG element. Hovering source text is non-mutating: it highlights the
 corresponding shape in the render pane and adds a subtle source highlight without
-changing selection.
+changing selection. Elements already in the active selection do not get duplicate
+source-hover highlights.
 
 ## Architecture Snapshot
 
@@ -88,10 +89,22 @@ pane. UI-driven selection still scrolls the source pane to the selected element.
 Wrap-aware scrolling uses visual rows, so selecting an element on a wrapped line
 scrolls to the visible row containing the selected source.
 
+Typing inside the current source-focus range preserves the existing editor
+selection and source caret while the structured edit is applied. Cursor
+navigation outside that focus range can still select the element at the source
+cursor.
+
+When focus originated from a CSS rule, moving the caret from the rule to one of
+the visible impacted elements does not immediately recompute focus from the
+element's current attributes. This keeps the active CSS rule visible while the
+user edits a matching `class` attribute through temporarily mismatched or
+unparseable intermediate text.
+
 Changed-source flashes are byte-range decorations managed by
-`FlashDecorations`. Flashes are capped, clamped to the current buffer, shifted or
-dropped across later edits, and rendered through the same visual-row path as
-hover highlights.
+`FlashDecorations`. Flashes are used for editor-driven source updates such as
+canvas/DOM writebacks, not for bytes the user just typed in the source pane.
+Flashes are capped, clamped to the current buffer, shifted or dropped across
+later edits, and rendered through the same visual-row path as hover highlights.
 
 ## Implementation Locators
 

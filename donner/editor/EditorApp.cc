@@ -105,6 +105,20 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   return result;
 }
 
+bool EditorApp::revertToCleanSource() {
+  const std::string source(cleanSourceText_);
+  if (source.empty()) {
+    return false;
+  }
+
+  if (!loadFromString(source)) {
+    return false;
+  }
+
+  setCleanSourceText(source);
+  return true;
+}
+
 bool EditorApp::flushFrame() {
   std::optional<svg::SVGDocument> documentBeforeFlush;
   std::vector<AttributeWritebackTarget> selectionTargets;

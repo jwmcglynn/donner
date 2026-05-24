@@ -772,6 +772,28 @@ TEST_F(TextEditorTests, ClickingFocusHiddenPlaceholderExpandsRangeWithoutMovingC
   EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2, 3, 4}));
 }
 
+TEST_F(TextEditorTests, CursorInsideFocusRangeTracksFullColorAndDimmedLines) {
+  editor.setText("root\nhidden\ntarget\nclosing");
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 2, .endLine = 3}},
+      .dimmed = {LineRange{.startLine = 0, .endLine = 1}, LineRange{.startLine = 3, .endLine = 4}},
+      .hidden = {LineRange{.startLine = 1, .endLine = 2}},
+  });
+
+  editor.setCursorPosition(Coordinates(2, 1));
+  EXPECT_TRUE(editor.isCursorInsideFocusRange());
+
+  editor.setCursorPosition(Coordinates(0, 0));
+  EXPECT_TRUE(editor.isCursorInsideFocusRange());
+
+  editor.setCursorPosition(Coordinates(1, 0));
+  EXPECT_FALSE(editor.isCursorInsideFocusRange());
+
+  editor.clearFocusPartition();
+  editor.setCursorPosition(Coordinates(2, 1));
+  EXPECT_FALSE(editor.isCursorInsideFocusRange());
+}
+
 TEST_F(TextEditorTests, ExternalSourceEditQueuesRenderedFlashDecoration) {
   editor.setText("<svg></svg>");
   editor.resetTextChanged();

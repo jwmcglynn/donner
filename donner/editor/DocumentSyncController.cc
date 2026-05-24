@@ -89,23 +89,6 @@ bool MirrorDocumentSourceIntoTextEditor(EditorApp& app, TextEditor& textEditor,
   return true;
 }
 
-void FlashUserVisibleSourceEdit(TextEditor& textEditor, std::string_view oldSource,
-                                std::string_view newSource) {
-  std::optional<SourceMirrorEdit> edit = BuildSingleSourceMirrorEdit(oldSource, newSource);
-  if (!edit.has_value() || edit->replacement.empty()) {
-    return;
-  }
-
-  // Single-character typing is noisy. Multi-byte/multi-character inserts cover paste,
-  // autocomplete, and structured source edits while preserving the event-driven loop.
-  if (edit->replacement.size() > 1 || edit->removedLength > 0) {
-    textEditor.flashSourceRange(SourceByteRange{
-        .start = edit->offset,
-        .end = edit->offset + edit->replacement.size(),
-    });
-  }
-}
-
 bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
                                         const std::vector<xml::XMLSourceDelta>& sourceDeltas,
                                         std::string* previousSourceText,
@@ -197,7 +180,6 @@ void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEdi
 
   if (textEditor.isTextChanged()) {
     const std::string newSource = textEditor.getText();
-    FlashUserVisibleSourceEdit(textEditor, previousSourceText_, newSource);
     std::vector<SourceEditIntent> editIntents = textEditor.takePendingSourceEditIntents();
     pendingSourceEditIntents_.insert(pendingSourceEditIntents_.end(),
                                      std::make_move_iterator(editIntents.begin()),
@@ -226,6 +208,14 @@ void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEdi
       textChangeIdleTimer_ = 0.0f;
     }
   }
+}
+
+std::optional<float> DocumentSyncController::nextTextSyncWakeSeconds() const {
+  if (!textDispatchThrottled_) {
+    return std::nullopt;
+  }
+
+  return std::max(0.0f, kTextChangeDebounceSeconds - textChangeIdleTimer_);
 }
 
 void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& selectTool,

@@ -3,9 +3,11 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/EditorApp.h"
@@ -88,6 +90,22 @@ TEST(SourceSelectionTest, ReturnsElementSourceByteRange) {
   const std::string selected = source.substr(range->start, range->end - range->start);
   EXPECT_NE(selected.find("<rect"), std::string::npos);
   EXPECT_NE(selected.find("id=\"target\""), std::string::npos);
+}
+
+TEST(SourceSelectionTest, ExcludesSelectedElementsFromSourceHoverCandidates) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  auto group = app.document().document().querySelector("#layer");
+  auto rect = app.document().document().querySelector("#target");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(rect.has_value());
+
+  const std::vector<svg::SVGElement> filtered = ExcludeSelectedSourceHoverElements(
+      {*group, *rect}, std::span<const svg::SVGElement>(&*rect, 1));
+
+  ASSERT_EQ(filtered.size(), 1u);
+  EXPECT_EQ(filtered.front().id(), "layer");
 }
 
 TEST(SourceSelectionTest, FindsElementAtTextEditorCursor) {

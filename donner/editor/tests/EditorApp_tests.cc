@@ -237,6 +237,35 @@ TEST(EditorAppTest, SyncDirtyFromSourceClearsWhenTextReturnsToCleanBaseline) {
   EXPECT_FALSE(app.isDirty());
 }
 
+TEST(EditorAppTest, RevertToCleanSourceReloadsLastSavedDocument) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.setCleanSourceText(kTrivialSvg);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  constexpr std::string_view kEditedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <circle id="replacement" cx="25" cy="25" r="10" fill="green"/>
+       </svg>)";
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kEditedSvg)));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.isDirty());
+  EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
+  auto replacement = app.document().document().querySelector("#replacement");
+  ASSERT_TRUE(replacement.has_value());
+  app.setSelection(*replacement);
+  EXPECT_TRUE(app.hasSelection());
+
+  ASSERT_TRUE(app.revertToCleanSource());
+  EXPECT_FALSE(app.isDirty());
+  EXPECT_FALSE(app.hasSelection());
+  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#replacement").has_value());
+}
+
 // Regression for the "scale is wrong, clicks land on the background" bug in
 // the editor's main loop. Mirrors exactly the sequence main.cc runs each
 // frame:

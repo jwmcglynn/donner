@@ -3,7 +3,9 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 #include <string_view>
+#include <vector>
 
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGDocument.h"
@@ -29,6 +31,16 @@ bool HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& eleme
  */
 std::optional<SourceByteRange> ElementSourceByteRange(const svg::SVGElement& element,
                                                       std::string_view source);
+
+/**
+ * Removes elements already represented by the active editor selection from source-hover candidates.
+ *
+ * @param hoverElements Candidate elements resolved from the source hover position.
+ * @param selectedElements Active editor selection.
+ * @return Hover candidates that are not already selected.
+ */
+std::vector<svg::SVGElement> ExcludeSelectedSourceHoverElements(
+    std::vector<svg::SVGElement> hoverElements, std::span<const svg::SVGElement> selectedElements);
 
 /**
  * Finds the deepest SVG element whose source range contains \p offset.

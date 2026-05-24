@@ -8,6 +8,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/svg/core/Display.h"
 
 namespace donner::editor {
 
@@ -86,6 +87,23 @@ bool SameActiveBoundsPreview(const std::optional<SelectTool::ActiveTransformBoun
 
   return lhs->startBoundsDoc == rhs->startBoundsDoc &&
          SameTransform(lhs->documentFromStartDocument, rhs->documentFromStartDocument);
+}
+
+std::optional<svg::SVGElement> SelectedGraphicsElement(EditorApp& app) {
+  if (!app.selectedElement().has_value()) {
+    return std::nullopt;
+  }
+
+  const auto& selected = *app.selectedElement();
+  if (!selected.isa<svg::SVGGraphicsElement>()) {
+    return std::nullopt;
+  }
+
+  return selected;
+}
+
+bool IsDisplayNone(const svg::SVGElement& element) {
+  return element.getComputedStyle().display.getRequired() == svg::Display::None;
 }
 
 }  // namespace
@@ -361,6 +379,10 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const auto currentVersion = app.document().currentFrameVersion();
   const auto dragPreview = selectTool.activeDragPreview();
   const Entity prewarmEntity = selectedCompositedEntity(app);
+  if (const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
+      selected.has_value() && IsDisplayNone(*selected)) {
+    compositedPresentation_.discardCachedTexturesForEntity(selected->entityHandle().entity());
+  }
 
   const bool selectionBoundsChanged = app.selectedElements() != selectionBoundsCache_.lastSelection;
   if (!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value()) {
@@ -416,16 +438,11 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // stale remap against an already-remapped compositor.
   req.structuralRemap = app.document().consumePendingStructuralRemap();
   req.selection = std::nullopt;
-  // Carry the current selection on every render so the compositor can keep
-  // the selected entity promoted across drag → idle → drag transitions.
-  // The compositor stays warmed against the selection, but only promotes when
-  // the entity is actually drag-capable. The pre-warm render that first
-  // triggers promotion is still gated separately below.
-  if (app.selectedElement().has_value()) {
-    const auto& selected = *app.selectedElement();
-    if (selected.isa<svg::SVGGraphicsElement>()) {
-      req.selectedEntity = selected.entityHandle().entity();
-    }
+  // Carry the current renderable selection on every render so the compositor can keep the selected
+  // entity promoted across drag → idle → drag transitions. A selected `display:none` element keeps
+  // editor chrome but must not keep or refresh a promoted content layer.
+  if (prewarmEntity != entt::null) {
+    req.selectedEntity = prewarmEntity;
   }
   if (schedule.dragPreview.has_value()) {
     req.dragPreview = *schedule.dragPreview;
@@ -434,16 +451,21 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 }
 
 Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
-  if (!app.selectedElement().has_value()) {
+  const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
+  if (!selected.has_value()) {
     return entt::null;
   }
 
-  const auto& selected = *app.selectedElement();
-  if (!selected.isa<svg::SVGGraphicsElement>()) {
+  if (IsDisplayNone(*selected)) {
     return entt::null;
   }
 
-  return selected.entityHandle().entity();
+  return selected->entityHandle().entity();
+}
+
+bool RenderCoordinator::shouldSuppressDragTargetTiles(EditorApp& app) const {
+  const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
+  return selected.has_value() && IsDisplayNone(*selected);
 }
 
 }  // namespace donner::editor
