@@ -112,25 +112,56 @@ Genuinely missing/broken rendering, far too large for edge coverage:
   the **fill rule**: closed contours expand to same-winding outer+inner subpaths,
   so the ring needs `EvenOdd` (`Impl::strokeFillRuleFor`), not `NonZero` which
   filled glyph interiors solid. Verified hollow ring; decoration tests 0 → 3.)
-- **Default-fill resolution for stroked text** — separate bug found via the stroke
-  work: a default-fill (`fill` unspecified) `<text stroke="…">` resolves `spanFill`
-  alpha=0 in `drawText`, so the **black fill is missing** and glyphs render as the
-  stroke ring only. Non-stroked default-fill text fills correctly, so it's specific
-  to the stroked path. **← next.**
-- `text/text/rotate…underline…pattern` → ~105k px (pattern-on-rotated-text).
-- `text/text/xml_lang_ja` (CJK) → ~19k px (CJK font fallback / bitmap-only glyphs,
-  which `drawText` skips at `RendererGeode.cc:3162`).
-- `text/writing-mode=tb` (vertical) → ~2.3k px.
+- ~~**Default-fill resolution for stroked text**~~ — recorded as a "missing black
+  fill" bug (default-fill `<text stroke="…">` resolving `spanFill` alpha=0, glyphs
+  rendering as the stroke ring only). **Investigated 2026-05-24: not a bug at HEAD**
+  (`aab9665f6`). Instrumented `drawText` measures `spanFill=(0,0,0,255)`, `hasFill=1`
+  across plain / nested (`all-types-nested.svg`) / tspan-child / inherited-from-group
+  variants; a tiny-skia-authored golden diffs at ~201 px (the accepted G1-edge 4×
+  MSAA floor) with black-filled glyphs + a hollow stroke ring confirmed visually. The
+  original note was an in-flight artifact of the stroke fill-rule fix (same commit),
+  recorded as a hypothesis without a committed red repro — there is no fix to make.
+> ⚠️ **Metric caveat (added 2026-05-24):** the px figures below were measured
+> **geode-vs-resvg-golden** — the wrong oracle (parity is geode-vs-**tiny-skia**, per
+> the methodology note above). They are inflated by the shared ~1313 px
+> tiny-skia-vs-resvg baseline offset (the documented ~2 px vertical-baseline
+> reference gap, already covered by the suite's `withMaxPixelsDifferent(1500)` on the
+> tb tests) plus the ~950 px sub-pixel crosshair/frame floor common to the whole
+> writing-mode category. **Re-measure geode-vs-tiny-skia before treating any of these
+> as a bug** — two of the three originally listed (default-fill, vertical) evaporated
+> under the correct metric.
+
+- ~~`text/writing-mode=tb` (vertical) → ~2.3k px~~ — **not a bug** (investigated
+  2026-05-24). Geode-vs-tiny-skia is **9 px** (G1-edge floor) across all six vertical
+  tests (`tb`, `tb-rl`, `tb-with-alignment`, `inheritance`, `vertical-lr`,
+  `vertical-rl`); a bare vertical repro is 0 px. The 2.3k was geode-vs-resvg (~1313
+  baseline + ~950 crosshair/frame). The vertical rotate-only transform is identical
+  in both `drawText` paths.
+- `text/text/xml_lang_ja` (CJK) → ~19k px **geode-vs-resvg — re-measure**. Likely
+  real + structural anyway: bitmap-only/CBDT glyphs are skipped in `drawText`
+  (`RendererGeode.cc:3162`) — overlaps [G4](#g4-color-emoji--bitmap-fonts-structural).
+- `text/text/rotate…underline…pattern` → ~105k px **geode-vs-resvg — re-measure**.
+  Magnitude is large enough to be a real pattern-on-rotated-text bug regardless.
+
+**Latent (no failing test yet):** the two `drawText` paths compose the per-glyph
+transform differently — tiny-skia does stretch-on-outline then `Rotate*Translate`
+(`RendererTinySkia.cc:1588-1650`); Geode does `Scale*Rotate*Translate`
+(`RendererGeode.cc:3216-3224`). These diverge only when `stretchScale≠1` **and**
+`rotateDegrees≠0` at once — i.e. vertical text + `textLength`/`lengthAdjust=spacingAndGlyphs`.
+No current test hits that combo (0 px contribution here); file a properly-scoped repro
+before fixing.
 
 **Plan:**
 1. ✅ Repro committed (text-decoration underline, red on Geode).
 2. ✅ **Decoration fill** rendered in `drawText` — repro green, no golden-suite
    regression.
 3. ✅ **Text + decoration stroke** rendered with the correct fill rule.
-4. **Fix default-fill resolution for stroked text** (the missing black fill above).
-   Once it lands, stroked decoration tests should fall to the G1-edge floor.
-5. Work the remaining G1-struct tail (CJK, vertical, rotate+pattern) as separate
-   repros + fixes.
+4. ✅ **Default-fill resolution for stroked text** — investigated, *not a bug* at
+   HEAD (see struck bullet above); the recorded symptom doesn't reproduce. No change.
+5. Work the remaining G1-struct tail — **re-measure geode-vs-tiny-skia FIRST** (the
+   doc's px figures are geode-vs-resvg; two of three "bugs" evaporated under the
+   correct metric). Live candidates: CJK (`xml_lang_ja`, bitmap-glyph skip / G4) and
+   rotate+pattern (~105k). Vertical is resolved (9 px floor). **← active.**
 6. **Un-gate**: flip `Text` → `true`; passing tests run, G1-edge tests get the
    documented 4×-MSAA threshold, remaining G1-struct failures keep narrow gates
    linked to their repro. (Un-gating before the structural fixes would just create
