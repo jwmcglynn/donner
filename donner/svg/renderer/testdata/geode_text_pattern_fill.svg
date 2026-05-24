@@ -1,0 +1,16 @@
+<svg viewBox="0 0 200 100" xmlns="http://www.w3.org/2000/svg"
+     font-family="Noto Sans" font-size="48">
+    <!-- G1 step 5 repro: text filled with a `<pattern>` (fill="url(#patt1)").
+         tiny-skia clips the pattern to the glyph outlines. Geode's drawText had
+         no pattern-fill path, so it (a) left the glyphs unfilled and (b) leaked
+         the staged pattern slot onto the NEXT drawn shape -- the frame rect --
+         painting the checkerboard across the whole frame. The trailing rect with
+         a default (black) solid fill catches that leak: it must stay solid black,
+         not pattern-filled. -->
+    <pattern id="patt1" patternUnits="userSpaceOnUse" width="10" height="10">
+        <rect x="0" y="0" width="5" height="5" fill="grey"/>
+        <rect x="5" y="5" width="5" height="5" fill="green"/>
+    </pattern>
+    <text x="10" y="55" fill="url(#patt1)">Text</text>
+    <rect x="160" y="10" width="30" height="30"/>
+</svg>

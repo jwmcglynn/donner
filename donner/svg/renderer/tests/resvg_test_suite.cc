@@ -555,6 +555,41 @@ TEST_F(GeodeTextDecorationRepro, UnderlineNotRenderedOnGeode) {
   renderAndCompare(document, svg, golden, params);
 }
 
+// ----------------------------------------------------------------------------
+// G1 Geode pattern-on-text parity repro
+// (see docs/design_docs/0021-resvg_feature_gaps.md §Geode parity).
+//
+// Root cause (confirmed in code + pixels): a `<text fill="url(#pattern)">`
+// stages a pattern paint slot via the driver's renderPattern/endPatternTile,
+// to be consumed by the next fill. RendererTinySkia::drawText consumes it
+// (clipping the pattern to the glyph outlines). RendererGeode::drawText had no
+// pattern-fill path: resolveSpanFill resolves a pattern ref to alpha=0, so the
+// glyph fill was skipped AND the staged `patternFillPaint` slot was never reset
+// -- it then leaked onto the NEXT drawn shape's `fillResolved`, painting the
+// pattern across that shape (e.g. a full-canvas frame rect).
+//
+// The repro fills "Text" with a checkerboard pattern and follows it with a
+// solid-black rect that must stay solid (the leak symptom). tiny-skia authors
+// and passes the golden; Geode failed until drawText consumed the slot.
+//
+// Authoring the golden (from tiny-skia):
+//   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
+//     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
+//       -- --gtest_filter='*PatternFillOnTextLeaksOnGeode*'
+// ----------------------------------------------------------------------------
+TEST_F(GeodeTextDecorationRepro, PatternFillOnTextLeaksOnGeode) {
+  const std::filesystem::path resvgRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
+  const char* svg = "donner/svg/renderer/testdata/geode_text_pattern_fill.svg";
+  const char* golden = "donner/svg/renderer/testdata/golden/geode_text_pattern_fill.png";
+
+  SVGDocument document = loadSVG(svg, resvgRoot);
+
+  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
+  params.enableGoldenUpdateFromEnv();
+  renderAndCompare(document, svg, golden, params);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     FiltersEnableBackground, ImageComparisonTestFixture,
     ValuesIn(getTestsInCategory(
