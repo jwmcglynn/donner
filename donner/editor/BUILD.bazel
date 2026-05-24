@@ -124,6 +124,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
+        "//donner/svg/components/style:style_system",
     ],
 )
 

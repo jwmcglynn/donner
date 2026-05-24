@@ -11,6 +11,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "GLFW/glfw3.h"
 #include "donner/editor/DocumentSave.h"
@@ -304,7 +305,7 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   documentSyncController_.resetForLoadedDocument(canonicalSource);
   app_.setCurrentFilePath(std::string(path));
   app_.setCleanSourceText(canonicalSource);
-  lastHighlightedSelection_.reset();
+  lastHighlightedSelection_.clear();
   textEditor_.clearFocusPartition();
   lastPostedScreenPoint_.reset();
   renderCoordinator_.resetForLoadedDocument();
@@ -934,19 +935,15 @@ void EditorShell::renderFloatingLayerPanel() {
 }
 
 bool EditorShell::highlightSelectionSourceIfNeeded() {
-  const auto& selectionNow = app_.selectedElement();
+  const auto& selectionNow = app_.selectedElements();
   if (selectionNow != lastHighlightedSelection_) {
     if (sourceSelectionOriginatedInText_) {
-      if (sourceFocusMode_) {
+      if (!sourceFocusOriginatedInStyle_) {
         updateSourceFocusView(/*scrollToSelection=*/false);
-      } else {
-        textEditor_.clearFocusPartition();
       }
       sourceSelectionOriginatedInText_ = false;
-    } else if (sourceFocusMode_) {
+    } else if (!selectionNow.empty()) {
       updateSourceFocusView(/*scrollToSelection=*/true);
-    } else if (selectionNow.has_value()) {
-      std::ignore = HighlightElementSource(textEditor_, *selectionNow);
     } else {
       textEditor_.clearFocusPartition();
     }
@@ -957,16 +954,53 @@ bool EditorShell::highlightSelectionSourceIfNeeded() {
   return false;
 }
 
+std::optional<StyleFocus> EditorShell::styleFocusAtSourceCursor() {
+  if (!app_.hasDocument() || textEditor_.isTextChanged()) {
+    return std::nullopt;
+  }
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  if (textEditor_.getText() != documentSource) {
+    return std::nullopt;
+  }
+
+  const std::size_t cursorOffset =
+      textEditor_.getByteOffsetAtCoordinates(textEditor_.getCursorPosition());
+  std::optional<StyleFocus> styleFocus =
+      ComputeStyleFocusAtSourceOffset(app_.document().document(), cursorOffset);
+  if (!styleFocus.has_value() && cursorOffset > 0) {
+    styleFocus = ComputeStyleFocusAtSourceOffset(app_.document().document(), cursorOffset - 1);
+  }
+
+  return styleFocus;
+}
+
+void EditorShell::applyStyleFocus(StyleFocus styleFocus) {
+  applySourcePartition(std::move(styleFocus.partition));
+  sourceFocusOriginatedInStyle_ = true;
+  sourceSelectionOriginatedInText_ = false;
+  if (app_.selectedElements() != styleFocus.impactedElements) {
+    app_.setSelection(std::move(styleFocus.impactedElements));
+    sourceSelectionOriginatedInText_ = app_.selectedElements() != lastHighlightedSelection_;
+  }
+}
+
 void EditorShell::syncSelectionFromSourceCursorIfNeeded() {
   const bool sourceCursorNavigationActive =
       textEditor_.isFocused() || textEditor_.didMouseChangeCursorPosition();
   if (!textEditor_.isCursorPositionChanged() || !sourceCursorNavigationActive ||
-      !app_.hasDocument() || textEditor_.isTextChanged()) {
+      !app_.hasDocument() || textEditor_.isTextChanged() || textEditor_.hasSelection()) {
     return;
   }
 
   const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
   if (textEditor_.getText() != documentSource) {
+    return;
+  }
+
+  std::optional<StyleFocus> styleFocus = styleFocusAtSourceCursor();
+  if (styleFocus.has_value()) {
+    applyStyleFocus(std::move(*styleFocus));
+    window_.wakeEventLoop();
     return;
   }
 
@@ -977,27 +1011,39 @@ void EditorShell::syncSelectionFromSourceCursorIfNeeded() {
   }
 
   if (app_.selectedElements().size() == 1u && app_.selectedElements().front() == *element) {
+    sourceSelectionOriginatedInText_ = false;
+    if (sourceFocusOriginatedInStyle_) {
+      updateSourceFocusView(/*scrollToSelection=*/false);
+      window_.wakeEventLoop();
+    }
     return;
   }
 
   app_.setSelection(*element);
-  sourceSelectionOriginatedInText_ = true;
-  if (sourceFocusMode_) {
-    updateSourceFocusView(/*scrollToSelection=*/false);
-  } else {
-    textEditor_.clearFocusPartition();
-  }
+  sourceSelectionOriginatedInText_ = app_.selectedElements() != lastHighlightedSelection_;
+  updateSourceFocusView(/*scrollToSelection=*/false);
   window_.wakeEventLoop();
 }
 
+void EditorShell::applySourcePartition(FocusPartition partition) {
+  if (!sourceFocusMode_) {
+    partition.fullColor.clear();
+    partition.dimmed.clear();
+    partition.hidden.clear();
+  }
+
+  textEditor_.setFocusPartition(partition);
+}
+
 void EditorShell::updateSourceFocusView(bool scrollToSelection) {
-  if (!sourceFocusMode_ || !app_.hasDocument() || !app_.selectedElement().has_value()) {
+  sourceFocusOriginatedInStyle_ = false;
+  if (!app_.hasDocument() || app_.selectedElements().empty()) {
     textEditor_.clearFocusPartition();
     return;
   }
 
   const svg::SVGElement selected = *app_.selectedElement();
-  textEditor_.setFocusPartition(ComputeFocusPartition(app_.document().document(), selected));
+  applySourcePartition(ComputeFocusPartition(app_.document().document(), app_.selectedElements()));
   if (scrollToSelection) {
     std::ignore = HighlightElementSource(textEditor_, selected);
   }
@@ -1005,6 +1051,13 @@ void EditorShell::updateSourceFocusView(bool scrollToSelection) {
 
 void EditorShell::setSourceFocusMode(bool enabled) {
   sourceFocusMode_ = enabled;
+  if (sourceFocusOriginatedInStyle_) {
+    if (std::optional<StyleFocus> styleFocus = styleFocusAtSourceCursor()) {
+      applyStyleFocus(std::move(*styleFocus));
+      window_.wakeEventLoop();
+      return;
+    }
+  }
   updateSourceFocusView(/*scrollToSelection=*/enabled);
   window_.wakeEventLoop();
 }

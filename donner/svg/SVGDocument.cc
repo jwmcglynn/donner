@@ -390,13 +390,27 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   }
 
   std::string combined;
+  components::StylesheetSourceMap sourceMap;
   bool foundTextChild = false;
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       foundTextChild = true;
       if (std::optional<RcString> value = child->value()) {
+        const std::size_t cssStartOffset = combined.size();
         combined += *value;
+        const std::size_t cssEndOffset = combined.size();
+        std::optional<SourceRange> childValueLocation = child->getValueLocation();
+        if (!childValueLocation.has_value() && child->type() == xml::XMLNode::Type::Data) {
+          childValueLocation = child->getNodeLocation();
+        }
+
+        if (childValueLocation.has_value() && childValueLocation->start.offset.has_value() &&
+            childValueLocation->end.offset.has_value() &&
+            *childValueLocation->end.offset >= *childValueLocation->start.offset &&
+            *childValueLocation->end.offset - *childValueLocation->start.offset == value->size()) {
+          sourceMap.addSegment(cssStartOffset, cssEndOffset, childValueLocation->start);
+        }
       }
     } else {
       return ParseDiagnostic::Error(
@@ -410,7 +424,7 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
     combined = node.value().value_or(RcString(""));
   }
 
-  stylesheet->parseStylesheet(std::string_view(combined));
+  stylesheet->parseStylesheet(std::string_view(combined), std::move(sourceMap));
   return std::nullopt;
 }
 

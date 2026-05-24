@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <optional>
+#include <span>
 #include <vector>
 
 #include "donner/svg/SVGDocument.h"
@@ -26,10 +28,10 @@ struct SourcePoint {
   bool operator==(const SourcePoint& other) const = default;
 };
 
-/// View-only connector from an attribute reference to the referenced element.
+/// View-only connector from a source reference to the referenced source target.
 struct FocusReferenceLink {
-  SourcePoint from;  ///< Location of the fragment reference token.
-  SourcePoint to;    ///< Opening `<` of the referenced element.
+  SourcePoint from;  ///< Location of the source reference token.
+  SourcePoint to;    ///< Location of the referenced source target.
 
   /// Equality operator.
   bool operator==(const FocusReferenceLink& other) const = default;
@@ -48,6 +50,12 @@ struct FocusPartition {
   }
 };
 
+/// Focus information for a stylesheet rule under the source cursor.
+struct StyleFocus {
+  FocusPartition partition;                       ///< Source-pane partition for the matched rule.
+  std::vector<svg::SVGElement> impactedElements;  ///< Elements matched by the selected rule.
+};
+
 /**
  * Compute the source-pane focus partition for \p selected.
  *
@@ -57,5 +65,40 @@ struct FocusPartition {
  */
 [[nodiscard]] FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
                                                    const svg::SVGElement& selected);
+
+/**
+ * Compute the source-pane focus partition for \p selectedElements.
+ *
+ * @param document Source-backed SVG document containing \p selectedElements.
+ * @param selectedElements Elements whose source should remain fully visible.
+ * @return Line partition for the source view, or an empty partition if source locations are absent.
+ */
+[[nodiscard]] FocusPartition ComputeFocusPartition(
+    const svg::SVGDocument& document, std::span<const svg::SVGElement> selectedElements);
+
+/**
+ * Compute source-pane and canvas focus information for a stylesheet rule under \p sourceOffset.
+ *
+ * @param document Source-backed SVG document to inspect.
+ * @param sourceOffset Byte offset in \p document source.
+ * @return Style focus information, or \c std::nullopt when \p sourceOffset is not inside a
+ * source-backed stylesheet rule.
+ */
+[[nodiscard]] std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(
+    const svg::SVGDocument& document, std::size_t sourceOffset);
+
+/**
+ * Compute a focus partition for a stylesheet rule under \p sourceOffset.
+ *
+ * When \p sourceOffset is inside an author `<style>` rule, the resulting focus set shows the
+ * matched rule, elements impacted by that selector, their ancestor context, and resources
+ * referenced by the rule. Returns \c std::nullopt when the offset is not inside a source-backed
+ * stylesheet rule.
+ *
+ * @param document Source-backed SVG document to inspect.
+ * @param sourceOffset Byte offset in \p document source.
+ */
+[[nodiscard]] std::optional<FocusPartition> ComputeStyleFocusPartitionAtSourceOffset(
+    const svg::SVGDocument& document, std::size_t sourceOffset);
 
 }  // namespace donner::editor

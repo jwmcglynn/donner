@@ -89,6 +89,14 @@ protected:
     return editor.visualLines_[visualIndex].continuation;
   }
 
+  [[nodiscard]] bool VisualLineIsFocusHiddenPlaceholder(int visualIndex) const {
+    return editor.visualLines_[visualIndex].focusHiddenPlaceholder;
+  }
+
+  [[nodiscard]] LineRange VisualLineHiddenRange(int visualIndex) const {
+    return editor.visualLines_[visualIndex].hiddenRange;
+  }
+
   [[nodiscard]] bool HorizontalScrollEnabled() const { return editor.horizontalScroll_; }
 
   void RequestSourceFocusModeContextMenuToggle() {
@@ -121,6 +129,12 @@ protected:
     }
     return -1;
   }
+
+  [[nodiscard]] int VisualLineIndexForCoordinates(const Coordinates& position) const {
+    return editor.visualLineIndexForCoordinates(position);
+  }
+
+  [[nodiscard]] float LastScrollY() const { return editor.lastScroll_; }
 
   [[nodiscard]] Coordinates CoordinatesAtVisualTextOffset(int visualIndex,
                                                           int visualColumnOffset) const {
@@ -675,9 +689,39 @@ TEST_F(TextEditorTests, FocusPartitionHidesLinesFromRenderedVisualLayout) {
 
   RenderEditorFrame(ImVec2(300.0f, 180.0f));
 
-  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 3, 4}));
-  ASSERT_GE(VisualLineCount(), 2);
-  EXPECT_EQ(CoordinatesAtVisualTextOffset(1, 2), Coordinates(3, 2));
+  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 3, 4}));
+  ASSERT_GE(VisualLineCount(), 3);
+  EXPECT_TRUE(VisualLineIsFocusHiddenPlaceholder(1));
+  EXPECT_EQ(VisualLineHiddenRange(1), (LineRange{.startLine = 1, .endLine = 3}));
+  EXPECT_EQ(CoordinatesAtVisualTextOffset(2, 2), Coordinates(3, 2));
+}
+
+TEST_F(TextEditorTests, ClickingFocusHiddenPlaceholderExpandsRangeWithoutMovingCursor) {
+  editor.setText("root\nhidden-a\nhidden-b\ntarget\nclose");
+  const FocusPartition partition{
+      .fullColor = {LineRange{.startLine = 3, .endLine = 4}},
+      .dimmed = {LineRange{.startLine = 0, .endLine = 1}, LineRange{.startLine = 4, .endLine = 5}},
+      .hidden = {LineRange{.startLine = 1, .endLine = 3}},
+  };
+  editor.setFocusPartition(partition);
+  editor.setCursorPosition(Coordinates(3, 0));
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  ASSERT_TRUE(VisualLineIsFocusHiddenPlaceholder(1));
+
+  const ImVec2 clickPos =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/1, /*visualColumnOffset=*/1);
+  RenderEditorFrameWithMouse(clickPos, false, ImVec2(300.0f, 180.0f));
+  RenderEditorFrameWithMouse(clickPos, true, ImVec2(300.0f, 180.0f));
+
+  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2, 3, 4}));
+  EXPECT_FALSE(VisualLineIsFocusHiddenPlaceholder(1));
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(3, 0));
+  EXPECT_FALSE(editor.isCursorPositionChanged());
+
+  editor.setFocusPartition(partition);
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2, 3, 4}));
 }
 
 TEST_F(TextEditorTests, ExternalSourceEditQueuesRenderedFlashDecoration) {
@@ -745,6 +789,44 @@ TEST_F(TextEditorTests, FocusReferenceConnectorsRouteThroughDistinctLeftGutterLa
   const float alpha = ImGui::ColorConvertU32ToFloat4(rectLayout->color).w;
   EXPECT_GE(alpha, 0.45f);
   EXPECT_LE(alpha, 0.55f);
+}
+
+TEST_F(TextEditorTests, ReferenceOnlyFocusPartitionLeavesAllLinesVisible) {
+  editor.setText(
+      "  <defs>\n"
+      "    <linearGradient id=\"grad\"/>\n"
+      "  </defs>\n"
+      "  <rect fill=\"url(#grad)\"/>\n");
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 3, .column = 19},
+      .to = SourcePoint{.line = 1, .column = 4},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .referenceLinks = {link},
+  });
+
+  RenderEditorFrame(ImVec2(520.0f, 180.0f));
+
+  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2, 3}));
+  EXPECT_TRUE(FocusReferenceLayout(link, 0).has_value());
+}
+
+TEST_F(TextEditorTests, SelectAndFocusScrollsToWrappedVisualCursorLine) {
+  editor.setText(
+      "  <rect id=\"target\" x=\"10\" y=\"20\" width=\"30\" height=\"40\" "
+      "fill=\"red\" stroke=\"blue\" opacity=\"0.5\" transform=\"translate(1 2)\"/>\n");
+
+  RenderEditorFrame(ImVec2(240.0f, 80.0f));
+
+  const Coordinates targetStart(0, 96);
+  const int targetVisualLine = VisualLineIndexForCoordinates(targetStart);
+  ASSERT_GT(targetVisualLine, 0);
+
+  editor.selectAndFocus(targetStart, Coordinates(0, 108));
+  RenderEditorFrame(ImVec2(240.0f, 80.0f));
+  RenderEditorFrame(ImVec2(240.0f, 80.0f));
+
+  EXPECT_GT(LastScrollY(), 0.0f);
 }
 
 // ============================================================================

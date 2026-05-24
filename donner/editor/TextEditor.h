@@ -1021,6 +1021,7 @@ private:
   FocusPartition focusPartition_;
   bool focusPartitionActive_ = false;
   FlashDecorations flashDecorations_;
+  std::vector<LineRange> expandedFocusHiddenRanges_;
 
   struct VisualLine {
     int lineNo = 0;
@@ -1028,6 +1029,8 @@ private:
     int endColumn = 0;
     int indentColumns = 0;
     bool continuation = false;
+    bool focusHiddenPlaceholder = false;
+    LineRange hiddenRange;
   };
   std::vector<VisualLine> visualLines_;
   int visualLayoutMaxColumns_ = 0;
@@ -1224,6 +1227,11 @@ private:
   void rebuildVisualLines(const ImVec2& contentSize);
   [[nodiscard]] bool isLineHiddenByFocus(int lineNo) const;
   [[nodiscard]] bool isLineDimmedByFocus(int lineNo) const;
+  [[nodiscard]] bool isLineExpandedHiddenByFocus(int lineNo) const;
+  [[nodiscard]] std::optional<LineRange> focusHiddenRangeForLine(int lineNo) const;
+  [[nodiscard]] bool isFocusHiddenRangeExpanded(LineRange range) const;
+  void expandFocusHiddenRange(LineRange range);
+  [[nodiscard]] bool tryExpandFocusHiddenPlaceholderAt(const ImVec2& position);
   [[nodiscard]] int visualLineIndexForCoordinates(const Coordinates& position) const;
   [[nodiscard]] Coordinates visualScreenPosToCoordinates(const ImVec2& position) const;
 
@@ -1249,6 +1257,9 @@ private:
   void renderVisualLine(const VisualLine& visualLine, int visualLineIndex, const ImVec2& lineStart,
                         const ImVec2& textStart, const ImVec2& contentSize, ImDrawList* drawList,
                         float& longestLine);
+  void renderFocusHiddenPlaceholder(const VisualLine& visualLine, const ImVec2& lineStart,
+                                    const ImVec2& contentSize, ImDrawList* drawList,
+                                    float& longestLine);
 
   // TODO: Doc comments
   void renderErrorTooltip(int line, const std::string& message);

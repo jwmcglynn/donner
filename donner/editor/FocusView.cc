@@ -1,14 +1,19 @@
 #include "donner/editor/FocusView.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLNode.h"
+#include "donner/svg/ElementType.h"
+#include "donner/svg/components/style/StyleSystem.h"
 
 namespace donner::editor {
 namespace {
@@ -23,9 +28,23 @@ struct FragmentReference {
   std::optional<std::size_t> sourceOffset;
 };
 
+struct FocusCssRule {
+  ByteRange ruleRange;
+  std::optional<ByteRange> stylesheetNodeRange;
+};
+
 struct FocusElementCollection {
   std::vector<svg::SVGElement> elements;
   std::vector<std::pair<std::size_t, svg::SVGElement>> links;
+  std::vector<FocusCssRule> cssRules;
+  std::vector<FocusReferenceLink> cssLinks;
+};
+
+struct CssRuleKey {
+  Entity stylesheetEntity = entt::null;
+  std::size_t ruleIndex = 0;
+
+  bool operator==(const CssRuleKey& other) const = default;
 };
 
 std::optional<ByteRange> ResolveSourceRange(std::string_view source, const SourceRange& range) {
@@ -72,18 +91,42 @@ SourcePoint PointForOffset(const std::vector<std::size_t>& lineStarts, std::size
   return SourcePoint{.line = line, .column = static_cast<int>(offset - lineStarts[line])};
 }
 
+std::optional<ByteRange> NodeRange(std::string_view source, const xml::XMLNode& xmlNode) {
+  std::optional<SourceRange> sourceRange = xmlNode.getNodeLocation();
+  if (!sourceRange.has_value()) {
+    return std::nullopt;
+  }
+
+  return ResolveSourceRange(source, *sourceRange);
+}
+
 std::optional<ByteRange> NodeRange(std::string_view source, const svg::SVGElement& element) {
   std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.entityHandle());
   if (!xmlNode.has_value()) {
     return std::nullopt;
   }
 
-  std::optional<SourceRange> sourceRange = xmlNode->getNodeLocation();
-  if (!sourceRange.has_value()) {
+  return NodeRange(source, *xmlNode);
+}
+
+std::optional<ByteRange> NodeRangeForEntity(std::string_view source, Registry& registry,
+                                            Entity entity) {
+  std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(EntityHandle(registry, entity));
+  if (!xmlNode.has_value()) {
     return std::nullopt;
   }
 
-  return ResolveSourceRange(source, *sourceRange);
+  return NodeRange(source, *xmlNode);
+}
+
+std::optional<std::size_t> NodeStartOffset(std::string_view source,
+                                           const svg::SVGElement& element) {
+  std::optional<ByteRange> range = NodeRange(source, element);
+  if (!range.has_value()) {
+    return std::nullopt;
+  }
+
+  return range->start;
 }
 
 bool IsAsciiSpace(char ch) {
@@ -207,6 +250,49 @@ std::vector<FragmentReference> ReferencedFragments(std::string_view source,
   return result;
 }
 
+std::optional<std::size_t> AttributeValueStartOffset(std::string_view source,
+                                                     const xml::XMLNode& xmlNode,
+                                                     std::string_view attrName) {
+  if (std::optional<xml::XMLAttributeSourceLocation> location =
+          xmlNode.getAttributeSourceLocation(xml::XMLQualifiedNameRef(attrName))) {
+    if (std::optional<ByteRange> valueRange = ResolveSourceRange(source, location->valueRange)) {
+      return valueRange->start;
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<std::size_t> SelectorLinkSourceOffset(std::string_view source,
+                                                    const svg::SVGElement& selected) {
+  std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(selected.entityHandle());
+  if (!xmlNode.has_value()) {
+    return std::nullopt;
+  }
+
+  for (std::string_view attrName : {std::string_view("class"), std::string_view("id")}) {
+    if (std::optional<std::size_t> offset = AttributeValueStartOffset(source, *xmlNode, attrName)) {
+      return offset;
+    }
+  }
+
+  if (std::optional<ByteRange> nodeRange = NodeRange(source, selected)) {
+    return nodeRange->start;
+  }
+
+  return std::nullopt;
+}
+
+void AppendCssFragmentReferences(std::string_view source, ByteRange range,
+                                 std::vector<FragmentReference>* references) {
+  if (range.start > source.size() || range.end > source.size() || range.end < range.start) {
+    return;
+  }
+
+  AppendUrlFragmentReferences(source.substr(range.start, range.end - range.start), range.start,
+                              references);
+}
+
 void AppendReferencedFragmentsInSubtree(std::string_view source, const svg::SVGElement& root,
                                         std::vector<FragmentReference>* references) {
   for (const FragmentReference& reference : ReferencedFragments(source, root)) {
@@ -234,17 +320,356 @@ std::optional<svg::SVGElement> FindElementById(const svg::SVGElement& root, std:
   return std::nullopt;
 }
 
+bool MatchesStyleSourceRule(const svg::components::MatchedStyleRule& match,
+                            const svg::components::StyleRuleAtSourceOffset& sourceRule) {
+  if (match.stylesheetEntity != sourceRule.stylesheetEntity ||
+      match.ruleIndex != sourceRule.ruleIndex) {
+    return false;
+  }
+
+  return !sourceRule.selectorEntryIndex.has_value() ||
+         match.selectorEntryIndex == *sourceRule.selectorEntryIndex;
+}
+
+bool IsNonRenderedStyleContainer(svg::ElementType type) {
+  switch (type) {
+    case svg::ElementType::Defs:
+    case svg::ElementType::ClipPath:
+    case svg::ElementType::Mask:
+    case svg::ElementType::Filter:
+    case svg::ElementType::Pattern:
+    case svg::ElementType::LinearGradient:
+    case svg::ElementType::RadialGradient:
+    case svg::ElementType::Symbol:
+    case svg::ElementType::Marker:
+    case svg::ElementType::Style: return true;
+    default: return false;
+  }
+}
+
+bool HasNonRenderedStyleAncestor(const svg::SVGElement& element) {
+  for (std::optional<svg::SVGElement> ancestor = element.parentElement(); ancestor.has_value();
+       ancestor = ancestor->parentElement()) {
+    if (IsNonRenderedStyleContainer(ancestor->type())) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool IsRenderedStyleTarget(const svg::SVGElement& element) {
+  if (IsNonRenderedStyleContainer(element.type()) || HasNonRenderedStyleAncestor(element)) {
+    return false;
+  }
+
+  switch (element.type()) {
+    case svg::ElementType::Circle:
+    case svg::ElementType::Ellipse:
+    case svg::ElementType::G:
+    case svg::ElementType::Image:
+    case svg::ElementType::Line:
+    case svg::ElementType::Path:
+    case svg::ElementType::Polygon:
+    case svg::ElementType::Polyline:
+    case svg::ElementType::Rect:
+    case svg::ElementType::SVG:
+    case svg::ElementType::Text:
+    case svg::ElementType::TextPath:
+    case svg::ElementType::TSpan:
+    case svg::ElementType::Use: return true;
+    default: return false;
+  }
+}
+
+void AppendImpactedElementsForStyleRule(const svg::SVGElement& root,
+                                        const svg::components::StyleRuleAtSourceOffset& sourceRule,
+                                        svg::components::StyleSystem* styleSystem,
+                                        std::vector<svg::SVGElement>* impactedElements) {
+  if (IsRenderedStyleTarget(root)) {
+    for (const svg::components::MatchedStyleRule& match :
+         styleSystem->collectMatchedStyleRules(root.entityHandle())) {
+      if (MatchesStyleSourceRule(match, sourceRule)) {
+        impactedElements->push_back(root);
+        break;
+      }
+    }
+  }
+
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    AppendImpactedElementsForStyleRule(*child, sourceRule, styleSystem, impactedElements);
+  }
+}
+
+bool AddFocusElement(const svg::SVGElement& element, FocusElementCollection* result,
+                     std::vector<Entity>* visited) {
+  const Entity entity = element.entityHandle().entity();
+  if (std::ranges::find(*visited, entity) != visited->end()) {
+    return false;
+  }
+
+  visited->push_back(entity);
+  result->elements.push_back(element);
+  return true;
+}
+
+void AddElementReferenceLink(std::size_t fromOffset, const svg::SVGElement& referenced,
+                             FocusElementCollection* result) {
+  const Entity referencedEntity = referenced.entityHandle().entity();
+  const auto it = std::ranges::find_if(result->links, [&](const auto& link) {
+    return link.first == fromOffset && link.second.entityHandle().entity() == referencedEntity;
+  });
+  if (it == result->links.end()) {
+    result->links.emplace_back(fromOffset, referenced);
+  }
+}
+
+void AddSourceReferenceLink(FocusReferenceLink link, std::vector<FocusReferenceLink>* links) {
+  if (std::ranges::find(*links, link) == links->end()) {
+    links->push_back(link);
+  }
+}
+
+bool HasAncestorNamed(const svg::SVGElement& element, std::string_view tagName) {
+  for (std::optional<svg::SVGElement> ancestor = element.parentElement(); ancestor.has_value();
+       ancestor = ancestor->parentElement()) {
+    if (std::string_view(ancestor->tagName().name) == tagName) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool IsReferenceResourceElement(const svg::SVGElement& element) {
+  const std::string_view tagName = element.tagName().name;
+  return tagName == "clipPath" || tagName == "filter" || tagName == "linearGradient" ||
+         tagName == "marker" || tagName == "mask" || tagName == "pattern" ||
+         tagName == "radialGradient" || tagName == "symbol" || HasAncestorNamed(element, "defs");
+}
+
+void MarkReverseExpandable(const svg::SVGElement& element,
+                           std::vector<Entity>* reverseExpandableEntities) {
+  const Entity entity = element.entityHandle().entity();
+  if (std::ranges::find(*reverseExpandableEntities, entity) == reverseExpandableEntities->end()) {
+    reverseExpandableEntities->push_back(entity);
+  }
+}
+
+void MarkReverseExpandableIfResource(const svg::SVGElement& element,
+                                     std::vector<Entity>* reverseExpandableEntities) {
+  if (IsReferenceResourceElement(element)) {
+    MarkReverseExpandable(element, reverseExpandableEntities);
+  }
+}
+
+bool CanReverseExpand(const svg::SVGElement& element,
+                      const std::vector<Entity>& reverseExpandableEntities) {
+  const Entity entity = element.entityHandle().entity();
+  return std::ranges::find(reverseExpandableEntities, entity) != reverseExpandableEntities.end();
+}
+
+std::optional<FocusCssRule> FocusCssRuleFromMatchedRule(
+    std::string_view source, Registry& registry,
+    const svg::components::MatchedStyleRule& matchedRule) {
+  if (!matchedRule.ruleSourceRange.has_value()) {
+    return std::nullopt;
+  }
+
+  std::optional<ByteRange> ruleRange = ResolveSourceRange(source, *matchedRule.ruleSourceRange);
+  if (!ruleRange.has_value()) {
+    return std::nullopt;
+  }
+
+  return FocusCssRule{
+      .ruleRange = *ruleRange,
+      .stylesheetNodeRange = NodeRangeForEntity(source, registry, matchedRule.stylesheetEntity),
+  };
+}
+
+void AddMatchedCssRule(std::string_view source, Registry& registry,
+                       const svg::components::MatchedStyleRule& matchedRule,
+                       FocusElementCollection* result, std::vector<CssRuleKey>* visitedCssRules) {
+  const CssRuleKey key{
+      .stylesheetEntity = matchedRule.stylesheetEntity,
+      .ruleIndex = matchedRule.ruleIndex,
+  };
+  if (std::ranges::find(*visitedCssRules, key) != visitedCssRules->end()) {
+    return;
+  }
+
+  std::optional<FocusCssRule> cssRule = FocusCssRuleFromMatchedRule(source, registry, matchedRule);
+  if (!cssRule.has_value()) {
+    return;
+  }
+
+  visitedCssRules->push_back(key);
+  result->cssRules.push_back(*cssRule);
+}
+
+void AppendMatchedCssRulesInSubtree(std::string_view source,
+                                    const std::vector<std::size_t>& lineStarts,
+                                    const svg::SVGElement& root,
+                                    svg::components::StyleSystem* styleSystem,
+                                    FocusElementCollection* result,
+                                    std::vector<CssRuleKey>* visitedCssRules,
+                                    std::vector<FragmentReference>* references) {
+  Registry& registry = *root.entityHandle().registry();
+  const std::optional<std::size_t> selectorLinkSource = SelectorLinkSourceOffset(source, root);
+  if (IsRenderedStyleTarget(root)) {
+    for (const svg::components::MatchedStyleRule& matchedRule :
+         styleSystem->collectMatchedStyleRules(root.entityHandle())) {
+      if (!matchedRule.ruleSourceRange.has_value() ||
+          !matchedRule.selectorSourceRange.has_value()) {
+        continue;
+      }
+
+      std::optional<ByteRange> ruleRange = ResolveSourceRange(source, *matchedRule.ruleSourceRange);
+      std::optional<ByteRange> selectorRange =
+          ResolveSourceRange(source, *matchedRule.selectorSourceRange);
+      if (!ruleRange.has_value() || !selectorRange.has_value()) {
+        continue;
+      }
+
+      AddMatchedCssRule(source, registry, matchedRule, result, visitedCssRules);
+
+      if (selectorLinkSource.has_value() && *selectorLinkSource <= source.size()) {
+        AddSourceReferenceLink(
+            FocusReferenceLink{
+                .from = PointForOffset(lineStarts, *selectorLinkSource),
+                .to = PointForOffset(lineStarts, selectorRange->start),
+            },
+            &result->cssLinks);
+      }
+
+      AppendCssFragmentReferences(source, *ruleRange, references);
+    }
+  }
+
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    AppendMatchedCssRulesInSubtree(source, lineStarts, *child, styleSystem, result, visitedCssRules,
+                                   references);
+  }
+}
+
+void AppendReverseAttributeReferences(std::string_view source, const svg::SVGElement& root,
+                                      std::string_view targetId,
+                                      const svg::SVGElement& targetElement,
+                                      FocusElementCollection* result, std::vector<Entity>* visited,
+                                      std::vector<Entity>* reverseExpandableEntities) {
+  for (const FragmentReference& reference : ReferencedFragments(source, root)) {
+    if (reference.fragmentId != targetId) {
+      continue;
+    }
+
+    if (reference.sourceOffset.has_value()) {
+      AddElementReferenceLink(*reference.sourceOffset, targetElement, result);
+    }
+    AddFocusElement(root, result, visited);
+    MarkReverseExpandableIfResource(root, reverseExpandableEntities);
+  }
+
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    AppendReverseAttributeReferences(source, *child, targetId, targetElement, result, visited,
+                                     reverseExpandableEntities);
+  }
+}
+
+void AppendReverseCssReferences(std::string_view source, const std::vector<std::size_t>& lineStarts,
+                                const svg::SVGElement& root, std::string_view targetId,
+                                const svg::SVGElement& targetElement,
+                                svg::components::StyleSystem* styleSystem,
+                                FocusElementCollection* result, std::vector<Entity>* visited,
+                                std::vector<CssRuleKey>* visitedCssRules,
+                                std::vector<Entity>* reverseExpandableEntities) {
+  Registry& registry = *root.entityHandle().registry();
+  if (IsRenderedStyleTarget(root)) {
+    for (const svg::components::MatchedStyleRule& matchedRule :
+         styleSystem->collectMatchedStyleRules(root.entityHandle())) {
+      if (!matchedRule.ruleSourceRange.has_value()) {
+        continue;
+      }
+
+      std::optional<ByteRange> ruleRange = ResolveSourceRange(source, *matchedRule.ruleSourceRange);
+      if (!ruleRange.has_value()) {
+        continue;
+      }
+
+      std::vector<FragmentReference> references;
+      AppendCssFragmentReferences(source, *ruleRange, &references);
+
+      bool referencesTarget = false;
+      for (const FragmentReference& reference : references) {
+        if (reference.fragmentId != targetId) {
+          continue;
+        }
+
+        referencesTarget = true;
+        if (reference.sourceOffset.has_value()) {
+          AddElementReferenceLink(*reference.sourceOffset, targetElement, result);
+        }
+      }
+
+      if (!referencesTarget) {
+        continue;
+      }
+
+      AddMatchedCssRule(source, registry, matchedRule, result, visitedCssRules);
+      if (matchedRule.selectorSourceRange.has_value()) {
+        std::optional<ByteRange> selectorRange =
+            ResolveSourceRange(source, *matchedRule.selectorSourceRange);
+        std::optional<std::size_t> selectorLinkSource = SelectorLinkSourceOffset(source, root);
+        if (selectorRange.has_value() && selectorLinkSource.has_value() &&
+            *selectorLinkSource <= source.size()) {
+          AddSourceReferenceLink(
+              FocusReferenceLink{
+                  .from = PointForOffset(lineStarts, *selectorLinkSource),
+                  .to = PointForOffset(lineStarts, selectorRange->start),
+              },
+              &result->cssLinks);
+        }
+      }
+      AddFocusElement(root, result, visited);
+      MarkReverseExpandableIfResource(root, reverseExpandableEntities);
+    }
+  }
+
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    AppendReverseCssReferences(source, lineStarts, *child, targetId, targetElement, styleSystem,
+                               result, visited, visitedCssRules, reverseExpandableEntities);
+  }
+}
+
 FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
-                                            const svg::SVGElement& selected) {
+                                            std::vector<svg::SVGElement> initialElements,
+                                            const std::vector<FragmentReference>& initialReferences,
+                                            const std::vector<std::size_t>& lineStarts) {
   FocusElementCollection result;
   std::vector<Entity> visited;
-  result.elements.push_back(selected);
-  visited.push_back(selected.entityHandle().entity());
+  std::vector<Entity> reverseExpandableEntities;
+  std::vector<std::string> reverseProcessedIds;
+  std::vector<CssRuleKey> visitedCssRules;
+  for (const svg::SVGElement& element : initialElements) {
+    AddFocusElement(element, &result, &visited);
+    MarkReverseExpandableIfResource(element, &reverseExpandableEntities);
+  }
 
   const svg::SVGElement root = document.svgElement();
+  svg::components::StyleSystem styleSystem;
   for (std::size_t i = 0; i < result.elements.size(); ++i) {
+    const svg::SVGElement current = result.elements[i];
     std::vector<FragmentReference> references;
-    AppendReferencedFragmentsInSubtree(document.source(), result.elements[i], &references);
+    if (i == 0) {
+      references.insert(references.end(), initialReferences.begin(), initialReferences.end());
+    }
+
+    AppendMatchedCssRulesInSubtree(document.source(), lineStarts, current, &styleSystem, &result,
+                                   &visitedCssRules, &references);
+    AppendReferencedFragmentsInSubtree(document.source(), current, &references);
 
     for (const FragmentReference& reference : references) {
       std::optional<svg::SVGElement> referenced = FindElementById(root, reference.fragmentId);
@@ -253,17 +678,25 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
       }
 
       if (reference.sourceOffset.has_value()) {
-        result.links.emplace_back(*reference.sourceOffset, *referenced);
+        AddElementReferenceLink(*reference.sourceOffset, *referenced, &result);
       }
 
-      const Entity entity = referenced->entityHandle().entity();
-      if (std::ranges::find(visited, entity) != visited.end()) {
-        continue;
-      }
-
-      visited.push_back(entity);
-      result.elements.push_back(*referenced);
+      AddFocusElement(*referenced, &result, &visited);
     }
+
+    const RcString currentId = current.id();
+    if (currentId.empty() || !CanReverseExpand(current, reverseExpandableEntities) ||
+        std::ranges::find(reverseProcessedIds, std::string_view(currentId)) !=
+            reverseProcessedIds.end()) {
+      continue;
+    }
+
+    reverseProcessedIds.push_back(std::string(currentId));
+    AppendReverseAttributeReferences(document.source(), root, std::string_view(currentId), current,
+                                     &result, &visited, &reverseExpandableEntities);
+    AppendReverseCssReferences(document.source(), lineStarts, root, std::string_view(currentId),
+                               current, &styleSystem, &result, &visited, &visitedCssRules,
+                               &reverseExpandableEntities);
   }
 
   return result;
@@ -293,6 +726,13 @@ std::vector<ByteRange> AncestorTagRanges(std::string_view source, ByteRange node
   return result;
 }
 
+void AddNodeTagLineRanges(std::string_view source, const std::vector<std::size_t>& lineStarts,
+                          ByteRange nodeRange, FocusPartition* partition) {
+  for (ByteRange tagRange : AncestorTagRanges(source, nodeRange)) {
+    partition->dimmed.push_back(RangeToLines(lineStarts, tagRange));
+  }
+}
+
 bool AddAncestorTagLineRanges(std::string_view source, const std::vector<std::size_t>& lineStarts,
                               const svg::SVGElement& element, FocusPartition* partition,
                               bool required) {
@@ -303,9 +743,7 @@ bool AddAncestorTagLineRanges(std::string_view source, const std::vector<std::si
       return !required;
     }
 
-    for (ByteRange tagRange : AncestorTagRanges(source, *ancestorRange)) {
-      partition->dimmed.push_back(RangeToLines(lineStarts, tagRange));
-    }
+    AddNodeTagLineRanges(source, lineStarts, *ancestorRange, partition);
   }
 
   return true;
@@ -326,6 +764,16 @@ void Normalize(std::vector<LineRange>* ranges) {
     }
   }
   *ranges = std::move(merged);
+}
+
+void DeduplicateLinks(std::vector<FocusReferenceLink>* links) {
+  std::vector<FocusReferenceLink> unique;
+  for (const FocusReferenceLink& link : *links) {
+    if (std::ranges::find(unique, link) == unique.end()) {
+      unique.push_back(link);
+    }
+  }
+  *links = std::move(unique);
 }
 
 bool ContainsLine(const std::vector<LineRange>& ranges, int line) {
@@ -358,30 +806,154 @@ std::vector<LineRange> HiddenLineRanges(int lineCount, const std::vector<LineRan
 
 FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
                                      const svg::SVGElement& selected) {
+  const std::array<svg::SVGElement, 1> selectedElements{selected};
+  return ComputeFocusPartition(document, std::span<const svg::SVGElement>(selectedElements));
+}
+
+FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
+                                     std::span<const svg::SVGElement> selectedElements) {
   if (!document.hasSourceStore()) {
+    return {};
+  }
+  if (selectedElements.empty()) {
     return {};
   }
 
   const std::string_view source = document.source();
   const std::vector<std::size_t> lineStarts = BuildLineStarts(source);
-  std::optional<ByteRange> selectedRange = NodeRange(source, selected);
-  if (!selectedRange.has_value()) {
-    return {};
+  std::vector<svg::SVGElement> initialElements;
+  initialElements.reserve(selectedElements.size());
+  std::vector<Entity> selectedEntities;
+  selectedEntities.reserve(selectedElements.size());
+  for (const svg::SVGElement& selected : selectedElements) {
+    if (!NodeRange(source, selected).has_value()) {
+      return {};
+    }
+
+    initialElements.push_back(selected);
+    selectedEntities.push_back(selected.entityHandle().entity());
   }
 
   FocusPartition partition;
-  const FocusElementCollection focusElements = CollectFocusElements(document, selected);
+  const FocusElementCollection focusElements =
+      CollectFocusElements(document, std::move(initialElements), {}, lineStarts);
 
   for (std::size_t i = 0; i < focusElements.elements.size(); ++i) {
-    std::optional<ByteRange> elementRange =
-        i == 0 ? selectedRange : NodeRange(source, focusElements.elements[i]);
+    std::optional<ByteRange> elementRange = NodeRange(source, focusElements.elements[i]);
     if (elementRange.has_value()) {
       partition.fullColor.push_back(RangeToLines(lineStarts, *elementRange));
     }
 
+    const bool selectedElement =
+        std::ranges::find(selectedEntities, focusElements.elements[i].entityHandle().entity()) !=
+        selectedEntities.end();
     if (!AddAncestorTagLineRanges(source, lineStarts, focusElements.elements[i], &partition,
-                                  /*required=*/i == 0)) {
+                                  /*required=*/selectedElement)) {
       return {};
+    }
+  }
+
+  for (const FocusCssRule& cssRule : focusElements.cssRules) {
+    partition.fullColor.push_back(RangeToLines(lineStarts, cssRule.ruleRange));
+    if (cssRule.stylesheetNodeRange.has_value()) {
+      AddNodeTagLineRanges(source, lineStarts, *cssRule.stylesheetNodeRange, &partition);
+    }
+  }
+
+  partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),
+                                  focusElements.cssLinks.end());
+
+  for (const auto& [fromOffset, referenced] : focusElements.links) {
+    std::optional<ByteRange> targetRange = NodeRange(source, referenced);
+    if (!targetRange.has_value() || fromOffset > source.size()) {
+      continue;
+    }
+
+    partition.referenceLinks.push_back(FocusReferenceLink{
+        .from = PointForOffset(lineStarts, fromOffset),
+        .to = PointForOffset(lineStarts, targetRange->start),
+    });
+  }
+
+  Normalize(&partition.fullColor);
+  Normalize(&partition.dimmed);
+  DeduplicateLinks(&partition.referenceLinks);
+
+  std::vector<LineRange> visible = partition.fullColor;
+  visible.insert(visible.end(), partition.dimmed.begin(), partition.dimmed.end());
+  Normalize(&visible);
+  partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts.size()), visible);
+  return partition;
+}
+
+std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument& document,
+                                                          std::size_t sourceOffset) {
+  if (!document.hasSourceStore()) {
+    return std::nullopt;
+  }
+
+  const std::string_view source = document.source();
+  if (sourceOffset >= source.size()) {
+    return std::nullopt;
+  }
+
+  const std::vector<std::size_t> lineStarts = BuildLineStarts(source);
+  svg::components::StyleSystem styleSystem;
+  Registry& registry = *document.svgElement().entityHandle().registry();
+  std::optional<svg::components::StyleRuleAtSourceOffset> sourceRule =
+      styleSystem.findStyleRuleAtSourceOffset(registry, sourceOffset);
+  if (!sourceRule.has_value()) {
+    return std::nullopt;
+  }
+
+  std::optional<ByteRange> ruleRange = ResolveSourceRange(source, sourceRule->ruleSourceRange);
+  std::optional<ByteRange> selectorRange =
+      ResolveSourceRange(source, sourceRule->selectorSourceRange);
+  if (!ruleRange.has_value() || !selectorRange.has_value()) {
+    return std::nullopt;
+  }
+
+  std::vector<svg::SVGElement> impactedElements;
+  AppendImpactedElementsForStyleRule(document.svgElement(), *sourceRule, &styleSystem,
+                                     &impactedElements);
+
+  std::vector<FragmentReference> cssReferences;
+  AppendCssFragmentReferences(source, *ruleRange, &cssReferences);
+  const FocusElementCollection focusElements =
+      CollectFocusElements(document, impactedElements, cssReferences, lineStarts);
+
+  FocusPartition partition;
+  partition.fullColor.push_back(RangeToLines(lineStarts, *ruleRange));
+
+  if (std::optional<ByteRange> stylesheetNodeRange =
+          NodeRangeForEntity(source, registry, sourceRule->stylesheetEntity)) {
+    AddNodeTagLineRanges(source, lineStarts, *stylesheetNodeRange, &partition);
+  }
+
+  for (const svg::SVGElement& element : focusElements.elements) {
+    if (std::optional<ByteRange> elementRange = NodeRange(source, element)) {
+      partition.fullColor.push_back(RangeToLines(lineStarts, *elementRange));
+    }
+
+    std::ignore = AddAncestorTagLineRanges(source, lineStarts, element, &partition,
+                                           /*required=*/false);
+  }
+
+  for (const FocusCssRule& cssRule : focusElements.cssRules) {
+    partition.fullColor.push_back(RangeToLines(lineStarts, cssRule.ruleRange));
+    if (cssRule.stylesheetNodeRange.has_value()) {
+      AddNodeTagLineRanges(source, lineStarts, *cssRule.stylesheetNodeRange, &partition);
+    }
+  }
+  partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),
+                                  focusElements.cssLinks.end());
+
+  for (const svg::SVGElement& element : focusElements.elements) {
+    if (std::optional<std::size_t> elementStart = NodeStartOffset(source, element)) {
+      partition.referenceLinks.push_back(FocusReferenceLink{
+          .from = PointForOffset(lineStarts, selectorRange->start),
+          .to = PointForOffset(lineStarts, *elementStart),
+      });
     }
   }
 
@@ -399,12 +971,26 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
 
   Normalize(&partition.fullColor);
   Normalize(&partition.dimmed);
+  DeduplicateLinks(&partition.referenceLinks);
 
   std::vector<LineRange> visible = partition.fullColor;
   visible.insert(visible.end(), partition.dimmed.begin(), partition.dimmed.end());
   Normalize(&visible);
   partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts.size()), visible);
-  return partition;
+  return StyleFocus{
+      .partition = std::move(partition),
+      .impactedElements = std::move(impactedElements),
+  };
+}
+
+std::optional<FocusPartition> ComputeStyleFocusPartitionAtSourceOffset(
+    const svg::SVGDocument& document, std::size_t sourceOffset) {
+  std::optional<StyleFocus> focus = ComputeStyleFocusAtSourceOffset(document, sourceOffset);
+  if (!focus.has_value()) {
+    return std::nullopt;
+  }
+
+  return std::move(focus->partition);
 }
 
 }  // namespace donner::editor

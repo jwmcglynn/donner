@@ -142,7 +142,10 @@ private:
   void renderFloatingLayerPanel();
   void renderLayerPanelContents();
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
+  [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceCursor();
+  void applyStyleFocus(StyleFocus styleFocus);
   void syncSelectionFromSourceCursorIfNeeded();
+  void applySourcePartition(FocusPartition partition);
   void updateSourceFocusView(bool scrollToSelection = false);
   void setSourceFocusMode(bool enabled);
   void toggleSourceFocusMode();
@@ -189,12 +192,13 @@ private:
   ImVec2 layerPanelFloatingPos_ = ImVec2(0.0f, 0.0f);
   /// Last floating Layers window size in screen pixels.
   ImVec2 layerPanelFloatingSize_ = ImVec2(420.0f, 360.0f);
-  std::optional<svg::SVGElement> lastHighlightedSelection_;
+  std::vector<svg::SVGElement> lastHighlightedSelection_;
   std::optional<svg::SVGElement> lastTreeSelection_;
   std::optional<ImVec2> lastPostedScreenPoint_;
   bool treeviewPendingScroll_ = false;
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
+  bool sourceFocusOriginatedInStyle_ = false;
   /// Design doc 0033 §M8: set when an M8 fast-path click consumed the
   /// pending click without going through the `!isBusy()`-gated post-
   /// onMouseDown cache refresh. The follow-up fires on the next idle

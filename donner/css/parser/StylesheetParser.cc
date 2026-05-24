@@ -1,5 +1,7 @@
 #include "donner/css/parser/StylesheetParser.h"
 
+#include <cctype>
+
 #include "donner/base/StringUtils.h"
 #include "donner/base/encoding/Base64.h"
 #include "donner/base/parser/DataUrlParser.h"
@@ -11,6 +13,173 @@
 namespace donner::css::parser {
 
 namespace {
+
+bool IsAsciiSpace(char ch) {
+  return std::isspace(static_cast<unsigned char>(ch)) != 0;
+}
+
+std::optional<std::size_t> ComponentSourceOffset(const ComponentValue& component) {
+  if (const Token* token = std::get_if<Token>(&component.value)) {
+    return token->offset().offset;
+  } else if (const Function* function = std::get_if<Function>(&component.value)) {
+    return function->sourceOffset.offset;
+  } else if (const SimpleBlock* block = std::get_if<SimpleBlock>(&component.value)) {
+    return block->sourceOffset.offset;
+  }
+
+  return std::nullopt;
+}
+
+std::size_t TrimStart(std::string_view str, std::size_t start, std::size_t end) {
+  while (start < end && IsAsciiSpace(str[start])) {
+    ++start;
+  }
+  return start;
+}
+
+std::size_t TrimEnd(std::string_view str, std::size_t start, std::size_t end) {
+  while (end > start && IsAsciiSpace(str[end - 1])) {
+    --end;
+  }
+  return end;
+}
+
+SourceRange MakeSourceRange(std::size_t start, std::size_t end) {
+  return SourceRange{.start = FileOffset::Offset(start), .end = FileOffset::Offset(end)};
+}
+
+std::size_t FindMatchingRuleEnd(std::string_view str, std::size_t openBraceOffset) {
+  if (openBraceOffset >= str.size() || str[openBraceOffset] != '{') {
+    return openBraceOffset;
+  }
+
+  int curlyDepth = 0;
+  char quote = '\0';
+  bool inComment = false;
+  for (std::size_t i = openBraceOffset; i < str.size(); ++i) {
+    const char ch = str[i];
+    const char next = i + 1 < str.size() ? str[i + 1] : '\0';
+
+    if (inComment) {
+      if (ch == '*' && next == '/') {
+        inComment = false;
+        ++i;
+      }
+      continue;
+    }
+
+    if (quote != '\0') {
+      if (ch == '\\' && next != '\0') {
+        ++i;
+      } else if (ch == quote) {
+        quote = '\0';
+      }
+      continue;
+    }
+
+    if (ch == '/' && next == '*') {
+      inComment = true;
+      ++i;
+    } else if (ch == '\'' || ch == '"') {
+      quote = ch;
+    } else if (ch == '{') {
+      ++curlyDepth;
+    } else if (ch == '}') {
+      --curlyDepth;
+      if (curlyDepth == 0) {
+        return i + 1;
+      }
+    }
+  }
+
+  return str.size();
+}
+
+std::vector<SourceRange> SplitSelectorEntryRanges(std::string_view str, std::size_t start,
+                                                  std::size_t end, std::size_t expectedEntryCount) {
+  std::vector<SourceRange> result;
+  std::size_t entryStart = start;
+  int parenDepth = 0;
+  int squareDepth = 0;
+  char quote = '\0';
+  bool inComment = false;
+
+  for (std::size_t i = start; i < end; ++i) {
+    const char ch = str[i];
+    const char next = i + 1 < str.size() ? str[i + 1] : '\0';
+
+    if (inComment) {
+      if (ch == '*' && next == '/') {
+        inComment = false;
+        ++i;
+      }
+      continue;
+    }
+
+    if (quote != '\0') {
+      if (ch == '\\' && next != '\0') {
+        ++i;
+      } else if (ch == quote) {
+        quote = '\0';
+      }
+      continue;
+    }
+
+    if (ch == '/' && next == '*') {
+      inComment = true;
+      ++i;
+    } else if (ch == '\'' || ch == '"') {
+      quote = ch;
+    } else if (ch == '(') {
+      ++parenDepth;
+    } else if (ch == ')' && parenDepth > 0) {
+      --parenDepth;
+    } else if (ch == '[') {
+      ++squareDepth;
+    } else if (ch == ']' && squareDepth > 0) {
+      --squareDepth;
+    } else if (ch == ',' && parenDepth == 0 && squareDepth == 0) {
+      const std::size_t trimmedStart = TrimStart(str, entryStart, i);
+      const std::size_t trimmedEnd = TrimEnd(str, trimmedStart, i);
+      result.push_back(MakeSourceRange(trimmedStart, trimmedEnd));
+      entryStart = i + 1;
+    }
+  }
+
+  const std::size_t trimmedStart = TrimStart(str, entryStart, end);
+  const std::size_t trimmedEnd = TrimEnd(str, trimmedStart, end);
+  result.push_back(MakeSourceRange(trimmedStart, trimmedEnd));
+
+  if (result.size() != expectedEntryCount) {
+    result.assign(expectedEntryCount, MakeSourceRange(start, end));
+  }
+
+  return result;
+}
+
+void PopulateSelectorRuleSourceRanges(std::string_view str, const QualifiedRule& qualifiedRule,
+                                      SelectorRule* selectorRule) {
+  std::optional<std::size_t> blockStart = qualifiedRule.block.sourceOffset.offset;
+  if (!blockStart.has_value()) {
+    return;
+  }
+
+  std::size_t selectorStart = *blockStart;
+  for (const ComponentValue& component : qualifiedRule.prelude) {
+    if (std::optional<std::size_t> offset = ComponentSourceOffset(component)) {
+      selectorStart = std::min(selectorStart, *offset);
+    }
+  }
+
+  selectorStart = TrimStart(str, selectorStart, *blockStart);
+  const std::size_t selectorEnd = TrimEnd(str, selectorStart, *blockStart);
+  const std::size_t ruleEnd = FindMatchingRuleEnd(str, *blockStart);
+
+  selectorRule->selectorSourceRange = MakeSourceRange(selectorStart, selectorEnd);
+  selectorRule->ruleSourceRange = MakeSourceRange(selectorStart, ruleEnd);
+  selectorRule->selectorEntrySourceRanges = SplitSelectorEntryRanges(
+      str, selectorStart, selectorEnd, selectorRule->selector.entries.size());
+}
 
 /**
  * Try to parse a `url()` function into either a data URL or an external URL.
@@ -75,6 +244,7 @@ Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warni
       SelectorRule selectorRule;
       selectorRule.selector = std::move(selectorResult.result());
       selectorRule.declarations = std::move(declarations);
+      PopulateSelectorRuleSourceRanges(str, *qualifiedRule, &selectorRule);
       selectorRules.emplace_back(std::move(selectorRule));
     } else if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
       if (atRule->name.equalsLowercase("font-face") && atRule->block) {

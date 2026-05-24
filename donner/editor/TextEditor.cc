@@ -677,6 +677,11 @@ void TextEditor::handleMouseInputs() {
     functionDeclarationTooltip_ = false;
   }
 
+  if (click && tryExpandFocusHiddenPlaceholderAt(ImGui::GetMousePos())) {
+    lastClick_ = -1.0f;
+    return;
+  }
+
   // Triple click - select line
   if (tripleClick && !ctrl) {
     const auto clickCoords = screenPosToCoordinates(ImGui::GetMousePos());
@@ -788,6 +793,11 @@ bool LineRangeContains(const std::vector<LineRange>& ranges, int lineNo) {
   });
 }
 
+bool FocusPartitionsEqual(const FocusPartition& lhs, const FocusPartition& rhs) {
+  return lhs.fullColor == rhs.fullColor && lhs.dimmed == rhs.dimmed && lhs.hidden == rhs.hidden &&
+         lhs.referenceLinks == rhs.referenceLinks;
+}
+
 std::string LineToString(const Line& line) {
   std::string result;
   result.reserve(line.size());
@@ -800,12 +810,67 @@ std::string LineToString(const Line& line) {
 }  // namespace
 
 bool TextEditor::isLineHiddenByFocus(int lineNo) const {
-  return focusPartitionActive_ && LineRangeContains(focusPartition_.hidden, lineNo);
+  return focusPartitionActive_ && LineRangeContains(focusPartition_.hidden, lineNo) &&
+         !isLineExpandedHiddenByFocus(lineNo);
 }
 
 bool TextEditor::isLineDimmedByFocus(int lineNo) const {
-  return focusPartitionActive_ && LineRangeContains(focusPartition_.dimmed, lineNo) &&
+  return focusPartitionActive_ &&
+         (LineRangeContains(focusPartition_.dimmed, lineNo) ||
+          isLineExpandedHiddenByFocus(lineNo)) &&
          !LineRangeContains(focusPartition_.fullColor, lineNo);
+}
+
+bool TextEditor::isLineExpandedHiddenByFocus(int lineNo) const {
+  return focusPartitionActive_ && LineRangeContains(expandedFocusHiddenRanges_, lineNo);
+}
+
+std::optional<LineRange> TextEditor::focusHiddenRangeForLine(int lineNo) const {
+  if (!focusPartitionActive_) {
+    return std::nullopt;
+  }
+
+  const auto it = std::ranges::find_if(focusPartition_.hidden, [lineNo](const LineRange& range) {
+    return lineNo >= range.startLine && lineNo < range.endLine;
+  });
+  if (it == focusPartition_.hidden.end()) {
+    return std::nullopt;
+  }
+
+  return *it;
+}
+
+bool TextEditor::isFocusHiddenRangeExpanded(LineRange range) const {
+  return std::ranges::find(expandedFocusHiddenRanges_, range) != expandedFocusHiddenRanges_.end();
+}
+
+void TextEditor::expandFocusHiddenRange(LineRange range) {
+  if (range.endLine <= range.startLine || isFocusHiddenRangeExpanded(range)) {
+    return;
+  }
+
+  expandedFocusHiddenRanges_.push_back(range);
+  visualLayoutMaxColumns_ = 0;
+}
+
+bool TextEditor::tryExpandFocusHiddenPlaceholderAt(const ImVec2& position) {
+  if (!focusPartitionActive_ || visualLines_.empty()) {
+    return false;
+  }
+
+  const ImVec2 local{position.x - uiCursorPos_.x, position.y - uiCursorPos_.y};
+  const int visualIndex = static_cast<int>(std::floor(local.y / charAdvance_.y));
+  if (visualIndex < 0 || visualIndex >= static_cast<int>(visualLines_.size())) {
+    return false;
+  }
+
+  const VisualLine& visualLine = visualLines_[visualIndex];
+  if (!visualLine.focusHiddenPlaceholder) {
+    return false;
+  }
+
+  expandFocusHiddenRange(visualLine.hiddenRange);
+  return true;
 }
 
 void TextEditor::rebuildVisualLines(const ImVec2& contentSize) {
@@ -818,6 +883,18 @@ void TextEditor::rebuildVisualLines(const ImVec2& contentSize) {
   visualLayoutMaxColumns_ = maxColumns;
   visualLines_.clear();
   for (int lineNo = 0; lineNo < text_.getTotalLines(); ++lineNo) {
+    if (std::optional<LineRange> hiddenRange = focusHiddenRangeForLine(lineNo)) {
+      if (!isFocusHiddenRangeExpanded(*hiddenRange)) {
+        visualLines_.push_back(VisualLine{
+            .lineNo = hiddenRange->startLine,
+            .focusHiddenPlaceholder = true,
+            .hiddenRange = *hiddenRange,
+        });
+        lineNo = hiddenRange->endLine - 1;
+        continue;
+      }
+    }
+
     if (isLineHiddenByFocus(lineNo)) {
       continue;
     }
@@ -1134,6 +1211,11 @@ void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIn
                                   const ImVec2& lineStart, const ImVec2& textStart,
                                   const ImVec2& contentSize, ImDrawList* drawList,
                                   float& longestLine) {
+  if (visualLine.focusHiddenPlaceholder) {
+    renderFocusHiddenPlaceholder(visualLine, lineStart, contentSize, drawList, longestLine);
+    return;
+  }
+
   if (visualLine.lineNo >= text_.getTotalLines()) {
     return;
   }
@@ -1159,6 +1241,32 @@ void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIn
       visualLineIndex == visualLineIndexForCoordinates(state_.cursorPosition)) {
     renderCursor(lineStart, drawList);
   }
+}
+
+void TextEditor::renderFocusHiddenPlaceholder(const VisualLine& visualLine, const ImVec2& lineStart,
+                                              const ImVec2& contentSize, ImDrawList* drawList,
+                                              float& longestLine) {
+  const ImVec2 rowStart{lineStart.x + ImGui::GetScrollX(), lineStart.y};
+  const ImVec2 rowEnd{lineStart.x + contentSize.x + 2.0f * ImGui::GetScrollX(),
+                      lineStart.y + charAdvance_.y};
+  const bool hovered = ImGui::IsMouseHoveringRect(rowStart, rowEnd);
+  if (hovered) {
+    drawList->AddRectFilled(rowStart, rowEnd,
+                            palette_[static_cast<int>(ColorIndex::CurrentLineFillInactive)]);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+  }
+
+  if (showLineNumbers_) {
+    const ImVec2 markerPos{lineStart.x + textStart_ - 3.0f * charAdvance_.x, lineStart.y};
+    drawList->AddText(markerPos, palette_[static_cast<int>(ColorIndex::LineNumber)], "...");
+  }
+
+  const ImU32 color = palette_[static_cast<int>(ColorIndex::Comment)];
+  const ImVec2 textPos{lineStart.x + textStart_, lineStart.y};
+  drawList->AddText(textPos, color, "...");
+  longestLine = std::max(longestLine, textStart_ + 3.0f * charAdvance_.x);
+
+  (void)visualLine;
 }
 
 void TextEditor::renderErrorTooltip(int line, const std::string& message) {
@@ -1500,6 +1608,10 @@ void TextEditor::setSelection(const Coordinates& start, const Coordinates& end,
 }
 
 void TextEditor::setFocusPartition(const FocusPartition& partition) {
+  if (!FocusPartitionsEqual(focusPartition_, partition)) {
+    expandedFocusHiddenRanges_.clear();
+  }
+
   focusPartition_ = partition;
   focusPartitionActive_ = !partition.empty();
 }
@@ -1507,6 +1619,7 @@ void TextEditor::setFocusPartition(const FocusPartition& partition) {
 void TextEditor::clearFocusPartition() {
   focusPartition_ = FocusPartition{};
   focusPartitionActive_ = false;
+  expandedFocusHiddenRanges_.clear();
 }
 
 void TextEditor::flashSourceRange(SourceByteRange byteRange) {
@@ -2981,6 +3094,18 @@ void TextEditor::ensureCursorVisible() {
 
   const auto pos = getActualCursorCoordinates();
   const auto len = getTextDistanceToLineStart(pos);
+
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    const int visualIndex = visualLineIndexForCoordinates(pos);
+    const auto topVisual = 1 + static_cast<int>(std::ceil(scrollY / charAdvance_.y));
+    const auto bottomVisual = static_cast<int>(std::ceil((scrollY + height) / charAdvance_.y));
+    if (visualIndex < topVisual) {
+      ImGui::SetScrollY(std::max(0.0f, (visualIndex - 1) * charAdvance_.y));
+    } else if (visualIndex > bottomVisual - 4) {
+      ImGui::SetScrollY(std::max(0.0f, (visualIndex + 4) * charAdvance_.y - height));
+    }
+    return;
+  }
 
   const auto top = 1 + static_cast<int>(std::ceil(scrollY / charAdvance_.y));
   const auto bottom = static_cast<int>(std::ceil((scrollY + height) / charAdvance_.y));
