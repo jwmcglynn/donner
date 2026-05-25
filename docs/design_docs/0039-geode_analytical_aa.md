@@ -488,3 +488,27 @@ why analytical AA was tried and shelved, so it isn't re-attempted.
 **Redirected effort:** the genuine remaining geode bugs — `feGaussianBlur/complex-transform`
 (CTM projection), [0040](0040-geode_slug_conformance.md) D2 (cubic→chord landmine), and the
 re-grounded D1/D5 — which are real correctness gaps, not sampling differences.
+
+---
+
+## 11. DECISION REVISED (2026-05-25): pursue 16× sampling, PerfBot-gated
+
+Superseding §10: pursue matching tiny's ~16-sample coverage (§9 Finding A), **gated on PerfBot
+clearing the cost.** Two gates, both must pass before any rollout/un-gate:
+1. **Parity gate** — 16× effective sampling actually brings representative edge-floor tests
+   (text, shapes, preserveAspectRatio, image, across categories) to ≤100 px geode-vs-tiny.
+   Uncertain: geode's sample *positions* must align with tiny's (the N=4-matched-tiny finding
+   says positions matter); a 4×4 box grid is the strongest candidate since §9 Finding A points
+   to tiny being ~4×4.
+2. **Perf gate (PerfBot)** — the per-frame cost vs the current 4× is acceptable for the
+   0017 animation frame budget, OR it's scoped so the live animation path keeps 4× (the §9
+   option-3 hybrid) while offscreen/one-shot renders get 16×.
+
+**Mechanism feasibility:** WebGPU only guarantees `sampleCount` ∈ {1, 4}; 8×/16× MSAA is
+adapter-optional and frequently unsupported (and 16× MSAA resolve has already shown driver
+hangs on Intel Arc — see GeodeDevice alpha-coverage fallback). So the likely viable mechanism
+is **supersample: render to an N×-larger target and box-downsample** (4×4 → 16 effective
+samples). This (a) matches tiny's 4×4 grid distribution, (b) composes correctly (full per-pixel
+rendering — no folded-alpha band-seam bug from §9 Finding B), (c) works on every adapter. Cost:
+~16× fragment + 16× intermediate memory — exactly what the perf gate must weigh. Check true
+MSAA sampleCount support first; fall back to supersample if 16× MSAA is unavailable.
