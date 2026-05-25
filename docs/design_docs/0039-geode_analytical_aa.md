@@ -462,3 +462,29 @@ ownership to be correct, which neither approach provides.
 
 Given Finding A, options 1 and 2 are the only ones that actually reach parity; the analytical
 dream (option 3 / the original plan) cannot match a finite-sample reference. Decision pending.
+
+---
+
+## 10. DECISION (2026-05-25): accept the edge floor; analytical AA shelved
+
+After three implement→revert cycles and the two findings in §9, the decision is to **accept
+the 191 edge-floor gates as a by-design difference and shelve the analytical-AA effort.**
+
+Rationale: the edge-floor gates are cases where **geode renders correctly** — the only
+difference from tiny is the sample count (geode 4× MSAA vs tiny's ~16-sample rasterizer, per
+§9 Finding A). Reaching ≤100 px parity would require either 16× MSAA (≈4× the rasterization/
+resolve cost, reversing 0017's deliberate 4×-for-perf decision, with no guarantee geode's
+sample positions match tiny's) or a from-scratch scan-converter match. Neither is worth the
+cost/risk for a *non-bug* sampling difference. Analytical coverage cannot match a finite-sample
+reference (§9 Finding A), so the original "match Slug analytical AA" goal is abandoned.
+
+The edge-floor gates remain binary-gated (no per-test thresholds, per policy) but their reason
+is reframed from "ratchet out with finer AA" to **"accepted by-design: geode 4× MSAA vs tiny's
+~16-sample coverage; geode renders correctly."** If a future need arises (e.g. a print/export
+path wanting reference-grade AA), revisit option 1 (16× MSAA, perf-gated) or option 3
+(non-overlapping band ownership) from §9 — both recorded there. This doc stays as the record of
+why analytical AA was tried and shelved, so it isn't re-attempted.
+
+**Redirected effort:** the genuine remaining geode bugs — `feGaussianBlur/complex-transform`
+(CTM projection), [0040](0040-geode_slug_conformance.md) D2 (cubic→chord landmine), and the
+re-grounded D1/D5 — which are real correctness gaps, not sampling differences.
