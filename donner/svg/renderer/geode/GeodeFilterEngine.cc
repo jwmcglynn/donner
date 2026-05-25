@@ -195,6 +195,17 @@ long turbulenceRandom(long seed) {                                    // NOLINT
   return result;
 }
 
+/// sRGB → linearRGB transfer for a single channel in [0,1] (matches tiny-skia's
+/// `srgbToLinearChannel`). Used to convert lighting-color uniforms into linear
+/// space when a lighting primitive resolves to `color-interpolation-filters:
+/// linearRGB`.
+float srgbToLinearChannel(float c) {
+  if (c <= 0.04045f) {
+    return c / 12.92f;
+  }
+  return std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
 /// Generate permutation + gradient tables from seed, matching tiny-skia exactly.
 void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
   // Seed clamping matching resvg.
@@ -1451,8 +1462,11 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     } else if (const auto* flood = std::get_if<filter_primitive::Flood>(&node.primitive)) {
       outputTex = applyFlood(arena, inputTex.getWidth(), inputTex.getHeight(), *flood);
     } else if (std::holds_alternative<filter_primitive::Merge>(node.primitive)) {
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
       outputTex = applyMerge(arena, node, namedBuffers, currentBuffer, sourceGraphic,
-                             sourceAlpha ? &*sourceAlpha : nullptr);
+                             sourceAlpha ? &*sourceAlpha : nullptr, nodeLinearRGB);
     } else if (const auto* composite = std::get_if<filter_primitive::Composite>(&node.primitive)) {
       // Resolve second input (in2/backdrop).
       wgpu::Texture in2Tex = inputTex;
@@ -1520,7 +1534,20 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         outputTex = applyComponentTransfer(arena, inputTex, *ct);
       }
     } else if (const auto* conv = std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
-      outputTex = applyConvolveMatrix(arena, inputTex, *conv);
+      // feConvolveMatrix operates in the filter's color-interpolation-filters
+      // space (linearRGB by default). The kernel sums channel values, so the
+      // result depends on the space. Match tiny-skia (sRGB→linear input, convolve,
+      // linear→sRGB output) when the node resolves to linearRGB.
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
+      if (nodeLinearRGB) {
+        wgpu::Texture linearInput = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture convOutput = applyConvolveMatrix(arena, linearInput, *conv);
+        outputTex = applyColorSpaceConversion(arena, convOutput, /*srgbToLinear=*/false);
+      } else {
+        outputTex = applyConvolveMatrix(arena, inputTex, *conv);
+      }
     } else if (const auto* turb = std::get_if<filter_primitive::Turbulence>(&node.primitive)) {
       // feTurbulence generates noise in the filter's color-interpolation-filters
       // space (linearRGB by default), then the result is stored in sRGB. Match
@@ -1567,14 +1594,20 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                    std::get_if<filter_primitive::DiffuseLighting>(&node.primitive)) {
       const Box2d lightingInputSubregion =
           node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
       outputTex = applyDiffuseLighting(arena, inputTex, *diffuse, graph, deviceFromFilter,
-                                       lightingInputSubregion);
+                                       lightingInputSubregion, nodeLinearRGB);
     } else if (const auto* specular =
                    std::get_if<filter_primitive::SpecularLighting>(&node.primitive)) {
       const Box2d lightingInputSubregion =
           node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
       outputTex = applySpecularLighting(arena, inputTex, *specular, graph, deviceFromFilter,
-                                        lightingInputSubregion);
+                                        lightingInputSubregion, nodeLinearRGB);
     } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
       // stdDeviation is magnitude only; dx/dy are directional and need
       // the full CTM projection (matching feOffset).
@@ -2061,7 +2094,7 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
     FilterResourceArena& arena, const svg::components::FilterNode& node,
     const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
     const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
-    const wgpu::Texture* sourceAlpha) {
+    const wgpu::Texture* sourceAlpha, bool linearRGB) {
   const uint32_t width = currentBuffer.getWidth();
   const uint32_t height = currentBuffer.getHeight();
 
@@ -2072,15 +2105,28 @@ wgpu::Texture GeodeFilterEngine::applyMerge(
     return applyFlood(arena, width, height, transparent);
   }
 
+  // feMerge composites in the filter's color-interpolation-filters space
+  // (linearRGB by default): tiny-skia converts every input sRGB→linear, merges,
+  // then converts the result linear→sRGB. Convert each resolved input on the way
+  // in and the accumulator on the way out so the alpha-over blends in the right
+  // space.
+  auto toLinear = [&](wgpu::Texture tex) {
+    return linearRGB ? applyColorSpaceConversion(arena, tex, /*srgbToLinear=*/true) : tex;
+  };
+
   // Resolve first input as the initial accumulator.
-  wgpu::Texture accumulator =
-      resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha);
+  wgpu::Texture accumulator = toLinear(
+      resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
 
   // Alpha-over composite each subsequent input on top.
   for (size_t i = 1; i < node.inputs.size(); ++i) {
-    wgpu::Texture src =
-        resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha);
+    wgpu::Texture src = toLinear(
+        resolveInput(node.inputs[i], namedBuffers, currentBuffer, sourceGraphic, sourceAlpha));
     accumulator = runMergePass(arena, src, accumulator, width, height);
+  }
+
+  if (linearRGB) {
+    accumulator = applyColorSpaceConversion(arena, accumulator, /*srgbToLinear=*/false);
   }
 
   return accumulator;
@@ -2697,7 +2743,7 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::DiffuseLighting& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
-    const Box2d& sampleSubregion) {
+    const Box2d& sampleSubregion, bool linearRGB) {
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -2711,10 +2757,18 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   params.pad0 = 0.0f;
   params.pad1 = 0.0f;
 
+  // feDiffuseLighting reads the input *alpha* as a height map (color-space-
+  // independent) and modulates the light color. In linearRGB, tiny-skia converts
+  // the light color sRGB→linear and the lit output linear→sRGB; match it.
   const css::RGBA rgba = primitive.lightingColor.asRGBA();
   params.lightR = static_cast<float>(rgba.r) / 255.0f;
   params.lightG = static_cast<float>(rgba.g) / 255.0f;
   params.lightB = static_cast<float>(rgba.b) / 255.0f;
+  if (linearRGB) {
+    params.lightR = srgbToLinearChannel(params.lightR);
+    params.lightG = srgbToLinearChannel(params.lightG);
+    params.lightB = srgbToLinearChannel(params.lightB);
+  }
 
   if (primitive.light.has_value()) {
     fillLightParams(primitive.light.value(), graph, deviceFromFilter, &params.lightType,
@@ -2791,6 +2845,9 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  if (linearRGB) {
+    output = applyColorSpaceConversion(arena, output, /*srgbToLinear=*/false);
+  }
   return output;
 }
 
@@ -2798,7 +2855,7 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::SpecularLighting& primitive,
     const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
-    const Box2d& sampleSubregion) {
+    const Box2d& sampleSubregion, bool linearRGB) {
   const wgpu::Device& dev = device_.device();
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
@@ -2806,16 +2863,31 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterSpecularLightingOutput");
 
+  // Per SVG spec, specularExponent must be in [1, 128]: values < 1 produce
+  // transparent output, values > 128 clamp to 128 (matches tiny-skia). The fresh
+  // intermediate texture is already transparent, so for exponent < 1 we skip the
+  // lighting dispatch entirely.
+  if (primitive.specularExponent < 1.0) {
+    return output;
+  }
+
   SpecularLightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);
   params.specularConstant = static_cast<float>(primitive.specularConstant);
-  params.specularExponent = static_cast<float>(primitive.specularExponent);
+  params.specularExponent = static_cast<float>(std::min(primitive.specularExponent, 128.0));
   params.pad0 = 0.0f;
 
+  // feSpecularLighting: in linearRGB tiny-skia converts the light color sRGB→
+  // linear and the output linear→sRGB; match it. (Input alpha = height map.)
   const css::RGBA rgba = primitive.lightingColor.asRGBA();
   params.lightR = static_cast<float>(rgba.r) / 255.0f;
   params.lightG = static_cast<float>(rgba.g) / 255.0f;
   params.lightB = static_cast<float>(rgba.b) / 255.0f;
+  if (linearRGB) {
+    params.lightR = srgbToLinearChannel(params.lightR);
+    params.lightG = srgbToLinearChannel(params.lightG);
+    params.lightB = srgbToLinearChannel(params.lightB);
+  }
 
   if (primitive.light.has_value()) {
     fillLightParams(primitive.light.value(), graph, deviceFromFilter, &params.lightType,
@@ -2891,6 +2963,9 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  if (linearRGB) {
+    output = applyColorSpaceConversion(arena, output, /*srgbToLinear=*/false);
+  }
   return output;
 }
 

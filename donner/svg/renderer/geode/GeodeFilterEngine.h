@@ -177,11 +177,14 @@ private:
   /// @param namedBuffers Named intermediate textures.
   /// @param currentBuffer The "previous" output buffer.
   /// @param sourceGraphic The original source-graphic texture.
+  /// @param linearRGB If true, composite in linearRGB: convert each input
+  ///   sRGB→linear before the alpha-over passes and convert the result
+  ///   linear→sRGB (matches tiny-skia's `color-interpolation-filters` handling).
   /// @return The composited texture.
   wgpu::Texture applyMerge(FilterResourceArena& arena, const svg::components::FilterNode& node,
                            const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
                            const wgpu::Texture& currentBuffer, const wgpu::Texture& sourceGraphic,
-                           const wgpu::Texture* sourceAlpha);
+                           const wgpu::Texture* sourceAlpha, bool linearRGB);
 
   /// Run a single alpha-over composite pass (src over dst → output).
   /// @param src Source texture.
@@ -261,24 +264,28 @@ private:
   /// @param primitive The feDiffuseLighting parameters.
   /// @param scaleX User-to-pixel scale X.
   /// @param scaleY User-to-pixel scale Y.
+  /// @param linearRGB If true, convert the lighting color sRGB→linear and the
+  ///   output linear→sRGB (matches tiny-skia's linearRGB color-interpolation).
   /// @return The lit texture.
   wgpu::Texture applyDiffuseLighting(
       FilterResourceArena& arena, const wgpu::Texture& input,
       const svg::components::filter_primitive::DiffuseLighting& primitive,
       const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
-      const Box2d& sampleSubregion);
+      const Box2d& sampleSubregion, bool linearRGB);
 
   /// Phong specular lighting (feSpecularLighting).
   /// @param input The input texture (alpha = height map).
   /// @param primitive The feSpecularLighting parameters.
   /// @param scaleX User-to-pixel scale X.
   /// @param scaleY User-to-pixel scale Y.
+  /// @param linearRGB If true, convert the lighting color sRGB→linear and the
+  ///   output linear→sRGB (matches tiny-skia's linearRGB color-interpolation).
   /// @return The lit texture.
   wgpu::Texture applySpecularLighting(
       FilterResourceArena& arena, const wgpu::Texture& input,
       const svg::components::filter_primitive::SpecularLighting& primitive,
       const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter,
-      const Box2d& sampleSubregion);
+      const Box2d& sampleSubregion, bool linearRGB);
 
   /// Drop-shadow composite (feDropShadow): blur alpha, offset, flood, source-over.
   /// @param input The input texture.

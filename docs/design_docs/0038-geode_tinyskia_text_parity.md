@@ -324,9 +324,19 @@ as feComposite/feComponentTransfer. One output-side conversion → all 12 feTurb
 unmasked a pre-existing geode **feDisplacementMap** bug (its SVG uses turbulence as displacement source):
 geode's shader lacked un-premultiply + used nearest instead of bilinear + skipped linearRGB — all three
 fixed (matches tiny's `FloatPixmap` displacement), keeping `FilterDisplacementMap` green (a real
-correctness fix for any displacement source, not just parity). **Gate ledger now: 0 text + 8 G2 +
-189 edge-floor = 197.** Remaining parity gaps: 8 filter (→ G2) + 189 edge-floor (→ finer geode AA) +
-the 137 sub-visual premultiply fills (→ G5, pass at 0.02). The hoist's text goal is achieved.
+correctness fix for any displacement source, not just parity). Gate ledger then: 0 text + 8 G2 +
+189 edge-floor = 197.
+
+**G2 finish (2026-05-25) — 8 → 1.** linearRGB sweep cleared feDiffuseLighting (221435→0),
+feMerge ×2, feConvolveMatrix (wrap added); feSpecularLighting was a *spec* bug not linearRGB
+(missing `specularExponent` [1,128] clamp + `<1`→transparent — a real conformance fix); filter/
+on-group-outside-canvas was already 0px. feColorMatrix non-normalized (edge-coverage) +
+feConvolveMatrix custom-divisor (premultiply-rounding, G5-class) recategorized → edge-floor.
+**Only `feGaussianBlur/complex-transform` deferred** — a distinct CTM/filter-region projection
+bug under a skewed ancestor transform (~35k px solid frame, not color-space). **Gate ledger now:
+0 text + 1 G2 + 191 edge-floor = 192.** Of the original 37 filter divergences, 36 are resolved.
+Remaining parity gaps: 1 G2 (feGaussianBlur CTM) + 191 edge-floor (→ finer geode AA) + the 137
+sub-visual premultiply fills (→ G5, pass at 0.02). Text + filter parity essentially complete.
 
 > **Pattern:** geode's filter engine inconsistently applied `color-interpolation-filters` (linearRGB
 > default). feGaussianBlur/feColorMatrix/feBlend had it; feComposite, feComponentTransfer, feTurbulence,

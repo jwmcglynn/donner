@@ -181,12 +181,16 @@ before fixing.
    text hoist resolved **all structural text divergences** (`kGenuineText` empty — gradient/
    pattern-on-text + a shared-layout baseline-shift idempotency bug fixed, rest render-correct
    edge-floor), and G2 fixes: a **linearRGB color-interpolation-filters** sweep for feComposite,
-   feComponentTransfer + feTurbulence (20 tests; geode was applying it to some primitives but not
-   others), an **feImage shared-`RendererDriver` re-draw idempotency fix** (8 tests), and a bonus
-   **feDisplacementMap** correctness fix (un-premult + bilinear + linearRGB). **Gate ledger now:
-   0 text + 8 G2 filter + 189 edge-floor = 197 gated** (down from 228). Two real production
-   idempotency bugs (baseline-shift, feImage) surfaced by the parity harness's double-draw, and a
-   systematic geode filter linearRGB gap — all fixed in shared/geode code, not backend quirks.
+   feComponentTransfer + feTurbulence + feMerge + feConvolveMatrix + feDiffuse/SpecularLighting
+   (geode was applying it to some primitives but not others), an **feImage shared-`RendererDriver`
+   re-draw idempotency fix** (8 tests), a **feDisplacementMap** correctness fix (un-premult +
+   bilinear + linearRGB), and a **feSpecularLighting spec fix** (specularExponent [1,128] clamp +
+   `<1`→transparent). **36 of the original 37 filter divergences resolved** — only
+   `feGaussianBlur/complex-transform` (a distinct CTM/filter-region projection bug) deferred.
+   **Gate ledger now: 0 text + 1 G2 filter + 191 edge-floor = 192 gated** (down from 228). Two real
+   production idempotency bugs (baseline-shift, feImage) surfaced by the parity harness's
+   double-draw, plus a systematic geode filter linearRGB gap + spec-conformance bugs — all fixed in
+   shared/geode code, not backend quirks.
 
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 

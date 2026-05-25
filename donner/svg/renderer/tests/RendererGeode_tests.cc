@@ -1245,13 +1245,17 @@ TEST_F(RendererGeodeTest, FilterSourceAlphaInputExtractsAlphaChannel) {
   EXPECT_EQ(center[3], 255u);
 }
 
-TEST_F(RendererGeodeTest, FilterSpecularLightingPointLightExponentZeroMatchesCpuReference) {
+// Per SVG spec, feSpecularLighting `specularExponent` must be in [1, 128]; a value
+// < 1 produces transparent-black output (the same rule tiny-skia applies in its
+// filter pipeline — see FilterGraph.cpp's `specularExponent >= 1.0` guard).
+// GeodeFilterEngine clamps/short-circuits to match; this pins the spec behavior.
+TEST_F(RendererGeodeTest, FilterSpecularLightingExponentBelowOneIsTransparent) {
   components::FilterGraph graph;
   components::FilterNode specularNode;
   components::filter_primitive::SpecularLighting specular;
   specular.surfaceScale = 3.0;
   specular.specularConstant = 1.0;
-  specular.specularExponent = 0.0;
+  specular.specularExponent = 0.0;  // < 1 → transparent per spec.
   specular.lightingColor = css::Color(css::RGBA(255, 255, 255, 255));
 
   components::filter_primitive::LightSource light;
@@ -1268,20 +1272,22 @@ TEST_F(RendererGeodeTest, FilterSpecularLightingPointLightExponentZeroMatchesCpu
   const Transform2d deviceFromFilter = Transform2d();
   const RendererBitmap actual = renderFlatSourceThroughFilter(graph, deviceFromFilter);
   ASSERT_FALSE(actual.empty());
-  const std::vector<uint8_t> expected =
-      CpuSpecularLightingReferenceForFlatSource(specular, deviceFromFilter);
-  ASSERT_FALSE(expected.empty());
 
-  const BitmapDiffStats diff = DiffBitmapAgainstStraightRgba(actual, expected);
-  EXPECT_EQ(diff.differingChannels, 0)
-      << "maxDiff=" << diff.maxChannelDiff << " first=(" << diff.firstDiffX << ", "
-      << diff.firstDiffY << ") channel=" << diff.firstDiffChannel
-      << " actual=" << static_cast<int>(diff.actualValue)
-      << " expected=" << static_cast<int>(diff.expectedValue);
+  // Every pixel must be transparent black (the lighting dispatch is skipped).
+  const auto center = pixelAt(actual, 32, 32);
+  EXPECT_EQ(center[0], 0u);
+  EXPECT_EQ(center[1], 0u);
+  EXPECT_EQ(center[2], 0u);
+  EXPECT_EQ(center[3], 0u);
+  const auto corner = pixelAt(actual, 18, 18);
+  EXPECT_EQ(corner[3], 0u) << "specularExponent<1 must produce transparent output everywhere";
 }
 
 TEST_F(RendererGeodeTest, FilterDiffuseLightingSpotLightConeMatchesCpuReference) {
   components::FilterGraph graph;
+  // The CPU reference runs the raw lighting kernel in sRGB; pin the graph to sRGB
+  // so geode matches (the linearRGB default is covered by the resvg suite).
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
   components::FilterNode diffuseNode;
   components::filter_primitive::DiffuseLighting diffuse;
   diffuse.surfaceScale = 2.0;
@@ -1393,7 +1399,11 @@ TEST_F(RendererGeodeTest, FilterMergeCompositesInputs) {
   //   Node 0: feFlood red 50% → result="red"
   //   Node 1: feFlood blue 50% → result="blue"
   //   Node 2: feMerge(in="red", in="blue") → alpha-over composite
+  // This test validates the raw merge alpha-over math in sRGB, so pin the
+  // graph to sRGB color-interpolation (the SVG default is linearRGB, exercised
+  // by the resvg suite's feMerge/* parity tests instead).
   components::FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
 
   // Node 0: red flood.
   {

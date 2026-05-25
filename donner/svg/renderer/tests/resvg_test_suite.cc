@@ -452,7 +452,19 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       // sampling). It is order-independent (no idempotency bug — unlike the 8
       // fragment-reference feImage cases that were fixed). Edge-coverage, not a
       // placement/color bug.
-      "filters/feImage/embedded-png.svg", "filters/feColorMatrix/type=saturate.svg",
+      "filters/feImage/embedded-png.svg",
+      // Recategorized from kGenuineG2 (2026-05-25 — see 0021 §G2): geode renders
+      // both *correctly*; the residual is a render-correct quantization floor, not
+      // a structural bug.
+      //   feColorMatrix/non-normalized-values (~2786px): edge-coverage — a thin
+      //   vertical band at the rect's anti-aliased left edge where partial coverage
+      //   (alpha ~85-91) is amplified by the extreme matrix coefficients (50,-100).
+      //   feConvolveMatrix/custom-divisor (~4464px): the convolve math matches tiny
+      //   bit-for-bit and the render is visually identical; the residual is the
+      //   premultiplied-low-alpha rounding (e.g. B 0 vs 15 at a=35) at the many
+      //   pattern-cell seams — same class as the G5 premultiply fills.
+      "filters/feColorMatrix/type=matrix-with-non-normalized-values.svg",
+      "filters/feConvolveMatrix/custom-divisor.svg", "filters/feColorMatrix/type=saturate.svg",
       "filters/feDropShadow/only-stdDeviation.svg",
       "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-1.svg",
       "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-2.svg",
@@ -614,19 +626,6 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       // all 8 now pass parity ≤1px. The 9th (embedded-png) was a 1px image-edge
       // band → moved to kEdgeFloor. See 0021 §G2.
       //
-      // feColorMatrix/non-normalized-values stays gated — a DIFFERENT root than
-      // the color-math cluster. feColorMatrix already runs in linearRGB; its
-      // residual ~2786px is a thin vertical band at the rect's anti-aliased left
-      // edge where partial coverage (alpha ~85-91) is amplified by the extreme
-      // matrix coefficients (50, -100). Edge-coverage interaction, not a color-
-      // space bug. See 0021 §G2.
-      "filters/feColorMatrix/type=matrix-with-non-normalized-values.svg",
-      "filters/feConvolveMatrix/custom-divisor.svg",
-      "filters/feDiffuseLighting/linearRGB-color-interpolation.svg",
-      "filters/feGaussianBlur/complex-transform.svg",
-      "filters/feMerge/color-interpolation-filters=linearRGB.svg",
-      "filters/feMerge/complex-transform.svg",
-      "filters/feSpecularLighting/specularExponent=256.svg",
       // feTurbulence (12) un-gated 2026-05-27: NOT an inherent noise-algorithm
       // mismatch (the audit's "different noise impl" was wrong). geode's WGSL
       // already implements the spec-exact Park-Miller RNG + gradient/lattice
@@ -637,7 +636,26 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       // not (e.g. fractalNoise center 128 vs tiny 187 = sRGB(0.5)). Fixed by a
       // one-way linear→sRGB conversion of the turbulence output in
       // GeodeFilterEngine::execute. All 12 now pass parity at 0px. See 0021 §G2.
-      "filters/filter/on-group-with-child-outside-of-canvas.svg",
+      //
+      // linearRGB sweep (5) un-gated 2026-05-25: feMerge, feConvolveMatrix,
+      // feDiffuse/feSpecularLighting did not wrap their primitive in the
+      // sRGB↔linear conversion that `color-interpolation-filters: linearRGB`
+      // (the default) requires — the same root as the composite/componentTransfer/
+      // turbulence fixes. Added the wraps in GeodeFilterEngine::execute (feMerge
+      // composites each input in linear; lighting converts the light color
+      // sRGB→linear + output linear→sRGB). feSpecularLighting/specularExponent=256
+      // ALSO needed the spec clamp of specularExponent to [1,128] (its filter is
+      // color-interpolation-filters=sRGB, so the clamp — not linearRGB — was its
+      // bug). Results (geode↔tiny): feDiffuseLighting 221435→0, specularExponent
+      // 768→0, feMerge/linearRGB 1100→11, feMerge/complex-transform 1325→35, and
+      // filter/on-group-outside-canvas was already 0. All ≤100, un-gated.
+      //
+      // feGaussianBlur/complex-transform stays gated — NOT color-space (blur
+      // already wraps linearRGB). Under a skewed ancestor transform the blurred
+      // region's device-space extent/placement diverges from tiny (a solid ~35k px
+      // frame around the rotated blurred rect, not edge fringe) — a filter-region/
+      // CTM-projection issue. Deferred as a distinct root. See 0021 §G2.
+      "filters/feGaussianBlur/complex-transform.svg",
   };
   if (kGenuineG2.count(key)) {
     return [](ImageComparisonParams& p) {
