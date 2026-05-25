@@ -123,6 +123,123 @@ bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Transformed-blur path detection (ported faithfully from
+// RendererTinySkia.cc's `isEligibleForTransformedBlurPath` /
+// `graphHasAnisotropicBlur` / `shouldUseTransformedBlurPath` /
+// `computeBlurPadding`). Keep in lockstep with tiny-skia — these decide when a
+// blur under a rotated/skewed CTM must be rasterized in filter-local space so
+// the (anisotropic) blur is oriented in the element's local axes rather than
+// device axes. tiny-skia is the parity reference for the result.
+// ---------------------------------------------------------------------------
+
+/// Eligible only for a linear chain of blur/offset primitives in user space (no
+/// named results, subregions, multi-input, OBB units, or other primitive types).
+bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
+  if (filterGraph.nodes.empty()) {
+    return false;
+  }
+  if (filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+    return false;
+  }
+
+  bool hasBlur = false;
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    const bool isBlur =
+        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
+        std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
+    const bool isOffset =
+        std::holds_alternative<components::filter_primitive::Offset>(node.primitive);
+    if (!isBlur && !isOffset) {
+      return false;
+    }
+    hasBlur |= isBlur;
+
+    if (node.result.has_value()) {
+      return false;  // No named result reuse.
+    }
+    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
+        node.height.has_value()) {
+      return false;  // No primitive subregions.
+    }
+    if (node.inputs.size() > 1) {
+      return false;  // Linear chain only.
+    }
+    if (node.inputs.size() == 1) {
+      const auto& input = node.inputs[0];
+      if (std::holds_alternative<components::FilterInput::Previous>(input.value)) {
+        // OK
+      } else if (const auto* stdInput =
+                     std::get_if<components::FilterStandardInput>(&input.value)) {
+        if (*stdInput != components::FilterStandardInput::SourceGraphic) {
+          return false;
+        }
+      } else {
+        return false;  // Named input — not eligible.
+      }
+    }
+  }
+
+  return hasBlur;
+}
+
+/// True if any blur/drop-shadow has stdDeviationX != stdDeviationY.
+bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
+  for (const auto& node : filterGraph.nodes) {
+    bool anisotropic = false;
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          }
+        },
+        node.primitive);
+    if (anisotropic) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// True when the CTM is skewed (always needs the local raster), or rotated with
+/// an anisotropic blur (whose orientation a device-axis blur can't reproduce).
+bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
+                                  const Transform2d& deviceFromFilter) {
+  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
+  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
+  if (!NearZero(dot, 1e-6)) {
+    return true;  // Skew (non-orthogonal axes).
+  }
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (!hasRotation) {
+    return false;
+  }
+  return graphHasAnisotropicBlur(filterGraph);
+}
+
+/// 3σ + 1 padding (in user-space units) for the maximum blur stdDeviation.
+double computeBlurPadding(const components::FilterGraph& filterGraph) {
+  double maxSigma = 0.0;
+  for (const auto& node : filterGraph.nodes) {
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          }
+        },
+        node.primitive);
+  }
+  return maxSigma * 3.0 + 1.0;
+}
+
 /// WebGPU requires bytesPerRow alignment to 256 when copying textures to
 /// buffers. This rounds the unpadded row width up to the next 256 boundary.
 constexpr uint32_t alignBytesPerRow(uint32_t unpadded) {
@@ -2413,6 +2530,147 @@ void RendererGeode::popFilterLayer() {
           ? frame.deviceFromFilter *
                 Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
           : frame.deviceFromFilter;
+
+  // ── Transformed-blur path ────────────────────────────────────────────────
+  // An anisotropic blur under a rotated CTM (or any blur under skew) cannot be
+  // reproduced by Geode's device-axis separable blur — the blur would land in
+  // device axes instead of the element's local axes. Mirror tiny-skia: rasterize
+  // the captured device content into an axis-aligned filter-local raster, run the
+  // (now axis-aligned) blur there, then composite the result back through the CTM
+  // so the blur is oriented correctly. Eligible only for the simple blur/offset
+  // chain (see isEligibleForTransformedBlurPath) and only when no buffer offset
+  // is active (the local raster supplies its own blur padding). tiny-skia is the
+  // parity reference.
+  bool transformedBlurComposited = false;
+  if (impl_->filterEngine && !frame.filterGraph.empty() && frame.filterRegion.width() > 0 &&
+      frame.filterRegion.height() > 0 && frame.filterBufferOffsetX == 0 &&
+      frame.filterBufferOffsetY == 0 && !NearZero(frame.deviceFromFilter.determinant(), 1e-12) &&
+      isEligibleForTransformedBlurPath(frame.filterGraph) &&
+      shouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter)) {
+    const Transform2d& deviceFromFilter = frame.deviceFromFilter;
+    const Box2d& filterRegion = frame.filterRegion;
+
+    // Local raster density from the CTM basis vectors (min 1× to avoid collapse),
+    // matching tiny-skia's transformed-blur raster sizing.
+    const double scaleX =
+        std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
+    const double scaleY =
+        std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+
+    const double blurPadding = computeBlurPadding(frame.filterGraph);
+    const Box2d paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
+                             filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
+
+    const uint32_t localWidth = static_cast<uint32_t>(
+        std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX))));
+    const uint32_t localHeight = static_cast<uint32_t>(
+        std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY))));
+
+    // Cap the local raster to avoid pathological allocations under extreme CTMs.
+    constexpr uint32_t kMaxLocalDim = 8192u;
+    if (localWidth <= kMaxLocalDim && localHeight <= kMaxLocalDim) {
+      // Allocate the local-raster offscreen pair (1-sample resolve + 4× MSAA).
+      wgpu::TextureDescriptor localDesc{};
+      localDesc.label = wgpuLabel("RendererGeodeBlurLocal");
+      localDesc.size = {localWidth, localHeight, 1u};
+      localDesc.format = impl_->textureFormat;
+      localDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                        wgpu::TextureUsage::CopySrc;
+      localDesc.mipLevelCount = 1;
+      localDesc.sampleCount = 1;
+      localDesc.dimension = wgpu::TextureDimension::_2D;
+      wgpu::Texture localTexture = impl_->acquireTexture(localDesc);
+
+      wgpu::TextureDescriptor localMsaaDesc{};
+      localMsaaDesc.label = wgpuLabel("RendererGeodeBlurLocalMSAA");
+      localMsaaDesc.size = localDesc.size;
+      localMsaaDesc.format = impl_->textureFormat;
+      localMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      localMsaaDesc.mipLevelCount = 1;
+      localMsaaDesc.sampleCount = 4;
+      localMsaaDesc.dimension = wgpu::TextureDimension::_2D;
+      wgpu::Texture localMsaaTexture =
+          impl_->device->sampleCount() > 1 ? impl_->acquireTexture(localMsaaDesc) : wgpu::Texture();
+
+      const bool needMsaa = impl_->device->sampleCount() > 1;
+      if (localTexture && (!needMsaa || localMsaaTexture)) {
+        // Transform chains mirror tiny-skia (operator* applies the left factor
+        // first): device pixel → filter user space → padded-raster origin → local
+        // raster pixels.
+        const Transform2d filterFromDevice = deviceFromFilter.inverse();
+        const Transform2d localFromDevice =
+            filterFromDevice *
+            Transform2d::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
+            Transform2d::Scale(scaleX, scaleY);
+
+        // Resample the captured device content into the local raster with a
+        // self-contained encoder (owns its CommandEncoder + submits on finish).
+        {
+          geode::GeoEncoder resampleEncoder(*impl_->device, *impl_->pipeline,
+                                            *impl_->gradientPipeline, *impl_->imagePipeline,
+                                            localMsaaTexture, localTexture);
+          resampleEncoder.setTransform(localFromDevice);
+          resampleEncoder.drawTexture(
+              frame.layerTexture,
+              Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
+                              static_cast<double>(frame.layerDesc.size.height)),
+              1.0, /*pixelated=*/false);
+          resampleEncoder.finish();
+        }
+
+        // Run the filter graph axis-aligned in local-raster space: deviceFromFilter
+        // is a pure Scale, and the filter region is in unscaled local units.
+        const Transform2d localDeviceFromFilter = Transform2d::Scale(scaleX, scaleY);
+        const Box2d localFilterRegion(
+            Vector2d(blurPadding, blurPadding),
+            Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
+        wgpu::Texture localFiltered = impl_->filterEngine->execute(
+            frame.filterGraph, localTexture, localFilterRegion, localDeviceFromFilter);
+
+        // Restore the outer target + encoder, then composite the local result back
+        // through the CTM. Transform chain (left factor first): local raster pixels
+        // → filter user space → device pixels.
+        const Transform2d deviceFromLocal =
+            Transform2d::Scale(1.0 / scaleX, 1.0 / scaleY) *
+            Transform2d::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
+            deviceFromFilter;
+
+        impl_->target = frame.savedTarget;
+        impl_->msaaTarget = frame.savedMsaaTarget;
+        auto compositeEncoder = std::make_unique<geode::GeoEncoder>(
+            *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+            frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder.get());
+        compositeEncoder->setLoadPreserve();
+        impl_->encoder = std::move(compositeEncoder);
+        impl_->updateEncoderScissor();
+        impl_->encoder->setTransform(deviceFromLocal);
+        impl_->encoder->drawTexture(localFiltered,
+                                    Box2d::FromXYWH(0.0, 0.0, static_cast<double>(localWidth),
+                                                    static_cast<double>(localHeight)),
+                                    1.0, /*pixelated=*/false);
+        impl_->encoder->setTransform(Transform2d());
+
+        impl_->releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
+        if (localMsaaTexture) {
+          impl_->releaseTextureAtFrameEnd(std::move(localMsaaTexture), localMsaaDesc);
+        }
+        transformedBlurComposited = true;
+      } else {
+        if (localTexture) {
+          impl_->releaseTexture(std::move(localTexture), localDesc);
+        }
+        if (localMsaaTexture) {
+          impl_->releaseTexture(std::move(localMsaaTexture), localMsaaDesc);
+        }
+      }
+    }
+  }
+
+  if (transformedBlurComposited) {
+    impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
+    return;
+  }
 
   // Run the filter graph on the captured layer texture.
   wgpu::Texture filteredTexture = frame.layerTexture;

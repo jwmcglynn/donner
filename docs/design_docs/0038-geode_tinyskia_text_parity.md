@@ -332,11 +332,24 @@ feMerge ×2, feConvolveMatrix (wrap added); feSpecularLighting was a *spec* bug 
 (missing `specularExponent` [1,128] clamp + `<1`→transparent — a real conformance fix); filter/
 on-group-outside-canvas was already 0px. feColorMatrix non-normalized (edge-coverage) +
 feConvolveMatrix custom-divisor (premultiply-rounding, G5-class) recategorized → edge-floor.
-**Only `feGaussianBlur/complex-transform` deferred** — a distinct CTM/filter-region projection
-bug under a skewed ancestor transform (~35k px solid frame, not color-space). **Gate ledger now:
-0 text + 1 G2 + 191 edge-floor = 192.** Of the original 37 filter divergences, 36 are resolved.
-Remaining parity gaps: 1 G2 (feGaussianBlur CTM) + 191 edge-floor (→ finer geode AA) + the 137
-sub-visual premultiply fills (→ G5, pass at 0.02). Text + filter parity essentially complete.
+Gate ledger then: 0 text + 1 G2 + 191 edge-floor = 192.
+
+**G2 CLOSED (2026-05-25).** The last G2 entry, `feGaussianBlur/complex-transform`, was an
+**anisotropic-blur-under-rotation** bug: `stdDeviation="12 0"` (X-only) on a `rotate(45)` rect —
+geode applied the blur device-axis-aligned (horizontal) while tiny applies it in local space (so
+it lands diagonal after rotation). geode's separable device-axis blur can't represent a rotated-
+axis blur. Fixed by porting tiny's **transformed-blur path** into `RendererGeode::popFilterLayer`
+(detect skew or rotation+anisotropic → resample device→local → blur axis-aligned in local →
+composite back via `deviceFromLocal`): **35151 → 140 px** (correctly diagonal; the 140 is the
+accepted edge floor, density-insensitive). A real fix for ALL rotated/skewed anisotropic blur,
+not just the test. Golden-regression hunt clean (12 blur+transform tests at 0px; axis-aligned
+blur goldens correctly not captured). Recategorized → edge-floor (structural bug fixed; residual
+is the accepted AAA-coverage class). **Gate ledger now: 0 text + 0 G2 + 192 edge-floor = 192** —
+**all 37 original filter divergences resolved; G2 is fully closed.** Remaining parity gaps are
+exclusively the **accepted-by-design edge floor** (geode-vs-tiny AAA coverage / crosshair
+sub-pixel, content matches — [0039 §13](0039-geode_analytical_aa.md)) + the 137 sub-visual
+premultiply fills (→ G5, pass at 0.02). **Text + filter parity complete; only the accepted
+sub-pixel coverage floor remains.**
 
 > **Pattern:** geode's filter engine inconsistently applied `color-interpolation-filters` (linearRGB
 > default). feGaussianBlur/feColorMatrix/feBlend had it; feComposite, feComponentTransfer, feTurbulence,

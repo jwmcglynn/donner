@@ -464,7 +464,15 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       //   premultiplied-low-alpha rounding (e.g. B 0 vs 15 at a=35) at the many
       //   pattern-cell seams — same class as the G5 premultiply fills.
       "filters/feColorMatrix/type=matrix-with-non-normalized-values.svg",
-      "filters/feConvolveMatrix/custom-divisor.svg", "filters/feColorMatrix/type=saturate.svg",
+      "filters/feConvolveMatrix/custom-divisor.svg",
+      // Recategorized from kGenuineG2 (2026-05-25 — see 0021 §G2): the anisotropic-
+      // blur-under-rotation orientation bug is FIXED (geode now rasterizes into a
+      // filter-local raster and composites back through the CTM, mirroring tiny-
+      // skia — RendererGeode::popFilterLayer transformed-blur path). geode↔tiny
+      // 35151→140px; the blur is correctly diagonal and the 140px residual is the
+      // accepted-by-design edge floor (resample of geode's edge coverage; density-
+      // insensitive — 2× raster gave 147px).
+      "filters/feGaussianBlur/complex-transform.svg", "filters/feColorMatrix/type=saturate.svg",
       "filters/feDropShadow/only-stdDeviation.svg",
       "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-1.svg",
       "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-2.svg",
@@ -609,8 +617,9 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       // pixelmatch); unfixable in-renderer (AAA is a stateful CPU scanline accumulator,
       // not per-fragment GPU-replicable -- proven across 4 attempts, see 0039 §§8-13).
       // NOT 4x MSAA quantization (sample-independent: identical at 16x/64x).
-      p.disableGeodeParity("geode-vs-tiny AAA coverage/crosshair sub-pixel delta; content "
-                           "matches, unfixable in-renderer (accepted by-design: 0039 §13)");
+      p.disableGeodeParity(
+          "geode-vs-tiny AAA coverage/crosshair sub-pixel delta; content "
+          "matches, unfixable in-renderer (accepted by-design: 0039 §13)");
     };
   }
 
@@ -657,12 +666,16 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       // 768→0, feMerge/linearRGB 1100→11, feMerge/complex-transform 1325→35, and
       // filter/on-group-outside-canvas was already 0. All ≤100, un-gated.
       //
-      // feGaussianBlur/complex-transform stays gated — NOT color-space (blur
-      // already wraps linearRGB). Under a skewed ancestor transform the blurred
-      // region's device-space extent/placement diverges from tiny (a solid ~35k px
-      // frame around the rotated blurred rect, not edge fringe) — a filter-region/
-      // CTM-projection issue. Deferred as a distinct root. See 0021 §G2.
-      "filters/feGaussianBlur/complex-transform.svg",
+      // feGaussianBlur/complex-transform (the last G2 gate) FIXED 2026-05-25:
+      // an anisotropic blur under a rotated CTM landed device-axis-aligned instead
+      // of along the element's local axes (geode's separable blur runs in device
+      // space; tiny rasterizes into a filter-local raster so the blur is oriented
+      // correctly). Ported tiny-skia's transformed-blur path into
+      // RendererGeode::popFilterLayer (resample device→local, blur axis-aligned in
+      // local space, composite back through the CTM). geode↔tiny 35151→140px: the
+      // blur is now correctly diagonal; the 140px residual is the accepted-by-design
+      // edge floor (resample of geode's edge coverage; density-insensitive — 2×
+      // raster gave 147px, not lower) → moved to kEdgeFloor. **kGenuineG2 now empty.**
   };
   if (kGenuineG2.count(key)) {
     return [](ImageComparisonParams& p) {

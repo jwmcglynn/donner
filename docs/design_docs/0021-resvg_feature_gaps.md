@@ -185,12 +185,16 @@ before fixing.
    (geode was applying it to some primitives but not others), an **feImage shared-`RendererDriver`
    re-draw idempotency fix** (8 tests), a **feDisplacementMap** correctness fix (un-premult +
    bilinear + linearRGB), and a **feSpecularLighting spec fix** (specularExponent [1,128] clamp +
-   `<1`→transparent). **36 of the original 37 filter divergences resolved** — only
-   `feGaussianBlur/complex-transform` (a distinct CTM/filter-region projection bug) deferred.
-   **Gate ledger now: 0 text + 1 G2 filter + 191 edge-floor = 192 gated** (down from 228). Two real
+   `<1`→transparent), and **`feGaussianBlur/complex-transform`** (anisotropic-blur-under-rotation —
+   ported tiny's transformed-blur path into geode's `popFilterLayer`: resample device→local, blur
+   in local space, composite back; 35151→140px). **All 37 original filter divergences resolved —
+   G2 is fully closed.** **Gate ledger now: 0 text + 0 G2 + 192 edge-floor = 192 gated** (down from
+   228); the remaining 192 are exclusively the **accepted-by-design** geode-vs-tiny AAA-coverage /
+   crosshair sub-pixel floor (content matches, unfixable in-renderer — [0039 §13](#)). Two real
    production idempotency bugs (baseline-shift, feImage) surfaced by the parity harness's
-   double-draw, plus a systematic geode filter linearRGB gap + spec-conformance bugs — all fixed in
-   shared/geode code, not backend quirks.
+   double-draw, plus a systematic geode filter linearRGB gap + spec-conformance bugs + the
+   transformed-blur path — all fixed in shared/geode code, not backend quirks. **Text + filter
+   parity complete.**
 
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 
