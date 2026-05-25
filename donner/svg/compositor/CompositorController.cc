@@ -1893,6 +1893,13 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   } else {
     layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
   }
+  // `setBitmap`/`setTextureSnapshot` bump a per-object generation that resets
+  // to 1 for every freshly-built layer. After a document replace reuses entity
+  // ids, that "1" collides with the generation the editor's GL texture cache
+  // already holds for the previous document's layer at the same id, so the new
+  // pixels never upload. Stamp a process-monotonic generation (shared with
+  // static segments) so each rasterization is globally unique.
+  layer.setGeneration(nextTileGeneration_++);
   layer.setCanvasOffset(geometry.canvasOffset);
   const auto rasterizeEnd = std::chrono::steady_clock::now();
   const auto elapsedUs =
@@ -2108,7 +2115,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     // Bump the generation so the editor's GL texture cache sees this
     // slot's pixel content changed and re-uploads on next frame.
     if (i < staticSegmentGeneration_.size()) {
-      staticSegmentGeneration_[i] = nextSegmentGeneration_++;
+      staticSegmentGeneration_[i] = nextTileGeneration_++;
     }
     const auto segmentRasterizeEnd = std::chrono::steady_clock::now();
     const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -2186,7 +2193,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   // cache will see a new tileId→generation pair and upload.
   for (size_t i = 0; i < newCount; ++i) {
     if (newGeneration[i] == 0) {
-      newGeneration[i] = nextSegmentGeneration_++;
+      newGeneration[i] = nextTileGeneration_++;
     }
   }
 

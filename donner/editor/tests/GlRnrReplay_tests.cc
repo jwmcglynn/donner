@@ -238,10 +238,13 @@ TEST(GlRnrReplayTest, UsesEmbeddedSvgSourceWhenOriginalPathIsMissing) {
 TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
   const std::filesystem::path outputDir = DiagnosticOutputDir();
   const std::filesystem::path reproPath = outputDir / "source_pane_character_input_replay.rnr";
+  // The document renders at actual size in the replay (no zoom is applied), so a
+  // tiny viewBox would paint fewer pixels than the bright-green threshold below.
+  // Use a 200x200 document so the recolored rect dominates the render pane crop.
   constexpr std::string_view kInitialSource =
-      R"(<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#ff0000"/></svg>)";
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="#ff0000"/></svg>)";
   constexpr std::string_view kEditedSource =
-      R"(<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#00ff00"/></svg>)";
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="#00ff00"/></svg>)";
 
   repro::ReproFile file;
   file.metadata.svgPath = "missing_text_edit_input.svg";

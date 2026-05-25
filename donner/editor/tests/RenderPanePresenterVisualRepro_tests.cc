@@ -114,7 +114,16 @@ svg::RendererBitmap MakeOverlayBitmap() {
 }
 
 std::filesystem::path StableOutputDir() {
-  return std::filesystem::path("/private/tmp/donner-display-none-ui-repro");
+  // A fixed, easy-to-open location for the diagnostic screenshots. Use the
+  // platform temp dir rather than a hardcoded "/private/tmp" so the directory
+  // is writable on Linux CI (which has no "/private") as well as macOS. The
+  // canonical CI artifacts still land in $TEST_UNDECLARED_OUTPUTS_DIR below.
+  std::error_code error;
+  const std::filesystem::path tempDir = std::filesystem::temp_directory_path(error);
+  if (error) {
+    return std::filesystem::path("donner-display-none-ui-repro");
+  }
+  return tempDir / "donner-display-none-ui-repro";
 }
 
 void WriteBitmap(const svg::RendererBitmap& bitmap, const std::filesystem::path& outputPath) {
