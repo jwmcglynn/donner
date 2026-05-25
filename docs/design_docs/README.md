@@ -86,8 +86,11 @@ conventions automated agents should follow when editing design docs.
 | 0035 | [filter_layer_compose_offset_bug](0035-filter_layer_compose_offset_bug.md)                 | Fixed                                                             | Root cause and coverage for the filtered-layer compose-offset/source-sync bug class.                                         |
 | 0036 | [composited_presentation_retrospective](0036-composited_presentation_retrospective.md)     | Retrospective                                                     | Review of the filtered drag repro, flat-mode removal, fragile code paths, testing gaps, and cleanup actions.                 |
 | 0037 | [geode_presentation_glitch_investigation](0037-geode_presentation_glitch_investigation.md) | Investigation                                                     | Handoff notes for the remaining Geode direct-texture drag/zoom overlay pops and texture-splat glitches.                      |
+| 0038 | [geode_tinyskia_text_parity](0038-geode_tinyskia_text_parity.md) | Developer reference | Geode↔tiny-skia text parity (complete): the shared `PlacedTextGeometry` layer both backends consume + the per-test parity gate. |
 | 0039 | [text_editor_focus_and_flash](0039-text_editor_focus_and_flash.md)                         | Implemented; see [Editor Source Focus](../editor_source_focus.md) | Source-pane focus view, changed-character flash highlight, and context-aware soft wrap without horizontal scrolling.         |
 | 0040 | [semantic_text_completion](0040-semantic_text_completion.md)                               | Design                                                            | Parser-backed text completion and source block movement that preserve cursor flow and document structure.                    |
+| 0041 | [geode_analytical_aa](0041-geode_analytical_aa.md) | Developer reference | Geode anti-aliasing & coverage: 4× MSAA `sample_mask`; the accepted sub-pixel floor vs tiny's Skia-AAA; appendix of rejected AA approaches. |
+| 0042 | [geode_slug_conformance](0042-geode_slug_conformance.md) | Developer reference | Geode Slug implementation reference: encoder + shader pipeline, invariants, and known limitations. |
 
 ## Cross-reference: developer docs
 

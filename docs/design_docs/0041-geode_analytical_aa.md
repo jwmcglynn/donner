@@ -1,4 +1,4 @@
-# 0039 — Geode anti-aliasing & coverage: developer reference
+# 0041 — Geode anti-aliasing & coverage: developer reference
 
 **Status:** Developer reference. Geode's edge coverage is **4× MSAA via
 `@builtin(sample_mask)`** on the Slug winding-number fill path. The geode↔tiny-skia
@@ -9,7 +9,7 @@ analytical/supersampling alternatives were evaluated and **rejected** (appendix)
 
 **Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
 [0038 text parity](0038-geode_tinyskia_text_parity.md),
-[0040 Slug implementation](0040-geode_slug_conformance.md),
+[0042 Slug implementation](0042-geode_slug_conformance.md),
 [0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)
 
 ---
@@ -67,7 +67,7 @@ these variants deleted once Mesa 25.3 lands and the hang is gone.)
 The same Bézier root-finding that the coverage test uses is the Slug pipeline core —
 banding, ray/root-find, `solve_quadratic` (numerically-stable Citardauq form), curve
 classification, fill rule, fixed-point encoding. That is documented as a unit in
-[0040 — Geode Slug implementation](0040-geode_slug_conformance.md); this doc covers
+[0042 — Geode Slug implementation](0042-geode_slug_conformance.md); this doc covers
 only the **coverage / AA** aspect.
 
 ---

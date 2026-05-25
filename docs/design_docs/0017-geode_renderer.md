@@ -1452,8 +1452,8 @@ cleanup.
 only remaining geode↔tiny diff is the accepted-by-design sub-pixel coverage floor. For
 detail, see the three developer references:
 [0038 text parity](0038-geode_tinyskia_text_parity.md),
-[0039 anti-aliasing & coverage](0039-geode_analytical_aa.md),
-[0040 Slug implementation](0040-geode_slug_conformance.md).
+[0041 anti-aliasing & coverage](0041-geode_analytical_aa.md),
+[0042 Slug implementation](0042-geode_slug_conformance.md).
 
 **What it is.** Both backends link into one binary (the geode-enabled build); each resvg
 test runs up to three comparison modes via a `ComparisonMode` parameter dimension:
@@ -1478,7 +1478,7 @@ The combined matrix lives only in the geode build (rides the `*_geode` wrapper u
 divergences are resolved; `kGenuineText` is empty. The remaining ~190 gated entries are
 the accepted edge floor (geode renders correctly; diff is the sub-pixel coverage delta vs
 tiny-skia's scan-converter + the resvg crosshair — proven sample-independent, see
-[0039 §2](0039-geode_analytical_aa.md)). The ~137 sub-visual premultiply fills pass at
+[0041 §2](0041-geode_analytical_aa.md)). The ~137 sub-visual premultiply fills pass at
 0.02 and are tracked in [0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds).
 
 **Final numbers (geode build, all green):**

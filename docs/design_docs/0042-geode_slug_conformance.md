@@ -1,13 +1,13 @@
-# 0040 — Geode Slug implementation: developer reference
+# 0042 — Geode Slug implementation: developer reference
 
 **Status:** Developer reference. Describes Geode's as-built implementation of the
 **Slug algorithm** (per-pixel ray/Bézier-crossing winding) — the pipeline a contributor
 must understand to work on the fill/coverage shaders or the path encoder — plus the
 invariants it relies on and the known limitations (D3/D4/D6) that remain future work.
-The per-pixel **AA coverage** math is documented in [0039](0039-geode_analytical_aa.md);
+The per-pixel **AA coverage** math is documented in [0041](0041-geode_analytical_aa.md);
 this doc covers the rest of the pipeline.
 
-**Related:** [0039 anti-aliasing](0039-geode_analytical_aa.md),
+**Related:** [0041 anti-aliasing](0041-geode_analytical_aa.md),
 [0038 text parity](0038-geode_tinyskia_text_parity.md),
 [0021](0021-resvg_feature_gaps.md)
 
@@ -74,7 +74,7 @@ Per pixel, `fs_main` casts a horizontal ray and counts winding from the band's c
    (`x(t) ≥ sample.x` — a one-directional horizontal ray); the contribution is the sign of
    the tangent `dy/dt` at `t` (±1). There is **no** Slug `0x2E74` classification tracer on
    the clean tree — that analytical approach is in
-   [0039 rejected approaches](0039-geode_analytical_aa.md) (the audit's "classification"
+   [0041 rejected approaches](0041-geode_analytical_aa.md) (the audit's "classification"
    reading was a mid-edit artifact; see appendix).
 5. **Winding accumulation + fill rule:** `sample_is_inside` (`slug_fill.wgsl:339`) sums
    `curve_winding` over the band's curves and applies the fill rule: **non-zero**
@@ -82,7 +82,7 @@ Per pixel, `fs_main` casts a horizontal ray and counts winding from the band's c
    evaluated per sub-pixel sample.
 6. **Coverage:** the winding test runs at 4 sub-pixel samples packed into
    `@builtin(sample_mask)` (the 4× MSAA path). The coverage/AA model is documented in
-   [0039](0039-geode_analytical_aa.md).
+   [0041](0041-geode_analytical_aa.md).
 
 All six Slug shaders (`slug_fill`, `slug_gradient`, `slug_mask`, and the three
 vendor-gated `*_alpha_coverage` variants) run the **same** integer-winding
@@ -132,7 +132,7 @@ output-neutral.
 
 **D5 — even-odd fill rule.** An earlier audit recorded a triangle-wave fold of
 *fractional* coverage for even-odd, but that was read mid-edit during the reverted
-analytical-AA experiment ([0039](0039-geode_analytical_aa.md)). The committed
+analytical-AA experiment ([0041](0041-geode_analytical_aa.md)). The committed
 `slug_fill.wgsl` has no `apply_fill_rule` and no fractional fold: even-odd is integer
 crossing parity (`(winding & 1) != 0`) in `sample_is_inside`, evaluated per sub-pixel
 sample on the 4× MSAA `sample_mask` path — identical across all shaders. Geode has a
@@ -144,7 +144,7 @@ rework is ever revisited, it must preserve integer-parity even-odd.
 ## 3. Known limitations / future work
 
 These are genuine, still-open divergences from the published method. They are scoped to
-the analytical-AA coverage rework (which is shelved — [0039](0039-geode_analytical_aa.md)),
+the analytical-AA coverage rework (which is shelved — [0041](0041-geode_analytical_aa.md)),
 because they only change observable output once a fractional-coverage tracer lands; on the
 current integer-winding `sample_mask` path they do not affect the accepted edge floor.
 
@@ -175,7 +175,7 @@ current integer-winding `sample_mask` path they do not affect the accepted edge 
 
 The original ledger (opened 2026-05-25) was an investigation tracker. Two entries (D1's
 "fourth analytical tracer" framing, D5's triangle-wave fold) were **mid-edit artifacts** —
-the audit read `slug_fill.wgsl` while the [0039](0039-geode_analytical_aa.md) analytical-AA
+the audit read `slug_fill.wgsl` while the [0041](0041-geode_analytical_aa.md) analytical-AA
 experiment was in flight (since reverted). On the clean committed tree all six shaders run
 the same integer-winding tracer and the same `solve_quadratic`; there is **no `0x2E74`
 analytical-classification tracer anywhere** (that remains 0039 future work), and even-odd

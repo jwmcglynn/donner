@@ -190,7 +190,7 @@ before fixing.
    in local space, composite back; 35151→140px). **All 37 original filter divergences resolved —
    G2 is fully closed.** **Gate ledger now: 0 text + 0 G2 + 192 edge-floor = 192 gated** (down from
    228); the remaining 192 are exclusively the **accepted-by-design** geode-vs-tiny AAA-coverage /
-   crosshair sub-pixel floor (content matches, unfixable in-renderer — [0039 §2](0039-geode_analytical_aa.md)). Two real
+   crosshair sub-pixel floor (content matches, unfixable in-renderer — [0041 §2](0041-geode_analytical_aa.md)). Two real
    production idempotency bugs (baseline-shift, feImage) surfaced by the parity harness's
    double-draw, plus a systematic geode filter linearRGB gap + spec-conformance bugs + the
    transformed-blur path — all fixed in shared/geode code, not backend quirks. **Text + filter

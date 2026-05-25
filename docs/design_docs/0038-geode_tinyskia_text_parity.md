@@ -2,14 +2,14 @@
 
 **Status:** Developer reference. Text parity between the Geode and tiny-skia
 backends is **complete** — 0 structural divergences remain; the only residual
-geode↔tiny diff is the accepted sub-pixel coverage floor ([0039](0039-geode_analytical_aa.md)).
+geode↔tiny diff is the accepted sub-pixel coverage floor ([0041](0041-geode_analytical_aa.md)).
 This doc describes the shared text layer both backends consume, how the per-test
 parity gate works, and the resolved divergence catalog (kept as implementation
 notes). The blow-by-blow investigation is condensed into the appendix.
 
 **Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
-[0039 anti-aliasing](0039-geode_analytical_aa.md),
-[0040 Slug implementation](0040-geode_slug_conformance.md),
+[0041 anti-aliasing](0041-geode_analytical_aa.md),
+[0042 Slug implementation](0042-geode_slug_conformance.md),
 [0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)
 
 ---
@@ -77,7 +77,7 @@ shared layer must keep tiny-skia byte-identical (verified against
 resolved (catalog in §4). The remaining geode↔tiny text diff is the
 accepted-by-design sub-pixel coverage floor — geode renders the correct
 glyphs/positions/colors; the residual is the thin edge band + the resvg harness
-0.5px crosshair overlay. See [0039 §2](0039-geode_analytical_aa.md) for why that
+0.5px crosshair overlay. See [0041 §2](0041-geode_analytical_aa.md) for why that
 floor is accepted and proven sample-independent.
 
 The text portion of the parity gate ledger is empty (`kGenuineText == {}`); text
