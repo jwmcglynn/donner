@@ -891,6 +891,51 @@ TEST_F(GeodeTextDecorationRepro, PatternFillOnTextLeaksOnGeode) {
 }
 
 // ----------------------------------------------------------------------------
+// CR repro (PR #606, Codex P2): a span-level gradient fill/stroke must OVERRIDE the
+// element-level pattern. `RendererGeode::drawText` keyed `fillIsGradient` /
+// `strokeIsGradient` off the element-level `hasPatternFill` / `patternStrokePaint`, so a
+// `<tspan fill="url(#grad)">` inside `<text fill="url(#patt)">` was forced to render the
+// inherited pattern instead of its own gradient. Fixed by checking whether the run's
+// effective fill/stroke server is the SPAN's own override (then gradient wins over the
+// element pattern). The golden is authored from tiny-skia (the parity oracle), which
+// renders the span gradient; geode rendered the pattern before the fix (red→green).
+//
+// Authoring the golden (from tiny-skia):
+//   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
+//     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
+//       -- --gtest_filter='*SpanGradientOverridesElementPattern*'
+// ----------------------------------------------------------------------------
+TEST_F(GeodeTextDecorationRepro, SpanGradientOverridesElementPattern) {
+  const std::filesystem::path resvgRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
+  const char* svg = "donner/svg/renderer/testdata/geode_text_span_gradient_over_pattern.svg";
+  const char* golden =
+      "donner/svg/renderer/testdata/golden/geode_text_span_gradient_over_pattern.png";
+
+  SVGDocument document = loadSVG(svg, resvgRoot);
+
+  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
+  params.enableGoldenUpdateFromEnv();
+  renderAndCompare(document, svg, golden, params);
+}
+
+// The STROKE counterpart of the above (PR #606, Codex P2 id=3299530270). Same red→green:
+// geode painted span B's stroke with the inherited element pattern before the fix.
+TEST_F(GeodeTextDecorationRepro, SpanGradientStrokeOverridesElementPatternStroke) {
+  const std::filesystem::path resvgRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
+  const char* svg = "donner/svg/renderer/testdata/geode_text_span_gradient_over_pattern_stroke.svg";
+  const char* golden =
+      "donner/svg/renderer/testdata/golden/geode_text_span_gradient_over_pattern_stroke.png";
+
+  SVGDocument document = loadSVG(svg, resvgRoot);
+
+  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
+  params.enableGoldenUpdateFromEnv();
+  renderAndCompare(document, svg, golden, params);
+}
+
+// ----------------------------------------------------------------------------
 // Nested baseline-shift re-draw idempotency regression (docs/design_docs/0038).
 //
 // `resolvePerSpanLayoutStyles` appended to `span.ancestorBaselineShifts` via

@@ -1380,7 +1380,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
   // drift on the bbox (see docs/design_docs/0038). Per the SVG spec it uses
   // em-box cells from font v-metrics (ascent above baseline, |descent| below),
   // not the raw font size.
-  const Box2d textBounds = computeTextBounds(textEngine, runs, text.spans, params.viewBox,
+  const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,
                                              params.fontMetrics, fontSizePx);
 
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
@@ -1526,7 +1526,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // exactly as before.
       Path glyphPath;
       if (!isBitmapFont) {
-        glyphPath = placedGlyphOutline(textEngine, run.font, glyph, scale);
+        glyphPath = PlacedGlyphOutline(textEngine, run.font, glyph, scale);
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
@@ -1775,7 +1775,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                   segTransform;
             }
 
-            drawDecoPath(toTinyPath(transformPath(segPath, segTransform)));
+            drawDecoPath(toTinyPath(TransformPath(segPath, segTransform)));
           }
         } else {
           const auto isRenderedGlyph = [](const auto& glyph) {

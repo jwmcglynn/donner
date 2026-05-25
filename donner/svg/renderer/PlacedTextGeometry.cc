@@ -7,7 +7,7 @@
 
 namespace donner::svg {
 
-Path transformPath(const Path& path, const Transform2d& transform) {
+Path TransformPath(const Path& path, const Transform2d& transform) {
   PathBuilder builder;
   const auto points = path.points();
 
@@ -35,7 +35,7 @@ Path transformPath(const Path& path, const Transform2d& transform) {
   return builder.build();
 }
 
-Path placedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
+Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
                         float scale) {
   if (glyph.glyphIndex == 0) {
     return Path();  // `.notdef` -- caller skips.
@@ -53,7 +53,7 @@ Path placedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   //    not the post-rotation frame.
   if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
     glyphPath =
-        transformPath(glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+        TransformPath(glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
   }
 
   // 3. Position: translate to the baseline origin, then rotate about it. As a
@@ -65,10 +65,10 @@ Path placedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
                      glyphFromLocal;
   }
 
-  return transformPath(glyphPath, glyphFromLocal);
+  return TransformPath(glyphPath, glyphFromLocal);
 }
 
-Box2d computeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs,
+Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs,
                         std::span<const components::ComputedTextComponent::TextSpan> spans,
                         const Box2d& viewBox, const FontMetrics& fontMetrics, float fontSizePx) {
   double minX = std::numeric_limits<double>::max();

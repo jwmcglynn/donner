@@ -1,6 +1,7 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@donner_config//:config.bzl", "DONNER_CONFIG")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library", "renderer_backend_compatible_with")
+load("//build_defs:dep_audit.bzl", "forbidden_transitive_dep_test")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_perf_sensitive_cc_library")
 
 # Renderer backend used by //donner/svg/renderer:renderer.
 # Override with --//donner/svg/renderer:renderer_backend=<tiny_skia|geode>
@@ -200,9 +201,11 @@ donner_perf_sensitive_cc_library(
     name = "filter_graph_executor",
     srcs = ["FilterGraphExecutor.cc"],
     hdrs = ["FilterGraphExecutor.h"],
-    # Pure-CPU; buildable under the geode config too so the geode test binary
-    # can link the tiny-skia backend for parity (see 0017 §Phase 4b).
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    # Backend-agnostic pure-CPU code: no `target_compatible_with` so it builds
+    # under every config (tiny_skia, geode, and the feature-flag variants). The
+    # geode test binary links the tiny-skia backend (which pulls this in) for
+    # in-process geode-vs-tiny-skia parity. Production geode never reaches this
+    # target — enforced by //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":pixel_format_utils",
@@ -281,9 +284,10 @@ donner_perf_sensitive_cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "tiny_skia_deps",
-    # Pure-CPU vendored lib; buildable under geode too so the geode test binary
-    # can link the tiny-skia backend for parity (see 0017 §Phase 4b).
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    # Backend-agnostic pure-CPU vendored lib: no `target_compatible_with` so it
+    # builds under every config. Linked into the geode test binary (via the
+    # tiny-skia backend) for parity; never reached by production geode —
+    # enforced by //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     deps = [
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
     ],
@@ -291,9 +295,10 @@ donner_perf_sensitive_cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "tiny_skia_filter_deps",
-    # Pure-CPU vendored lib; buildable under geode too so the geode test binary
-    # can link the tiny-skia backend for parity (see 0017 §Phase 4b).
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    # Backend-agnostic pure-CPU vendored lib: no `target_compatible_with` so it
+    # builds under every config. Linked into the geode test binary (via the
+    # tiny-skia backend) for parity; never reached by production geode —
+    # enforced by //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     deps = [
         "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
@@ -356,12 +361,14 @@ donner_perf_sensitive_cc_library(
         ":filters_enabled": ["DONNER_FILTERS_ENABLED"],
         "//conditions:default": [],
     }),
-    # The tiny-skia renderer is a pure-CPU library (no wgpu); it builds under
-    # both the tiny-skia and geode configs so the geode-enabled test binary can
-    # link both backends and run geode-vs-tiny-skia parity in one process
-    # (see docs/design_docs/0017-geode_renderer.md §Phase 4b). Selecting the
-    # geode *backend* for production rendering still routes through `:renderer`.
-    target_compatible_with = renderer_backend_compatible_with(["tiny_skia", "geode"]),
+    # The tiny-skia renderer is a pure-CPU library (no wgpu): no
+    # `target_compatible_with` so it builds under every config, including geode.
+    # The geode-enabled test binary links both backends to run geode-vs-tiny-skia
+    # parity in one process (see docs/design_docs/0017-geode_renderer.md §Phase
+    # 4b). Production rendering still routes through `:renderer`, which selects
+    # exactly one backend per config — so production geode never links this
+    # target. That invariant is enforced by
+    # //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     visibility = ["//visibility:public"],
     deps = [
         ":pixel_format_utils",
@@ -412,4 +419,30 @@ donner_cc_library(
         ":renderer_backend_geode": [":renderer_geode"],
         "//conditions:default": [":renderer_tiny_skia"],
     }),
+)
+
+# Dependency audit: the geode *production* renderer must never link the
+# tiny-skia backend. We dropped the `target_compatible_with` guards from the
+# pure-CPU tiny-skia libs so the geode *test* binary can embed both backends
+# for in-process geode-vs-tiny-skia parity (see
+# docs/design_docs/0017-geode_renderer.md §Phase 4b). With those analysis-time
+# guards gone, this query-based test is what keeps the line honest: it asserts
+# `somepath(:renderer_geode, :renderer_tiny_skia)` is empty, so production geode
+# (which routes through :renderer_geode) carries zero tiny-skia code.
+#
+# How it catches a regression: if anyone adds :renderer_tiny_skia (or anything
+# that transitively reaches it) to :renderer_geode's deps — even behind a
+# select — the unconfigured `somepath` query finds the path and the test fails,
+# printing the offending dependency chain. The test anchors on :renderer_geode,
+# NOT the :renderer dispatcher, because :renderer legitimately reaches tiny-skia
+# through its `//conditions:default` select branch (which the loading-phase
+# graph always includes).
+forbidden_transitive_dep_test(
+    name = "geode_excludes_tiny_skia_audit",
+    forbidden = "//donner/svg/renderer:renderer_tiny_skia",
+    tags = [
+        "audit",
+        "deps",
+    ],
+    target = "//donner/svg/renderer:renderer_geode",
 )

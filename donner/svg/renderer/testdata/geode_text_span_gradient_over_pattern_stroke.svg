@@ -1,0 +1,20 @@
+<svg viewBox="0 0 240 100" xmlns="http://www.w3.org/2000/svg"
+     font-family="Noto Sans" font-size="56" font-weight="bold">
+    <!-- CR repro (PR #606, Codex P2 id=3299530270): the STROKE counterpart of the fill
+         repro. `RendererGeode::drawText` treated any server-backed stroke as the element
+         pattern whenever `patternStrokePaint` existed, so a `<tspan stroke="url(#grad)">`
+         inside `<text stroke="url(#patt)">` was misclassified as the inherited pattern
+         stroke. Fixed by keying `strokeIsGradient` off the SPAN's own stroke server when
+         the span overrides. tiny-skia (the oracle) strokes B with the gradient; A and C
+         keep the element pattern stroke. fill="none" so only the stroke is visible. -->
+    <pattern id="patt" patternUnits="userSpaceOnUse" width="12" height="12">
+        <rect x="0" y="0" width="6" height="6" fill="grey"/>
+        <rect x="6" y="6" width="6" height="6" fill="green"/>
+    </pattern>
+    <linearGradient id="grad" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="red"/>
+        <stop offset="1" stop-color="blue"/>
+    </linearGradient>
+    <text x="12" y="64" fill="none" stroke="url(#patt)" stroke-width="3">A<tspan
+          stroke="url(#grad)">B</tspan>C</text>
+</svg>

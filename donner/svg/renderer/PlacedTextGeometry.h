@@ -29,14 +29,14 @@ namespace donner::svg {
 /**
  * @brief Apply an affine transform to every point of a path.
  *
- * Backend-agnostic replacement for the byte-identical `transformPath` free
+ * Backend-agnostic replacement for the byte-identical `TransformPath` free
  * functions that previously lived in each renderer TU.
  *
  * @param path The source path.
  * @param transform The transform to apply to each point.
  * @return A new path with all points transformed.
  */
-Path transformPath(const Path& path, const Transform2d& transform);
+Path TransformPath(const Path& path, const Transform2d& transform);
 
 /**
  * @brief Build the placed outline for a single glyph in document space.
@@ -57,7 +57,7 @@ Path transformPath(const Path& path, const Transform2d& transform);
  * @param scale Per-run pixel-height scale (`scaleForPixelHeight(font, sizePx)`).
  * @return The placed outline path in the text element's local space.
  */
-Path placedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
+Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
                         float scale);
 
 /**
@@ -80,7 +80,7 @@ Path placedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
  * @param fontSizePx Element-level resolved font size in pixels.
  * @return The text bounding box in the element's local space.
  */
-Box2d computeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs,
+Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs,
                         std::span<const components::ComputedTextComponent::TextSpan> spans,
                         const Box2d& viewBox, const FontMetrics& fontMetrics, float fontSizePx);
 

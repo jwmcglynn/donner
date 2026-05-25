@@ -46,6 +46,12 @@ When debugging bugs — **especially performance or UI bugs** — write an autom
 - **Do NOT use percentage thresholds.** They mask regressions smaller than the threshold and scale with scene size. Either the diff is zero (identity) or the test writes `actual_*.png` / `expected_*.png` / `diff_*.png` to `$TEST_UNDECLARED_OUTPUTS_DIR` for operator inspection.
 - If a new pixel-diff test needs composition the helper library doesn't provide, extend `bitmap_golden_compare` — do not inline a private variant in the test.
 
+## Test Diagnosability: gmock + ToTT-style failures
+
+- **Prioritize gmock matchers (`EXPECT_THAT` + matchers) over hand-rolled `EXPECT_TRUE(a == b)`-style assertions.** A failing test must localize the bug *without a rerun* — `EXPECT_THAT(pixel, RgbaNear(187, 0, 188, 255, 4))` prints the full expected-vs-actual RGBA and names the offending channel; `EXPECT_TRUE(pixel[0] == 187)` prints "false". This is the "Testing on the Toilet" (ToTT) standard: the failure message *is* the diagnostic.
+- **Promote repeated assertion shapes into a named gmock matcher** with a good `DescribeTo` / `result_listener` message (e.g. the `Rgba(...)` / `RgbaNear(...)` / `Alpha(...)` pixel matchers in `RendererGeode_tests.cc`). A repeated `EXPECT_NEAR` per channel is a smell — make one matcher that reports all channels.
+- Don't churn assertions that are already diagnosable; apply this to new/edited tests and anywhere a failure currently prints a bare boolean.
+
 ## Anti-Aliasing Is Never the Root Cause
 
 - **Never attribute a pixel difference to anti-aliasing.** "AA quality", "MSAA drift", "sample-count difference", "4× vs 16× AA", "AA fringe", "supersampling difference" are **banned explanations** — in code comments, design docs, commit messages, test reasons, and chat. They are the universal lazy excuse that hides the actual bug: wrong glyph position, wrong transform/coordinate space, wrong coverage geometry, wrong color space, wrong premultiplication, wrong layer compositing. This is the same trap as "don't blame glyph outline differences."
