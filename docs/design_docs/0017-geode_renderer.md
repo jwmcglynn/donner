@@ -1537,14 +1537,14 @@ the `*_geode` wrapper under `bazel test //...`); the pure-CPU `resvg_test_suite`
 6. ✅ **228 binary parity gates** via `geodeParityGate(category, filename)` (an in-place
    extension of the existing gate system, folded into the deferred `geodeGate` so it touches
    only the parity instance). Organized as an inventory by theme:
-   - **172 edge-floor (101–763 px)** — the proven 4× MSAA edge-coverage quantization. One
-     shared reason; these ratchet out together when Geode gains finer AA.
-   - **56 genuine (≥768 px)** — real divergences: **38 filter** color/algorithm bugs (reason
-     → [0021 §G2](0021-resvg_feature_gaps.md#g2-filter-primitive-correctness-16-of-23-disabled-tests)),
-     **18 text / text-on-shape** (reason → [0038](0038-geode_tinyskia_text_parity.md)).
-7. **Follow-on:** fix the 56 genuine (G2 filter + 0038 text), then drop those gates; fix the
-   137-fill premultiply root cause ([0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)), then no
-   change needed (they already pass at 0.02). Finer AA retires the 172 edge-floor gates.
+   - Initially **172 edge-floor + 56 genuine** (18 text / text-on-shape → 0038, 38 filter →
+     0021 G2). **Hoist progress (2026-05-24):** all 18 text divergences resolved — gradient/
+     pattern-on-text + baseline-shift fixed (the latter a shared-layout idempotency bug the
+     double-draw parity harness exposed), the rest were render-correct edge-floor. **Ledger now
+     0 text + 37 filter (G2) + 188 edge-floor = 225 gated; `kGenuineText` is empty.**
+7. **Follow-on:** fix the 37 genuine filter divergences ([0021 §G2](0021-resvg_feature_gaps.md#g2-filter-primitive-correctness-16-of-23-disabled-tests)),
+   then drop those gates; fix the 137-fill premultiply root cause ([0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds))
+   (already pass at 0.02). Finer Geode AA retires the 188 edge-floor gates.
 
 **Final numbers (geode build, all green):**
 

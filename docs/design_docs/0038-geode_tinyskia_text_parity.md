@@ -49,12 +49,15 @@ eyeballing every diff PNG (geode + tiny + diff) — magnitude alone is *not* dec
 Classified by **where the diff lands**:
 
 - **STRUCTURAL** — geode renders *wrong* (whole-glyph offset / wrong paint / missing text);
-  solid-region diff. Stays in `kGenuineText`. **2 remaining** (B7/B8 per-char dy/rotate);
-  the 6 paint(b) cases AND the 6 baseline-shift cases below are now FIXED.
-- **EDGE-FLOOR (was mislabeled)** — geode renders *correct* (right glyphs/positions/colors);
-  the diff is the thin 4× MSAA fringe, over 100px only from large cumulative perimeter (many
-  lines / long strings / tiled or on-path small text, or a gradient stroke ring). Moved to
-  `kEdgeFloor`. **5 from the audit + 3 from the paint(b) fix = 8 text edge-floor.**
+  solid-region diff. Stays in `kGenuineText`. **0 remaining** — all originally-structural
+  text divergences are resolved: the 6 paint(b) cases + the 6 baseline-shift cases are FIXED,
+  and B7/B8 turned out render-correct edge-floor once the baseline-shift idempotency fix
+  landed. `kGenuineText` is now empty `{}`.
+- **EDGE-FLOOR (was mislabeled / fixed-to-floor)** — geode renders *correct* (right
+  glyphs/positions/colors); the diff is the thin 4× MSAA fringe, over 100px only from large
+  cumulative perimeter (many lines / long strings / tiled or on-path small text, or a gradient
+  stroke ring). Moved to `kEdgeFloor`. **5 from the audit + 3 from paint(b) + 6 baseline-shift
+  + 2 (B7/B8) = 16 text edge-floor.**
 
 **✅ Paint(b) cluster FIXED (2026-05-26).** Root cause: geode `drawText` had **no gradient
 handling and incomplete pattern handling** — `resolveSpanFill`/`resolveSolidStroke` collapse
@@ -82,8 +85,8 @@ stroke/linear **11917→465** (now render correctly; residual is the 4× MSAA ed
 | ✅B4 | 4320→720 | `text/baseline-shift/deeply-nested-super` | FIXED→EDGE | same | (a) baseline-shift | done |
 | ✅B5 | 2870→677 | `text/baseline-shift/nested-super` | FIXED→EDGE | same | (a) baseline-shift | done |
 | ✅B6 | 2438→686 | `text/baseline-shift/nested-length` | FIXED→EDGE | same | (a) baseline-shift | done |
-| B7 | 4643→1177 | `text/text-decoration/underline-with-dy-list-2` | **STRUCT** | partly helped by baseline-shift fix; a separate per-char `dy` divergence remains >100 | (a) per-char dy | **Y** |
-| B8 | 4561→1145 | `text/text-decoration/underline-with-rotate-list-4` | **STRUCT** | same; per-char rotate-list divergence remains | (a) per-char rotate | **Y** |
+| ✅B7 | 4643→1177 | `text/text-decoration/underline-with-dy-list-2` | EDGE | baseline-shift fix cleared the structural part; residual ~1177px is 4× fringe on the gray stroke-ring + gradient (plain sibling `dy-list-1` is already edge-floor at 699px → dy consumed correctly) | (a) per-char dy | done |
+| ✅B8 | 4561→1145 | `text/text-decoration/underline-with-rotate-list-4` | EDGE | same; rotate consumed correctly (plain sibling `rotate-list-3` edge-floor at 686px); residual is stroke-ring + gradient fringe | (a) per-char rotate | done |
 
 **✅ Baseline-shift cluster B1–B6 FIXED (2026-05-26).** Root cause (resolved the
 increment-2 "identical positions" contradiction): the positions were **not** identical —
@@ -283,6 +286,14 @@ Gate ledger then: 8 text + 37 G2 + 180 edge-floor = 225.
 
 **Baseline-shift fix (2026-05-26).** B1–B6 fixed (shared-layout `ancestorBaselineShifts`
 accumulation, cleared in TextEngine); all 6 moved text→edge-floor (render correctly, edge
-fringe). No full un-gates (they're ~700px, not ≤100), so total holds. **Gate ledger now:
-2 text + 37 G2 + 186 edge-floor = 225** (all green). The 2 remaining STRUCTURAL text gates
-are B7/B8 (per-char dy/rotate consume) — the target for the next increment.
+fringe). No full un-gates (they're ~700px, not ≤100), so total holds. Gate ledger then:
+2 text + 37 G2 + 186 edge-floor = 225.
+
+**B7/B8 audit (2026-05-24).** The last 2 `kGenuineText` gates re-checked post-baseline-shift-fix:
+render-correct edge-floor, not structural (glyph interiors zero-diff; residual is 4× fringe on
+the gray stroke-ring + gradient — the plain-black siblings `dy-list-1`/`rotate-list-3` are
+already accepted edge-floor, proving dy/rotate are consumed correctly; double-draw ruled out,
+tiny-twice = 0px). Moved text→edge-floor. **Gate ledger now: 0 text + 37 G2 + 188 edge-floor
+= 225** (all green). **All originally-structural text divergences are resolved — `kGenuineText`
+is empty.** Remaining parity gaps: 37 filter (→ G2) + 188 edge-floor (→ finer geode AA) +
+the 137 sub-visual premultiply fills (→ G5, pass at 0.02). The hoist's text goal is achieved.

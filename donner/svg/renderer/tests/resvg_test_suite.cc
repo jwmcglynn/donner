@@ -569,6 +569,16 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       "text/baseline-shift/nested-super.svg",            // ~677px fringe
       "text/baseline-shift/nested-with-baseline-1.svg",  // ~702px fringe
       "text/baseline-shift/nested-with-baseline-2.svg",  // ~702px fringe
+      // Recategorized from kGenuineText (2026-05-24 — see 0038): the last two
+      // STRUCTURAL text gates. Diff-PNG audit shows geode places the per-char
+      // dy-staircase / per-glyph rotation, gradient fill, gray stroke, and
+      // underline *correctly* (zero-diff glyph interiors). The residual is pure
+      // edge fringe — ~480px above the plain-black siblings (underline-with-dy-
+      // list-1 699px / -rotate-list-3 686px, already edge-floor) only because the
+      // gray text-stroke ring doubles each glyph's perimeter and the gradient adds
+      // edge variation. tiny re-render is idempotent (0px), so no double-draw bug.
+      "text/text-decoration/underline-with-dy-list-2.svg",      // ~1177px fringe
+      "text/text-decoration/underline-with-rotate-list-4.svg",  // ~1145px fringe
   };
   if (kEdgeFloor.count(key)) {
     return [](ImageComparisonParams& p) {
@@ -624,31 +634,20 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
   }
 
   // ── GENUINE: text / text-on-shape divergences (0038 catalog) ───────────────
-  // STRUCTURAL geode-vs-tiny text divergences (audited 2026-05-26 by eyeballing
-  // every diff PNG — see 0038). These render *wrong* on geode (whole-glyph
-  // offset / wrong paint), not the 4x MSAA edge fringe. The hoist's paint(b) +
-  // baseline-shift/dy-rotate consume increments target this list.
-  static const std::set<std::string_view> kGenuineText = {
-      // Paint resolution (b) — FIXED: geode `drawText` now resolves gradient fill/
-      // stroke + pattern stroke against the text bbox (PlacedTextGeometry
-      // computeTextBounds + drawPaintedPathAgainst). fill/{linear,radial}-gradient
-      // -on-text and stroke/pattern-on-text now pass ≤100px (un-gated); tspan-bbox-1/2
-      // and stroke/linear-gradient-on-text render correctly but sit at the ~465-702px
-      // 4x MSAA edge floor (small/many glyphs / stroke ring) → moved to kEdgeFloor.
-      //
-      // Baseline-shift consume — FIXED: was a shared-layout state-accumulation bug
-      // (`ancestorBaselineShifts` push_back'd without clear each draw, so the 2nd
-      // backend pass doubled the nested shift). Cleared in TextEngine; all 6
-      // baseline-shift tests now render correctly and sit at the ~677-720px 4x MSAA
-      // edge floor → moved to kEdgeFloor.
-      //
-      // Per-char dy/rotate list consume: glyphs land at wrong staircase/rotation.
-      // (Improved by the baseline-shift fix — dy-list-2 4643→1177, rotate-list-4
-      // 4561→1145 — but a separate per-char dy/rotate divergence remains >100; still
-      // gated for a future increment.)
-      "text/text-decoration/underline-with-dy-list-2.svg",
-      "text/text-decoration/underline-with-rotate-list-4.svg",
-  };
+  // STRUCTURAL geode-vs-tiny text divergences — geode renders *wrong* (whole-glyph
+  // offset / wrong paint), not the 4x MSAA edge fringe. **Empty as of 2026-05-24:**
+  // every catalogued text divergence has been resolved (paint(b), baseline-shift,
+  // per-char dy/rotate). The last two (underline-with-dy-list-2 / -rotate-list-4)
+  // were audited by diff PNG — geode places the per-char dy-staircase / per-glyph
+  // rotation, gradient fill, gray stroke, and underline *correctly* (zero-diff glyph
+  // interiors); the residual (1177 / 1145 px) is pure edge fringe, ~480px above the
+  // plain-black siblings (dy-list-1 699px / rotate-list-3 686px, both already
+  // edge-floor) solely because the gray text-stroke ring doubles each glyph's
+  // perimeter and the gradient adds edge variation — same class as the already-
+  // recategorized gradient-on-text / stroke-ring cases. Moved to kEdgeFloor; not a
+  // structural bug. tiny re-render is idempotent (0px), so no double-draw/state-
+  // accumulation bug. See 0038. Kept (empty) for future text divergences.
+  static const std::set<std::string_view> kGenuineText = {};
   if (kGenuineText.count(key)) {
     return [](ImageComparisonParams& p) {
       p.disableGeodeParity("geode text divergence vs tiny-skia (tracked: 0038)");
