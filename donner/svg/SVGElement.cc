@@ -265,6 +265,19 @@ void ElementAnchor::release() noexcept {
     return;
   }
 
+  // §concurrent-dom: if the calling thread already holds a read access (and not write), taking
+  // write here would self-deadlock — DocumentWriteAccess drains all readers without supporting a
+  // read→write upgrade, so the writer would wait on its own held read. (Write access is reentrant,
+  // so write-while-write is fine and proceeds.) The detached-node Collect call below is purely
+  // opportunistic eager cleanup; the next periodic NodeLifetimeCollector::Collect pass (e.g. on the
+  // next source edit, mutation batch commit, or end-of-frame) will pick this entity up, so it is
+  // safe to bail without leaking. Without this guard a perfectly-normal API pattern — a detached
+  // SVGElement local going out of scope inside a withReadAccess callback — would hang the thread.
+  if (documentHandle_->currentThreadHasAccess() &&
+      !documentHandle_->currentThreadHasWriteAccess()) {
+    return;
+  }
+
   DocumentWriteAccess access = documentHandle_->write();
   Registry& registry = access.registry();
   if (!registry.valid(entity_)) {

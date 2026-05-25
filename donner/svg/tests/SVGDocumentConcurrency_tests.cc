@@ -731,5 +731,30 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomStressHasDeterministicFinalState)
   }
 }
 
+// Regression test for the codex-flagged P1 self-deadlock in `ElementAnchor::release()`. When the
+// last public handle to a *detached* `SVGElement` destructs *inside* a `withReadAccess` callback
+// (a perfectly-normal API pattern: a detached element local going out of scope while the calling
+// thread holds a read guard), the destructor's release() path used to unconditionally acquire
+// `documentHandle_->write()`. In ConcurrentDom the writer drains all readers without supporting a
+// read→write upgrade, so it would wait on the calling thread's own held read — hanging forever.
+// The fix bails when the thread holds read-but-not-write (the opportunistic detached-node Collect
+// happens on the next periodic Collect pass instead). If the deadlock regresses, this test hangs
+// the entire `donner_svg_concurrency_tests` target until its bazel timeout fires.
+TEST(SVGDocumentConcurrencyTests, ReleaseOfDetachedHandleInsideReadAccessDoesNotSelfDeadlock) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.remove();  // mark the element detached so release() takes the cleanup path
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  document.withReadAccess([&rect](DocumentReadAccess&) {
+    // The last public handle is moved into the read-access scope; when `moved` destructs at the end
+    // of this lambda the calling thread still holds the read guard. Without the fix this hangs.
+    SVGRectElement moved = std::move(rect);
+    (void)moved;
+  });
+
+  SUCCEED();  // reaching this line means release() did not self-deadlock
+}
+
 }  // namespace
 }  // namespace donner::svg

@@ -13,6 +13,7 @@
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
+#include "donner/svg/components/NodeLifetimeCollector.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -591,13 +592,26 @@ xml::ApplySourceEditResult SVGDocument::applySourceEdit(const xml::XMLEditIntent
     return result;
   }
 
-  xml::ApplySourceEditResult result = xmlDocument().applySourceEdit(intent);
-  for (const xml::XMLMutation& mutation : result.mutations) {
-    std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
-    if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
-      result.diagnostic = std::move(projectionDiagnostic);
+  xml::ApplySourceEditResult result;
+  {
+    // Defer detached-node collection across the reparse. ReplaceChildrenFromParsedNode removes
+    // every child and then reuses the matching ones by re-appending, but each removeChild routes
+    // through TreeMutation::RemoveChild, which collects detached nodes synchronously. Without the
+    // deferral a child queued for reuse is destroyed mid-reparse and the reparse's still-live
+    // XMLNode handle trips an entt "set does not contain entity" assert. Reused children are
+    // re-attached by the subsequent appendChild; genuinely-removed children are swept by the
+    // Collect below once the deferral ends.
+    DetachedNodeCollectionDeferral collectionDeferral =
+        documentState_->deferDetachedNodeCollection();
+    result = xmlDocument().applySourceEdit(intent);
+    for (const xml::XMLMutation& mutation : result.mutations) {
+      std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
+      if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
+        result.diagnostic = std::move(projectionDiagnostic);
+      }
     }
   }
+  components::NodeLifetimeCollector::Collect(documentState_->registry());
 
   return result;
 }
