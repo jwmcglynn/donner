@@ -268,6 +268,12 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
         span.baselineShiftKeyword = BSK::Super;
       }
 
+      // Resolve fresh each call: this runs per `draw()` and accumulates ancestor
+      // shifts via push_back, so re-resolving the same span (e.g. two backends
+      // drawing the same document, or any re-draw) would otherwise double the
+      // nested baseline-shift. Clear so the layout is idempotent.
+      span.ancestorBaselineShifts.clear();
+
       Entity ancestor = styleEntity;
       while (registry.all_of<donner::components::TreeComponent>(ancestor)) {
         ancestor = registry.get<donner::components::TreeComponent>(ancestor).parent();

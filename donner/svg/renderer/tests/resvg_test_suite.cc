@@ -560,6 +560,15 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       "painting/stroke/linear-gradient-on-text.svg",  // gradient stroke ring, ~465px fringe
       "text/tspan/tspan-bbox-1.svg",                  // 24px gradient span, ~702px fringe
       "text/tspan/tspan-bbox-2.svg",                  // 24px gradient span, ~694px fringe
+      // Recategorized from kGenuineText after the baseline-shift fix (2026-05-26 — see
+      // 0038): the nested baseline-shift accumulation bug (shared TextEngine layout) is
+      // fixed; these now render correctly at 64px, residual = 4x MSAA edge fringe.
+      "text/baseline-shift/deeply-nested-super.svg",     // ~720px fringe
+      "text/baseline-shift/mixed-nested.svg",            // ~690px fringe
+      "text/baseline-shift/nested-length.svg",           // ~686px fringe
+      "text/baseline-shift/nested-super.svg",            // ~677px fringe
+      "text/baseline-shift/nested-with-baseline-1.svg",  // ~702px fringe
+      "text/baseline-shift/nested-with-baseline-2.svg",  // ~702px fringe
   };
   if (kEdgeFloor.count(key)) {
     return [](ImageComparisonParams& p) {
@@ -627,15 +636,16 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       // and stroke/linear-gradient-on-text render correctly but sit at the ~465-702px
       // 4x MSAA edge floor (small/many glyphs / stroke ring) → moved to kEdgeFloor.
       //
-      // Baseline-shift consume: geode mis-applies nested baseline-shift (whole-glyph
-      // vertical offset; in nested-with-baseline cases a whole text string is dropped).
-      "text/baseline-shift/deeply-nested-super.svg",
-      "text/baseline-shift/mixed-nested.svg",
-      "text/baseline-shift/nested-length.svg",
-      "text/baseline-shift/nested-super.svg",
-      "text/baseline-shift/nested-with-baseline-1.svg",
-      "text/baseline-shift/nested-with-baseline-2.svg",
+      // Baseline-shift consume — FIXED: was a shared-layout state-accumulation bug
+      // (`ancestorBaselineShifts` push_back'd without clear each draw, so the 2nd
+      // backend pass doubled the nested shift). Cleared in TextEngine; all 6
+      // baseline-shift tests now render correctly and sit at the ~677-720px 4x MSAA
+      // edge floor → moved to kEdgeFloor.
+      //
       // Per-char dy/rotate list consume: glyphs land at wrong staircase/rotation.
+      // (Improved by the baseline-shift fix — dy-list-2 4643→1177, rotate-list-4
+      // 4561→1145 — but a separate per-char dy/rotate divergence remains >100; still
+      // gated for a future increment.)
       "text/text-decoration/underline-with-dy-list-2.svg",
       "text/text-decoration/underline-with-rotate-list-4.svg",
   };
@@ -821,6 +831,41 @@ TEST_F(GeodeTextDecorationRepro, PatternFillOnTextLeaksOnGeode) {
   ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
   params.enableGoldenUpdateFromEnv();
   renderAndCompare(document, svg, golden, params);
+}
+
+// ----------------------------------------------------------------------------
+// Nested baseline-shift re-draw idempotency regression (docs/design_docs/0038).
+//
+// `resolvePerSpanLayoutStyles` appended to `span.ancestorBaselineShifts` via
+// push_back without clearing, and runs on every `draw()`. A SECOND render of the
+// same `SVGDocument` / `ComputedTextComponent` therefore DOUBLED the nested
+// baseline-shift. The parity harness (two backends drawing the same document)
+// surfaced it, but it's a real production bug for any re-draw (e.g. editor
+// re-renders). This test pins it directly: render the same document twice via
+// tiny-skia and require pixel-identity. Both draws share the 4x MSAA edge floor,
+// so an idempotent layout makes them byte-identical (0 diff); the doubled-shift
+// bug shifts the glyphs in draw #2, producing a large diff.
+//
+// Backend-agnostic: renders via tiny-skia (always linked), so it runs on the
+// default CPU build and exercises the shared TextEngine layout, not a backend.
+// ----------------------------------------------------------------------------
+TEST_F(GeodeTextDecorationRepro, NestedBaselineShiftRedrawIsIdempotent) {
+  const std::filesystem::path resvgRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
+  const char* svg = "donner/svg/renderer/testdata/text_nested_baseline_shift_idempotency.svg";
+
+  SVGDocument document = loadSVG(svg, resvgRoot);
+
+  // Two renders of the SAME document. With the layout-idempotency bug, draw #2's
+  // nested baseline-shift is doubled, so its glyphs sit higher than draw #1's.
+  const RendererBitmap first = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+  const RendererBitmap second = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+
+  ASSERT_FALSE(first.empty());
+  ASSERT_FALSE(second.empty());
+
+  // Strict identity: the two renders must be pixel-for-pixel identical.
+  ExpectBitmapsIdentical(second, first, "nested_baseline_shift_redraw");
 }
 
 INSTANTIATE_TEST_SUITE_P(

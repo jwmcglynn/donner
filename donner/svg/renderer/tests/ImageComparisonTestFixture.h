@@ -429,6 +429,23 @@ using ImageComparisonTestParam = std::tuple<ImageComparisonTestcase, ComparisonM
 std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTestParam>& info);
 
 /**
+ * @brief Asserts two live renderer bitmaps are pixel-for-pixel identical.
+ *
+ * Strict identity pixelmatch (threshold 0, AA included, 0 mismatches allowed) —
+ * the renderer suite's shared bitmap-to-bitmap comparator (so tests don't roll a
+ * private one; mirrors the editor's `CompareBitmapToBitmap`). On mismatch, adds a
+ * gtest failure and writes `actual_/expected_/diff_<label>.png` to
+ * `$TEST_UNDECLARED_OUTPUTS_DIR` (else the temp dir). Use when the ground truth
+ * is another render (e.g. a re-draw idempotency check), not a committed golden.
+ *
+ * @param actual The bitmap under test.
+ * @param expected The reference bitmap.
+ * @param label Short identifier for log output and dumped PNG names.
+ */
+void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& expected,
+                            std::string_view label);
+
+/**
  * @brief Terminal preview configuration derived from the environment.
  */
 struct TerminalPreviewConfig {

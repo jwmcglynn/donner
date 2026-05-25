@@ -49,8 +49,8 @@ eyeballing every diff PNG (geode + tiny + diff) — magnitude alone is *not* dec
 Classified by **where the diff lands**:
 
 - **STRUCTURAL** — geode renders *wrong* (whole-glyph offset / wrong paint / missing text);
-  solid-region diff. Stays in `kGenuineText`; the hoist's baseline-shift/dy-rotate consume
-  increments target these. **8 remaining** (the 6 paint(b) cases below are now FIXED).
+  solid-region diff. Stays in `kGenuineText`. **2 remaining** (B7/B8 per-char dy/rotate);
+  the 6 paint(b) cases AND the 6 baseline-shift cases below are now FIXED.
 - **EDGE-FLOOR (was mislabeled)** — geode renders *correct* (right glyphs/positions/colors);
   the diff is the thin 4× MSAA fringe, over 100px only from large cumulative perimeter (many
   lines / long strings / tiled or on-path small text, or a gradient stroke ring). Moved to
@@ -76,14 +76,29 @@ stroke/linear **11917→465** (now render correctly; residual is the 4× MSAA ed
 
 | # | px | test | class | symptom (eyeballed) | layer | Hoist |
 |---|---|---|---|---|---|---|
-| B1 | 19750 | `text/baseline-shift/nested-with-baseline-2` | **STRUCT** | tiny draws 2 strings (black shifted + red reset); **geode draws only 1 unshifted** — nested baseline-shift ignored | (a) baseline-shift | **Y** |
-| B2 | 12886 | `text/baseline-shift/nested-with-baseline-1` | **STRUCT** | same: geode drops the shifted/reset string | (a) baseline-shift | **Y** |
-| B3 | 4338 | `text/baseline-shift/mixed-nested` | **STRUCT** | center+right "Text" solid-offset vs tiny | (a) baseline-shift | **Y** |
-| B4 | 4320 | `text/baseline-shift/deeply-nested-super` | **STRUCT** | C/D/E/F progressively wrong super-shift (A/B match) | (a) baseline-shift | **Y** |
-| B5 | 2870 | `text/baseline-shift/nested-super` | **STRUCT** | rightmost "Text" solid-offset (left two match) | (a) baseline-shift | **Y** |
-| B6 | 2438 | `text/baseline-shift/nested-length` | **STRUCT** | rightmost "Text" solid-offset | (a) baseline-shift | **Y** |
-| B7 | 4643 | `text/text-decoration/underline-with-dy-list-2` | **STRUCT** | per-char `dy` staircase differs; whole-glyph vertical offset | (a) per-char dy | **Y** |
-| B8 | 4561 | `text/text-decoration/underline-with-rotate-list-4` | **STRUCT** | per-char rotate list differs; glyphs rotated to wrong angles | (a) per-char rotate | **Y** |
+| ✅B1 | 19750→702 | `text/baseline-shift/nested-with-baseline-2` | FIXED→EDGE | nested baseline-shift now correct | (a) baseline-shift | done |
+| ✅B2 | 12886→702 | `text/baseline-shift/nested-with-baseline-1` | FIXED→EDGE | same | (a) baseline-shift | done |
+| ✅B3 | 4338→690 | `text/baseline-shift/mixed-nested` | FIXED→EDGE | same | (a) baseline-shift | done |
+| ✅B4 | 4320→720 | `text/baseline-shift/deeply-nested-super` | FIXED→EDGE | same | (a) baseline-shift | done |
+| ✅B5 | 2870→677 | `text/baseline-shift/nested-super` | FIXED→EDGE | same | (a) baseline-shift | done |
+| ✅B6 | 2438→686 | `text/baseline-shift/nested-length` | FIXED→EDGE | same | (a) baseline-shift | done |
+| B7 | 4643→1177 | `text/text-decoration/underline-with-dy-list-2` | **STRUCT** | partly helped by baseline-shift fix; a separate per-char `dy` divergence remains >100 | (a) per-char dy | **Y** |
+| B8 | 4561→1145 | `text/text-decoration/underline-with-rotate-list-4` | **STRUCT** | same; per-char rotate-list divergence remains | (a) per-char rotate | **Y** |
+
+**✅ Baseline-shift cluster B1–B6 FIXED (2026-05-26).** Root cause (resolved the
+increment-2 "identical positions" contradiction): the positions were **not** identical —
+nested baseline-shift is a **shared-layout state-accumulation bug**, not a geode rendering
+gap. `resolvePerSpanLayoutStyles` (TextEngine) does `span.ancestorBaselineShifts.push_back(…)`
+without ever clearing, and it runs **per `draw()`**. The parity harness draws the document
+twice (geode then tiny on the same `ComputedTextComponent`), so the 2nd backend (tiny, the
+oracle) saw **doubled** ancestor shifts. Position dump proved it: geode (1st pass)
+`y=74.4` (correct 2×20%), tiny (2nd pass) `y=61.6` (3×20% — one extra accumulated shift).
+Fix: `span.ancestorBaselineShifts.clear()` before re-populating → idempotent layout. tiny
+single-pass output unchanged (clear is a no-op on the empty default vector — verified
+byte-identical across 96 text tests, incl. all baseline-shift). All 6 now render correctly
+at the ~677–720px 4× MSAA edge floor (64px "Text") → moved to `kEdgeFloor`. The fix also
+*partly* helped B7/B8 (they have spans too) but a separate per-char dy/rotate divergence
+remains — still gated.
 | ✅B11 | 2929→694 | `text/tspan/tspan-bbox-2` | FIXED→EDGE | gradient span now resolved vs text bbox; residual = edge fringe | (b) bbox paint | done |
 | ✅B12 | 1803→702 | `text/tspan/tspan-bbox-1` | FIXED→EDGE | same | (b) bbox paint | done |
 | ✅B15 | 14562→3 | `painting/fill/radial-gradient-on-text` | FIXED (un-gated) | gradient fill now resolved vs text bbox | (b) bbox paint | done |
@@ -264,6 +279,10 @@ byte-identical between backends — no extraction needed. After the audit the le
 text + 37 G2 + 177 edge-floor = 228 (only the skip *reason* changed for the 5 moved).
 
 **Paint(b) fix (2026-05-26).** 3 paint tests un-gated (now pass ≤100), 3 moved text→edge-floor.
-**Gate ledger now: 8 text + 37 G2 + 180 edge-floor = 225** (3 fewer total; all green). The 8
-remaining STRUCTURAL text gates are the baseline-shift cluster (B1–B6) + per-char dy/rotate
-(B7/B8) — the targets for the baseline-shift/dy-rotate consume increment.
+Gate ledger then: 8 text + 37 G2 + 180 edge-floor = 225.
+
+**Baseline-shift fix (2026-05-26).** B1–B6 fixed (shared-layout `ancestorBaselineShifts`
+accumulation, cleared in TextEngine); all 6 moved text→edge-floor (render correctly, edge
+fringe). No full un-gates (they're ~700px, not ≤100), so total holds. **Gate ledger now:
+2 text + 37 G2 + 186 edge-floor = 225** (all green). The 2 remaining STRUCTURAL text gates
+are B7/B8 (per-char dy/rotate consume) — the target for the next increment.

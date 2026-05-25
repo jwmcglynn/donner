@@ -604,6 +604,44 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
   }
 }
 
+void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& expected,
+                            std::string_view label) {
+  if (actual.dimensions != expected.dimensions || actual.rowBytes != expected.rowBytes ||
+      actual.pixels.size() != expected.pixels.size()) {
+    ADD_FAILURE() << label << ": bitmap size mismatch (actual " << actual.dimensions.x << "x"
+                  << actual.dimensions.y << " vs expected " << expected.dimensions.x << "x"
+                  << expected.dimensions.y << ")";
+    return;
+  }
+
+  const int width = actual.dimensions.x;
+  const int height = actual.dimensions.y;
+  const size_t strideInPixels = actual.rowBytes / 4u;
+
+  std::vector<uint8_t> diffImage(strideInPixels * static_cast<size_t>(height) * 4u);
+  pixelmatch::Options options;
+  options.threshold = 0.0f;
+  options.includeAA = true;  // strict identity — count every differing pixel
+  const int mismatched = pixelmatch::pixelmatch(expected.pixels, actual.pixels, diffImage, width,
+                                                height, strideInPixels, options);
+  if (mismatched == 0) {
+    std::cout << "[" << label << "] PASS bitmap identity (0 px differ)\n";
+    return;
+  }
+
+  const std::filesystem::path outDir = parityOutputDir();
+  const std::string flat = escapeFilename(std::string(label));
+  RendererImageIO::writeRgbaPixelsToPngFile((outDir / ("actual_" + flat + ".png")).string().c_str(),
+                                            actual.pixels, width, height, strideInPixels);
+  RendererImageIO::writeRgbaPixelsToPngFile(
+      (outDir / ("expected_" + flat + ".png")).string().c_str(), expected.pixels, width, height,
+      strideInPixels);
+  RendererImageIO::writeRgbaPixelsToPngFile((outDir / ("diff_" + flat + ".png")).string().c_str(),
+                                            diffImage, width, height, strideInPixels);
+  ADD_FAILURE() << label << ": " << mismatched << " pixels differ (expected identical). Diff: "
+                << (outDir / ("diff_" + flat + ".png")).string();
+}
+
 std::string RenderTerminalComparisonGridForTesting(const TerminalImageView& actual,
                                                    const TerminalImageView& expected,
                                                    const TerminalImageView& diff,
