@@ -512,3 +512,56 @@ samples). This (a) matches tiny's 4×4 grid distribution, (b) composes correctly
 rendering — no folded-alpha band-seam bug from §9 Finding B), (c) works on every adapter. Cost:
 ~16× fragment + 16× intermediate memory — exactly what the perf gate must weigh. Check true
 MSAA sampleCount support first; fall back to supersample if 16× MSAA is unavailable.
+
+---
+
+## 12. 16× sampling NO-GO (2026-05-25) — the edge floor is sub-perceptual, not sampling
+
+The §11 16×-sampling path was built and measured. **NO-GO for text** (the bulk of the edge
+floor), with the most decisive evidence of the whole effort:
+
+**MSAA sampleCount=16 is unsupported** — wgpu-native on Metal (M4 Pro) and llvmpipe both cap at
+4 (`"device supports [1,2,4]"`; WebGPU guarantees only {1,4}). So 16× can only be reached by
+**supersample** (render to a kSS×-larger target + box-downsample). Implemented: kSS=2 → 16
+effective samples, kSS=4 → 64 effective.
+
+**Blocker 1 — text parity is sample-INDEPENDENT (the gate fails for the right reason):**
+
+| test | baseline 4× | 16 eff (kSS=2) | 64 eff (kSS=4) |
+|---|--:|--:|--:|
+| text/text/simple-case | 708 | 295 | **293** |
+| text/text/rotate | 652 | 287 | **287** |
+| shapes/circle/simple-case | ~18 | 1 | **0** |
+| shapes/line/no-y1-coordinate | 107 | — | **8** |
+
+16 and 64 effective samples give **identical** text px (~290) — quantization would be crushed by
+64×, so the residual is **algorithm-level**, proven by diff PNG:
+- **glyph edges (~900 px):** geode 96 vs tiny 103 at the 1px AA fringe = **7/255 (2.7%)**, mean
+  signed bias ≈ −1 (symmetric, not a positional shift). The inherent geode-coverage-vs-tiny-
+  scan-converter delta, sitting *just over* the 0.02 threshold (5.1/255). Sample-independent.
+- **horizontal crosshair (~728 px):** the 0.5px reference line — tiny distributes it asymmetrically
+  across rows (128/192), geode's symmetric downsample gives 160/160. A geometric line-placement
+  difference. (Vertical crosshair is perfect — the H-ray resolves it analytically.)
+
+§9 Finding A held for **shapes** (filled regions → 0–8 px at 16×) but **not for text**: glyph
+edges + the thin crosshair are not grid-matchable to ≤100.
+
+**Blocker 2 — full supersample is a pervasive rewrite.** The POC supersamples only the main pass;
+offscreen targets (filter/layer/mask/pattern/image) stay 1×, so a full-suite sweep at kSS=4 gave
+**0 flips / 200 regressions** (filters at 200k+ px — offscreen content composites at 1× into the
+kSS× target). Correctness needs kSS× on every offscreen target + every blit/scissor/clip-rect
+coordinate across RendererGeode — large and invasive — and Blocker 1 means it still wouldn't fix
+text.
+
+**Conclusion (all four attempts — dual-ray, single-axis SS, MSAA-16, render-SS):** geode's
+coverage matches tiny to **~2.7% per edge pixel**; the edge-floor gates exceed 100 px purely from
+that sub-perceptual delta accumulating over long perimeters + the harness 0.5px crosshair. **None
+of it is fixable by more/better samples.** Perf for the record: kSS=2 ≈ 4× fill cost, kSS=4 ≈ 16×
+— moot for text given Blocker 1.
+
+Remaining real options: **(1) accept the edge floor** (it is the characterized, sub-perceptual
+geode-vs-tiny rasterizer delta — not a bug, not sampling); **(2)** reimplement geode's coverage to
+bit-match tiny's scan-converter (huge, defeats the GPU-native design, uncertain); **(3)**
+shapes-only supersample (helps shapes, full offscreen rewrite + 4× perf, text stays gated — not
+worth it). PerfBot was not engaged: the parity gate failed first (text sample-independent), so the
+perf question is moot.
