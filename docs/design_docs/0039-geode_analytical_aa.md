@@ -411,3 +411,54 @@ drop is orthogonal); exclude the harness crosshair from the parity diff (= maski
 supersampling get the crosshair AND glyphs ≤100 with no regressions on ~6 representative
 tests?) BEFORE a full rollout — two reverts earned a validation gate. Vertical bands
 (encoder step 2) are NOT needed for direction 1 and are shelved.
+
+---
+
+## 9. Revision 2 (2026-05-25) — §6 supersampling NO-GO; the premise itself is wrong
+
+The single-axis supersampling POC (one H-ray + N perpendicular sub-samples, no vertical
+bands) was built and swept. **NO-GO**, and it reframes the whole effort. Two decisive findings:
+
+### Finding A — tiny-skia is finite-sample (~4×4=16), not analytically smooth
+Single-axis supersampling on `text/text/simple-case`: **N=4 → 15px, N=8 → 411px, N=16 → 411px.**
+A converging average cannot get *worse* with more samples. So tiny-skia's coverage is **a
+specific finite sample pattern** (~16-sample), and N=4 coincidentally aligned with it — not an
+analytical limit. **This invalidates the project's premise.** "Analytical coverage" computes
+the smooth (∞-sample) limit, which *by construction* differs from tiny's 16-level quantization
+by more than the 0.02 parity threshold (1/16 = 0.0625 > 0.02). You cannot match a finite-sample
+reference with an analytical method. The real parity target is **tiny's sample count/pattern**,
+not Slug's analytical coverage.
+
+### Finding B — folded-alpha coverage doesn't compose across band seams (the N-independent wall)
+~168–182 tests regress at *every* N, identically. Root cause (diff-localized on
+`structure/use/simple-case`): a pixel straddling a 32px band boundary is shaded by one fragment
+per band; each writes coverage ≈0.5 into alpha; premultiplied source-over composes them as
+`0.5 + 0.5·(1−0.5) = 0.75` (195) instead of 1.0 (255). The 4× MSAA path is correct because
+`@builtin(sample_mask)` writes are **hardware-additive per-sample** (each sample written exactly
+once, no double-composition). **Any folded-alpha scheme loses that additivity at band seams** —
+this killed dual-ray (vertical-band seams) and supersampling (horizontal-band seams) alike.
+
+### Unifying conclusion
+Every analytical-fold attempt (dual-ray, supersampling) hit the same root: **moving coverage
+out of `sample_mask` into folded alpha breaks cross-band composition.** The `sample_mask` MSAA
+path is correct by construction; folded analytical coverage needs non-overlapping per-pixel band
+ownership to be correct, which neither approach provides.
+
+### The reframed options (analytical-AA-to-match-Slug is abandoned)
+1. **Raise geode MSAA 4×→16× in the `sample_mask` path.** Keeps hardware-additive composition
+   (no seam bug) AND matches tiny's ~16-sample quantization (Finding A) — the actual parity
+   target. Cost: ~4× the MSAA rasterization the 0017 perf decision deliberately avoided. Needs
+   verification that geode's sample *positions* match tiny's closely enough (the N=4 alignment
+   suggests positions matter). This is **not** the "no sample-count-bump shortcut" that was
+   earlier banned — that ban assumed tiny was analytical; the data now shows matching tiny's
+   sample count IS the correct target.
+2. **Accept the edge floor.** The 191 edge-floor gates are cases where geode renders *correctly*;
+   the diff is a deliberate 4×-vs-16× sample-count difference. Keep them gated/documented as the
+   0017 perf tradeoff; stop chasing pixel-identity on coverage.
+3. **Non-overlapping band ownership** (full-height band quads, or single-band encoding for small
+   paths) to make folded analytical coverage compose correctly — re-enables the 1-sample perf
+   dream, but is the hardest path and still wouldn't match tiny's finite quantization (Finding A),
+   so it trades parity for perf, not for parity.
+
+Given Finding A, options 1 and 2 are the only ones that actually reach parity; the analytical
+dream (option 3 / the original plan) cannot match a finite-sample reference. Decision pending.
