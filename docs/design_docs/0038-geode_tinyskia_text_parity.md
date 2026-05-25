@@ -134,3 +134,58 @@ catalog), *then* do the hoist as its own refactor — each catalogued divergence
 regression test that must stay green through the hoist. Do the hoist in-place (modify both
 `drawText`s to call the shared builder incrementally), not as a parallel new path
 (CLAUDE.md: no dead code, refactor in-place).
+
+## Concrete increment plan (refined 2026-05-25)
+
+**Invariant for every increment: tiny-skia text output stays byte-identical.** The shared
+layer encodes tiny-skia's *current* behavior (the parity reference). tiny adopts each slice
+at zero change; geode converges to it in a later step, which is when the `kGenuineText`
+parity gates flip. Verify byte-identity after each tiny-adopting step against `:resvg_test_suite`
+(default + max) text tests and `:renderer_tests`.
+
+Key facts that shape the order (confirmed in code):
+- Both backends already share the **same** `runs` (`ComputedTextGeometryComponent` cache)
+  and `toTextLayoutParams`, so `glyph.{xPosition,yPosition,rotateDegrees,stretchScale,
+  fontSizeScale}` are **identical** between backends. The 19 divergences are therefore in
+  how each backend **consumes** those values (placement transform, paint resolution,
+  decoration geometry, per-run font-size/scale) — exactly what the builder consolidates.
+- The two backends' free-function `transformPath(Path, Transform2d)` are byte-identical
+  duplicates; the placement slice also removes that duplication.
+
+**Increment order (each lands green on its own):**
+
+1. **Placement geometry (a) — `PlacedTextGeometry` / `placedGlyphOutline`.** A shared
+   pure-geometry helper (lib code, no backend/paint types): given `TextEngine`, a run's
+   `FontHandle`+`scale`, and a `TextGlyph`, return the placed outline `Path` encoding
+   tiny-skia's exact sequence: `glyphOutline(font, idx, scale*fontSizeScale)` → stretch on
+   the **raw outline** (`Scale(stretchX,stretchY)`) → `Rotate(rotateDegrees) * Translate(x,y)`.
+   Also provide the shared `transformPath`. **tiny adopts** (replaces its inline placement);
+   geode untouched. *Subsumes on geode-adopt:* D4 (stretch+rotate order) and is the
+   foundation for the per-char dy/rotate cases (B7/B8 placement half) and baseline-shift
+   (B1–B6, whose glyph y already carries the shift — the consume path is what differs).
+   **← THIS INCREMENT.**
+2. **Per-run scale + font-size resolution (d).** Hoist `spanFontSizePx` / `scale` /
+   `scaleForPixelHeight` / em-scale derivation into the builder (it's re-derived per backend
+   today). tiny adopts; geode converges. *Subsumes on geode-adopt:* B10 (named font-size).
+3. **Paint resolution (b) — `resolveSpanFill` / stroke / opacity / bbox.** The builder
+   resolves each run's fill (solid/gradient/pattern), stroke, and the `objectBoundingBox`
+   text bbox into backend-agnostic descriptors (color + a paint-server handle + bbox), so
+   both backends map the *same* resolved paint to their own shader/pipeline. *Subsumes:*
+   B11/B12/B15/B17/B18 (per-span / text-bbox paint), B16/B19 (pattern on text), and the
+   137-fill premultiply only insofar as inputs match (the rounding itself is rasterizer-side,
+   0021 G5).
+4. **Decoration geometry (c).** Hoist underline/overline/line-through rect derivation +
+   its paint inheritance into the builder. *Subsumes:* B9 (decoration drift), B7/B8
+   decoration half.
+5. **textPath + baseline-shift consume paths.** Whatever placement nuance remains for
+   `textPath` advance (B13) and baseline-shift nesting (B1–B6) once (a)+(d) are shared.
+6. **Collapse both `drawText`s to thin op consumers.** Final state: each backend loops the
+   builder's glyph/decoration ops calling `fillPath`/`fillPathPattern`/`strokeToFill`. Drop
+   the subsumed `kGenuineText` entries from `resvg_test_suite.cc` and mark ✅ here, verifying
+   each parity gate flips green.
+
+**Increment 1 detail (this PR):** introduce `donner/svg/renderer/PlacedTextGeometry.{h,cc}`
+(lib target) with `transformPath` + `placedGlyphOutline`; `RendererTinySkia::drawText` calls
+`placedGlyphOutline` instead of its inline outline→stretch→translate→rotate block, and uses
+the shared `transformPath`. Zero behavior change (it's the same sequence factored out).
+Geode is **not** touched. Proof = tiny text goldens byte-identical.

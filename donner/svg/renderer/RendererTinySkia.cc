@@ -24,6 +24,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
@@ -160,33 +161,8 @@ tiny_skia::Path toTinyPath(const Path& spline) {
   return builder.finish().value_or(tiny_skia::Path());
 }
 
-Path transformPath(const Path& spline, const Transform2d& transform) {
-  PathBuilder builder;
-  const auto points = spline.points();
-
-  for (const Path::Command& command : spline.commands()) {
-    switch (command.verb) {
-      case Path::Verb::MoveTo:
-        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
-        break;
-      case Path::Verb::LineTo:
-        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
-        break;
-      case Path::Verb::QuadTo:
-        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]));
-        break;
-      case Path::Verb::CurveTo:
-        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
-                        transform.transformPosition(points[command.pointIndex + 1]),
-                        transform.transformPosition(points[command.pointIndex + 2]));
-        break;
-      case Path::Verb::ClosePath: builder.closePath(); break;
-    }
-  }
-
-  return builder.build();
-}
+// `transformPath` now lives in the shared (text-gated) PlacedTextGeometry header
+// so both backends share one definition; see docs/design_docs/0038.
 
 inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
   if (!numbersArePercent) {
@@ -1581,14 +1557,14 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         continue;  // .notdef glyph, skip.
       }
 
+      // Placed outline in document space (outline -> stretch -> translate ->
+      // rotate). Shared with RendererGeode via PlacedTextGeometry so the two
+      // backends can't drift on placement (0038). Empty for bitmap-only fonts
+      // / outline-less glyphs, which fall through to the bitmap branch below
+      // exactly as before.
       Path glyphPath;
       if (!isBitmapFont) {
-        glyphPath =
-            textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
-        if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPath(glyphPath,
-                                    Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
-        }
+        glyphPath = placedGlyphOutline(textEngine, run.font, glyph, scale);
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
@@ -1639,17 +1615,10 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         continue;
       }
 
-      // Place glyph geometry in document space, then let the renderer's current transform map it
-      // to device space. This avoids relying on composed affine semantics that differ from
-      // TinySkia's.
-      Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-      if (glyph.rotateDegrees != 0.0) {
-        glyphFromLocal =
-            Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-            glyphFromLocal;
-      }
-
-      const tiny_skia::Path tinyPath = toTinyPath(transformPath(glyphPath, glyphFromLocal));
+      // `glyphPath` is already placed in document space (translate/rotate baked
+      // in by placedGlyphOutline); the renderer's current transform maps it to
+      // device space below.
+      const tiny_skia::Path tinyPath = toTinyPath(glyphPath);
       auto pixmapView = currentPixmapView();
 
       // Fill.
