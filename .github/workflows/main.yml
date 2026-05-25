@@ -283,27 +283,14 @@ jobs:
       - name: Test
         shell: bash
         run: |
-          set -uo pipefail
+          set -euo pipefail
           TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
             echo "//..."
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          set +e
-          bazelisk test --config=ci --test_output=errors $TARGETS
-          rc=$?
-          set -e
-          if [ "$rc" != "0" ]; then
-            tl=$(bazelisk info bazel-testlogs 2>/dev/null)
-            echo "=== [diag] bazel-testlogs=$tl ==="
-            for log in "$tl"/donner/svg/renderer/tests/resvg_test_suite_geode/test.log \
-                       "$tl"/donner/svg/renderer/tests/resvg_test_suite_geode/shard_*/test.log \
-                       "$tl"/donner/svg/renderer/tests/resvg_test_suite_geode/attempt_*.log; do
-              [ -f "$log" ] && { echo "--- [diag] $log (tail 140) ---"; tail -140 "$log"; }
-            done
-            echo "=== [diag] end ==="
-          fi
-          exit $rc
+          bazelisk test --config=ci --test_output=errors \
+            $TARGETS
 
 
   macos:

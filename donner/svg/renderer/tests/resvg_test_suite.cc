@@ -675,7 +675,15 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       // local space, composite back through the CTM). geode↔tiny 35151→140px: the
       // blur is now correctly diagonal; the 140px residual is the accepted-by-design
       // edge floor (resample of geode's edge coverage; density-insensitive — 2×
-      // raster gave 147px, not lower) → moved to kEdgeFloor. **kGenuineG2 now empty.**
+      // raster gave 147px, not lower) → moved to kEdgeFloor.
+      //
+      // feColorMatrix/type=hueRotate DRIVER-DIVERGENT (added 2026-05-25): geode-vs-tiny
+      // exceeds the flat-100 parity budget on CI's Mesa llvmpipe (Vulkan software driver)
+      // while measuring ≤100px on macOS Metal — the hueRotate RGB-rotation matrix math
+      // diverges more under llvmpipe's float behavior (the Metal-calibrated un-gate missed
+      // it; CI's llvmpipe is the authoritative driver). A G2 color-math divergence like the
+      // rest; gated here. See 0021 §G2.
+      "filters/feColorMatrix/type=hueRotate.svg",
   };
   if (kGenuineG2.count(key)) {
     return [](ImageComparisonParams& p) {

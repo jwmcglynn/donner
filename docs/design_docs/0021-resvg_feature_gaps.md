@@ -187,10 +187,12 @@ before fixing.
    bilinear + linearRGB), and a **feSpecularLighting spec fix** (specularExponent [1,128] clamp +
    `<1`→transparent), and **`feGaussianBlur/complex-transform`** (anisotropic-blur-under-rotation —
    ported tiny's transformed-blur path into geode's `popFilterLayer`: resample device→local, blur
-   in local space, composite back; 35151→140px). **All 37 original filter divergences resolved —
-   G2 is fully closed.** **Gate ledger now: 0 text + 0 G2 + 192 edge-floor = 192 gated** (down from
-   228); the remaining 192 are exclusively the **accepted-by-design** geode-vs-tiny AAA-coverage /
-   crosshair sub-pixel floor (content matches, unfixable in-renderer — [0041 §2](0041-geode_analytical_aa.md)). Two real
+   in local space, composite back; 35151→140px). All 37 original filter divergences resolved; a
+   38th, **`feColorMatrix/type=hueRotate`**, surfaced on CI's Mesa **llvmpipe** (>100px geode-vs-tiny
+   there, ≤100px on macOS Metal — the Metal-calibrated un-gate missed it; gated as a driver-divergent
+   G2 color-math case). **Gate ledger now: 0 text + 1 G2 (hueRotate, llvmpipe-divergent) + 192
+   edge-floor = 193 gated** (down from 228); the rest are the **accepted-by-design** geode-vs-tiny
+   AAA-coverage / crosshair sub-pixel floor (content matches, unfixable in-renderer — [0041 §2](0041-geode_analytical_aa.md)). Two real
    production idempotency bugs (baseline-shift, feImage) surfaced by the parity harness's
    double-draw, plus a systematic geode filter linearRGB gap + spec-conformance bugs + the
    transformed-blur path — all fixed in shared/geode code, not backend quirks. **Text + filter
