@@ -1460,7 +1460,23 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic,
                               sourceAlpha ? &*sourceAlpha : nullptr);
       }
-      outputTex = applyComposite(arena, inputTex, in2Tex, *composite);
+      // Per SVG spec, feComposite operates in the filter's color-interpolation-
+      // filters space (linearRGB by default). The arithmetic operator in
+      // particular evaluates k1..k4 against the channel values, so the result
+      // depends on whether those are sRGB or linear. Match tiny-skia by wrapping
+      // the composite with sRGB↔linear conversion when the node resolves to
+      // linearRGB.
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
+      if (nodeLinearRGB) {
+        wgpu::Texture linearIn1 = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture linearIn2 = applyColorSpaceConversion(arena, in2Tex, /*srgbToLinear=*/true);
+        wgpu::Texture linearOutput = applyComposite(arena, linearIn1, linearIn2, *composite);
+        outputTex = applyColorSpaceConversion(arena, linearOutput, /*srgbToLinear=*/false);
+      } else {
+        outputTex = applyComposite(arena, inputTex, in2Tex, *composite);
+      }
     } else if (const auto* blend = std::get_if<filter_primitive::Blend>(&node.primitive)) {
       // Resolve second input (in2/backdrop).
       wgpu::Texture in2Tex = inputTex;
@@ -1487,7 +1503,22 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       const int ry = static_cast<int>(std::round(toPixelY(morph->radiusY)));
       outputTex = applyMorphology(arena, inputTex, *morph, rx, ry);
     } else if (const auto* ct = std::get_if<filter_primitive::ComponentTransfer>(&node.primitive)) {
-      outputTex = applyComponentTransfer(arena, inputTex, *ct);
+      // Per SVG spec, feComponentTransfer operates in the filter's color-
+      // interpolation-filters space (linearRGB by default). The per-channel
+      // transfer functions evaluate against the channel values, so the result
+      // depends on whether those are sRGB or linear. Match tiny-skia by wrapping
+      // the transfer with sRGB↔linear conversion when the node resolves to
+      // linearRGB.
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
+      if (nodeLinearRGB) {
+        wgpu::Texture linearInput = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture transferOutput = applyComponentTransfer(arena, linearInput, *ct);
+        outputTex = applyColorSpaceConversion(arena, transferOutput, /*srgbToLinear=*/false);
+      } else {
+        outputTex = applyComponentTransfer(arena, inputTex, *ct);
+      }
     } else if (const auto* conv = std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
       outputTex = applyConvolveMatrix(arena, inputTex, *conv);
     } else if (const auto* turb = std::get_if<filter_primitive::Turbulence>(&node.primitive)) {

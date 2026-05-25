@@ -177,6 +177,12 @@ before fixing.
    Whole-suite parity: **1035 pass / 228 gated** (text 86/159, non-text 949/69). The ~137
    sub-visual premultiply fills pass at 0.02 → [G5](#g5-audit-the-aa-justified-geode-thresholds).
 
+   **Progress since landing (2026-05-24, see [0038](0038-geode_tinyskia_text_parity.md)):** the
+   text hoist resolved **all structural text divergences** (`kGenuineText` empty — gradient/
+   pattern-on-text + a shared-layout baseline-shift idempotency bug fixed, rest render-correct
+   edge-floor), and a G2 **linearRGB fix** for feComposite + feComponentTransfer cleared 8 filter
+   tests. **Gate ledger now: 0 text + 29 G2 filter + 188 edge-floor = 217 gated** (down from 228).
+
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 
 Concentrated, well-scoped shader/kernel bugs (file:line into

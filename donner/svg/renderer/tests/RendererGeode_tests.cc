@@ -1561,14 +1561,21 @@ TEST_F(RendererGeodeTest, FilterCompositeOverDefault) {
   RendererBitmap snap = renderer.takeSnapshot();
   ASSERT_FALSE(snap.empty());
 
-  // in1 = blue 50% premul (0,0,128,128), in2 = red opaque (255,0,0,255).
-  // over: result = in1 + in2 * (1 - in1.a) = (0,0,128,128) + (255,0,0,255)*(1 - 0.502)
-  //     ≈ (0,0,128,128) + (127,0,0,127) = (127,0,128,255).
-  // Straight: R≈127, G=0, B≈128, A=255.
+  // feComposite operates in linearRGB by default (the `color-interpolation-
+  // filters` property), matching tiny-skia and the SVG spec. With pure blue
+  // (B=1.0) and red (R=1.0) the sRGB→linear conversion is the identity on the
+  // active channels, but the `over` blend mixes red's R into the 50%-alpha
+  // backdrop region, so the result is computed in linear light:
+  //   in1 = blue 50% linear-premul (0,0,0.502,0.502),
+  //   in2 = red opaque linear-premul (1.0,0,0,1.0).
+  //   over = in1 + in2*(1 - in1.a) = (0.498, 0, 0.502, 1.0) linear.
+  //   linear→sRGB: 0.498 → ~0.735 → 187, 0.502 → ~0.738 → 188.
+  // (Running this `over` in sRGB instead would give the wrong (127,0,128) — the
+  // pre-linearRGB-fix behavior. See GeodeFilterEngine::execute feComposite wrap.)
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 127u, 4u) << "Composite-over R";
+  EXPECT_NEAR(center[0], 187u, 4u) << "Composite-over R (linearRGB)";
   EXPECT_EQ(center[1], 0u) << "Composite-over G";
-  EXPECT_NEAR(center[2], 128u, 4u) << "Composite-over B";
+  EXPECT_NEAR(center[2], 188u, 4u) << "Composite-over B (linearRGB)";
   EXPECT_NEAR(center[3], 255u, 1u) << "Composite-over A";
 }
 

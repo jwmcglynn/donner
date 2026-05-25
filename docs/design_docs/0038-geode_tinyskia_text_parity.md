@@ -293,7 +293,16 @@ fringe). No full un-gates (they're ~700px, not ≤100), so total holds. Gate led
 render-correct edge-floor, not structural (glyph interiors zero-diff; residual is 4× fringe on
 the gray stroke-ring + gradient — the plain-black siblings `dy-list-1`/`rotate-list-3` are
 already accepted edge-floor, proving dy/rotate are consumed correctly; double-draw ruled out,
-tiny-twice = 0px). Moved text→edge-floor. **Gate ledger now: 0 text + 37 G2 + 188 edge-floor
-= 225** (all green). **All originally-structural text divergences are resolved — `kGenuineText`
-is empty.** Remaining parity gaps: 37 filter (→ G2) + 188 edge-floor (→ finer geode AA) +
+tiny-twice = 0px). Moved text→edge-floor. Gate ledger then: 0 text + 37 G2 + 188 edge-floor
+= 225 (all green). **All originally-structural text divergences are resolved — `kGenuineText`
+is empty.**
+
+**G2 color-math fix (2026-05-24).** Geode ran feComposite + feComponentTransfer in sRGB, but
+the SVG default `color-interpolation-filters` is linearRGB (which tiny honors + GeodeFilterEngine
+already applied to feGaussianBlur/feColorMatrix/feBlend, just not these two). Wrapping them in the
+sRGB↔linear conversion cleared **8 of the 9 color-math tests to exactly 0px** (4 feComposite-
+arithmetic + 4 feComponentTransfer, un-gated); feColorMatrix non-normalized stays (distinct
+edge-coverage root). Also corrected a unit test (`FilterCompositeOverDefault`) that encoded the
+sRGB bug. **Gate ledger now: 0 text + 29 G2 + 188 edge-floor = 217.** Remaining parity gaps:
+29 filter (→ G2) + 188 edge-floor (→ finer geode AA) +
 the 137 sub-visual premultiply fills (→ G5, pass at 0.02). The hoist's text goal is achieved.

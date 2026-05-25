@@ -589,15 +589,20 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
 
   // ── GENUINE: filter color/algorithm divergences (0021 §G2) ─────────────────
   static const std::set<std::string_view> kGenuineG2 = {
+      // feComposite-arithmetic + feComponentTransfer (8) un-gated 2026-05-27:
+      // root cause was geode running these two primitives in sRGB while tiny-skia
+      // runs them in linearRGB (the `color-interpolation-filters` default). Fixed
+      // by wrapping both with the existing sRGB↔linear conversion in
+      // GeodeFilterEngine::execute (same as feGaussianBlur/feColorMatrix/feBlend);
+      // both now pass geode-vs-tiny parity at 0px. See 0021 §G2.
+      //
+      // feColorMatrix/non-normalized-values stays gated — a DIFFERENT root than
+      // the color-math cluster. feColorMatrix already runs in linearRGB; its
+      // residual ~2786px is a thin vertical band at the rect's anti-aliased left
+      // edge where partial coverage (alpha ~85-91) is amplified by the extreme
+      // matrix coefficients (50, -100). Edge-coverage interaction, not a color-
+      // space bug. See 0021 §G2.
       "filters/feColorMatrix/type=matrix-with-non-normalized-values.svg",
-      "filters/feComponentTransfer/type=linear-on-blue.svg",
-      "filters/feComponentTransfer/type=table-and-tableValues=1-0-1.svg",
-      "filters/feComponentTransfer/type=table-on-blue-twice.svg",
-      "filters/feComponentTransfer/type=table-on-blue.svg",
-      "filters/feComposite/operator=arithmetic-with-large-k1-4.svg",
-      "filters/feComposite/operator=arithmetic-with-opacity.svg",
-      "filters/feComposite/operator=arithmetic-with-some-k1-4.svg",
-      "filters/feComposite/operator=arithmetic.svg",
       "filters/feConvolveMatrix/custom-divisor.svg",
       "filters/feDiffuseLighting/linearRGB-color-interpolation.svg",
       "filters/feGaussianBlur/complex-transform.svg",
