@@ -1,357 +1,295 @@
-# 0038 — Geode ↔ tiny-skia text parity: divergence catalog + hoist-shared-drawText proposal
+# 0038 — Geode ↔ tiny-skia text parity: developer reference
 
-**Status:** living catalog (opened 2026-05-24). Accumulates every geode↔tiny-skia text
-divergence found during the [Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
-parity push, then proposes the structural fix. The backend matrix + whole-suite parity
-landed green (flat-100 policy); the catalog below is the complete set of text divergences
-the parity run surfaced (19 text/text-on-shape), each parity-gated with a 0038 reason.
-**Postmortem + hoist proposal to be executed after the genuine bugs are root-caused.**
+**Status:** Developer reference. Text parity between the Geode and tiny-skia
+backends is **complete** — 0 structural divergences remain; the only residual
+geode↔tiny diff is the accepted sub-pixel coverage floor ([0039](0039-geode_analytical_aa.md)).
+This doc describes the shared text layer both backends consume, how the per-test
+parity gate works, and the resolved divergence catalog (kept as implementation
+notes). The blow-by-blow investigation is condensed into the appendix.
 
-## Thesis
+**Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
+[0039 anti-aliasing](0039-geode_analytical_aa.md),
+[0040 Slug implementation](0040-geode_slug_conformance.md),
+[0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)
 
-`RendererGeode::drawText` and `RendererTinySkia::drawText` are **two parallel
-reimplementations of the same logic**. Each independently re-derives:
+---
 
-- **(a) per-glyph placement transform** — translate / rotate / stretch order, plus
-  per-character `dy` / `rotate` lists and `textPath` advancement;
-- **(b) span paint resolution** — fill / stroke / opacity, solid vs gradient vs pattern,
-  default-fill black, `currentColor`, `objectBoundingBox`-via-text-bbox;
-- **(c) decoration geometry** — underline / overline / line-through rects from font
-  metrics, and their paint (which inherits the span paint);
-- **(d) font-size resolution** — named values (`xx-small`…), percent, negative sizes.
+## 1. How text flows through both backends
 
-**Every parity gap in the catalog below is a place these two re-derivations drifted.**
-Fixing them one-by-one in `RendererGeode::drawText` re-converges the two copies
-temporarily, but the copies will drift again. The durable fix is to **hoist (a)–(d) into a
-shared layer** (above both backends, below `TextEngine`) that emits backend-agnostic draw
-ops; each backend's `drawText` becomes a thin consumer. See "Hoist proposal" below.
+`RendererGeode::drawText` and `RendererTinySkia::drawText` are two backend-specific
+consumers of one **shared text layer**. Everything that determines *what* to draw —
+glyph placement, paint resolution, decoration geometry, font-size/scale — is computed
+once, above both backends and below `TextEngine`; each backend only rasterizes the
+result.
 
-## Divergence catalog
+### 1.1 Shared layout (above both backends)
 
-Legend — **Where:** the layer the divergence currently lives in. **Hoist:** does the
-durable fix belong in the proposed shared layer (Y), or is it genuinely backend-specific (N)?
+- **`ComputedTextGeometryComponent` (`runs` cache) + `toTextLayoutParams`** produce
+  per-glyph `{xPosition, yPosition, rotateDegrees, stretchScale, fontSizeScale}`.
+  These values are **identical between backends** — neither backend re-derives glyph
+  positions. A backend can only diverge in how it *consumes* these values.
+- **`spanFontSizePx` + `scaleForPixelHeight`** (per-element and per-span font-size
+  resolution, including named keywords `xx-small`…, percent, and negative sizes) are
+  computed by a byte-identical expression in both backends from the same inputs.
+- **`resolvePerSpanLayoutStyles` (TextEngine)** resolves nested baseline-shift. It
+  clears `span.ancestorBaselineShifts` before re-populating, so repeated `draw()`
+  calls on the same `ComputedTextComponent` are idempotent (see B1–B6 in §4).
 
-### Found + fixed this session (each was a geode-only re-derivation gap)
+### 1.2 Shared placement + bounds: `PlacedTextGeometry`
 
-| # | Divergence | geode (before) vs tiny | Fix commit | Where | Hoist |
-|---|---|---|---|---|---|
-| D1 | text-decoration not drawn | geode drew no underline/overline/line-through; tiny did | `d1742348c` | (c) decoration geometry | **Y** |
-| D2 | stroked-glyph ring fill rule | geode used `NonZero` (filled interior solid); ring needs `EvenOdd` | `2314efb0d` | (b)/(a) stroke→fill | **Y** |
-| D3 | pattern-fill on text | geode `drawText` had no pattern path → glyphs unfilled + staged `patternFillPaint` slot leaked to next shape | `1e2eb2b6f` | (b) paint resolution | **Y** |
-| D4 | stretch+rotate transform order | tiny: stretch-on-outline → `Rotate*Translate`; geode: `Scale*Rotate*Translate` — diverge when `stretchScale≠1` **and** `rotate≠0` | latent (no test) | (a) placement transform | **Y** |
+`donner/svg/renderer/PlacedTextGeometry.{h,cc}` is the pure-geometry layer both
+backends call (lib target, no backend/paint types):
 
-### Open — genuine text divergences (parity-gated, reason → this doc)
+- **`placedGlyphOutline(textEngine, font, glyph, …)`** (`PlacedTextGeometry.h:60`)
+  returns the placed outline `Path` for one glyph, encoding the canonical sequence:
+  `glyphOutline(font, idx, scale * fontSizeScale)` → stretch on the **raw outline**
+  (`Scale(stretchX, stretchY)`) → `Rotate(rotateDegrees) * Translate(x, y)`. Returns
+  empty for outline-less glyphs (bitmap-only fonts, `.notdef`), which each backend
+  skips. Both `drawText` paths call this instead of re-deriving the placement
+  transform.
+- **`transformPath(path, transform)`** (`PlacedTextGeometry.h:39`) — one shared
+  definition, replacing the previously-duplicated byte-identical free function in
+  each backend.
+- **`computeTextBounds(textEngine, runs, …)`** (`PlacedTextGeometry.h:83`) — the
+  text bounding box used to resolve `objectBoundingBox` gradients/patterns on text.
+  One implementation serves both backends.
 
-From the **Phase 4b whole-suite parity run** (geode↔tiny-skia at the policy metric: per-pixel
-`kDefaultThreshold` 0.02, `includeAA=false`; px = diff count). **Audited 2026-05-26** by
-eyeballing every diff PNG (geode + tiny + diff) — magnitude alone is *not* decisive
-(B10 is 3488px yet edge-floor; a baseline-shift offset is kilo-pixel AND structural).
-Classified by **where the diff lands**:
+### 1.3 Per-backend consumers (`drawText`)
 
-- **STRUCTURAL** — geode renders *wrong* (whole-glyph offset / wrong paint / missing text);
-  solid-region diff. Stays in `kGenuineText`. **0 remaining** — all originally-structural
-  text divergences are resolved: the 6 paint(b) cases + the 6 baseline-shift cases are FIXED,
-  and B7/B8 turned out render-correct edge-floor once the baseline-shift idempotency fix
-  landed. `kGenuineText` is now empty `{}`.
-- **EDGE-FLOOR (was mislabeled / fixed-to-floor)** — geode renders *correct* (right
-  glyphs/positions/colors); the diff is the thin 4× MSAA fringe, over 100px only from large
-  cumulative perimeter (many lines / long strings / tiled or on-path small text, or a gradient
-  stroke ring). Moved to `kEdgeFloor`. **5 from the audit + 3 from paint(b) + 6 baseline-shift
-  + 2 (B7/B8) = 16 text edge-floor.**
+Each backend's `drawText` loops the shared placement/bounds output and rasterizes:
 
-**✅ Paint(b) cluster FIXED (2026-05-26).** Root cause: geode `drawText` had **no gradient
-handling and incomplete pattern handling** — `resolveSpanFill`/`resolveSolidStroke` collapse
-gradient refs (→ glyphs unfilled / element gradient text rendered *nothing*), and it consumed
-only the `patternFillPaint` slot, never `patternStrokePaint`. Fix (targeted convergence,
-reusing geode's existing gradient infra — NOT a big new abstraction, since geode was *missing*
-the feature, not drifting): geode now computes the text bbox via the shared
-`computeTextBounds` (hoisted to PlacedTextGeometry), then routes gradient fill/stroke through
-`drawPaintedPathAgainst(textBbox, glyph, server, …)` and pattern stroke through the
-`patternStrokePaint` slot. **De-dup:** `RendererTinySkia::drawText` then dropped its inline
-text-bbox loop and adopted the same `computeTextBounds` — proven a pixel no-op (95-test
-tiny-vs-golden before/after diff = IDENTICAL, incl. every gradient-on-text / tspan-bbox case,
-which gradient parity passing at 1–3px had already implied). **One bbox implementation now
-serves both backends.** Results
-(geode↔tiny @0.02): fill/linear **10195→1**, fill/radial **14562→3**, stroke/pattern
-**13115→39** (all ≤100, **un-gated**); tspan-bbox-1 **1803→702**, tspan-bbox-2 **2929→694**,
-stroke/linear **11917→465** (now render correctly; residual is the 4× MSAA edge floor →
-**moved to `kEdgeFloor`**).
+- **Geode** (`RendererGeode::drawText`): routes glyph outlines through the Slug fill
+  pipeline; gradient fill/stroke through `drawPaintedPathAgainst(textBbox, …)`;
+  pattern fill/stroke through the `patternFillPaint` / `patternStrokePaint` slots;
+  decorations (underline/overline/line-through) as filled/stroked rects.
+- **tiny-skia** (`RendererTinySkia::drawText`): the same logical steps on the
+  tiny-skia rasterizer.
 
-| # | px | test | class | symptom (eyeballed) | layer | Hoist |
-|---|---|---|---|---|---|---|
-| ✅B1 | 19750→702 | `text/baseline-shift/nested-with-baseline-2` | FIXED→EDGE | nested baseline-shift now correct | (a) baseline-shift | done |
-| ✅B2 | 12886→702 | `text/baseline-shift/nested-with-baseline-1` | FIXED→EDGE | same | (a) baseline-shift | done |
-| ✅B3 | 4338→690 | `text/baseline-shift/mixed-nested` | FIXED→EDGE | same | (a) baseline-shift | done |
-| ✅B4 | 4320→720 | `text/baseline-shift/deeply-nested-super` | FIXED→EDGE | same | (a) baseline-shift | done |
-| ✅B5 | 2870→677 | `text/baseline-shift/nested-super` | FIXED→EDGE | same | (a) baseline-shift | done |
-| ✅B6 | 2438→686 | `text/baseline-shift/nested-length` | FIXED→EDGE | same | (a) baseline-shift | done |
-| ✅B7 | 4643→1177 | `text/text-decoration/underline-with-dy-list-2` | EDGE | baseline-shift fix cleared the structural part; residual ~1177px is 4× fringe on the gray stroke-ring + gradient (plain sibling `dy-list-1` is already edge-floor at 699px → dy consumed correctly) | (a) per-char dy | done |
-| ✅B8 | 4561→1145 | `text/text-decoration/underline-with-rotate-list-4` | EDGE | same; rotate consumed correctly (plain sibling `rotate-list-3` edge-floor at 686px); residual is stroke-ring + gradient fringe | (a) per-char rotate | done |
+**Invariant:** tiny-skia text output is the parity reference. Any change to the
+shared layer must keep tiny-skia byte-identical (verified against
+`:resvg_test_suite` text tests + `:renderer_tests`); Geode converges to it.
 
-**✅ Baseline-shift cluster B1–B6 FIXED (2026-05-26).** Root cause (resolved the
-increment-2 "identical positions" contradiction): the positions were **not** identical —
-nested baseline-shift is a **shared-layout state-accumulation bug**, not a geode rendering
-gap. `resolvePerSpanLayoutStyles` (TextEngine) does `span.ancestorBaselineShifts.push_back(…)`
-without ever clearing, and it runs **per `draw()`**. The parity harness draws the document
-twice (geode then tiny on the same `ComputedTextComponent`), so the 2nd backend (tiny, the
-oracle) saw **doubled** ancestor shifts. Position dump proved it: geode (1st pass)
-`y=74.4` (correct 2×20%), tiny (2nd pass) `y=61.6` (3×20% — one extra accumulated shift).
-Fix: `span.ancestorBaselineShifts.clear()` before re-populating → idempotent layout. tiny
-single-pass output unchanged (clear is a no-op on the empty default vector — verified
-byte-identical across 96 text tests, incl. all baseline-shift). All 6 now render correctly
-at the ~677–720px 4× MSAA edge floor (64px "Text") → moved to `kEdgeFloor`. The fix also
-*partly* helped B7/B8 (they have spans too) but a separate per-char dy/rotate divergence
-remains — still gated.
-| ✅B11 | 2929→694 | `text/tspan/tspan-bbox-2` | FIXED→EDGE | gradient span now resolved vs text bbox; residual = edge fringe | (b) bbox paint | done |
-| ✅B12 | 1803→702 | `text/tspan/tspan-bbox-1` | FIXED→EDGE | same | (b) bbox paint | done |
-| ✅B15 | 14562→3 | `painting/fill/radial-gradient-on-text` | FIXED (un-gated) | gradient fill now resolved vs text bbox | (b) bbox paint | done |
-| ✅B16 | 13115→39 | `painting/stroke/pattern-on-text` | FIXED (un-gated) | pattern stroke slot now consumed | (b) paint resolution | done |
-| ✅B17 | 11917→465 | `painting/stroke/linear-gradient-on-text` | FIXED→EDGE | gradient stroke now resolved; residual = stroke-ring edge fringe | (b) bbox paint | done |
-| ✅B18 | 10195→1 | `painting/fill/linear-gradient-on-text` | FIXED (un-gated) | gradient fill now resolved vs text bbox | (b) bbox paint | done |
-| ~~B9~~ | 1822 | `text/text-decoration/tspan-decoration` | EDGE | geode renders correct multi-color text + underlines; thin fringe on long small string | — | n/a |
-| ~~B10~~ | 3488 | `text/font-size/named-value` | EDGE | 11 small (size-12) lines render correct; cumulative edge fringe | — | n/a |
-| ~~B13~~ | 2219 | `text/textPath/dy-with-tiny-coordinates` | EDGE | glyphs correctly on-path; fringe + 0.5px path line | — | n/a |
-| ~~B14~~ | 932 | `text/letter-spacing/on-Arabic` | EDGE | correct glyphs/spacing; fringe + ref lines | — | n/a |
-| ~~B19~~ | 1663 | `paint-servers/pattern/text-child` | EDGE | `<pattern>` tiled with text renders correct; fringe over tiled field | — | n/a |
+---
 
-**Structural shared roots (the hoist targets):** **B1–B6** baseline-shift nesting (geode
-ignores/mis-applies nested baseline-shift — the largest, most clearly-broken cluster);
-**B11/B12/B15/B17/B18** per-span / text-bbox gradient paint resolution; **B16** pattern-on-
-text paint; **B7/B8** per-char `dy`/`rotate` list consumption. (B16 is pattern *as the text
-fill*, structural; the EDGE B19 `pattern/text-child` is a `<pattern>` *containing* text,
-which renders correctly.)
+## 2. Parity status
 
-> Surprise / contradiction to flag: B1/B2 show geode **drops an entire baseline-shifted
-> string**, and B7/B8 show whole-glyph dy/rotate offsets — yet increment-2 analysis found
-> `glyph.{x,y,rotate}` *identical* between backends (shared `runs` cache). So the baseline-
-> shift / dy-rotate divergence is **not** in the shared glyph positions — it's in a
-> per-backend consume path (decoration/second-pass placement, or geode re-deriving shift)
-> that the increment-3 (already-shared font-size/scale) finding did not cover. The
-> baseline-shift increment must locate where geode diverges despite identical layout input.
+**0 structural text divergences.** Every originally-structural text divergence is
+resolved (catalog in §4). The remaining geode↔tiny text diff is the
+accepted-by-design sub-pixel coverage floor — geode renders the correct
+glyphs/positions/colors; the residual is the thin edge band + the resvg harness
+0.5px crosshair overlay. See [0039 §2](0039-geode_analytical_aa.md) for why that
+floor is accepted and proven sample-independent.
 
-> Note: the strict-0 characterization listed `font-size/negative-size` (5588) and
-> `tspan/with-opacity` (1599) as bugs; both drop below the 100-px flat budget at 0.02 and are
-> NOT gated.
+The text portion of the parity gate ledger is empty (`kGenuineText == {}`); text
+edge-floor entries live in `kEdgeFloor` with a reason pointing at 0039.
 
-> Every STRUCTURAL divergence is a **Hoist = Y** — there is no backend-specific reason for
-> any of them to differ.
+---
 
-### Open — non-text filter divergences (parity-gated, reason → 0021 §G2)
+## 3. How the parity gate works (for text)
 
-The parity run also surfaced **37 pure-filter** geode↔tiny divergences (gated with a
-0021-G2 reason). These are NOT drawText gaps and are out of this doc's hoist scope; listed
-here only for completeness of the parity gate ledger. By theme (px = geode↔tiny at 0.02):
+Parity runs in the **geode-enabled build** of `//donner/svg/renderer/tests:resvg_test_suite`
+(it rides the `*_geode` wrapper under `bazel test //...`). Each test runs up to three
+comparison modes; text un-gates on the `GeodeTinyParity` mode. See
+[0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
+for the full mode matrix.
 
-- **feTurbulence (12)** — Perlin-noise pattern genuinely differs per pixel (different noise
-  impl); ~47k–89k px. Algorithmic parity, not a uniform offset.
-- **feImage (9)** — subregion / transform / opacity / chained placement; ~1.5k–88k.
-- **feComposite arithmetic (4)** — visibly more-saturated output vs tiny; 160k–230k.
-- **feComponentTransfer (4)** — table/linear transfer wrong output color; 160k.
-- **feMerge (2)**, **feColorMatrix (1)**, **feConvolveMatrix (1)**, **feDiffuseLighting (1)**,
-  **feSpecularLighting (1)**, **feGaussianBlur/complex-transform (1)**,
-  **filter/on-group-with-child-outside-of-canvas (1)**.
+**Policy (text and non-text alike):** pixelmatch `includeAA=false`, per-pixel
+`kDefaultThreshold` (0.02), **flat max-pixel-count = 100, no per-test thresholds.**
+A diff >100 px is gated, never absorbed by a larger budget (that would be masking).
 
-These overlap the [0021 §G2](0021-resvg_feature_gaps.md#g2-filter-primitive-correctness-16-of-23-disabled-tests)
-filter-correctness backlog; fix there, then drop the parity gates.
+**To un-gate a text test:** confirm its `GeodeTinyParity` diff measures ≤100 px,
+then remove its entry from the gate inventory (`geodeParityGate` in
+`resvg_test_suite.cc`). Un-gate only on a *measured* ≤100 px pass — never by bumping
+a threshold or sample count.
 
-### The 137 sub-visual premultiply fills (NOT gated — pass at 0.02)
+**To add a text test:** add it to the suite as usual; if its geode↔tiny diff exceeds
+100 px and it renders correctly (edge floor), add a `kEdgeFloor` entry with the 0039
+reason; if it renders *wrong*, that's a real bug — fix the shared layer or the
+backend consumer, don't gate it.
 
-At strict-0, ~137 non-text tests showed a whole-fill diff that **collapses to <100 px at
-the policy 0.02 threshold** — a uniform, sub-perceptual color/alpha offset across solid
-fills (premultiplied-alpha / color-space rounding between geode and tiny). They PASS parity
-and are not gated. Tracked as a single root-cause item in
-[0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds) (likely one premultiply/rounding fix clears most).
+> The parity oracle is tiny-skia, so a tiny-skia text regression could mask a geode
+> one. This is mitigated because the `TinyGolden` mode gates tiny-skia against the
+> resvg ground truth in the same run.
 
-## Hoist proposal (post-matrix)
+---
 
-Introduce a shared **`PlacedText`** builder in the renderer layer (consumed by both
-`RendererGeode::drawText` and `RendererTinySkia::drawText`). Given a
-`ComputedTextComponent` + `TextParams`, it produces a backend-agnostic op list:
+## 4. Resolved divergence catalog (implementation notes)
 
-- **glyph ops**: `{ placed outline Path (already transformed for translate/rotate/stretch +
-  dy/rotate lists), resolved fill (solid/gradient/pattern), fill rule, resolved stroke +
-  stroke style }`;
-- **decoration ops**: `{ rect Path, resolved fill, resolved stroke }`.
+Each entry below was a place the two backends drifted (or where Geode was missing a
+feature). All are resolved; they double as regression-relevant implementation notes.
 
-All of (a)–(d) live in the builder, computed **once**. Each backend's `drawText` collapses
-to a loop calling `fillPath` / `fillPathPattern` / `strokeToFill` — no placement math, no
-paint resolution, no decoration geometry per backend. The parity gaps above become
-structurally impossible (one implementation can't disagree with itself), and the parity
-test's job shrinks to "did the rasterizer rasterize the identical ops the same way" — i.e.
-purely the 4× MSAA edge floor.
+### 4.1 Feature gaps fixed in Geode's `drawText`
 
-**Sequencing:** land the backend matrix + parity test first (so the catalog is complete
-and we have a green parity gate to refactor under), root-cause the 9 bugs (filling in the
-catalog), *then* do the hoist as its own refactor — each catalogued divergence becomes a
-regression test that must stay green through the hoist. Do the hoist in-place (modify both
-`drawText`s to call the shared builder incrementally), not as a parallel new path
-(CLAUDE.md: no dead code, refactor in-place).
+| # | Divergence | Root cause | Fix |
+|---|---|---|---|
+| D1 | text-decoration not drawn | geode drew no underline/overline/line-through | `d1742348c` — decoration geometry |
+| D2 | stroked-glyph ring fill rule | geode used `NonZero` (solid interior); the ring needs `EvenOdd` | `2314efb0d` — stroke→fill |
+| D3 | pattern-fill on text | geode `drawText` had no pattern path → glyphs unfilled + a staged `patternFillPaint` slot leaked to the next shape | `1e2eb2b6f` — paint resolution |
+| D4 | stretch+rotate transform order | tiny applied stretch on the raw outline then `Rotate*Translate`; geode used `Scale*Rotate*Translate` — diverges only when `stretchScale≠1` **and** `rotate≠0` | structurally fixed by `placedGlyphOutline` (latent: no suite test triggers it) |
 
-## Concrete increment plan (refined 2026-05-25)
+### 4.2 Paint resolution against the text bbox
 
-**Invariant for every increment: tiny-skia text output stays byte-identical.** The shared
-layer encodes tiny-skia's *current* behavior (the parity reference). tiny adopts each slice
-at zero change; geode converges to it in a later step, which is when the `kGenuineText`
-parity gates flip. Verify byte-identity after each tiny-adopting step against `:resvg_test_suite`
-(default + max) text tests and `:renderer_tests`.
+Geode `drawText` was **missing** gradient handling and had incomplete pattern
+handling — `resolveSpanFill`/`resolveSolidStroke` collapsed gradient refs (glyphs
+unfilled / element-gradient text rendered nothing), and only the `patternFillPaint`
+slot was consumed, never `patternStrokePaint`. Fix (reusing geode's existing gradient
+infra, not a new abstraction): geode computes the text bbox via the shared
+`computeTextBounds`, routes gradient fill/stroke through `drawPaintedPathAgainst(textBbox, …)`,
+and pattern stroke through the `patternStrokePaint` slot. tiny-skia then dropped its
+inline text-bbox loop and adopted the same `computeTextBounds` (proven a pixel no-op —
+95-test before/after diff identical). **One bbox implementation now serves both
+backends.**
 
-Key facts that shape the order (confirmed in code):
-- Both backends already share the **same** `runs` (`ComputedTextGeometryComponent` cache)
-  and `toTextLayoutParams`, so `glyph.{xPosition,yPosition,rotateDegrees,stretchScale,
-  fontSizeScale}` are **identical** between backends. The 19 divergences are therefore in
-  how each backend **consumes** those values (placement transform, paint resolution,
-  decoration geometry, per-run font-size/scale) — exactly what the builder consolidates.
-- The two backends' free-function `transformPath(Path, Transform2d)` are byte-identical
-  duplicates; the placement slice also removes that duplication.
+| # | test | geode↔tiny px (before → after) | outcome |
+|---|---|---|---|
+| B15 | `painting/fill/radial-gradient-on-text` | 14562 → 3 | un-gated |
+| B16 | `painting/stroke/pattern-on-text` | 13115 → 39 | un-gated |
+| B18 | `painting/fill/linear-gradient-on-text` | 10195 → 1 | un-gated |
+| B17 | `painting/stroke/linear-gradient-on-text` | 11917 → 465 | edge-floor |
+| B11 | `text/tspan/tspan-bbox-2` | 2929 → 694 | edge-floor |
+| B12 | `text/tspan/tspan-bbox-1` | 1803 → 702 | edge-floor |
 
-**Increment order (each lands green on its own):**
+(B19 `paint-servers/pattern/text-child` is a `<pattern>` *containing* text — already
+rendered correctly, edge-floor — distinct from B16 which is a pattern *as the text
+fill*.)
 
-1. ✅ **Placement geometry (a) — `PlacedTextGeometry` / `placedGlyphOutline`** (`f06f717f8`).
-   Shared pure-geometry helper (lib code, no backend/paint types): given `TextEngine`, a
-   run's `FontHandle`+`scale`, and a `TextGlyph`, returns the placed outline `Path` encoding
-   tiny-skia's exact sequence: `glyphOutline(font, idx, scale*fontSizeScale)` → stretch on
-   the **raw outline** (`Scale(stretchX,stretchY)`) → `Rotate(rotateDegrees) * Translate(x,y)`.
-   Also provides the shared `transformPath`. tiny adopted at zero behavior change (goldens
-   byte-identical); geode untouched in that step.
-2. ✅ **Geode adopts placement** (increment 2). `RendererGeode::drawText` calls
-   `placedGlyphOutline` + shared `transformPath`; geode's duplicate `transformPath` removed.
-   **Outcome: this fixes D4 structurally but flips ZERO parity gates** — measured (gates
-   bypassed) every gated test's geode↔tiny px is *unchanged* (whole-suite parity stays
-   1035/228, GeodeGolden stays 1046, all green). **Finding: D4 is purely latent** — no test
-   in the suite has simultaneous `stretchScale≠1` *and* `rotateDegrees≠0`, so the
-   order-of-operations fix changes no pixels. The placement transform is *not* the cause of
-   any of the 19 text divergences; their glyph `{x,y,rotate,stretch}` are identical between
-   backends (shared `runs` cache), so the divergence is in the *other* consume paths (per-run
-   scale/font-size, paint resolution, decoration, baseline-shift consumption) — increments
-   3–5. Increment 2 is still the right structural step (de-dups `transformPath`, makes D4
-   impossible for any future stretch+rotate test, and converges the code path geode 3–5 build
-   on), but it is a no-op at the pixel level. **← THIS INCREMENT (no gates flipped; none
-   un-gated, per "un-gate only on measured ≤100px pass").**
-3. ~~**Per-run scale + font-size resolution (d).**~~ **SKIPPED — already shared.** Audited:
-   `spanFontSizePx` (element + per-span override, named/percent values) and
-   `scaleForPixelHeight` are computed by a **byte-identical** expression in both backends
-   (same inputs), so there is nothing to extract — it flips no gates. B10
-   (`font-size/named-value`) was *not* a font-size bug at all: the named keywords are on the
-   `<rect>`s, the text is all size-12, geode renders it correctly, and the 3488px is edge
-   fringe over 11 small lines → reclassified **edge-floor** (gate moved to `kEdgeFloor`).
-   The next real consume-path increment is paint resolution below.
-4. ✅ **Paint resolution (b)** (2026-05-26). Done as a *targeted* geode convergence rather
-   than a full descriptor hoist: geode was **missing** gradient/stroke-pattern handling for
-   text (not drifting), so the minimal fix reuses geode's existing gradient infra
-   (`drawPaintedPathAgainst`) + the shared `computeTextBounds` (hoisted; tiny untouched).
-   *Subsumed:* B15/B16/B18 un-gated (≤100); B11/B12/B17 → edge-floor; B19 was already
-   reclassified edge-floor in the audit (it's a `<pattern>` *containing* text, which already
-   rendered correctly). The 137-fill premultiff remains rasterizer-side ([0021 G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)).
-   A full backend-agnostic paint *descriptor* hoist is deferred — geode and tiny now both map
-   the same paint servers + the same `computeTextBounds`, so there's no remaining drift here
-   to justify the larger abstraction yet.
-4. **Decoration geometry (c).** Hoist underline/overline/line-through rect derivation +
-   its paint inheritance into the builder. *Subsumes:* B9 (decoration drift), B7/B8
-   decoration half.
-5. **textPath + baseline-shift consume paths.** Whatever placement nuance remains for
-   `textPath` advance (B13) and baseline-shift nesting (B1–B6) once (a)+(d) are shared.
-6. **Collapse both `drawText`s to thin op consumers.** Final state: each backend loops the
-   builder's glyph/decoration ops calling `fillPath`/`fillPathPattern`/`strokeToFill`. Drop
-   the subsumed `kGenuineText` entries from `resvg_test_suite.cc` and mark ✅ here, verifying
-   each parity gate flips green.
+### 4.3 Nested baseline-shift (shared-layout idempotency)
 
-**Increment 1 detail:** introduced `donner/svg/renderer/PlacedTextGeometry.{h,cc}`
-(lib target) with `transformPath` + `placedGlyphOutline`; `RendererTinySkia::drawText` calls
-`placedGlyphOutline` instead of its inline outline→stretch→translate→rotate block, and uses
-the shared `transformPath`. Zero behavior change (same sequence factored out). Geode not
-touched. Proof = tiny text goldens byte-identical (91-test before/after count diff = 0).
+B1–B6 (the largest cluster) were **not** a geode rendering gap — they were a
+shared-layout state-accumulation bug. `resolvePerSpanLayoutStyles` pushed onto
+`span.ancestorBaselineShifts` without ever clearing, and it runs **per `draw()`**.
+The parity harness draws each document twice (geode then tiny on the same
+`ComputedTextComponent`), so the second backend saw **doubled** ancestor shifts.
+Position dump: geode (1st pass) `y=74.4` (correct 2×20%), tiny (2nd pass) `y=61.6`
+(3×20%). Fix: `span.ancestorBaselineShifts.clear()` before re-populating → idempotent
+layout. tiny single-pass output unchanged (clear is a no-op on the empty default;
+verified byte-identical across 96 text tests).
 
-**Increment 2 detail:** `RendererGeode::drawText` now calls `placedGlyphOutline` (replacing
-its `Scale*Rotate*Translate` `glyphFromLocal` block) and the shared `transformPath`; geode's
-duplicate `transformPath` removed (both backends now share one definition). Geode's
-per-glyph bitmap-only-font skip (run-level) and `.notdef` skip are preserved
-(`placedGlyphOutline` returns empty for outline-less glyphs). **Verified geode output is
-byte-identical to pre-increment**: whole-suite parity 1035 ≤100 / 228 >100 (unchanged),
-GeodeGolden 1046 pass (unchanged), all 3 modes FAIL=0. **0 of the 228 gates flipped** — the
-D4 order fix is latent (no test triggers stretch+rotate together), so no `kGenuineText` /
-`kEdgeFloor` entry was removed. The real text divergences move in increments 3–5 (scale /
-paint / decoration / baseline-shift consume paths). Gate ledger then was 19 text + 37 G2 +
-172 edge-floor = 228.
+| # | test | geode↔tiny px (before → after) |
+|---|---|---|
+| B1 | `text/baseline-shift/nested-with-baseline-2` | 19750 → 702 |
+| B2 | `text/baseline-shift/nested-with-baseline-1` | 12886 → 702 |
+| B3 | `text/baseline-shift/mixed-nested` | 4338 → 690 |
+| B4 | `text/baseline-shift/deeply-nested-super` | 4320 → 720 |
+| B5 | `text/baseline-shift/nested-super` | 2870 → 677 |
+| B6 | `text/baseline-shift/nested-length` | 2438 → 686 |
 
-**Audit detail (2026-05-26 — triage pass, ledger-only, no refactor):** eyeballed all 19
-`kGenuineText` diff PNGs → 14 STRUCTURAL (stay) / 5 EDGE-FLOOR mislabeled (moved to
-`kEdgeFloor`): `font-size/named-value`, `text-decoration/tspan-decoration`,
-`textPath/dy-with-tiny-coordinates`, `letter-spacing/on-Arabic`, `paint-servers/pattern/
-text-child`. Also confirmed (increment-3 finding) per-run font-size/scale is already
-byte-identical between backends — no extraction needed. After the audit the ledger was 14
-text + 37 G2 + 177 edge-floor = 228 (only the skip *reason* changed for the 5 moved).
+All six now render correctly at the ~677–720 px edge floor → `kEdgeFloor`. This same
+double-draw idempotency class also surfaced a production feImage-fragment bug
+(unrelated to text; see [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
+and the appendix).
 
-**Paint(b) fix (2026-05-26).** 3 paint tests un-gated (now pass ≤100), 3 moved text→edge-floor.
-Gate ledger then: 8 text + 37 G2 + 180 edge-floor = 225.
+### 4.4 Per-char `dy` / `rotate` lists (render-correct edge floor)
 
-**Baseline-shift fix (2026-05-26).** B1–B6 fixed (shared-layout `ancestorBaselineShifts`
-accumulation, cleared in TextEngine); all 6 moved text→edge-floor (render correctly, edge
-fringe). No full un-gates (they're ~700px, not ≤100), so total holds. Gate ledger then:
-2 text + 37 G2 + 186 edge-floor = 225.
+| # | test | geode↔tiny px (before → after) |
+|---|---|---|
+| B7 | `text/text-decoration/underline-with-dy-list-2` | 4643 → 1177 |
+| B8 | `text/text-decoration/underline-with-rotate-list-4` | 4561 → 1145 |
 
-**B7/B8 audit (2026-05-24).** The last 2 `kGenuineText` gates re-checked post-baseline-shift-fix:
-render-correct edge-floor, not structural (glyph interiors zero-diff; residual is 4× fringe on
-the gray stroke-ring + gradient — the plain-black siblings `dy-list-1`/`rotate-list-3` are
-already accepted edge-floor, proving dy/rotate are consumed correctly; double-draw ruled out,
-tiny-twice = 0px). Moved text→edge-floor. Gate ledger then: 0 text + 37 G2 + 188 edge-floor
-= 225 (all green). **All originally-structural text divergences are resolved — `kGenuineText`
-is empty.**
+The baseline-shift fix cleared the structural part of B7/B8. The residual is the 4×
+fringe on the gray stroke-ring + gradient: the plain-black siblings `dy-list-1`
+(699 px) and `rotate-list-3` (686 px) are already accepted edge-floor, proving `dy`
+and `rotate` are consumed correctly; glyph interiors are zero-diff and double-draw was
+ruled out (tiny-twice = 0 px). Both moved to `kEdgeFloor`.
 
-**G2 color-math fix (2026-05-24).** Geode ran feComposite + feComponentTransfer in sRGB, but
-the SVG default `color-interpolation-filters` is linearRGB (which tiny honors + GeodeFilterEngine
-already applied to feGaussianBlur/feColorMatrix/feBlend, just not these two). Wrapping them in the
-sRGB↔linear conversion cleared **8 of the 9 color-math tests to exactly 0px** (4 feComposite-
-arithmetic + 4 feComponentTransfer, un-gated); feColorMatrix non-normalized stays (distinct
-edge-coverage root). Also corrected a unit test (`FilterCompositeOverDefault`) that encoded the
-sRGB bug. Gate ledger then: 0 text + 29 G2 + 188 edge-floor = 217.
+### 4.5 Already-correct, reclassified to edge-floor
 
-**G2 feImage fix (2026-05-24) — a SECOND production idempotency bug.** The feImage "placement"
-divergence (9 tests) was misattributed: geode places feImage correctly (0–1px on fresh docs).
-The real bug is in shared `RendererDriver` — `OffscreenFeImage` shadow-tree instances leak into
-the global pool and the render-tree fast path keeps them across renders, so the 2nd render draws
-the referenced fragment as *main content* (kilo-pixel corruption). Same class as the baseline-
-shift bug; **any host re-rendering an feImage-fragment document (the editor) was corrupted.** Fix:
-filter offscreen feImage shadow entities out of the main snapshot in `draw()` + `drawEntityRange()`
-+ red→green regression test `FeImageFragmentRedrawIsIdempotent`. 8 fragment-reference cases
-un-gated (≤1px parity); `embedded-png` → edge-floor (1px image-edge band, order-independent, not
-the idempotency bug). Gate ledger then: 0 text + 20 G2 + 189 edge-floor = 209.
+These were never structural — they render correctly and the diff is cumulative edge
+fringe (many lines / long strings / on-path small text / tiled fields):
 
-**G2 feTurbulence fix (2026-05-25) + bonus feDisplacementMap.** feTurbulence was NOT a noise-algo
-mismatch — geode's WGSL Perlin noise is already spec-exact (Park-Miller LCG, gradient tables,
-lattice, octave sum, fractal-vs-turbulence). The single deviation: geode skipped the linearRGB→sRGB
-conversion on the generated noise (geode 128 vs tiny's sRGB 187) — the **same linearRGB-coverage gap**
-as feComposite/feComponentTransfer. One output-side conversion → all 12 feTurbulence at 0px. The fix
-unmasked a pre-existing geode **feDisplacementMap** bug (its SVG uses turbulence as displacement source):
-geode's shader lacked un-premultiply + used nearest instead of bilinear + skipped linearRGB — all three
-fixed (matches tiny's `FloatPixmap` displacement), keeping `FilterDisplacementMap` green (a real
-correctness fix for any displacement source, not just parity). Gate ledger then: 0 text + 8 G2 +
-189 edge-floor = 197.
+| # | test | px |
+|---|---|---|
+| B9 | `text/text-decoration/tspan-decoration` | 1822 |
+| B10 | `text/font-size/named-value` | 3488 (named keywords are on `<rect>`s; the text is all size-12 and renders correct) |
+| B13 | `text/textPath/dy-with-tiny-coordinates` | 2219 |
+| B14 | `text/letter-spacing/on-Arabic` | 932 |
+| B19 | `paint-servers/pattern/text-child` | 1663 |
 
-**G2 finish (2026-05-25) — 8 → 1.** linearRGB sweep cleared feDiffuseLighting (221435→0),
-feMerge ×2, feConvolveMatrix (wrap added); feSpecularLighting was a *spec* bug not linearRGB
-(missing `specularExponent` [1,128] clamp + `<1`→transparent — a real conformance fix); filter/
-on-group-outside-canvas was already 0px. feColorMatrix non-normalized (edge-coverage) +
-feConvolveMatrix custom-divisor (premultiply-rounding, G5-class) recategorized → edge-floor.
-Gate ledger then: 0 text + 1 G2 + 191 edge-floor = 192.
+> Note: at strict-0 the characterization also listed `font-size/negative-size` (5588)
+> and `tspan/with-opacity` (1599) as bugs; both drop below the 100-px flat budget at
+> 0.02 and are not gated.
 
-**G2 CLOSED (2026-05-25).** The last G2 entry, `feGaussianBlur/complex-transform`, was an
-**anisotropic-blur-under-rotation** bug: `stdDeviation="12 0"` (X-only) on a `rotate(45)` rect —
-geode applied the blur device-axis-aligned (horizontal) while tiny applies it in local space (so
-it lands diagonal after rotation). geode's separable device-axis blur can't represent a rotated-
-axis blur. Fixed by porting tiny's **transformed-blur path** into `RendererGeode::popFilterLayer`
-(detect skew or rotation+anisotropic → resample device→local → blur axis-aligned in local →
-composite back via `deviceFromLocal`): **35151 → 140 px** (correctly diagonal; the 140 is the
-accepted edge floor, density-insensitive). A real fix for ALL rotated/skewed anisotropic blur,
-not just the test. Golden-regression hunt clean (12 blur+transform tests at 0px; axis-aligned
-blur goldens correctly not captured). Recategorized → edge-floor (structural bug fixed; residual
-is the accepted AAA-coverage class). **Gate ledger now: 0 text + 0 G2 + 192 edge-floor = 192** —
-**all 37 original filter divergences resolved; G2 is fully closed.** Remaining parity gaps are
-exclusively the **accepted-by-design edge floor** (geode-vs-tiny AAA coverage / crosshair
-sub-pixel, content matches — [0039 §13](0039-geode_analytical_aa.md)) + the 137 sub-visual
-premultiply fills (→ G5, pass at 0.02). **Text + filter parity complete; only the accepted
-sub-pixel coverage floor remains.**
+---
 
-> **Pattern:** geode's filter engine inconsistently applied `color-interpolation-filters` (linearRGB
-> default). feGaussianBlur/feColorMatrix/feBlend had it; feComposite, feComponentTransfer, feTurbulence,
-> feDisplacementMap did not — all now fixed. Worth a sweep of the remaining primitives (feMerge,
-> feConvolveMatrix, feDiffuseLighting, feSpecularLighting) for the same gap.
+## 5. Related parity ledgers (not text)
+
+For completeness of the parity gate ledger — these are tracked elsewhere:
+
+- **Filter divergences (G2):** the parity run also surfaced 37 pure-filter geode↔tiny
+  divergences. **All resolved** — the common root was geode inconsistently applying
+  `color-interpolation-filters` (linearRGB default) plus a handful of genuine
+  conformance/CTM bugs; details and the close-out are in the appendix and
+  [0021 §G2](0021-resvg_feature_gaps.md#g2-filter-primitive-correctness-16-of-23-disabled-tests).
+- **Sub-visual premultiply fills (~137):** at strict-0, ~137 non-text tests show a
+  whole-fill diff that collapses to <100 px at 0.02 (a uniform sub-perceptual
+  premultiplied-alpha / color-space rounding offset). They PASS parity and are not
+  gated; tracked as one root-cause item in
+  [0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds).
+
+---
+
+## Appendix — investigation history & rejected approaches
+
+Condensed from the parity push; preserved so the conclusions aren't re-litigated.
+
+### A.1 The original hoist proposal (partially executed, then descoped)
+
+The opening thesis was that the two `drawText`s were full parallel reimplementations
+that would keep drifting, and the durable fix was to hoist **all** of placement /
+paint / decoration / font-size into a single shared `PlacedText` builder emitting a
+backend-agnostic op list, collapsing each `drawText` to a thin op consumer.
+
+What actually shipped: the **geometry** slices were hoisted (`PlacedTextGeometry`:
+`placedGlyphOutline`, `transformPath`, `computeTextBounds` — §1.2). The remaining
+divergences turned out **not** to be drift in shared logic but either (a) a feature
+*missing* from geode (gradient/stroke-pattern on text — fixed by targeted convergence
+reusing geode's existing infra) or (b) a shared-layout idempotency bug
+(baseline-shift). Once those were fixed there was **no remaining drift** to justify
+the larger paint-descriptor abstraction, so the full op-list hoist was **descoped** —
+both backends now map the same paint servers + the same `computeTextBounds`. If future
+drift reappears, the op-list builder remains the recorded durable fix.
+
+### A.2 Increment-by-increment findings (why the plan changed shape)
+
+- **Per-run scale + font-size (planned increment):** *skipped — already shared.*
+  `spanFontSizePx` and `scaleForPixelHeight` are byte-identical expressions in both
+  backends; nothing to extract. B10 (`font-size/named-value`) was never a font-size
+  bug — reclassified edge-floor.
+- **D4 placement order:** structurally fixed by `placedGlyphOutline` but flips **zero**
+  gates — no suite test has simultaneous `stretchScale≠1` *and* `rotateDegrees≠0`, so
+  the order fix changes no pixels. Kept because it makes D4 impossible for any future
+  stretch+rotate test.
+- **The "identical positions" contradiction:** early analysis found `glyph.{x,y,rotate}`
+  identical between backends (shared `runs` cache), seemingly contradicting whole-glyph
+  baseline-shift offsets. Resolution: the positions *were* identical per-pass — the
+  divergence was the double-draw accumulation in shared layout (§4.3), not a geode
+  consume-path bug.
+
+### A.3 Filter (G2) close-out — for the record
+
+All 37 filter divergences were resolved, mostly by fixing geode's inconsistent
+`color-interpolation-filters` (linearRGB) handling:
+
+- **feComposite + feComponentTransfer** ran in sRGB instead of the linearRGB default
+  → 8 of 9 color-math tests to 0 px (also corrected a unit test that encoded the bug).
+- **feImage** "placement" was misattributed — the real bug was a shared `RendererDriver`
+  idempotency leak (`OffscreenFeImage` shadow-tree instances persisting across renders,
+  corrupting any host re-rendering an feImage-fragment doc, e.g. the editor). Fixed +
+  red→green `FeImageFragmentRedrawIsIdempotent`.
+- **feTurbulence** was spec-exact Perlin noise; the only deviation was a skipped
+  linearRGB→sRGB output conversion → all 12 to 0 px. The fix unmasked a real
+  feDisplacementMap bug (missing un-premultiply, nearest vs bilinear, skipped
+  linearRGB), all fixed.
+- **feDiffuseLighting / feMerge / feConvolveMatrix** cleared by the linearRGB sweep
+  (+ a convolve wrap fix); **feSpecularLighting** was a genuine spec bug (missing
+  `specularExponent` [1,128] clamp + `<1`→transparent).
+- **feGaussianBlur/complex-transform** was anisotropic-blur-under-rotation
+  (`stdDeviation="12 0"` on `rotate(45)`): geode blurred device-axis-aligned while
+  tiny blurs in local space. Fixed by porting tiny's transformed-blur path into
+  `RendererGeode::popFilterLayer` (35151 → 140 px, the accepted edge floor) — a real
+  fix for all rotated/skewed anisotropic blur.
+
+> **Pattern worth remembering:** geode's filter engine inconsistently applied
+> `color-interpolation-filters`. The original gap spanned feComposite,
+> feComponentTransfer, feTurbulence, feDisplacementMap (all fixed); feGaussianBlur /
+> feColorMatrix / feBlend already had it.

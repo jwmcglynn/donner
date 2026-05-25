@@ -1448,126 +1448,92 @@ cleanup.
 
 ### Phase 4b: In-process backend matrix + geode-vs-tiny-skia parity comparison
 
-**Goal:** run **both** backends in one binary (no separate compiles) and add a direct
-**geode-vs-tiny-skia parity** comparison, so the resvg `text/*` suite un-gates on Geode at
-the correct parity metric. As of 2026-05-24 the G1-struct tail is cleared (default-fill,
-vertical, CJK were [phantoms](0021-resvg_feature_gaps.md#g1-geode-text-parity--split-into-edge-sampling-accepted--structural-bugs);
-pattern-on-text fixed, `1e2eb2b6f`). What remains is the un-gate *mechanism*.
+**Status: ✅ complete.** Text + filter parity between Geode and tiny-skia is reached; the
+only remaining geode↔tiny diff is the accepted-by-design sub-pixel coverage floor. For
+detail, see the three developer references:
+[0038 text parity](0038-geode_tinyskia_text_parity.md),
+[0039 anti-aliasing & coverage](0039-geode_analytical_aa.md),
+[0040 Slug implementation](0040-geode_slug_conformance.md).
 
-**Design — additive 3-mode (chosen 2026-05-24).** In the geode-enabled build, each test
-runs up to three comparisons (a `ComparisonMode` parameter dimension):
+**What it is.** Both backends link into one binary (the geode-enabled build); each resvg
+test runs up to three comparison modes via a `ComparisonMode` parameter dimension:
 
 | Mode | Compares | Notes |
 |---|---|---|
-| `TinyGolden` | tiny-skia → resvg golden | ground truth; unchanged from today |
-| `GeodeGolden` | geode → resvg golden | existing geode behavior; text stays category-gated here (golden is contaminated for text — see below) |
-| `GeodeTinyParity` | geode → tiny-skia, **golden ignored** | **new**; the metric that un-gates text |
+| `TinyGolden` | tiny-skia → resvg golden | ground truth oracle, unchanged |
+| `GeodeGolden` | geode → resvg golden | existing geode behavior; golden is text-contaminated, so text stays category-gated here |
+| `GeodeTinyParity` | geode → tiny-skia, golden ignored | the metric that un-gates text/filters |
 
-`GeodeTinyParity` is additive — it does not remove `GeodeGolden`. tiny-skia is the
-validated oracle (passes all 252 text tests vs golden at strict budgets), so
-geode↔tiny-skia + tiny-skia↔golden transitively validates Geode without the
-golden's contamination.
+tiny-skia is the validated oracle (passes all text tests vs golden at strict budgets), so
+geode↔tiny-skia + tiny-skia↔golden transitively validates Geode without the golden's
+~1313 px baseline offset. Parity uses pixelmatch `includeAA=false`, per-pixel
+`kDefaultThreshold` (0.02), and a **flat max-pixel-count of 100 with no per-test
+thresholds** — a diff >100 px is binary-gated, never absorbed (masking is banned).
+`GeodeTinyParity` bypasses the `requireFeature(Text/FilterEffects)` skips so geode
+actually renders text/filters; explicit `Skip()` / `disableBackend(Geode)` stay honored.
+The combined matrix lives only in the geode build (rides the `*_geode` wrapper under
+`bazel test //...`); the pure-CPU `resvg_test_suite` is unchanged.
 
-**Why parity, not `widenThresholdForGeode`:** the static golden folds in (a) the ~1313 px
-tiny-skia↔golden baseline offset the budgets already absorb for tiny-skia, plus (b) the
-proven 4× MSAA edge floor. A blanket per-pixel threshold bump to 0.3
-(`widenThresholdForGeode`) to swallow both is the
-[G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds) masking
-pattern — pixelmatch already excludes AA, so 0.3 hides *real* diffs (it is how the
-pattern-leak bug would have hidden had it been smaller). The parity comparison removes (a)
-entirely and gates (b) with a count tolerance (below).
-
-**Parity tolerance (chosen 2026-05-24): a documented max-pixel-*count* of ~800, NOT a
-per-pixel threshold bump.** pixelmatch runs with `includeAA=false` (already excludes AA);
-the parity test passes when the geode↔tiny-skia diff count ≤ ~800 px, documented as the
-4× MSAA 64-step edge-quantization tradeoff. Keeping the per-pixel threshold strict means a
-future regression that adds a *solid-region* diff still trips even under the count
-tolerance — a per-pixel bump would have masked the genuine bugs below.
-
-**Characterization data (2026-05-24, geode↔tiny-skia, threshold 0 / `includeAA=false`,
-250 runnable `text/*`):**
-
-| Bucket | N | Range |
-|---|---|---|
-| pass-clean | 86 | < 100 px |
-| **edge-floor** | **155** | 112 – **763** px (thin band hugging glyph edges + 0.5px crosshair/frame) |
-| **genuine-bug** | **9** | ≥ 1599 px, off-edge/solid-region |
-| pre-existing skip | 104 | 93 `Skip()` + 11 `onlyTextFull()` |
-
-The distribution is cleanly **bimodal** — a floor topping out at 763 px, an empty gap, then
-the 9 bugs ≥ 1599 px. Even `text_text_simple-case` floors at 708 px (font-size 64 +
-0.5px crosshair on 200×200); multi-line tests reach 763. Hence the ~800 px ceiling.
-
-**Enabling refactor (the hard part): make both renderers linkable in one binary.** Today
-`RendererTestBackend{TinySkia,Geode}.cc` each define the *same* symbols
-(`ActiveRendererBackend`, `RenderDocumentWithActiveBackend`), so the variant system links
-exactly one per binary (ODR). Refactor in-place to a runtime dispatch
-`RenderDocumentWithBackend(doc, backend)` with coexisting per-backend implementations; the
-geode build links both, the CPU build links tiny only. `kActiveIsGeode` and the
-`geodeCategoryGate` / `geodeFilenameGate` / `widenThresholdForGeode` helpers become
-per-(backend, mode) rather than per-binary. **Constraint:** a binary running Geode must
-link wgpu-native, so the combined matrix lives only in the **geode-enabled build** (rides
-the `*_geode` wrapper under `bazel test //...`); the pure-CPU `resvg_test_suite`
-(tiny/text-full/max) is unchanged.
-
-**Incremental landing (in-place, each step green on `main`):**
-
-1. ✅ Characterize (done — table above).
-2. ✅ **Backend dispatch refactor** (`be7de1653`): `ActiveRendererBackend()`/
-   `RenderDocumentWithActiveBackend()` → `RenderDocumentWithBackend(doc, backend)`; both
-   backend TUs coexist; geode build links both.
-3. ✅ **`ComparisonMode` parameter dimension** (`a924c84f9`): fixture param is
-   `std::tuple<ImageComparisonTestcase, ComparisonMode>`; active mode list is build-dependent
-   (CPU = `{TinyGolden}`, geode = `{TinyGolden, GeodeGolden, GeodeTinyParity}`);
-   `INSTANTIATE_TEST_SUITE_P` sites use `Combine(ValuesIn(tests), ValuesIn(ActiveComparisonModes()))`;
-   gates are per-(backend, mode); single-mode CPU build keeps historical names (no suffix).
-4. ✅ **Implement `GeodeTinyParity` + whole-suite activation** (increment 4): in
-   `renderAndCompare`, render geode + tiny in-process and pixelmatch geode-vs-tiny (golden
-   ignored). The parity mode **bypasses** the `requireFeature(Text/FilterEffects)` skips so
-   geode actually renders text/filters (this folds in increment 5's text un-gate — no
-   separate `requireFeature(Text)` flip needed); explicit `Skip()` / `disableBackend(Geode)`
-   stay honored.
-5. ✅ **Final parity policy (landed green):** pixelmatch `includeAA=false`, per-pixel
-   `kDefaultThreshold` (0.02 — the suite's own default for every golden compare), **flat
-   max-pixel-count = `kDefaultMismatchedPixels` (100); no per-test thresholds.** A diff
-   >100 px is gated, never absorbed by a larger budget (that would be masking). Rationale:
-   0.02 (not strict-0) keeps the ~137 sub-visual premultiply offsets passing while still
-   catching genuine bugs; the flat 100 (not the rejected blanket 0.3 bump) means a
-   solid-region regression still trips.
-6. ✅ **228 binary parity gates** via `geodeParityGate(category, filename)` (an in-place
-   extension of the existing gate system, folded into the deferred `geodeGate` so it touches
-   only the parity instance). Organized as an inventory by theme:
-   - Initially **172 edge-floor + 56 genuine** (18 text / text-on-shape → 0038, 38 filter →
-     0021 G2). **Hoist progress (2026-05-24):** all 18 text divergences resolved — gradient/
-     pattern-on-text + baseline-shift fixed (the latter a shared-layout idempotency bug the
-     double-draw parity harness exposed), the rest were render-correct edge-floor. **Ledger now
-     0 text + 37 filter (G2) + 188 edge-floor = 225 gated; `kGenuineText` is empty.**
-7. **Follow-on:** fix the 37 genuine filter divergences ([0021 §G2](0021-resvg_feature_gaps.md#g2-filter-primitive-correctness-16-of-23-disabled-tests)),
-   then drop those gates; fix the 137-fill premultiply root cause ([0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds))
-   (already pass at 0.02). Finer Geode AA retires the 188 edge-floor gates.
+**Outcome.** All originally-structural text divergences and all 37 filter (G2)
+divergences are resolved; `kGenuineText` is empty. The remaining ~190 gated entries are
+the accepted edge floor (geode renders correctly; diff is the sub-pixel coverage delta vs
+tiny-skia's scan-converter + the resvg crosshair — proven sample-independent, see
+[0039 §2](0039-geode_analytical_aa.md)). The ~137 sub-visual premultiply fills pass at
+0.02 and are tracked in [0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds).
 
 **Final numbers (geode build, all green):**
 
 | Mode | pass | gated/skip | fail |
 |---|---|---|---|
-| `TinyGolden` (tiny-skia vs golden, unchanged) | 1335 | 4 | 0 |
-| `GeodeGolden` (geode vs golden, unchanged) | 1046 | 582 | 0 |
-| `GeodeTinyParity` (geode vs tiny-skia, NEW) | 1086 | 502 | 0 |
+| `TinyGolden` (tiny-skia vs golden) | 1335 | 4 | 0 |
+| `GeodeGolden` (geode vs golden) | 1046 | 582 | 0 |
+| `GeodeTinyParity` (geode vs tiny-skia) | 1086 | 502 | 0 |
 
-Parity comparison (1263 tests that actually rendered + compared): **1035 pass / 228 gated**
-— text **86 pass / 159 gated** (14 genuine + 145 edge-floor), non-text **949 pass / 69 gated**
-(42 genuine + 27 edge-floor). (`GeodeTinyParity` OK=1086 > 1035 because `RenderOnly` UB tests
-count as OK without a parity compare; SKIP=502 = 228 parity gates + explicit
-`Skip()`/`onlyTextFull`/`disableBackend` honest skips.)
+Parity comparison (1263 rendered + compared): **1035 pass / 228 gated** at the time of
+landing; subsequent text + filter fixes drove the genuine portion to 0, leaving the edge
+floor + honest skips. (`GeodeTinyParity` OK > pass because `RenderOnly` UB tests count as
+OK without a parity compare.) Gates live in `geodeParityGate(category, filename)`
+(`resvg_test_suite.cc`); un-gate an entry only when it measures ≤100 px.
 
-**Risk:** parity uses tiny-skia as the geode oracle, so a tiny-skia text regression could
-mask a geode one — mitigated because `TinyGolden` gates tiny-skia against ground truth in
-the same run.
+**Risk:** parity uses tiny-skia as the geode oracle, so a tiny-skia regression could mask
+a geode one — mitigated because `TinyGolden` gates tiny-skia against ground truth in the
+same run.
 
 **Out of scope (separate items):** color-emoji / bitmap glyphs ([G4](0021-resvg_feature_gaps.md#g4-color-emoji--bitmap-fonts-structural),
 `drawText` skips CBDT at `RendererGeode.cc:3162`); the CJK `xml:lang` font-fallback gap
 (CPU-tier, not Geode-specific); the latent vertical-text + `lengthAdjust=spacingAndGlyphs`
 transform-order divergence (no current test triggers it).
+
+<details>
+<summary>Build-out history (how the matrix landed — for reference)</summary>
+
+The hard enabling refactor was making both renderers linkable in one binary:
+`RendererTestBackend{TinySkia,Geode}.cc` each defined the same symbols
+(`ActiveRendererBackend`, `RenderDocumentWithActiveBackend`), so the variant system linked
+exactly one per binary (ODR). Landed in-place, each step green on `main`:
+
+1. ✅ Characterize the geode↔tiny distribution (bimodal: edge floor topping out at 763 px,
+   an empty gap, then genuine bugs ≥ 1599 px — hence the original ~800 px ceiling idea,
+   later replaced by the flat-100 policy).
+2. ✅ **Backend dispatch refactor** (`be7de1653`): `ActiveRendererBackend()` /
+   `RenderDocumentWithActiveBackend()` → runtime `RenderDocumentWithBackend(doc, backend)`;
+   both backend TUs coexist; geode build links both, CPU build links tiny only.
+3. ✅ **`ComparisonMode` parameter dimension** (`a924c84f9`): fixture param is
+   `std::tuple<ImageComparisonTestcase, ComparisonMode>`; active mode list is
+   build-dependent; gates are per-(backend, mode).
+4. ✅ **Implement `GeodeTinyParity` + whole-suite activation:** render geode + tiny
+   in-process in `renderAndCompare` and pixelmatch geode-vs-tiny.
+5. ✅ **Final parity policy:** `includeAA=false`, 0.02 per-pixel, flat 100 max-count, no
+   per-test thresholds (0.02 keeps the ~137 sub-visual premultiply offsets passing while
+   still catching genuine bugs; flat 100 means a solid-region regression still trips). The
+   rejected alternative — a blanket `widenThresholdForGeode` 0.3 bump — was the
+   [G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds) masking
+   pattern (pixelmatch already excludes AA, so 0.3 hides real diffs).
+6. ✅ **228 binary parity gates** via `geodeParityGate`. Initially 172 edge-floor + 56
+   genuine (18 text → 0038, 38 filter → 0021 G2); all genuine text + filter divergences
+   were then resolved (0038, 0039), leaving the edge floor.
+
+</details>
 
 ### Phase 5: ECS Cache Integration and Performance
 

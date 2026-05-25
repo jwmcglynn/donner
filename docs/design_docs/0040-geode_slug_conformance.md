@@ -1,120 +1,184 @@
-# 0040 — Geode Slug-algorithm conformance: divergences from the published method
+# 0040 — Geode Slug implementation: developer reference
 
-**Status:** living conformance tracker (opened 2026-05-25). Records where Geode's
-implementation of the **Slug algorithm** deviates from the published algorithm, so the
-divergences are tracked and closed deliberately rather than discovered as parity bugs.
-Complements [0039](0039-geode_analytical_aa.md) (the analytical-AA coverage rollout) and
-the parity ledger in [0038](0038-geode_tinyskia_text_parity.md) / [0021](0021-resvg_feature_gaps.md).
+**Status:** Developer reference. Describes Geode's as-built implementation of the
+**Slug algorithm** (per-pixel ray/Bézier-crossing winding) — the pipeline a contributor
+must understand to work on the fill/coverage shaders or the path encoder — plus the
+invariants it relies on and the known limitations (D3/D4/D6) that remain future work.
+The per-pixel **AA coverage** math is documented in [0039](0039-geode_analytical_aa.md);
+this doc covers the rest of the pipeline.
+
+**Related:** [0039 anti-aliasing](0039-geode_analytical_aa.md),
+[0038 text parity](0038-geode_tinyskia_text_parity.md),
+[0021](0021-resvg_feature_gaps.md)
 
 ## Source of truth
 
-Audited Geode's `donner/svg/renderer/geode/` Slug pipeline against:
-- Eric Lengyel, **"GPU-Centered Font Rendering Directly from Glyph Outlines,"** JCGT 6(2),
-  2017 — https://jcgt.org/published/0006/02/02/
+Geode implements the Slug algorithm clean-room (ISC). The algorithmic references are:
+- Eric Lengyel, **"GPU-Centered Font Rendering Directly from Glyph Outlines,"** JCGT
+  6(2), 2017 — https://jcgt.org/published/0006/02/02/
 - **Slug library** — https://sluglibrary.com/ ; **"A Decade of Slug"** —
   https://terathon.com/blog/decade-slug.html
 - Author-endorsed reference impl **mightycow/Sluggish** (`SlugPixelShader.hlsl` —
-  classification code `0x2E74`, root extraction, coverage accumulation, dual-ray combine).
+  `0x2E74` classification, root extraction, coverage accumulation).
 
-Geode "implements the Slug algorithm": per-pixel, cast a ray, find Bézier/ray crossings,
-accumulate winding/coverage from band-binned curves. The audit checked banding, root-find,
-curve classification, quadratic/cubic handling, fill rule, the per-pixel scale, and data
-encoding. The per-pixel **AA coverage** math (Eq. 3 / dual-ray) is being (re)implemented in
-[0039](0039-geode_analytical_aa.md) and is tracked there; this doc covers the rest.
+The patent (US10373352B1) was dedicated to the public domain on 2026-03-17; reference
+shaders are MIT. Geode's implementation is independent.
 
-## Divergence ledger
+---
 
-Severity: **Critical** = correctness/parity bug with broad blast radius; **Moderate** =
-real divergence, narrower or conditional; **Benign** = legitimate adaptation or
-already-correct.
+## 1. The as-built Slug pipeline
+
+Geode renders a `Path` by encoding it into band-binned Y-monotonic quadratic curves on
+the CPU, then per-pixel casting a horizontal ray and counting winding from the curves in
+the pixel's band. Two halves:
+
+### 1.1 CPU encoder — `GeodePathEncoder.cc`
+
+`GeodePathEncoder::encode` lowers a `Path` into an `EncodedPath` of bands + quadratic
+curves for the GPU:
+
+1. **Cubic lowering (invariant):** `encode` runs `path.cubicToQuadratic(tolerance)`
+   first (`GeodePathEncoder.cc:56`), so `extractCurves` only ever sees `QuadTo`
+   segments. A raw `CurveTo` reaching `extractCurves` is a hard-fail
+   (`UTILS_RELEASE_ASSERT_MSG`, `GeodePathEncoder.cc:185`) — the "cubic-free input"
+   invariant is documented in code rather than silently flattened (D2).
+2. **Lines → degenerate quads:** a `LineTo` becomes a quadratic with control point at
+   the segment midpoint (`GeodePathEncoder.cc:147`) — the standard Slug approach (D9).
+3. **Implicit close:** open subpaths are implicitly closed for winding correctness
+   (`GeodePathEncoder.cc:116`); explicit `Close` suppresses the final implicit close.
+   Stroke geometry funnels through `Path::strokeToFill` (already closed), so the encoder
+   sees a pre-closed ribbon there (D10).
+4. **Banding:** the path's Y range is split into bands of **~32 px each, max 256 bands**
+   (`computeBandCount`, `GeodePathEncoder.cc:44`); a Y-monotonic curve is duplicated into
+   every band its Y-extent overlaps (`GeodePathEncoder.cc` step 5, ~line 229). Band
+   binning currently uses the control-point AABB and is unsorted within a band (D4).
+5. **Encoding:** curves are stored as **f32** in an SSBO (more precise than the
+   reference's f16 textures — a legitimate WebGPU adaptation, D12).
+
+### 1.2 GPU fragment shader — `slug_fill.wgsl`
+
+Per pixel, `fs_main` casts a horizontal ray and counts winding from the band's curves:
+
+1. **Per-pixel scale:** reads `dpdx`/`dpdy` of `sample_pos` (`slug_fill.wgsl:393`),
+   constant across the affine primitive (D3 — see limitations).
+2. **Half-pixel dilation:** the orthographic-2D simplification (`slug_fill.wgsl:182`),
+   correct for Geode's affine 2D content (D8).
+3. **Root-find per curve:** `curve_winding(curve, sample)` (`slug_fill.wgsl:279`) forms
+   the quadratic in the ray parameter and calls `solve_quadratic` (`slug_fill.wgsl:220`),
+   which uses the **numerically-stable Citardauq form** (`q = -(b + sign(b)·√disc)/2`,
+   `t0 = q/a`, `t1 = c/q`, with a `q≈0` double-root fallback). Degenerate
+   `abs(a) < 1e-4` routes to the linear fallback (`slug_fill.wgsl:233`) (D6 — see
+   limitations).
+4. **Crossing eligibility + direction:** `curve_winding` (`slug_fill.wgsl:286-308`) counts
+   a root only when `t ≥ 0` **and** the crossing is to the right of the sample
+   (`x(t) ≥ sample.x` — a one-directional horizontal ray); the contribution is the sign of
+   the tangent `dy/dt` at `t` (±1). There is **no** Slug `0x2E74` classification tracer on
+   the clean tree — that analytical approach is in
+   [0039 rejected approaches](0039-geode_analytical_aa.md) (the audit's "classification"
+   reading was a mid-edit artifact; see appendix).
+5. **Winding accumulation + fill rule:** `sample_is_inside` (`slug_fill.wgsl:339`) sums
+   `curve_winding` over the band's curves and applies the fill rule: **non-zero**
+   = `winding != 0`, **even-odd** = `(winding & 1) != 0` — integer crossing parity,
+   evaluated per sub-pixel sample.
+6. **Coverage:** the winding test runs at 4 sub-pixel samples packed into
+   `@builtin(sample_mask)` (the 4× MSAA path). The coverage/AA model is documented in
+   [0039](0039-geode_analytical_aa.md).
+
+All six Slug shaders (`slug_fill`, `slug_gradient`, `slug_mask`, and the three
+vendor-gated `*_alpha_coverage` variants) run the **same** integer-winding
+`curve_winding` tracer and the same `solve_quadratic`.
+
+---
+
+## 2. Conformance ledger
+
+Severity: **Critical** = correctness/parity bug, broad blast radius; **Moderate** =
+narrower or conditional; **Benign** = legitimate adaptation or already-correct. Most are
+resolved (implementation notes / invariants in §1); the open ones are the known
+limitations in §3.
 
 | # | Sev | Area | Geode location | Status |
 |---|-----|------|----------------|--------|
-| D1 | Critical | cancellation-prone `solve_quadratic` `(-b ± √disc)/2a` in all six Slug shaders | `slug_fill.wgsl`, `slug_gradient.wgsl`, `slug_mask.wgsl` + the 3 `*_alpha_coverage.wgsl` | **RESOLVED 2026-05-25** — stabilized (see "D1 re-grounded" below). The "fourth analytical tracer" framing was a mid-edit artifact: on the clean tree all six shaders run the *same* integer-winding `curve_winding`, so there is no tracer divergence; the real item was the shared cancellation-prone `solve_quadratic`, now replaced with the numerically-stable Citardauq form uniformly (output-neutral) |
-| D2 | Critical (latent) | encoder `CurveTo` silently collapses a cubic to a straight chord (midpoint control pt) instead of subdividing | `GeodePathEncoder.cc:184` | **RESOLVED 2026-05-25** — replaced the silent chord-flatten with a `UTILS_RELEASE_ASSERT_MSG` documenting the cubic-free invariant (`encode` runs `cubicToQuadratic` first, so the case is unreachable; hard-fail rather than silently produce wrong geometry) |
-| D3 | Critical | pixels-per-em scale `m` uses `abs(dpdx().x)`/`abs(dpdy().y)`, not `length(dpdx())`/`fwidth` — overestimates `m` under rotation/sub-pixel features | `slug_fill.wgsl:439` | **in flight** (0039 AA increment) |
-| D4 | Moderate | band binning by control-point AABB over-includes curves; no per-band sort | `GeodePathEncoder.cc:253` | open (perf; benign correctness) |
-| D5 | Moderate | even-odd implemented as a triangle-wave fold of *fractional* coverage, not integer crossing parity | `slug_fill.wgsl:340` | **MOOT / RESOLVED 2026-05-25** — re-grounded against the clean tree: the triangle-wave fold was part of the reverted analytical-AA experiment. The committed `slug_fill.wgsl` uses integer-parity even-odd (`(winding & 1) != 0`) via `sample_is_inside` on the MSAA `sample_mask` path; no `apply_fill_rule`/fractional fold exists. No code change |
-| D6 | Moderate | degeneracy threshold `abs(a)<1e-4` is absolute (path-space units), not scale-relative; no `b≈0` NaN guard on the linear fallback | `slug_fill.wgsl:236`, `:319` | **in flight** (0039 AA increment) |
-| D7 | Benign | classification index uses `0x2E74>>idx` shift vs reference sign-bit form — numerically equivalent (verified all 8 sign configs); only differs at the measure-zero `y==0` boundary | `slug_fill.wgsl:304` | no action |
-| D8 | Benign | half-pixel dilation uses the orthographic-2D simplification, not the full perspective quadratic — correct for Geode's affine 2D content | `slug_fill.wgsl:182` | no action |
-| D9 | Benign | lines encoded as degenerate quads (control pt = midpoint) — the standard Slug approach | `GeodePathEncoder.cc:147` | no action |
-| D10 | Benign | implicit-close of open subpaths — correct SVG-fill conformance adaptation (Slug assumes closed contours) | `GeodePathEncoder.cc:116` | no action |
-| D11 | Benign | ~32px/band, max 256 — implementation-defined banding granularity | `GeodePathEncoder.cc:37` | no action |
-| D12 | Benign | f32 SSBO curve storage vs the reference's f16 textures — more precise, legitimate WebGPU adaptation | `slug_fill.wgsl:91` | no action |
+| D1 | Critical | `solve_quadratic` numerical stability | all six Slug shaders | **resolved** — Citardauq form (§1.2 step 3) |
+| D2 | Critical (latent) | encoder must not silently flatten cubics | `GeodePathEncoder.cc:185` | **resolved** — hard-fail assert documents the cubic-free invariant (§1.1) |
+| D3 | Critical | pixels-per-em scale ignores rotation/shear | `slug_fill.wgsl:393` | **open / known limitation** (§3) |
+| D4 | Moderate | band binning over-includes curves; no per-band sort | `GeodePathEncoder.cc:253` | **open** (perf only; correctness benign) |
+| D5 | Moderate | even-odd fill rule | `slug_fill.wgsl` | **resolved/moot** — integer parity `(winding & 1)`, never a fractional fold |
+| D6 | Moderate | absolute degeneracy threshold + missing `b≈0` NaN guard | `slug_fill.wgsl:233` | **open / known limitation** (§3) |
+| D7 | — | (`0x2E74` classification) | — | **moot** — not present on the clean tree; committed shaders use one-directional `curve_winding`, no classification tracer (a mid-edit-artifact reading, like D5) |
+| D8 | Benign | orthographic-2D half-pixel dilation | `slug_fill.wgsl:182` | no action — correct for affine 2D |
+| D9 | Benign | lines as degenerate quads (control pt = midpoint) | `GeodePathEncoder.cc:147` | no action — standard Slug |
+| D10 | Benign | implicit-close of open subpaths | `GeodePathEncoder.cc:116` | no action — SVG-fill conformance |
+| D11 | Benign | ~32px/band, max 256 | `GeodePathEncoder.cc:37` | no action — impl-defined granularity |
+| D12 | Benign | f32 SSBO curve storage vs reference f16 textures | `slug_fill.wgsl:91` | no action — more precise WebGPU adaptation |
 
-## The real divergences (detail)
+### Implementation notes (resolved Critical/Moderate items)
 
-### D1 — re-grounded + RESOLVED (cancellation-prone `solve_quadratic`)
-The original entry ("three of four pipelines run a non-Slug winding algorithm; only `slug_fill.wgsl`
-was moved to the analytical tracer") was a **mid-edit artifact** — the audit read the files while the
-[0039](0039-geode_analytical_aa.md) analytical-AA experiment was in flight in `slug_fill.wgsl` (since
-reverted). On the **clean committed tree**, all six Slug shaders (`slug_fill`, `slug_gradient`,
-`slug_mask`, and the three vendor-gated `*_alpha_coverage` variants) run the **same** integer-winding
-`curve_winding` tracer (one-directional scanline count with `dy/dt`-sign crossing accumulation) — so
-there is no fill-vs-others tracer divergence to converge. There is **no `0x2E74` analytical
-classification tracer anywhere**; that remains future work tracked in 0039.
+**D1 — `solve_quadratic` stability.** All six shaders previously used the naive
+`(-b ± √disc)/2a`, which loses precision to subtractive cancellation when `b` and a root
+share a sign — worst exactly at the tangent/grazing crossings the winding count is most
+sensitive to. Replaced uniformly with the Citardauq form (§1.2 step 3). Output-neutral on
+every passing test (strict-identity geode goldens, all three resvg parity modes, geode
+unit/encoder/shader tests, CPU lanes unchanged); a robustness improvement for grazing
+crossings, flips no gates.
 
-The real, shared item was the **cancellation-prone `solve_quadratic`** — all six used the byte-
-identical naive `(-b ± √disc) / 2a`, which loses precision to subtractive cancellation when `b` and a
-root share a sign (worst exactly at the tangent/grazing crossings the winding count is most sensitive
-to). **Closed 2026-05-25:** replaced uniformly across all six shaders with the numerically-stable
-Citardauq form (`q = -(b + sign(b)·√disc)/2`, `t0 = q/a`, `t1 = c/q`, with a `q≈0` double-root
-fallback) — matching the Slug reference's robust root extraction. **Output-neutral** on every passing
-test: the strict-identity geode golden suite, all three resvg parity modes, the geode unit/encoder/
-shader tests, and the CPU lanes were unchanged (verified before/after). Robustness improvement for
-grazing crossings; it flips no gates (the remaining gates are the accepted-by-design edge floor).
+**D2 — cubic→chord landmine.** `extractCurves`'s `CurveTo` case used to discard both
+cubic control points and emit a quad with control point = endpoint midpoint = a straight
+chord — silently wrong geometry. Dead in current call paths (encode runs
+`cubicToQuadratic` first), but a future caller handing a raw cubic in would have silently
+flattened every cubic. Replaced with `UTILS_RELEASE_ASSERT_MSG(false, …)` documenting the
+cubic-free invariant — hard-fail instead of silent corruption. Unreachable today, so
+output-neutral.
 
-### D2 — cubic CurveTo collapses to a chord (latent landmine) — RESOLVED
-`extractCurves`'s `CurveTo` case discarded both cubic control points and emitted a quad with control
-point = endpoint midpoint = a straight line. Dead in current call paths (`GeodePathEncoder::encode`
-runs `cubicToQuadratic` first, so `extractCurves` only ever sees QuadTo segments), but any future
-caller handing a raw cubic in would have silently flattened every cubic with no error. **Closed
-2026-05-25:** replaced the silent chord-flatten with `UTILS_RELEASE_ASSERT_MSG(false, …)` documenting
-the "encode requires cubic-free input" invariant — hard-fail instead of silently producing wrong
-geometry (no-dead-code discipline). Unreachable today, so output-neutral; the encoder/golden/parity
-suites are unchanged.
+**D5 — even-odd fill rule.** An earlier audit recorded a triangle-wave fold of
+*fractional* coverage for even-odd, but that was read mid-edit during the reverted
+analytical-AA experiment ([0039](0039-geode_analytical_aa.md)). The committed
+`slug_fill.wgsl` has no `apply_fill_rule` and no fractional fold: even-odd is integer
+crossing parity (`(winding & 1) != 0`) in `sample_is_inside`, evaluated per sub-pixel
+sample on the 4× MSAA `sample_mask` path — identical across all shaders. Geode has a
+single, spec-correct even-odd behavior. **Invariant:** if the analytical-AA coverage
+rework is ever revisited, it must preserve integer-parity even-odd.
 
-### D3 — per-pixel scale ignores rotation/shear
-`m = 1/abs(dpdx(sample_pos).x)` (and `.y`) takes only the axis-aligned derivative component;
-the reference uses the full gradient magnitude (`1/fwidth` ≈ `1/length(dpdx)`). Since
-`abs(dx.x) ≤ length(dx)`, `m` is overestimated → coverage ramp too steep, worst on thin/rotated
-features (glyph stems). Independently matches the AA increment's observed text-glyph regression.
-**Close (in flight):** `m = 1/max(length(dpdx(sample_pos)), 1e-8)` per ray.
+---
 
-### D5 — MOOT (no triangle-wave fold on the clean tree)
-The audit recorded an `apply_fill_rule` triangle-wave fold of *fractional* coverage for even-odd —
-but that was part of the reverted [0039](0039-geode_analytical_aa.md) analytical-AA experiment, read
-mid-edit. The **committed `slug_fill.wgsl`** has no `apply_fill_rule` and no fractional fold: even-odd
-is integer crossing parity (`(winding & 1) != 0`) in `sample_is_inside`, evaluated per sub-pixel
-sample on the 4× MSAA `sample_mask` path — identical to the other shaders. Geode has a single,
-spec-correct even-odd behavior. **No code change; resolved by re-grounding.** (If the analytical-AA
-coverage rework lands later, it must preserve integer-parity even-odd — re-open then if it doesn't.)
+## 3. Known limitations / future work
 
-### D6 — absolute degeneracy threshold + missing NaN guard
-`abs(a) < 1e-4` is in raw path-space units, so genuine shallow quads at large coordinates (or
-near-degenerate lines at tiny coordinates) misfire the linear fallback; and a quad with both
-`a≈0` and `b≈0` divides by ~0 → NaN coverage (the AA increment's text-glyph garbage). **Close
-(in flight):** make the threshold scale-relative (vs control-point span / `max(|a|,|b|,|c|)`)
-and guard the linear fallback against `b≈0`.
+These are genuine, still-open divergences from the published method. They are scoped to
+the analytical-AA coverage rework (which is shelved — [0039](0039-geode_analytical_aa.md)),
+because they only change observable output once a fractional-coverage tracer lands; on the
+current integer-winding `sample_mask` path they do not affect the accepted edge floor.
 
-## Sequencing
+- **D3 — per-pixel scale ignores rotation/shear** (`slug_fill.wgsl:393`).
+  `m = 1/abs(dpdx(sample_pos).x)` (and `.y`) takes only the axis-aligned derivative
+  component; the reference uses the full gradient magnitude (`1/fwidth` ≈
+  `1/length(dpdx)`). Since `abs(dx.x) ≤ length(dx)`, `m` is overestimated → coverage ramp
+  too steep, worst on thin/rotated features (glyph stems). **Intended fix:**
+  `m = 1/max(length(dpdx(sample_pos)), 1e-8)` per ray. Only matters once fractional
+  coverage uses `m`.
 
-Status as of 2026-05-25 (re-grounded against the clean committed tree after the 0039 analytical-AA
-experiment was reverted):
+- **D4 — band binning over-includes curves; no per-band sort**
+  (`GeodePathEncoder.cc:253`). Binning by control-point AABB over-includes curves into
+  bands, and curves are unsorted within a band. **Correctness-benign** (extra curves just
+  contribute zero winding for a ray that misses them); a **perf** opportunity — tighter
+  binning by true curve extent + per-band sort. Open, optional.
 
-- **D1** (cancellation-prone `solve_quadratic`) — ✅ RESOLVED: stabilized uniformly across all six
-  shaders (output-neutral). The "analytical-tracer convergence" framing was a mid-edit artifact; all
-  shaders already share the integer-winding tracer, so nothing to converge. A future `0x2E74`
-  analytical classification tracer remains 0039 work.
-- **D5** (triangle-wave even-odd) — ✅ MOOT: the fractional fold never existed on the clean tree;
-  committed even-odd is integer parity. No code change.
-- **D2** (cubic→chord landmine) — ✅ RESOLVED: hard-fail assert documenting the cubic-free invariant.
-- **D3, D6** (per-pixel scale / degeneracy threshold + NaN guard) — still tracked in
-  [0039](0039-geode_analytical_aa.md) (they belong to the analytical-AA coverage rework, not this
-  hygiene pass; they only matter once the fractional-coverage tracer lands).
-- **D4** — optional perf: tighter band binning by true curve extent. Open.
-- **D7–D12** — benign, no action.
+- **D6 — absolute degeneracy threshold + missing NaN guard** (`slug_fill.wgsl:233`).
+  `abs(a) < 1e-4` is in raw path-space units, so genuine shallow quads at large
+  coordinates (or near-degenerate lines at tiny coordinates) misfire the linear fallback;
+  and a quad with both `a≈0` and `b≈0` divides by ~0 → NaN coverage. **Intended fix:**
+  make the threshold scale-relative (vs control-point span / `max(|a|,|b|,|c|)`) and guard
+  the linear fallback against `b≈0`. Only observable once fractional coverage lands.
 
-Each close lands in-place, green, with the geode-vs-tiny parity suite + the strict-identity geode
-golden suite as the output-neutrality gate; un-gate edge-floor entries only when they measure ≤100 px.
+---
+
+## Appendix — audit history
+
+The original ledger (opened 2026-05-25) was an investigation tracker. Two entries (D1's
+"fourth analytical tracer" framing, D5's triangle-wave fold) were **mid-edit artifacts** —
+the audit read `slug_fill.wgsl` while the [0039](0039-geode_analytical_aa.md) analytical-AA
+experiment was in flight (since reverted). On the clean committed tree all six shaders run
+the same integer-winding tracer and the same `solve_quadratic`; there is **no `0x2E74`
+analytical-classification tracer anywhere** (that remains 0039 future work), and even-odd
+is integer parity everywhere. D1 (real shared item: cancellation-prone `solve_quadratic`)
+and D2 were then closed as hygiene fixes; D5 was re-grounded as moot; D3/D4/D6 carry
+forward as §3.
