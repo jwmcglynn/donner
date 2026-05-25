@@ -180,11 +180,13 @@ before fixing.
    **Progress since landing (2026-05-24, see [0038](0038-geode_tinyskia_text_parity.md)):** the
    text hoist resolved **all structural text divergences** (`kGenuineText` empty — gradient/
    pattern-on-text + a shared-layout baseline-shift idempotency bug fixed, rest render-correct
-   edge-floor), and two G2 fixes — a **linearRGB fix** for feComposite + feComponentTransfer (8
-   tests) and an **feImage shared-`RendererDriver` re-draw idempotency fix** (8 tests). **Gate
-   ledger now: 0 text + 20 G2 filter + 189 edge-floor = 209 gated** (down from 228). Two real
-   production idempotency bugs (baseline-shift, feImage) surfaced by the parity harness's
-   double-draw — both fixed in shared code, not backend quirks.
+   edge-floor), and G2 fixes: a **linearRGB color-interpolation-filters** sweep for feComposite,
+   feComponentTransfer + feTurbulence (20 tests; geode was applying it to some primitives but not
+   others), an **feImage shared-`RendererDriver` re-draw idempotency fix** (8 tests), and a bonus
+   **feDisplacementMap** correctness fix (un-premult + bilinear + linearRGB). **Gate ledger now:
+   0 text + 8 G2 filter + 189 edge-floor = 197 gated** (down from 228). Two real production
+   idempotency bugs (baseline-shift, feImage) surfaced by the parity harness's double-draw, and a
+   systematic geode filter linearRGB gap — all fixed in shared/geode code, not backend quirks.
 
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 

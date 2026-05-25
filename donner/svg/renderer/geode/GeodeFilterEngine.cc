@@ -1522,8 +1522,19 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     } else if (const auto* conv = std::get_if<filter_primitive::ConvolveMatrix>(&node.primitive)) {
       outputTex = applyConvolveMatrix(arena, inputTex, *conv);
     } else if (const auto* turb = std::get_if<filter_primitive::Turbulence>(&node.primitive)) {
+      // feTurbulence generates noise in the filter's color-interpolation-filters
+      // space (linearRGB by default), then the result is stored in sRGB. Match
+      // tiny-skia, which runs `linearToSrgb` on the generated noise when the node
+      // resolves to linearRGB. The generator has no input, so this is a one-way
+      // linear→sRGB conversion of the output (no input conversion).
       outputTex = applyTurbulence(arena, inputTex.getWidth(), inputTex.getHeight(), *turb,
                                   deviceFromFilter);
+      const bool nodeLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
+      if (nodeLinearRGB) {
+        outputTex = applyColorSpaceConversion(arena, outputTex, /*srgbToLinear=*/false);
+      }
     } else if (const auto* disp = std::get_if<filter_primitive::DisplacementMap>(&node.primitive)) {
       wgpu::Texture in2Tex = inputTex;
       if (node.inputs.size() >= 2) {
@@ -1536,7 +1547,22 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         pixelScale *= std::sqrt(bboxW * bboxH);
       }
       pixelScale *= std::sqrt(scaleX * scaleY);
-      outputTex = applyDisplacementMap(arena, inputTex, in2Tex, *disp, pixelScale);
+      // feDisplacementMap operates in the filter's color-interpolation-filters
+      // space (linearRGB by default): tiny-skia converts BOTH inputs sRGB→linear,
+      // runs the displacement, then converts the output linear→sRGB. Match it so
+      // the displaced sampling and the in2 channel values use the same space.
+      const bool dispLinearRGB =
+          node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+          svg::ColorInterpolationFilters::SRGB;
+      if (dispLinearRGB) {
+        wgpu::Texture linearIn1 = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture linearIn2 = applyColorSpaceConversion(arena, in2Tex, /*srgbToLinear=*/true);
+        wgpu::Texture linearOut =
+            applyDisplacementMap(arena, linearIn1, linearIn2, *disp, pixelScale);
+        outputTex = applyColorSpaceConversion(arena, linearOut, /*srgbToLinear=*/false);
+      } else {
+        outputTex = applyDisplacementMap(arena, inputTex, in2Tex, *disp, pixelScale);
+      }
     } else if (const auto* diffuse =
                    std::get_if<filter_primitive::DiffuseLighting>(&node.primitive)) {
       const Box2d lightingInputSubregion =

@@ -314,6 +314,21 @@ shift bug; **any host re-rendering an feImage-fragment document (the editor) was
 filter offscreen feImage shadow entities out of the main snapshot in `draw()` + `drawEntityRange()`
 + red→green regression test `FeImageFragmentRedrawIsIdempotent`. 8 fragment-reference cases
 un-gated (≤1px parity); `embedded-png` → edge-floor (1px image-edge band, order-independent, not
-the idempotency bug). **Gate ledger now: 0 text + 20 G2 + 189 edge-floor = 209.** Remaining
-parity gaps: 20 filter (→ G2) + 189 edge-floor (→ finer geode AA) +
+the idempotency bug). Gate ledger then: 0 text + 20 G2 + 189 edge-floor = 209.
+
+**G2 feTurbulence fix (2026-05-25) + bonus feDisplacementMap.** feTurbulence was NOT a noise-algo
+mismatch — geode's WGSL Perlin noise is already spec-exact (Park-Miller LCG, gradient tables,
+lattice, octave sum, fractal-vs-turbulence). The single deviation: geode skipped the linearRGB→sRGB
+conversion on the generated noise (geode 128 vs tiny's sRGB 187) — the **same linearRGB-coverage gap**
+as feComposite/feComponentTransfer. One output-side conversion → all 12 feTurbulence at 0px. The fix
+unmasked a pre-existing geode **feDisplacementMap** bug (its SVG uses turbulence as displacement source):
+geode's shader lacked un-premultiply + used nearest instead of bilinear + skipped linearRGB — all three
+fixed (matches tiny's `FloatPixmap` displacement), keeping `FilterDisplacementMap` green (a real
+correctness fix for any displacement source, not just parity). **Gate ledger now: 0 text + 8 G2 +
+189 edge-floor = 197.** Remaining parity gaps: 8 filter (→ G2) + 189 edge-floor (→ finer geode AA) +
 the 137 sub-visual premultiply fills (→ G5, pass at 0.02). The hoist's text goal is achieved.
+
+> **Pattern:** geode's filter engine inconsistently applied `color-interpolation-filters` (linearRGB
+> default). feGaussianBlur/feColorMatrix/feBlend had it; feComposite, feComponentTransfer, feTurbulence,
+> feDisplacementMap did not — all now fixed. Worth a sweep of the remaining primitives (feMerge,
+> feConvolveMatrix, feDiffuseLighting, feSpecularLighting) for the same gap.

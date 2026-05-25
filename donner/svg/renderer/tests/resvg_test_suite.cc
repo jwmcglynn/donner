@@ -627,18 +627,16 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       "filters/feMerge/color-interpolation-filters=linearRGB.svg",
       "filters/feMerge/complex-transform.svg",
       "filters/feSpecularLighting/specularExponent=256.svg",
-      "filters/feTurbulence/baseFrequency=0.01.svg",
-      "filters/feTurbulence/baseFrequency=0.05-0.01.svg",
-      "filters/feTurbulence/baseFrequency=0.05-0.05.svg",
-      "filters/feTurbulence/baseFrequency=0.05-0.svg",
-      "filters/feTurbulence/complex-transform.svg",
-      "filters/feTurbulence/numOctaves=5.svg",
-      "filters/feTurbulence/primitiveUnits=objectBoundingBox.svg",
-      "filters/feTurbulence/seed=-20.svg",
-      "filters/feTurbulence/seed=1.5.svg",
-      "filters/feTurbulence/seed=20.svg",
-      "filters/feTurbulence/type=fractalNoise.svg",
-      "filters/feTurbulence/type=invalid.svg",
+      // feTurbulence (12) un-gated 2026-05-27: NOT an inherent noise-algorithm
+      // mismatch (the audit's "different noise impl" was wrong). geode's WGSL
+      // already implements the spec-exact Park-Miller RNG + gradient/lattice
+      // tables (matching tiny-skia bit-for-bit). The only deviation was a missing
+      // linearRGB→sRGB conversion: feTurbulence generates noise in the filter's
+      // color-interpolation-filters space (linearRGB by default) and the result is
+      // stored in sRGB; tiny runs `linearToSrgb` on the generated noise, geode did
+      // not (e.g. fractalNoise center 128 vs tiny 187 = sRGB(0.5)). Fixed by a
+      // one-way linear→sRGB conversion of the turbulence output in
+      // GeodeFilterEngine::execute. All 12 now pass parity at 0px. See 0021 §G2.
       "filters/filter/on-group-with-child-outside-of-canvas.svg",
   };
   if (kGenuineG2.count(key)) {
