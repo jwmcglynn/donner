@@ -366,3 +366,48 @@ once steps 3+5 land.
 If a future adapter cannot do single-sample analytical coverage (none found),
 the `*_alpha_coverage` slot remains as the per-adapter escape — but pointed at
 the analytical code, never back to 4-sample quantization.
+
+---
+
+## 8. Revision (2026-05-25) — dual-ray is a dead end; pivot to §6 supersampling
+
+**Steps 1–3 were implemented twice and reverted twice.** The dual-ray (steps 1–3)
+*does* roughly halve the edge floor on real edges (text `simple-case` 708→~290) and is
+correct for all non-text geometry (shapes/circles/rects/fill-rule → 0–18 px). But it
+**cannot reach ≤100 px vs tiny on the resvg corpus**, for a fundamental reason — not a
+tuning or scale (D3) or degeneracy (D6) bug (both were applied, zero effect on the number):
+
+**The conflation problem.** Every resvg text test carries a `stroke-width="0.5"` crosshair
++ 1 px frame (thin axis-aligned lines). A ray cast *along* a sub-pixel-width line never
+exits it → reports full coverage (geode 255 vs tiny 160). The two adversarial cases need
+**opposite** combine rules:
+- thin line aligned with a ray (crosshair) → wants `min` (the perpendicular ray is right);
+- genuine perpendicular edge fringe (glyph top) → wants `max` (the aligned ray reads 0).
+
+No single combine satisfies both. Measured on the full 1263-test parity sweep:
+
+| combine | edge-floor flips (≤100) | new regressions (non-gated) |
+|---|---|---|
+| average (Slug-canonical fast mode) | 1 | **56** (over-covers every thin line) |
+| min | ~0 (text stuck ~295) | under-covers perpendicular fringes |
+| min/max hybrid | 10 | 16 (skew/transform/letter-spacing) |
+
+Best (hybrid) = +10 / −16 = **net negative**. This is a property of axis-aligned dual-ray,
+not a bug to tune out. Plus sub-pixel-phase differences vs tiny's scan-converter accumulate
+past 100 over long glyph perimeters.
+
+**Pivot — direction 1: single-axis analytical supersampling (Slug paper §6).** Keep ONE
+ray; take N sub-samples shifted *perpendicular* to it (offset ray origin), average. This
+matches a scan-converter's coverage *distribution* far better than a second perpendicular
+ray and **sidesteps the thin-line conflation entirely** (a horizontal ray measures the
+0.5px crosshair width correctly at every vertical sub-position; glyph fringes captured at N
+sub-positions). It is the paper's *quality* mode (dual-ray is the *fast* mode). Cost: N× the
+single-ray tracer per pixel (no vertical bands needed — big simplification vs steps 2–3).
+
+Discarded alternatives: accept the edge floor (pursue parity via other levers / the MSAA
+drop is orthogonal); exclude the harness crosshair from the parity diff (= masking, banned).
+
+**Plan supersedes steps 1–3 above:** prove direction 1 with a small POC (does perpendicular
+supersampling get the crosshair AND glyphs ≤100 with no regressions on ~6 representative
+tests?) BEFORE a full rollout — two reverts earned a validation gate. Vertical bands
+(encoder step 2) are NOT needed for direction 1 and are shelved.
