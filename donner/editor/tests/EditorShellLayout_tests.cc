@@ -31,6 +31,66 @@ TEST(EditorShellLayoutTest, SplitsInspectorAndLayerPanelWithResizableBudget) {
   EXPECT_FLOAT_EQ(layout.layerPanelHeightFraction, 0.5f);
 }
 
+TEST(EditorShellLayoutTest, MainLayoutUsesSourcePaneWidthWhenVisible) {
+  const EditorMainPaneLayout layout = ComputeEditorMainPaneLayout({
+      .windowWidth = 1600.0f,
+      .sourcePaneVisible = true,
+      .sourcePaneWidth = 560.0f,
+      .minSourcePaneWidth = 240.0f,
+      .maxSourcePaneWidth = 900.0f,
+      .rightPaneWidth = 420.0f,
+      .minRightPaneWidth = 220.0f,
+      .maxRightPaneWidth = 900.0f,
+      .minRenderPaneWidth = 220.0f,
+  });
+
+  EXPECT_FLOAT_EQ(layout.sourcePaneWidth, 560.0f);
+  EXPECT_FLOAT_EQ(layout.renderPaneX, 560.0f);
+  EXPECT_FLOAT_EQ(layout.renderPaneWidth, 620.0f);
+  EXPECT_FLOAT_EQ(layout.rightPaneX, 1180.0f);
+  EXPECT_FLOAT_EQ(layout.rightPaneWidth, 420.0f);
+}
+
+TEST(EditorShellLayoutTest, MainLayoutGivesSourceWidthBackToRenderPaneWhenHidden) {
+  const EditorMainPaneLayout layout = ComputeEditorMainPaneLayout({
+      .windowWidth = 1600.0f,
+      .sourcePaneVisible = false,
+      .sourcePaneWidth = 560.0f,
+      .minSourcePaneWidth = 240.0f,
+      .maxSourcePaneWidth = 900.0f,
+      .rightPaneWidth = 420.0f,
+      .minRightPaneWidth = 220.0f,
+      .maxRightPaneWidth = 900.0f,
+      .minRenderPaneWidth = 220.0f,
+  });
+
+  EXPECT_FLOAT_EQ(layout.sourcePaneWidth, 0.0f);
+  EXPECT_FLOAT_EQ(layout.renderPaneX, 0.0f);
+  EXPECT_FLOAT_EQ(layout.renderPaneWidth, 1180.0f);
+  EXPECT_FLOAT_EQ(layout.rightPaneX, 1180.0f);
+  EXPECT_FLOAT_EQ(layout.rightPaneWidth, 420.0f);
+}
+
+TEST(EditorShellLayoutTest, MainLayoutClampsSourcePaneWidthWhenVisible) {
+  const EditorMainPaneLayout layout = ComputeEditorMainPaneLayout({
+      .windowWidth = 1600.0f,
+      .sourcePaneVisible = true,
+      .sourcePaneWidth = 80.0f,
+      .minSourcePaneWidth = 240.0f,
+      .maxSourcePaneWidth = 900.0f,
+      .rightPaneWidth = 420.0f,
+      .minRightPaneWidth = 220.0f,
+      .maxRightPaneWidth = 900.0f,
+      .minRenderPaneWidth = 220.0f,
+  });
+
+  EXPECT_FLOAT_EQ(layout.sourcePaneWidth, 240.0f);
+  EXPECT_FLOAT_EQ(layout.renderPaneX, 240.0f);
+  EXPECT_FLOAT_EQ(layout.renderPaneWidth, 940.0f);
+  EXPECT_FLOAT_EQ(layout.rightPaneX, 1180.0f);
+  EXPECT_FLOAT_EQ(layout.rightPaneWidth, 420.0f);
+}
+
 TEST(EditorShellLayoutTest, PreservesInspectorMinimumWhenLayerPanelIsExpanded) {
   RightSidebarLayoutInput input = DefaultLayoutInput();
   input.layerPanelHeightFraction = 1.0f;

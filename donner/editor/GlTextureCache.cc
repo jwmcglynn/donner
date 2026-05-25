@@ -214,6 +214,7 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
       view.texture = ToImTextureId(it->second.texture);
       view.id = tile.id;
       view.kind = tile.kind;
+      view.layerEntity = tile.layerEntity;
       view.generation = tile.generation;
       view.bitmapDimsPx = Vector2i(it->second.width, it->second.height);
       view.rasterCanvasSize = tile.rasterCanvasSize;
@@ -295,6 +296,7 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
     view.texture = ToImTextureId(entry.texture);
     view.id = tile.id;
     view.kind = tile.kind;
+    view.layerEntity = tile.layerEntity;
     view.generation = tile.generation;
     view.bitmapDimsPx =
         !tile.bitmap.empty() ? tile.bitmap.dimensions : Vector2i(entry.width, entry.height);

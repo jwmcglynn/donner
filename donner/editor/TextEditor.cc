@@ -995,6 +995,62 @@ Coordinates TextEditor::visualScreenPosToCoordinates(const ImVec2& position) con
   return sanitizeCoordinates(Coordinates(visualLine.lineNo, column));
 }
 
+Coordinates TextEditor::visibleSelectionEndCoordinates() const {
+  Coordinates end = state_.selectionEnd;
+  if (!hasSelection()) {
+    return end;
+  }
+
+  if (end.column > 0) {
+    return Coordinates(end.line, end.column - 1);
+  }
+
+  if (end.line > state_.selectionStart.line) {
+    const int previousLine = end.line - 1;
+    return Coordinates(previousLine, text_.getLineMaxColumn(previousLine));
+  }
+
+  return end;
+}
+
+float TextEditor::visibleTextRegionHeight() const {
+  if (scrollViewportHeight_ > 0.0f) {
+    return scrollViewportHeight_;
+  }
+  return ImGui::GetWindowHeight();
+}
+
+void TextEditor::scrollCoordinatesRangeIntoView(const Coordinates& start, const Coordinates& end) {
+  if (!withinRender_) {
+    return;
+  }
+
+  const float scrollY = ImGui::GetScrollY();
+  const float height = visibleTextRegionHeight();
+
+  int firstLine = std::min(start.line, end.line);
+  int lastLine = std::max(start.line, end.line);
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    firstLine = std::min(visualLineIndexForCoordinates(start), visualLineIndexForCoordinates(end));
+    lastLine = std::max(visualLineIndexForCoordinates(start), visualLineIndexForCoordinates(end));
+  }
+
+  const int firstVisible = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+  const int visibleLineCount = std::max(1, static_cast<int>(std::floor(height / charAdvance_.y)));
+  const int lastVisible = firstVisible + visibleLineCount - 1;
+  const int selectedLineCount = lastLine - firstLine + 1;
+
+  if (selectedLineCount > visibleLineCount || firstLine < firstVisible) {
+    ImGui::SetScrollY(std::max(0.0f, static_cast<float>(firstLine) * charAdvance_.y));
+    return;
+  }
+
+  if (lastLine > lastVisible) {
+    const int targetFirstLine = lastLine - visibleLineCount + 1;
+    ImGui::SetScrollY(std::max(0.0f, static_cast<float>(targetFirstLine) * charAdvance_.y));
+  }
+}
+
 void TextEditor::renderInternal(std::string_view title) {
   calculateCharacterAdvance();
   updatePaletteAlpha();
@@ -1002,8 +1058,10 @@ void TextEditor::renderInternal(std::string_view title) {
   UTILS_RELEASE_ASSERT(lineBuffer_.empty());
   focused_ = ImGui::IsWindowFocused() || findFocused_ || replaceFocused_;
 
+  const ImVec2 contentRegionMin = ImGui::GetWindowContentRegionMin();
   const auto contentSize = ImGui::GetWindowContentRegionMax();
   contentRegionMax_ = contentSize;
+  scrollViewportHeight_ = std::max(0.0f, contentSize.y - contentRegionMin.y);
   auto* drawList = ImGui::GetWindowDrawList();
   float longestLine = textStart_;
   tickSourceFlashes();
@@ -1068,9 +1126,16 @@ void TextEditor::handleScrolling() {
     return;
   }
 
+  if (scrollSelectionIntoView_ && hasSelection()) {
+    scrollCoordinatesRangeIntoView(state_.selectionStart, visibleSelectionEndCoordinates());
+    scrollSelectionIntoView_ = false;
+    scrollToCursor_ = false;
+    return;
+  }
+
   const float scrollX = ImGui::GetScrollX();
   const float scrollY = ImGui::GetScrollY();
-  const float height = ImGui::GetWindowHeight();
+  const float height = visibleTextRegionHeight();
   const float width = windowWidth_;
 
   const auto pos = getActualCursorCoordinates();
@@ -1078,27 +1143,29 @@ void TextEditor::handleScrolling() {
 
   if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
     const int visualIndex = visualLineIndexForCoordinates(pos);
-    const auto topVisual = 1 + static_cast<int>(std::ceil(scrollY / charAdvance_.y));
-    const auto bottomVisual = static_cast<int>(std::ceil((scrollY + height) / charAdvance_.y));
-    if (visualIndex < topVisual) {
-      ImGui::SetScrollY(std::max(0.0f, (visualIndex - 1) * charAdvance_.y));
-    } else if (visualIndex > bottomVisual - 4) {
-      ImGui::SetScrollY(std::max(0.0f, (visualIndex + 4) * charAdvance_.y - height));
+    const int firstVisible = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+    const int lastVisible =
+        static_cast<int>(std::floor((scrollY + height - charAdvance_.y) / charAdvance_.y));
+    if (visualIndex < firstVisible) {
+      ImGui::SetScrollY(std::max(0.0f, visualIndex * charAdvance_.y));
+    } else if (visualIndex > lastVisible) {
+      ImGui::SetScrollY(std::max(0.0f, (visualIndex + 1) * charAdvance_.y - height));
     }
     scrollToCursor_ = false;
     return;
   }
 
-  const auto top = 1 + static_cast<int>(std::ceil(scrollY / charAdvance_.y));
-  const auto bottom = static_cast<int>(std::ceil((scrollY + height) / charAdvance_.y));
+  const auto top = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+  const auto bottom =
+      static_cast<int>(std::floor((scrollY + height - charAdvance_.y) / charAdvance_.y));
   const auto left = static_cast<int>(std::ceil(scrollX / charAdvance_.x));
   const auto right = static_cast<int>(std::ceil((scrollX + width) / charAdvance_.x));
 
   if (pos.line < top) {
-    ImGui::SetScrollY(std::max(0.0f, (pos.line - 1) * charAdvance_.y));
+    ImGui::SetScrollY(std::max(0.0f, pos.line * charAdvance_.y));
   }
-  if (pos.line > bottom - 4) {
-    ImGui::SetScrollY(std::max(0.0f, (pos.line + 4) * charAdvance_.y - height));
+  if (pos.line > bottom) {
+    ImGui::SetScrollY(std::max(0.0f, (pos.line + 1) * charAdvance_.y - height));
   }
   if (pos.column < left) {
     ImGui::SetScrollX(std::max(0.0f, len + textStart_ - 11 * charAdvance_.x));
@@ -2077,23 +2144,47 @@ void TextEditor::renderCursor(const ImVec2& pos, ImDrawList* drawList) {
 
 namespace {
 
-void renderFunctionTooltip(const std::string& declaration, const ImVec2& position, float uiScale,
-                           ImDrawList* drawList) {
-  const float tooltipWidth = 350.0f * uiScale;
-  const float tooltipHeight = 50.0f * uiScale;
+std::string popupWindowName(std::string_view label) {
+  return std::string("TextEditor") + std::string(label) + "##" +
+         std::to_string(ImGui::GetID(label.data(), label.data() + label.size()));
+}
 
-  drawList->AddRectFilled(position, ImVec2(position.x + tooltipWidth, position.y + tooltipHeight),
-                          ImGui::GetColorU32(ImGuiCol_FrameBg));
+ImFont* popPushedEditorFont() {
+  ImGuiContext* context = ImGui::GetCurrentContext();
+  if (context == nullptr || context->FontStack.Size == 0) {
+    return nullptr;
+  }
 
   ImFont* font = ImGui::GetFont();
   ImGui::PopFont();
+  return font;
+}
+
+void pushEditorFontIfNeeded(ImFont* font) {
+  if (font != nullptr) {
+    ImGui::PushFont(font);
+  }
+}
+
+void renderFunctionTooltip(const std::string& declaration, const ImVec2& position, float uiScale) {
+  const float tooltipWidth = 350.0f * uiScale;
+  const float tooltipHeight = 50.0f * uiScale;
+
+  ImFont* font = popPushedEditorFont();
 
   ImGui::SetNextWindowPos(position, ImGuiCond_Always);
-  ImGui::BeginChild("##texteditor_functooltip", ImVec2(tooltipWidth, tooltipHeight), true);
-  ImGui::TextWrapped("%s", declaration.c_str());
-  ImGui::EndChild();
+  ImGui::SetNextWindowSize(ImVec2(tooltipWidth, tooltipHeight), ImGuiCond_Always);
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
+      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoInputs;
+  const std::string windowName = popupWindowName("FunctionTooltip");
+  if (ImGui::Begin(windowName.c_str(), nullptr, flags)) {
+    ImGui::TextWrapped("%s", declaration.c_str());
+  }
+  ImGui::End();
 
-  ImGui::PushFont(font);
+  pushEditorFontIfNeeded(font);
 }
 
 void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& suggestions,
@@ -2102,7 +2193,16 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
   const float popupHeight = 100.0f * uiScale;
 
   ImGui::SetNextWindowPos(position, ImGuiCond_Always);
-  ImGui::BeginChild("##texteditor_autocompl", ImVec2(popupWidth, popupHeight), true);
+  ImGui::SetNextWindowSize(ImVec2(popupWidth, popupHeight), ImGuiCond_Always);
+  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
+                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus;
+  const std::string windowName = popupWindowName("Autocomplete");
+  if (!ImGui::Begin(windowName.c_str(), nullptr, flags)) {
+    ImGui::End();
+    return;
+  }
 
   for (int i = 0; i < suggestions.size(); i++) {
     const bool isSelected = (i == selectedIndex);
@@ -2113,7 +2213,7 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
     }
   }
 
-  ImGui::EndChild();
+  ImGui::End();
 }
 
 }  // namespace
@@ -2125,7 +2225,7 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
     const ImVec2 tooltipPos = coordinatesToScreenPos(functionDeclarationCoord_);
     const ImVec2 adjustedPos(tooltipPos.x + ImGui::GetScrollX(), tooltipPos.y + charAdvance_.y);
 
-    renderFunctionTooltip(functionDeclaration_, adjustedPos, uiScale_, drawList);
+    renderFunctionTooltip(functionDeclaration_, adjustedPos, uiScale_);
 
     ImGui::SetWindowFocus();
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
@@ -2140,15 +2240,11 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
     acPos.y += charAdvance_.y;
     acPos.x += ImGui::GetScrollX();
 
-    drawList->AddRectFilled(acPos, ImVec2(acPos.x + 150.0f * uiScale_, acPos.y + 100.0f * uiScale_),
-                            ImGui::GetColorU32(ImGuiCol_FrameBg));
-
-    ImFont* font = ImGui::GetFont();
-    ImGui::PopFont();
+    ImFont* font = popPushedEditorFont();
 
     renderAutocomplete(autocompleteSuggestions_, autocompleteIndex_, acPos, uiScale_);
 
-    ImGui::PushFont(font);
+    pushEditorFontIfNeeded(font);
 
     ImGui::SetWindowFocus();
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
@@ -2165,7 +2261,12 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
 
   // Handle cursor visibility
   if (scrollToCursor_) {
-    ensureCursorVisible();
+    if (scrollSelectionIntoView_ && hasSelection()) {
+      scrollCoordinatesRangeIntoView(state_.selectionStart, visibleSelectionEndCoordinates());
+      scrollSelectionIntoView_ = false;
+    } else {
+      ensureCursorVisible();
+    }
     scrollToCursor_ = false;
   }
 
@@ -3175,7 +3276,7 @@ void TextEditor::ensureCursorVisible() {
 
   const float scrollX = ImGui::GetScrollX();
   const float scrollY = ImGui::GetScrollY();
-  const float height = ImGui::GetWindowHeight();
+  const float height = visibleTextRegionHeight();
   const float width = windowWidth_;
 
   const auto pos = getActualCursorCoordinates();
@@ -3183,26 +3284,28 @@ void TextEditor::ensureCursorVisible() {
 
   if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
     const int visualIndex = visualLineIndexForCoordinates(pos);
-    const auto topVisual = 1 + static_cast<int>(std::ceil(scrollY / charAdvance_.y));
-    const auto bottomVisual = static_cast<int>(std::ceil((scrollY + height) / charAdvance_.y));
-    if (visualIndex < topVisual) {
-      ImGui::SetScrollY(std::max(0.0f, (visualIndex - 1) * charAdvance_.y));
-    } else if (visualIndex > bottomVisual - 4) {
-      ImGui::SetScrollY(std::max(0.0f, (visualIndex + 4) * charAdvance_.y - height));
+    const int firstVisible = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+    const int lastVisible =
+        static_cast<int>(std::floor((scrollY + height - charAdvance_.y) / charAdvance_.y));
+    if (visualIndex < firstVisible) {
+      ImGui::SetScrollY(std::max(0.0f, visualIndex * charAdvance_.y));
+    } else if (visualIndex > lastVisible) {
+      ImGui::SetScrollY(std::max(0.0f, (visualIndex + 1) * charAdvance_.y - height));
     }
     return;
   }
 
-  const auto top = 1 + static_cast<int>(std::ceil(scrollY / charAdvance_.y));
-  const auto bottom = static_cast<int>(std::ceil((scrollY + height) / charAdvance_.y));
+  const auto top = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+  const auto bottom =
+      static_cast<int>(std::floor((scrollY + height - charAdvance_.y) / charAdvance_.y));
   const auto left = static_cast<int>(std::ceil(scrollX / charAdvance_.x));
   const auto right = static_cast<int>(std::ceil((scrollX + width) / charAdvance_.x));
 
   if (pos.line < top) {
-    ImGui::SetScrollY(std::max(0.0f, (pos.line - 1) * charAdvance_.y));
+    ImGui::SetScrollY(std::max(0.0f, pos.line * charAdvance_.y));
   }
-  if (pos.line > bottom - 4) {
-    ImGui::SetScrollY(std::max(0.0f, (pos.line + 4) * charAdvance_.y - height));
+  if (pos.line > bottom) {
+    ImGui::SetScrollY(std::max(0.0f, (pos.line + 1) * charAdvance_.y - height));
   }
   if (pos.column < left) {
     ImGui::SetScrollX(std::max(0.0f, len + textStart_ - 11 * charAdvance_.x));

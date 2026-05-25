@@ -271,6 +271,18 @@ std::string HexHash(std::uint64_t hash) {
   return out.str();
 }
 
+std::string ReproContentHash(std::string_view source) {
+  static constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
+  std::uint64_t hash = kFnvOffset;
+  for (unsigned char byte : source) {
+    hash = HashByte(hash, byte);
+  }
+
+  std::ostringstream out;
+  out << "fnv1a64:" << std::hex << std::setw(16) << std::setfill('0') << hash;
+  return out.str();
+}
+
 std::optional<std::string> BitmapContentHash(const svg::RendererBitmap& bitmap) {
   if (bitmap.empty()) {
     return std::nullopt;
@@ -609,6 +621,15 @@ std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& 
 
   return std::vector<uint8_t>(std::istreambuf_iterator<char>(stream),
                               std::istreambuf_iterator<char>());
+}
+
+std::optional<std::string> ReadTextFile(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  if (!stream) {
+    return std::nullopt;
+  }
+
+  return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
 }
 
 int AttachPngFile(ToolCallResult* out, const std::string& label, const std::filesystem::path& path,
@@ -1239,6 +1260,7 @@ ToolCallResult EditorControlSession::loadSvgSource(std::string_view source,
     return MakeErrorResult("failed to parse SVG source");
   }
   currentSourcePath_ = std::string(sourcePath);
+  currentSourceText_ = std::string(source);
   app_.setCurrentFilePath(std::string(sourcePath));
   app_.setCleanSourceText(source);
   app_.flushFrame();
@@ -1557,9 +1579,7 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
     return MakeErrorResult(error);
   }
   if (svgPath.empty() || svgPath == "<memory>") {
-    return MakeErrorResult(
-        "start_rnr_recording requires svg_path when the session was loaded from "
-        "in-memory SVG source");
+    svgPath = "embedded.svg";
   }
 
   rnrRecording_ = RnrRecordingState{};
@@ -1569,6 +1589,9 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
   }
   rnrRecording_.frameDeltaMs = frameDeltaMs > 0.0 ? frameDeltaMs : 1000.0 / 60.0;
   rnrRecording_.file.metadata.svgPath = svgPath;
+  rnrRecording_.file.metadata.svgBasename = std::filesystem::path(svgPath).filename().string();
+  rnrRecording_.file.metadata.svgContentHash = ReproContentHash(currentSourceText_);
+  rnrRecording_.file.metadata.svgSource = currentSourceText_;
   rnrRecording_.file.metadata.windowWidth = windowWidth > 0 ? windowWidth : canvasWidth_;
   rnrRecording_.file.metadata.windowHeight = windowHeight > 0 ? windowHeight : canvasHeight_;
   rnrRecording_.file.metadata.displayScale = displayScale > 0.0 ? displayScale : 1.0;
@@ -1579,6 +1602,9 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
       {"active", true},
       {"output_path", outputPath.empty() ? nullptr : json(outputPath)},
       {"svg_path", rnrRecording_.file.metadata.svgPath},
+      {"svg_basename", rnrRecording_.file.metadata.svgBasename},
+      {"svg_hash", rnrRecording_.file.metadata.svgContentHash},
+      {"embedded_svg_source", rnrRecording_.file.metadata.svgSource.has_value()},
       {"frame_count", rnrRecording_.file.frames.size()},
   };
   return out;
@@ -1637,6 +1663,9 @@ ToolCallResult EditorControlSession::rnrRecordingState(const json&) const {
       {"output_path",
        rnrRecording_.outputPath.has_value() ? json(rnrRecording_.outputPath->string()) : nullptr},
       {"svg_path", rnrRecording_.file.metadata.svgPath},
+      {"svg_basename", rnrRecording_.file.metadata.svgBasename},
+      {"svg_hash", rnrRecording_.file.metadata.svgContentHash},
+      {"embedded_svg_source", rnrRecording_.file.metadata.svgSource.has_value()},
   };
   return out;
 }
@@ -1769,24 +1798,39 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
     return MakeErrorResult("failed to read .rnr file: " + rnrPathString);
   }
 
-  std::optional<std::filesystem::path> svgPath;
+  std::filesystem::path svgDisplayPath;
+  std::string liveSource;
+  bool usedEmbeddedSvgSource = false;
   if (!svgPathOverride.empty()) {
-    svgPath = std::filesystem::path(svgPathOverride);
+    svgDisplayPath = std::filesystem::path(svgPathOverride);
+    std::optional<std::string> source = ReadTextFile(svgDisplayPath);
+    if (!source.has_value()) {
+      return MakeErrorResult("failed to open SVG for .rnr replay: " + svgDisplayPath.string());
+    }
+    liveSource = std::move(*source);
+  } else if (replay->metadata.svgSource.has_value()) {
+    svgDisplayPath = !replay->metadata.svgBasename.empty()
+                         ? std::filesystem::path(replay->metadata.svgBasename)
+                         : std::filesystem::path(replay->metadata.svgPath).filename();
+    if (svgDisplayPath.empty()) {
+      svgDisplayPath = "embedded.svg";
+    }
+    liveSource = *replay->metadata.svgSource;
+    usedEmbeddedSvgSource = true;
   } else {
-    svgPath = resolveRnrSvgPath(rnrPath, replay->metadata.svgPath);
+    std::optional<std::filesystem::path> resolvedSvgPath =
+        resolveRnrSvgPath(rnrPath, replay->metadata.svgPath);
+    if (!resolvedSvgPath.has_value()) {
+      return MakeErrorResult("failed to resolve SVG path from .rnr metadata: " +
+                             replay->metadata.svgPath);
+    }
+    svgDisplayPath = *resolvedSvgPath;
+    std::optional<std::string> source = ReadTextFile(svgDisplayPath);
+    if (!source.has_value()) {
+      return MakeErrorResult("failed to open SVG for .rnr replay: " + svgDisplayPath.string());
+    }
+    liveSource = std::move(*source);
   }
-  if (!svgPath.has_value()) {
-    return MakeErrorResult("failed to resolve SVG path from .rnr metadata: " +
-                           replay->metadata.svgPath);
-  }
-
-  std::ifstream svgFile(*svgPath, std::ios::binary);
-  if (!svgFile.is_open()) {
-    return MakeErrorResult("failed to open SVG for .rnr replay: " + svgPath->string());
-  }
-  std::ostringstream svgBuffer;
-  svgBuffer << svgFile.rdbuf();
-  std::string liveSource = svgBuffer.str();
 
   LoadOptions loadOptions;
   loadOptions.canvasWidth =
@@ -1796,7 +1840,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
   loadOptions.devicePixelRatio =
       replay->metadata.displayScale > 0.0 ? replay->metadata.displayScale : 1.0;
   loadOptions.renderAfterLoad = false;
-  ToolCallResult load = loadSvgSource(liveSource, loadOptions, svgPath->string());
+  ToolCallResult load = loadSvgSource(liveSource, loadOptions, svgDisplayPath.string());
   if (load.isError || !load.body.value("ok", false)) {
     return load;
   }
@@ -1822,7 +1866,9 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
   out.body = json{
       {"ok", true},
       {"rnr_path", rnrPathString},
-      {"svg_path", svgPath->string()},
+      {"svg_path", svgDisplayPath.string()},
+      {"embedded_svg_source", usedEmbeddedSvgSource},
+      {"svg_hash", replay->metadata.svgContentHash},
       {"frame_count", replay->frames.size()},
       {"rendered_frame_count", 0},
       {"mouse_up_count", 0},

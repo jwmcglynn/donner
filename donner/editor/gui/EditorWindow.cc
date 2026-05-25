@@ -253,6 +253,15 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   if (inputOverride.mouseWheelH != 0.0f || inputOverride.mouseWheel != 0.0f) {
     io.AddMouseWheelEvent(inputOverride.mouseWheelH, inputOverride.mouseWheel);
   }
+  for (const int key : inputOverride.keyDownEvents) {
+    io.AddKeyEvent(static_cast<ImGuiKey>(key), true);
+  }
+  for (const int key : inputOverride.keyUpEvents) {
+    io.AddKeyEvent(static_cast<ImGuiKey>(key), false);
+  }
+  for (const std::uint32_t codepoint : inputOverride.inputCharacters) {
+    io.AddInputCharacter(codepoint);
+  }
 }
 
 #ifdef __EMSCRIPTEN__

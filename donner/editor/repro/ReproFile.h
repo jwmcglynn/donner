@@ -16,7 +16,8 @@
 /// Format is one JSON object per line (NDJSON):
 ///
 /// ```
-/// {"v":2,"svg":"path.svg","wnd":[1600,900],"scale":2.0,"exp":false}
+/// {"v":3,"svg":"path.svg","svg_base":"path.svg","svg_hash":"fnv1a64:...",
+///  "svg_src":"<svg>...</svg>","wnd":[1600,900],"scale":2.0,"exp":false}
 /// {"f":0,"t":0.0,"dt":16.6,"mx":100.5,"my":50.2,"btn":0,"mod":0,
 ///  "mdx":12.4,"mdy":33.1,
 ///  "vp":{"ox":560,"oy":22,"pw":1040,"ph":878,"dpr":2,
@@ -51,6 +52,12 @@
 ///   - `mdx` / `mdy`: mouse position in SVG-document coordinates
 ///   - `vp`: a snapshot of the editor viewport at record time
 ///   - `mdown.hit`: the element under the cursor at mouse-down time
+///
+/// Since v3 the metadata line can also carry a deterministic snapshot
+/// of the initial SVG source:
+///   - `svg_base`: basename of the originally opened filename
+///   - `svg_hash`: stable content hash of `svg_src`
+///   - `svg_src`: optional embedded SVG source text
 
 #include <cstdint>
 #include <filesystem>
@@ -62,11 +69,12 @@ namespace donner::editor::repro {
 
 /// File format version written by the current serializer.
 ///
-/// The reader accepts both:
+/// The reader accepts:
 /// - v1: legacy files with window-space mouse data only
 /// - v2: adds doc-space mouse coords, viewport snapshots, and
 ///   mouse-down hit-test checkpoints
-constexpr int kReproFileVersion = 2;
+/// - v3: adds optional embedded SVG source snapshots
+constexpr int kReproFileVersion = 3;
 
 /// Maximum number of mouse buttons recorded. Matches ImGui's
 /// `ImGuiMouseButton_COUNT`.
@@ -231,8 +239,19 @@ struct ReproExpectation {
 /// Session-level metadata captured at recording start.
 struct ReproMetadata {
   /// Path to the SVG being edited when recording started. Relative or
-  /// absolute — player resolves against its working directory.
+  /// absolute; replayers use this as the fallback when no embedded source
+  /// snapshot is available.
   std::string svgPath;
+  /// Basename of the originally opened SVG path. Informational and
+  /// useful when the embedded source has been detached from the path.
+  std::string svgBasename;
+  /// Stable hash of \ref svgSource when embedded. Prefix identifies
+  /// the hash algorithm, e.g. `fnv1a64:0123456789abcdef`.
+  std::string svgContentHash;
+  /// Optional embedded SVG source snapshot. Replayers prefer this when
+  /// no explicit SVG path override is provided, so repros can remain
+  /// deterministic even if the original file changes later.
+  std::optional<std::string> svgSource;
   /// Logical window size at start. Replayer sets this on its mock window.
   int windowWidth = 0;
   int windowHeight = 0;

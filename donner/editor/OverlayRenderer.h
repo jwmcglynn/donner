@@ -79,6 +79,9 @@ struct SelectionChromeSnapshot {
     /// in document space lets chrome stroke width depend only on viewport
     /// scale, not on the selected element's own scale/rotation transform.
     Path pathDoc;
+    /// True when the selected element is hidden by `display:none`. The path outline still renders
+    /// as an editable placeholder, but uses a dimmer stroke than visible selections.
+    bool displayNone = false;
   };
   std::vector<PathItem> paths;
   /// Transient source-hover path outlines. Drawn as soft hover chrome before selection chrome.

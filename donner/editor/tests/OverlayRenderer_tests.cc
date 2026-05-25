@@ -395,6 +395,61 @@ TEST(OverlayRendererTest, DisplayNoneSelectionStillDrawsPathOutline) {
   const auto bitmap = overlayRenderer.takeSnapshot();
   ASSERT_FALSE(bitmap.empty());
 
+  const auto pixelAt = [&](int x, int y) -> std::array<std::uint8_t, 4> {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return {row[x * 4 + 0], row[x * 4 + 1], row[x * 4 + 2], row[x * 4 + 3]};
+  };
+
+  bool foundOutline = false;
+  std::array<std::uint8_t, 4> outlinePixel{};
+  for (int x = 20; x <= 60; ++x) {
+    const std::array<std::uint8_t, 4> pixel = pixelAt(x, 20);
+    if (pixel[3] > 0) {
+      foundOutline = true;
+      outlinePixel = pixel;
+      break;
+    }
+  }
+  EXPECT_TRUE(foundOutline)
+      << "A display:none selection should still expose its path overlay outline for source edits.";
+  if (foundOutline) {
+    EXPECT_GT(outlinePixel[0], 0)
+        << "Display-none selection chrome should use the dimmed gray-blue stroke, not pure cyan.";
+    EXPECT_LT(outlinePixel[1], 0xc8);
+    EXPECT_LT(outlinePixel[2], 0xff);
+    EXPECT_GT(outlinePixel[2], outlinePixel[0]);
+    EXPECT_GT(outlinePixel[1], outlinePixel[0]);
+  }
+}
+
+TEST(OverlayRendererTest, DisplayNonePathSelectionStillDrawsPathOutline) {
+  constexpr std::string_view kHiddenPathSelectionSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+              <style>.cls-82{fill:red}</style>
+              <path class="cls-82" d="M20 20 H60 V60 H20 Z" style="display:none"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kHiddenPathSelectionSvg));
+  app.document().document().setCanvasSize(100, 100);
+
+  auto hidden = app.document().document().querySelector(".cls-82");
+  ASSERT_TRUE(hidden.has_value());
+  app.setSelection(*hidden);
+
+  svg::Renderer overlayRenderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(100.0, 100.0);
+  viewport.devicePixelRatio = 1.0;
+  overlayRenderer.beginFrame(viewport);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  OverlayRenderer::drawChromeWithTransform(overlayRenderer, app.selectedElement(), canvasFromDoc);
+  overlayRenderer.endFrame();
+
+  const auto bitmap = overlayRenderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+
   const auto alphaAt = [&](int x, int y) -> std::uint8_t {
     const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
     return row[x * 4 + 3];
@@ -402,13 +457,10 @@ TEST(OverlayRendererTest, DisplayNoneSelectionStillDrawsPathOutline) {
 
   bool foundOutline = false;
   for (int x = 20; x <= 60; ++x) {
-    if (alphaAt(x, 20) > 0) {
-      foundOutline = true;
-      break;
-    }
+    foundOutline = foundOutline || alphaAt(x, 20) > 0;
   }
   EXPECT_TRUE(foundOutline)
-      << "A display:none selection should still expose its path overlay outline for source edits.";
+      << "A display:none path selection should still expose its path overlay outline.";
 }
 
 // Regression for "dragging a shape moves the path outline in the
@@ -655,6 +707,49 @@ TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
       << "combined-AABB top-right corner missing from the unified Skia overlay";
   EXPECT_TRUE(anyNonZeroNear(20, 180, 2))
       << "combined-AABB bottom-left corner missing from the unified Skia overlay";
+}
+
+TEST(OverlayRendererTest, SelectionAabbShowsPixelSizeChip) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <rect id="r1" x="40" y="60" width="40" height="50" fill="red"/>
+            </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  svg::Renderer overlayRenderer;
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+  overlayRenderer.beginFrame(viewport);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  OverlayRenderer::drawChromeWithTransform(overlayRenderer, app.selectedElement(), canvasFromDoc);
+  overlayRenderer.endFrame();
+
+  const auto bitmap = overlayRenderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+  const auto pixelAt = [&](int x, int y, int channel) -> std::uint8_t {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + channel];
+  };
+
+  EXPECT_EQ(pixelAt(40, 38, 3), 0) << "chip should have rounded, transparent corners";
+
+  EXPECT_GT(pixelAt(42, 46, 3), 220) << "chip background should be above the AABB";
+  EXPECT_LT(pixelAt(42, 46, 0), 40);
+  EXPECT_GT(pixelAt(42, 46, 1), 80);
+  EXPECT_GT(pixelAt(42, 46, 2), 100);
+
+  EXPECT_GT(pixelAt(47, 43, 0), 220) << "white size text should render over the chip";
+  EXPECT_GT(pixelAt(47, 43, 1), 220);
+  EXPECT_GT(pixelAt(47, 43, 2), 220);
+  EXPECT_GT(pixelAt(47, 43, 3), 220);
 }
 
 // Marquee chrome also moved to the ImGui draw list. The path overlay

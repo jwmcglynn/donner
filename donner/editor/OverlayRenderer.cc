@@ -1,6 +1,12 @@
 #include "donner/editor/OverlayRenderer.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/Path.h"
@@ -13,6 +19,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/core/Display.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -34,6 +41,16 @@ constexpr double kHoverStrokePixels = 1.5;
 /// Marquee stroke thickness — matches the prior ImGui chrome exactly.
 constexpr double kMarqueeStrokePixels = 1.5;
 
+constexpr double kSizeChipGapPixels = 4.0;
+constexpr double kSizeChipPaddingXPixels = 6.0;
+constexpr double kSizeChipPaddingYPixels = 4.0;
+constexpr double kSizeChipCornerRadiusPixels = 4.0;
+constexpr double kSizeChipGlyphCellPixels = 2.0;
+constexpr double kSizeChipGlyphGapPixels = 2.0;
+constexpr double kSizeChipSpaceWidthPixels = 4.0;
+constexpr int kSizeChipGlyphColumns = 3;
+constexpr int kSizeChipGlyphRows = 5;
+
 svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
   // Bright cyan stroke, no fill.
@@ -44,6 +61,12 @@ svg::PaintParams MakeSelectionStrokePaint(double worldStrokeWidth) {
   paint.strokeParams.lineCap = svg::StrokeLinecap::Butt;
   paint.strokeParams.lineJoin = svg::StrokeLinejoin::Miter;
   paint.strokeParams.miterLimit = 4.0;
+  return paint;
+}
+
+svg::PaintParams MakeDisplayNoneSelectionStrokePaint(double worldStrokeWidth) {
+  svg::PaintParams paint = MakeSelectionStrokePaint(worldStrokeWidth);
+  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x5f, 0x9a, 0xb2, 0xff)));
   return paint;
 }
 
@@ -110,6 +133,22 @@ svg::PaintParams MakeMarqueeStrokePaint(double worldStrokeWidth) {
   return paint;
 }
 
+svg::PaintParams MakeSizeChipBackgroundPaint() {
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0x6f, 0x95, 0xff)));
+  paint.stroke = svg::PaintServer::None{};
+  paint.fillOpacity = 1.0;
+  return paint;
+}
+
+svg::PaintParams MakeSizeChipTextPaint() {
+  svg::PaintParams paint;
+  paint.fill = svg::PaintServer::Solid(css::Color(css::RGBA(0xff, 0xff, 0xff, 0xff)));
+  paint.stroke = svg::PaintServer::None{};
+  paint.fillOpacity = 1.0;
+  return paint;
+}
+
 /// Linear scale factor baked into `canvasFromDoc`. Both axes are
 /// identical under `preserveAspectRatio="xMid* meet|slice"`, which is
 /// the only case the editor renders today.
@@ -149,6 +188,27 @@ Path PathForCorners(const std::array<Vector2d, 4>& corners) {
   return builder.build();
 }
 
+Path RoundedRectPath(const Box2d& rect, double radius) {
+  const double clampedRadius = std::clamp(radius, 0.0, std::min(rect.width(), rect.height()) * 0.5);
+  const double left = rect.topLeft.x;
+  const double top = rect.topLeft.y;
+  const double right = rect.bottomRight.x;
+  const double bottom = rect.bottomRight.y;
+
+  PathBuilder builder;
+  builder.moveTo(Vector2d(left + clampedRadius, top));
+  builder.lineTo(Vector2d(right - clampedRadius, top));
+  builder.quadTo(Vector2d(right, top), Vector2d(right, top + clampedRadius));
+  builder.lineTo(Vector2d(right, bottom - clampedRadius));
+  builder.quadTo(Vector2d(right, bottom), Vector2d(right - clampedRadius, bottom));
+  builder.lineTo(Vector2d(left + clampedRadius, bottom));
+  builder.quadTo(Vector2d(left, bottom), Vector2d(left, bottom - clampedRadius));
+  builder.lineTo(Vector2d(left, top + clampedRadius));
+  builder.quadTo(Vector2d(left, top), Vector2d(left + clampedRadius, top));
+  builder.closePath();
+  return builder.build();
+}
+
 Path TransformPathToDocument(const Path& path, const Transform2d& documentFromElement) {
   PathBuilder builder;
   path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
@@ -174,6 +234,181 @@ Path TransformPathToDocument(const Path& path, const Transform2d& documentFromEl
   return builder.build();
 }
 
+std::array<std::string_view, kSizeChipGlyphRows> SizeChipGlyph(char ch) {
+  switch (ch) {
+    case '0': return {"111", "101", "101", "101", "111"};
+    case '1': return {"010", "110", "010", "010", "111"};
+    case '2': return {"111", "001", "111", "100", "111"};
+    case '3': return {"111", "001", "111", "001", "111"};
+    case '4': return {"101", "101", "111", "001", "001"};
+    case '5': return {"111", "100", "111", "001", "111"};
+    case '6': return {"111", "100", "111", "101", "111"};
+    case '7': return {"111", "001", "010", "010", "010"};
+    case '8': return {"111", "101", "111", "101", "111"};
+    case '9': return {"111", "101", "111", "001", "111"};
+    case 'x':
+    case 'X': return {"101", "101", "010", "101", "101"};
+    default: return {"000", "000", "000", "000", "000"};
+  }
+}
+
+double SizeChipGlyphAdvance(char ch) {
+  return ch == ' ' ? kSizeChipSpaceWidthPixels : kSizeChipGlyphColumns * kSizeChipGlyphCellPixels;
+}
+
+double SizeChipTextWidth(std::string_view text) {
+  double width = 0.0;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    if (i != 0) {
+      width += kSizeChipGlyphGapPixels;
+    }
+    width += SizeChipGlyphAdvance(text[i]);
+  }
+  return width;
+}
+
+std::string SizeChipLabel(double widthPx, double heightPx) {
+  const long long roundedWidth = std::max(0LL, std::llround(widthPx));
+  const long long roundedHeight = std::max(0LL, std::llround(heightPx));
+  return std::to_string(roundedWidth) + " x " + std::to_string(roundedHeight);
+}
+
+struct SizeChipGeometry {
+  Box2d canvasBounds;
+  double widthPx = 0.0;
+  double heightPx = 0.0;
+};
+
+Box2d CanvasBoundsForDocumentBox(const Box2d& box, const Transform2d& canvasFromDoc) {
+  const std::array<Vector2d, 4> corners{
+      box.topLeft,
+      Vector2d(box.bottomRight.x, box.topLeft.y),
+      box.bottomRight,
+      Vector2d(box.topLeft.x, box.bottomRight.y),
+  };
+
+  Box2d bounds = Box2d::CreateEmpty(canvasFromDoc.transformPosition(corners.front()));
+  for (const Vector2d& corner : corners) {
+    bounds.addPoint(canvasFromDoc.transformPosition(corner));
+  }
+  return bounds;
+}
+
+SizeChipGeometry SizeChipGeometryForDocumentBox(const Box2d& box,
+                                                const Transform2d& canvasFromDoc) {
+  const Box2d canvasBounds = CanvasBoundsForDocumentBox(box, canvasFromDoc);
+  return SizeChipGeometry{
+      .canvasBounds = canvasBounds,
+      .widthPx = std::abs(canvasBounds.width()),
+      .heightPx = std::abs(canvasBounds.height()),
+  };
+}
+
+SizeChipGeometry SizeChipGeometryForOrientedBox(
+    const SelectionChromeSnapshot::OrientedBox& orientedBox, const Transform2d& canvasFromDoc) {
+  std::array<Vector2d, 4> canvasCorners;
+  for (std::size_t i = 0; i < orientedBox.cornersDoc.size(); ++i) {
+    canvasCorners[i] = canvasFromDoc.transformPosition(orientedBox.cornersDoc[i]);
+  }
+
+  Box2d canvasBounds = Box2d::CreateEmpty(canvasCorners.front());
+  for (const Vector2d& corner : canvasCorners) {
+    canvasBounds.addPoint(corner);
+  }
+
+  return SizeChipGeometry{
+      .canvasBounds = canvasBounds,
+      .widthPx = (canvasCorners[1] - canvasCorners[0]).length(),
+      .heightPx = (canvasCorners[3] - canvasCorners[0]).length(),
+  };
+}
+
+void DrawSizeChipText(svg::Renderer& renderer, std::string_view text, const Vector2d& origin) {
+  double cursorX = origin.x;
+  for (std::size_t glyphIndex = 0; glyphIndex < text.size(); ++glyphIndex) {
+    if (glyphIndex != 0) {
+      cursorX += kSizeChipGlyphGapPixels;
+    }
+
+    const char ch = text[glyphIndex];
+    if (ch == ' ') {
+      cursorX += SizeChipGlyphAdvance(ch);
+      continue;
+    }
+
+    const auto glyph = SizeChipGlyph(ch);
+    for (int row = 0; row < kSizeChipGlyphRows; ++row) {
+      for (int column = 0; column < kSizeChipGlyphColumns; ++column) {
+        if (glyph[row][column] != '1') {
+          continue;
+        }
+
+        const Box2d cell =
+            Box2d::FromXYWH(cursorX + static_cast<double>(column) * kSizeChipGlyphCellPixels,
+                            origin.y + static_cast<double>(row) * kSizeChipGlyphCellPixels,
+                            kSizeChipGlyphCellPixels, kSizeChipGlyphCellPixels);
+        renderer.drawRect(cell, svg::StrokeParams());
+      }
+    }
+    cursorX += SizeChipGlyphAdvance(ch);
+  }
+}
+
+void DrawSizeChip(svg::Renderer& renderer, const SizeChipGeometry& geometry) {
+  if (geometry.widthPx <= 0.0 || geometry.heightPx <= 0.0 || renderer.width() <= 0 ||
+      renderer.height() <= 0) {
+    return;
+  }
+
+  const std::string label = SizeChipLabel(geometry.widthPx, geometry.heightPx);
+  const double textWidth = SizeChipTextWidth(label);
+  const double textHeight = kSizeChipGlyphRows * kSizeChipGlyphCellPixels;
+  const double chipWidth = textWidth + 2.0 * kSizeChipPaddingXPixels;
+  const double chipHeight = textHeight + 2.0 * kSizeChipPaddingYPixels;
+
+  const double maxX = std::max(0.0, static_cast<double>(renderer.width()) - chipWidth);
+  const double maxY = std::max(0.0, static_cast<double>(renderer.height()) - chipHeight);
+  const double chipX = std::clamp(geometry.canvasBounds.topLeft.x, 0.0, maxX);
+  double chipY = geometry.canvasBounds.topLeft.y - chipHeight - kSizeChipGapPixels;
+  if (chipY < 0.0) {
+    chipY = geometry.canvasBounds.topLeft.y + kSizeChipGapPixels;
+  }
+  chipY = std::clamp(chipY, 0.0, maxY);
+
+  renderer.setTransform(Transform2d());
+  const Box2d chipRect = Box2d::FromXYWH(chipX, chipY, chipWidth, chipHeight);
+  const svg::PaintParams backgroundPaint = MakeSizeChipBackgroundPaint();
+  renderer.setPaint(backgroundPaint);
+  svg::PathShape backgroundShape;
+  backgroundShape.path = RoundedRectPath(chipRect, kSizeChipCornerRadiusPixels);
+  backgroundShape.parentFromEntity = Transform2d();
+  renderer.drawPath(backgroundShape, backgroundPaint.strokeParams);
+
+  const svg::PaintParams textPaint = MakeSizeChipTextPaint();
+  renderer.setPaint(textPaint);
+  DrawSizeChipText(renderer, label,
+                   Vector2d(chipX + kSizeChipPaddingXPixels, chipY + kSizeChipPaddingYPixels));
+}
+
+bool ElementDisplayNone(const svg::SVGElement& element) {
+  return element.getComputedStyle().display.getRequired() == svg::Display::None;
+}
+
+bool HasDisplayNoneInAncestorChain(const svg::SVGElement& element) {
+  svg::SVGElement current = element;
+  while (true) {
+    if (ElementDisplayNone(current)) {
+      return true;
+    }
+
+    std::optional<svg::SVGElement> parent = current.parentElement();
+    if (!parent.has_value()) {
+      return false;
+    }
+    current = *parent;
+  }
+}
+
 void AppendPathItems(std::span<const svg::SVGElement> elements,
                      std::vector<SelectionChromeSnapshot::PathItem>* out) {
   for (const auto& element : elements) {
@@ -182,6 +417,7 @@ void AppendPathItems(std::span<const svg::SVGElement> elements,
         SelectionChromeSnapshot::PathItem item;
         const Transform2d documentFromElement = geometry.elementFromWorld();
         item.pathDoc = TransformPathToDocument(*spline, documentFromElement);
+        item.displayNone = HasDisplayNoneInAncestorChain(geometry);
         out->push_back(std::move(item));
       }
     }
@@ -314,19 +550,22 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
 
   const svg::PaintParams selectionStrokePaint =
       MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+  const svg::PaintParams displayNoneSelectionStrokePaint =
+      MakeDisplayNoneSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
+  std::optional<SizeChipGeometry> sizeChipGeometry;
 
   // Per-element path outlines first — the user sees the exact shape of
-  // every selected element regardless of how many are picked. All
-  // outlines share the same cyan stroke, so the paint is set once and
-  // reused across the loop.
+  // every selected element regardless of how many are picked.
   if (!snapshot.paths.empty()) {
-    renderer.setPaint(selectionStrokePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
     for (const auto& item : snapshot.paths) {
+      const svg::PaintParams& paint =
+          item.displayNone ? displayNoneSelectionStrokePaint : selectionStrokePaint;
+      renderer.setPaint(paint);
       svg::PathShape shape;
       shape.path = item.pathDoc;
       shape.parentFromEntity = Transform2d();
-      renderer.drawPath(shape, selectionStrokePaint.strokeParams);
+      renderer.drawPath(shape, paint.strokeParams);
     }
   }
 
@@ -344,16 +583,19 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
   } else if (!snapshot.aabbsDoc.empty()) {
     renderer.setPaint(selectionStrokePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
+    const Box2d combinedBounds = CombinedSelectionBounds(snapshot.aabbsDoc);
     for (const Box2d& aabb : snapshot.aabbsDoc) {
       renderer.drawRect(aabb, selectionStrokePaint.strokeParams);
     }
     if (snapshot.aabbsDoc.size() > 1) {
-      Box2d combined = snapshot.aabbsDoc.front();
-      for (std::size_t i = 1; i < snapshot.aabbsDoc.size(); ++i) {
-        combined.addBox(snapshot.aabbsDoc[i]);
-      }
-      renderer.drawRect(combined, selectionStrokePaint.strokeParams);
+      renderer.drawRect(combinedBounds, selectionStrokePaint.strokeParams);
     }
+    sizeChipGeometry = SizeChipGeometryForDocumentBox(combinedBounds, snapshot.canvasFromDoc);
+  }
+
+  if (snapshot.orientedBoundsDoc.has_value()) {
+    sizeChipGeometry =
+        SizeChipGeometryForOrientedBox(*snapshot.orientedBoundsDoc, snapshot.canvasFromDoc);
   }
 
   if (!snapshot.handleBoxesDoc.empty()) {
@@ -377,6 +619,10 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
     const svg::PaintParams marqueeStroke = MakeMarqueeStrokePaint(snapshot.marqueeStrokeWidthWorld);
     renderer.setPaint(marqueeStroke);
     renderer.drawRect(*snapshot.marqueeDoc, marqueeStroke.strokeParams);
+  }
+
+  if (sizeChipGeometry.has_value()) {
+    DrawSizeChip(renderer, *sizeChipGeometry);
   }
 }
 

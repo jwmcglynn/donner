@@ -837,6 +837,15 @@ private:
   /// `pendingDemotions_` and reuses the cached bitmap.
   void processPendingDemotions(Registry& registry);
 
+  /// Drop interaction hints for entities that no longer have a render instance.
+  ///
+  /// Demotion hysteresis deliberately keeps released drag layers alive for a short
+  /// window, but an entity that just became `display:none` has left paint order.
+  /// Keeping its interaction layer as a static-segment boundary lets preserved
+  /// segment caches describe the wrong paint range. Returns true when the layer
+  /// assignment must be re-resolved and every static segment should be rebuilt.
+  bool dropNonRenderableInteractionHints(Registry& registry);
+
   /// Returns true if the entity is currently within the layer's cached render range.
   bool layerContainsEntity(const CompositorLayer& layer, Entity entity) const;
 

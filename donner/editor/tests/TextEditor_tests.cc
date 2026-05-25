@@ -2,9 +2,14 @@
 
 #include <gtest/gtest.h>
 
+#include <cmath>
+#include <sstream>
+#include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/ImGuiInternalIncludes.h"
 
 namespace donner::editor {
 
@@ -135,6 +140,58 @@ protected:
   }
 
   [[nodiscard]] float LastScrollY() const { return editor.lastScroll_; }
+  [[nodiscard]] float LastScrollViewportHeight() const { return editor.scrollViewportHeight_; }
+  [[nodiscard]] float CharacterAdvanceY() const { return editor.charAdvance_.y; }
+  void EnterCharacter(ImWchar character) { editor.enterCharacter(character, /*shift=*/false); }
+
+  void OpenAutocompleteAtCursor(std::string_view displayText) {
+    editor.autocompleteOpened_ = true;
+    editor.autocompleteSuggestions_.clear();
+    editor.autocompleteSuggestions_.emplace_back(RcString(displayText), RcString(displayText));
+    editor.autocompleteIndex_ = 0;
+    editor.autocompletePosition_ = editor.getCursorPosition();
+  }
+
+  void ReplaceAutocompleteSuggestion(std::string_view displayText) {
+    ASSERT_FALSE(editor.autocompleteSuggestions_.empty());
+    editor.autocompleteSuggestions_[0] = {RcString(displayText), RcString(displayText)};
+  }
+
+  [[nodiscard]] int AutocompleteChildWindowCount() const {
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context == nullptr) {
+      return 0;
+    }
+
+    int childWindowCount = 0;
+    for (ImGuiWindow* window : context->Windows) {
+      const std::string_view name(window->Name);
+      if ((name.find("Autocomplete") != std::string_view::npos ||
+           name.find("autocompl") != std::string_view::npos) &&
+          (window->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
+        ++childWindowCount;
+      }
+    }
+    return childWindowCount;
+  }
+
+  [[nodiscard]] int AutocompleteTopLevelWindowCount() const {
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context == nullptr) {
+      return 0;
+    }
+
+    int topLevelWindowCount = 0;
+    for (ImGuiWindow* window : context->Windows) {
+      const std::string_view name(window->Name);
+      if ((name.find("Autocomplete") != std::string_view::npos ||
+           name.find("autocompl") != std::string_view::npos) &&
+          (window->Flags & ImGuiWindowFlags_ChildWindow) == 0) {
+        ++topLevelWindowCount;
+      }
+    }
+    return topLevelWindowCount;
+  }
 
   [[nodiscard]] Coordinates CoordinatesAtVisualTextOffset(int visualIndex,
                                                           int visualColumnOffset) const {
@@ -808,6 +865,52 @@ TEST_F(TextEditorTests, ExternalSourceEditQueuesRenderedFlashDecoration) {
   EXPECT_GT(flashes[0].intensity, 0.0f);
 }
 
+TEST_F(TextEditorTests, ExternalSourceEditInsideSelectionExtendsSelection) {
+  constexpr std::string_view kSource =
+      R"(<svg><rect id="r1" x="0" y="0" width="10" height="10"/></svg>)";
+  constexpr std::string_view kInserted = " transform=\"translate(5)\"";
+  editor.setText(kSource);
+  editor.resetTextChanged();
+
+  const std::size_t selectionStart = kSource.find("<rect");
+  ASSERT_NE(selectionStart, std::string_view::npos);
+  const std::size_t selectionEnd = kSource.find("/>", selectionStart);
+  ASSERT_NE(selectionEnd, std::string_view::npos);
+  const std::size_t selectedSourceEnd = selectionEnd + 2;
+  editor.setSelection(editor.getCoordinatesAtByteOffset(selectionStart),
+                      editor.getCoordinatesAtByteOffset(selectedSourceEnd));
+  editor.setCursorPosition(editor.getCoordinatesAtByteOffset(selectionStart));
+
+  editor.applyExternalSourceEdit(selectionEnd, 0, kInserted);
+
+  EXPECT_EQ(
+      editor.getSelectedText(),
+      R"expected(<rect id="r1" x="0" y="0" width="10" height="10" transform="translate(5)"/>)expected");
+  EXPECT_EQ(editor.getCursorPosition(), editor.getCoordinatesAtByteOffset(selectionStart));
+}
+
+TEST_F(TextEditorTests, ExternalSourceEditInsideReverseSelectionExtendsSelection) {
+  constexpr std::string_view kSource =
+      R"(<svg><rect id="r1" x="0" y="0" width="10" height="10"/></svg>)";
+  constexpr std::string_view kInserted = " transform=\"translate(5)\"";
+  editor.setText(kSource);
+  editor.resetTextChanged();
+
+  const std::size_t selectionStart = kSource.find("<rect");
+  ASSERT_NE(selectionStart, std::string_view::npos);
+  const std::size_t selectionEnd = kSource.find("/>", selectionStart);
+  ASSERT_NE(selectionEnd, std::string_view::npos);
+  const std::size_t selectedSourceEnd = selectionEnd + 2;
+  editor.setSelection(editor.getCoordinatesAtByteOffset(selectedSourceEnd),
+                      editor.getCoordinatesAtByteOffset(selectionStart));
+
+  editor.applyExternalSourceEdit(selectionEnd, 0, kInserted);
+
+  EXPECT_EQ(
+      editor.getSelectedText(),
+      R"expected(<rect id="r1" x="0" y="0" width="10" height="10" transform="translate(5)"/>)expected");
+}
+
 TEST_F(TextEditorTests, SourceFocusModeContextMenuStateAndToggleRequestAreConsumable) {
   editor.setSourceFocusModeContextMenu(true);
 
@@ -903,6 +1006,86 @@ TEST_F(TextEditorTests, SelectAndFocusScrollsToWrappedVisualCursorLine) {
   RenderEditorFrame(ImVec2(240.0f, 80.0f));
 
   EXPECT_GT(LastScrollY(), 0.0f);
+}
+
+TEST_F(TextEditorTests, SelectAndFocusScrollsEntireSelectionIntoView) {
+  std::ostringstream source;
+  for (int i = 0; i < 80; ++i) {
+    source << "line" << i << "\n";
+  }
+  editor.setText(source.str());
+
+  constexpr ImVec2 kEditorSize(240.0f, 180.0f);
+  RenderEditorFrame(kEditorSize);
+
+  editor.selectAndFocus(Coordinates(40, 0), Coordinates(45, 6));
+  RenderEditorFrame(kEditorSize);
+  RenderEditorFrame(kEditorSize);
+
+  const int firstVisible = static_cast<int>(std::floor(LastScrollY() / CharacterAdvanceY()));
+  const int lastVisible =
+      firstVisible +
+      std::max(1, static_cast<int>(std::floor(LastScrollViewportHeight() / CharacterAdvanceY()))) -
+      1;
+  EXPECT_LE(firstVisible, 40) << "scrollY=" << LastScrollY() << " charY=" << CharacterAdvanceY()
+                              << " viewportY=" << LastScrollViewportHeight();
+  EXPECT_GE(lastVisible, 45) << "firstVisible=" << firstVisible << " scrollY=" << LastScrollY()
+                             << " charY=" << CharacterAdvanceY()
+                             << " viewportY=" << LastScrollViewportHeight();
+}
+
+TEST_F(TextEditorTests, TypingOnTopVisibleLineDoesNotNudgeScrollUp) {
+  std::ostringstream source;
+  for (int i = 0; i < 80; ++i) {
+    source << "line" << i << "\n";
+  }
+  editor.setText(source.str());
+
+  constexpr ImVec2 kEditorSize(240.0f, 80.0f);
+  RenderEditorFrame(kEditorSize);
+  editor.selectAndFocus(Coordinates(40, 0), Coordinates(40, 0));
+  RenderEditorFrame(kEditorSize);
+  RenderEditorFrame(kEditorSize);
+
+  const int topVisibleLine = static_cast<int>(std::floor(LastScrollY() / CharacterAdvanceY()));
+  editor.setCursorPosition(Coordinates(topVisibleLine, 0));
+  RenderEditorFrame(kEditorSize);
+  RenderEditorFrame(kEditorSize);
+  const float beforeTypingScrollY = LastScrollY();
+
+  EnterCharacter('x');
+  RenderEditorFrame(kEditorSize);
+  RenderEditorFrame(kEditorSize);
+
+  EXPECT_GE(LastScrollY() + 0.5f, beforeTypingScrollY);
+}
+
+TEST_F(TextEditorTests, AutocompletePopupDoesNotPerturbEditorScroll) {
+  std::ostringstream source;
+  for (int i = 0; i < 80; ++i) {
+    source << "<path id=\"line" << i << "\" class=\"cls-" << i << "\"/>\n";
+  }
+  editor.setText(source.str());
+
+  constexpr ImVec2 kEditorSize(240.0f, 80.0f);
+  RenderEditorFrame(kEditorSize);
+  editor.selectAndFocus(Coordinates(40, 8), Coordinates(40, 8));
+  RenderEditorFrame(kEditorSize);
+  RenderEditorFrame(kEditorSize);
+
+  const float beforePopupScrollY = LastScrollY();
+  OpenAutocompleteAtCursor("style");
+  RenderEditorFrame(kEditorSize);
+  const float afterOpenScrollY = LastScrollY();
+
+  ReplaceAutocompleteSuggestion("stroke");
+  RenderEditorFrame(kEditorSize);
+  const float afterSuggestionChangeScrollY = LastScrollY();
+
+  EXPECT_NEAR(afterOpenScrollY, beforePopupScrollY, 0.5f);
+  EXPECT_NEAR(afterSuggestionChangeScrollY, beforePopupScrollY, 0.5f);
+  EXPECT_EQ(AutocompleteChildWindowCount(), 0);
+  EXPECT_EQ(AutocompleteTopLevelWindowCount(), 1);
 }
 
 // ============================================================================

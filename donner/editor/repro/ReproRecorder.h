@@ -45,6 +45,10 @@ struct ReproRecorderOptions {
   std::filesystem::path outputPath;
   /// SVG file the editor is editing. Stored verbatim in the metadata.
   std::string svgPath;
+  /// Initial SVG source loaded into the source pane. When present, the
+  /// recorder embeds it in metadata so replay does not depend on a mutable
+  /// external file path.
+  std::optional<std::string> svgSource;
   /// Initial logical window dimensions at recording start.
   int windowWidth = 0;
   int windowHeight = 0;

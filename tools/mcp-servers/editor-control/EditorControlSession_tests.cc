@@ -569,6 +569,10 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
 
   std::optional<repro::ReproFile> recorded = repro::ReadReproFile(rnrPath);
   ASSERT_TRUE(recorded.has_value());
+  EXPECT_EQ(recorded->metadata.svgBasename, svgPath.filename().string());
+  EXPECT_TRUE(recorded->metadata.svgContentHash.starts_with("fnv1a64:"));
+  ASSERT_TRUE(recorded->metadata.svgSource.has_value());
+  EXPECT_EQ(*recorded->metadata.svgSource, kFilteredScene);
   ASSERT_EQ(recorded->frames.size(), 4u);
   ASSERT_EQ(recorded->frames.front().events.size(), 1u);
   EXPECT_EQ(recorded->frames.front().events.front().kind, repro::ReproEvent::Kind::MouseDown);
@@ -585,6 +589,8 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
   idleFrame.events.clear();
   recordedWithIdle.frames.insert(recordedWithIdle.frames.begin(), 2, idleFrame);
   ASSERT_TRUE(repro::WriteReproFile(idleRnrPath, recordedWithIdle));
+  std::error_code removeError;
+  std::filesystem::remove(svgPath, removeError);
 
   ToolCallResult replay =
       session.handleToolCall("replay_rnr", json{{"rnr_path", idleRnrPath.string()},
@@ -593,6 +599,7 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
                                                 {"max_frame_results", 10},
                                                 {"include_final_frame", false}});
   ASSERT_TRUE(replay.body.value("ok", false));
+  EXPECT_TRUE(replay.body.value("embedded_svg_source", false));
   EXPECT_EQ(replay.body.value("mouse_up_count", 0), 1);
   EXPECT_EQ(replay.body.value("processed_frame_count", 0), 4);
   EXPECT_EQ(replay.body.value("skipped_idle_frame_count", 0), 2);
@@ -630,6 +637,44 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
     }
   }
   EXPECT_TRUE(sawActiveTileDisplay);
+}
+
+TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {
+  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_memory.rnr";
+
+  EditorControlSession session;
+  ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kFilteredScene)},
+                                              {"canvas_width", 120},
+                                              {"canvas_height", 80},
+                                              {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false));
+
+  ToolCallResult start =
+      session.handleToolCall("start_rnr_recording", json{{"output_path", rnrPath.string()}});
+  ASSERT_TRUE(start.body.value("ok", false)) << start.body.dump(2);
+  EXPECT_EQ(start.body.value("svg_path", ""), "embedded.svg");
+  EXPECT_TRUE(start.body.value("embedded_svg_source", false));
+
+  ToolCallResult stop = session.handleToolCall("stop_rnr_recording", json::object());
+  ASSERT_TRUE(stop.body.value("ok", false));
+
+  std::optional<repro::ReproFile> recorded = repro::ReadReproFile(rnrPath);
+  ASSERT_TRUE(recorded.has_value());
+  EXPECT_EQ(recorded->metadata.svgPath, "embedded.svg");
+  EXPECT_EQ(recorded->metadata.svgBasename, "embedded.svg");
+  EXPECT_TRUE(recorded->metadata.svgContentHash.starts_with("fnv1a64:"));
+  ASSERT_TRUE(recorded->metadata.svgSource.has_value());
+  EXPECT_EQ(*recorded->metadata.svgSource, kFilteredScene);
+
+  ToolCallResult replay = session.handleToolCall(
+      "replay_rnr", json{{"rnr_path", rnrPath.string()}, {"include_frame_results", false}});
+  ASSERT_TRUE(replay.body.value("ok", false)) << replay.body.dump(2);
+  EXPECT_TRUE(replay.body.value("embedded_svg_source", false));
+
+  std::error_code removeError;
+  std::filesystem::remove(rnrPath, removeError);
 }
 
 }  // namespace

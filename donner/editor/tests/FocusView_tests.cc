@@ -206,6 +206,11 @@ bool ContainsLink(const std::vector<FocusReferenceLink>& links, const FocusRefer
   return std::ranges::find(links, needle) != links.end();
 }
 
+bool ContainsElement(const std::vector<svg::SVGElement>& elements,
+                     const std::optional<svg::SVGElement>& needle) {
+  return needle.has_value() && std::ranges::find(elements, *needle) != elements.end();
+}
+
 std::vector<FocusReferenceLink> SortLinks(std::vector<FocusReferenceLink> links) {
   std::sort(links.begin(), links.end(),
             [](const FocusReferenceLink& a, const FocusReferenceLink& b) {
@@ -270,6 +275,26 @@ TEST(FocusViewTest, IncludesReferencedPaintAndCompositingElements) {
                     .to = PointForNeedle(kReferencedSvg, R"(<linearGradient id="base")"),
                 },
             }));
+}
+
+TEST(FocusViewTest, ReferenceHighlightSummaryCountsForwardReferences) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kReferencedSvg));
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
+      app.document().document(), std::span<const svg::SVGElement>(&*target, 1));
+
+  EXPECT_EQ(summary.referencedElements.size(), 3u);
+  EXPECT_TRUE(ContainsElement(summary.referencedElements,
+                              app.document().document().querySelector("#paint")));
+  EXPECT_TRUE(ContainsElement(summary.referencedElements,
+                              app.document().document().querySelector("#clip")));
+  EXPECT_TRUE(ContainsElement(summary.referencedElements,
+                              app.document().document().querySelector("#shadow")));
+  EXPECT_TRUE(summary.referencingElements.empty());
+  EXPECT_EQ(summary.totalCount(), 3u);
 }
 
 TEST(FocusViewTest, IncludesReferencesFromStyleAndDescendantHrefAttributes) {
@@ -597,6 +622,26 @@ TEST(FocusViewTest, SelectingReferencedResourceIncludesReferringElementsAndCssRu
           .from = PointForNeedle(kResourceReferrersSvg, "#chained"),
           .to = PointForNeedle(kResourceReferrersSvg, R"(<linearGradient id="chained")"),
       }));
+}
+
+TEST(FocusViewTest, ReferenceHighlightSummaryCountsReverseReferences) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kResourceReferrersSvg));
+  std::optional<svg::SVGElement> paint = app.document().document().querySelector("#paint");
+  ASSERT_TRUE(paint.has_value());
+
+  const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
+      app.document().document(), std::span<const svg::SVGElement>(&*paint, 1));
+
+  EXPECT_TRUE(summary.referencedElements.empty());
+  EXPECT_EQ(summary.referencingElements.size(), 3u);
+  EXPECT_TRUE(ContainsElement(summary.referencingElements,
+                              app.document().document().querySelector("#cssTarget")));
+  EXPECT_TRUE(ContainsElement(summary.referencingElements,
+                              app.document().document().querySelector("#attrTarget")));
+  EXPECT_TRUE(ContainsElement(summary.referencingElements,
+                              app.document().document().querySelector("#chained")));
+  EXPECT_EQ(summary.totalCount(), 3u);
 }
 
 TEST(FocusViewTest, ForwardFilterDependencyDoesNotReverseExpandOtherFilterReferrers) {

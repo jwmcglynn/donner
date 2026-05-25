@@ -185,6 +185,7 @@ private:
 
   RnrRecordingState rnrRecording_;
   std::string currentSourcePath_;
+  std::string currentSourceText_;
   std::uint64_t nextRenderVersion_ = 1;
   int canvasWidth_ = 0;
   int canvasHeight_ = 0;

@@ -87,6 +87,7 @@ conventions automated agents should follow when editing design docs.
 | 0036 | [composited_presentation_retrospective](0036-composited_presentation_retrospective.md)     | Retrospective                                                     | Review of the filtered drag repro, flat-mode removal, fragile code paths, testing gaps, and cleanup actions.                 |
 | 0037 | [geode_presentation_glitch_investigation](0037-geode_presentation_glitch_investigation.md) | Investigation                                                     | Handoff notes for the remaining Geode direct-texture drag/zoom overlay pops and texture-splat glitches.                      |
 | 0039 | [text_editor_focus_and_flash](0039-text_editor_focus_and_flash.md)                         | Implemented; see [Editor Source Focus](../editor_source_focus.md) | Source-pane focus view, changed-character flash highlight, and context-aware soft wrap without horizontal scrolling.         |
+| 0040 | [semantic_text_completion](0040-semantic_text_completion.md)                               | Design                                                            | Parser-backed text completion and source block movement that preserve cursor flow and document structure.                    |
 
 ## Cross-reference: developer docs
 

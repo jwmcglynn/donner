@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 #include "donner/editor/repro/ReproRecorder.h"
 
@@ -54,6 +55,9 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   EXPECT_DOUBLE_EQ(loaded->metadata.displayScale, 2.0);
   EXPECT_TRUE(loaded->metadata.experimentalMode);
   EXPECT_EQ(loaded->metadata.startedAtIso8601, "2026-04-19T12:00:00Z");
+  EXPECT_TRUE(loaded->metadata.svgBasename.empty());
+  EXPECT_TRUE(loaded->metadata.svgContentHash.empty());
+  EXPECT_FALSE(loaded->metadata.svgSource.has_value());
   ASSERT_EQ(loaded->frames.size(), 1u);
   EXPECT_DOUBLE_EQ(loaded->frames[0].mouseX, 123.25);
   EXPECT_DOUBLE_EQ(loaded->frames[0].mouseY, 456.75);
@@ -61,6 +65,47 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   EXPECT_FALSE(loaded->frames[0].mouseDocY.has_value());
   EXPECT_FALSE(loaded->frames[0].viewport.has_value());
   EXPECT_FALSE(loaded->metadata.expect.has_value());
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, RoundTripEmbeddedSvgSourceMetadata) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.metadata.svgBasename = "input.svg";
+  file.metadata.svgContentHash = "fnv1a64:0123456789abcdef";
+  file.metadata.svgSource = "<svg viewBox=\"0 0 1 1\">\n<path d=\"M0 0\"/>\n</svg>";
+
+  const auto path = TempFile("svg_source_metadata");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->metadata.svgBasename, "input.svg");
+  EXPECT_EQ(loaded->metadata.svgContentHash, "fnv1a64:0123456789abcdef");
+  ASSERT_TRUE(loaded->metadata.svgSource.has_value());
+  EXPECT_EQ(*loaded->metadata.svgSource, *file.metadata.svgSource);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, ReproRecorderEmbedsInitialSvgSource) {
+  const auto path = TempFile("recorder_svg_source");
+
+  ReproRecorderOptions options;
+  options.outputPath = path;
+  options.svgPath = "/tmp/donner/input.svg";
+  options.svgSource = "<svg><path id=\"target\"/></svg>\n";
+  ReproRecorder recorder(std::move(options));
+
+  ASSERT_TRUE(recorder.flush());
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->metadata.svgPath, "/tmp/donner/input.svg");
+  EXPECT_EQ(loaded->metadata.svgBasename, "input.svg");
+  EXPECT_TRUE(loaded->metadata.svgContentHash.starts_with("fnv1a64:"));
+  ASSERT_TRUE(loaded->metadata.svgSource.has_value());
+  EXPECT_EQ(*loaded->metadata.svgSource, "<svg><path id=\"target\"/></svg>\n");
 
   std::error_code ec;
   std::filesystem::remove(path, ec);

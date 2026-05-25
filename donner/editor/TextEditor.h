@@ -448,6 +448,7 @@ public:
   void selectAndFocus(const Coordinates& start, const Coordinates& end) {
     setSelection(start, end);
     setCursorPosition(start);
+    scrollSelectionIntoView_ = true;
     scrollToCursor_ = true;
   }
 
@@ -1093,6 +1094,7 @@ private:
   bool sourceFocusModeContextMenuVisible_ = false;          //!< Show focus toggle in context menu
   bool sourceFocusModeContextMenuChecked_ = false;          //!< Context menu focus toggle state
   bool sourceFocusModeContextMenuToggleRequested_ = false;  //!< Context menu requested a toggle
+  bool scrollSelectionIntoView_ = false;                    //!< Scroll full programmatic selection
 
   // Reference aliases into `core_` for fields accessed by the shell's
   // render / input-capture code. These are initialized in the ctor
@@ -1111,17 +1113,18 @@ private:
   const LanguageDefinition& languageDefinition_;  //!< Language syntax (core_)
 
   // Layout and rendering. Interactive-selection trackers moved to core_.
-  ImVec2 uiCursorPos_;             //!< Current UI cursor position
-  ImVec2 contentRegionMax_{};      //!< Last rendered content-region max, relative to current window
-  ImVec2 findOrigin_;              //!< Search dialog origin
-  float windowWidth_;              //!< Current window width
-  ImVec2 rightClickPos_;           //!< Position of right click
-  ErrorMarkers& errorMarkers_;     //!< Line error markers (core_)
-  ImVec2 charAdvance_;             //!< Character size
-  Coordinates& interactiveStart_;  //!< Start of interactive selection (core_)
-  Coordinates& interactiveEnd_;    //!< End of interactive selection (core_)
-  std::string lineBuffer_;         //!< Buffer for current line
-  uint64_t startTime_ = 0;         //!< Editor start time
+  ImVec2 uiCursorPos_;                 //!< Current UI cursor position
+  ImVec2 contentRegionMax_{};          //!< Last rendered content-region max.
+  float scrollViewportHeight_ = 0.0f;  //!< Last rendered scroll viewport height.
+  ImVec2 findOrigin_;                  //!< Search dialog origin
+  float windowWidth_;                  //!< Current window width
+  ImVec2 rightClickPos_;               //!< Position of right click
+  ErrorMarkers& errorMarkers_;         //!< Line error markers (core_)
+  ImVec2 charAdvance_;                 //!< Character size
+  Coordinates& interactiveStart_;      //!< Start of interactive selection (core_)
+  Coordinates& interactiveEnd_;        //!< End of interactive selection (core_)
+  std::string lineBuffer_;             //!< Buffer for current line
+  uint64_t startTime_ = 0;             //!< Editor start time
 
   // Hover state
   Coordinates lastHoverPosition_;                        //!< Last mouse hover position
@@ -1260,6 +1263,9 @@ private:
   void updateHoveredTextPosition();
   [[nodiscard]] int visualLineIndexForCoordinates(const Coordinates& position) const;
   [[nodiscard]] Coordinates visualScreenPosToCoordinates(const ImVec2& position) const;
+  [[nodiscard]] Coordinates visibleSelectionEndCoordinates() const;
+  [[nodiscard]] float visibleTextRegionHeight() const;
+  void scrollCoordinatesRangeIntoView(const Coordinates& start, const Coordinates& end);
 
   /**
    * Handle editor scrolling.

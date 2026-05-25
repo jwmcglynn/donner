@@ -56,6 +56,19 @@ struct StyleFocus {
   std::vector<svg::SVGElement> impactedElements;  ///< Elements matched by the selected rule.
 };
 
+/// Distinct same-document references related to the active selection.
+struct ReferenceHighlightSummary {
+  /// Elements directly referenced by the active selection.
+  std::vector<svg::SVGElement> referencedElements;
+  /// Elements that directly reference the active selection.
+  std::vector<svg::SVGElement> referencingElements;
+
+  /// Number of references represented by this summary.
+  [[nodiscard]] std::size_t totalCount() const {
+    return referencedElements.size() + referencingElements.size();
+  }
+};
+
 /**
  * Compute the source-pane focus partition for \p selected.
  *
@@ -100,5 +113,17 @@ struct StyleFocus {
  */
 [[nodiscard]] std::optional<FocusPartition> ComputeStyleFocusPartitionAtSourceOffset(
     const svg::SVGDocument& document, std::size_t sourceOffset);
+
+/**
+ * Compute direct forward and reverse reference elements for \p selectedElements.
+ *
+ * Forward references are same-document URL/href/CSS declaration refs from the selected elements.
+ * Reverse references are elements whose URL/href/CSS declaration refs point at a selected resource.
+ *
+ * @param document Source-backed SVG document containing \p selectedElements.
+ * @param selectedElements Elements whose related refs should be summarized.
+ */
+[[nodiscard]] ReferenceHighlightSummary ComputeReferenceHighlightSummary(
+    const svg::SVGDocument& document, std::span<const svg::SVGElement> selectedElements);
 
 }  // namespace donner::editor

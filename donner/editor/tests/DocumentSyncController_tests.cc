@@ -158,6 +158,45 @@ TEST_F(DocumentSyncControllerTest, PartialOpeningTagEditPreservesSelectionWhileI
             std::string_view::npos);
 }
 
+TEST_F(DocumentSyncControllerTest, TypingDisplayNoneBeforePathClassKeepsSelectionAfterFlush) {
+  constexpr std::string_view kPathClassSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <style>.cls-82{fill:red}</style>
+  <path class="cls-82" d="M10 10 H60 V60 H10 Z"/>
+</svg>)svg";
+
+  ASSERT_TRUE(app_.loadFromString(kPathClassSvg));
+  app_.setCleanSourceText(kPathClassSvg);
+  textEditor_.setText(kPathClassSvg);
+  controller_.resetForLoadedDocument(std::string(kPathClassSvg));
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  std::optional<svg::SVGElement> path = app_.document().document().querySelector(".cls-82");
+  ASSERT_TRUE(path.has_value());
+  app_.setSelection(*path);
+
+  const std::size_t pathTagOffset = textEditor_.getText().find("<path");
+  ASSERT_NE(pathTagOffset, std::string::npos);
+  const std::size_t insertOffset = pathTagOffset + std::string_view("<path").size();
+  textEditor_.setCursorPosition(textEditor_.getCoordinatesAtByteOffset(insertOffset));
+
+  for (const char ch : std::string_view(" style=\"display:none\"")) {
+    textEditor_.insertText(std::string(1, ch));
+    controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+    (void)app_.flushFrame();
+
+    controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
+    (void)app_.flushFrame();
+
+    ASSERT_TRUE(app_.hasSelection()) << "lost selection after typing '" << ch << "'";
+    ASSERT_EQ(app_.selectedElements().size(), 1u);
+    EXPECT_TRUE(app_.selectedElement()->isa<svg::SVGGeometryElement>());
+  }
+
+  ASSERT_TRUE(app_.selectedElement().has_value());
+  EXPECT_EQ(app_.selectedElement()->getComputedStyle().display.getRequired(), svg::Display::None);
+}
+
 TEST_F(DocumentSyncControllerTest, RevertingTextToCleanBaselineClearsDirtyFlag) {
   textEditor_.setText(std::string(kTrivialSvg) + "\n<!-- edit -->\n");
   controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
@@ -214,6 +253,35 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackMirrorsWithoutTextCh
   EXPECT_FALSE(textEditor_.isTextChanged());
   EXPECT_TRUE(textEditor_.nextFlashWakeSeconds().has_value());
   EXPECT_TRUE(app_.document().queue().empty());
+}
+
+TEST_F(DocumentSyncControllerTest, SourceBackedDragWritebackExtendsSelectedSourceRange) {
+  SelectTool tool;
+
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  ASSERT_FALSE(textEditor_.isTextChanged());
+
+  const std::string beforeText = textEditor_.getText();
+  const std::size_t rectStart = beforeText.find("<rect");
+  ASSERT_NE(rectStart, std::string::npos);
+  const std::size_t rectEnd = beforeText.find("/>", rectStart);
+  ASSERT_NE(rectEnd, std::string::npos);
+  textEditor_.setSelection(textEditor_.getCoordinatesAtByteOffset(rectStart),
+                           textEditor_.getCoordinatesAtByteOffset(rectEnd + 2));
+  textEditor_.setCursorPosition(textEditor_.getCoordinatesAtByteOffset(rectStart));
+
+  tool.onMouseDown(app_, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseMove(app_, Vector2d(25.0, 15.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app_, Vector2d(25.0, 15.0));
+  ASSERT_TRUE(app_.flushFrame());
+
+  controller_.applyPendingWritebacks(app_, tool, textEditor_);
+
+  const std::string selectedText = textEditor_.getSelectedText();
+  EXPECT_NE(selectedText.find("<rect"), std::string::npos);
+  EXPECT_NE(selectedText.find("transform=\"translate(10)\""), std::string::npos);
+  EXPECT_TRUE(selectedText.ends_with("/>")) << selectedText;
+  EXPECT_EQ(textEditor_.getCursorPosition(), textEditor_.getCoordinatesAtByteOffset(rectStart));
 }
 
 TEST_F(DocumentSyncControllerTest, AppTransformWritebacksDrainAllQueuedEntries) {

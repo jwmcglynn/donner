@@ -68,6 +68,55 @@ struct PixelRect {
   return direct;
 }
 
+struct ReproSvgInput {
+  std::filesystem::path displayPath;
+  std::string source;
+};
+
+[[nodiscard]] std::filesystem::path EmbeddedSvgDisplayPath(const ReproMetadata& metadata) {
+  if (!metadata.svgBasename.empty()) {
+    return std::filesystem::path(metadata.svgBasename);
+  }
+  if (!metadata.svgPath.empty()) {
+    return std::filesystem::path(metadata.svgPath).filename();
+  }
+  return "embedded.svg";
+}
+
+[[nodiscard]] std::optional<ReproSvgInput> LoadReproSvgInput(const GlRnrReplayOptions& options,
+                                                             const ReproMetadata& metadata,
+                                                             std::string* error) {
+  if (options.svgPathOverride.has_value()) {
+    const std::optional<std::string> source = ReadTextFile(*options.svgPathOverride);
+    if (!source.has_value()) {
+      (void)SetError(error, "could not read SVG " + options.svgPathOverride->string());
+      return std::nullopt;
+    }
+    return ReproSvgInput{
+        .displayPath = *options.svgPathOverride,
+        .source = *source,
+    };
+  }
+
+  if (metadata.svgSource.has_value()) {
+    return ReproSvgInput{
+        .displayPath = EmbeddedSvgDisplayPath(metadata),
+        .source = *metadata.svgSource,
+    };
+  }
+
+  const std::filesystem::path svgPath = ResolveSvgPath(options.rnrPath, metadata.svgPath);
+  const std::optional<std::string> source = ReadTextFile(svgPath);
+  if (!source.has_value()) {
+    (void)SetError(error, "could not read SVG " + svgPath.string());
+    return std::nullopt;
+  }
+  return ReproSvgInput{
+      .displayPath = svgPath,
+      .source = *source,
+  };
+}
+
 [[nodiscard]] bool HasLeftMouseDown(const ReproFrame& frame) {
   for (const ReproEvent& event : frame.events) {
     if (event.kind == ReproEvent::Kind::MouseDown && event.mouseButton == 0) {
@@ -91,9 +140,18 @@ struct PixelRect {
   input.keySuper = (frame.modifiers & (1 << 3)) != 0;
 
   for (const ReproEvent& event : frame.events) {
-    if (event.kind == ReproEvent::Kind::Wheel) {
-      input.mouseWheelH += event.wheelDeltaX;
-      input.mouseWheel += event.wheelDeltaY;
+    switch (event.kind) {
+      case ReproEvent::Kind::KeyDown: input.keyDownEvents.push_back(event.key); break;
+      case ReproEvent::Kind::KeyUp: input.keyUpEvents.push_back(event.key); break;
+      case ReproEvent::Kind::Char: input.inputCharacters.push_back(event.codepoint); break;
+      case ReproEvent::Kind::Wheel:
+        input.mouseWheelH += event.wheelDeltaX;
+        input.mouseWheel += event.wheelDeltaY;
+        break;
+      case ReproEvent::Kind::MouseDown:
+      case ReproEvent::Kind::MouseUp:
+      case ReproEvent::Kind::Resize:
+      case ReproEvent::Kind::Focus: break;
     }
   }
 
@@ -262,11 +320,9 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     return SetError(error, "failed to read .rnr file: " + options.rnrPath.string());
   }
 
-  const std::filesystem::path svgPath =
-      options.svgPathOverride.value_or(ResolveSvgPath(options.rnrPath, repro->metadata.svgPath));
-  const std::optional<std::string> source = ReadTextFile(svgPath);
-  if (!source.has_value()) {
-    return SetError(error, "could not read SVG " + svgPath.string());
+  const std::optional<ReproSvgInput> svgInput = LoadReproSvgInput(options, repro->metadata, error);
+  if (!svgInput.has_value()) {
+    return false;
   }
 
   std::error_code createDirError;
@@ -300,9 +356,9 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   }
 
   EditorShell shell(window, EditorShellOptions{
-                                .svgPath = svgPath.string(),
-                                .initialSource = source,
-                                .initialPath = svgPath.string(),
+                                .svgPath = svgInput->displayPath.string(),
+                                .initialSource = svgInput->source,
+                                .initialPath = svgInput->displayPath.string(),
                                 .editorNoticeText = "",
                             });
   if (!shell.valid()) {

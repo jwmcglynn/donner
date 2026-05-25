@@ -249,6 +249,22 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "render_pane_presenter_visual_repro_tests",
+    srcs = ["RenderPanePresenterVisualRepro_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:gl_texture_cache",
+        "//donner/editor:imgui_headers",
+        "//donner/editor:render_pane_presenter",
+        "//donner/editor/gui:editor_window",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "layer_inspector_diagnostics_tests",
     srcs = ["LayerInspectorDiagnostics_tests.cc"],
     deps = [
@@ -662,6 +678,7 @@ donner_cc_test(
     }),
     deps = [
         ":bitmap_golden_compare",
+        "//donner/editor:imgui_headers",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",
         "//donner/svg/renderer:renderer_interface",

@@ -176,6 +176,8 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlayMarqueeRectDoc_.reset();
   lastOverlayActiveBoundsPreview_.reset();
   renderScheduler_.reset();
+  displayNoneSuppressedSelectionEntity_ = entt::null;
+  displayNoneSuppressedLayerEntity_ = entt::null;
 }
 
 bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elements) {
@@ -308,6 +310,17 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     }
 
     textures.uploadComposited(*result.compositedPreview);
+    if (displayNoneSuppressedLayerEntity_ != entt::null) {
+      const bool stillCarriesSuppressedLayer = std::ranges::any_of(
+          result.compositedPreview->tiles, [&](const RenderResult::CompositedTile& tile) {
+            return tile.kind == RenderResult::CompositedTile::Kind::Layer &&
+                   tile.layerEntity == displayNoneSuppressedLayerEntity_;
+          });
+      if (!stillCarriesSuppressedLayer) {
+        displayNoneSuppressedSelectionEntity_ = entt::null;
+        displayNoneSuppressedLayerEntity_ = entt::null;
+      }
+    }
     // Cache identity is keyed to the document canvas size, not the promoted
     // tile's intrinsic dimensions. Bounded layer tiles can be smaller than the
     // canvas, and using their dimensions here would make the cache appear stale
@@ -379,9 +392,9 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const auto currentVersion = app.document().currentFrameVersion();
   const auto dragPreview = selectTool.activeDragPreview();
   const Entity prewarmEntity = selectedCompositedEntity(app);
-  if (const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
-      selected.has_value() && IsDisplayNone(*selected)) {
-    compositedPresentation_.discardCachedTexturesForEntity(selected->entityHandle().entity());
+  const Entity suppressedLayerEntity = suppressedCompositedLayerEntity(app);
+  if (suppressedLayerEntity != entt::null) {
+    compositedPresentation_.discardCachedTexturesForEntity(suppressedLayerEntity);
   }
 
   const bool selectionBoundsChanged = app.selectedElements() != selectionBoundsCache_.lastSelection;
@@ -409,11 +422,12 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
        marqueeRectDoc.has_value() || activeBoundsPreviewDiffers || sourceHoverDiffers) &&
       (selectionDiffers || sourceHoverDiffers || marqueeDiffers || canvasDiffers ||
        activeBoundsPreviewDiffers || overlayVersionDiffers)) {
-    rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc,
-                                        dragPreview.has_value()
-                                            ? OverlayUploadMode::Immediate
-                                            : OverlayUploadMode::MatchDisplayedVersion,
-                                        dragPreview, activeBoundsPreview);
+    rasterizeOverlayForCurrentSelection(
+        app, viewport, textures, marqueeRectDoc,
+        dragPreview.has_value() || suppressedLayerEntity != entt::null
+            ? OverlayUploadMode::Immediate
+            : OverlayUploadMode::MatchDisplayedVersion,
+        dragPreview, activeBoundsPreview);
   }
 
   const PresentationRenderScheduleDecision schedule =
@@ -463,7 +477,44 @@ Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
   return selected->entityHandle().entity();
 }
 
-bool RenderCoordinator::shouldSuppressDragTargetTiles(EditorApp& app) const {
+Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
+  const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
+  if (!selected.has_value()) {
+    return displayNoneSuppressedLayerEntity_;
+  }
+
+  if (!IsDisplayNone(*selected)) {
+    const Entity selectedEntity = selected->entityHandle().entity();
+    if (selectedEntity == displayNoneSuppressedSelectionEntity_ ||
+        selectedEntity == displayNoneSuppressedLayerEntity_) {
+      displayNoneSuppressedSelectionEntity_ = entt::null;
+      displayNoneSuppressedLayerEntity_ = entt::null;
+      return entt::null;
+    }
+
+    return displayNoneSuppressedLayerEntity_;
+  }
+
+  const Entity selectedEntity = selected->entityHandle().entity();
+  const CompositedPresentation::DiagnosticsSnapshot diagnostics =
+      compositedPresentation_.diagnostics();
+  if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null) {
+    displayNoneSuppressedSelectionEntity_ = selectedEntity;
+    displayNoneSuppressedLayerEntity_ = diagnostics.cachedEntity;
+    return diagnostics.cachedEntity;
+  }
+
+  if (displayNoneSuppressedSelectionEntity_ == selectedEntity &&
+      displayNoneSuppressedLayerEntity_ != entt::null) {
+    return displayNoneSuppressedLayerEntity_;
+  }
+
+  displayNoneSuppressedSelectionEntity_ = selectedEntity;
+  displayNoneSuppressedLayerEntity_ = selectedEntity;
+  return selectedEntity;
+}
+
+bool RenderCoordinator::selectedElementIsDisplayNone(EditorApp& app) const {
   const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
   return selected.has_value() && IsDisplayNone(*selected);
 }
