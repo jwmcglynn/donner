@@ -3105,6 +3105,16 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   const float textFontSizePx = static_cast<float>(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
+  // Text bounding box for `objectBoundingBox` gradient/pattern paint. A tspan
+  // has no bbox, so span gradient/pattern paint maps through this element-level
+  // box — same computation as `RendererTinySkia::drawText` (shared helper). The
+  // bbox is passed to `drawPaintedPathAgainst` as the gradient *geometry* path
+  // while the glyph outline is the *draw* path.
+  const Box2d textBounds = computeTextBounds(textEngine, runs, text.spans, params.viewBox,
+                                             params.fontMetrics, textFontSizePx);
+  const Path textBoundsPath =
+      textBounds.isEmpty() ? Path() : PathBuilder().addRect(textBounds).build();
+
   // Element-level pattern fill: the driver stages a `patternFillPaint` slot
   // (via renderPattern / endPatternTile) for a `<text fill="url(#pattern)">`,
   // to be consumed by the next fill. Mirror `RendererTinySkia::drawText`, which
@@ -3180,16 +3190,37 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const css::RGBA spanFill = resolveSpanFill(runIndex);
     const bool hasFill = spanFill.a != 0;
 
+    // Effective per-run fill paint *server*: a span's own non-None fill overrides
+    // the element-level fill. This carries gradient refs that the solid
+    // `resolveSpanFill` collapses (it returns the inherited default for a ref) —
+    // `drawPaintedPathAgainst` resolves them against the text bbox below (mirrors
+    // `RendererTinySkia::drawText`). Patterns are NOT routed here: the driver
+    // stages a `patternFillPaint` slot for a pattern fill, so `hasPatternFill`
+    // distinguishes pattern from gradient (both are `PaintResolvedReference`).
+    const components::ResolvedPaintServer& fillServer =
+        (runIndex < text.spans.size() &&
+         !std::holds_alternative<PaintServer::None>(text.spans[runIndex].resolvedFill))
+            ? text.spans[runIndex].resolvedFill
+            : impl_->paint.fill;
+    const bool fillIsGradient =
+        std::holds_alternative<components::PaintResolvedReference>(fillServer) && !hasPatternFill &&
+        !textBoundsPath.empty();
+    const double fillOpacity = runIndex < text.spans.size()
+                                   ? text.spans[runIndex].fillOpacity * text.spans[runIndex].opacity
+                                   : impl_->paint.fillOpacity;
+
     // A run inherits the element-level pattern fill when it has no solid fill of
-    // its own (a per-span solid/gradient fill overrides). `resolveSpanFill`
-    // returns alpha=0 for a pattern paint ref, so `!hasFill` is the marker.
+    // its own. `resolveSpanFill` returns alpha=0 for a pattern ref, so `!hasFill`
+    // is the marker; gradient refs went down the `hasPatternFill`-false branch.
     const bool usePatternFill = hasPatternFill && !hasFill;
 
-    // Resolve per-run stroke (solid only; gradient/pattern text stroke is a
-    // separate gap). A per-span stroke overrides the element-level stroke.
-    // Mirrors `RendererTinySkia::drawText`.
+    // Resolve per-run stroke. A per-span stroke overrides the element-level
+    // stroke. Solid is taken directly; gradient/pattern strokes route through
+    // the server below. Mirrors `RendererTinySkia::drawText`.
     std::optional<css::RGBA> strokeColor;
     std::optional<StrokeStyle> strokeStyle;
+    const components::ResolvedPaintServer* strokeServer = &impl_->paint.stroke;
+    double strokeOpacity = impl_->paint.strokeOpacity;
     {
       StrokeParams runStrokeParams = params.strokeParams;
       std::optional<css::RGBA> color = impl_->resolveSolidStroke();
@@ -3199,18 +3230,37 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           runStrokeParams.strokeWidth = span.strokeWidth;
         }
         if (!std::holds_alternative<PaintServer::None>(span.resolvedStroke)) {
+          strokeServer = &span.resolvedStroke;
+          strokeOpacity = span.strokeOpacity * span.opacity;
           color = impl_->resolveSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity);
         }
       }
-      if (runStrokeParams.strokeWidth > 0.0 && color.has_value() && color->a != 0) {
-        strokeColor = color;
-        strokeStyle = toStrokeStyle(runStrokeParams);
+      if (runStrokeParams.strokeWidth > 0.0) {
+        // Solid stroke colour available → draw flat. Otherwise, a gradient/
+        // pattern stroke server drives the paint below.
+        if (color.has_value() && color->a != 0) {
+          strokeColor = color;
+        }
+        const bool strokeIsServer =
+            std::holds_alternative<components::PaintResolvedReference>(*strokeServer);
+        if (strokeColor.has_value() || strokeIsServer || impl_->patternStrokePaint.has_value()) {
+          strokeStyle = toStrokeStyle(runStrokeParams);
+        }
       }
     }
+    // Pattern stroke stages a `patternStrokePaint` slot (driver), distinguishing
+    // it from a gradient stroke (both `PaintResolvedReference`).
+    const bool usePatternStroke = strokeStyle.has_value() && !strokeColor.has_value() &&
+                                  impl_->patternStrokePaint.has_value();
+    const bool strokeIsGradient =
+        strokeStyle.has_value() && !strokeColor.has_value() && !usePatternStroke &&
+        std::holds_alternative<components::PaintResolvedReference>(*strokeServer) &&
+        !textBoundsPath.empty();
+    const bool hasStrokePaint = strokeColor.has_value() || strokeIsGradient || usePatternStroke;
 
     const TextDecoration spanDecoration =
         runIndex < text.spans.size() ? text.spans[runIndex].textDecoration : params.textDecoration;
-    if (!hasFill && !usePatternFill && !strokeColor.has_value() &&
+    if (!hasFill && !usePatternFill && !fillIsGradient && !hasStrokePaint &&
         spanDecoration == TextDecoration::None) {
       continue;  // Nothing to fill, stroke, or decorate.
     }
@@ -3232,7 +3282,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         continue;
       }
 
-      if (usePatternFill) {
+      if (fillIsGradient) {
+        // Gradient fill on text: resolve the gradient against the text bbox
+        // (the gradient *geometry*), fill the glyph outline (the *draw* path).
+        impl_->drawPaintedPathAgainst(textBoundsPath, placed, fillServer, fillOpacity,
+                                      FillRule::NonZero);
+      } else if (usePatternFill) {
         // Fill the glyph outline with the staged pattern tile, same as a
         // pattern-filled `<path>` (see Impl::fillResolved). The glyph path is
         // already in the element's local space and `deviceFromLocalTransform`
@@ -3244,13 +3299,26 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       } else if (hasFill) {
         impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
       }
-      if (strokeColor.has_value()) {
+      if (hasStrokePaint) {
         // Closed glyph contours expand to same-winding outer+inner subpaths, so
         // the stroked outline needs `strokeFillRuleFor` (EvenOdd for the ring),
         // not a hardcoded NonZero -- see RendererGeode::drawPath's stroke notes.
         const Path stroked = placed.strokeToFill(*strokeStyle);
         if (!stroked.empty()) {
-          impl_->encoder->fillPath(stroked, *strokeColor, Impl::strokeFillRuleFor(stroked));
+          const FillRule strokeRule = Impl::strokeFillRuleFor(stroked);
+          if (strokeIsGradient) {
+            // Gradient stroke: resolve against the text bbox (the *original*
+            // geometry, per SVG), fill the stroked outline.
+            impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
+                                          strokeRule);
+          } else if (usePatternStroke) {
+            impl_->syncTransform();
+            impl_->encoder->fillPathPattern(
+                stroked, strokeRule,
+                impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity));
+          } else {
+            impl_->encoder->fillPath(stroked, *strokeColor, strokeRule);
+          }
         }
       }
     }
@@ -3472,12 +3540,13 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     }
   }
 
-  // Consume the element-level pattern fill slot exactly once. Even if no run
-  // actually used it (e.g. every glyph was .notdef), it must be reset here so
-  // the staged pattern does not leak onto the next shape's `fillResolved`.
+  // Consume the element-level pattern fill/stroke slots exactly once. Even if no
+  // run actually used them (e.g. every glyph was .notdef), they must be reset
+  // here so the staged pattern does not leak onto the next shape's draw.
   if (hasPatternFill) {
     impl_->patternFillPaint.reset();
   }
+  impl_->patternStrokePaint.reset();
 #else
   (void)registry;
   (void)text;

@@ -13,8 +13,14 @@
 /// `TextEngine` — no backend paint types. No allocation beyond what `Path`
 /// itself does; no exceptions.
 
+#include <span>
+#include <vector>
+
+#include "donner/base/Box.h"
 #include "donner/base/Path.h"
+#include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextTypes.h"
 
@@ -53,5 +59,29 @@ Path transformPath(const Path& path, const Transform2d& transform);
  */
 Path placedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
                         float scale);
+
+/**
+ * @brief Compute the text element's bounding box for `objectBoundingBox` paint.
+ *
+ * Encodes tiny-skia's computation: the union over rendered glyphs of em-box
+ * cells — horizontally `[xPosition, xPosition + xAdvance]`, vertically
+ * `[yPosition - ascent*scale, yPosition - descent*scale]` (font v-metrics, not
+ * the raw font size), per the SVG spec for text `objectBoundingBox`. A `tspan`
+ * has no bbox of its own, so gradient/pattern paint on a span maps through this
+ * element-level box.
+ *
+ * Returns an empty (default) `Box2d` when there are no rendered glyphs.
+ *
+ * @param textEngine Engine providing per-run scale + font v-metrics.
+ * @param runs Positioned layout runs.
+ * @param spans Per-span styles (for per-span font-size overrides).
+ * @param viewBox Viewport box for length resolution.
+ * @param fontMetrics Font metrics for length resolution.
+ * @param fontSizePx Element-level resolved font size in pixels.
+ * @return The text bounding box in the element's local space.
+ */
+Box2d computeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs,
+                        std::span<const components::ComputedTextComponent::TextSpan> spans,
+                        const Box2d& viewBox, const FontMetrics& fontMetrics, float fontSizePx);
 
 }  // namespace donner::svg

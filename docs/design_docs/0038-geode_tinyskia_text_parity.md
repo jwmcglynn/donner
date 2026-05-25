@@ -49,11 +49,30 @@ eyeballing every diff PNG (geode + tiny + diff) — magnitude alone is *not* dec
 Classified by **where the diff lands**:
 
 - **STRUCTURAL** — geode renders *wrong* (whole-glyph offset / wrong paint / missing text);
-  solid-region diff. Stays in `kGenuineText`; the hoist's paint(b) + baseline-shift/dy-rotate
-  consume increments target these. **14 tests.**
+  solid-region diff. Stays in `kGenuineText`; the hoist's baseline-shift/dy-rotate consume
+  increments target these. **8 remaining** (the 6 paint(b) cases below are now FIXED).
 - **EDGE-FLOOR (was mislabeled)** — geode renders *correct* (right glyphs/positions/colors);
   the diff is the thin 4× MSAA fringe, over 100px only from large cumulative perimeter (many
-  lines / long strings / tiled or on-path small text). Moved to `kEdgeFloor`. **5 tests.**
+  lines / long strings / tiled or on-path small text, or a gradient stroke ring). Moved to
+  `kEdgeFloor`. **5 from the audit + 3 from the paint(b) fix = 8 text edge-floor.**
+
+**✅ Paint(b) cluster FIXED (2026-05-26).** Root cause: geode `drawText` had **no gradient
+handling and incomplete pattern handling** — `resolveSpanFill`/`resolveSolidStroke` collapse
+gradient refs (→ glyphs unfilled / element gradient text rendered *nothing*), and it consumed
+only the `patternFillPaint` slot, never `patternStrokePaint`. Fix (targeted convergence,
+reusing geode's existing gradient infra — NOT a big new abstraction, since geode was *missing*
+the feature, not drifting): geode now computes the text bbox via the shared
+`computeTextBounds` (hoisted to PlacedTextGeometry), then routes gradient fill/stroke through
+`drawPaintedPathAgainst(textBbox, glyph, server, …)` and pattern stroke through the
+`patternStrokePaint` slot. **De-dup:** `RendererTinySkia::drawText` then dropped its inline
+text-bbox loop and adopted the same `computeTextBounds` — proven a pixel no-op (95-test
+tiny-vs-golden before/after diff = IDENTICAL, incl. every gradient-on-text / tspan-bbox case,
+which gradient parity passing at 1–3px had already implied). **One bbox implementation now
+serves both backends.** Results
+(geode↔tiny @0.02): fill/linear **10195→1**, fill/radial **14562→3**, stroke/pattern
+**13115→39** (all ≤100, **un-gated**); tspan-bbox-1 **1803→702**, tspan-bbox-2 **2929→694**,
+stroke/linear **11917→465** (now render correctly; residual is the 4× MSAA edge floor →
+**moved to `kEdgeFloor`**).
 
 | # | px | test | class | symptom (eyeballed) | layer | Hoist |
 |---|---|---|---|---|---|---|
@@ -65,12 +84,12 @@ Classified by **where the diff lands**:
 | B6 | 2438 | `text/baseline-shift/nested-length` | **STRUCT** | rightmost "Text" solid-offset | (a) baseline-shift | **Y** |
 | B7 | 4643 | `text/text-decoration/underline-with-dy-list-2` | **STRUCT** | per-char `dy` staircase differs; whole-glyph vertical offset | (a) per-char dy | **Y** |
 | B8 | 4561 | `text/text-decoration/underline-with-rotate-list-4` | **STRUCT** | per-char rotate list differs; glyphs rotated to wrong angles | (a) per-char rotate | **Y** |
-| B11 | 2929 | `text/tspan/tspan-bbox-2` | **STRUCT** | both lines solid fill-color diff (paint via text bbox) | (b) bbox paint | **Y** |
-| B12 | 1803 | `text/tspan/tspan-bbox-1` | **STRUCT** | "long" span solid fill-color diff (bbox paint) | (b) bbox paint | **Y** |
-| B15 | 14562 | `painting/fill/radial-gradient-on-text` | **STRUCT** | gradient fill ramp differs across whole glyph bodies | (b) bbox paint | **Y** |
-| B16 | 13115 | `painting/stroke/pattern-on-text` | **STRUCT** | pattern stroke tiling/placement differs | (b) paint resolution | **Y** |
-| B17 | 11917 | `painting/stroke/linear-gradient-on-text` | **STRUCT** | linear-gradient stroke ramp differs | (b) bbox paint | **Y** |
-| B18 | 10195 | `painting/fill/linear-gradient-on-text` | **STRUCT** | linear-gradient fill ramp differs | (b) bbox paint | **Y** |
+| ✅B11 | 2929→694 | `text/tspan/tspan-bbox-2` | FIXED→EDGE | gradient span now resolved vs text bbox; residual = edge fringe | (b) bbox paint | done |
+| ✅B12 | 1803→702 | `text/tspan/tspan-bbox-1` | FIXED→EDGE | same | (b) bbox paint | done |
+| ✅B15 | 14562→3 | `painting/fill/radial-gradient-on-text` | FIXED (un-gated) | gradient fill now resolved vs text bbox | (b) bbox paint | done |
+| ✅B16 | 13115→39 | `painting/stroke/pattern-on-text` | FIXED (un-gated) | pattern stroke slot now consumed | (b) paint resolution | done |
+| ✅B17 | 11917→465 | `painting/stroke/linear-gradient-on-text` | FIXED→EDGE | gradient stroke now resolved; residual = stroke-ring edge fringe | (b) bbox paint | done |
+| ✅B18 | 10195→1 | `painting/fill/linear-gradient-on-text` | FIXED (un-gated) | gradient fill now resolved vs text bbox | (b) bbox paint | done |
 | ~~B9~~ | 1822 | `text/text-decoration/tspan-decoration` | EDGE | geode renders correct multi-color text + underlines; thin fringe on long small string | — | n/a |
 | ~~B10~~ | 3488 | `text/font-size/named-value` | EDGE | 11 small (size-12) lines render correct; cumulative edge fringe | — | n/a |
 | ~~B13~~ | 2219 | `text/textPath/dy-with-tiny-coordinates` | EDGE | glyphs correctly on-path; fringe + 0.5px path line | — | n/a |
@@ -198,13 +217,16 @@ Key facts that shape the order (confirmed in code):
    `<rect>`s, the text is all size-12, geode renders it correctly, and the 3488px is edge
    fringe over 11 small lines → reclassified **edge-floor** (gate moved to `kEdgeFloor`).
    The next real consume-path increment is paint resolution below.
-4. **Paint resolution (b) — `resolveSpanFill` / stroke / opacity / bbox.** The builder
-   resolves each run's fill (solid/gradient/pattern), stroke, and the `objectBoundingBox`
-   text bbox into backend-agnostic descriptors (color + a paint-server handle + bbox), so
-   both backends map the *same* resolved paint to their own shader/pipeline. *Subsumes:*
-   B11/B12/B15/B17/B18 (per-span / text-bbox paint), B16/B19 (pattern on text), and the
-   137-fill premultiply only insofar as inputs match (the rounding itself is rasterizer-side,
-   0021 G5).
+4. ✅ **Paint resolution (b)** (2026-05-26). Done as a *targeted* geode convergence rather
+   than a full descriptor hoist: geode was **missing** gradient/stroke-pattern handling for
+   text (not drifting), so the minimal fix reuses geode's existing gradient infra
+   (`drawPaintedPathAgainst`) + the shared `computeTextBounds` (hoisted; tiny untouched).
+   *Subsumed:* B15/B16/B18 un-gated (≤100); B11/B12/B17 → edge-floor; B19 was already
+   reclassified edge-floor in the audit (it's a `<pattern>` *containing* text, which already
+   rendered correctly). The 137-fill premultiff remains rasterizer-side ([0021 G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)).
+   A full backend-agnostic paint *descriptor* hoist is deferred — geode and tiny now both map
+   the same paint servers + the same `computeTextBounds`, so there's no remaining drift here
+   to justify the larger abstraction yet.
 4. **Decoration geometry (c).** Hoist underline/overline/line-through rect derivation +
    its paint inheritance into the builder. *Subsumes:* B9 (decoration drift), B7/B8
    decoration half.
@@ -238,7 +260,10 @@ paint / decoration / baseline-shift consume paths). Gate ledger then was 19 text
 `kEdgeFloor`): `font-size/named-value`, `text-decoration/tspan-decoration`,
 `textPath/dy-with-tiny-coordinates`, `letter-spacing/on-Arabic`, `paint-servers/pattern/
 text-child`. Also confirmed (increment-3 finding) per-run font-size/scale is already
-byte-identical between backends — no extraction needed. **Gate ledger now: 14 text + 37 G2 +
-177 edge-floor = 228** (total unchanged; all green; only the skip *reason* changed for the 5
-moved). The 14 STRUCTURAL are the explicit hoist-target list for the paint(b) +
-baseline-shift/dy-rotate consume increments.
+byte-identical between backends — no extraction needed. After the audit the ledger was 14
+text + 37 G2 + 177 edge-floor = 228 (only the skip *reason* changed for the 5 moved).
+
+**Paint(b) fix (2026-05-26).** 3 paint tests un-gated (now pass ≤100), 3 moved text→edge-floor.
+**Gate ledger now: 8 text + 37 G2 + 180 edge-floor = 225** (3 fewer total; all green). The 8
+remaining STRUCTURAL text gates are the baseline-shift cluster (B1–B6) + per-char dy/rotate
+(B7/B8) — the targets for the baseline-shift/dy-rotate consume increment.

@@ -1375,51 +1375,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
 
-  // Compute text bounding box from glyph positions for objectBoundingBox gradient mapping.
-  // Per the SVG spec, the objectBoundingBox for text uses em-box cells defined by font metrics
-  // (ascent above baseline, |descent| below baseline), not the raw font size.
-  Box2d textBounds;
-  {
-    double minX = std::numeric_limits<double>::max();
-    double minY = std::numeric_limits<double>::max();
-    double maxX = std::numeric_limits<double>::lowest();
-    double maxY = std::numeric_limits<double>::lowest();
-    for (size_t runIdx = 0; runIdx < runs.size(); ++runIdx) {
-      const auto& run = runs[runIdx];
-
-      // Resolve per-run font size (spans may override the text element's font size).
-      float runFontSizePx = fontSizePx;
-      if (runIdx < text.spans.size() && text.spans[runIdx].fontSize.value != 0.0) {
-        runFontSizePx = static_cast<float>(text.spans[runIdx].fontSize.toPixels(
-            params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-      }
-
-      // Get font metrics for this run to compute proper em-box vertical extent.
-      float runScale = run.font ? textEngine.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
-      double emTop = static_cast<double>(runFontSizePx);  // fallback: full font size above baseline
-      double emBottom = 0.0;                              // fallback: baseline
-      if (run.font && runScale > 0.0f) {
-        const FontVMetrics metrics = textEngine.fontVMetrics(run.font);
-        // ascent is positive (above baseline), descent is negative (below baseline).
-        // In SVG's y-down space: top = baseline - ascent*scale, bottom = baseline - descent*scale.
-        emTop = static_cast<double>(metrics.ascent) * runScale;
-        emBottom = -static_cast<double>(metrics.descent) * runScale;
-      }
-
-      for (const auto& glyph : run.glyphs) {
-        if (glyph.glyphIndex == 0) {
-          continue;
-        }
-        minX = std::min(minX, glyph.xPosition);
-        maxX = std::max(maxX, glyph.xPosition + glyph.xAdvance);
-        minY = std::min(minY, glyph.yPosition - emTop);
-        maxY = std::max(maxY, glyph.yPosition + emBottom);
-      }
-    }
-    if (minX < maxX && minY < maxY) {
-      textBounds = Box2d({minX, minY}, {maxX, maxY});
-    }
-  }
+  // Text bounding box for objectBoundingBox gradient/pattern mapping — the same
+  // shared computation RendererGeode::drawText uses, so the two backends can't
+  // drift on the bbox (see docs/design_docs/0038). Per the SVG spec it uses
+  // em-box cells from font v-metrics (ascent above baseline, |descent| below),
+  // not the raw font size.
+  const Box2d textBounds = computeTextBounds(textEngine, runs, text.spans, params.viewBox,
+                                             params.fontMetrics, fontSizePx);
 
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.

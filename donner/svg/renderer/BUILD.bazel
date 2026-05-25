@@ -190,6 +190,7 @@ donner_perf_sensitive_cc_library(
     visibility = ["//visibility:public"],
     deps = [
         "//donner/base",
+        "//donner/svg/components/text:components",
         "//donner/svg/text:text_engine",
         "//donner/svg/text:text_types",
     ],

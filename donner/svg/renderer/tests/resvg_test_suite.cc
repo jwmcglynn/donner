@@ -554,6 +554,12 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       "text/letter-spacing/on-Arabic.svg",           // correct glyphs, edge fringe
       "text/text-decoration/tspan-decoration.svg",   // correct multi-color + underline
       "text/textPath/dy-with-tiny-coordinates.svg",  // correct on-path placement
+      // Recategorized from kGenuineText after the paint(b) fix (2026-05-26 — see 0038):
+      // geode now renders these gradient-on-text cases *correctly*; the residual is the
+      // 4x MSAA edge fringe (small 24px gradient text / gradient stroke ring).
+      "painting/stroke/linear-gradient-on-text.svg",  // gradient stroke ring, ~465px fringe
+      "text/tspan/tspan-bbox-1.svg",                  // 24px gradient span, ~702px fringe
+      "text/tspan/tspan-bbox-2.svg",                  // 24px gradient span, ~694px fringe
   };
   if (kEdgeFloor.count(key)) {
     return [](ImageComparisonParams& p) {
@@ -614,13 +620,13 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
   // offset / wrong paint), not the 4x MSAA edge fringe. The hoist's paint(b) +
   // baseline-shift/dy-rotate consume increments target this list.
   static const std::set<std::string_view> kGenuineText = {
-      // Paint resolution (b): gradient/pattern/bbox on text — whole-glyph fill differs.
-      "painting/fill/linear-gradient-on-text.svg",
-      "painting/fill/radial-gradient-on-text.svg",
-      "painting/stroke/linear-gradient-on-text.svg",
-      "painting/stroke/pattern-on-text.svg",
-      "text/tspan/tspan-bbox-1.svg",
-      "text/tspan/tspan-bbox-2.svg",
+      // Paint resolution (b) — FIXED: geode `drawText` now resolves gradient fill/
+      // stroke + pattern stroke against the text bbox (PlacedTextGeometry
+      // computeTextBounds + drawPaintedPathAgainst). fill/{linear,radial}-gradient
+      // -on-text and stroke/pattern-on-text now pass ≤100px (un-gated); tspan-bbox-1/2
+      // and stroke/linear-gradient-on-text render correctly but sit at the ~465-702px
+      // 4x MSAA edge floor (small/many glyphs / stroke ring) → moved to kEdgeFloor.
+      //
       // Baseline-shift consume: geode mis-applies nested baseline-shift (whole-glyph
       // vertical offset; in nested-with-baseline cases a whole text string is dropped).
       "text/baseline-shift/deeply-nested-super.svg",
