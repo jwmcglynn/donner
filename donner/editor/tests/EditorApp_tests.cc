@@ -1,6 +1,7 @@
 #include "donner/editor/EditorApp.h"
 
 #include "donner/editor/ViewportGeometry.h"
+#include "donner/svg/SVGPathElement.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -178,6 +179,215 @@ TEST(EditorAppTest, AddToSelectionIsIdempotent) {
   app.addToSelection(*r1);
   app.addToSelection(*r1);
   EXPECT_EQ(app.selectedElements().size(), 1u);
+}
+
+TEST(EditorAppTest, SetAttributeOnSelectionQueuesEverySelectedElement) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  ASSERT_TRUE(app.setAttributeOnSelection("fill", "#112233"));
+  EXPECT_EQ(app.document().queue().size(), 2u);
+  ASSERT_TRUE(app.flushFrame());
+
+  auto updatedR1 = app.document().document().querySelector("#r1");
+  auto updatedR2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(updatedR1.has_value());
+  ASSERT_TRUE(updatedR2.has_value());
+  EXPECT_EQ(updatedR1->getAttribute("fill"), "#112233");
+  EXPECT_EQ(updatedR2->getAttribute("fill"), "#112233");
+}
+
+TEST(EditorAppTest, SetStylePropertyOnSelectionMergesIntoStyleAttribute) {
+  constexpr std::string_view kStyledSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="10" y="10" width="20" height="20" fill="red"
+               style="stroke: blue; opacity: 0.5"/>
+       </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kStyledSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(*r1);
+
+  ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#112233"));
+  EXPECT_EQ(app.document().queue().size(), 1u);
+  ASSERT_TRUE(app.flushFrame());
+
+  auto updatedR1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(updatedR1.has_value());
+  EXPECT_EQ(updatedR1->getAttribute("fill"), "red");
+  EXPECT_EQ(updatedR1->getAttribute("style"), "stroke: blue; opacity: 0.5; fill: #112233");
+}
+
+TEST(EditorAppTest, SetStylePropertyOnSelectionOverridesExistingStyleProperty) {
+  constexpr std::string_view kStyledSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="10" y="10" width="20" height="20" fill="red"
+               style="fill: blue; stroke: black"/>
+       </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kStyledSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(*r1);
+
+  ASSERT_TRUE(app.setStylePropertyOnSelection("fill", "#112233"));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto updatedR1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(updatedR1.has_value());
+  EXPECT_EQ(updatedR1->getAttribute("style"), "stroke: black; fill: #112233");
+}
+
+TEST(EditorAppTest, SetStrokeWidthOnSelectionClampsNegativeValues) {
+  constexpr std::string_view kStyledSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="10" y="10" width="20" height="20" stroke-width="4"
+               style="stroke: black; opacity: 0.5"/>
+       </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kStyledSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(*r1);
+
+  ASSERT_TRUE(app.setStrokeWidthOnSelection(-4.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto updatedR1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(updatedR1.has_value());
+  EXPECT_EQ(updatedR1->getAttribute("stroke-width"), "4");
+  EXPECT_EQ(updatedR1->getAttribute("style"), "stroke: black; opacity: 0.5; stroke-width: 0");
+}
+
+TEST(EditorAppTest, SetStrokeWidthOnSelectionOverridesExistingStyleProperty) {
+  constexpr std::string_view kStyledSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="10" y="10" width="20" height="20" stroke-width="4"
+               style="stroke-width: 9; stroke: black"/>
+       </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kStyledSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+  app.setSelection(*r1);
+
+  ASSERT_TRUE(app.setStrokeWidthOnSelection(2.5));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto updatedR1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(updatedR1.has_value());
+  EXPECT_EQ(updatedR1->getAttribute("stroke-width"), "4");
+  EXPECT_EQ(updatedR1->getAttribute("style"), "stroke: black; stroke-width: 2.5");
+}
+
+TEST(EditorAppTest, SetActiveStrokeWidthClampsNegativeValues) {
+  EditorApp app;
+
+  app.setActiveStrokeWidth(-4.0);
+
+  EXPECT_EQ(app.activePaintStyle().strokeWidth, 0.0);
+}
+
+TEST(EditorAppTest, PathOperationAvailabilityRequiresMultipleGeometryElements) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  EXPECT_FALSE(app.pathOperationAvailability(PathOperationKind::Union).canApply);
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+
+  app.setSelection(*r1);
+  EXPECT_FALSE(app.pathOperationAvailability(PathOperationKind::Union).canApply);
+
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+  EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::Union).canApply);
+  EXPECT_FALSE(app.pathOperationAvailability(PathOperationKind::SubtractFront).canApply);
+}
+
+TEST(EditorAppTest, PathUnionReplacesSelectionWithBoundsPath) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Union));
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_TRUE(app.selectedElements().front().isa<svg::SVGPathElement>());
+  EXPECT_EQ(std::string_view(app.selectedElements().front().cast<svg::SVGPathElement>().d()),
+            "M 10 10 L 70 10 L 70 70 L 10 70 Z");
+
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+  EXPECT_EQ(std::string_view(result->cast<svg::SVGPathElement>().d()),
+            "M 10 10 L 70 10 L 70 70 L 10 70 Z");
+  EXPECT_NE(app.document().document().source().find(R"(<path d="M 10 10 L 70 10)"),
+            std::string_view::npos);
+}
+
+TEST(EditorAppTest, PathIntersectReplacesSelectionWithOverlapPath) {
+  constexpr std::string_view kOverlappingSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="10" y="10" width="40" height="40" fill="red"/>
+         <rect id="r2" x="30" y="25" width="40" height="20" fill="blue"/>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kOverlappingSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Intersect));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+  EXPECT_EQ(std::string_view(result->cast<svg::SVGPathElement>().d()),
+            "M 30 25 L 50 25 L 50 45 L 30 45 Z");
+}
+
+TEST(EditorAppTest, PathIntersectDisabledWhenBoundsDoNotOverlap) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  EXPECT_FALSE(app.pathOperationAvailability(PathOperationKind::Intersect).canApply);
+  EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Intersect));
+  EXPECT_EQ(app.document().queue().size(), 0u);
 }
 
 TEST(EditorAppTest, HitTestRectFindsAllIntersectingElements) {

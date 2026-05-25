@@ -116,6 +116,19 @@ constexpr std::string_view kFilterFanoutSvg =
   <path id="otherUser" class="uses-other"/>
 </svg>)svg";
 
+constexpr std::string_view kDenseResourceReferrersSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="paint"><stop offset="1"/></linearGradient>
+  </defs>
+  <rect id="r1" fill="url(#paint)"/>
+  <rect id="r2" fill="url(#paint)"/>
+  <rect id="r3" fill="url(#paint)"/>
+  <rect id="r4" fill="url(#paint)"/>
+  <rect id="r5" fill="url(#paint)"/>
+  <rect id="r6" fill="url(#paint)"/>
+</svg>)svg";
+
 constexpr std::string_view kNonRenderedStopStyleSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <style>
@@ -142,6 +155,19 @@ constexpr std::string_view kUniversalStopStyleSvg =
   </defs>
 </svg>)svg";
 
+constexpr std::string_view kDenseUniversalStyleSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    * { stroke-width: 0; }
+  </style>
+  <rect id="r1"/>
+  <rect id="r2"/>
+  <rect id="r3"/>
+  <rect id="r4"/>
+  <rect id="r5"/>
+  <rect id="r6"/>
+</svg>)svg";
+
 constexpr std::string_view kGroupedCssChildrenSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <style>
@@ -164,6 +190,24 @@ std::size_t OffsetForNeedle(std::string_view source, std::string_view needle) {
 
 SourcePoint PointForNeedle(std::string_view source, std::string_view needle) {
   const std::size_t offset = OffsetForNeedle(source, needle);
+
+  int line = 0;
+  std::size_t lineStart = 0;
+  for (std::size_t i = 0; i < offset; ++i) {
+    if (source[i] == '\n') {
+      ++line;
+      lineStart = i + 1;
+    }
+  }
+
+  return SourcePoint{.line = line, .column = static_cast<int>(offset - lineStart)};
+}
+
+SourcePoint PointForOpeningTagEnd(std::string_view source, std::string_view openingTagStart) {
+  const std::size_t startOffset = OffsetForNeedle(source, openingTagStart);
+  const std::size_t closeOffset = source.find('>', startOffset);
+  EXPECT_NE(closeOffset, std::string_view::npos) << openingTagStart;
+  const std::size_t offset = closeOffset == std::string_view::npos ? startOffset : closeOffset + 1;
 
   int line = 0;
   std::size_t lineStart = 0;
@@ -258,19 +302,19 @@ TEST(FocusViewTest, IncludesReferencedPaintAndCompositingElements) {
             SortLinks(std::vector<FocusReferenceLink>{
                 {
                     .from = PointForNeedle(kReferencedSvg, "#paint"),
-                    .to = PointForNeedle(kReferencedSvg, R"(<linearGradient id="paint")"),
+                    .to = PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="paint")"),
                 },
                 {
                     .from = PointForNeedle(kReferencedSvg, "#clip"),
-                    .to = PointForNeedle(kReferencedSvg, R"(<clipPath id="clip")"),
+                    .to = PointForOpeningTagEnd(kReferencedSvg, R"(<clipPath id="clip")"),
                 },
                 {
                     .from = PointForNeedle(kReferencedSvg, "#shadow"),
-                    .to = PointForNeedle(kReferencedSvg, R"(<filter id="shadow")"),
+                    .to = PointForOpeningTagEnd(kReferencedSvg, R"(<filter id="shadow")"),
                 },
                 {
                     .from = PointForNeedle(kReferencedSvg, "#base"),
-                    .to = PointForNeedle(kReferencedSvg, R"(<linearGradient id="base")"),
+                    .to = PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="base")"),
                 },
             }));
 }
@@ -310,11 +354,11 @@ TEST(FocusViewTest, IncludesReferencesFromStyleAndDescendantHrefAttributes) {
             SortLinks(std::vector<FocusReferenceLink>{
                 {
                     .from = PointForNeedle(kSubtreeReferencedSvg, "#arrow"),
-                    .to = PointForNeedle(kSubtreeReferencedSvg, R"(<marker id="arrow")"),
+                    .to = PointForOpeningTagEnd(kSubtreeReferencedSvg, R"(<marker id="arrow")"),
                 },
                 {
                     .from = PointForNeedle(kSubtreeReferencedSvg, "#pathRef"),
-                    .to = PointForNeedle(kSubtreeReferencedSvg, R"(<path id="pathRef")"),
+                    .to = PointForOpeningTagEnd(kSubtreeReferencedSvg, R"(<path id="pathRef")"),
                 },
             }));
 }
@@ -349,12 +393,12 @@ TEST(FocusViewTest, IncludesMatchedCssRulesAndCssDeclarationReferences) {
           .from = PointForNeedleAfter(kCssReferencedSvg, "cls-92", R"(<rect id="target")"),
           .to = PointForNeedle(kCssReferencedSvg, ".cls-92"),
       }));
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForNeedle(kCssReferencedSvg, "#paint"),
-                       .to = PointForNeedle(kCssReferencedSvg, R"(<linearGradient id="paint")"),
-                   }));
+  EXPECT_TRUE(ContainsLink(
+      partition.referenceLinks,
+      FocusReferenceLink{
+          .from = PointForNeedle(kCssReferencedSvg, "#paint"),
+          .to = PointForOpeningTagEnd(kCssReferencedSvg, R"(<linearGradient id="paint")"),
+      }));
 }
 
 TEST(FocusViewTest, StyleOffsetFocusIncludesImpactedElementsAndCssDeclarationReferences) {
@@ -384,12 +428,12 @@ TEST(FocusViewTest, StyleOffsetFocusIncludesImpactedElementsAndCssDeclarationRef
                                .from = PointForNeedle(kCssReferencedSvg, ".cls-92"),
                                .to = PointForNeedle(kCssReferencedSvg, R"(<rect id="target")"),
                            }));
-  EXPECT_TRUE(
-      ContainsLink(partition->referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForNeedle(kCssReferencedSvg, "#paint"),
-                       .to = PointForNeedle(kCssReferencedSvg, R"(<linearGradient id="paint")"),
-                   }));
+  EXPECT_TRUE(ContainsLink(
+      partition->referenceLinks,
+      FocusReferenceLink{
+          .from = PointForNeedle(kCssReferencedSvg, "#paint"),
+          .to = PointForOpeningTagEnd(kCssReferencedSvg, R"(<linearGradient id="paint")"),
+      }));
 }
 
 TEST(FocusViewTest, StyleOffsetFocusUsesSelectorListBranchUnderCursor) {
@@ -597,31 +641,31 @@ TEST(FocusViewTest, SelectingReferencedResourceIncludesReferringElementsAndCssRu
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kResourceReferrersSvg, R"(<rect id="sibling")").line));
 
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForNeedle(kResourceReferrersSvg, "#paint"),
-                       .to = PointForNeedle(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
-                   }));
-  EXPECT_TRUE(
-      ContainsLink(partition.referenceLinks,
-                   FocusReferenceLink{
-                       .from = PointForNeedleAfter(kResourceReferrersSvg, "#paint",
-                                                   R"(<linearGradient id="chained")"),
-                       .to = PointForNeedle(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
-                   }));
+  EXPECT_TRUE(ContainsLink(
+      partition.referenceLinks,
+      FocusReferenceLink{
+          .from = PointForNeedle(kResourceReferrersSvg, "#paint"),
+          .to = PointForOpeningTagEnd(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
+      }));
+  EXPECT_TRUE(ContainsLink(
+      partition.referenceLinks,
+      FocusReferenceLink{
+          .from = PointForNeedleAfter(kResourceReferrersSvg, "#paint",
+                                      R"(<linearGradient id="chained")"),
+          .to = PointForOpeningTagEnd(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
+      }));
   EXPECT_TRUE(ContainsLink(
       partition.referenceLinks,
       FocusReferenceLink{
           .from =
               PointForNeedleAfter(kResourceReferrersSvg, "#paint", R"(<circle id="attrTarget")"),
-          .to = PointForNeedle(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
+          .to = PointForOpeningTagEnd(kResourceReferrersSvg, R"(<radialGradient id="paint")"),
       }));
   EXPECT_TRUE(ContainsLink(
       partition.referenceLinks,
       FocusReferenceLink{
           .from = PointForNeedle(kResourceReferrersSvg, "#chained"),
-          .to = PointForNeedle(kResourceReferrersSvg, R"(<linearGradient id="chained")"),
+          .to = PointForOpeningTagEnd(kResourceReferrersSvg, R"(<linearGradient id="chained")"),
       }));
 }
 
@@ -643,6 +687,45 @@ TEST(FocusViewTest, ReferenceHighlightSummaryCountsReverseReferences) {
   EXPECT_TRUE(ContainsElement(summary.referencingElements,
                               app.document().document().querySelector("#chained")));
   EXPECT_EQ(summary.totalCount(), 3u);
+}
+
+TEST(FocusViewTest, SuppressesReverseReferenceExpansionAfterFiveRefs) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kDenseResourceReferrersSvg));
+  std::optional<svg::SVGElement> paint = app.document().document().querySelector("#paint");
+  ASSERT_TRUE(paint.has_value());
+
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *paint);
+
+  EXPECT_TRUE(ContainsLine(
+      partition.fullColor,
+      PointForNeedle(kDenseResourceReferrersSvg, R"(<linearGradient id="paint")").line));
+  EXPECT_FALSE(ContainsLine(partition.referenceColor,
+                            PointForNeedle(kDenseResourceReferrersSvg, R"(<rect id="r1")").line));
+  EXPECT_FALSE(ContainsLine(partition.referenceColor,
+                            PointForNeedle(kDenseResourceReferrersSvg, R"(<rect id="r6")").line));
+  EXPECT_TRUE(ContainsLine(partition.hidden,
+                           PointForNeedle(kDenseResourceReferrersSvg, R"(<rect id="r1")").line));
+  EXPECT_TRUE(partition.referenceLinks.empty());
+}
+
+TEST(FocusViewTest, StyleFocusSuppressesUniversalSelectorExpansionAfterFiveRefs) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kDenseUniversalStyleSvg));
+
+  const std::optional<StyleFocus> focus = ComputeStyleFocusAtSourceOffset(
+      app.document().document(), OffsetForNeedle(kDenseUniversalStyleSvg, "stroke-width"));
+  ASSERT_TRUE(focus.has_value());
+
+  EXPECT_TRUE(focus->reverseReferenceExpansionSuppressed);
+  EXPECT_TRUE(focus->impactedElements.empty());
+  EXPECT_TRUE(ContainsLine(focus->partition.fullColor,
+                           PointForNeedle(kDenseUniversalStyleSvg, "* {").line));
+  EXPECT_FALSE(ContainsLine(focus->partition.referenceColor,
+                            PointForNeedle(kDenseUniversalStyleSvg, R"(<rect id="r1")").line));
+  EXPECT_FALSE(ContainsLine(focus->partition.referenceColor,
+                            PointForNeedle(kDenseUniversalStyleSvg, R"(<rect id="r6")").line));
+  EXPECT_TRUE(focus->partition.referenceLinks.empty());
 }
 
 TEST(FocusViewTest, ForwardFilterDependencyDoesNotReverseExpandOtherFilterReferrers) {
@@ -674,7 +757,7 @@ TEST(FocusViewTest, ForwardFilterDependencyDoesNotReverseExpandOtherFilterReferr
       partition.referenceLinks,
       FocusReferenceLink{
           .from = PointForNeedleAfter(kFilterFanoutSvg, "#glow", R"(<path id="letterD")"),
-          .to = PointForNeedle(kFilterFanoutSvg, R"(<filter id="glow")"),
+          .to = PointForOpeningTagEnd(kFilterFanoutSvg, R"(<filter id="glow")"),
       }));
 }
 
@@ -699,13 +782,14 @@ TEST(FocusViewTest, SelectingFilterResourceStillIncludesTransitiveReferrers) {
       partition.referenceLinks,
       FocusReferenceLink{
           .from = PointForNeedleAfter(kFilterFanoutSvg, "#glow", R"(<filter id="other")"),
-          .to = PointForNeedle(kFilterFanoutSvg, R"(<filter id="glow")"),
+          .to = PointForOpeningTagEnd(kFilterFanoutSvg, R"(<filter id="glow")"),
       }));
-  EXPECT_TRUE(ContainsLink(partition.referenceLinks,
-                           FocusReferenceLink{
-                               .from = PointForNeedle(kFilterFanoutSvg, "#other"),
-                               .to = PointForNeedle(kFilterFanoutSvg, R"(<filter id="other")"),
-                           }));
+  EXPECT_TRUE(
+      ContainsLink(partition.referenceLinks,
+                   FocusReferenceLink{
+                       .from = PointForNeedle(kFilterFanoutSvg, "#other"),
+                       .to = PointForOpeningTagEnd(kFilterFanoutSvg, R"(<filter id="other")"),
+                   }));
 }
 
 TEST(FocusViewTest, ReferencedGradientOmitsCssRulesMatchedOnlyByStopDescendants) {

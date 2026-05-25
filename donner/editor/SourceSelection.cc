@@ -14,19 +14,6 @@ namespace donner::editor {
 
 namespace {
 
-Coordinates FileOffsetToEditorCoordinates(const TextEditor& textEditor, const FileOffset& offset) {
-  if (offset.offset.has_value()) {
-    return textEditor.getCoordinatesAtByteOffset(*offset.offset);
-  }
-
-  if (offset.lineInfo.has_value()) {
-    return Coordinates(static_cast<int>(offset.lineInfo->line) - 1,
-                       static_cast<int>(offset.lineInfo->offsetOnLine));
-  }
-
-  return Coordinates(0, 0);
-}
-
 std::optional<std::size_t> ResolveFileOffset(std::string_view source, const FileOffset& offset) {
   const FileOffset resolved = offset.resolveOffset(source);
   if (!resolved.offset.has_value()) {
@@ -97,25 +84,23 @@ bool ElementTagEndsAt(const svg::SVGElement& element, std::string_view source, s
 }  // namespace
 
 bool HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& element) {
-  auto xmlNode = element.withReadAccess(
-      [](svg::DocumentReadAccess&, EntityHandle handle) { return xml::XMLNode::TryCast(handle); });
-  if (!xmlNode.has_value()) {
+  const std::string source = textEditor.getText();
+  const std::optional<SourceByteRange> byteRange = ElementSourceByteRange(element, source);
+  return byteRange.has_value() && HighlightSourceByteRange(textEditor, *byteRange);
+}
+
+bool HighlightSourceByteRange(TextEditor& textEditor, SourceByteRange byteRange) {
+  if (byteRange.end <= byteRange.start || byteRange.end > textEditor.getText().size()) {
     return false;
   }
 
-  auto range = xmlNode->getNodeLocation();
-  if (!range.has_value()) {
-    return false;
-  }
-
-  textEditor.selectAndFocus(FileOffsetToEditorCoordinates(textEditor, range->start),
-                            FileOffsetToEditorCoordinates(textEditor, range->end));
+  textEditor.selectAndFocus(textEditor.getCoordinatesAtByteOffset(byteRange.start),
+                            textEditor.getCoordinatesAtByteOffset(byteRange.end));
   return true;
 }
 
-std::optional<SourceByteRange> ElementSourceByteRange(const svg::SVGElement& element,
-                                                      std::string_view source) {
-  auto xmlNode = xml::XMLNode::TryCast(element.entityHandle());
+std::optional<SourceByteRange> EntitySourceByteRange(EntityHandle handle, std::string_view source) {
+  auto xmlNode = xml::XMLNode::TryCast(handle);
   if (!xmlNode.has_value()) {
     return std::nullopt;
   }
@@ -134,6 +119,13 @@ std::optional<SourceByteRange> ElementSourceByteRange(const svg::SVGElement& ele
   return SourceByteRange{.start = *start, .end = *end};
 }
 
+std::optional<SourceByteRange> ElementSourceByteRange(const svg::SVGElement& element,
+                                                      std::string_view source) {
+  return element.withReadAccess([source](svg::DocumentReadAccess&, EntityHandle handle) {
+    return EntitySourceByteRange(handle, source);
+  });
+}
+
 std::vector<svg::SVGElement> ExcludeSelectedSourceHoverElements(
     std::vector<svg::SVGElement> hoverElements, std::span<const svg::SVGElement> selectedElements) {
   if (hoverElements.empty() || selectedElements.empty()) {
@@ -146,6 +138,18 @@ std::vector<svg::SVGElement> ExcludeSelectedSourceHoverElements(
                                                         selectedElements.end(),
                                                         element) != selectedElements.end();
                                      }),
+                      hoverElements.end());
+  return hoverElements;
+}
+
+std::vector<svg::SVGElement> ExcludeDocumentRootSourceHoverElement(
+    std::vector<svg::SVGElement> hoverElements, const svg::SVGDocument& document) {
+  if (hoverElements.empty()) {
+    return hoverElements;
+  }
+
+  const svg::SVGElement root = document.svgElement();
+  hoverElements.erase(std::remove(hoverElements.begin(), hoverElements.end(), root),
                       hoverElements.end());
   return hoverElements;
 }

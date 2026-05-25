@@ -5,6 +5,7 @@
 #include <array>
 #include <cfloat>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -17,6 +18,7 @@
 #include <vector>
 
 #include "GLFW/glfw3.h"
+#include "donner/css/parser/ColorParser.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/FocusView.h"
@@ -24,10 +26,13 @@
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
+#include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"
+#include "donner/svg/SVGDocument.h"
+#include "donner/svg/properties/PaintServer.h"
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
 
@@ -64,6 +69,11 @@ constexpr float kReferenceChipPaddingY = 5.0f;
 constexpr float kReferenceChipRadius = 6.0f;
 constexpr float kReferenceChipGapFromAabb = 30.0f;
 constexpr float kReferenceChipMinFontSize = 15.0f;
+constexpr float kToolPaletteButtonSize = 30.0f;
+constexpr float kToolPaletteGap = 4.0f;
+constexpr float kToolPalettePadding = 5.0f;
+constexpr float kToolPalettePaintWidgetWidth = 118.0f;
+constexpr float kToolPaletteTopInset = 8.0f;
 constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
 
 ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
@@ -96,6 +106,306 @@ void SetImGuiOsCursorManagementEnabled(bool enabled) {
 bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point) {
   return point.x >= rect.topLeft.x && point.x <= rect.bottomRight.x && point.y >= rect.topLeft.y &&
          point.y <= rect.bottomRight.y;
+}
+
+ImVec2 ToImVec2(const Vector2d& point) {
+  return ImVec2(static_cast<float>(point.x), static_cast<float>(point.y));
+}
+
+Vector2d CubicPoint(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2, const Vector2d& p3,
+                    double t) {
+  const double oneMinusT = 1.0 - t;
+  return p0 * (oneMinusT * oneMinusT * oneMinusT) + p1 * (3.0 * oneMinusT * oneMinusT * t) +
+         p2 * (3.0 * oneMinusT * t * t) + p3 * (t * t * t);
+}
+
+ImVec2 PenToolIconPoint(const ImVec2& origin, float scale, float x, float y) {
+  return ImVec2(origin.x + x * scale, origin.y + y * scale);
+}
+
+void StrokePenToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
+                             ImU32 color, float strokeWidth) {
+  const float buttonSize = std::min(max.x - min.x, max.y - min.y);
+  const float iconSize = buttonSize - 9.0f;
+  const float scale = iconSize / 24.0f;
+  const ImVec2 origin(min.x + (max.x - min.x - iconSize) * 0.5f,
+                      min.y + (max.y - min.y - iconSize) * 0.5f);
+  const auto point = [&](float x, float y) { return PenToolIconPoint(origin, scale, x, y); };
+
+  drawList->PathClear();
+  drawList->PathLineTo(point(14.4153f, 18.6964f));
+  drawList->PathLineTo(point(7.88293f, 19.2352f));
+  drawList->PathLineTo(point(3.80865f, 3.84719f));
+  drawList->PathLineTo(point(19.1966f, 7.92147f));
+  drawList->PathLineTo(point(18.3043f, 14.8073f));
+  drawList->PathStroke(color, ImDrawFlags_None, strokeWidth);
+
+  constexpr float kCosMinus45 = 0.70710678f;
+  constexpr float kSinMinus45 = -0.70710678f;
+  constexpr float kRectX = 13.7081f;
+  constexpr float kRectY = 19.4036f;
+  const auto rectPoint = [&](float dx, float dy) {
+    return point(kRectX + dx * kCosMinus45 - dy * kSinMinus45,
+                 kRectY + dx * kSinMinus45 + dy * kCosMinus45);
+  };
+  drawList->PathClear();
+  drawList->PathLineTo(rectPoint(0.0f, 0.0f));
+  drawList->PathLineTo(rectPoint(7.22447f, 0.0f));
+  drawList->PathLineTo(rectPoint(7.22447f, 3.0f));
+  drawList->PathLineTo(rectPoint(0.0f, 3.0f));
+  drawList->PathStroke(color, ImDrawFlags_Closed, strokeWidth);
+
+  drawList->AddLine(point(5.92996f, 5.96852f), point(10.8797f, 10.9183f), color, strokeWidth);
+  drawList->AddCircle(point(12.2939f, 12.3325f), 2.0f * scale, color, 0, strokeWidth);
+}
+
+void DrawPenToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max) {
+  StrokePenToolButtonIcon(drawList, min, max, IM_COL32(255, 255, 255, 255), 3.0f);
+  StrokePenToolButtonIcon(drawList, min, max, IM_COL32(0, 0, 0, 255), 1.75f);
+}
+
+void DrawSelectToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImVec2& max) {
+  const float buttonSize = std::min(max.x - min.x, max.y - min.y);
+  const float iconSize = buttonSize - 8.0f;
+  const float scale = iconSize / 24.0f;
+  const ImVec2 origin(min.x + (max.x - min.x - iconSize) * 0.5f,
+                      min.y + (max.y - min.y - iconSize) * 0.5f);
+  const auto point = [&](float x, float y) {
+    return ImVec2(origin.x + x * scale, origin.y + y * scale);
+  };
+  const std::array<ImVec2, 7> points = {
+      point(5.5f, 3.5f),   point(5.5f, 21.0f),  point(10.2f, 16.4f), point(12.9f, 22.0f),
+      point(15.8f, 20.6f), point(13.0f, 15.1f), point(19.5f, 15.1f),
+  };
+
+  drawList->AddTriangleFilled(points[0], points[1], points[2], IM_COL32(0, 0, 0, 255));
+  drawList->AddTriangleFilled(points[0], points[2], points[6], IM_COL32(0, 0, 0, 255));
+  drawList->AddTriangleFilled(points[2], points[3], points[5], IM_COL32(0, 0, 0, 255));
+  drawList->AddTriangleFilled(points[3], points[4], points[5], IM_COL32(0, 0, 0, 255));
+
+  drawList->AddPolyline(points.data(), static_cast<int>(points.size()),
+                        IM_COL32(255, 255, 255, 255), ImDrawFlags_Closed, 3.2f);
+  drawList->AddPolyline(points.data(), static_cast<int>(points.size()), IM_COL32(0, 0, 0, 255),
+                        ImDrawFlags_Closed, 1.7f);
+}
+
+float ColorChannelToFloat(std::uint8_t value) {
+  return static_cast<float>(value) / 255.0f;
+}
+
+ImVec4 ColorToImVec4(const css::RGBA& color) {
+  return ImVec4(ColorChannelToFloat(color.r), ColorChannelToFloat(color.g),
+                ColorChannelToFloat(color.b), ColorChannelToFloat(color.a));
+}
+
+css::RGBA ColorFromPicker(const float color[4]) {
+  const auto channel = [](float value) {
+    return static_cast<std::uint8_t>(
+        std::clamp(static_cast<int>(std::lround(value * 255.0f)), 0, 255));
+  };
+  return css::RGBA(channel(color[0]), channel(color[1]), channel(color[2]), channel(color[3]));
+}
+
+std::string ColorToSvgAttribute(const css::RGBA& color) {
+  return color.toHexString();
+}
+
+std::optional<css::RGBA> ParseColorAttribute(std::string_view value) {
+  auto parsed = css::parser::ColorParser::ParseString(value);
+  if (parsed.hasError() || !parsed.hasResult()) {
+    return std::nullopt;
+  }
+
+  const css::Color color = parsed.result();
+  if (color.isCurrentColor()) {
+    return css::RGBA::RGB(0, 0, 0);
+  }
+
+  return color.asRGBA();
+}
+
+css::RGBA CurrentColorForElement(const svg::SVGElement& element) {
+  const css::Color color = element.getComputedStyle().color.getRequired();
+  return color.isCurrentColor() ? css::RGBA::RGB(0, 0, 0) : color.asRGBA();
+}
+
+struct ToolbarPaintReferenceState {
+  std::string href;
+  bool external = false;
+  std::optional<SourceByteRange> sourceRange;
+};
+
+struct ToolbarPaintSlotState {
+  css::RGBA color = css::RGBA::RGB(0, 0, 0);
+  bool isNone = true;
+  bool isCustom = false;
+  std::optional<ToolbarPaintReferenceState> reference;
+  std::string customLabel;
+};
+
+struct ToolbarPaintState {
+  ToolbarPaintSlotState fill;
+  ToolbarPaintSlotState stroke;
+};
+
+css::RGBA PaintServerFallbackColor() {
+  return css::RGBA::RGB(74, 89, 112);
+}
+
+ToolbarPaintSlotState ToolbarPaintSlotStateForActiveAttribute(std::string_view value) {
+  ToolbarPaintSlotState state;
+  if (value == "none") {
+    return state;
+  }
+
+  state.isNone = false;
+  const std::optional<css::RGBA> parsedColor = ParseColorAttribute(value);
+  state.color = parsedColor.value_or(PaintServerFallbackColor());
+  state.isCustom = !parsedColor.has_value();
+  if (state.isCustom) {
+    state.customLabel = std::string(value);
+  }
+  return state;
+}
+
+std::optional<SourceByteRange> ResolveReferenceSourceRange(svg::SVGDocument& document,
+                                                           std::string_view source,
+                                                           const svg::Reference& reference) {
+  if (reference.isExternal()) {
+    return std::nullopt;
+  }
+
+  const std::optional<svg::ResolvedReference> resolved = reference.resolve(document.registry());
+  if (!resolved.has_value() || !resolved->valid()) {
+    return std::nullopt;
+  }
+
+  return EntitySourceByteRange(resolved->handle, source);
+}
+
+ToolbarPaintReferenceState ToolbarPaintReferenceStateFor(svg::SVGDocument* document,
+                                                         std::optional<std::string_view> source,
+                                                         const svg::Reference& reference) {
+  ToolbarPaintReferenceState state;
+  state.href = std::string(std::string_view(reference.href));
+  state.external = reference.isExternal();
+
+  if (document != nullptr && source.has_value() && !state.external) {
+    state.sourceRange = ResolveReferenceSourceRange(*document, *source, reference);
+  }
+
+  return state;
+}
+
+ToolbarPaintSlotState ToolbarPaintSlotStateForPaintServer(const svg::PaintServer& paint,
+                                                          const css::RGBA& currentColor,
+                                                          svg::SVGDocument* document,
+                                                          std::optional<std::string_view> source) {
+  ToolbarPaintSlotState state;
+  state.color = PaintServerFallbackColor();
+
+  if (paint.is<svg::PaintServer::None>()) {
+    state.isNone = true;
+    return state;
+  }
+
+  if (paint.is<svg::PaintServer::Solid>()) {
+    state.isNone = false;
+    state.color = paint.get<svg::PaintServer::Solid>().color.resolve(currentColor, 1.0f);
+    return state;
+  }
+
+  if (paint.is<svg::PaintServer::ElementReference>()) {
+    const auto& ref = paint.get<svg::PaintServer::ElementReference>();
+    state.isNone = false;
+    state.isCustom = true;
+    state.reference = ToolbarPaintReferenceStateFor(document, source, ref.reference);
+    if (ref.fallback.has_value()) {
+      state.color = ref.fallback->resolve(currentColor, 1.0f);
+    }
+    return state;
+  }
+
+  state.isNone = false;
+  state.isCustom = true;
+  state.customLabel = paint.is<svg::PaintServer::ContextFill>() ? "context-fill" : "context-stroke";
+  return state;
+}
+
+ToolbarPaintSlotState ToolbarPaintSlotStateForElement(const svg::SVGElement& element,
+                                                      std::string_view attrName,
+                                                      svg::SVGDocument* document,
+                                                      std::optional<std::string_view> source) {
+  const auto& style = element.getComputedStyle();
+  const svg::PaintServer paint =
+      attrName == "fill" ? style.fill.getRequired() : style.stroke.getRequired();
+  ToolbarPaintSlotState state =
+      ToolbarPaintSlotStateForPaintServer(paint, CurrentColorForElement(element), document, source);
+
+  if (state.isCustom || !state.isNone) {
+    return state;
+  }
+
+  if (std::optional<RcString> attribute = element.getAttribute(attrName);
+      attribute.has_value() && std::string_view(*attribute) != "none") {
+    state = ToolbarPaintSlotStateForActiveAttribute(std::string_view(*attribute));
+  }
+  return state;
+}
+
+ToolbarPaintState ToolbarPaintStateForActivePaint(const ActivePaintStyle& paintStyle) {
+  ToolbarPaintState state;
+  state.fill = ToolbarPaintSlotStateForActiveAttribute(paintStyle.fill);
+  state.stroke = ToolbarPaintSlotStateForActiveAttribute(paintStyle.stroke);
+  return state;
+}
+
+void OverridePaintStateFromElement(ToolbarPaintState* state, const svg::SVGElement& element,
+                                   svg::SVGDocument* document,
+                                   std::optional<std::string_view> source) {
+  state->fill = ToolbarPaintSlotStateForElement(element, "fill", document, source);
+  state->stroke = ToolbarPaintSlotStateForElement(element, "stroke", document, source);
+}
+
+ToolbarPaintState ToolbarPaintStateForApp(EditorApp& app, std::optional<std::string_view> source) {
+  ToolbarPaintState state = ToolbarPaintStateForActivePaint(app.activePaintStyle());
+  if (app.hasSelection()) {
+    OverridePaintStateFromElement(&state, app.selectedElements().front(),
+                                  app.hasDocument() ? &app.document().document() : nullptr, source);
+  }
+  return state;
+}
+
+void DrawPaintSwatch(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
+                     const ToolbarPaintSlotState& state) {
+  drawList->AddRectFilled(min, max, ImGui::GetColorU32(ColorToImVec4(state.color)), 2.0f);
+  if (state.isCustom) {
+    drawList->PushClipRect(min, max, true);
+    for (float x = min.x - (max.y - min.y); x < max.x; x += 5.0f) {
+      drawList->AddLine(ImVec2(x, max.y), ImVec2(x + (max.y - min.y), min.y),
+                        IM_COL32(255, 255, 255, 95), 1.0f);
+    }
+    drawList->PopClipRect();
+  }
+  drawList->AddRect(min, max, IM_COL32(255, 255, 255, 230), 2.0f, 0, 1.0f);
+  drawList->AddRect(min, max, state.isCustom ? IM_COL32(91, 189, 255, 255) : IM_COL32(0, 0, 0, 210),
+                    2.0f, 0, 2.0f);
+  if (state.isNone) {
+    drawList->AddLine(ImVec2(min.x + 2.0f, max.y - 2.0f), ImVec2(max.x - 2.0f, min.y + 2.0f),
+                      IM_COL32(230, 40, 40, 255), 2.2f);
+  }
+}
+
+std::string PaintChipLabel(std::string_view prefix, const ToolbarPaintSlotState& state) {
+  std::string value = state.reference.has_value() ? state.reference->href : state.customLabel;
+  if (value.empty()) {
+    value = "custom";
+  }
+  constexpr std::size_t kMaxValueLength = 12;
+  if (value.size() > kMaxValueLength) {
+    value = value.substr(0, kMaxValueLength - 3) + "...";
+  }
+  return std::string(prefix) + " " + value;
 }
 
 std::string SelectionSizeChipLabel(const Box2d& screenBounds) {
@@ -266,6 +576,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       options_(std::move(options)),
       app_(),
       selectTool_(),
+      penTool_(),
       textEditor_(),
       textures_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
@@ -662,6 +973,23 @@ void EditorShell::handleGlobalShortcuts() {
     toggleSourceFocusMode();
   }
 
+  if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
+      ImGui::IsKeyPressed(ImGuiKey_V, /*repeat=*/false)) {
+    activeTool_ = ActiveTool::Select;
+    penTool_.cancel();
+  }
+
+  if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
+      ImGui::IsKeyPressed(ImGuiKey_P, /*repeat=*/false)) {
+    activeTool_ = ActiveTool::Pen;
+  }
+
+  if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
+      penTool_.isDrafting()) {
+    penTool_.cancel();
+    return;
+  }
+
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
       app_.hasSelection()) {
     app_.setSelection(std::nullopt);
@@ -684,7 +1012,9 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
   ImGui::Begin("Source", nullptr, kPaneFlags);
   ImGui::PushFont(codeFont);
   textEditor_.setSourceFocusModeContextMenu(sourceFocusMode_);
+  updateSourceStyleDecorations();
   textEditor_.render("##source");
+  applySourceStyleDecorationChipClick();
   updateSourceHoverPreview();
   if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
     toggleSourceFocusMode();
@@ -703,6 +1033,245 @@ void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float pa
   }
   updateSourceHoverPreview();
   ImGui::End();
+}
+
+Box2d EditorShell::toolPaletteScreenRect(const ImVec2& paneOrigin,
+                                         const ImVec2& contentRegion) const {
+  constexpr float kButtonCount = 3.0f;
+  const float width = kToolPalettePadding * 2.0f + kToolPaletteButtonSize * kButtonCount +
+                      kToolPalettePaintWidgetWidth + kToolPaletteGap * kButtonCount;
+  const float height = kToolPalettePadding * 2.0f + kToolPaletteButtonSize;
+  const float x = paneOrigin.x + std::max(0.0f, (contentRegion.x - width) * 0.5f);
+  const float y = paneOrigin.y + kToolPaletteTopInset;
+  return Box2d::FromXYWH(x, y, width, height);
+}
+
+void EditorShell::renderFillStrokeToolbarWidget() {
+  const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
+  const bool canEditPaint = app_.hasDocument() && !rendererBusy;
+  std::string editorSource;
+  std::string documentSource;
+  std::optional<std::string_view> sourceForRanges;
+  if (canEditPaint) {
+    editorSource = textEditor_.getText();
+    documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+    if (editorSource == documentSource) {
+      sourceForRanges = std::string_view(editorSource);
+    }
+  }
+  const ToolbarPaintState paintState =
+      rendererBusy ? ToolbarPaintState{} : ToolbarPaintStateForApp(app_, sourceForRanges);
+  ImGui::BeginDisabled(!canEditPaint);
+  ImGui::InvisibleButton("##fill_stroke_widget",
+                         ImVec2(kToolPalettePaintWidgetWidth, kToolPaletteButtonSize));
+  const ImVec2 min = ImGui::GetItemRectMin();
+  const ImVec2 max = ImGui::GetItemRectMax();
+  const ImVec2 mouse = ImGui::GetMousePos();
+  const ImVec2 strokeMin(min.x + 15.0f, min.y + 3.0f);
+  const ImVec2 strokeMax(strokeMin.x + 19.0f, strokeMin.y + 19.0f);
+  const ImVec2 fillMin(min.x + 5.0f, min.y + 10.0f);
+  const ImVec2 fillMax(fillMin.x + 19.0f, fillMin.y + 19.0f);
+  const ImVec2 chipMin(min.x + 42.0f, min.y + 1.0f);
+  const ImVec2 chipMax(max.x - 3.0f, min.y + 14.0f);
+  const ImVec2 fillChipMin(chipMin.x, min.y + 16.0f);
+  const ImVec2 fillChipMax(chipMax.x, min.y + 29.0f);
+  const ImVec2 strokeChipMin(chipMin.x, chipMin.y);
+  const ImVec2 strokeChipMax(chipMax.x, chipMax.y);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  DrawPaintSwatch(drawList, strokeMin, strokeMax, paintState.stroke);
+  DrawPaintSwatch(drawList, fillMin, fillMax, paintState.fill);
+
+  const auto contains = [](const ImVec2& rectMin, const ImVec2& rectMax, const ImVec2& point) {
+    return point.x >= rectMin.x && point.x <= rectMax.x && point.y >= rectMin.y &&
+           point.y <= rectMax.y;
+  };
+  const auto fitChipLabel = [](std::string label, float maxWidth) {
+    if (ImGui::CalcTextSize(label.c_str()).x <= maxWidth) {
+      return label;
+    }
+
+    std::string base = std::move(label);
+    while (base.size() > 1u) {
+      base.pop_back();
+      const std::string candidate = base + "...";
+      if (ImGui::CalcTextSize(candidate.c_str()).x <= maxWidth) {
+        return candidate;
+      }
+    }
+    return std::string("...");
+  };
+  const auto renderChip = [&](std::string_view prefix, const ToolbarPaintSlotState& slot,
+                              const ImVec2& rectMin, const ImVec2& rectMax) {
+    if (!slot.isCustom) {
+      return;
+    }
+
+    const bool actionable = slot.reference.has_value() && slot.reference->sourceRange.has_value();
+    const ImU32 fillColor = actionable ? IM_COL32(37, 112, 172, 245) : IM_COL32(61, 72, 86, 225);
+    const ImU32 borderColor =
+        actionable ? IM_COL32(127, 203, 255, 255) : IM_COL32(119, 132, 150, 235);
+    drawList->AddRectFilled(rectMin, rectMax, fillColor, 4.0f);
+    drawList->AddRect(rectMin, rectMax, borderColor, 4.0f, 0, 1.0f);
+
+    const std::string label =
+        fitChipLabel(PaintChipLabel(prefix, slot), rectMax.x - rectMin.x - 8.0f);
+    const ImVec2 textSize = ImGui::CalcTextSize(label.c_str());
+    drawList->AddText(
+        ImVec2(rectMin.x + 4.0f, rectMin.y + (rectMax.y - rectMin.y - textSize.y) * 0.5f - 0.5f),
+        IM_COL32(255, 255, 255, 245), label.c_str());
+  };
+  renderChip("S", paintState.stroke, strokeChipMin, strokeChipMax);
+  renderChip("F", paintState.fill, fillChipMin, fillChipMax);
+
+  if (canEditPaint && ImGui::IsItemClicked()) {
+    const bool clickedFillChip =
+        paintState.fill.isCustom && contains(fillChipMin, fillChipMax, mouse);
+    const bool clickedStrokeChip =
+        paintState.stroke.isCustom && contains(strokeChipMin, strokeChipMax, mouse);
+    bool handledPaintClick = false;
+    if (clickedFillChip || clickedStrokeChip) {
+      const ToolbarPaintSlotState& slot = clickedFillChip ? paintState.fill : paintState.stroke;
+      if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
+        revealSourceRange(*slot.reference->sourceRange);
+      }
+      handledPaintClick = true;
+    }
+
+    if (!handledPaintClick) {
+      const bool clickedFill = mouse.x >= fillMin.x && mouse.x <= fillMax.x &&
+                               mouse.y >= fillMin.y && mouse.y <= fillMax.y;
+      const bool clickedStroke = mouse.x >= strokeMin.x && mouse.x <= strokeMax.x &&
+                                 mouse.y >= strokeMin.y && mouse.y <= strokeMax.y;
+      if (clickedFill || !clickedStroke) {
+        ImGui::OpenPopup("##fill_color_picker");
+      } else {
+        ImGui::OpenPopup("##stroke_color_picker");
+      }
+    }
+  }
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    const bool hoveredFillChip =
+        paintState.fill.isCustom && contains(fillChipMin, fillChipMax, mouse);
+    const bool hoveredStrokeChip =
+        paintState.stroke.isCustom && contains(strokeChipMin, strokeChipMax, mouse);
+    if (hoveredFillChip || hoveredStrokeChip) {
+      const char* name = hoveredFillChip ? "Fill" : "Stroke";
+      const ToolbarPaintSlotState& slot = hoveredFillChip ? paintState.fill : paintState.stroke;
+      if (slot.reference.has_value() && slot.reference->sourceRange.has_value()) {
+        ImGui::SetTooltip("%s paint server %s. Click to show source.", name,
+                          slot.reference->href.c_str());
+      } else if (slot.reference.has_value() && slot.reference->external) {
+        ImGui::SetTooltip("%s uses external paint server %s.", name, slot.reference->href.c_str());
+      } else if (slot.reference.has_value()) {
+        ImGui::SetTooltip("%s uses unresolved paint server %s.", name,
+                          slot.reference->href.c_str());
+      } else {
+        ImGui::SetTooltip("%s uses custom paint %s.", name, slot.customLabel.c_str());
+      }
+    } else {
+      ImGui::SetTooltip("%s", canEditPaint ? "Fill / stroke" : "Open an SVG document");
+    }
+  }
+  ImGui::EndDisabled();
+
+  auto renderColorPopup = [&](const char* popupId, const char* pickerId, std::string_view attrName,
+                              const ToolbarPaintSlotState& slot) {
+    if (!ImGui::BeginPopup(popupId)) {
+      return;
+    }
+
+    float pickerColor[4] = {
+        ColorChannelToFloat(slot.color.r),
+        ColorChannelToFloat(slot.color.g),
+        ColorChannelToFloat(slot.color.b),
+        ColorChannelToFloat(slot.color.a),
+    };
+    constexpr ImGuiColorEditFlags kFlags = ImGuiColorEditFlags_AlphaBar |
+                                           ImGuiColorEditFlags_AlphaPreviewHalf |
+                                           ImGuiColorEditFlags_NoSidePreview;
+    if (ImGui::ColorPicker4(pickerId, pickerColor, kFlags)) {
+      const css::RGBA chosen = ColorFromPicker(pickerColor);
+      const std::string svgColor = ColorToSvgAttribute(chosen);
+      if (attrName == "fill") {
+        app_.setActiveFill(svgColor);
+      } else {
+        app_.setActiveStroke(svgColor);
+      }
+      std::ignore = app_.setStylePropertyOnSelection(attrName, svgColor);
+      window_.wakeEventLoop();
+    }
+    ImGui::EndPopup();
+  };
+
+  renderColorPopup("##fill_color_picker", "##fill_picker", "fill", paintState.fill);
+  renderColorPopup("##stroke_color_picker", "##stroke_picker", "stroke", paintState.stroke);
+}
+
+void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion) {
+  const Box2d rect = toolPaletteScreenRect(paneOrigin, contentRegion);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(
+      ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y)),
+      ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y)),
+      ImGui::GetColorU32(ImVec4(0.11f, 0.12f, 0.14f, 0.92f)), 7.0f);
+  drawList->AddRect(
+      ImVec2(static_cast<float>(rect.topLeft.x), static_cast<float>(rect.topLeft.y)),
+      ImVec2(static_cast<float>(rect.bottomRight.x), static_cast<float>(rect.bottomRight.y)),
+      ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 0.14f)), 7.0f);
+
+  ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(rect.topLeft.x) + kToolPalettePadding,
+                                   static_cast<float>(rect.topLeft.y) + kToolPalettePadding));
+  ImGui::PushID("tool_palette");
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.0f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
+
+  enum class ToolButtonIcon {
+    None,
+    SelectPointer,
+    PenTool,
+  };
+  const auto renderButton = [&](ActiveTool tool, const char* label, ToolButtonIcon icon,
+                                const char* tooltip) {
+    const bool selected = activeTool_ == tool;
+    if (selected) {
+      ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.43f, 0.90f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.50f, 1.0f, 1.0f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.35f, 0.78f, 1.0f));
+    }
+    if (ImGui::Button(label, ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize))) {
+      activeTool_ = tool;
+      if (tool == ActiveTool::Select) {
+        penTool_.cancel();
+      }
+    }
+    if (icon == ToolButtonIcon::SelectPointer) {
+      DrawSelectToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    } else if (icon == ToolButtonIcon::PenTool) {
+      DrawPenToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("%s", tooltip);
+    }
+    if (selected) {
+      ImGui::PopStyleColor(3);
+    }
+  };
+
+  renderButton(ActiveTool::Select, "##select_tool", ToolButtonIcon::SelectPointer, "Select");
+  ImGui::SameLine(0.0f, kToolPaletteGap);
+  renderButton(ActiveTool::Pen, "##pen_tool", ToolButtonIcon::PenTool, "Pen");
+  ImGui::SameLine(0.0f, kToolPaletteGap);
+  ImGui::BeginDisabled(true);
+  (void)ImGui::Button("△", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
+  ImGui::EndDisabled();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+    ImGui::SetTooltip("%s", "Path edit");
+  }
+  ImGui::SameLine(0.0f, kToolPaletteGap);
+  renderFillStrokeToolbarWidget();
+
+  ImGui::PopStyleVar(2);
+  ImGui::PopID();
 }
 
 void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
@@ -740,13 +1309,16 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   const bool hideReferenceChip = selectTool_.activeTransformBoundsPreview().has_value();
   const std::optional<Box2d> referenceChipRect =
       hideReferenceChip ? std::nullopt : referenceHighlightChipScreenRect(referenceChipLabel);
+  const Box2d toolPaletteRect = toolPaletteScreenRect(paneOriginImGui, contentRegion);
+  const bool toolPaletteHovered = ContainsScreenPoint(toolPaletteRect, ImGui::GetMousePos());
   const bool referenceChipHovered = referenceChipRect.has_value() &&
                                     ContainsScreenPoint(*referenceChipRect, ImGui::GetMousePos());
 
+  ImGui::SetNextItemAllowOverlap();
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
   const bool paneHovered = ImGui::IsItemHovered();
-  const bool canvasHovered = paneHovered && !referenceChipHovered;
+  const bool canvasHovered = paneHovered && !referenceChipHovered && !toolPaletteHovered;
   const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
                                          interactionController_.viewport().paneOrigin.y,
                                          interactionController_.viewport().paneSize.x,
@@ -789,8 +1361,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
   }
 
-  const bool modalCapturingInput =
-      referenceChipHovered || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const bool modalCapturingInput = referenceChipHovered || toolPaletteHovered ||
+                                   ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   interactionController_.consumeScrollEvents(inputBridge_.events(), paneRect, modalCapturingInput,
                                              kWheelZoomStep, kTrackpadPanPixelsPerScrollUnit);
 
@@ -804,6 +1376,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
 
   const bool toolEligible = canvasHovered && !interactionController_.panning() && !spaceHeld;
+  const bool selectToolActive = activeTool_ == ActiveTool::Select;
+  const bool penToolActive = activeTool_ == ActiveTool::Pen;
   const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint) {
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     if (boundsCache.lastSelection != app_.selectedElements()) {
@@ -813,7 +1387,16 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                             interactionController_.viewport().pixelsPerDocUnit());
   };
   SelectionTransformHandleIntent hoverTransformIntent;
-  if (!rotateCursorLocked && toolEligible && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+  if (penToolActive && !rotateCursorLocked && toolEligible) {
+    if (rotateCursorSet_.setPenCursor()) {
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      rotateCursorSet_.clearIfActive();
+      SetImGuiOsCursorManagementEnabled(true);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+    }
+  } else if (selectToolActive && !rotateCursorLocked && toolEligible &&
+             !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
     hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
     if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
       if (hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate &&
@@ -867,7 +1450,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         cacheMatchesSelection ? cachedHandleIntentAt(pendingClick.documentPoint)
                               : SelectionTransformHandleIntent{};
     const bool tookFastRedrag =
-        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+        selectToolActive && cacheMatchesSelection &&
+        pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
         selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
                                              pendingClick.modifiers, boundsCache.displayedBoundsDoc,
                                              boundsCache.displayedOccludingBoundsDoc);
@@ -879,14 +1463,27 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       // Slow path: full `onMouseDown` (hitTest + selection change +
       // possible drag start). Race-safe only when the worker is idle.
       lastPostedScreenPoint_.reset();
-      selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-      renderCoordinator_.refreshSelectionBoundsCache(app_);
-      renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                            textures_);
-      renderCoordinator_.rasterizeOverlayForCurrentSelection(
-          app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-          RenderCoordinator::OverlayUploadMode::MatchDisplayedVersion,
-          selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+      bool queuedMutationForNextFrame = false;
+      if (selectToolActive) {
+        selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+      } else if (penToolActive) {
+        penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && penTool_.isDraggingAnchor()) {
+          penTool_.onMouseUp(app_, pendingClick.documentPoint);
+        }
+        queuedMutationForNextFrame = true;
+      }
+      if (queuedMutationForNextFrame) {
+        window_.wakeEventLoop();
+      } else {
+        renderCoordinator_.refreshSelectionBoundsCache(app_);
+        renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
+                                              textures_);
+        renderCoordinator_.rasterizeOverlayForCurrentSelection(
+            app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+            RenderCoordinator::OverlayUploadMode::MatchDisplayedVersion,
+            selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+      }
       interactionController_.clearPendingClick();
     } else {
       // Worker is busy with a (likely-stale) prewarm render at the
@@ -961,6 +1558,16 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
   }
 
+  if (penToolActive && penTool_.isDraggingAnchor()) {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
+      penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      penTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
+      window_.wakeEventLoop();
+    }
+  }
+
   if (!renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument()) {
     renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
                                           textures_);
@@ -989,8 +1596,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_),
   };
   renderPanePresenter_.render(paneState);
+  renderPenToolPreview();
   renderSelectionSizeChip(hoverTransformIntent, activeGesturePreview);
   renderReferenceHighlightChip();
+  renderToolPalette(paneOriginImGui, contentRegion);
   renderRenderPaneContextMenu();
 
   ImGui::End();
@@ -1035,8 +1644,12 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.inspectorPaneY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.inspectorPaneHeight), ImGuiCond_Always);
   ImGui::Begin("Inspector", nullptr, paneFlags);
-  sidebarPresenter_.renderInspector(interactionController_.viewport());
+  const bool inspectorQueuedMutation =
+      sidebarPresenter_.renderInspector(liveAppForClicks, interactionController_.viewport());
   ImGui::End();
+  if (inspectorQueuedMutation) {
+    window_.wakeEventLoop();
+  }
 
   if (layerPanelDetached_) {
     return;
@@ -1332,8 +1945,10 @@ std::vector<svg::SVGElement> EditorShell::sourceHoverElements() const {
 
   const std::size_t hoverOffset = textEditor_.getByteOffsetAtCoordinates(*hoverPosition);
   if (std::optional<StyleFocus> styleFocus = styleFocusAtSourceOffset(hoverOffset)) {
-    return ExcludeSelectedSourceHoverElements(std::move(styleFocus->impactedElements),
-                                              app_.selectedElements());
+    return ExcludeDocumentRootSourceHoverElement(
+        ExcludeSelectedSourceHoverElements(std::move(styleFocus->impactedElements),
+                                           app_.selectedElements()),
+        app_.document().document());
   }
 
   std::optional<svg::SVGElement> element =
@@ -1342,7 +1957,9 @@ std::vector<svg::SVGElement> EditorShell::sourceHoverElements() const {
     return {};
   }
 
-  return ExcludeSelectedSourceHoverElements({*element}, app_.selectedElements());
+  return ExcludeDocumentRootSourceHoverElement(
+      ExcludeSelectedSourceHoverElements({*element}, app_.selectedElements()),
+      app_.document().document());
 }
 
 std::vector<SourceByteRange> EditorShell::sourceHoverRangesForElements(
@@ -1621,6 +2238,52 @@ void EditorShell::renderReferenceHighlightChip() {
                     IM_COL32(255, 255, 255, 255), label.c_str(), label.c_str() + label.size());
 }
 
+void EditorShell::renderPenToolPreview() {
+  if (activeTool_ != ActiveTool::Pen || !penTool_.isDrafting()) {
+    return;
+  }
+
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const ViewportState& viewport = interactionController_.viewport();
+  const ImU32 pathColor = ImGui::GetColorU32(ImVec4(0.10f, 0.43f, 1.0f, 1.0f));
+  const ImU32 handleColor = ImGui::GetColorU32(ImVec4(0.10f, 0.43f, 1.0f, 0.42f));
+  const ImU32 anchorFill = ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+  const ImU32 anchorStroke = ImGui::GetColorU32(ImVec4(0.06f, 0.20f, 0.48f, 1.0f));
+
+  for (const PenTool::PreviewHandleLine& handle : penTool_.previewHandleLines()) {
+    drawList->AddLine(ToImVec2(viewport.documentToScreen(handle.start)),
+                      ToImVec2(viewport.documentToScreen(handle.end)), handleColor, 1.2f);
+    drawList->AddCircleFilled(ToImVec2(viewport.documentToScreen(handle.end)), 3.0f, handleColor);
+  }
+
+  for (const PenTool::PreviewSegment& segment : penTool_.previewSegments()) {
+    if (!segment.cubic) {
+      drawList->AddLine(ToImVec2(viewport.documentToScreen(segment.start)),
+                        ToImVec2(viewport.documentToScreen(segment.end)), pathColor, 2.0f);
+      continue;
+    }
+
+    constexpr int kCubicSteps = 24;
+    Vector2d previous = segment.start;
+    for (int i = 1; i <= kCubicSteps; ++i) {
+      const double t = static_cast<double>(i) / static_cast<double>(kCubicSteps);
+      const Vector2d current =
+          CubicPoint(segment.start, segment.control1, segment.control2, segment.end, t);
+      drawList->AddLine(ToImVec2(viewport.documentToScreen(previous)),
+                        ToImVec2(viewport.documentToScreen(current)), pathColor, 2.0f);
+      previous = current;
+    }
+  }
+
+  for (const Vector2d& anchor : penTool_.previewAnchors()) {
+    const ImVec2 center = ToImVec2(viewport.documentToScreen(anchor));
+    const ImVec2 min(center.x - 4.0f, center.y - 4.0f);
+    const ImVec2 max(center.x + 4.0f, center.y + 4.0f);
+    drawList->AddRectFilled(min, max, anchorFill, 1.0f);
+    drawList->AddRect(min, max, anchorStroke, 1.0f, 0, 1.4f);
+  }
+}
+
 void EditorShell::openRenderPaneContextMenu(const Vector2d& documentPoint) {
   renderContextMenuDocumentPoint_ = documentPoint;
   renderContextMenuHitElement_.reset();
@@ -1736,6 +2399,9 @@ void EditorShell::applyStyleFocus(StyleFocus styleFocus) {
   applySourcePartition(std::move(styleFocus.partition));
   sourceFocusOriginatedInStyle_ = true;
   sourceSelectionOriginatedInText_ = false;
+  if (styleFocus.reverseReferenceExpansionSuppressed) {
+    return;
+  }
   if (app_.selectedElements() != styleFocus.impactedElements) {
     app_.setSelection(std::move(styleFocus.impactedElements));
     sourceSelectionOriginatedInText_ = app_.selectedElements() != lastHighlightedSelection_;
@@ -1811,6 +2477,97 @@ void EditorShell::updateSourceFocusView(bool scrollToSelection) {
   }
 }
 
+void EditorShell::updateSourceStyleDecorations() {
+  const auto clearDecorations = [this]() {
+    styleSourceContributions_.clear();
+    styleSourceDecorationsValid_ = false;
+    styleSourceDecorationSourceVersion_ = 0;
+    styleSourceDecorationText_.clear();
+    std::ignore = textEditor_.clearSourceStyleDecorations();
+  };
+
+  if (!app_.hasDocument() || textEditor_.isTextChanged() || app_.document().hasPendingMutations()) {
+    clearDecorations();
+    return;
+  }
+
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  if (documentSource.empty() || textEditor_.getText() != documentSource) {
+    clearDecorations();
+    return;
+  }
+
+  const std::uint64_t sourceVersion = app_.document().document().sourceVersion();
+  if (styleSourceDecorationsValid_ && styleSourceDecorationSourceVersion_ == sourceVersion &&
+      styleSourceDecorationText_ == documentSource) {
+    return;
+  }
+
+  StyleSourceAnnotations annotations =
+      ComputeStyleSourceAnnotations(app_.document().document(), documentSource);
+  styleSourceContributions_ = std::move(annotations.contributions);
+
+  std::vector<TextEditor::SourceStyleDecoration> decorations;
+  decorations.reserve(styleSourceContributions_.size());
+  for (const StyleSourceContribution& contribution : styleSourceContributions_) {
+    decorations.push_back(TextEditor::SourceStyleDecoration{
+        .id = contribution.id,
+        .range = contribution.sourceRange,
+        .chipRange = contribution.chipRange,
+        .ineffective = !contribution.effective,
+        .showChip = contribution.showChip,
+        .chipCount = contribution.matchedElementCount,
+        .showOverflowMarker = contribution.showOverflowMarker,
+        .tooltip = contribution.tooltip,
+        .chipTooltip = contribution.chipTooltip,
+        .overflowTooltip = contribution.overflowTooltip,
+    });
+  }
+
+  std::ignore = textEditor_.setSourceStyleDecorations(std::move(decorations));
+  styleSourceDecorationsValid_ = true;
+  styleSourceDecorationSourceVersion_ = sourceVersion;
+  styleSourceDecorationText_ = documentSource;
+}
+
+void EditorShell::applySourceStyleDecorationChipClick() {
+  const std::optional<std::size_t> clickedId = textEditor_.takeClickedSourceStyleChipId();
+  if (!clickedId.has_value()) {
+    return;
+  }
+
+  auto contributionIter =
+      std::find_if(styleSourceContributions_.begin(), styleSourceContributions_.end(),
+                   [clickedId](const StyleSourceContribution& contribution) {
+                     return contribution.id == *clickedId;
+                   });
+  if (contributionIter == styleSourceContributions_.end()) {
+    return;
+  }
+  if (contributionIter->showOverflowMarker) {
+    return;
+  }
+
+  app_.setSelection(contributionIter->matchedElements);
+  sourceSelectionOriginatedInText_ = true;
+  sourceFocusOriginatedInStyle_ = false;
+  referenceHighlightActive_ = false;
+  referenceHighlightChipHovered_ = false;
+  referenceHighlightSummary_ = ReferenceHighlightSummary{};
+  lastReferenceHighlightSelection_.clear();
+  updateSourceFocusView(/*scrollToSelection=*/false);
+
+  if (!renderCoordinator_.asyncRenderer().isBusy()) {
+    renderCoordinator_.refreshSelectionBoundsCache(app_);
+    renderCoordinator_.rasterizeOverlayForCurrentSelection(
+        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
+        selectTool_.activeTransformBoundsPreview());
+  }
+
+  window_.wakeEventLoop();
+}
+
 void EditorShell::setSourceFocusMode(bool enabled) {
   sourceFocusMode_ = enabled;
   if (sourceFocusOriginatedInStyle_) {
@@ -1843,6 +2600,14 @@ void EditorShell::setSourcePaneVisible(bool visible) {
           RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
           selectTool_.activeTransformBoundsPreview());
     }
+  }
+  window_.wakeEventLoop();
+}
+
+void EditorShell::revealSourceRange(SourceByteRange byteRange) {
+  setSourcePaneVisible(true);
+  if (HighlightSourceByteRange(textEditor_, byteRange)) {
+    textEditor_.flashSourceRange(byteRange);
   }
   window_.wakeEventLoop();
 }

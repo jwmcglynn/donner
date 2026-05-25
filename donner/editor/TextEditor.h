@@ -197,6 +197,23 @@ public:
   using LanguageDefinition = ::donner::editor::LanguageDefinition;
   using String = RcString;
 
+  /// Source decoration for style/cascade annotations in the editor.
+  struct SourceStyleDecoration {
+    std::size_t id = 0;         ///< Stable decoration id returned on chip clicks.
+    SourceByteRange range;      ///< Source byte range covered by the decoration.
+    SourceByteRange chipRange;  ///< Source range whose end anchors the chip.
+    bool ineffective = false;   ///< Strike through the source range when the style is inactive.
+    bool showChip = false;      ///< Render a selector-match count chip.
+    int chipCount = 0;          ///< Count rendered inside the chip.
+    bool showOverflowMarker = false;  ///< Render a chip-adjacent overflow marker.
+    std::string tooltip;              ///< Tooltip shown for the inactive source range.
+    std::string chipTooltip;          ///< Tooltip shown for the chip.
+    std::string overflowTooltip;      ///< Tooltip shown for the overflow marker.
+
+    /// Equality operator.
+    bool operator==(const SourceStyleDecoration& other) const = default;
+  };
+
   // Constants
   static constexpr int kLineNumberSpace = 20;  //!< Width of line number margin in pixels
 
@@ -573,6 +590,16 @@ public:
   [[nodiscard]] const std::vector<SourceByteRange>& hoverSourceRanges() const {
     return hoverSourceRanges_;
   }
+  /// Set source style/cascade decorations.
+  bool setSourceStyleDecorations(std::vector<SourceStyleDecoration> decorations);
+  /// Clear source style/cascade decorations.
+  bool clearSourceStyleDecorations() { return setSourceStyleDecorations({}); }
+  /// Active source style/cascade decorations.
+  [[nodiscard]] const std::vector<SourceStyleDecoration>& sourceStyleDecorations() const {
+    return sourceStyleDecorations_;
+  }
+  /// Return and clear the last clicked source style decoration chip id.
+  [[nodiscard]] std::optional<std::size_t> takeClickedSourceStyleChipId();
 
   /// Install a source-focus partition. Hidden lines are folded from the view only.
   void setFocusPartition(const FocusPartition& partition);
@@ -1042,10 +1069,21 @@ private:
   std::vector<int>& changedLines_;
   std::vector<int> highlightedLines_;               //!< Lines to highlight
   std::vector<SourceByteRange> hoverSourceRanges_;  //!< Source ranges highlighted on hover
+  std::vector<SourceStyleDecoration> sourceStyleDecorations_;  //!< Style source decorations.
   FocusPartition focusPartition_;
   bool focusPartitionActive_ = false;
   FlashDecorations flashDecorations_;
   std::vector<LineRange> expandedFocusHiddenRanges_;
+
+  struct SourceStyleChipHitRect {
+    std::size_t id = 0;
+    ImVec2 min;
+    ImVec2 max;
+    std::string tooltip;
+    bool clickEnabled = true;
+  };
+  std::vector<SourceStyleChipHitRect> sourceStyleChipHitRects_;
+  std::optional<std::size_t> clickedSourceStyleChipId_;
 
   struct VisualLine {
     int lineNo = 0;
@@ -1068,6 +1106,22 @@ private:
   };
   [[nodiscard]] std::optional<FocusReferenceConnectorLayout> focusReferenceConnectorLayout(
       const FocusReferenceLink& link, int linkIndex) const;
+  struct SourceStyleChipBounds {
+    ImVec2 min;
+    ImVec2 max;
+  };
+  [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForDecoration(
+      const SourceStyleDecoration& decoration) const;
+  [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForAnchor(
+      const SourcePoint& anchor) const;
+  [[nodiscard]] const SourceStyleDecoration* sourceStyleDecorationAtByteOffset(
+      std::size_t byteOffset, bool ineffectiveOnly) const;
+  [[nodiscard]] bool isByteOffsetInIneffectiveStyleDecoration(std::size_t byteOffset) const;
+  void renderSourceStyleDecorationStrikethroughs(int lineNo, int startColumn, int endColumn,
+                                                 ImDrawList* drawList);
+  void renderSourceStyleDecorationChips(ImDrawList* drawList);
+  void hitTestSourceStyleDecorationChips();
+  void renderSourceStyleDecorationTooltip();
 
   // Editor settings. `insertSpaces_`, `smartIndent_`, `tabSize_`,
   // `scrollToCursor_`, `scrollToTop_`, `textChanged_`, `colorizerEnabled_`,

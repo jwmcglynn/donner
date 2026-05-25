@@ -7,6 +7,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
@@ -21,6 +22,27 @@ namespace donner::editor {
  * @return true if a source range was found and selected.
  */
 bool HighlightElementSource(TextEditor& textEditor, const svg::SVGElement& element);
+
+/**
+ * Selects a raw source byte range in the text editor.
+ *
+ * @param textEditor Source editor to update.
+ * @param byteRange Half-open byte range to select.
+ * @return true if the range was valid for the current text buffer.
+ */
+bool HighlightSourceByteRange(TextEditor& textEditor, SourceByteRange byteRange);
+
+/**
+ * Return the serialized XML node byte range for an ECS entity.
+ *
+ * This is useful for resolved references where the caller has an \ref EntityHandle but not a
+ * public \ref svg::SVGElement wrapper.
+ *
+ * @param handle Entity whose XML node source should be resolved.
+ * @param source Source text corresponding to the entity's document.
+ * @return Half-open byte range for the node, or \c std::nullopt if no source range exists.
+ */
+std::optional<SourceByteRange> EntitySourceByteRange(EntityHandle handle, std::string_view source);
 
 /**
  * Return the serialized XML node byte range for an SVG element.
@@ -41,6 +63,19 @@ std::optional<SourceByteRange> ElementSourceByteRange(const svg::SVGElement& ele
  */
 std::vector<svg::SVGElement> ExcludeSelectedSourceHoverElements(
     std::vector<svg::SVGElement> hoverElements, std::span<const svg::SVGElement> selectedElements);
+
+/**
+ * Removes the document root from automatic source-hover candidates.
+ *
+ * The root `<svg>` source range covers the entire document, so automatic source hover should not
+ * turn that into a whole-canvas overlay preview.
+ *
+ * @param hoverElements Candidate elements resolved from the source hover position.
+ * @param document Document whose root should be excluded.
+ * @return Hover candidates that are not the document root element.
+ */
+std::vector<svg::SVGElement> ExcludeDocumentRootSourceHoverElement(
+    std::vector<svg::SVGElement> hoverElements, const svg::SVGDocument& document);
 
 /**
  * Finds the deepest SVG element whose source range contains \p offset.

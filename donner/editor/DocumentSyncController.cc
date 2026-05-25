@@ -221,6 +221,7 @@ std::optional<float> DocumentSyncController::nextTextSyncWakeSeconds() const {
 void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& selectTool,
                                                     TextEditor& textEditor) {
   const AsyncSVGDocument::FlushResult& lastFlush = app.document().lastFlushResult();
+  bool handledLastFlushSourceDeltas = false;
   if (lastFlush.replacedDocument && lastFlush.preserveUndoOnReparse && app.hasDocument() &&
       !app.document().lastParseError().has_value()) {
     (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
@@ -249,6 +250,7 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
   }
 
   if (!pendingElementRemoveWritebacks_.empty()) {
+    handledLastFlushSourceDeltas = true;
     if (mirrorSourceDeltas(app, textEditor, app.document().lastFlushResult().sourceDeltas) ||
         MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
                                            &lastWritebackSourceText_)) {
@@ -271,6 +273,13 @@ void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& 
         textEditor.setText(source, /*preserveScroll=*/true);
         QueueSourceWritebackReparse(app, source, &previousSourceText_, &lastWritebackSourceText_);
       }
+    }
+  }
+
+  if (!handledLastFlushSourceDeltas && !lastFlush.sourceDeltas.empty()) {
+    if (!mirrorSourceDeltas(app, textEditor, lastFlush.sourceDeltas)) {
+      (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+                                               &lastWritebackSourceText_);
     }
   }
 

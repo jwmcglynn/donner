@@ -15,6 +15,7 @@
 /// canvas pan/zoom state (that lives at the main-loop layer where it
 /// belongs). It is just enough surface for `SelectTool` to do its job.
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -32,6 +33,28 @@
 #include "donner/svg/SVGGeometryElement.h"
 
 namespace donner::editor {
+
+/// Boolean-style path operation exposed by the editor path operations panel.
+enum class PathOperationKind : std::uint8_t {
+  Union,
+  Intersect,
+  SubtractFront,
+  SubtractBack,
+  Exclude,
+};
+
+/// Whether a path operation can currently be applied to the editor selection.
+struct PathOperationAvailability {
+  bool canApply = false;  ///< True when the operation button should be enabled.
+  std::string reason;     ///< Short disabled-state reason for tooltips and tests.
+};
+
+/// Active paint settings used by authoring tools when creating new geometry.
+struct ActivePaintStyle {
+  std::string fill = "none";     ///< SVG fill attribute for new geometry.
+  std::string stroke = "black";  ///< SVG stroke attribute for new geometry.
+  double strokeWidth = 1.0;      ///< SVG stroke-width attribute for new geometry.
+};
 
 /// Top-level editor shell.
 ///
@@ -177,9 +200,81 @@ public:
   /// existing entries. No-op if `element` is already selected.
   void addToSelection(const svg::SVGElement& element);
 
+  /**
+   * Queue an attribute write for every selected element.
+   *
+   * @param attrName Attribute name to set, e.g. `"fill"`.
+   * @param attrValue Attribute value to write.
+   * @return true if commands were queued.
+   */
+  bool setAttributeOnSelection(std::string_view attrName, std::string_view attrValue);
+
+  /**
+   * Merge a single CSS declaration into each selected element's `style` attribute.
+   *
+   * @param propertyName CSS property name, e.g. `"fill"`.
+   * @param propertyValue CSS property value, e.g. `"#112233"`.
+   * @return true if commands were queued.
+   */
+  bool setStylePropertyOnSelection(std::string_view propertyName, std::string_view propertyValue);
+
+  /**
+   * Queue a `stroke-width` style-property write for every selected element.
+   *
+   * @param strokeWidth Stroke width in user units. Negative values clamp to zero.
+   * @return true if commands were queued.
+   */
+  bool setStrokeWidthOnSelection(double strokeWidth);
+
+  /// Active paint settings used by path-authoring tools for newly-created elements.
+  [[nodiscard]] const ActivePaintStyle& activePaintStyle() const { return activePaintStyle_; }
+
+  /**
+   * Set the active fill attribute for newly-created elements.
+   *
+   * @param fill SVG fill attribute value.
+   */
+  void setActiveFill(std::string_view fill) { activePaintStyle_.fill = std::string(fill); }
+
+  /**
+   * Set the active stroke attribute for newly-created elements.
+   *
+   * @param stroke SVG stroke attribute value.
+   */
+  void setActiveStroke(std::string_view stroke) { activePaintStyle_.stroke = std::string(stroke); }
+
+  /**
+   * Set the active stroke width for newly-created elements.
+   *
+   * @param strokeWidth Stroke width in user units. Negative values clamp to zero.
+   */
+  void setActiveStrokeWidth(double strokeWidth);
+
   /// Drop every entry from the selection. Equivalent to
   /// `setSelection(std::nullopt)` but reads better at clear sites.
   void clearSelection() { setSelection(std::nullopt); }
+
+  /**
+   * Return whether a path operation is available for the current selection.
+   *
+   * @param operation Operation to test.
+   * @return Availability and a user-facing disabled reason.
+   */
+  [[nodiscard]] PathOperationAvailability pathOperationAvailability(
+      PathOperationKind operation) const;
+
+  /**
+   * Queue a destructive path operation over the current selection.
+   *
+   * The current prototype supports Union and Intersect by replacing the
+   * selected geometry with a source-backed rectangle path derived from the
+   * selected elements' document-space bounds. Full curve/path boolean math is
+   * scoped in `0041-path_authoring_and_boolean_operations.md`.
+   *
+   * @param operation Operation to apply.
+   * @return true if commands were queued.
+   */
+  bool applyPathOperation(PathOperationKind operation);
 
   // ---------------------------------------------------------------------------
   // Hit testing
@@ -329,6 +424,7 @@ private:
   std::optional<std::string> currentFilePath_;
   std::string cleanSourceText_;
   bool isDirty_ = false;
+  ActivePaintStyle activePaintStyle_;
 };
 
 }  // namespace donner::editor

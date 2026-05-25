@@ -349,6 +349,44 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaW
   EXPECT_FALSE(app_.document().document().querySelector("#r1").has_value());
 }
 
+TEST_F(DocumentSyncControllerTest, PathOperationMirrorsInsertAndDeletesWithoutTextEcho) {
+  constexpr std::string_view kTwoOverlappingRects =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="10" y="10" width="40" height="40" fill="red"/>
+         <rect id="r2" x="30" y="25" width="40" height="20" fill="blue"/>
+       </svg>)";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kTwoOverlappingRects)};
+
+  ASSERT_TRUE(app.loadFromString(kTwoOverlappingRects));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kTwoOverlappingRects);
+  textEditor.setText(kTwoOverlappingRects);
+  textEditor.resetTextChanged();
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Intersect));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.document().lastFlushResult().replacedDocument);
+  EXPECT_GE(app.document().lastFlushResult().sourceDeltas.size(), 3u);
+
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_FALSE(textEditor.isTextChanged());
+  EXPECT_TRUE(app.document().document().querySelector("path").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
+}
+
 TEST_F(DocumentSyncControllerTest, UiDeleteUndoRestoresDeletedElementAndSourceText) {
   EditorApp app;
   TextEditor textEditor;

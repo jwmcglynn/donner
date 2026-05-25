@@ -984,6 +984,34 @@ TEST_F(XMLParserTests, InsertNodeBeforeReferenceUpdatesSourceThroughDocument) {
   EXPECT_EQ(*rect.nextSibling(), sibling);
 }
 
+TEST_F(XMLParserTests, InsertNodeRecoversStaleClosingTagLocation) {
+  constexpr std::string_view kXml = R"(<svg><g id="parent"></g></svg>)";
+  constexpr std::string_view kInserted = R"(<rect id="inserted"/>)";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(kXml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode svg = document.root().firstChild().value();
+  XMLNode rect = XMLNode::CreateElementNode(document, "rect");
+  rect.setAttribute("id", "inserted");
+
+  svg.setClosingTagLocation(
+      SourceRange{FileOffset::Offset(kXml.size()), FileOffset::Offset(kXml.size())});
+
+  ApplySourceEditResult result = document.insertNode(svg, rect);
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.sourceDeltas, ElementsAre(XMLSourceDelta{
+                                       .offset = kXml.find("</svg>"),
+                                       .removedLength = 0,
+                                       .insertedLength = kInserted.size(),
+                                       .sourceVersion = 1,
+                                   }));
+  EXPECT_EQ(document.source(), R"(<svg><g id="parent"></g><rect id="inserted"/></svg>)");
+  EXPECT_LT(document.source().find(R"(<rect id="inserted"/>)"), document.source().find("</svg>"));
+}
+
 TEST_F(XMLParserTests, InsertNodeExpandsSelfClosingParentThroughDocument) {
   constexpr std::string_view kXml = R"(<svg><g id="parent"/><circle/></svg>)";
 

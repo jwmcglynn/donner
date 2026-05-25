@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -245,6 +246,31 @@ protected:
     return editor.flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now());
   }
 
+  [[nodiscard]] bool IsByteOffsetInIneffectiveStyleDecoration(std::size_t byteOffset) const {
+    return editor.isByteOffsetInIneffectiveStyleDecoration(byteOffset);
+  }
+
+  [[nodiscard]] std::size_t SourceStyleChipHitRectCount() const {
+    return editor.sourceStyleChipHitRects_.size();
+  }
+
+  [[nodiscard]] ImVec2 SourceStyleChipHitRectCenter(std::size_t index) const {
+    const auto& hitRect = editor.sourceStyleChipHitRects_[index];
+    return ImVec2((hitRect.min.x + hitRect.max.x) * 0.5f, (hitRect.min.y + hitRect.max.y) * 0.5f);
+  }
+
+  [[nodiscard]] ImVec2 SourceStyleChipHitRectMin(std::size_t index) const {
+    return editor.sourceStyleChipHitRects_[index].min;
+  }
+
+  [[nodiscard]] ImVec2 SourceStyleChipHitRectMax(std::size_t index) const {
+    return editor.sourceStyleChipHitRects_[index].max;
+  }
+
+  [[nodiscard]] std::string SourceStyleChipHitRectTooltip(std::size_t index) const {
+    return editor.sourceStyleChipHitRects_[index].tooltip;
+  }
+
   ImGuiContext* imguiContext_ = nullptr;
   TextEditor editor;
 };
@@ -323,6 +349,138 @@ TEST_F(TextEditorTests, HoverSourceRangesAreClampedAndDeduplicated) {
   EXPECT_FALSE(editor.setHoverSourceRanges(editor.hoverSourceRanges()));
   EXPECT_TRUE(editor.clearHoverSourceRanges());
   EXPECT_TRUE(editor.hoverSourceRanges().empty());
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationsAreClampedAndCleared) {
+  editor.setText("abcdef");
+
+  EXPECT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 7,
+          .range = SourceByteRange{.start = 4, .end = 4},
+          .ineffective = true,
+      },
+      TextEditor::SourceStyleDecoration{
+          .id = 2,
+          .range = SourceByteRange{.start = 5, .end = 100},
+          .showChip = true,
+          .chipCount = -4,
+          .tooltip = "unused selector",
+      },
+      TextEditor::SourceStyleDecoration{
+          .id = 1,
+          .range = SourceByteRange{.start = 2, .end = 5},
+          .ineffective = true,
+          .tooltip = "fill is overridden",
+      },
+  }));
+
+  ASSERT_EQ(editor.sourceStyleDecorations().size(), 2u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].id, 1u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 2, .end = 5}));
+  EXPECT_TRUE(editor.sourceStyleDecorations()[0].ineffective);
+  EXPECT_EQ(editor.sourceStyleDecorations()[1].id, 2u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[1].range, (SourceByteRange{.start = 5, .end = 6}));
+  EXPECT_EQ(editor.sourceStyleDecorations()[1].chipCount, 0);
+
+  EXPECT_FALSE(editor.setSourceStyleDecorations(editor.sourceStyleDecorations()));
+  EXPECT_TRUE(editor.clearSourceStyleDecorations());
+  EXPECT_TRUE(editor.sourceStyleDecorations().empty());
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationsStrikeRangesWithoutRenderingHiddenChips) {
+  editor.setText("fill: red;");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 11,
+          .range = SourceByteRange{.start = 0, .end = 4},
+          .ineffective = true,
+          .showChip = false,
+          .chipCount = 5,
+          .tooltip = "fill is overridden",
+      },
+  }));
+
+  EXPECT_TRUE(IsByteOffsetInIneffectiveStyleDecoration(0));
+  EXPECT_TRUE(IsByteOffsetInIneffectiveStyleDecoration(3));
+  EXPECT_FALSE(IsByteOffsetInIneffectiveStyleDecoration(4));
+
+  RenderEditorFrame(ImVec2(360.0f, 120.0f));
+  EXPECT_EQ(SourceStyleChipHitRectCount(), 0u);
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationChipClickIsConsumable) {
+  editor.setText(".cls { fill: red; }\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 42,
+          .range = SourceByteRange{.start = 7, .end = 16},
+          .showChip = true,
+          .chipCount = 3,
+          .tooltip = "3 matched elements",
+      },
+  }));
+
+  RenderEditorFrame(ImVec2(420.0f, 120.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 1u);
+  const ImVec2 chipCenter = SourceStyleChipHitRectCenter(0);
+
+  RenderEditorFrameWithMouse(chipCenter, true, ImVec2(420.0f, 120.0f));
+
+  EXPECT_EQ(editor.takeClickedSourceStyleChipId(), std::optional<std::size_t>(42));
+  EXPECT_EQ(editor.takeClickedSourceStyleChipId(), std::nullopt);
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationChipUsesChipRangeAnchor) {
+  editor.setText(".hit {\n  fill: red;\n}\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 84,
+          .range = SourceByteRange{.start = 9, .end = 19},
+          .chipRange = SourceByteRange{.start = 0, .end = 4},
+          .showChip = true,
+          .chipCount = 2,
+          .tooltip = "fill is overridden",
+          .chipTooltip = "Selector matches 2 elements",
+      },
+  }));
+
+  RenderEditorFrame(ImVec2(420.0f, 120.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 1u);
+
+  const float selectorLineCenterY =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/4).y;
+  const float propertyLineCenterY =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/1, /*visualColumnOffset=*/12).y;
+  const float chipCenterY = SourceStyleChipHitRectCenter(0).y;
+  EXPECT_LT(std::abs(chipCenterY - selectorLineCenterY),
+            std::abs(chipCenterY - propertyLineCenterY));
+  EXPECT_EQ(SourceStyleChipHitRectTooltip(0), "Selector matches 2 elements");
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationOverflowMarkerHasTooltipAndIsNotClickable) {
+  editor.setText("<linearGradient id=\"paint\">\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 85,
+          .range = SourceByteRange{.start = 0, .end = 27},
+          .chipRange = SourceByteRange{.start = 0, .end = 27},
+          .showChip = true,
+          .chipCount = 6,
+          .showOverflowMarker = true,
+          .chipTooltip = "Referenced 6 times",
+          .overflowTooltip = "Too many reverse refs to draw lines",
+      },
+  }));
+
+  RenderEditorFrame(ImVec2(520.0f, 120.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 2u);
+  EXPECT_LT(SourceStyleChipHitRectCenter(0).x, SourceStyleChipHitRectCenter(1).x);
+  EXPECT_EQ(SourceStyleChipHitRectTooltip(0), "Referenced 6 times");
+  EXPECT_EQ(SourceStyleChipHitRectTooltip(1), "Too many reverse refs to draw lines");
+
+  RenderEditorFrameWithMouse(SourceStyleChipHitRectCenter(1), true, ImVec2(520.0f, 120.0f));
+  EXPECT_EQ(editor.takeClickedSourceStyleChipId(), std::nullopt);
 }
 
 TEST_F(TextEditorTests, MoveLeftRetractsCursor) {
@@ -972,6 +1130,42 @@ TEST_F(TextEditorTests, FocusReferenceConnectorsRouteThroughDistinctRightSideLan
   const float alpha = ImGui::ColorConvertU32ToFloat4(rectLayout->color).w;
   EXPECT_GE(alpha, 0.45f);
   EXPECT_LE(alpha, 0.55f);
+}
+
+TEST_F(TextEditorTests, FocusReferenceConnectorTerminatesOnRightSideOfSourceStyleChip) {
+  editor.setText(
+      "<linearGradient id=\"paint\">\n"
+      "<rect fill=\"url(#paint)\"/>\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 94,
+          .range = SourceByteRange{.start = 0, .end = 27},
+          .chipRange = SourceByteRange{.start = 0, .end = 27},
+          .showChip = true,
+          .chipCount = 1,
+          .chipTooltip = "Referenced 1 time",
+      },
+  }));
+
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 1, .column = 17},
+      .to = SourcePoint{.line = 0, .column = 27},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 0, .endLine = 2}},
+      .referenceLinks = {link},
+  });
+
+  RenderEditorFrame(ImVec2(520.0f, 140.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 1u);
+
+  const auto layout = FocusReferenceLayout(link, 0);
+  ASSERT_TRUE(layout.has_value());
+
+  const ImVec2 chipMin = SourceStyleChipHitRectMin(0);
+  const ImVec2 chipMax = SourceStyleChipHitRectMax(0);
+  EXPECT_FLOAT_EQ(layout->tip.x, chipMax.x);
+  EXPECT_FLOAT_EQ(layout->tip.y, chipMin.y + (chipMax.y - chipMin.y) * 0.5f);
 }
 
 TEST_F(TextEditorTests, ReferenceOnlyFocusPartitionLeavesAllLinesVisible) {

@@ -43,8 +43,15 @@ public:
   /// thread owns the document).
   void renderTreeView(EditorApp* liveApp, TreeViewState& state) const;
 
-  /// Render the inspector pane from the current snapshot.
-  void renderInspector(const ViewportState& viewport) const;
+  /**
+   * Render the inspector pane from the current snapshot.
+   *
+   * @param liveApp Live editor app for button actions, or null while the
+   *   renderer owns the document.
+   * @param viewport Viewport state diagnostics.
+   * @return true if an inspector action queued a document mutation.
+   */
+  bool renderInspector(EditorApp* liveApp, const ViewportState& viewport) const;
 
   [[nodiscard]] bool inspectorHasSelectionForTesting() const {
     return inspectorSnapshot_.hasSelection;

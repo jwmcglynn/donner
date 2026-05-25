@@ -14,6 +14,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/PanClosedCursorSvg.h"
 #include "donner/editor/PanCursorSvg.h"
+#include "donner/editor/PenCursorSvg.h"
 #include "donner/editor/RotateCursorSvg.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -27,6 +28,8 @@ constexpr int kCursorRasterScale = 4;
 constexpr int kCursorRasterSizePx = kCursorSizePx * kCursorRasterScale;
 constexpr int kCursorHotspotPx = 16;
 constexpr int kPanCursorHotspotPx = 15;
+constexpr int kPenCursorHotspotXPx = 4;
+constexpr int kPenCursorHotspotYPx = 4;
 constexpr std::string_view kRotationPlaceholder = "rotate(0,16,16)";
 
 bool ReplaceFirst(std::string* text, std::string_view needle, std::string_view replacement) {
@@ -94,6 +97,18 @@ std::string BuildPanCursorSvg(PanCursorKind kind) {
                  embedded::kPanClosedCursorSvg.size());
       break;
   }
+
+  std::ostringstream rasterSize;
+  rasterSize << kCursorRasterSizePx;
+  const std::string rasterSizeText = rasterSize.str();
+  ReplaceFirst(&svg, R"svg(width="32")svg", std::string("width=\"") + rasterSizeText + "\"");
+  ReplaceFirst(&svg, R"svg(height="32")svg", std::string("height=\"") + rasterSizeText + "\"");
+  return svg;
+}
+
+std::string BuildPenCursorSvg() {
+  std::string svg(reinterpret_cast<const char*>(embedded::kPenCursorSvg.data()),
+                  embedded::kPenCursorSvg.size());
 
   std::ostringstream rasterSize;
   rasterSize << kCursorRasterSizePx;
@@ -200,6 +215,11 @@ std::optional<RotateCursorImage> RenderPanCursorImage(
   return RenderImageFromSvg(BuildPanCursorSvg(kind), std::move(geodeDevice));
 }
 
+std::optional<RotateCursorImage> RenderPenCursorImage(
+    std::shared_ptr<geode::GeodeDevice> geodeDevice) {
+  return RenderImageFromSvg(BuildPenCursorSvg(), std::move(geodeDevice));
+}
+
 RotateCursorSet::~RotateCursorSet() {
   destroy();
 }
@@ -259,6 +279,23 @@ bool RotateCursorSet::initialize(GLFWwindow* window,
     panCursors_[PanCursorIndex(kind)] = cursor;
   }
 
+  std::optional<RotateCursorImage> penImage = RenderPenCursorImage(geodeDevice);
+  if (!penImage.has_value()) {
+    destroy();
+    return false;
+  }
+
+  GLFWimage glfwImage{
+      .width = penImage->width,
+      .height = penImage->height,
+      .pixels = penImage->rgba.data(),
+  };
+  penCursor_ = glfwCreateCursor(&glfwImage, kPenCursorHotspotXPx, kPenCursorHotspotYPx);
+  if (penCursor_ == nullptr) {
+    destroy();
+    return false;
+  }
+
   valid_ = true;
   return true;
 }
@@ -293,6 +330,16 @@ bool RotateCursorSet::setPanCursor(PanCursorKind kind) {
   return true;
 }
 
+bool RotateCursorSet::setPenCursor() {
+  if (!valid_ || window_ == nullptr || penCursor_ == nullptr) {
+    return false;
+  }
+
+  glfwSetCursor(window_, penCursor_);
+  customCursorActive_ = true;
+  return true;
+}
+
 void RotateCursorSet::clearIfActive() {
   if (!customCursorActive_ || window_ == nullptr) {
     return;
@@ -315,6 +362,10 @@ void RotateCursorSet::destroy() {
       glfwDestroyCursor(cursor);
       cursor = nullptr;
     }
+  }
+  if (penCursor_ != nullptr) {
+    glfwDestroyCursor(penCursor_);
+    penCursor_ = nullptr;
   }
   window_ = nullptr;
   valid_ = false;

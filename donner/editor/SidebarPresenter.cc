@@ -1,6 +1,7 @@
 #include "donner/editor/SidebarPresenter.h"
 
 #include <algorithm>
+#include <array>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -111,6 +112,156 @@ void RenderInspectorSection(const char* heading, const char* tableId,
     }
     ImGui::EndTable();
   }
+}
+
+struct PathOperationButton {
+  PathOperationKind operation;
+  const char* id;
+  const char* tooltip;
+};
+
+constexpr std::array<PathOperationButton, 5> kPathOperationButtons = {{
+    {.operation = PathOperationKind::Union, .id = "##path_operation_union", .tooltip = "Union"},
+    {.operation = PathOperationKind::Intersect,
+     .id = "##path_operation_intersect",
+     .tooltip = "Intersect"},
+    {.operation = PathOperationKind::SubtractFront,
+     .id = "##path_operation_subtract_front",
+     .tooltip = "Subtract Front"},
+    {.operation = PathOperationKind::SubtractBack,
+     .id = "##path_operation_subtract_back",
+     .tooltip = "Subtract Back"},
+    {.operation = PathOperationKind::Exclude,
+     .id = "##path_operation_exclude",
+     .tooltip = "Exclude"},
+}};
+
+void RenderPathOperationIcon(PathOperationKind operation, ImVec2 min, ImVec2 max, ImU32 iconColor) {
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const float w = max.x - min.x;
+  const float h = max.y - min.y;
+  const float left = min.x + w * 0.28f;
+  const float top = min.y + h * 0.28f;
+  const float right = min.x + w * 0.60f;
+  const float bottom = min.y + h * 0.60f;
+  const ImVec2 a0(left, top);
+  const ImVec2 a1(right, bottom);
+  const ImVec2 b0(min.x + w * 0.42f, min.y + h * 0.42f);
+  const ImVec2 b1(min.x + w * 0.74f, min.y + h * 0.74f);
+  const ImVec2 overlap0(b0.x, b0.y);
+  const ImVec2 overlap1(a1.x, a1.y);
+  const float strokeWidth = 1.6f;
+
+  switch (operation) {
+    case PathOperationKind::Union:
+      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddLine(ImVec2(a0.x, b0.y), ImVec2(b0.x, b0.y), iconColor, strokeWidth);
+      drawList->AddLine(ImVec2(b0.x, a0.y), ImVec2(b0.x, b0.y), iconColor, strokeWidth);
+      break;
+    case PathOperationKind::Intersect:
+      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddRectFilled(overlap0, overlap1, iconColor, 1.0f);
+      break;
+    case PathOperationKind::SubtractFront:
+      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddLine(ImVec2(b0.x + 1.0f, b0.y), ImVec2(b1.x - 1.0f, b1.y), iconColor,
+                        strokeWidth);
+      break;
+    case PathOperationKind::SubtractBack:
+      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddLine(ImVec2(a0.x + 1.0f, a0.y), ImVec2(a1.x - 1.0f, a1.y), iconColor,
+                        strokeWidth);
+      break;
+    case PathOperationKind::Exclude:
+      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
+      drawList->AddLine(overlap0, overlap1, iconColor, strokeWidth);
+      drawList->AddLine(ImVec2(overlap1.x, overlap0.y), ImVec2(overlap0.x, overlap1.y), iconColor,
+                        strokeWidth);
+      break;
+  }
+}
+
+bool RenderPathOperationsPanel(EditorApp* liveApp) {
+  ImGui::Separator();
+  ImGui::TextUnformatted("Path Operations");
+
+  bool queuedMutation = false;
+  const ImVec2 buttonSize(30.0f, 26.0f);
+  for (std::size_t i = 0; i < kPathOperationButtons.size(); ++i) {
+    const PathOperationButton& button = kPathOperationButtons[i];
+    const PathOperationAvailability availability =
+        liveApp != nullptr
+            ? liveApp->pathOperationAvailability(button.operation)
+            : PathOperationAvailability{.canApply = false, .reason = "Rendering in progress"};
+
+    if (i > 0) {
+      ImGui::SameLine();
+    }
+
+    if (!availability.canApply) {
+      ImGui::BeginDisabled();
+    }
+    if (ImGui::Button(button.id, buttonSize) && liveApp != nullptr &&
+        liveApp->applyPathOperation(button.operation)) {
+      queuedMutation = true;
+    }
+    if (!availability.canApply) {
+      ImGui::EndDisabled();
+    }
+
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+      if (availability.canApply) {
+        ImGui::SetTooltip("%s", button.tooltip);
+      } else {
+        ImGui::SetTooltip("%s: %s", button.tooltip, availability.reason.c_str());
+      }
+    }
+
+    const ImU32 iconColor = availability.canApply ? ImGui::GetColorU32(ImGuiCol_Text)
+                                                  : ImGui::GetColorU32(ImGuiCol_TextDisabled);
+    RenderPathOperationIcon(button.operation, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                            iconColor);
+  }
+
+  return queuedMutation;
+}
+
+double FirstSelectedStrokeWidth(const EditorApp& app) {
+  const std::vector<svg::SVGElement>& selection = app.selectedElements();
+  if (selection.empty()) {
+    return 1.0;
+  }
+
+  return selection.front().getComputedStyle().strokeWidth.getRequired().value;
+}
+
+bool RenderStrokeControlsPanel(EditorApp* liveApp) {
+  ImGui::Separator();
+  ImGui::TextUnformatted("Stroke");
+
+  const bool canEdit = liveApp != nullptr && liveApp->hasSelection();
+  float strokeWidth = canEdit ? static_cast<float>(FirstSelectedStrokeWidth(*liveApp)) : 1.0f;
+
+  if (!canEdit) {
+    ImGui::BeginDisabled();
+  }
+  ImGui::SetNextItemWidth(96.0f);
+  const bool changed = ImGui::DragFloat("Width", &strokeWidth, 0.1f, 0.0f, 200.0f, "%.2f");
+  if (!canEdit) {
+    ImGui::EndDisabled();
+  }
+
+  if (changed && liveApp != nullptr) {
+    liveApp->setActiveStrokeWidth(strokeWidth);
+    return liveApp->setStrokeWidthOnSelection(strokeWidth);
+  }
+
+  return false;
 }
 
 }  // namespace
@@ -259,9 +410,18 @@ void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state) 
   renderTreeNode(liveApp, *treeSnapshot_, state);
 }
 
-void SidebarPresenter::renderInspector(const ViewportState& viewport) const {
+bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& viewport) const {
+  bool queuedMutation = false;
   if (!inspectorSnapshot_.hasSelection) {
-    ImGui::TextDisabled("Select a single element to inspect attributes.");
+    if (liveApp != nullptr && liveApp->selectedElements().size() > 1u) {
+      ImGui::Text("%zu elements selected", liveApp->selectedElements().size());
+      queuedMutation = RenderStrokeControlsPanel(liveApp);
+      queuedMutation = RenderPathOperationsPanel(liveApp) || queuedMutation;
+    } else {
+      ImGui::TextDisabled("Select a single element to inspect attributes.");
+      queuedMutation = RenderStrokeControlsPanel(liveApp);
+      queuedMutation = RenderPathOperationsPanel(liveApp) || queuedMutation;
+    }
   } else {
     ImGui::TextUnformatted(inspectorSnapshot_.titleText.c_str());
     if (inspectorSnapshot_.bounds.has_value()) {
@@ -274,10 +434,12 @@ void SidebarPresenter::renderInspector(const ViewportState& viewport) const {
       ImGui::Text("Transform: [%.3f %.3f %.3f %.3f  %.2f %.2f]", xform.data[0], xform.data[1],
                   xform.data[2], xform.data[3], xform.data[4], xform.data[5]);
     }
+    queuedMutation = RenderStrokeControlsPanel(liveApp);
     RenderInspectorSection("XML attributes", "##inspector_xml_attributes",
                            inspectorSnapshot_.xmlAttributes);
     RenderInspectorSection("Computed style", "##inspector_computed_style",
                            inspectorSnapshot_.computedStyle);
+    queuedMutation = RenderPathOperationsPanel(liveApp) || queuedMutation;
   }
   ImGui::Separator();
   ImGui::Text("Zoom: %.0f%%", viewport.zoom * 100.0);
@@ -288,6 +450,7 @@ void SidebarPresenter::renderInspector(const ViewportState& viewport) const {
   ImGui::TextDisabled("Cmd+scroll = zoom");
   ImGui::TextDisabled("space+drag = pan");
   ImGui::TextDisabled("Cmd+0 = 100%%");
+  return queuedMutation;
 }
 
 }  // namespace donner::editor

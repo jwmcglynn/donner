@@ -741,6 +741,57 @@ bool IsXmlSpace(char ch) {
   return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
 }
 
+std::string ClosingTagFor(const XMLNode& node) {
+  std::string closingTag;
+  closingTag.append("</");
+  AppendQualifiedName(closingTag, node.tagName());
+  closingTag.push_back('>');
+  return closingTag;
+}
+
+bool SourceHasClosingTagAt(std::string_view source, std::size_t offset,
+                           std::string_view closingTag) {
+  return offset <= source.size() && closingTag.size() <= source.size() - offset &&
+         source.substr(offset, closingTag.size()) == closingTag;
+}
+
+std::optional<std::size_t> FindParentClosingTagInsertionOffset(const XMLDocument& document,
+                                                               const XMLNode& parent) {
+  const std::string closingTag = ClosingTagFor(parent);
+  if (std::optional<SourceRange> closingTagLocation = parent.getClosingTagLocation();
+      closingTagLocation.has_value() && closingTagLocation->start.offset.has_value()) {
+    const std::size_t offset = *closingTagLocation->start.offset;
+    if (SourceHasClosingTagAt(document.source(), offset, closingTag)) {
+      return offset;
+    }
+  }
+
+  std::optional<SourceRange> nodeLocation = parent.getNodeLocation();
+  if (!nodeLocation.has_value() || !nodeLocation->start.offset.has_value() ||
+      !nodeLocation->end.offset.has_value() ||
+      *nodeLocation->end.offset > document.source().size()) {
+    return std::nullopt;
+  }
+
+  const std::size_t searchStart = *nodeLocation->start.offset;
+  const std::size_t searchEnd = *nodeLocation->end.offset;
+  if (searchEnd < closingTag.size()) {
+    return std::nullopt;
+  }
+
+  const std::size_t lastPossibleOffset = searchEnd - closingTag.size();
+  for (std::size_t offset = lastPossibleOffset;; --offset) {
+    if (SourceHasClosingTagAt(document.source(), offset, closingTag)) {
+      return offset;
+    }
+    if (offset == searchStart) {
+      break;
+    }
+  }
+
+  return std::nullopt;
+}
+
 void ApplyParentInsertionPlan(XMLNode& parent, const NodeInsertionPlan& plan) {
   if (plan.parentOpeningTagLocation.has_value() && plan.parentClosingTagLocation.has_value() &&
       plan.parentEndOffset.has_value()) {
@@ -773,13 +824,10 @@ std::optional<NodeInsertionPlan> GetNodeInsertionPlan(const XMLDocument& documen
     };
   }
 
-  std::optional<SourceRange> closingTagLocation = parent.getClosingTagLocation();
-  if (closingTagLocation.has_value() && closingTagLocation->start.offset.has_value()) {
-    if (*closingTagLocation->start.offset > document.source().size()) {
-      return std::nullopt;
-    }
-
-    const std::size_t offset = *closingTagLocation->start.offset;
+  if (std::optional<std::size_t> closingTagOffset =
+          FindParentClosingTagInsertionOffset(document, parent);
+      closingTagOffset.has_value()) {
+    const std::size_t offset = *closingTagOffset;
     return NodeInsertionPlan{
         .replacementOffset = offset,
         .replacementLength = 0,
@@ -805,10 +853,7 @@ std::optional<NodeInsertionPlan> GetNodeInsertionPlan(const XMLDocument& documen
     --replacementStart;
   }
 
-  std::string closingTag;
-  closingTag.append("</");
-  AppendQualifiedName(closingTag, parent.tagName());
-  closingTag.push_back('>');
+  const std::string closingTag = ClosingTagFor(parent);
 
   const std::size_t insertedOffset = replacementStart + 1;
   const std::size_t closingTagStart = insertedOffset + serializedNode.size();
