@@ -445,7 +445,15 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
 
   // ── EDGE-FLOOR: 4x MSAA edge-quantization >100px (0017 §Phase 4b) ──────────
   static const std::set<std::string_view> kEdgeFloor = {
-      "filters/feColorMatrix/type=saturate.svg", "filters/feDropShadow/only-stdDeviation.svg",
+      // feImage/embedded-png recategorized from kGenuineG2 (2026-05-27 — see
+      // 0021 §G2): geode places the data-URI image *correctly* (zero-diff
+      // interior); the residual ~1580px is a 1px-wide edge band around the image
+      // rectangle perimeter (geode bilinear vs tiny RasterizeTransformedImage edge
+      // sampling). It is order-independent (no idempotency bug — unlike the 8
+      // fragment-reference feImage cases that were fixed). Edge-coverage, not a
+      // placement/color bug.
+      "filters/feImage/embedded-png.svg", "filters/feColorMatrix/type=saturate.svg",
+      "filters/feDropShadow/only-stdDeviation.svg",
       "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-1.svg",
       "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-2.svg",
       "masking/mask/on-a-small-object.svg", "paint-servers/pattern/tiny-pattern-upscaled.svg",
@@ -596,6 +604,16 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       // GeodeFilterEngine::execute (same as feGaussianBlur/feColorMatrix/feBlend);
       // both now pass geode-vs-tiny parity at 0px. See 0021 §G2.
       //
+      // feImage (9) un-gated 2026-05-27: 8 fragment-reference cases (link-to-*,
+      // chained-feImage) were a shared-code re-draw idempotency bug, NOT a geode
+      // placement bug — `preRenderFeImageFragments` leaked OffscreenFeImage shadow
+      // RenderingInstanceComponents into the global pool, so the 2nd render of a
+      // document drew the referenced fragment as main content (corrupting BOTH
+      // backends). Fixed by filtering those instances out of the main snapshot in
+      // RendererDriver::draw (+ red→green test FeImageFragmentRedrawIsIdempotent);
+      // all 8 now pass parity ≤1px. The 9th (embedded-png) was a 1px image-edge
+      // band → moved to kEdgeFloor. See 0021 §G2.
+      //
       // feColorMatrix/non-normalized-values stays gated — a DIFFERENT root than
       // the color-math cluster. feColorMatrix already runs in linearRGB; its
       // residual ~2786px is a thin vertical band at the rect's anti-aliased left
@@ -606,15 +624,6 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       "filters/feConvolveMatrix/custom-divisor.svg",
       "filters/feDiffuseLighting/linearRGB-color-interpolation.svg",
       "filters/feGaussianBlur/complex-transform.svg",
-      "filters/feImage/chained-feImage.svg",
-      "filters/feImage/embedded-png.svg",
-      "filters/feImage/link-on-an-element-with-complex-transform.svg",
-      "filters/feImage/link-on-an-element-with-transform.svg",
-      "filters/feImage/link-to-an-element-with-opacity.svg",
-      "filters/feImage/link-to-an-element-with-transform.svg",
-      "filters/feImage/link-to-an-element.svg",
-      "filters/feImage/link-to-g.svg",
-      "filters/feImage/link-to-use.svg",
       "filters/feMerge/color-interpolation-filters=linearRGB.svg",
       "filters/feMerge/complex-transform.svg",
       "filters/feSpecularLighting/specularExponent=256.svg",
@@ -870,6 +879,47 @@ TEST_F(GeodeTextDecorationRepro, NestedBaselineShiftRedrawIsIdempotent) {
 
   // Strict identity: the two renders must be pixel-for-pixel identical.
   ExpectBitmapsIdentical(second, first, "nested_baseline_shift_redraw");
+}
+
+// ----------------------------------------------------------------------------
+// feImage fragment re-draw idempotency regression (docs/design_docs/0021 §G2).
+//
+// `RendererDriver::preRenderFeImageFragments` instantiates a referenced fragment
+// (`#rect3`) as an OffscreenFeImage shadow tree; `createFeImageShadowTree`
+// emplaces a `RenderingInstanceComponent` per shadow entity into the global pool
+// so the feImage pre-pass can rasterize it. Those instances are offscreen-only,
+// but the render-tree fast path skips a rebuild when nothing is dirty, so they
+// lingered in the pool between renders. A SECOND render of the same SVGDocument
+// then picked them up in the main-entity snapshot and drew the fragment as if it
+// were main content (e.g. the green rect stamped at its document position on top
+// of the filtered output), so render #2 differed markedly from render #1. The
+// geode-vs-tiny parity harness (which draws the same document twice) surfaced it,
+// but it's a real bug for any re-draw (e.g. editor re-renders) and it corrupts
+// BOTH backends. The fix filters OffscreenFeImage shadow instances out of the
+// main snapshot (RendererDriver::collectOffscreenFeImageShadowEntities).
+//
+// Backend-agnostic: renders via tiny-skia (always linked) so it runs on the
+// default CPU build and exercises the shared RendererDriver feImage path.
+// ----------------------------------------------------------------------------
+TEST_F(GeodeTextDecorationRepro, FeImageFragmentRedrawIsIdempotent) {
+  const std::filesystem::path resvgRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
+  const char* svg = "donner/svg/renderer/testdata/feimage_fragment_idempotency.svg";
+
+  SVGDocument document = loadSVG(svg, resvgRoot);
+
+  // Two renders of the SAME document. With the leaked-shadow-instance bug, draw
+  // #2's main snapshot includes the feImage fragment's offscreen shadow rect, so
+  // it draws the green rect at (36,36) over the filtered output — differing from
+  // draw #1.
+  const RendererBitmap first = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+  const RendererBitmap second = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
+
+  ASSERT_FALSE(first.empty());
+  ASSERT_FALSE(second.empty());
+
+  // Strict identity: the two renders must be pixel-for-pixel identical.
+  ExpectBitmapsIdentical(second, first, "feimage_fragment_redraw");
 }
 
 INSTANTIATE_TEST_SUITE_P(

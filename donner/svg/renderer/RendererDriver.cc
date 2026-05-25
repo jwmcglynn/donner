@@ -5,6 +5,7 @@
 #include <iostream>
 #include <optional>
 #include <span>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,8 @@
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
+#include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowBranch.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -385,6 +388,35 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
 /// metrics.
 double lengthToPixels(const Lengthd& length, const Box2d& viewBox, const FontMetrics& fontMetrics) {
   return length.toPixels(viewBox, fontMetrics);
+}
+
+/// Collect every entity that belongs to an `OffscreenFeImage` shadow branch.
+///
+/// `createFeImageShadowTree` instantiates the referenced fragment's subtree as an
+/// offscreen shadow tree and emplaces a `RenderingInstanceComponent` per shadow
+/// entity into the global pool (so the feImage pre-pass can rasterize it). Those
+/// instances are offscreen-only — they are consumed by the feImage pre-render and
+/// must never be drawn by the main pass. They are NOT torn down between renders
+/// (the render-tree fast path skips a rebuild when nothing is dirty), so on any
+/// re-draw they linger in the `RenderingInstanceComponent` storage. Unlike
+/// mask/marker/paint offscreen subtrees, no main-pool host instance owns them via
+/// `subtreeInfo`, so the main traversal would otherwise pick them up as top-level
+/// content. We filter them out of the main-entity snapshot by entity identity.
+std::unordered_set<Entity> collectOffscreenFeImageShadowEntities(Registry& registry) {
+  std::unordered_set<Entity> result;
+  for (auto view = registry.view<const components::ComputedShadowTreeComponent>();
+       auto hostEntity : view) {
+    const auto& shadow = view.get<const components::ComputedShadowTreeComponent>(hostEntity);
+    for (const auto& branch : shadow.branches) {
+      if (branch.branchType != components::ShadowBranchType::OffscreenFeImage) {
+        continue;
+      }
+      for (const Entity shadowEntity : branch.shadowEntities) {
+        result.insert(shadowEntity);
+      }
+    }
+  }
+  return result;
 }
 
 std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& filterGraph,
@@ -796,11 +828,22 @@ void RendererDriver::draw(SVGDocument& document) {
   // entities created by feImage pre-rendering don't get picked up by the main traversal view.
   // `beginFrame` must come first — some callers (notably the RendererDriver unit tests) populate
   // the render tree inside a `beginFrame` hook.
+  //
+  // Filter out OffscreenFeImage shadow instances: a prior render's feImage pre-pass leaves them in
+  // the global RenderingInstanceComponent pool (the render-tree fast path skips a rebuild when
+  // nothing is dirty), so without this filter the 2nd+ render of a document containing an feImage
+  // fragment reference would draw the referenced fragment as if it were main content. See
+  // `collectOffscreenFeImageShadowEntities`.
+  const std::unordered_set<Entity> feImageShadowEntities =
+      collectOffscreenFeImageShadowEntities(document.registry());
   std::vector<Entity> mainEntities;
   {
     RenderingInstanceView snapshot(document.registry());
     while (!snapshot.done()) {
-      mainEntities.push_back(snapshot.currentEntity());
+      const Entity entity = snapshot.currentEntity();
+      if (feImageShadowEntities.count(entity) == 0) {
+        mainEntities.push_back(entity);
+      }
       snapshot.advance();
     }
   }
@@ -829,7 +872,12 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   // Snapshot the entity slice [firstEntity, lastEntity] and pre-resolve filter graphs before the
   // main traversal, for the same reason as `draw()`: `preRenderFeImageFragments` mutates
   // `RenderingInstanceComponent` storage (emplace + sort inside `createFeImageShadowTree`), which
-  // would invalidate a live-iterating view.
+  // would invalidate a live-iterating view. Also filter out OffscreenFeImage shadow instances
+  // left in the pool by a prior render's feImage pre-pass (see
+  // `collectOffscreenFeImageShadowEntities` + `draw()`); they are offscreen-only and must not be
+  // drawn as main content on a re-render (e.g. an editor partial re-draw).
+  const std::unordered_set<Entity> feImageShadowEntities =
+      collectOffscreenFeImageShadowEntities(registry);
   std::vector<Entity> rangeEntities;
   {
     RenderingInstanceView scanView(registry);
@@ -839,7 +887,9 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     bool reachedLast = false;
     while (!scanView.done() && !reachedLast) {
       reachedLast = (scanView.currentEntity() == lastEntity);
-      rangeEntities.push_back(scanView.currentEntity());
+      if (feImageShadowEntities.count(scanView.currentEntity()) == 0) {
+        rangeEntities.push_back(scanView.currentEntity());
+      }
       scanView.advance();
     }
   }

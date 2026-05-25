@@ -303,6 +303,17 @@ already applied to feGaussianBlur/feColorMatrix/feBlend, just not these two). Wr
 sRGB↔linear conversion cleared **8 of the 9 color-math tests to exactly 0px** (4 feComposite-
 arithmetic + 4 feComponentTransfer, un-gated); feColorMatrix non-normalized stays (distinct
 edge-coverage root). Also corrected a unit test (`FilterCompositeOverDefault`) that encoded the
-sRGB bug. **Gate ledger now: 0 text + 29 G2 + 188 edge-floor = 217.** Remaining parity gaps:
-29 filter (→ G2) + 188 edge-floor (→ finer geode AA) +
+sRGB bug. Gate ledger then: 0 text + 29 G2 + 188 edge-floor = 217.
+
+**G2 feImage fix (2026-05-24) — a SECOND production idempotency bug.** The feImage "placement"
+divergence (9 tests) was misattributed: geode places feImage correctly (0–1px on fresh docs).
+The real bug is in shared `RendererDriver` — `OffscreenFeImage` shadow-tree instances leak into
+the global pool and the render-tree fast path keeps them across renders, so the 2nd render draws
+the referenced fragment as *main content* (kilo-pixel corruption). Same class as the baseline-
+shift bug; **any host re-rendering an feImage-fragment document (the editor) was corrupted.** Fix:
+filter offscreen feImage shadow entities out of the main snapshot in `draw()` + `drawEntityRange()`
++ red→green regression test `FeImageFragmentRedrawIsIdempotent`. 8 fragment-reference cases
+un-gated (≤1px parity); `embedded-png` → edge-floor (1px image-edge band, order-independent, not
+the idempotency bug). **Gate ledger now: 0 text + 20 G2 + 189 edge-floor = 209.** Remaining
+parity gaps: 20 filter (→ G2) + 189 edge-floor (→ finer geode AA) +
 the 137 sub-visual premultiply fills (→ G5, pass at 0.02). The hoist's text goal is achieved.
