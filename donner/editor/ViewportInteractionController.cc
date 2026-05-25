@@ -42,6 +42,10 @@ float FrameHistory::max() const {
   return maximum;
 }
 
+bool ShouldShowRenderPanePanCursor(bool canvasHovered, bool spaceHeld, bool panning) {
+  return panning || (canvasHovered && spaceHeld);
+}
+
 void ViewportInteractionController::updatePaneLayout(const Vector2d& paneOrigin,
                                                      const Vector2d& paneSize,
                                                      const std::optional<Box2d>& documentViewBox) {

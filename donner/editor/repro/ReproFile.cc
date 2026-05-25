@@ -184,6 +184,18 @@ void WriteMetadataLine(std::ostream& os, const ReproMetadata& meta) {
     os << ",\"at\":";
     WriteQuotedJsonString(os, meta.startedAtIso8601);
   }
+  if (!meta.svgBasename.empty()) {
+    os << ",\"svg_base\":";
+    WriteQuotedJsonString(os, meta.svgBasename);
+  }
+  if (!meta.svgContentHash.empty()) {
+    os << ",\"svg_hash\":";
+    WriteQuotedJsonString(os, meta.svgContentHash);
+  }
+  if (meta.svgSource.has_value()) {
+    os << ",\"svg_src\":";
+    WriteQuotedJsonString(os, *meta.svgSource);
+  }
   if (meta.expect.has_value()) {
     os << ',';
     WriteExpectation(os, *meta.expect);
@@ -262,6 +274,29 @@ std::optional<double> ReadNumber(std::string_view& cursor) {
 }
 
 std::optional<std::string> ReadString(std::string_view& cursor) {
+  const auto hexValue = [](char c) -> int {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + c - 'a';
+    if (c >= 'A' && c <= 'F') return 10 + c - 'A';
+    return -1;
+  };
+  const auto appendUtf8 = [](std::string& out, std::uint32_t codepoint) {
+    if (codepoint <= 0x7Fu) {
+      out += static_cast<char>(codepoint);
+    } else if (codepoint <= 0x7FFu) {
+      out += static_cast<char>(0xC0u | (codepoint >> 6));
+      out += static_cast<char>(0x80u | (codepoint & 0x3Fu));
+    } else if (codepoint <= 0xFFFFu) {
+      out += static_cast<char>(0xE0u | (codepoint >> 12));
+      out += static_cast<char>(0x80u | ((codepoint >> 6) & 0x3Fu));
+      out += static_cast<char>(0x80u | (codepoint & 0x3Fu));
+    } else {
+      out += static_cast<char>(0xF0u | (codepoint >> 18));
+      out += static_cast<char>(0x80u | ((codepoint >> 12) & 0x3Fu));
+      out += static_cast<char>(0x80u | ((codepoint >> 6) & 0x3Fu));
+      out += static_cast<char>(0x80u | (codepoint & 0x3Fu));
+    }
+  };
   std::size_t i = 0;
   while (i < cursor.size() && (cursor[i] == ' ' || cursor[i] == '\t')) ++i;
   if (i >= cursor.size() || cursor[i] != '"') return std::nullopt;
@@ -278,9 +313,23 @@ std::optional<std::string> ReadString(std::string_view& cursor) {
       switch (next) {
         case '"': out += '"'; break;
         case '\\': out += '\\'; break;
+        case 'b': out += '\b'; break;
+        case 'f': out += '\f'; break;
         case 'n': out += '\n'; break;
         case 't': out += '\t'; break;
         case 'r': out += '\r'; break;
+        case 'u': {
+          if (i + 5 >= cursor.size()) return std::nullopt;
+          std::uint32_t codepoint = 0;
+          for (std::size_t j = 0; j < 4; ++j) {
+            const int value = hexValue(cursor[i + 2 + j]);
+            if (value < 0) return std::nullopt;
+            codepoint = (codepoint << 4) | static_cast<std::uint32_t>(value);
+          }
+          appendUtf8(out, codepoint);
+          i += 6;
+          continue;
+        }
         default: out += next; break;
       }
       i += 2;
@@ -687,8 +736,8 @@ std::optional<ReproFile> ReadReproFile(const std::filesystem::path& path) {
       auto vn = ReadNumber(r);
       if (!vn) return std::nullopt;
       version = static_cast<int>(*vn);
-      if (version != 1 && version != kReproFileVersion) {
-        std::fprintf(stderr, "ReproFile: version %d, expected 1 or %d\n", version,
+      if (version < 1 || version > kReproFileVersion) {
+        std::fprintf(stderr, "ReproFile: version %d, expected 1 through %d\n", version,
                      kReproFileVersion);
         return std::nullopt;
       }
@@ -728,6 +777,21 @@ std::optional<ReproFile> ReadReproFile(const std::filesystem::path& path) {
       if (!atRest.empty()) {
         auto s = ReadString(atRest);
         if (s) meta.startedAtIso8601 = std::move(*s);
+      }
+      auto svgBaseRest = FindKey(view, "svg_base");
+      if (!svgBaseRest.empty()) {
+        auto s = ReadString(svgBaseRest);
+        if (s) meta.svgBasename = std::move(*s);
+      }
+      auto svgHashRest = FindKey(view, "svg_hash");
+      if (!svgHashRest.empty()) {
+        auto s = ReadString(svgHashRest);
+        if (s) meta.svgContentHash = std::move(*s);
+      }
+      auto svgSourceRest = FindKey(view, "svg_src");
+      if (!svgSourceRest.empty()) {
+        auto s = ReadString(svgSourceRest);
+        if (s) meta.svgSource = std::move(*s);
       }
       auto expectRest = FindKey(view, "expect");
       if (!expectRest.empty()) {

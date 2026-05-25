@@ -248,10 +248,27 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   io.AddKeyEvent(ImGuiKey_LeftShift, inputOverride.keyShift);
   io.AddKeyEvent(ImGuiKey_LeftAlt, inputOverride.keyAlt);
   io.AddKeyEvent(ImGuiKey_LeftSuper, inputOverride.keySuper);
+  // ImGui derives io.KeyCtrl/io.KeyMods from the dedicated ImGuiMod_* reserved
+  // key slots, which are distinct from ImGuiKey_LeftCtrl/etc. The real GLFW
+  // backend populates them via ImGui_ImplGlfw_UpdateKeyModifiers(); mirror that
+  // here so synthesized shortcuts (Ctrl+A, Ctrl+C, ...) match in headless replay.
+  io.AddKeyEvent(ImGuiMod_Ctrl, inputOverride.keyCtrl);
+  io.AddKeyEvent(ImGuiMod_Shift, inputOverride.keyShift);
+  io.AddKeyEvent(ImGuiMod_Alt, inputOverride.keyAlt);
+  io.AddKeyEvent(ImGuiMod_Super, inputOverride.keySuper);
   io.MouseWheelH = inputOverride.mouseWheelH;
   io.MouseWheel = inputOverride.mouseWheel;
   if (inputOverride.mouseWheelH != 0.0f || inputOverride.mouseWheel != 0.0f) {
     io.AddMouseWheelEvent(inputOverride.mouseWheelH, inputOverride.mouseWheel);
+  }
+  for (const int key : inputOverride.keyDownEvents) {
+    io.AddKeyEvent(static_cast<ImGuiKey>(key), true);
+  }
+  for (const int key : inputOverride.keyUpEvents) {
+    io.AddKeyEvent(static_cast<ImGuiKey>(key), false);
+  }
+  for (const std::uint32_t codepoint : inputOverride.inputCharacters) {
+    io.AddInputCharacter(codepoint);
   }
 }
 

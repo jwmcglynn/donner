@@ -8,6 +8,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/svg/core/Display.h"
 
 namespace donner::editor {
 
@@ -88,6 +89,23 @@ bool SameActiveBoundsPreview(const std::optional<SelectTool::ActiveTransformBoun
          SameTransform(lhs->documentFromStartDocument, rhs->documentFromStartDocument);
 }
 
+std::optional<svg::SVGElement> SelectedGraphicsElement(EditorApp& app) {
+  if (!app.selectedElement().has_value()) {
+    return std::nullopt;
+  }
+
+  const auto& selected = *app.selectedElement();
+  if (!selected.isa<svg::SVGGraphicsElement>()) {
+    return std::nullopt;
+  }
+
+  return selected;
+}
+
+bool IsDisplayNone(const svg::SVGElement& element) {
+  return element.getComputedStyle().display.getRequired() == svg::Display::None;
+}
+
 }  // namespace
 
 bool ShouldPresentCompositedPreviewForViewport(const RenderResult::CompositedPreview& preview,
@@ -151,11 +169,24 @@ void RenderCoordinator::resetForLoadedDocument() {
   pendingOverlayVersion_ = 0;
   displayedDocVersion_ = 0;
   lastOverlaySelectionVec_.clear();
+  sourceHoverElements_.clear();
+  lastOverlaySourceHoverVec_.clear();
   lastOverlayCanvasSize_ = Vector2i::Zero();
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   lastOverlayMarqueeRectDoc_.reset();
   lastOverlayActiveBoundsPreview_.reset();
   renderScheduler_.reset();
+  displayNoneSuppressedSelectionEntity_ = entt::null;
+  displayNoneSuppressedLayerEntity_ = entt::null;
+}
+
+bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elements) {
+  if (sourceHoverElements_ == elements) {
+    return false;
+  }
+
+  sourceHoverElements_ = std::move(elements);
+  return true;
 }
 
 void RenderCoordinator::refreshSelectionBoundsCache(EditorApp& app) {
@@ -204,9 +235,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   // Overlay AABBs are computed from the same live DOM snapshot as the path
   // outlines. `selectionBoundsCache_` is maintained only for main-loop
   // selection-change detection and does not gate overlay geometry.
-  OverlayRenderer::drawChromeWithTransform(overlayRenderer_,
-                                           std::span<const svg::SVGElement>(overlaySelection),
-                                           marqueeRectDoc, canvasFromDoc, chromeBoundsPreview);
+  OverlayRenderer::drawChromeWithTransform(
+      overlayRenderer_, std::span<const svg::SVGElement>(overlaySelection), marqueeRectDoc,
+      canvasFromDoc, chromeBoundsPreview, std::span<const svg::SVGElement>(sourceHoverElements_));
   overlayRenderer_.endFrame();
   pendingOverlayTexture_ = overlayRenderer_.takeTextureSnapshot();
   if (pendingOverlayTexture_ != nullptr) {
@@ -246,6 +277,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   }
 
   lastOverlaySelectionVec_ = overlaySelection;
+  lastOverlaySourceHoverVec_ = sourceHoverElements_;
   lastOverlayCanvasSize_ = currentCanvasSize;
   lastOverlayVersion_ = currentVersion;
   lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
@@ -278,6 +310,17 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     }
 
     textures.uploadComposited(*result.compositedPreview);
+    if (displayNoneSuppressedLayerEntity_ != entt::null) {
+      const bool stillCarriesSuppressedLayer = std::ranges::any_of(
+          result.compositedPreview->tiles, [&](const RenderResult::CompositedTile& tile) {
+            return tile.kind == RenderResult::CompositedTile::Kind::Layer &&
+                   tile.layerEntity == displayNoneSuppressedLayerEntity_;
+          });
+      if (!stillCarriesSuppressedLayer) {
+        displayNoneSuppressedSelectionEntity_ = entt::null;
+        displayNoneSuppressedLayerEntity_ = entt::null;
+      }
+    }
     // Cache identity is keyed to the document canvas size, not the promoted
     // tile's intrinsic dimensions. Bounded layer tiles can be smaller than the
     // canvas, and using their dimensions here would make the cache appear stale
@@ -349,6 +392,10 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const auto currentVersion = app.document().currentFrameVersion();
   const auto dragPreview = selectTool.activeDragPreview();
   const Entity prewarmEntity = selectedCompositedEntity(app);
+  const Entity suppressedLayerEntity = suppressedCompositedLayerEntity(app);
+  if (suppressedLayerEntity != entt::null) {
+    compositedPresentation_.discardCachedTexturesForEntity(suppressedLayerEntity);
+  }
 
   const bool selectionBoundsChanged = app.selectedElements() != selectionBoundsCache_.lastSelection;
   if (!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value()) {
@@ -359,6 +406,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 
   const auto& overlaySelection = app.selectedElements();
   const bool selectionDiffers = overlaySelection != lastOverlaySelectionVec_;
+  const bool sourceHoverDiffers = sourceHoverElements_ != lastOverlaySourceHoverVec_;
   const std::optional<Box2d> marqueeRectDoc = selectTool.marqueeRect();
   const auto activeBoundsPreview = selectTool.activeTransformBoundsPreview();
   // The marquee rect updates every mouse-move during a marquee drag and
@@ -371,14 +419,15 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool canvasDiffers = currentCanvasSize != lastOverlayCanvasSize_;
   const bool overlayVersionDiffers = currentVersion != lastOverlayVersion_;
   if ((!compositedPresentation_.isWaitingForFullRender() || dragPreview.has_value() ||
-       marqueeRectDoc.has_value() || activeBoundsPreviewDiffers) &&
-      (selectionDiffers || marqueeDiffers || canvasDiffers || activeBoundsPreviewDiffers ||
-       overlayVersionDiffers)) {
-    rasterizeOverlayForCurrentSelection(app, viewport, textures, marqueeRectDoc,
-                                        dragPreview.has_value()
-                                            ? OverlayUploadMode::Immediate
-                                            : OverlayUploadMode::MatchDisplayedVersion,
-                                        dragPreview, activeBoundsPreview);
+       marqueeRectDoc.has_value() || activeBoundsPreviewDiffers || sourceHoverDiffers) &&
+      (selectionDiffers || sourceHoverDiffers || marqueeDiffers || canvasDiffers ||
+       activeBoundsPreviewDiffers || overlayVersionDiffers)) {
+    rasterizeOverlayForCurrentSelection(
+        app, viewport, textures, marqueeRectDoc,
+        dragPreview.has_value() || suppressedLayerEntity != entt::null
+            ? OverlayUploadMode::Immediate
+            : OverlayUploadMode::MatchDisplayedVersion,
+        dragPreview, activeBoundsPreview);
   }
 
   const PresentationRenderScheduleDecision schedule =
@@ -403,16 +452,11 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // stale remap against an already-remapped compositor.
   req.structuralRemap = app.document().consumePendingStructuralRemap();
   req.selection = std::nullopt;
-  // Carry the current selection on every render so the compositor can keep
-  // the selected entity promoted across drag → idle → drag transitions.
-  // The compositor stays warmed against the selection, but only promotes when
-  // the entity is actually drag-capable. The pre-warm render that first
-  // triggers promotion is still gated separately below.
-  if (app.selectedElement().has_value()) {
-    const auto& selected = *app.selectedElement();
-    if (selected.isa<svg::SVGGraphicsElement>()) {
-      req.selectedEntity = selected.entityHandle().entity();
-    }
+  // Carry the current renderable selection on every render so the compositor can keep the selected
+  // entity promoted across drag → idle → drag transitions. A selected `display:none` element keeps
+  // editor chrome but must not keep or refresh a promoted content layer.
+  if (prewarmEntity != entt::null) {
+    req.selectedEntity = prewarmEntity;
   }
   if (schedule.dragPreview.has_value()) {
     req.dragPreview = *schedule.dragPreview;
@@ -421,16 +465,58 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 }
 
 Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
-  if (!app.selectedElement().has_value()) {
+  const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
+  if (!selected.has_value()) {
     return entt::null;
   }
 
-  const auto& selected = *app.selectedElement();
-  if (!selected.isa<svg::SVGGraphicsElement>()) {
+  if (IsDisplayNone(*selected)) {
     return entt::null;
   }
 
-  return selected.entityHandle().entity();
+  return selected->entityHandle().entity();
+}
+
+Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
+  const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
+  if (!selected.has_value()) {
+    return displayNoneSuppressedLayerEntity_;
+  }
+
+  if (!IsDisplayNone(*selected)) {
+    const Entity selectedEntity = selected->entityHandle().entity();
+    if (selectedEntity == displayNoneSuppressedSelectionEntity_ ||
+        selectedEntity == displayNoneSuppressedLayerEntity_) {
+      displayNoneSuppressedSelectionEntity_ = entt::null;
+      displayNoneSuppressedLayerEntity_ = entt::null;
+      return entt::null;
+    }
+
+    return displayNoneSuppressedLayerEntity_;
+  }
+
+  const Entity selectedEntity = selected->entityHandle().entity();
+  const CompositedPresentation::DiagnosticsSnapshot diagnostics =
+      compositedPresentation_.diagnostics();
+  if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null) {
+    displayNoneSuppressedSelectionEntity_ = selectedEntity;
+    displayNoneSuppressedLayerEntity_ = diagnostics.cachedEntity;
+    return diagnostics.cachedEntity;
+  }
+
+  if (displayNoneSuppressedSelectionEntity_ == selectedEntity &&
+      displayNoneSuppressedLayerEntity_ != entt::null) {
+    return displayNoneSuppressedLayerEntity_;
+  }
+
+  displayNoneSuppressedSelectionEntity_ = selectedEntity;
+  displayNoneSuppressedLayerEntity_ = selectedEntity;
+  return selectedEntity;
+}
+
+bool RenderCoordinator::selectedElementIsDisplayNone(EditorApp& app) const {
+  const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
+  return selected.has_value() && IsDisplayNone(*selected);
 }
 
 }  // namespace donner::editor

@@ -39,6 +39,8 @@ public:
   bool mirrorSourceDeltas(EditorApp& app, TextEditor& textEditor,
                           const std::vector<xml::XMLSourceDelta>& sourceDeltas);
   void handleTextEdits(EditorApp& app, TextEditor& textEditor, float deltaSeconds);
+  /// Return the pending source-text sync wake interval, if a throttled edit is waiting.
+  [[nodiscard]] std::optional<float> nextTextSyncWakeSeconds() const;
   void applyPendingWritebacks(EditorApp& app, SelectTool& selectTool, TextEditor& textEditor);
 
 private:

@@ -41,6 +41,10 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Save As...", "Cmd+Shift+S", false, state.canSave)) {
       actions.saveFileAs = true;
     }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Revert", nullptr, false, state.canRevert)) {
+      actions.revertFile = true;
+    }
     ImGui::EndMenu();
   }
 
@@ -75,6 +79,10 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
   }
 
   if (ImGui::BeginMenu("View")) {
+    if (ImGui::MenuItem("Source Focus Mode", "Cmd+Enter", state.sourceFocusMode)) {
+      actions.toggleSourceFocusMode = true;
+    }
+    ImGui::Separator();
     if (ImGui::MenuItem("Zoom In", "Cmd+=")) {
       actions.zoomIn = true;
     }

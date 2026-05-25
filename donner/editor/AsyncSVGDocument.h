@@ -111,6 +111,9 @@ public:
   /// this accessor exists for tests and for the main loop's `flushFrame`.
   [[nodiscard]] CommandQueue& queue() { return queue_; }
 
+  /// Whether any document mutations are queued for the next frame flush.
+  [[nodiscard]] bool hasPendingMutations() const { return !queue_.empty(); }
+
   /// Drain and apply any pending commands. Called once per frame at the
   /// start of the main loop. Returns true if any commands were applied
   /// (so the caller can decide whether to re-render).

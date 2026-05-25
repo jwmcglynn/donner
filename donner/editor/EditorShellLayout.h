@@ -3,6 +3,51 @@
 
 namespace donner::editor {
 
+/// Inputs used to compute the editor's horizontal source/render/sidebar layout.
+struct EditorMainPaneLayoutInput {
+  /// Full editor window width in screen pixels.
+  float windowWidth = 0.0f;
+  /// Whether the source pane is currently visible.
+  bool sourcePaneVisible = true;
+  /// Preferred source pane width when visible.
+  float sourcePaneWidth = 0.0f;
+  /// Minimum source pane width while visible.
+  float minSourcePaneWidth = 0.0f;
+  /// Maximum source pane width while visible.
+  float maxSourcePaneWidth = 0.0f;
+  /// Persisted/requested right sidebar width.
+  float rightPaneWidth = 0.0f;
+  /// Minimum right sidebar width.
+  float minRightPaneWidth = 0.0f;
+  /// Maximum right sidebar width.
+  float maxRightPaneWidth = 0.0f;
+  /// Minimum render pane width to preserve before growing the right sidebar.
+  float minRenderPaneWidth = 0.0f;
+};
+
+/// Computed geometry for the editor's horizontal source/render/sidebar layout.
+struct EditorMainPaneLayout {
+  /// Effective source pane width. Zero when the source pane is hidden.
+  float sourcePaneWidth = 0.0f;
+  /// Clamped right sidebar width.
+  float rightPaneWidth = 0.0f;
+  /// Left edge of the render pane.
+  float renderPaneX = 0.0f;
+  /// Width of the render pane.
+  float renderPaneWidth = 0.0f;
+  /// Left edge of the right sidebar.
+  float rightPaneX = 0.0f;
+};
+
+/**
+ * Compute horizontal pane geometry for the source pane, render pane, and
+ * right sidebar.
+ *
+ * @param input Horizontal layout constraints and persisted sidebar width.
+ */
+[[nodiscard]] EditorMainPaneLayout ComputeEditorMainPaneLayout(
+    const EditorMainPaneLayoutInput& input);
+
 /// Inputs used to compute the editor's right sidebar pane layout.
 struct RightSidebarLayoutInput {
   /// Top of the sidebar content region in screen pixels.

@@ -33,6 +33,17 @@ void SetRenderTreeState(Registry& registry, const RenderTreeState& state) {
   registry.ctx().emplace<RenderTreeState>(state);
 }
 
+std::string_view SourceSlice(std::string_view source, const SourceRange& range) {
+  EXPECT_TRUE(range.start.offset.has_value());
+  EXPECT_TRUE(range.end.offset.has_value());
+  if (!range.start.offset.has_value() || !range.end.offset.has_value() ||
+      *range.end.offset < *range.start.offset) {
+    return {};
+  }
+
+  return source.substr(*range.start.offset, *range.end.offset - *range.start.offset);
+}
+
 }  // namespace
 
 class StyleSystemTest : public ::testing::Test {
@@ -118,6 +129,106 @@ TEST_F(StyleSystemTest, IdSelectorStyleApplied) {
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
   EXPECT_TRUE(computed->properties.has_value());
+}
+
+TEST_F(StyleSystemTest, StylesheetSourceMapMapsRuleBackToSvgSource) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>
+        .cls { fill: red; }
+      </style>
+      <rect class="cls"/>
+    </svg>
+  )");
+
+  auto styleElement = document.querySelector("style");
+  ASSERT_TRUE(styleElement.has_value());
+  const auto& stylesheet =
+      document.registry().get<StylesheetComponent>(styleElement->entityHandle().entity());
+  ASSERT_EQ(stylesheet.stylesheet.rules().size(), 1u);
+
+  const css::SelectorRule& rule = stylesheet.stylesheet.rules()[0];
+  const std::optional<SourceRange> mappedRule =
+      stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange);
+  ASSERT_TRUE(mappedRule.has_value());
+  EXPECT_EQ(SourceSlice(document.source(), *mappedRule), ".cls { fill: red; }");
+}
+
+TEST_F(StyleSystemTest, CollectMatchedStyleRulesReportsSelectorBranchAndSourceRanges) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>
+        .cls-92, #other { fill: red; }
+        [class] { stroke: blue; }
+      </style>
+      <rect id="target" class="cls-92"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#target");
+  ASSERT_TRUE(element.has_value());
+  const std::vector<MatchedStyleRule> matches =
+      styleSystem.collectMatchedStyleRules(element->entityHandle());
+
+  bool sawUserAgentWithoutSource = false;
+  std::vector<MatchedStyleRule> authoredMatches;
+  for (const MatchedStyleRule& match : matches) {
+    if (match.isUserAgentStylesheet && !match.ruleSourceRange.has_value()) {
+      sawUserAgentWithoutSource = true;
+    }
+    if (match.ruleSourceRange.has_value()) {
+      authoredMatches.push_back(match);
+    }
+  }
+
+  EXPECT_TRUE(sawUserAgentWithoutSource);
+  ASSERT_EQ(authoredMatches.size(), 2u);
+
+  EXPECT_EQ(authoredMatches[0].selectorEntryIndex, 0u);
+  EXPECT_EQ(authoredMatches[0].specificity, css::Specificity::FromABC(0, 1, 0));
+  ASSERT_TRUE(authoredMatches[0].selectorSourceRange.has_value());
+  EXPECT_EQ(SourceSlice(document.source(), *authoredMatches[0].selectorSourceRange), ".cls-92");
+  EXPECT_EQ(SourceSlice(document.source(), *authoredMatches[0].ruleSourceRange),
+            ".cls-92, #other { fill: red; }");
+
+  EXPECT_EQ(authoredMatches[1].selectorEntryIndex, 0u);
+  EXPECT_EQ(authoredMatches[1].specificity, css::Specificity::FromABC(0, 1, 0));
+  ASSERT_TRUE(authoredMatches[1].selectorSourceRange.has_value());
+  EXPECT_EQ(SourceSlice(document.source(), *authoredMatches[1].selectorSourceRange), "[class]");
+  EXPECT_EQ(SourceSlice(document.source(), *authoredMatches[1].ruleSourceRange),
+            "[class] { stroke: blue; }");
+}
+
+TEST_F(StyleSystemTest, FindsStyleRuleAtSourceOffsetAndSelectorBranch) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>
+        .hit, .miss { opacity: 0.5; }
+      </style>
+      <rect id="hit" class="hit"/>
+      <rect id="miss" class="miss"/>
+    </svg>
+  )");
+
+  const std::string_view source = document.source();
+  const std::size_t hitOffset = source.find(".hit");
+  const std::size_t opacityOffset = source.find("opacity");
+  ASSERT_NE(hitOffset, std::string_view::npos);
+  ASSERT_NE(opacityOffset, std::string_view::npos);
+
+  const std::optional<StyleRuleAtSourceOffset> hitRule =
+      styleSystem.findStyleRuleAtSourceOffset(document.registry(), hitOffset);
+  ASSERT_TRUE(hitRule.has_value());
+  ASSERT_TRUE(hitRule->selectorEntryIndex.has_value());
+  EXPECT_EQ(*hitRule->selectorEntryIndex, 0u);
+  EXPECT_EQ(SourceSlice(source, hitRule->selectorSourceRange), ".hit");
+  EXPECT_EQ(SourceSlice(source, hitRule->ruleSourceRange), ".hit, .miss { opacity: 0.5; }");
+
+  const std::optional<StyleRuleAtSourceOffset> blockRule =
+      styleSystem.findStyleRuleAtSourceOffset(document.registry(), opacityOffset);
+  ASSERT_TRUE(blockRule.has_value());
+  EXPECT_FALSE(blockRule->selectorEntryIndex.has_value());
+  EXPECT_EQ(SourceSlice(source, blockRule->selectorSourceRange), ".hit, .miss");
 }
 
 // --- Inheritance ---

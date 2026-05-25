@@ -86,6 +86,11 @@ public:
   /// Return true when freshly rasterized overlay chrome is waiting for a
   /// matching async-render result before upload.
   [[nodiscard]] bool hasPendingOverlayForTesting() const { return pendingOverlayVersion_ != 0; }
+  /// Replace transient source-hover chrome elements.
+  ///
+  /// @param elements Elements to highlight as source-hover preview chrome.
+  /// @return true if the hover preview changed.
+  bool setSourceHoverElements(std::vector<svg::SVGElement> elements);
 
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
@@ -110,6 +115,20 @@ public:
                         FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
                           GlTextureCache& textures);
+  /**
+   * Return the selected layer whose cached pixels should be hidden while editor chrome remains
+   * visible. This is used when the live selected element is `display:none`: hit-testing and the
+   * next render already treat it as non-rendering, so the presenter must not keep drawing a stale
+   * promoted texture for that entity. If a source reparse remapped the selected element to a new
+   * entity, this returns the currently cached pre-reparse entity so that stale texture is hidden.
+   *
+   * @param app Editor application state containing the live selection.
+   * @return Entity whose cached layer should be suppressed, or entt::null if no suppression is
+   *   needed.
+   */
+  [[nodiscard]] Entity suppressedCompositedLayerEntity(EditorApp& app);
+  /// Return true when the live selected graphics element is hidden by `display:none`.
+  [[nodiscard]] bool selectedElementIsDisplayNone(EditorApp& app) const;
 
 private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
@@ -137,6 +156,8 @@ private:
   std::uint64_t displayedDocVersion_ = 0;
 
   std::vector<svg::SVGElement> lastOverlaySelectionVec_;
+  std::vector<svg::SVGElement> sourceHoverElements_;
+  std::vector<svg::SVGElement> lastOverlaySourceHoverVec_;
   Vector2i lastOverlayCanvasSize_ = Vector2i::Zero();
   std::uint64_t lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   /// Last marquee rect baked into the overlay texture, or nullopt if
@@ -148,6 +169,10 @@ private:
   std::optional<SelectTool::ActiveTransformBoundsPreview> lastOverlayActiveBoundsPreview_;
 
   PresentationRenderScheduler renderScheduler_;
+  /// Live selected display:none entity whose stale promoted layer is currently hidden.
+  Entity displayNoneSuppressedSelectionEntity_ = entt::null;
+  /// Cached promoted layer entity hidden for \ref displayNoneSuppressedSelectionEntity_.
+  Entity displayNoneSuppressedLayerEntity_ = entt::null;
   /// Most recent desired canvas size requested by `maybeRequestRender`.
   /// Used to debounce continuous pinch-zoom before committing through
   /// `SVGDocument::setCanvasSize`.

@@ -4,6 +4,33 @@
 
 namespace donner::editor {
 
+EditorMainPaneLayout ComputeEditorMainPaneLayout(const EditorMainPaneLayoutInput& input) {
+  const float windowWidth = std::max(0.0f, input.windowWidth);
+  const float minSourcePaneWidth = std::max(0.0f, input.minSourcePaneWidth);
+  const float maxSourcePaneWidth = std::max(minSourcePaneWidth, input.maxSourcePaneWidth);
+  const float minRightPaneWidth = std::max(0.0f, input.minRightPaneWidth);
+  const float minRenderPaneWidth = std::max(0.0f, input.minRenderPaneWidth);
+  const float maxRightPaneWidth = std::max(minRightPaneWidth, input.maxRightPaneWidth);
+  const float sourcePaneUpperBound = std::max(
+      0.0f, std::min(maxSourcePaneWidth, windowWidth - minRightPaneWidth - minRenderPaneWidth));
+  const float sourcePaneLowerBound = std::min(minSourcePaneWidth, sourcePaneUpperBound);
+  const float sourcePaneWidth =
+      input.sourcePaneVisible
+          ? std::clamp(input.sourcePaneWidth, sourcePaneLowerBound, sourcePaneUpperBound)
+          : 0.0f;
+  const float rightPaneUpperBound =
+      std::max(minRightPaneWidth,
+               std::min(maxRightPaneWidth, windowWidth - sourcePaneWidth - minRenderPaneWidth));
+
+  EditorMainPaneLayout layout;
+  layout.sourcePaneWidth = sourcePaneWidth;
+  layout.rightPaneWidth = std::clamp(input.rightPaneWidth, minRightPaneWidth, rightPaneUpperBound);
+  layout.renderPaneX = sourcePaneWidth;
+  layout.renderPaneWidth = std::max(0.0f, windowWidth - sourcePaneWidth - layout.rightPaneWidth);
+  layout.rightPaneX = windowWidth - layout.rightPaneWidth;
+  return layout;
+}
+
 RightSidebarLayout ComputeRightSidebarLayout(const RightSidebarLayoutInput& input) {
   const float paneOriginY = input.paneOriginY;
   const float paneHeight = std::max(0.0f, input.paneHeight);

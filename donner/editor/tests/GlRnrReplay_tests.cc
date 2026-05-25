@@ -10,8 +10,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "donner/base/Vector2.h"
+#include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -174,6 +177,151 @@ std::optional<double> YellowCentroidY(const svg::RendererBitmap& bitmap) {
     return std::nullopt;
   }
   return totalY / static_cast<double>(count);
+}
+
+int CountBrightGreenPixels(const svg::RendererBitmap& bitmap) {
+  int count = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+      const std::uint8_t red = bitmap.pixels[offset];
+      const std::uint8_t green = bitmap.pixels[offset + 1];
+      const std::uint8_t blue = bitmap.pixels[offset + 2];
+      const std::uint8_t alpha = bitmap.pixels[offset + 3];
+      if (alpha > 200 && red < 40 && green > 200 && blue < 40) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+TEST(GlRnrReplayTest, UsesEmbeddedSvgSourceWhenOriginalPathIsMissing) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir();
+  const std::filesystem::path reproPath = outputDir / "embedded_svg_source_replay.rnr";
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_original_input.svg";
+  file.metadata.svgBasename = "embedded_input.svg";
+  file.metadata.svgContentHash = "fnv1a64:test";
+  file.metadata.svgSource =
+      R"(<svg viewBox="0 0 10 10"><rect width="10" height="10" fill="#ffcc00"/></svg>)";
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  repro::ReproFrame frame;
+  frame.index = 0;
+  frame.deltaMs = 16.667;
+  frame.mouseX = 20.0;
+  frame.mouseY = 20.0;
+  file.frames.push_back(frame);
+
+  ASSERT_TRUE(repro::WriteReproFile(reproPath, file));
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = reproPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(0);
+  options.pace = false;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_NE(FindCapture(result, 0), nullptr);
+
+  std::error_code ec;
+  std::filesystem::remove(reproPath, ec);
+}
+
+TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir();
+  const std::filesystem::path reproPath = outputDir / "source_pane_character_input_replay.rnr";
+  // The document renders at actual size in the replay (no zoom is applied), so a
+  // tiny viewBox would paint fewer pixels than the bright-green threshold below.
+  // Use a 200x200 document so the recolored rect dominates the render pane crop.
+  constexpr std::string_view kInitialSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="#ff0000"/></svg>)";
+  constexpr std::string_view kEditedSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"><rect width="200" height="200" fill="#00ff00"/></svg>)";
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_text_edit_input.svg";
+  file.metadata.svgBasename = "text_edit_input.svg";
+  file.metadata.svgContentHash = "fnv1a64:test";
+  file.metadata.svgSource = std::string(kInitialSource);
+  file.metadata.windowWidth = 1400;
+  file.metadata.windowHeight = 600;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, double mouseX, double mouseY, int buttons,
+                             int modifiers, std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) * 0.01;
+    frame.deltaMs = 10.0;
+    frame.mouseX = mouseX;
+    frame.mouseY = mouseY;
+    frame.mouseButtonMask = buttons;
+    frame.modifiers = modifiers;
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, 30.0, 70.0, 0, 0);
+  repro::ReproEvent mouseDown;
+  mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  mouseDown.mouseButton = 0;
+  pushFrame(1, 30.0, 70.0, 1, 0, {mouseDown});
+  repro::ReproEvent mouseUp;
+  mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  mouseUp.mouseButton = 0;
+  pushFrame(2, 30.0, 70.0, 0, 0, {mouseUp});
+  repro::ReproEvent selectAllDown;
+  selectAllDown.kind = repro::ReproEvent::Kind::KeyDown;
+  selectAllDown.key = static_cast<int>(ImGuiKey_A);
+  selectAllDown.modifiers = 1 << 0;
+  pushFrame(3, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
+  repro::ReproEvent selectAllUp;
+  selectAllUp.kind = repro::ReproEvent::Kind::KeyUp;
+  selectAllUp.key = static_cast<int>(ImGuiKey_A);
+  pushFrame(4, 30.0, 70.0, 0, 0, {selectAllUp});
+
+  std::vector<repro::ReproEvent> characterEvents;
+  for (const unsigned char c : kEditedSource) {
+    repro::ReproEvent event;
+    event.kind = repro::ReproEvent::Kind::Char;
+    event.codepoint = c;
+    characterEvents.push_back(event);
+  }
+  pushFrame(5, 30.0, 70.0, 0, 0, std::move(characterEvents));
+  for (std::uint64_t index = 6; index <= 60; ++index) {
+    pushFrame(index, 30.0, 70.0, 0, 0);
+  }
+
+  ASSERT_TRUE(repro::WriteReproFile(reproPath, file));
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = reproPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(60);
+  options.cropMode = repro::GlRnrReplayCropMode::Full;
+  options.pace = true;
+  options.maxFrame = 60;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, 60);
+  ASSERT_TRUE(bitmap.has_value());
+  const svg::RendererBitmap renderPaneCrop =
+      CropBitmap(*bitmap, PixelCrop{.x = 560, .y = 0, .width = 500, .height = 600});
+  EXPECT_GT(CountBrightGreenPixels(renderPaneCrop), 100);
+
+  std::error_code ec;
+  std::filesystem::remove(reproPath, ec);
 }
 
 TEST(GlRnrReplayTest, ClickAfterZoomBeforeRerasterSelectsNewTarget) {

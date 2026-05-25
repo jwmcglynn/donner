@@ -88,6 +88,8 @@ donner_cc_library(
     srcs = ["RotateCursorSet.cc"],
     hdrs = ["RotateCursorSet.h"],
     deps = [
+        ":pan_closed_cursor_svg",
+        ":pan_cursor_svg",
         ":rotate_cursor_svg",
         ":selection_transform_handles",
         "//donner/base",
@@ -114,6 +116,31 @@ donner_cc_library(
         "//donner/base/xml",
         "//donner/svg",
     ],
+)
+
+donner_cc_library(
+    name = "focus_view",
+    srcs = ["FocusView.cc"],
+    hdrs = ["FocusView.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "flash_decorations",
+    srcs = ["FlashDecorations.cc"],
+    hdrs = ["FlashDecorations.h"],
+    deps = [],
+)
+
+donner_cc_library(
+    name = "soft_wrap",
+    srcs = ["SoftWrap.cc"],
+    hdrs = ["SoftWrap.h"],
+    deps = [],
 )
 
 donner_cc_library(
@@ -512,6 +539,7 @@ donner_cc_library(
         ":editor_app",
         ":editor_input_bridge",
         ":editor_shell_layout",
+        ":focus_view",
         ":gl_texture_cache",
         ":imgui_headers",
         ":keyboard_shortcut_policy",
@@ -643,6 +671,22 @@ filegroup(
 # exposes `donner::embedded::kEditorNoticeText` as a
 # `std::span<const unsigned char>`. The editor's Help → About dialog
 # displays this.
+embed_resources(
+    name = "pan_closed_cursor_svg",
+    header_output = "donner/editor/PanClosedCursorSvg.h",
+    resources = {
+        "kPanClosedCursorSvg": "pan_closed_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "pan_cursor_svg",
+    header_output = "donner/editor/PanCursorSvg.h",
+    resources = {
+        "kPanCursorSvg": "pan_cursor.svg",
+    },
+)
+
 embed_resources(
     name = "rotate_cursor_svg",
     header_output = "donner/editor/RotateCursorSvg.h",
@@ -782,7 +826,10 @@ donner_cc_library(
     srcs = ["TextEditor.cc"],
     hdrs = ["TextEditor.h"],
     deps = [
+        ":flash_decorations",
+        ":focus_view",
         ":imgui_headers",
+        ":soft_wrap",
         ":source_edit_intent",
         ":text_buffer",
         ":text_editor_core",

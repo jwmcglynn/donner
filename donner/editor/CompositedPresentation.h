@@ -212,6 +212,29 @@ public:
     state_ = Cached{.cache = cache};
   }
 
+  /// Drop cached presentation state for @p entity.
+  ///
+  /// This is intentionally explicit instead of tied to selection changes. Normal deselection keeps
+  /// the cached document image alive until the next render replaces it; a selected element becoming
+  /// `display:none` is different because the cached promoted tile would keep rendering content that
+  /// the live DOM has already hidden.
+  ///
+  /// @param entity Entity whose cached presentation should be discarded.
+  /// @return true if cached state matched @p entity and was cleared.
+  bool discardCachedTexturesForEntity(Entity entity) {
+    if (entity == entt::null) {
+      return false;
+    }
+
+    const std::optional<CachedTextures> cache = currentCache();
+    if (!cache.has_value() || cache->entity != entity) {
+      return false;
+    }
+
+    state_ = NoCache{};
+    return true;
+  }
+
   /// Finish the settle handoff once overlay chrome and cached AABBs have refreshed to match the
   /// settled document version. Only then is it safe to drop the old drag offset.
   void noteChromeRefreshCompleted(std::uint64_t refreshedVersion) {

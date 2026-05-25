@@ -288,18 +288,7 @@ public:
       }
 
       if (text[i] == '\n') {
-        if (charIndex < static_cast<int>(lines_[where.line].size()) && charIndex >= 0) {
-          // Split line
-          auto& line = lines_[where.line];
-          auto& newLine = insertLine(where.line, where.column);
-
-          // Insert everything after charIndex into the next line
-          newLine.insert(newLine.begin(), line.begin() + charIndex, line.end());
-          line.erase(line.begin() + charIndex, line.end());
-        } else {
-          insertLine(where.line, where.column);
-        }
-
+        insertLineAfterSplit(where.line, charIndex);
         ++where.line;
         charIndex = 0;
         where.column = 0;
@@ -351,7 +340,7 @@ public:
         char currentChar = text[i];
         bool isTab = (currentChar == '\t');
         auto& line = lines_[where.line];
-        auto charLen = Utf8::SequenceLength(currentChar);
+        int charLen = glyphByteLength(currentChar);
 
         if (charIndex > (int)line.size()) {
           charIndex = (int)line.size();
@@ -507,7 +496,7 @@ public:
       } else {
         col++;
       }
-      i += Utf8::SequenceLength(c);
+      i += glyphByteLength(c);
     }
 
     return col;
@@ -524,7 +513,7 @@ public:
     const auto& lineContent = lines_[line];
     int count = 0;
     for (unsigned i = 0; i < lineContent.size(); count++) {
-      i += Utf8::SequenceLength(lineContent[i].character);
+      i += glyphByteLength(lineContent[i].character);
     }
 
     return count;
@@ -547,7 +536,7 @@ public:
       } else {
         ++col;
       }
-      index += Utf8::SequenceLength(line[index].character);
+      index += glyphByteLength(line[index].character);
     }
 
     return index;
@@ -568,7 +557,7 @@ public:
 
     while (i < index && i < static_cast<int>(lineContent.size())) {
       char c = lineContent[i].character;
-      i += Utf8::SequenceLength(c);
+      i += glyphByteLength(c);
       if (c == '\t') {
         col = (col / tabSize_) * tabSize_ + tabSize_;
       } else {
@@ -664,6 +653,26 @@ private:
       line.emplace_back(c, ColorIndex::Default);
     }
     return line;
+  }
+
+  static int glyphByteLength(char c) { return std::max(1, Utf8::SequenceLength(c)); }
+
+  Line& insertLineAfterSplit(int index, int charIndex) {
+    if (index < 0) {
+      index = 0;
+    }
+    if (index >= static_cast<int>(lines_.size())) {
+      lines_.emplace_back();
+      return lines_.back();
+    }
+
+    Line& oldLine = lines_[index];
+    charIndex = std::clamp(charIndex, 0, static_cast<int>(oldLine.size()));
+    Line newLine;
+    newLine.insert(newLine.end(), oldLine.begin() + charIndex, oldLine.end());
+    oldLine.erase(oldLine.begin() + charIndex, oldLine.end());
+    lines_.insert(lines_.begin() + index + 1, std::move(newLine));
+    return lines_[index + 1];
   }
 
   /**

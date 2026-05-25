@@ -25,6 +25,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/base/Vector2.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -94,6 +95,12 @@ struct EditorWindowInputOverride {
   float mouseWheelH = 0.0f;
   /// Vertical mouse-wheel delta for this frame.
   float mouseWheel = 0.0f;
+  /// ImGui key enum values pressed during this frame.
+  std::vector<int> keyDownEvents;
+  /// ImGui key enum values released during this frame.
+  std::vector<int> keyUpEvents;
+  /// UTF-32 character input events queued during this frame.
+  std::vector<std::uint32_t> inputCharacters;
 };
 
 /// Initializes GLFW + GL + ImGui when constructed, tears everything down

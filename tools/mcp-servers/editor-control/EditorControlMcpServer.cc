@@ -190,7 +190,8 @@ json HandleRequest(EditorControlSession* session, const json& request) {
              {"serverInfo", {{"name", "donner-editor-control"}, {"version", "0.1.0"}}},
              {"instructions",
               "Headless Donner editor control: load SVGs, select by CSS selector, synthesize "
-              "drag frames, and inspect compositor layers without OS permissions."},
+              "drag frames, edit source drafts, render previews, and inspect compositor layers "
+              "without OS permissions."},
          }},
     };
   }

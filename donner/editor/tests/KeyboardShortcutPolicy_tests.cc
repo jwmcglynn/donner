@@ -29,5 +29,16 @@ TEST(KeyboardShortcutPolicyTest, DeleteBlockedWithoutSelectionOrWithPopup) {
       /*sourcePaneFocused=*/false));
 }
 
+TEST(KeyboardShortcutPolicyTest, SourceFocusToggleRequiresCommandEnterWithoutPopup) {
+  EXPECT_TRUE(CanToggleSourceFocusModeFromShortcut(
+      /*enterKey=*/true, /*commandDown=*/true, /*anyPopupOpen=*/false));
+  EXPECT_FALSE(CanToggleSourceFocusModeFromShortcut(
+      /*enterKey=*/false, /*commandDown=*/true, /*anyPopupOpen=*/false));
+  EXPECT_FALSE(CanToggleSourceFocusModeFromShortcut(
+      /*enterKey=*/true, /*commandDown=*/false, /*anyPopupOpen=*/false));
+  EXPECT_FALSE(CanToggleSourceFocusModeFromShortcut(
+      /*enterKey=*/true, /*commandDown=*/true, /*anyPopupOpen=*/true));
+}
+
 }  // namespace
 }  // namespace donner::editor

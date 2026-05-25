@@ -181,6 +181,10 @@ struct RenderResult {
     /// this to reuse GL textures across frames when the tile's
     /// `generation` hasn't bumped.
     std::string id;
+    /// Promoted entity represented by this layer tile. Null for static segment and full-canvas
+    /// tiles. The presenter uses this to suppress stale cached pixels for a selected element that
+    /// became non-rendering while keeping editor chrome visible.
+    Entity layerEntity = entt::null;
     /// Monotonic generation from the compositor. Editor re-uploads
     /// the bitmap only when this advances.
     std::uint64_t generation = 0;

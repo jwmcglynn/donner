@@ -1,10 +1,12 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/editor/DialogPresenter.h"
@@ -125,16 +127,20 @@ public:
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
   bool trySavePath(std::string_view path, std::string* error);
+  void resetPresentationForLoadedDocument(std::string_view canonicalSource);
+  void requestRevert();
   void requestSave();
   void requestSaveAs(std::string error = std::string());
   bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
   void handleGlobalShortcuts();
-  void renderSourcePane(float paneOriginY, float paneHeight, ImFont* codeFont);
+  void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
   void renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
                         ImGuiWindowFlags paneFlags);
   void renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
                       const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags);
+  void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
+                                float sourcePaneWidth);
   void renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight);
   void renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
                                 const RightSidebarLayout& layout);
@@ -142,6 +148,40 @@ private:
   void renderFloatingLayerPanel();
   void renderLayerPanelContents();
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
+  [[nodiscard]] std::vector<svg::SVGElement> sourceHoverElements() const;
+  [[nodiscard]] std::vector<SourceByteRange> sourceHoverRangesForElements(
+      const std::vector<svg::SVGElement>& elements) const;
+  [[nodiscard]] std::vector<svg::SVGElement> referenceHighlightElements() const;
+  [[nodiscard]] std::vector<svg::SVGElement> combinedSourcePreviewElements() const;
+  void updateSourceHoverPreview();
+  void refreshReferenceHighlightSummaryIfNeeded();
+  void applyReferenceHighlightPreview();
+  void setReferenceHighlightChipHovered(bool hovered);
+  struct SelectionChipBounds {
+    Box2d documentBounds;
+    Box2d screenBounds;
+    Vector2d chipAnchorScreen = Vector2d::Zero();
+  };
+  [[nodiscard]] std::optional<Box2d> referenceHighlightChipScreenRect(std::string_view label) const;
+  [[nodiscard]] std::optional<SelectionChipBounds> selectionChipBounds(
+      const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) const;
+  [[nodiscard]] std::optional<Box2d> selectionSizeChipScreenRect(
+      std::string_view label, const Vector2d& chipAnchorScreen) const;
+  void renderSelectionSizeChip(
+      const SelectionTransformHandleIntent& hoverTransformIntent,
+      const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
+  void renderReferenceHighlightChip();
+  void openRenderPaneContextMenu(const Vector2d& documentPoint);
+  void renderRenderPaneContextMenu();
+  [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceOffset(std::size_t sourceOffset) const;
+  [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceCursor();
+  void applyStyleFocus(StyleFocus styleFocus);
+  void syncSelectionFromSourceCursorIfNeeded();
+  void applySourcePartition(FocusPartition partition);
+  void updateSourceFocusView(bool scrollToSelection = false);
+  void setSourceFocusMode(bool enabled);
+  void toggleSourceFocusMode();
+  void setSourcePaneVisible(bool visible);
 
   gui::EditorWindow& window_;
   EditorShellOptions options_;
@@ -185,17 +225,33 @@ private:
   ImVec2 layerPanelFloatingPos_ = ImVec2(0.0f, 0.0f);
   /// Last floating Layers window size in screen pixels.
   ImVec2 layerPanelFloatingSize_ = ImVec2(420.0f, 360.0f);
-  std::optional<svg::SVGElement> lastHighlightedSelection_;
+  std::vector<svg::SVGElement> lastHighlightedSelection_;
   std::optional<svg::SVGElement> lastTreeSelection_;
   std::optional<ImVec2> lastPostedScreenPoint_;
   bool treeviewPendingScroll_ = false;
   bool treeSelectionOriginatedInTree_ = false;
+  bool sourceSelectionOriginatedInText_ = false;
+  bool sourceFocusOriginatedInStyle_ = false;
+  ReferenceHighlightSummary referenceHighlightSummary_;
+  std::vector<svg::SVGElement> lastReferenceHighlightSelection_;
+  bool referenceHighlightActive_ = false;
+  bool referenceHighlightChipHovered_ = false;
+  std::optional<Vector2d> renderContextMenuDocumentPoint_;
+  std::optional<svg::SVGElement> renderContextMenuHitElement_;
+  bool renderContextMenuOpenRequested_ = false;
+  /// Suppress source-pane reselection/scrolling when a source edit remaps the same selection while
+  /// the cursor remains inside the active focus partition.
+  bool preserveSourceEditFocusCursor_ = false;
   /// Design doc 0033 §M8: set when an M8 fast-path click consumed the
   /// pending click without going through the `!isBusy()`-gated post-
   /// onMouseDown cache refresh. The follow-up fires on the next idle
   /// frame so re-drag hit testing catches up without posting a
   /// pre-move render ahead of the drag update.
   bool pendingClickFollowupAfterIdle_ = false;
+  bool sourceFocusMode_ = true;
+  /// Preferred width for the source pane when it is visible.
+  float sourcePaneWidth_ = 560.0f;
+  bool sourcePaneVisible_ = true;
 
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;

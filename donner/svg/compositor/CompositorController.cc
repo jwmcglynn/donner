@@ -492,6 +492,33 @@ void CompositorController::processPendingDemotions(Registry& registry) {
   reconcileLayers(registry);
 }
 
+bool CompositorController::dropNonRenderableInteractionHints(Registry& registry) {
+  std::vector<Entity> droppedEntities;
+  droppedEntities.reserve(activeHints_.size());
+  for (const auto& [entity, hint] : activeHints_) {
+    (void)hint;
+    if (!registry.valid(entity) ||
+        !registry.all_of<components::RenderingInstanceComponent>(entity)) {
+      droppedEntities.push_back(entity);
+    }
+  }
+
+  if (droppedEntities.empty()) {
+    return false;
+  }
+
+  for (const Entity entity : droppedEntities) {
+    activeHints_.erase(entity);
+    pendingDemotions_.erase(entity);
+    if (splitStaticLayersEntity_ == entity) {
+      splitStaticLayersEntity_ = entt::null;
+      splitStaticLayersViewport_ = Vector2i::Zero();
+    }
+  }
+
+  return true;
+}
+
 bool CompositorController::isPromoted(Entity entity) const {
   return activeHints_.contains(entity);
 }
@@ -884,6 +911,7 @@ bool CompositorController::remapAfterStructuralReplace(
     complexityBucketer_.rebuildForReplacedDocument(registry);
   }
   hintsScanned_ = true;
+  const bool droppedNonRenderableHints = dropNonRenderableInteractionHints(registry);
 
   // Step 3: remap layer entity ids. Cached `bitmap_`, `canvasFromBitmap_`,
   // `bitmapEntityFromWorldTransform_`, and `fallbackReasons_` survive
@@ -927,6 +955,9 @@ bool CompositorController::remapAfterStructuralReplace(
   };
   resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
   reconcileLayers(registry);
+  if (droppedNonRenderableHints) {
+    markAllSegmentsDirty();
+  }
 
   // The remap proves the tree shape survived, not that cached layer pixels
   // are still a pixel-exact final render. Drag writeback commonly changes
@@ -1497,6 +1528,12 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     documentPrepared_ = true;
     refreshLayerMetadata();
 
+    if (dropNonRenderableInteractionHints(registry)) {
+      resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+      reconcileLayers(registry);
+      markAllSegmentsDirty();
+    }
+
     // After preparation, keep the global rebuild signal consumed. RenderingContext clears this
     // after a successful render-tree instantiation; this write is a defensive no-op for callers
     // that still reach this path with the flag set.
@@ -1517,6 +1554,25 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
       reconcileLayers(registry);
     }
+  }
+
+  if (layers_.empty()) {
+    ZoneScopedN("Compositor::emptyLayerSetAfterPrepare");
+    RendererDriver driver(renderer());
+    driver.draw(document());
+    staticSegments_.clear();
+    staticSegmentTextures_.clear();
+    staticSegmentBoundaries_.clear();
+    staticSegmentDirty_.clear();
+    staticSegmentOffsets_.clear();
+    staticSegmentLastRasterizeMs_.clear();
+    staticSegmentsCanvas_ = Vector2i::Zero();
+    staticSegmentsLayerCount_ = 0;
+    splitStaticLayersEntity_ = entt::null;
+    splitStaticLayersViewport_ = Vector2i::Zero();
+    rootDirty_ = false;
+    mainRendererHasCachedFrame_ = true;
+    return;
   }
 
   // Update composition transforms for layers whose stamped transform
@@ -1837,6 +1893,13 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   } else {
     layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
   }
+  // `setBitmap`/`setTextureSnapshot` bump a per-object generation that resets
+  // to 1 for every freshly-built layer. After a document replace reuses entity
+  // ids, that "1" collides with the generation the editor's GL texture cache
+  // already holds for the previous document's layer at the same id, so the new
+  // pixels never upload. Stamp a process-monotonic generation (shared with
+  // static segments) so each rasterization is globally unique.
+  layer.setGeneration(nextTileGeneration_++);
   layer.setCanvasOffset(geometry.canvasOffset);
   const auto rasterizeEnd = std::chrono::steady_clock::now();
   const auto elapsedUs =
@@ -2052,7 +2115,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     // Bump the generation so the editor's GL texture cache sees this
     // slot's pixel content changed and re-uploads on next frame.
     if (i < staticSegmentGeneration_.size()) {
-      staticSegmentGeneration_[i] = nextSegmentGeneration_++;
+      staticSegmentGeneration_[i] = nextTileGeneration_++;
     }
     const auto segmentRasterizeEnd = std::chrono::steady_clock::now();
     const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -2130,7 +2193,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   // cache will see a new tileId→generation pair and upload.
   for (size_t i = 0; i < newCount; ++i) {
     if (newGeneration[i] == 0) {
-      newGeneration[i] = nextSegmentGeneration_++;
+      newGeneration[i] = nextTileGeneration_++;
     }
   }
 

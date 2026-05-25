@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <regex>
 #include <stack>
@@ -303,6 +304,10 @@ std::pair<int, int> calculateColumnPosition(const Line& line, float localX, floa
 }  // namespace
 
 Coordinates TextEditor::screenPosToCoordinates(const ImVec2& position) const {
+  if (wordWrapEnabled_ || focusPartitionActive_) {
+    return visualScreenPosToCoordinates(position);
+  }
+
   // Local coordinates relative to editor window
   const ImVec2 local{position.x - uiCursorPos_.x, position.y - uiCursorPos_.y};
 
@@ -327,6 +332,10 @@ Coordinates TextEditor::screenPosToCoordinates(const ImVec2& position) const {
 }
 
 Coordinates TextEditor::mousePosToCoordinates(const ImVec2& position) const {
+  if (wordWrapEnabled_ || focusPartitionActive_) {
+    return visualScreenPosToCoordinates(position);
+  }
+
   // Local coordinates relative to editor window
   const ImVec2 local{position.x - uiCursorPos_.x, position.y - uiCursorPos_.y};
 
@@ -601,7 +610,9 @@ void TextEditor::handleKeyboardInputs() {
 
         case ShortcutId::NewLine:
         case ShortcutId::Indent:
-        case ShortcutId::Unindent: additionalChecks = !autocompleteOpened_ && editorFocused; break;
+        case ShortcutId::Unindent:
+          additionalChecks = !autocompleteOpened_ && editorFocused && !io.KeySuper;
+          break;
 
         default: break;
       }
@@ -668,9 +679,17 @@ void TextEditor::handleMouseInputs() {
     functionDeclarationTooltip_ = false;
   }
 
+  if (click && tryExpandFocusHiddenPlaceholderAt(ImGui::GetMousePos())) {
+    lastClick_ = -1.0f;
+    return;
+  }
+
   // Triple click - select line
   if (tripleClick && !ctrl) {
     const auto clickCoords = screenPosToCoordinates(ImGui::GetMousePos());
+    const bool cursorChanged = state_.cursorPosition != clickCoords;
+    cursorPositionChanged_ = cursorPositionChanged_ || cursorChanged;
+    cursorPositionChangedByMouse_ = cursorPositionChangedByMouse_ || cursorChanged;
     state_.cursorPosition = interactiveStart_ = interactiveEnd_ = clickCoords;
     selectionMode_ = SelectionMode::Line;
     setSelection(interactiveStart_, interactiveEnd_, selectionMode_);
@@ -681,10 +700,16 @@ void TextEditor::handleMouseInputs() {
   // Double click - select word
   if (doubleClick && !ctrl) {
     const auto clickCoords = screenPosToCoordinates(ImGui::GetMousePos());
+    const bool cursorChanged = state_.cursorPosition != clickCoords;
+    cursorPositionChanged_ = cursorPositionChanged_ || cursorChanged;
+    cursorPositionChangedByMouse_ = cursorPositionChangedByMouse_ || cursorChanged;
     state_.cursorPosition = interactiveStart_ = interactiveEnd_ = clickCoords;
     selectionMode_ =
         (selectionMode_ == SelectionMode::Line) ? SelectionMode::Normal : SelectionMode::Word;
     setSelection(interactiveStart_, interactiveEnd_, selectionMode_);
+    const bool selectionEndChanged = state_.cursorPosition != state_.selectionEnd;
+    cursorPositionChanged_ = cursorPositionChanged_ || selectionEndChanged;
+    cursorPositionChangedByMouse_ = cursorPositionChangedByMouse_ || selectionEndChanged;
     state_.cursorPosition = state_.selectionEnd;
     lastClick_ = currentTime;
     return;
@@ -708,6 +733,9 @@ void TextEditor::handleMouseInputs() {
     const auto clickCoords = screenPosToCoordinates(mousePos);
 
     // Update cursor position immediately
+    const bool cursorChanged = state_.cursorPosition != clickCoords;
+    cursorPositionChanged_ = cursorPositionChanged_ || cursorChanged;
+    cursorPositionChangedByMouse_ = cursorPositionChangedByMouse_ || cursorChanged;
     state_.cursorPosition = clickCoords;
 
     if (!shift) {
@@ -730,6 +758,9 @@ void TextEditor::handleMouseInputs() {
 
     // Update selection end point to current mouse position
     auto mousePos = screenPosToCoordinates(ImGui::GetMousePos());
+    const bool cursorChanged = state_.cursorPosition != mousePos;
+    cursorPositionChanged_ = cursorPositionChanged_ || cursorChanged;
+    cursorPositionChangedByMouse_ = cursorPositionChangedByMouse_ || cursorChanged;
     state_.cursorPosition = interactiveEnd_ = mousePos;
 
     // Create selection from start to current point
@@ -756,6 +787,277 @@ void TextEditor::handleMouseInputs() {
   }
 }
 
+namespace {
+
+bool LineRangeContains(const std::vector<LineRange>& ranges, int lineNo) {
+  return std::ranges::any_of(ranges, [lineNo](const LineRange& range) {
+    return lineNo >= range.startLine && lineNo < range.endLine;
+  });
+}
+
+bool FocusPartitionsEqual(const FocusPartition& lhs, const FocusPartition& rhs) {
+  return lhs.fullColor == rhs.fullColor && lhs.referenceColor == rhs.referenceColor &&
+         lhs.dimmed == rhs.dimmed && lhs.hidden == rhs.hidden &&
+         lhs.referenceLinks == rhs.referenceLinks;
+}
+
+std::string LineToString(const Line& line) {
+  std::string result;
+  result.reserve(line.size());
+  for (const Glyph& glyph : line) {
+    result.push_back(glyph.character);
+  }
+  return result;
+}
+
+}  // namespace
+
+bool TextEditor::isLineHiddenByFocus(int lineNo) const {
+  return focusPartitionActive_ && LineRangeContains(focusPartition_.hidden, lineNo) &&
+         !isLineExpandedHiddenByFocus(lineNo);
+}
+
+bool TextEditor::isLineReferenceColoredByFocus(int lineNo) const {
+  return focusPartitionActive_ && LineRangeContains(focusPartition_.referenceColor, lineNo) &&
+         !LineRangeContains(focusPartition_.fullColor, lineNo);
+}
+
+bool TextEditor::isLineDimmedByFocus(int lineNo) const {
+  return focusPartitionActive_ &&
+         (LineRangeContains(focusPartition_.dimmed, lineNo) ||
+          isLineExpandedHiddenByFocus(lineNo)) &&
+         !LineRangeContains(focusPartition_.fullColor, lineNo) &&
+         !LineRangeContains(focusPartition_.referenceColor, lineNo);
+}
+
+bool TextEditor::isLineExpandedHiddenByFocus(int lineNo) const {
+  return focusPartitionActive_ && LineRangeContains(expandedFocusHiddenRanges_, lineNo);
+}
+
+std::optional<LineRange> TextEditor::focusHiddenRangeForLine(int lineNo) const {
+  if (!focusPartitionActive_) {
+    return std::nullopt;
+  }
+
+  const auto it = std::ranges::find_if(focusPartition_.hidden, [lineNo](const LineRange& range) {
+    return lineNo >= range.startLine && lineNo < range.endLine;
+  });
+  if (it == focusPartition_.hidden.end()) {
+    return std::nullopt;
+  }
+
+  return *it;
+}
+
+bool TextEditor::isFocusHiddenRangeExpanded(LineRange range) const {
+  return std::ranges::find(expandedFocusHiddenRanges_, range) != expandedFocusHiddenRanges_.end();
+}
+
+void TextEditor::expandFocusHiddenRange(LineRange range) {
+  if (range.endLine <= range.startLine || isFocusHiddenRangeExpanded(range)) {
+    return;
+  }
+
+  expandedFocusHiddenRanges_.push_back(range);
+  visualLayoutMaxColumns_ = 0;
+}
+
+bool TextEditor::tryExpandFocusHiddenPlaceholderAt(const ImVec2& position) {
+  if (!focusPartitionActive_ || visualLines_.empty()) {
+    return false;
+  }
+
+  const ImVec2 local{position.x - uiCursorPos_.x, position.y - uiCursorPos_.y};
+  const int visualIndex = static_cast<int>(std::floor(local.y / charAdvance_.y));
+  if (visualIndex < 0 || visualIndex >= static_cast<int>(visualLines_.size())) {
+    return false;
+  }
+
+  const VisualLine& visualLine = visualLines_[visualIndex];
+  if (!visualLine.focusHiddenPlaceholder) {
+    return false;
+  }
+
+  expandFocusHiddenRange(visualLine.hiddenRange);
+  return true;
+}
+
+void TextEditor::updateHoveredTextPosition() {
+  hoveredTextPosition_.reset();
+  if (!ImGui::IsWindowHovered() || ImGui::IsMouseDown(ImGuiMouseButton_Left) ||
+      ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+    return;
+  }
+
+  const ImVec2 mousePos = ImGui::GetMousePos();
+  const ImVec2 local{mousePos.x - uiCursorPos_.x, mousePos.y - uiCursorPos_.y};
+  if (local.x < textStart_ || local.y < 0.0f || charAdvance_.x <= 0.0f || charAdvance_.y <= 0.0f) {
+    return;
+  }
+
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    const int visualIndex = static_cast<int>(std::floor(local.y / charAdvance_.y));
+    if (visualIndex < 0 || visualIndex >= static_cast<int>(visualLines_.size()) ||
+        visualLines_[visualIndex].focusHiddenPlaceholder) {
+      return;
+    }
+  } else {
+    const int lineNo = static_cast<int>(std::floor(local.y / charAdvance_.y));
+    if (lineNo < 0 || lineNo >= text_.getTotalLines()) {
+      return;
+    }
+  }
+
+  hoveredTextPosition_ = screenPosToCoordinates(mousePos);
+}
+
+void TextEditor::rebuildVisualLines(const ImVec2& contentSize) {
+  const int maxColumns =
+      std::max(12, static_cast<int>((contentSize.x - textStart_ - 12.0f) / charAdvance_.x));
+  if (visualLayoutMaxColumns_ == maxColumns && !visualLines_.empty()) {
+    return;
+  }
+
+  visualLayoutMaxColumns_ = maxColumns;
+  visualLines_.clear();
+  for (int lineNo = 0; lineNo < text_.getTotalLines(); ++lineNo) {
+    if (std::optional<LineRange> hiddenRange = focusHiddenRangeForLine(lineNo)) {
+      if (!isFocusHiddenRangeExpanded(*hiddenRange)) {
+        visualLines_.push_back(VisualLine{
+            .lineNo = hiddenRange->startLine,
+            .focusHiddenPlaceholder = true,
+            .hiddenRange = *hiddenRange,
+        });
+        lineNo = hiddenRange->endLine - 1;
+        continue;
+      }
+    }
+
+    if (isLineHiddenByFocus(lineNo)) {
+      continue;
+    }
+
+    const Line& line = text_.getLineGlyphs(lineNo);
+    const std::string lineText = LineToString(line);
+    std::vector<SoftWrapSegment> segments = wordWrapEnabled_
+                                                ? ComputeSoftWrapSegments(lineText, maxColumns)
+                                                : std::vector<SoftWrapSegment>{SoftWrapSegment{
+                                                      .startColumn = 0,
+                                                      .endColumn = text_.getLineMaxColumn(lineNo),
+                                                  }};
+    for (const SoftWrapSegment& segment : segments) {
+      visualLines_.push_back(VisualLine{
+          .lineNo = lineNo,
+          .startColumn = segment.startColumn,
+          .endColumn = segment.endColumn,
+          .indentColumns = segment.indentColumns,
+          .continuation = segment.continuation,
+      });
+    }
+  }
+
+  if (visualLines_.empty()) {
+    visualLines_.push_back(VisualLine{});
+  }
+}
+
+int TextEditor::visualLineIndexForCoordinates(const Coordinates& position) const {
+  if (visualLines_.empty()) {
+    return std::max(0, position.line);
+  }
+
+  int fallback = 0;
+  for (int i = 0; i < static_cast<int>(visualLines_.size()); ++i) {
+    const VisualLine& visualLine = visualLines_[i];
+    if (visualLine.lineNo < position.line) {
+      fallback = i;
+      continue;
+    }
+    if (visualLine.lineNo > position.line) {
+      return fallback;
+    }
+    if (position.column >= visualLine.startColumn && position.column <= visualLine.endColumn) {
+      return i;
+    }
+    fallback = i;
+  }
+  return fallback;
+}
+
+Coordinates TextEditor::visualScreenPosToCoordinates(const ImVec2& position) const {
+  if (visualLines_.empty()) {
+    return sanitizeCoordinates(Coordinates(0, 0));
+  }
+
+  const ImVec2 local{position.x - uiCursorPos_.x, position.y - uiCursorPos_.y};
+  const int visualIndex = std::clamp(static_cast<int>(std::floor(local.y / charAdvance_.y)), 0,
+                                     static_cast<int>(visualLines_.size()) - 1);
+  const VisualLine& visualLine = visualLines_[visualIndex];
+  const float visualTextStart =
+      textStart_ + static_cast<float>(visualLine.indentColumns) * charAdvance_.x;
+  const float localX = local.x - visualTextStart;
+  const int columnOffset = std::max(0, static_cast<int>(std::round(localX / charAdvance_.x)));
+  const int column = std::clamp(visualLine.startColumn + columnOffset, visualLine.startColumn,
+                                std::max(visualLine.startColumn, visualLine.endColumn));
+  return sanitizeCoordinates(Coordinates(visualLine.lineNo, column));
+}
+
+Coordinates TextEditor::visibleSelectionEndCoordinates() const {
+  Coordinates end = state_.selectionEnd;
+  if (!hasSelection()) {
+    return end;
+  }
+
+  if (end.column > 0) {
+    return Coordinates(end.line, end.column - 1);
+  }
+
+  if (end.line > state_.selectionStart.line) {
+    const int previousLine = end.line - 1;
+    return Coordinates(previousLine, text_.getLineMaxColumn(previousLine));
+  }
+
+  return end;
+}
+
+float TextEditor::visibleTextRegionHeight() const {
+  if (scrollViewportHeight_ > 0.0f) {
+    return scrollViewportHeight_;
+  }
+  return ImGui::GetWindowHeight();
+}
+
+void TextEditor::scrollCoordinatesRangeIntoView(const Coordinates& start, const Coordinates& end) {
+  if (!withinRender_) {
+    return;
+  }
+
+  const float scrollY = ImGui::GetScrollY();
+  const float height = visibleTextRegionHeight();
+
+  int firstLine = std::min(start.line, end.line);
+  int lastLine = std::max(start.line, end.line);
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    firstLine = std::min(visualLineIndexForCoordinates(start), visualLineIndexForCoordinates(end));
+    lastLine = std::max(visualLineIndexForCoordinates(start), visualLineIndexForCoordinates(end));
+  }
+
+  const int firstVisible = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+  const int visibleLineCount = std::max(1, static_cast<int>(std::floor(height / charAdvance_.y)));
+  const int lastVisible = firstVisible + visibleLineCount - 1;
+  const int selectedLineCount = lastLine - firstLine + 1;
+
+  if (selectedLineCount > visibleLineCount || firstLine < firstVisible) {
+    ImGui::SetScrollY(std::max(0.0f, static_cast<float>(firstLine) * charAdvance_.y));
+    return;
+  }
+
+  if (lastLine > lastVisible) {
+    const int targetFirstLine = lastLine - visibleLineCount + 1;
+    ImGui::SetScrollY(std::max(0.0f, static_cast<float>(targetFirstLine) * charAdvance_.y));
+  }
+}
+
 void TextEditor::renderInternal(std::string_view title) {
   calculateCharacterAdvance();
   updatePaletteAlpha();
@@ -763,9 +1065,13 @@ void TextEditor::renderInternal(std::string_view title) {
   UTILS_RELEASE_ASSERT(lineBuffer_.empty());
   focused_ = ImGui::IsWindowFocused() || findFocused_ || replaceFocused_;
 
+  const ImVec2 contentRegionMin = ImGui::GetWindowContentRegionMin();
   const auto contentSize = ImGui::GetWindowContentRegionMax();
+  contentRegionMax_ = contentSize;
+  scrollViewportHeight_ = std::max(0.0f, contentSize.y - contentRegionMin.y);
   auto* drawList = ImGui::GetWindowDrawList();
   float longestLine = textStart_;
+  tickSourceFlashes();
 
   if (scrollToTop_) {
     scrollToTop_ = false;
@@ -773,7 +1079,7 @@ void TextEditor::renderInternal(std::string_view title) {
   }
 
   const ImVec2 cursorScreenPos = uiCursorPos_ = ImGui::GetCursorScreenPos();
-  const float scrollX = ImGui::GetScrollX();
+  const float scrollX = lastScrollX_ = ImGui::GetScrollX();
   const float scrollY = lastScroll_ = ImGui::GetScrollY();
 
   // Calculate visible lines
@@ -783,17 +1089,36 @@ void TextEditor::renderInternal(std::string_view title) {
   int visibleLineMax = std::max(0, std::min(totalLines - 1, lineNo + pageSize));
 
   updateTextStart();
+  visualLayoutMaxColumns_ = 0;
+  rebuildVisualLines(contentSize);
   calculateFolds(lineNo, totalLines);
 
-  while (lineNo <= visibleLineMax) {
-    const ImVec2 lineStartPos{cursorScreenPos.x,
-                              cursorScreenPos.y + (lineNo - foldedLines_) * charAdvance_.y};
-    const ImVec2 textPos{lineStartPos.x + textStart_, lineStartPos.y};
+  if (wordWrapEnabled_ || focusPartitionActive_) {
+    const int firstVisualLine = std::clamp(static_cast<int>(std::floor(scrollY / charAdvance_.y)),
+                                           0, static_cast<int>(visualLines_.size()) - 1);
+    const int lastVisualLine =
+        std::clamp(firstVisualLine + pageSize + 1, 0, static_cast<int>(visualLines_.size()) - 1);
+    for (int visualIndex = firstVisualLine; visualIndex <= lastVisualLine; ++visualIndex) {
+      const ImVec2 lineStartPos{cursorScreenPos.x,
+                                cursorScreenPos.y + visualIndex * charAdvance_.y};
+      const ImVec2 textPos{
+          lineStartPos.x + textStart_ + visualLines_[visualIndex].indentColumns * charAdvance_.x,
+          lineStartPos.y};
+      renderVisualLine(visualLines_[visualIndex], visualIndex, lineStartPos, textPos, contentSize,
+                       drawList, longestLine);
+    }
+  } else {
+    while (lineNo <= visibleLineMax) {
+      const ImVec2 lineStartPos{cursorScreenPos.x,
+                                cursorScreenPos.y + (lineNo - foldedLines_) * charAdvance_.y};
+      const ImVec2 textPos{lineStartPos.x + textStart_, lineStartPos.y};
 
-    renderLine(lineNo, lineStartPos, textPos, contentSize, scrollX, drawList, longestLine);
-    lineNo++;
+      renderLine(lineNo, lineStartPos, textPos, contentSize, scrollX, drawList, longestLine);
+      lineNo++;
+    }
   }
 
+  renderFocusReferenceLinks(drawList);
   renderExtraUI(drawList, cursorScreenPos, scrollX, scrollY, longestLine, contentSize);
   handleScrolling();
 }
@@ -808,24 +1133,46 @@ void TextEditor::handleScrolling() {
     return;
   }
 
+  if (scrollSelectionIntoView_ && hasSelection()) {
+    scrollCoordinatesRangeIntoView(state_.selectionStart, visibleSelectionEndCoordinates());
+    scrollSelectionIntoView_ = false;
+    scrollToCursor_ = false;
+    return;
+  }
+
   const float scrollX = ImGui::GetScrollX();
   const float scrollY = ImGui::GetScrollY();
-  const float height = ImGui::GetWindowHeight();
+  const float height = visibleTextRegionHeight();
   const float width = windowWidth_;
 
   const auto pos = getActualCursorCoordinates();
   const auto len = getTextDistanceToLineStart(pos);
 
-  const auto top = 1 + static_cast<int>(std::ceil(scrollY / charAdvance_.y));
-  const auto bottom = static_cast<int>(std::ceil((scrollY + height) / charAdvance_.y));
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    const int visualIndex = visualLineIndexForCoordinates(pos);
+    const int firstVisible = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+    const int lastVisible =
+        static_cast<int>(std::floor((scrollY + height - charAdvance_.y) / charAdvance_.y));
+    if (visualIndex < firstVisible) {
+      ImGui::SetScrollY(std::max(0.0f, visualIndex * charAdvance_.y));
+    } else if (visualIndex > lastVisible) {
+      ImGui::SetScrollY(std::max(0.0f, (visualIndex + 1) * charAdvance_.y - height));
+    }
+    scrollToCursor_ = false;
+    return;
+  }
+
+  const auto top = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+  const auto bottom =
+      static_cast<int>(std::floor((scrollY + height - charAdvance_.y) / charAdvance_.y));
   const auto left = static_cast<int>(std::ceil(scrollX / charAdvance_.x));
   const auto right = static_cast<int>(std::ceil((scrollX + width) / charAdvance_.x));
 
   if (pos.line < top) {
-    ImGui::SetScrollY(std::max(0.0f, (pos.line - 1) * charAdvance_.y));
+    ImGui::SetScrollY(std::max(0.0f, pos.line * charAdvance_.y));
   }
-  if (pos.line > bottom - 4) {
-    ImGui::SetScrollY(std::max(0.0f, (pos.line + 4) * charAdvance_.y - height));
+  if (pos.line > bottom) {
+    ImGui::SetScrollY(std::max(0.0f, (pos.line + 1) * charAdvance_.y - height));
   }
   if (pos.column < left) {
     ImGui::SetScrollX(std::max(0.0f, len + textStart_ - 11 * charAdvance_.x));
@@ -966,6 +1313,68 @@ void TextEditor::renderLine(int lineNo, const ImVec2& lineStart, const ImVec2& t
   }
 }
 
+void TextEditor::renderVisualLine(const VisualLine& visualLine, int visualLineIndex,
+                                  const ImVec2& lineStart, const ImVec2& textStart,
+                                  const ImVec2& contentSize, ImDrawList* drawList,
+                                  float& longestLine) {
+  if (visualLine.focusHiddenPlaceholder) {
+    renderFocusHiddenPlaceholder(visualLine, lineStart, contentSize, drawList, longestLine);
+    return;
+  }
+
+  if (visualLine.lineNo >= text_.getTotalLines()) {
+    return;
+  }
+
+  const Line& line = text_.getLineGlyphs(visualLine.lineNo);
+  const int visualColumns =
+      visualLine.indentColumns + std::max(0, visualLine.endColumn - visualLine.startColumn);
+  longestLine = std::max(textStart_ + visualColumns * charAdvance_.x, longestLine);
+
+  renderLineBackground(visualLine, lineStart, contentSize, drawList);
+
+  if (showLineNumbers_ && !visualLine.continuation) {
+    renderLineNumbers(visualLine.lineNo, lineStart, drawList);
+  }
+
+  if (hasSelection()) {
+    renderSelection(visualLine, line, lineStart, drawList);
+  }
+
+  renderText(visualLine, line, textStart, drawList);
+
+  if (state_.cursorPosition.line == visualLine.lineNo &&
+      visualLineIndex == visualLineIndexForCoordinates(state_.cursorPosition)) {
+    renderCursor(lineStart, drawList);
+  }
+}
+
+void TextEditor::renderFocusHiddenPlaceholder(const VisualLine& visualLine, const ImVec2& lineStart,
+                                              const ImVec2& contentSize, ImDrawList* drawList,
+                                              float& longestLine) {
+  const ImVec2 rowStart{lineStart.x + ImGui::GetScrollX(), lineStart.y};
+  const ImVec2 rowEnd{lineStart.x + contentSize.x + 2.0f * ImGui::GetScrollX(),
+                      lineStart.y + charAdvance_.y};
+  const bool hovered = ImGui::IsMouseHoveringRect(rowStart, rowEnd);
+  if (hovered) {
+    drawList->AddRectFilled(rowStart, rowEnd,
+                            palette_[static_cast<int>(ColorIndex::CurrentLineFillInactive)]);
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+  }
+
+  if (showLineNumbers_) {
+    const ImVec2 markerPos{lineStart.x + textStart_ - 3.0f * charAdvance_.x, lineStart.y};
+    drawList->AddText(markerPos, palette_[static_cast<int>(ColorIndex::LineNumber)], "...");
+  }
+
+  const ImU32 color = palette_[static_cast<int>(ColorIndex::Comment)];
+  const ImVec2 textPos{lineStart.x + textStart_, lineStart.y};
+  drawList->AddText(textPos, color, "...");
+  longestLine = std::max(longestLine, textStart_ + 3.0f * charAdvance_.x);
+
+  (void)visualLine;
+}
+
 void TextEditor::renderErrorTooltip(int line, const std::string& message) {
   ImGui::BeginTooltip();
   ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(
@@ -1024,6 +1433,227 @@ void TextEditor::renderLineBackground(int lineNo, const ImVec2& lineStart,
   }
 }
 
+void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2& lineStart,
+                                      const ImVec2& contentSize, ImDrawList* drawList) {
+  renderLineBackground(visualLine.lineNo, lineStart, contentSize, drawList);
+
+  const float textStartX =
+      lineStart.x + textStart_ + static_cast<float>(visualLine.indentColumns) * charAdvance_.x;
+
+  const auto drawSourceRange = [&](SourceByteRange byteRange, ImU32 color) {
+    const Coordinates rangeStart = getCoordinatesAtByteOffset(byteRange.start);
+    const Coordinates rangeEnd = getCoordinatesAtByteOffset(byteRange.end);
+    if (rangeEnd.line < visualLine.lineNo || rangeStart.line > visualLine.lineNo) {
+      return;
+    }
+
+    int startColumn = visualLine.startColumn;
+    int endColumn = visualLine.endColumn;
+    if (rangeStart.line == visualLine.lineNo) {
+      startColumn = std::max(startColumn, rangeStart.column);
+    }
+    if (rangeEnd.line == visualLine.lineNo) {
+      endColumn = std::min(endColumn, rangeEnd.column);
+    }
+    if (endColumn <= startColumn) {
+      return;
+    }
+
+    const ImVec2 start{textStartX + (startColumn - visualLine.startColumn) * charAdvance_.x,
+                       lineStart.y};
+    const ImVec2 end{textStartX + (endColumn - visualLine.startColumn) * charAdvance_.x,
+                     lineStart.y + charAdvance_.y};
+    drawList->AddRectFilled(start, end, color, 2.0f * uiScale_);
+  };
+
+  const ImU32 hoverColor = ImGui::ColorConvertFloat4ToU32(ImVec4(0.22f, 0.62f, 1.0f, 0.13f));
+  for (const SourceByteRange& range : hoverSourceRanges_) {
+    drawSourceRange(range, hoverColor);
+  }
+
+  const std::vector<ActiveFlash> flashes =
+      flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now());
+  for (const ActiveFlash& flash : flashes) {
+    const float alpha = std::clamp(0.18f + 0.32f * flash.intensity, 0.0f, 0.5f);
+    const ImU32 color = ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 0.78f, 0.16f, alpha));
+    drawSourceRange(flash.byteRange, color);
+  }
+}
+
+namespace {
+
+ImVec2 AddVec(const ImVec2& lhs, const ImVec2& rhs) {
+  return ImVec2(lhs.x + rhs.x, lhs.y + rhs.y);
+}
+
+ImVec2 SubVec(const ImVec2& lhs, const ImVec2& rhs) {
+  return ImVec2(lhs.x - rhs.x, lhs.y - rhs.y);
+}
+
+ImVec2 MulVec(const ImVec2& value, float scale) {
+  return ImVec2(value.x * scale, value.y * scale);
+}
+
+float VecLength(const ImVec2& value) {
+  return std::sqrt(value.x * value.x + value.y * value.y);
+}
+
+ImVec2 NormalizeVec(const ImVec2& value) {
+  const float length = VecLength(value);
+  return length > 0.001f ? MulVec(value, 1.0f / length) : ImVec2(0.0f, 0.0f);
+}
+
+void PathRoundedCorner(ImDrawList* drawList, const ImVec2& previous, const ImVec2& corner,
+                       const ImVec2& next, float radius) {
+  const float previousLength = VecLength(SubVec(previous, corner));
+  const float nextLength = VecLength(SubVec(next, corner));
+  const float cornerRadius = std::min({radius, previousLength * 0.5f, nextLength * 0.5f});
+  if (cornerRadius <= 0.5f) {
+    drawList->PathLineTo(corner);
+    return;
+  }
+
+  const ImVec2 before =
+      AddVec(corner, MulVec(NormalizeVec(SubVec(previous, corner)), cornerRadius));
+  const ImVec2 after = AddVec(corner, MulVec(NormalizeVec(SubVec(next, corner)), cornerRadius));
+  drawList->PathLineTo(before);
+  drawList->PathBezierQuadraticCurveTo(corner, after, 8);
+}
+
+void StrokeRoundedConnector(ImDrawList* drawList, const ImVec2& start, const ImVec2& bendA,
+                            const ImVec2& bendB, const ImVec2& end, ImU32 color, float thickness,
+                            float radius) {
+  drawList->PathLineTo(start);
+  PathRoundedCorner(drawList, start, bendA, bendB, radius);
+  PathRoundedCorner(drawList, bendA, bendB, end, radius);
+  drawList->PathLineTo(end);
+  drawList->PathStroke(color, ImDrawFlags_None, thickness);
+}
+
+void DrawArrowhead(ImDrawList* drawList, const ImVec2& tip, const ImVec2& direction, ImU32 color,
+                   float length, float halfWidth) {
+  const ImVec2 unitDirection = NormalizeVec(direction);
+  if (VecLength(unitDirection) <= 0.001f) {
+    return;
+  }
+
+  const ImVec2 normal(-unitDirection.y, unitDirection.x);
+  const ImVec2 base = SubVec(tip, MulVec(unitDirection, length));
+  drawList->AddTriangleFilled(tip, AddVec(base, MulVec(normal, halfWidth)),
+                              SubVec(base, MulVec(normal, halfWidth)), color);
+}
+
+std::uint32_t MixReferenceSeed(const FocusReferenceLink& link, int linkIndex) {
+  std::uint32_t seed = 0x9e3779b9u ^ static_cast<std::uint32_t>(linkIndex + 1);
+  const auto mix = [&seed](int value) {
+    seed ^= static_cast<std::uint32_t>(value) + 0x9e3779b9u + (seed << 6u) + (seed >> 2u);
+  };
+  mix(link.from.line);
+  mix(link.from.column);
+  mix(link.to.line);
+  mix(link.to.column);
+  return seed;
+}
+
+float UnitFromSeed(std::uint32_t seed) {
+  seed ^= seed >> 16u;
+  seed *= 0x7feb352du;
+  seed ^= seed >> 15u;
+  seed *= 0x846ca68bu;
+  seed ^= seed >> 16u;
+  return static_cast<float>(seed & 0xffffu) / static_cast<float>(0xffffu);
+}
+
+ImU32 PastelReferenceColor(const FocusReferenceLink& link, int linkIndex, float alpha) {
+  const std::uint32_t seed = MixReferenceSeed(link, linkIndex);
+  const float hue = UnitFromSeed(seed);
+  const float saturation = 0.30f + 0.10f * UnitFromSeed(seed ^ 0x68bc21ebu);
+  const float value = 0.90f + 0.08f * UnitFromSeed(seed ^ 0x02e5be93u);
+
+  float red = 0.0f;
+  float green = 0.0f;
+  float blue = 0.0f;
+  ImGui::ColorConvertHSVtoRGB(hue, saturation, value, red, green, blue);
+  return ImGui::ColorConvertFloat4ToU32(ImVec4(red, green, blue, std::clamp(alpha, 0.0f, 1.0f)));
+}
+
+float TextBaselineOffsetY() {
+  const ImFont* font = ImGui::GetFont();
+  if (font == nullptr || font->FontSize <= 0.0f) {
+    return ImGui::GetTextLineHeight();
+  }
+
+  return font->Ascent * (ImGui::GetFontSize() / font->FontSize);
+}
+
+}  // namespace
+
+std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusReferenceConnectorLayout(
+    const FocusReferenceLink& link, int linkIndex) const {
+  if (isLineHiddenByFocus(link.from.line) || isLineHiddenByFocus(link.to.line)) {
+    return std::nullopt;
+  }
+
+  FocusReferenceConnectorLayout layout;
+  const float baselineY = TextBaselineOffsetY();
+  layout.start = coordinatesToScreenPos(Coordinates(link.from.line, link.from.column));
+  layout.start.x += charAdvance_.x * 0.5f;
+  layout.start.y += baselineY;
+
+  layout.tip = coordinatesToScreenPos(Coordinates(link.to.line, link.to.column));
+  layout.tip.x -= 2.0f * uiScale_;
+  layout.tip.y += baselineY;
+
+  constexpr int kLaneCount = 5;
+  const int laneIndex = ((linkIndex % kLaneCount) + kLaneCount) % kLaneCount;
+  const float laneSpacing = std::max(2.0f * uiScale_, 0.35f * charAdvance_.x);
+  const float scrollbarReserve = std::max(ImGui::GetStyle().ScrollbarSize, 12.0f * uiScale_);
+  const float contentRightX =
+      uiCursorPos_.x +
+      (contentRegionMax_.x > 0.0f ? contentRegionMax_.x : std::max(windowWidth_, textStart_)) -
+      scrollbarReserve - 0.8f * charAdvance_.x;
+  const float endpointRightX = std::max(layout.start.x, layout.tip.x) + 1.5f * charAdvance_.x;
+  const float laneX =
+      std::max(contentRightX - static_cast<float>(laneIndex) * laneSpacing, endpointRightX);
+
+  layout.laneStart = ImVec2(laneX, layout.start.y);
+  layout.laneEnd = ImVec2(laneX, layout.tip.y);
+
+  const float selectionAlpha =
+      ImGui::ColorConvertU32ToFloat4(palette_[static_cast<int>(ColorIndex::Selection)]).w;
+  layout.color = PastelReferenceColor(link, linkIndex, selectionAlpha);
+  return layout;
+}
+
+void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
+  if (!focusPartitionActive_ || focusPartition_.referenceLinks.empty()) {
+    return;
+  }
+
+  const float thickness = 1.75f * uiScale_;
+  const float cornerRadius = 8.0f * uiScale_;
+  const float arrowLength = 8.0f * uiScale_;
+  const float arrowHalfWidth = 4.5f * uiScale_;
+
+  int visibleLinkIndex = 0;
+  for (const FocusReferenceLink& link : focusPartition_.referenceLinks) {
+    std::optional<FocusReferenceConnectorLayout> layout =
+        focusReferenceConnectorLayout(link, visibleLinkIndex);
+    if (!layout.has_value()) {
+      continue;
+    }
+
+    const ImVec2 endDirection = NormalizeVec(SubVec(layout->tip, layout->laneEnd));
+    const ImVec2 pathEnd = SubVec(layout->tip, MulVec(endDirection, arrowLength * 0.7f));
+
+    StrokeRoundedConnector(drawList, layout->start, layout->laneStart, layout->laneEnd, pathEnd,
+                           layout->color, thickness, cornerRadius);
+    DrawArrowhead(drawList, layout->tip, SubVec(layout->tip, layout->laneEnd), layout->color,
+                  arrowLength, arrowHalfWidth);
+    ++visibleLinkIndex;
+  }
+}
+
 void TextEditor::renderSelection(int lineNo, const Line& line, const ImVec2& lineStart,
                                  const ImVec2& contentSize, ImDrawList* drawList) {
   // If no selection, nothing to do
@@ -1064,9 +1694,103 @@ void TextEditor::renderSelection(int lineNo, const Line& line, const ImVec2& lin
   }
 }
 
+void TextEditor::renderSelection(const VisualLine& visualLine, const Line& line,
+                                 const ImVec2& lineStart, ImDrawList* drawList) {
+  if (!hasSelection()) {
+    return;
+  }
+
+  (void)line;
+  const auto& start = state_.selectionStart;
+  const auto& end = state_.selectionEnd;
+  if (end.line < visualLine.lineNo || start.line > visualLine.lineNo) {
+    return;
+  }
+
+  int selStartColumn = visualLine.startColumn;
+  int selEndColumn = visualLine.endColumn;
+  if (start.line == visualLine.lineNo) {
+    selStartColumn = std::max(selStartColumn, start.column);
+  }
+  if (end.line == visualLine.lineNo) {
+    selEndColumn = std::min(selEndColumn, end.column);
+  }
+  if (selEndColumn <= selStartColumn) {
+    return;
+  }
+
+  const float textStartX =
+      lineStart.x + textStart_ + static_cast<float>(visualLine.indentColumns) * charAdvance_.x;
+  const ImVec2 selStartPos(textStartX + (selStartColumn - visualLine.startColumn) * charAdvance_.x,
+                           lineStart.y);
+  const ImVec2 selEndPos(textStartX + (selEndColumn - visualLine.startColumn) * charAdvance_.x,
+                         lineStart.y + charAdvance_.y);
+  drawList->AddRectFilled(selStartPos, selEndPos,
+                          palette_[static_cast<int>(ColorIndex::Selection)]);
+}
+
 void TextEditor::setSelection(const Coordinates& start, const Coordinates& end,
                               SelectionMode mode) {
   core_.setSelection(start, end, mode);
+}
+
+void TextEditor::setFocusPartition(const FocusPartition& partition) {
+  if (!FocusPartitionsEqual(focusPartition_, partition)) {
+    expandedFocusHiddenRanges_.clear();
+  }
+
+  focusPartition_ = partition;
+  focusPartitionActive_ = !partition.empty();
+}
+
+bool TextEditor::setHoverSourceRanges(std::vector<SourceByteRange> ranges) {
+  const std::size_t bufferSize = getText().size();
+  for (SourceByteRange& range : ranges) {
+    range.start = std::min(range.start, bufferSize);
+    range.end = std::min(range.end, bufferSize);
+  }
+  std::erase_if(ranges, [](const SourceByteRange& range) { return range.end <= range.start; });
+  std::sort(ranges.begin(), ranges.end(),
+            [](const SourceByteRange& lhs, const SourceByteRange& rhs) {
+              return lhs.start != rhs.start ? lhs.start < rhs.start : lhs.end < rhs.end;
+            });
+  ranges.erase(std::unique(ranges.begin(), ranges.end()), ranges.end());
+
+  if (hoverSourceRanges_ == ranges) {
+    return false;
+  }
+
+  hoverSourceRanges_ = std::move(ranges);
+  return true;
+}
+
+bool TextEditor::isPositionInsideFocusRange(const Coordinates& position) const {
+  if (!focusPartitionActive_) {
+    return false;
+  }
+
+  const int lineNo = sanitizeCoordinates(position).line;
+  return LineRangeContains(focusPartition_.fullColor, lineNo) ||
+         LineRangeContains(focusPartition_.referenceColor, lineNo) ||
+         LineRangeContains(focusPartition_.dimmed, lineNo);
+}
+
+void TextEditor::clearFocusPartition() {
+  focusPartition_ = FocusPartition{};
+  focusPartitionActive_ = false;
+  expandedFocusHiddenRanges_.clear();
+}
+
+void TextEditor::flashSourceRange(SourceByteRange byteRange) {
+  flashDecorations_.flash(byteRange, FlashDecorations::Clock::now(), getText().size());
+}
+
+std::optional<float> TextEditor::nextFlashWakeSeconds() const {
+  return flashDecorations_.nextWakeSeconds(FlashDecorations::Clock::now());
+}
+
+void TextEditor::tickSourceFlashes() {
+  flashDecorations_.tick(FlashDecorations::Clock::now());
 }
 
 namespace {
@@ -1081,6 +1805,25 @@ void renderBufferedText(const std::string& buffer, ImVec2& offset, const ImVec2&
   auto textSize = ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f,
                                                   buffer.c_str(), nullptr, nullptr);
   offset.x += textSize.x;
+}
+
+ImU32 dimmedTextColor(ImU32 color) {
+  ImVec4 value = ImGui::ColorConvertU32ToFloat4(color);
+  const float gray = (value.x + value.y + value.z) / 3.0f;
+  value.x = gray * 0.75f;
+  value.y = gray * 0.75f;
+  value.z = gray * 0.75f;
+  value.w *= 0.62f;
+  return ImGui::ColorConvertFloat4ToU32(value);
+}
+
+ImU32 referenceTextColor(ImU32 color) {
+  ImVec4 value = ImGui::ColorConvertU32ToFloat4(color);
+  value.x *= 0.72f;
+  value.y *= 0.72f;
+  value.z *= 0.72f;
+  value.w *= 0.82f;
+  return ImGui::ColorConvertFloat4ToU32(value);
 }
 
 }  // namespace
@@ -1148,6 +1891,89 @@ void TextEditor::renderText(const Line& line, const ImVec2& pos, ImDrawList* dra
   }
 
   // Render any remaining buffered text
+  if (!lineBuffer_.empty()) {
+    renderBufferedText(lineBuffer_, offset, pos, drawList, prevColor);
+    lineBuffer_.clear();
+  }
+}
+
+void TextEditor::renderText(const VisualLine& visualLine, const Line& line, const ImVec2& pos,
+                            ImDrawList* drawList) {
+  const int startIndex =
+      text_.getCharacterIndex(Coordinates(visualLine.lineNo, visualLine.startColumn));
+  const int endIndex =
+      text_.getCharacterIndex(Coordinates(visualLine.lineNo, visualLine.endColumn));
+  const bool referenceColored = isLineReferenceColoredByFocus(visualLine.lineNo);
+  const bool dimmed = isLineDimmedByFocus(visualLine.lineNo);
+
+  ImU32 prevColor = palette_[static_cast<int>(ColorIndex::Default)];
+  ImVec2 offset;
+  lineBuffer_.clear();
+
+  const float spaceSize =
+      ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, " ").x;
+
+  for (int glyphIndex = startIndex;
+       glyphIndex < endIndex && glyphIndex < static_cast<int>(line.size());) {
+    const Glyph& glyph = line[glyphIndex];
+    ImU32 color = getGlyphColor(glyph);
+    if (referenceColored) {
+      color = referenceTextColor(color);
+    } else if (dimmed) {
+      color = dimmedTextColor(color);
+    }
+
+    if ((color != prevColor || glyph.character == '\t' || glyph.character == ' ') &&
+        !lineBuffer_.empty()) {
+      renderBufferedText(lineBuffer_, offset, pos, drawList, prevColor);
+      lineBuffer_.clear();
+    }
+    prevColor = color;
+
+    if (glyph.character == '\t') {
+      const float oldX = offset.x;
+      offset.x =
+          (1.0f + std::floor((1.0f + offset.x) / (static_cast<float>(tabSize_) * spaceSize))) *
+          (static_cast<float>(tabSize_) * spaceSize);
+      const float arrowX = pos.x + oldX + (offset.x - oldX) * 0.5f;
+      const float arrowY = pos.y + offset.y + ImGui::GetFontSize() * 0.2f;
+      ImU32 arrowColor = 0x99906060;
+      if (referenceColored) {
+        arrowColor = referenceTextColor(arrowColor);
+      } else if (dimmed) {
+        arrowColor = dimmedTextColor(arrowColor);
+      }
+      drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(arrowX, arrowY), arrowColor,
+                        "→");
+      ++glyphIndex;
+    } else if (glyph.character == ' ') {
+      const float centerX = pos.x + offset.x + spaceSize * 0.5f;
+      const float centerY = pos.y + offset.y + ImGui::GetFontSize() * 0.5f;
+      ImU32 dotColor = 0x99805050;
+      if (referenceColored) {
+        dotColor = referenceTextColor(dotColor);
+      } else if (dimmed) {
+        dotColor = dimmedTextColor(dotColor);
+      }
+      drawList->AddCircleFilled(ImVec2(centerX, centerY), 1.0f, dotColor, 4);
+      offset.x += spaceSize;
+      ++glyphIndex;
+    } else {
+      char buf[7];
+      int sequenceLength = Utf8::SequenceLength(glyph.character);
+      if (sequenceLength <= 0) {
+        sequenceLength = 1;
+      }
+      int charCount = 0;
+      while (charCount < sequenceLength && glyphIndex < endIndex &&
+             glyphIndex < static_cast<int>(line.size())) {
+        buf[charCount++] = line[glyphIndex++].character;
+      }
+      buf[charCount] = '\0';
+      lineBuffer_ += buf;
+    }
+  }
+
   if (!lineBuffer_.empty()) {
     renderBufferedText(lineBuffer_, offset, pos, drawList, prevColor);
     lineBuffer_.clear();
@@ -1328,7 +2154,13 @@ void TextEditor::renderCursor(const ImVec2& pos, ImDrawList* drawList) {
 
   // Calculate cursor dimensions
   const float cursorWidth = 1.0f;
-  const float x = pos.x + getTextDistanceToLineStart(state_.cursorPosition);
+  float x = pos.x + getTextDistanceToLineStart(state_.cursorPosition);
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    const int visualIndex = visualLineIndexForCoordinates(state_.cursorPosition);
+    const VisualLine& visualLine = visualLines_[visualIndex];
+    x = pos.x + static_cast<float>(visualLine.indentColumns) * charAdvance_.x +
+        std::max(0, state_.cursorPosition.column - visualLine.startColumn) * charAdvance_.x;
+  }
 
   // Draw cursor rectangle
   const ImVec2 cursorStart(x + textStart_,  // Account for margin
@@ -1343,23 +2175,47 @@ void TextEditor::renderCursor(const ImVec2& pos, ImDrawList* drawList) {
 
 namespace {
 
-void renderFunctionTooltip(const std::string& declaration, const ImVec2& position, float uiScale,
-                           ImDrawList* drawList) {
-  const float tooltipWidth = 350.0f * uiScale;
-  const float tooltipHeight = 50.0f * uiScale;
+std::string popupWindowName(std::string_view label) {
+  return std::string("TextEditor") + std::string(label) + "##" +
+         std::to_string(ImGui::GetID(label.data(), label.data() + label.size()));
+}
 
-  drawList->AddRectFilled(position, ImVec2(position.x + tooltipWidth, position.y + tooltipHeight),
-                          ImGui::GetColorU32(ImGuiCol_FrameBg));
+ImFont* popPushedEditorFont() {
+  ImGuiContext* context = ImGui::GetCurrentContext();
+  if (context == nullptr || context->FontStack.Size == 0) {
+    return nullptr;
+  }
 
   ImFont* font = ImGui::GetFont();
   ImGui::PopFont();
+  return font;
+}
+
+void pushEditorFontIfNeeded(ImFont* font) {
+  if (font != nullptr) {
+    ImGui::PushFont(font);
+  }
+}
+
+void renderFunctionTooltip(const std::string& declaration, const ImVec2& position, float uiScale) {
+  const float tooltipWidth = 350.0f * uiScale;
+  const float tooltipHeight = 50.0f * uiScale;
+
+  ImFont* font = popPushedEditorFont();
 
   ImGui::SetNextWindowPos(position, ImGuiCond_Always);
-  ImGui::BeginChild("##texteditor_functooltip", ImVec2(tooltipWidth, tooltipHeight), true);
-  ImGui::TextWrapped("%s", declaration.c_str());
-  ImGui::EndChild();
+  ImGui::SetNextWindowSize(ImVec2(tooltipWidth, tooltipHeight), ImGuiCond_Always);
+  const ImGuiWindowFlags flags =
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
+      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoInputs;
+  const std::string windowName = popupWindowName("FunctionTooltip");
+  if (ImGui::Begin(windowName.c_str(), nullptr, flags)) {
+    ImGui::TextWrapped("%s", declaration.c_str());
+  }
+  ImGui::End();
 
-  ImGui::PushFont(font);
+  pushEditorFontIfNeeded(font);
 }
 
 void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& suggestions,
@@ -1368,7 +2224,16 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
   const float popupHeight = 100.0f * uiScale;
 
   ImGui::SetNextWindowPos(position, ImGuiCond_Always);
-  ImGui::BeginChild("##texteditor_autocompl", ImVec2(popupWidth, popupHeight), true);
+  ImGui::SetNextWindowSize(ImVec2(popupWidth, popupHeight), ImGuiCond_Always);
+  const ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
+                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNavFocus;
+  const std::string windowName = popupWindowName("Autocomplete");
+  if (!ImGui::Begin(windowName.c_str(), nullptr, flags)) {
+    ImGui::End();
+    return;
+  }
 
   for (int i = 0; i < suggestions.size(); i++) {
     const bool isSelected = (i == selectedIndex);
@@ -1379,7 +2244,7 @@ void renderAutocomplete(const std::vector<std::pair<RcString, RcString>>& sugges
     }
   }
 
-  ImGui::EndChild();
+  ImGui::End();
 }
 
 }  // namespace
@@ -1391,7 +2256,7 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
     const ImVec2 tooltipPos = coordinatesToScreenPos(functionDeclarationCoord_);
     const ImVec2 adjustedPos(tooltipPos.x + ImGui::GetScrollX(), tooltipPos.y + charAdvance_.y);
 
-    renderFunctionTooltip(functionDeclaration_, adjustedPos, uiScale_, drawList);
+    renderFunctionTooltip(functionDeclaration_, adjustedPos, uiScale_);
 
     ImGui::SetWindowFocus();
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
@@ -1406,15 +2271,11 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
     acPos.y += charAdvance_.y;
     acPos.x += ImGui::GetScrollX();
 
-    drawList->AddRectFilled(acPos, ImVec2(acPos.x + 150.0f * uiScale_, acPos.y + 100.0f * uiScale_),
-                            ImGui::GetColorU32(ImGuiCol_FrameBg));
-
-    ImFont* font = ImGui::GetFont();
-    ImGui::PopFont();
+    ImFont* font = popPushedEditorFont();
 
     renderAutocomplete(autocompleteSuggestions_, autocompleteIndex_, acPos, uiScale_);
 
-    ImGui::PushFont(font);
+    pushEditorFontIfNeeded(font);
 
     ImGui::SetWindowFocus();
     if (ImGui::IsKeyPressed(ImGui::GetKeyIndex(ImGuiKey_Escape))) {
@@ -1424,12 +2285,19 @@ void TextEditor::renderExtraUI(ImDrawList* drawList, const ImVec2& basePos, floa
   }
 
   // Add padding at the bottom of the editor
-  ImGui::Dummy(
-      ImVec2(longest + 100.0f * uiScale_, (text_.getTotalLines() - foldedLines_) * charAdvance_.y));
+  const int visualLineCount = (wordWrapEnabled_ || focusPartitionActive_)
+                                  ? static_cast<int>(visualLines_.size())
+                                  : text_.getTotalLines() - foldedLines_;
+  ImGui::Dummy(ImVec2(longest + 100.0f * uiScale_, visualLineCount * charAdvance_.y));
 
   // Handle cursor visibility
   if (scrollToCursor_) {
-    ensureCursorVisible();
+    if (scrollSelectionIntoView_ && hasSelection()) {
+      scrollCoordinatesRangeIntoView(state_.selectionStart, visibleSelectionEndCoordinates());
+      scrollSelectionIntoView_ = false;
+    } else {
+      ensureCursorVisible();
+    }
     scrollToCursor_ = false;
   }
 
@@ -1783,8 +2651,18 @@ void TextEditor::buildSuggestions(bool* keepAutocompleteOpen) {
 
 ImVec2 TextEditor::coordinatesToScreenPos(const Coordinates& position) const {
   const ImVec2 origin = uiCursorPos_;
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    const int visualIndex = visualLineIndexForCoordinates(position);
+    const VisualLine& visualLine = visualLines_[visualIndex];
+    const int column = std::max(visualLine.startColumn, position.column);
+    return ImVec2(
+        origin.x + textStart_ +
+            (visualLine.indentColumns + column - visualLine.startColumn) * charAdvance_.x -
+            lastScrollX_,
+        origin.y + visualIndex * charAdvance_.y);
+  }
 
-  return ImVec2(origin.x + (textStart_ + position.column) * charAdvance_.x - ImGui::GetScrollX(),
+  return ImVec2(origin.x + (textStart_ + position.column) * charAdvance_.x - lastScrollX_,
                 origin.y + position.line * charAdvance_.y);
 }
 
@@ -1941,6 +2819,8 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
 
   withinRender_ = true;
   cursorPositionChanged_ = false;
+  cursorPositionChangedByMouse_ = false;
+  hoveredTextPosition_.reset();
 
   findOrigin_ = ImGui::GetCursorScreenPos();
   windowWidth_ = ImGui::GetWindowWidth();
@@ -1956,6 +2836,13 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
     }
     ImGui::BeginChild(title.data(), size, showBorder, flags);
   }
+
+  calculateCharacterAdvance();
+  updateTextStart();
+  uiCursorPos_ = ImGui::GetCursorScreenPos();
+  visualLayoutMaxColumns_ = 0;
+  rebuildVisualLines(ImGui::GetWindowContentRegionMax());
+  updateHoveredTextPosition();
 
   if (handleKeyboardInputs_) {
     handleKeyboardInputs();
@@ -2002,6 +2889,12 @@ void TextEditor::render(std::string_view title, const ImVec2& size, bool showBor
       if (ImGui::Selectable("Cut")) cut();
       if (ImGui::Selectable("Copy")) copy();
       if (ImGui::Selectable("Paste")) paste();
+    }
+    if (sourceFocusModeContextMenuVisible_) {
+      ImGui::Separator();
+      if (ImGui::MenuItem("Source Focus Mode", nullptr, sourceFocusModeContextMenuChecked_)) {
+        sourceFocusModeContextMenuToggleRequested_ = true;
+      }
     }
     ImGui::EndPopup();
   }
@@ -2107,7 +3000,13 @@ void TextEditor::setText(std::string_view text, bool preserveScroll) {
 
 void TextEditor::applyExternalSourceEdit(std::size_t offset, std::size_t removedLength,
                                          std::string_view replacement) {
+  const std::size_t currentSize = getText().size();
+  const std::size_t newSize = currentSize - removedLength + replacement.size();
+  flashDecorations_.applySourceEdit(offset, removedLength, replacement.size(), newSize);
   core_.applyExternalSourceEdit(offset, removedLength, replacement);
+  if (!replacement.empty()) {
+    flashSourceRange(SourceByteRange{.start = offset, .end = offset + replacement.size()});
+  }
 }
 
 void TextEditor::enterCharacter(ImWchar character, bool shift) {
@@ -2408,22 +3307,36 @@ void TextEditor::ensureCursorVisible() {
 
   const float scrollX = ImGui::GetScrollX();
   const float scrollY = ImGui::GetScrollY();
-  const float height = ImGui::GetWindowHeight();
+  const float height = visibleTextRegionHeight();
   const float width = windowWidth_;
 
   const auto pos = getActualCursorCoordinates();
   const auto len = getTextDistanceToLineStart(pos);
 
-  const auto top = 1 + static_cast<int>(std::ceil(scrollY / charAdvance_.y));
-  const auto bottom = static_cast<int>(std::ceil((scrollY + height) / charAdvance_.y));
+  if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+    const int visualIndex = visualLineIndexForCoordinates(pos);
+    const int firstVisible = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+    const int lastVisible =
+        static_cast<int>(std::floor((scrollY + height - charAdvance_.y) / charAdvance_.y));
+    if (visualIndex < firstVisible) {
+      ImGui::SetScrollY(std::max(0.0f, visualIndex * charAdvance_.y));
+    } else if (visualIndex > lastVisible) {
+      ImGui::SetScrollY(std::max(0.0f, (visualIndex + 1) * charAdvance_.y - height));
+    }
+    return;
+  }
+
+  const auto top = static_cast<int>(std::floor(scrollY / charAdvance_.y));
+  const auto bottom =
+      static_cast<int>(std::floor((scrollY + height - charAdvance_.y) / charAdvance_.y));
   const auto left = static_cast<int>(std::ceil(scrollX / charAdvance_.x));
   const auto right = static_cast<int>(std::ceil((scrollX + width) / charAdvance_.x));
 
   if (pos.line < top) {
-    ImGui::SetScrollY(std::max(0.0f, (pos.line - 1) * charAdvance_.y));
+    ImGui::SetScrollY(std::max(0.0f, pos.line * charAdvance_.y));
   }
-  if (pos.line > bottom - 4) {
-    ImGui::SetScrollY(std::max(0.0f, (pos.line + 4) * charAdvance_.y - height));
+  if (pos.line > bottom) {
+    ImGui::SetScrollY(std::max(0.0f, (pos.line + 1) * charAdvance_.y - height));
   }
   if (pos.column < left) {
     ImGui::SetScrollX(std::max(0.0f, len + textStart_ - 11 * charAdvance_.x));

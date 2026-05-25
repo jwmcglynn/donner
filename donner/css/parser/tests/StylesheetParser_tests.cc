@@ -36,6 +36,38 @@ TEST(StylesheetParser, WithRules) {
                   ElementsAre(DeclarationIs("name", ElementsAre(TokenIsIdent("value")))))));
 }
 
+TEST(StylesheetParser, SelectorRuleSourceRanges) {
+  constexpr std::string_view kCss =
+      "  rect.cls, [data-tone=\"warm\"] { fill: url(#paint); stroke: blue; }\n";
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  const Stylesheet sheet = StylesheetParser::Parse(kCss, disabled);
+  ASSERT_EQ(sheet.rules().size(), 1u);
+
+  const SelectorRule& rule = sheet.rules()[0];
+  ASSERT_TRUE(rule.ruleSourceRange.start.offset.has_value());
+  ASSERT_TRUE(rule.ruleSourceRange.end.offset.has_value());
+  EXPECT_EQ(kCss.substr(*rule.ruleSourceRange.start.offset,
+                        *rule.ruleSourceRange.end.offset - *rule.ruleSourceRange.start.offset),
+            R"(rect.cls, [data-tone="warm"] { fill: url(#paint); stroke: blue; })");
+
+  ASSERT_TRUE(rule.selectorSourceRange.start.offset.has_value());
+  ASSERT_TRUE(rule.selectorSourceRange.end.offset.has_value());
+  EXPECT_EQ(
+      kCss.substr(*rule.selectorSourceRange.start.offset,
+                  *rule.selectorSourceRange.end.offset - *rule.selectorSourceRange.start.offset),
+      R"(rect.cls, [data-tone="warm"])");
+
+  ASSERT_EQ(rule.selectorEntrySourceRanges.size(), 2u);
+  EXPECT_EQ(kCss.substr(*rule.selectorEntrySourceRanges[0].start.offset,
+                        *rule.selectorEntrySourceRanges[0].end.offset -
+                            *rule.selectorEntrySourceRanges[0].start.offset),
+            "rect.cls");
+  EXPECT_EQ(kCss.substr(*rule.selectorEntrySourceRanges[1].start.offset,
+                        *rule.selectorEntrySourceRanges[1].end.offset -
+                            *rule.selectorEntrySourceRanges[1].start.offset),
+            R"([data-tone="warm"])");
+}
+
 TEST(StylesheetParser, FontFace) {
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   Stylesheet sheet = StylesheetParser::Parse(R"(

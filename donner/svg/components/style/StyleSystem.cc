@@ -130,6 +130,39 @@ private:
   Entity dataEntity_;
 };
 
+struct MatchedSelectorEntry {
+  std::size_t selectorEntryIndex = 0;
+  css::Specificity specificity;
+};
+
+std::optional<MatchedSelectorEntry> MatchSelectorRule(const css::SelectorRule& rule,
+                                                      const ShadowedElementAdapter& adapter) {
+  for (std::size_t i = 0; i < rule.selector.entries.size(); ++i) {
+    if (css::SelectorMatchResult match = rule.selector.entries[i].matches(
+            adapter, css::SelectorMatchOptions<ShadowedElementAdapter>());
+        match) {
+      return MatchedSelectorEntry{
+          .selectorEntryIndex = i,
+          .specificity = match.specificity,
+      };
+    }
+  }
+
+  return std::nullopt;
+}
+
+std::optional<std::size_t> ResolveOffset(const SourceRange& range, std::string_view source,
+                                         bool end) {
+  const FileOffset resolved = (end ? range.end : range.start).resolveOffset(source);
+  return resolved.offset;
+}
+
+bool LocalRangeContainsOffset(const SourceRange& range, std::size_t localOffset) {
+  const std::optional<std::size_t> start = ResolveOffset(range, std::string_view(), false);
+  const std::optional<std::size_t> end = ResolveOffset(range, std::string_view(), true);
+  return start.has_value() && end.has_value() && *start <= localOffset && localOffset < *end;
+}
+
 }  // namespace
 
 const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
@@ -185,10 +218,10 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     auto [stylesheet] = view.get(stylesheetEntity);
 
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
-      if (css::SelectorMatchResult match =
-              rule.selector.matches(ShadowedElementAdapter(registry, handle.entity(), dataEntity));
-          match) {
-        css::Specificity specificity = match.specificity;
+      if (std::optional<MatchedSelectorEntry> match = MatchSelectorRule(
+              rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity));
+          match.has_value()) {
+        css::Specificity specificity = match->specificity;
         if (stylesheet.isUserAgentStylesheet) {
           specificity = specificity.toUserAgentSpecificity();
         }
@@ -253,6 +286,117 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     }
     computedStyle.properties->resolveFontStretch(parentFontStretch);
   }
+}
+
+std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle handle) const {
+  Registry& registry = *handle.registry();
+
+  const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
+  const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
+
+  std::vector<MatchedStyleRule> result;
+  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+    const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
+
+    for (std::size_t ruleIndex = 0; ruleIndex < rules.size(); ++ruleIndex) {
+      const css::SelectorRule& rule = rules[ruleIndex];
+      std::optional<MatchedSelectorEntry> match =
+          MatchSelectorRule(rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity));
+      if (!match.has_value()) {
+        continue;
+      }
+
+      css::Specificity specificity = match->specificity;
+      if (stylesheet.isUserAgentStylesheet) {
+        specificity = specificity.toUserAgentSpecificity();
+      }
+
+      MatchedStyleRule matchedRule;
+      matchedRule.stylesheetEntity = stylesheetEntity;
+      matchedRule.ruleIndex = ruleIndex;
+      matchedRule.selectorEntryIndex = match->selectorEntryIndex;
+      matchedRule.specificity = specificity;
+      matchedRule.isUserAgentStylesheet = stylesheet.isUserAgentStylesheet;
+      matchedRule.ruleSourceRange = stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange);
+
+      if (match->selectorEntryIndex < rule.selectorEntrySourceRanges.size()) {
+        matchedRule.selectorSourceRange = stylesheet.sourceMap.mapToDocumentSource(
+            rule.selectorEntrySourceRanges[match->selectorEntryIndex]);
+      } else {
+        matchedRule.selectorSourceRange =
+            stylesheet.sourceMap.mapToDocumentSource(rule.selectorSourceRange);
+      }
+
+      for (const css::Declaration& declaration : rule.declarations) {
+        if (std::optional<SourceRange> sourceRange =
+                stylesheet.sourceMap.mapToDocumentSource(declaration.sourceRange)) {
+          matchedRule.declarationSourceRanges.push_back(*sourceRange);
+        }
+      }
+
+      result.push_back(std::move(matchedRule));
+    }
+  }
+
+  return result;
+}
+
+std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(
+    Registry& registry, std::size_t documentSourceOffset) const {
+  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+    if (stylesheet.isUserAgentStylesheet || stylesheet.sourceMap.empty()) {
+      continue;
+    }
+
+    std::optional<std::size_t> localOffset =
+        stylesheet.sourceMap.mapToLocalCssOffset(documentSourceOffset);
+    if (!localOffset.has_value()) {
+      continue;
+    }
+
+    const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
+    for (std::size_t ruleIndex = 0; ruleIndex < rules.size(); ++ruleIndex) {
+      const css::SelectorRule& rule = rules[ruleIndex];
+      if (!LocalRangeContainsOffset(rule.ruleSourceRange, *localOffset)) {
+        continue;
+      }
+
+      std::optional<SourceRange> ruleSourceRange =
+          stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange);
+      std::optional<SourceRange> selectorSourceRange =
+          stylesheet.sourceMap.mapToDocumentSource(rule.selectorSourceRange);
+      if (!ruleSourceRange.has_value() || !selectorSourceRange.has_value()) {
+        continue;
+      }
+
+      StyleRuleAtSourceOffset result;
+      result.stylesheetEntity = stylesheetEntity;
+      result.ruleIndex = ruleIndex;
+      result.ruleSourceRange = *ruleSourceRange;
+      result.selectorSourceRange = *selectorSourceRange;
+
+      for (std::size_t selectorEntryIndex = 0;
+           selectorEntryIndex < rule.selectorEntrySourceRanges.size(); ++selectorEntryIndex) {
+        if (!LocalRangeContainsOffset(rule.selectorEntrySourceRanges[selectorEntryIndex],
+                                      *localOffset)) {
+          continue;
+        }
+
+        result.selectorEntryIndex = selectorEntryIndex;
+        if (std::optional<SourceRange> entrySourceRange = stylesheet.sourceMap.mapToDocumentSource(
+                rule.selectorEntrySourceRanges[selectorEntryIndex])) {
+          result.selectorSourceRange = *entrySourceRange;
+        }
+        break;
+      }
+
+      return result;
+    }
+  }
+
+  return std::nullopt;
 }
 
 void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink) {

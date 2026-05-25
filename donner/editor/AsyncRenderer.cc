@@ -516,6 +516,7 @@ void AsyncRenderer::workerLoop() {
         RenderResult::CompositedTile tile;
         tile.kind = kind;
         tile.id = tileId;
+        tile.layerEntity = ct.layerEntity;
         tile.generation = ct.generation;
         tile.bitmapDimsPx = ct.bitmapDims;
         tile.rasterCanvasSize = canvasSize;

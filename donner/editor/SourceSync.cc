@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <optional>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "donner/base/FileOffset.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
 
 namespace donner::editor {
@@ -21,6 +24,101 @@ struct StructuredApplyResult {
   bool applied = false;
   bool needsDocumentReplace = false;
 };
+
+struct SelectionRemapTarget {
+  svg::SVGElement element;
+  AttributeWritebackTarget writebackTarget;
+};
+
+std::vector<SelectionRemapTarget> CaptureSelectionRemapTargets(const EditorApp& app) {
+  std::vector<SelectionRemapTarget> targets;
+  targets.reserve(app.selectedElements().size());
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    if (std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(element);
+        target.has_value()) {
+      targets.push_back(SelectionRemapTarget{
+          .element = element,
+          .writebackTarget = std::move(*target),
+      });
+    }
+  }
+
+  return targets;
+}
+
+bool DocumentContainsElement(svg::SVGDocument& document, const svg::SVGElement& target) {
+  std::vector<svg::SVGElement> stack;
+  stack.push_back(document.svgElement());
+  while (!stack.empty()) {
+    svg::SVGElement current = stack.back();
+    stack.pop_back();
+    if (current == target) {
+      return true;
+    }
+
+    for (std::optional<svg::SVGElement> child = current.firstChild(); child.has_value();
+         child = child->nextSibling()) {
+      stack.push_back(*child);
+    }
+  }
+
+  return false;
+}
+
+std::optional<svg::SVGElement> ResolveSelectionTargetById(svg::SVGDocument& document,
+                                                          const AttributeWritebackTarget& target) {
+  if (!target.elementId.has_value() || target.elementPath.empty()) {
+    return std::nullopt;
+  }
+
+  const auto targetTagName = target.elementPath.back().qualifiedName;
+  std::vector<svg::SVGElement> stack;
+  stack.push_back(document.svgElement());
+  while (!stack.empty()) {
+    svg::SVGElement current = stack.back();
+    stack.pop_back();
+    if (current.tagName() == targetTagName && current.id() == *target.elementId) {
+      return current;
+    }
+
+    for (std::optional<svg::SVGElement> child = current.firstChild(); child.has_value();
+         child = child->nextSibling()) {
+      stack.push_back(*child);
+    }
+  }
+
+  return std::nullopt;
+}
+
+void RemapSelectionAfterStructuredSourceEdit(EditorApp& app,
+                                             const std::vector<SelectionRemapTarget>& targets) {
+  if (targets.empty() && app.selectedElements().empty()) {
+    return;
+  }
+
+  std::vector<svg::SVGElement> remappedSelection;
+  remappedSelection.reserve(targets.size());
+  for (const SelectionRemapTarget& target : targets) {
+    svg::SVGDocument& document = app.document().document();
+    if (DocumentContainsElement(document, target.element)) {
+      remappedSelection.push_back(target.element);
+      continue;
+    }
+
+    std::optional<svg::SVGElement> element;
+    if (target.writebackTarget.elementId.has_value()) {
+      element = ResolveSelectionTargetById(document, target.writebackTarget);
+    } else {
+      element = resolveAttributeWritebackTarget(document, target.writebackTarget);
+    }
+
+    if (element.has_value()) {
+      remappedSelection.push_back(*element);
+    }
+  }
+
+  app.setSelection(std::move(remappedSelection));
+}
 
 std::optional<SourceTextEdit> BuildSingleSourceTextEdit(std::string_view oldSource,
                                                         std::string_view newSource) {
@@ -66,6 +164,8 @@ StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_v
     return {};
   }
 
+  const std::vector<SelectionRemapTarget> selectionTargets = CaptureSelectionRemapTargets(app);
+
   svg::SVGDocument& document = app.document().document();
   if (!document.hasSourceStore() || document.source() != previousSource) {
     return {};
@@ -80,6 +180,10 @@ StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_v
 
   if (!result.applied) {
     return {};
+  }
+
+  if (!result.diagnostic.has_value()) {
+    RemapSelectionAfterStructuredSourceEdit(app, selectionTargets);
   }
 
   return StructuredApplyResult{

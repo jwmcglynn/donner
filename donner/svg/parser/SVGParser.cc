@@ -13,6 +13,7 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/parser/AttributeParser.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
 
@@ -43,10 +44,26 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
     // Multiple Data/CData nodes can occur when whitespace text nodes are preserved
     // between or around CDATA sections.
     std::string combined;
+    components::StylesheetSourceMap sourceMap;
     for (auto child = node.firstChild(); child; child = child->nextSibling()) {
       if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
         if (auto value = child->value()) {
+          const std::size_t cssStartOffset = combined.size();
           combined += value.value();
+          const std::size_t cssEndOffset = combined.size();
+
+          std::optional<SourceRange> childValueLocation = child->getValueLocation();
+          if (!childValueLocation.has_value() && child->type() == XMLNode::Type::Data) {
+            childValueLocation = child->getNodeLocation();
+          }
+
+          if (childValueLocation.has_value() && childValueLocation->start.offset.has_value() &&
+              childValueLocation->end.offset.has_value() &&
+              *childValueLocation->end.offset >= *childValueLocation->start.offset &&
+              *childValueLocation->end.offset - *childValueLocation->start.offset ==
+                  value->size()) {
+            sourceMap.addSegment(cssStartOffset, cssEndOffset, childValueLocation->start);
+          }
         }
       } else {
         ParseDiagnostic err;
@@ -63,7 +80,9 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
       }
     }
     if (!combined.empty()) {
-      element.setContents(combined);
+      auto& stylesheetComponent =
+          element.entityHandle().get_or_emplace<components::StylesheetComponent>();
+      stylesheetComponent.parseStylesheet(std::string_view(combined), std::move(sourceMap));
     }
   }
 

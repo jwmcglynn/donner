@@ -78,8 +78,11 @@ head -1 /tmp/my_bug.donner-repro | jq
 
 ```json
 {
-  "v": 1,
+  "v": 3,
   "svg": "donner_splash.svg",
+  "svg_base": "donner_splash.svg",
+  "svg_hash": "fnv1a64:...",
+  "svg_src": "<svg>...</svg>",
   "wnd": [1600, 900],
   "scale": 2.0,
   "exp": 0,
@@ -143,6 +146,7 @@ Recording: attached `cls8_clip.donner-repro` (847 frames, ~14 sec).
 ```
 
 With the `.donner-repro` in hand, the maintainer can:
+
 - Inspect the event sequence to understand what you did.
 - (Once Stage 2 lands) replay it through the headless player for a
   reliable bisect target.
@@ -153,7 +157,8 @@ With the `.donner-repro` in hand, the maintainer can:
 See `ReproFile.h` for the data model. Compact summary:
 
 ```
-Line 1: {"v":1,"svg":"path.svg","wnd":[W,H],"scale":S,"exp":0|1,"at":"ISO8601"}
+Line 1: {"v":3,"svg":"path.svg","svg_base":"path.svg","svg_hash":"fnv1a64:...",
+         "svg_src":"<svg>...</svg>","wnd":[W,H],"scale":S,"exp":0|1,"at":"ISO8601"}
 Line N: {"f":N,"t":seconds,"dt":milliseconds,"mx":X,"my":Y,
          "btn":BUTTON_MASK,"mod":MODIFIER_MASK,"e":[Event, Event, ...]}
 ```
@@ -164,14 +169,14 @@ Line N: {"f":N,"t":seconds,"dt":milliseconds,"mx":X,"my":Y,
 
 **Event kinds** (tag in `k` field):
 
-| Kind | Fields | Notes |
-|------|--------|-------|
-| `mdown` / `mup` | `b` (button 0-4) | Edge of a bit in the frame's button mask |
-| `kdown` / `kup` | `key` (ImGuiKey int), `m` (modifier mask) | See the watchlist in `ReproRecorder.cc` |
-| `chr` | `c` (UTF-32 code point) | From `io.InputQueueCharacters` |
-| `wheel` | `dx`, `dy` (float) | Per-frame wheel delta when non-zero |
-| `resize` | `w`, `h` (int) | `ImGuiIO::DisplaySize` changed |
-| `focus` | `on` (0/1) | Window focus gained/lost |
+| Kind            | Fields                                    | Notes                                    |
+| --------------- | ----------------------------------------- | ---------------------------------------- |
+| `mdown` / `mup` | `b` (button 0-4)                          | Edge of a bit in the frame's button mask |
+| `kdown` / `kup` | `key` (ImGuiKey int), `m` (modifier mask) | See the watchlist in `ReproRecorder.cc`  |
+| `chr`           | `c` (UTF-32 code point)                   | From `io.InputQueueCharacters`           |
+| `wheel`         | `dx`, `dy` (float)                        | Per-frame wheel delta when non-zero      |
+| `resize`        | `w`, `h` (int)                            | `ImGuiIO::DisplaySize` changed           |
+| `focus`         | `on` (0/1)                                | Window focus gained/lost                 |
 
 The continuous signal (`mx, my, btn, mod`) is captured every frame;
 discrete events are emitted only on transitions. Replay logic can
@@ -181,23 +186,27 @@ discrete events as hints — the next frame's state wins regardless.
 ## What is and isn't recorded
 
 **IS recorded:**
+
 - Mouse position + button state, every frame
 - Mouse wheel deltas
 - Keyboard key transitions (for the curated watchlist — letters,
   digits, function keys, modifiers, nav, arrow keys, common symbols)
 - Character input (everything typed into an `InputText` widget)
 - Window resize / focus
-- Starting SVG path, window size, display scale, and legacy composited-mode flag
-  (new recordings default this to `false`)
+- Starting SVG path, original filename basename, embedded initial SVG
+  source, source content hash, window size, display scale, and legacy
+  composited-mode flag (new recordings default this to `false`)
 
 **IS NOT recorded:**
+
 - The actual rendered output. A `.donner-repro` is a script of your
   inputs, not a video of the editor's output. You need the golden
   PNG (Stage 2) to know what "correct output" should be.
-- File I/O. If your bug involves loading a different SVG mid-session
-  (File → Open), the new file path is recorded indirectly via the
-  dialog clicks, but the file contents aren't. Replay has to
-  resolve the same path on its end.
+- Mid-session file I/O. The initially opened SVG source is embedded
+  in new recordings for deterministic replay. If your bug involves
+  loading a different SVG mid-session (File → Open), the new file
+  path is recorded indirectly via the dialog clicks, but that later
+  file's contents aren't.
 - Clipboard state. Copy/paste operations are captured as key
   events, but the clipboard contents aren't.
 - System-level state (monitor DPI at record time, OS theme, fonts,

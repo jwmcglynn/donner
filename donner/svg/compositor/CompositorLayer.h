@@ -229,6 +229,17 @@ public:
   /// bitmap to its cached GL texture.
   [[nodiscard]] uint64_t generation() const { return generation_; }
 
+  /// Override the generation with a controller-supplied value. Per-object
+  /// `++generation_` resets to 1 whenever a fresh `CompositorLayer` is built
+  /// (e.g. after `resetAllLayers` on document replace). Because entity ids are
+  /// reused across a document swap, that fresh "1" can collide with the
+  /// generation the editor already cached for the *previous* document's layer
+  /// at the same entity id, suppressing the re-upload and leaving stale pixels
+  /// on screen. `CompositorController` calls this with a process-monotonic
+  /// counter (shared with static segments) so each rasterization is globally
+  /// unique. See `CompositorController::rasterizeLayer`.
+  void setGeneration(uint64_t generation) { generation_ = generation; }
+
   /// Cumulative number of times this layer's bitmap has been re-rasterized
   /// since construction. Increments with `generation_`, but is exposed as
   /// a separate counter so the editor's layer-inspector panel can show a

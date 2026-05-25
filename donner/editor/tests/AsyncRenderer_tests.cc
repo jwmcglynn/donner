@@ -40,6 +40,17 @@ bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
   return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
 }
 
+bool TileCoversDocPoint(const RenderResult::CompositedTile& tile, const Vector2d& point) {
+  if (tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
+    return false;
+  }
+
+  const Vector2d topLeft = tile.canvasOffsetDoc + tile.dragTranslationDoc;
+  const Vector2d bottomRight = topLeft + tile.bitmapDimsDoc;
+  return point.x >= topLeft.x && point.x < bottomRight.x && point.y >= topLeft.y &&
+         point.y < bottomRight.y;
+}
+
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotWhenTilesExist) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
       /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/true);
@@ -349,6 +360,223 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   }
   EXPECT_TRUE(sawAPending) << "M9 hysteresis must keep pending-demote A's layer tile in the "
                               "result so the editor can keep blitting it while the demote ages.";
+}
+
+TEST(AsyncRendererTest, DisplayNoneSelectionDropsStaleCompositedLayerImmediately) {
+  svg::SVGDocument document =
+      svg::instantiateSubtree(R"svg(
+    <rect id="under" x="0" y="0" width="64" height="64" fill="white" />
+    <rect id="target" x="20" y="0" width="16" height="16" fill="red" />
+  )svg",
+                              svg::parser::SVGParser::Options(), Vector2i(64, 64));
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) {
+        return result;
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    return std::nullopt;
+  };
+
+  {
+    RenderRequest request(renderer, document);
+    request.version = 1;
+    request.selectedEntity = targetEntity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = targetEntity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+  }
+
+  const std::optional<RenderResult> selected = waitForResult();
+  ASSERT_TRUE(selected.has_value());
+  ASSERT_TRUE(selected->compositedPreview.has_value());
+
+  const Vector2d targetCenter(28.0, 8.0);
+  bool sawSelectedLayerAtTarget = false;
+  for (const RenderResult::CompositedTile& tile : selected->compositedPreview->tiles) {
+    if (tile.kind == RenderResult::CompositedTile::Kind::Layer &&
+        TileCoversDocPoint(tile, targetCenter)) {
+      sawSelectedLayerAtTarget = true;
+      EXPECT_EQ(tile.layerEntity, targetEntity)
+          << "Promoted layer metadata must identify the selected entity so the render pane can "
+             "suppress stale pixels if the source edit changes it to display:none.";
+      break;
+    }
+  }
+  ASSERT_TRUE(sawSelectedLayerAtTarget)
+      << "The repro must start with the selected rect isolated into a composited layer.";
+
+  target->cast<svg::SVGGraphicsElement>().setStyle("display:none");
+
+  {
+    RenderRequest request(renderer, document);
+    request.version = 2;
+    request.selectedEntity = entt::null;
+    asyncRenderer.requestRender(request);
+  }
+
+  const std::optional<RenderResult> hidden = waitForResult();
+  ASSERT_TRUE(hidden.has_value());
+  ASSERT_TRUE(hidden->compositedPreview.has_value());
+
+  for (const RenderResult::CompositedTile& tile : hidden->compositedPreview->tiles) {
+    EXPECT_FALSE(tile.kind == RenderResult::CompositedTile::Kind::Layer &&
+                 TileCoversDocPoint(tile, targetCenter))
+        << "A display:none edit must drop the stale selected layer in the same worker result; "
+           "otherwise the editor keeps presenting the old texture until another canvas change.";
+  }
+}
+
+TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhenDragSwitches) {
+  svg::SVGDocument document =
+      svg::instantiateSubtree(R"svg(
+    <rect id="under" x="0" y="0" width="96" height="32" fill="white" />
+    <rect id="hidden-soon" x="8" y="8" width="16" height="16" fill="red" />
+    <rect id="next" x="40" y="8" width="16" height="16" fill="blue" />
+  )svg",
+                              svg::parser::SVGParser::Options(), Vector2i(96, 32));
+
+  auto hiddenSoon = document.querySelector("#hidden-soon");
+  auto next = document.querySelector("#next");
+  ASSERT_TRUE(hiddenSoon.has_value());
+  ASSERT_TRUE(next.has_value());
+  const Entity hiddenSoonEntity = hiddenSoon->entityHandle().entity();
+  const Entity nextEntity = next->entityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) {
+        return result;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return std::nullopt;
+  };
+  const auto pixelAt = [](const svg::RendererBitmap& bitmap, int x,
+                          int y) -> std::array<uint8_t, 4> {
+    const size_t offset = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
+    return {bitmap.pixels[offset + 0u], bitmap.pixels[offset + 1u], bitmap.pixels[offset + 2u],
+            bitmap.pixels[offset + 3u]};
+  };
+  const auto tilePixelAtDoc =
+      [&](const RenderResult::CompositedTile& tile,
+          const Vector2d& docPoint) -> std::optional<std::array<uint8_t, 4>> {
+    if (tile.bitmap.empty() || tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
+      return std::nullopt;
+    }
+    const Vector2d local = docPoint - tile.canvasOffsetDoc;
+    if (local.x < 0.0 || local.y < 0.0 || local.x >= tile.bitmapDimsDoc.x ||
+        local.y >= tile.bitmapDimsDoc.y) {
+      return std::nullopt;
+    }
+    const int x = std::clamp(
+        static_cast<int>(std::floor(local.x * static_cast<double>(tile.bitmap.dimensions.x) /
+                                    tile.bitmapDimsDoc.x)),
+        0, tile.bitmap.dimensions.x - 1);
+    const int y = std::clamp(
+        static_cast<int>(std::floor(local.y * static_cast<double>(tile.bitmap.dimensions.y) /
+                                    tile.bitmapDimsDoc.y)),
+        0, tile.bitmap.dimensions.y - 1);
+    return pixelAt(tile.bitmap, x, y);
+  };
+  const auto isRed = [](const std::array<uint8_t, 4>& pixel) {
+    return pixel[0] > 180 && pixel[1] < 80 && pixel[2] < 80;
+  };
+  const auto isBlue = [](const std::array<uint8_t, 4>& pixel) {
+    return pixel[0] < 80 && pixel[1] < 80 && pixel[2] > 180;
+  };
+  const auto isWhite = [](const std::array<uint8_t, 4>& pixel) {
+    return pixel[0] > 180 && pixel[1] > 180 && pixel[2] > 180;
+  };
+
+  {
+    RenderRequest request(renderer, document);
+    request.version = 1;
+    request.selectedEntity = hiddenSoonEntity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = hiddenSoonEntity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+  }
+  const std::optional<RenderResult> selected = waitForResult();
+  ASSERT_TRUE(selected.has_value());
+  ASSERT_TRUE(selected->compositedPreview.has_value());
+
+  hiddenSoon->cast<svg::SVGGraphicsElement>().setStyle("display:none");
+  {
+    RenderRequest request(renderer, document);
+    request.version = 2;
+    request.selectedEntity = entt::null;
+    asyncRenderer.requestRender(request);
+  }
+  const std::optional<RenderResult> hidden = waitForResult();
+  ASSERT_TRUE(hidden.has_value());
+  ASSERT_FALSE(hidden->bitmap.empty());
+  const std::array<uint8_t, 4> hiddenOldPixel = pixelAt(hidden->bitmap, 16, 16);
+  const std::array<uint8_t, 4> hiddenNextPixel = pixelAt(hidden->bitmap, 48, 16);
+  EXPECT_TRUE(isWhite(hiddenOldPixel))
+      << "The full-canvas frame after display:none must not retain the old promoted red pixels; "
+      << testing::PrintToString(hiddenOldPixel);
+  EXPECT_TRUE(isBlue(hiddenNextPixel))
+      << "Hiding the previous selection must not drop unrelated visible content; "
+      << testing::PrintToString(hiddenNextPixel);
+
+  {
+    RenderRequest request(renderer, document);
+    request.version = 3;
+    request.selectedEntity = nextEntity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = nextEntity,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+    asyncRenderer.requestRender(request);
+  }
+  const std::optional<RenderResult> draggingNext = waitForResult();
+  ASSERT_TRUE(draggingNext.has_value());
+  ASSERT_TRUE(draggingNext->compositedPreview.has_value());
+
+  bool sawNextLayer = false;
+  for (const RenderResult::CompositedTile& tile : draggingNext->compositedPreview->tiles) {
+    if (tile.kind == RenderResult::CompositedTile::Kind::Layer && tile.layerEntity == nextEntity) {
+      sawNextLayer = true;
+      continue;
+    }
+    if (tile.kind != RenderResult::CompositedTile::Kind::Segment) {
+      continue;
+    }
+    const std::optional<std::array<uint8_t, 4>> hiddenPixel =
+        tilePixelAtDoc(tile, Vector2d(16.0, 16.0));
+    if (hiddenPixel.has_value()) {
+      EXPECT_FALSE(isRed(*hiddenPixel))
+          << "A static segment must not keep pixels for a display:none element.";
+    }
+    const std::optional<std::array<uint8_t, 4>> nextPixel =
+        tilePixelAtDoc(tile, Vector2d(48.0, 16.0));
+    if (nextPixel.has_value()) {
+      EXPECT_FALSE(isBlue(*nextPixel))
+          << "A static segment must not also contain the active drag target; otherwise the "
+             "selected shape is drawn twice.";
+    }
+  }
+  EXPECT_TRUE(sawNextLayer) << "The repro must isolate #next as the active drag layer.";
 }
 
 // Design doc 0033 §M4 — async re-rasterization with cancellation. A
@@ -3066,6 +3294,160 @@ TEST(RenderCoordinatorTest, TearingDownWithInFlightRenderDoesNotCrashOnExit) {
 
   // Reaching the end of this test without a crash is the assertion.
   coordinator.reset();
+}
+
+TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPromotedTilePresentation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  RenderCoordinator coordinator;
+  EXPECT_TRUE(coordinator.suppressedCompositedLayerEntity(app) == entt::null);
+
+  target->setStyle("display:none");
+
+  EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), target->entityHandle().entity())
+      << "The live DOM has hidden the selected element, so stale promoted-layer pixels should not "
+         "be drawn even while selection chrome remains visible.";
+}
+
+TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPreReparseCachedLayer) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity oldTargetEntity = target->entityHandle().entity();
+  app.setSelection(*target);
+
+  RenderCoordinator coordinator;
+  coordinator.compositedPresentation().noteCachedTextures(oldTargetEntity, /*version=*/1,
+                                                          Vector2i(64, 64));
+
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="before" x="0" y="0" width="1" height="1" fill="blue"/>
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"
+            style="display:none"/>
+    </svg>
+  )svg"));
+  ASSERT_TRUE(app.flushFrame());
+
+  ASSERT_TRUE(app.selectedElement().has_value());
+  const Entity newTargetEntity = app.selectedElement()->entityHandle().entity();
+  ASSERT_NE(oldTargetEntity, newTargetEntity)
+      << "This regression covers source-reparse selection remap, where the stale texture still "
+         "belongs to the pre-reparse entity.";
+
+  EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), oldTargetEntity)
+      << "A display:none source edit after full reparse must suppress the cached pre-reparse "
+         "layer, "
+         "not just the remapped hidden selection entity.";
+}
+
+TEST(RenderCoordinatorTest, DisplayNoneSelectionKeepsPreReparseSuppressionAfterCacheDiscard) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity oldTargetEntity = target->entityHandle().entity();
+  app.setSelection(*target);
+
+  RenderCoordinator coordinator;
+  coordinator.compositedPresentation().noteCachedTextures(oldTargetEntity, /*version=*/1,
+                                                          Vector2i(64, 64));
+
+  app.applyMutation(EditorCommand::ReplaceDocumentCommand(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="before" x="0" y="0" width="1" height="1" fill="blue"/>
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"
+            style="display:none"/>
+    </svg>
+  )svg"));
+  ASSERT_TRUE(app.flushFrame());
+
+  ASSERT_EQ(coordinator.suppressedCompositedLayerEntity(app), oldTargetEntity);
+  ASSERT_TRUE(coordinator.compositedPresentation().discardCachedTexturesForEntity(oldTargetEntity));
+
+  EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), oldTargetEntity)
+      << "The presenter asks for suppression after maybeRequestRender has already discarded the "
+         "cached presentation state, so the coordinator must remember the pre-reparse layer entity "
+         "until the stale texture is replaced.";
+}
+
+TEST(RenderCoordinatorTest, DisplayNoneSuppressionSurvivesSelectingDifferentVisibleElement) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="hidden-soon" x="8" y="8" width="16" height="16" fill="red"/>
+      <rect id="next" x="32" y="8" width="16" height="16" fill="blue"/>
+    </svg>
+  )svg"));
+
+  auto hiddenSoon = app.document().document().querySelector("#hidden-soon");
+  auto next = app.document().document().querySelector("#next");
+  ASSERT_TRUE(hiddenSoon.has_value());
+  ASSERT_TRUE(next.has_value());
+  const Entity hiddenSoonEntity = hiddenSoon->entityHandle().entity();
+  app.setSelection(*hiddenSoon);
+
+  RenderCoordinator coordinator;
+  coordinator.compositedPresentation().noteCachedTextures(hiddenSoonEntity, /*version=*/1,
+                                                          Vector2i(64, 64));
+
+  hiddenSoon->setStyle("display:none");
+  ASSERT_EQ(coordinator.suppressedCompositedLayerEntity(app), hiddenSoonEntity);
+  ASSERT_TRUE(
+      coordinator.compositedPresentation().discardCachedTexturesForEntity(hiddenSoonEntity));
+
+  app.setSelection(*next);
+
+  EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), hiddenSoonEntity)
+      << "Changing selection before the replacement render lands must not let the stale "
+         "display:none elevated layer bleed back into the presenter.";
+}
+
+TEST(RenderCoordinatorTest, DisplayNoneSuppressionClearsWhenSameElementBecomesVisible) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->entityHandle().entity();
+  app.setSelection(*target);
+
+  RenderCoordinator coordinator;
+  coordinator.compositedPresentation().noteCachedTextures(targetEntity, /*version=*/1,
+                                                          Vector2i(64, 64));
+
+  target->setStyle("display:none");
+  ASSERT_EQ(coordinator.suppressedCompositedLayerEntity(app), targetEntity);
+
+  target->setStyle("");
+
+  EXPECT_TRUE(coordinator.suppressedCompositedLayerEntity(app) == entt::null)
+      << "Removing display:none from the same selected element should immediately allow its "
+         "cached layer to render again.";
 }
 
 TEST(RenderCoordinatorTest, ImmediateOverlayUploadBypassesDisplayedVersionGate) {

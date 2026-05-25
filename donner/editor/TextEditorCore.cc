@@ -80,6 +80,46 @@ bool matchesCommentEnd(std::string_view line, size_t index, std::string_view com
                     line.begin() + index + 1 - commentEnd.size());
 }
 
+enum class SourceEditBoundaryBias {
+  Before,
+  After,
+};
+
+std::size_t MapExternalSourceEditOffset(std::size_t point, std::size_t editStart,
+                                        std::size_t removedLength, std::size_t insertedLength,
+                                        SourceEditBoundaryBias bias) {
+  const std::size_t editEnd = editStart + removedLength;
+  if (point < editStart) {
+    return point;
+  }
+
+  if (removedLength == 0 && point == editStart) {
+    return bias == SourceEditBoundaryBias::After ? editStart + insertedLength : editStart;
+  }
+
+  if (point > editEnd) {
+    if (insertedLength >= removedLength) {
+      return point + (insertedLength - removedLength);
+    }
+    return point - (removedLength - insertedLength);
+  }
+
+  if (point == editStart && bias == SourceEditBoundaryBias::Before) {
+    return editStart;
+  }
+  return editStart + insertedLength;
+}
+
+SourceEditBoundaryBias SelectionEndpointBias(std::size_t point, std::size_t selectionStart,
+                                             std::size_t selectionEnd) {
+  if (selectionStart == selectionEnd) {
+    return SourceEditBoundaryBias::Before;
+  }
+
+  return point == std::max(selectionStart, selectionEnd) ? SourceEditBoundaryBias::After
+                                                         : SourceEditBoundaryBias::Before;
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -1179,6 +1219,7 @@ void TextEditorCore::moveUp(int amount, bool select) {
   state_.cursorPosition.line = std::max(0, state_.cursorPosition.line - amount);
 
   if (oldPos != state_.cursorPosition) {
+    cursorPositionChanged_ = true;
     if (select) {
       if (oldPos == interactiveStart_) {
         interactiveStart_ = state_.cursorPosition;
@@ -1205,6 +1246,7 @@ void TextEditorCore::moveDown(int amount, bool select) {
       std::max(0, std::min(text_.getTotalLines() - 1, state_.cursorPosition.line + amount));
 
   if (state_.cursorPosition != oldPos) {
+    cursorPositionChanged_ = true;
     if (select) {
       if (oldPos == interactiveEnd_) {
         interactiveEnd_ = state_.cursorPosition;
@@ -1237,6 +1279,10 @@ void TextEditorCore::moveLeft(int amount, bool select, bool /*wordMode*/) {
         state_.cursorPosition.column = text_.getLineMaxColumn(state_.cursorPosition.line);
       }
     }
+  }
+
+  if (state_.cursorPosition != oldPos) {
+    cursorPositionChanged_ = true;
   }
 
   if (select) {
@@ -1275,6 +1321,10 @@ void TextEditorCore::moveRight(int amount, bool select, bool /*wordMode*/) {
         state_.cursorPosition.column = 0;
       }
     }
+  }
+
+  if (state_.cursorPosition != oldPos) {
+    cursorPositionChanged_ = true;
   }
 
   if (select) {
@@ -1605,6 +1655,12 @@ void TextEditorCore::applyExternalSourceEdit(std::size_t offset, std::size_t rem
   UTILS_RELEASE_ASSERT(offset <= currentText.size());
   UTILS_RELEASE_ASSERT(removedLength <= currentText.size() - offset);
 
+  const std::size_t cursorOffset = text_.getByteOffset(sanitizeCoordinates(state_.cursorPosition));
+  const std::size_t selectionStartOffset =
+      text_.getByteOffset(sanitizeCoordinates(state_.selectionStart));
+  const std::size_t selectionEndOffset =
+      text_.getByteOffset(sanitizeCoordinates(state_.selectionEnd));
+
   const Coordinates editStart = text_.getCoordinatesAtByteOffset(offset);
   const Coordinates editEnd = text_.getCoordinatesAtByteOffset(offset + removedLength);
   deleteRange(editStart, editEnd);
@@ -1616,9 +1672,17 @@ void TextEditorCore::applyExternalSourceEdit(std::size_t offset, std::size_t rem
   }
 
   colorize(editStart.line - 1, insertedLines + 2);
-  state_.cursorPosition = sanitizeCoordinates(state_.cursorPosition);
-  state_.selectionStart = sanitizeCoordinates(state_.selectionStart);
-  state_.selectionEnd = sanitizeCoordinates(state_.selectionEnd);
+  const std::size_t insertedLength = replacement.size();
+  state_.cursorPosition = text_.getCoordinatesAtByteOffset(MapExternalSourceEditOffset(
+      cursorOffset, offset, removedLength, insertedLength, SourceEditBoundaryBias::Before));
+  state_.selectionStart = text_.getCoordinatesAtByteOffset(MapExternalSourceEditOffset(
+      selectionStartOffset, offset, removedLength, insertedLength,
+      SelectionEndpointBias(selectionStartOffset, selectionStartOffset, selectionEndOffset)));
+  state_.selectionEnd = text_.getCoordinatesAtByteOffset(MapExternalSourceEditOffset(
+      selectionEndOffset, offset, removedLength, insertedLength,
+      SelectionEndpointBias(selectionEndOffset, selectionStartOffset, selectionEndOffset)));
+  interactiveStart_ = state_.selectionStart;
+  interactiveEnd_ = state_.selectionEnd;
   cursorPositionChanged_ = true;
 
   textChanged_ = false;

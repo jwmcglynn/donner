@@ -83,6 +83,7 @@ def libc_compat_deps():
     """
     return select({
         "//build_defs:llvm_latest_linux": ["//third_party/libc_compat:libc_compat"],
+        "//build_defs:llvm_latest_macos": ["//third_party/libc_compat:libcxx_macos_compat"],
         "//conditions:default": [],
     })
 
@@ -561,10 +562,16 @@ def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
     # Build linkopts for fuzzer, including LLVM 21 workaround and runtime paths
     fuzzer_linkopts = ["-fsanitize=fuzzer"] + llvm21_macos_workaround_linkopts() + select({
         "@platforms//os:macos": [
-            # Add rpath for execroot (from bin directory to external/)
+            # Add rpaths for execroot (from bazel-out/.../bin/<package> to external/).
+            # Fuzzers live at different package depths, so include the depths used
+            # today rather than baking in //donner/editor/tests only.
+            "-Wl,-rpath,@loader_path/../../../../../external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
             "-Wl,-rpath,@loader_path/../../../../../../external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
-            # Add rpath for runfiles directory (without 'external/' prefix)
+            "-Wl,-rpath,@loader_path/../../../../../../../external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
+            # Add rpaths for runfiles directory (without 'external/' prefix).
+            "-Wl,-rpath,@loader_path/../../../toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
             "-Wl,-rpath,@loader_path/../../../../toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
+            "-Wl,-rpath,@loader_path/../../../../../toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin",
         ],
         "//conditions:default": [],
     })

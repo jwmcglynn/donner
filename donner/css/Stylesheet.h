@@ -25,6 +25,12 @@ namespace donner::css {
 struct SelectorRule {
   Selector selector;                      ///< Selector for this rule.
   std::vector<Declaration> declarations;  ///< Declarations for this rule.
+  SourceRange ruleSourceRange{FileOffset::Offset(0),
+                              FileOffset::Offset(0)};  ///< Rule range in local CSS source.
+  SourceRange selectorSourceRange{
+      FileOffset::Offset(0), FileOffset::Offset(0)};  ///< Full selector range in local CSS source.
+  std::vector<SourceRange>
+      selectorEntrySourceRanges;  ///< Per-entry selector ranges in local CSS source.
 
   /**
    * Output a human-readable representation of the delector to a stream.

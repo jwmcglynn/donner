@@ -79,14 +79,21 @@ struct SelectionChromeSnapshot {
     /// in document space lets chrome stroke width depend only on viewport
     /// scale, not on the selected element's own scale/rotation transform.
     Path pathDoc;
+    /// True when the selected element is hidden by `display:none`. The path outline still renders
+    /// as an editable placeholder, but uses a dimmer stroke than visible selections.
+    bool displayNone = false;
   };
   std::vector<PathItem> paths;
+  /// Transient source-hover path outlines. Drawn as soft hover chrome before selection chrome.
+  std::vector<PathItem> hoverPaths;
 
   /// Per-element AABBs in document space (from
   /// `SnapshotSelectionWorldBounds`). Drawn with `canvasFromDoc`
   /// applied at compose time so they line up with the rendered
   /// content for the same DOM frame.
   std::vector<Box2d> aabbsDoc;
+  /// Bounds for the transient source-hover elements.
+  std::vector<Box2d> hoverAabbsDoc;
 
   /// Optional marquee rectangle in document space.
   std::optional<Box2d> marqueeDoc;
@@ -107,6 +114,7 @@ struct SelectionChromeSnapshot {
   /// `canvasFromDoc` scale, pre-computed so the draw phase doesn't
   /// have to recompute anything that depends on registry state.
   double selectionStrokeWidthWorld = 0.0;
+  double hoverStrokeWidthWorld = 0.0;
   double marqueeStrokeWidthWorld = 0.0;
 };
 
@@ -157,7 +165,8 @@ public:
   static void drawChromeWithTransform(
       svg::Renderer& renderer, std::span<const svg::SVGElement> selection,
       const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc,
-      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt);
+      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt,
+      std::span<const svg::SVGElement> sourceHover = {});
 
   /// Back-compat overload without marquee. Kept for existing callers
   /// that don't need a marquee rect (older tests, worker-thread
@@ -178,7 +187,8 @@ public:
   [[nodiscard]] static SelectionChromeSnapshot captureChromeSnapshot(
       std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
       const Transform2d& canvasFromDoc,
-      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt);
+      const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt,
+      std::span<const svg::SVGElement> sourceHover = {});
 
   /// Race-free chrome rasterize: reads only the snapshot, never the
   /// registry. Safe to call while the async-renderer worker is

@@ -4,16 +4,22 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
+#include <span>
 #include <sstream>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include "GLFW/glfw3.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
+#include "donner/editor/FocusView.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/SourceSelection.h"
@@ -29,7 +35,11 @@ namespace donner::editor {
 
 namespace {
 
-constexpr float kSourcePaneWidth = 560.0f;
+constexpr float kMinSourcePaneWidth = 240.0f;
+constexpr float kMaxSourcePaneWidth = 900.0f;
+constexpr float kSourcePaneSplitterThickness = 6.0f;
+constexpr float kSourcePaneRevealHandleWidth = 10.0f;
+constexpr float kSourcePaneCollapseThreshold = kMinSourcePaneWidth;
 constexpr float kTreeViewHeightFraction = 0.33f;
 constexpr float kKeyboardZoomStep = 1.5f;
 constexpr float kRightPaneSplitterThickness = 6.0f;
@@ -42,6 +52,19 @@ constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
 constexpr int kMaxSaveSyncFlushPasses = 4;
+constexpr float kSelectionSizeChipPaddingX = 6.0f;
+constexpr float kSelectionSizeChipPaddingY = 3.0f;
+constexpr float kSelectionSizeChipRadius = 5.0f;
+constexpr float kSelectionSizeChipGapFromAabb = 4.0f;
+constexpr float kSelectionSizeChipMinFontSize = 13.0f;
+constexpr float kSelectionSizeChipFontStepDown = 2.0f;
+constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
+constexpr float kReferenceChipPaddingX = 8.0f;
+constexpr float kReferenceChipPaddingY = 5.0f;
+constexpr float kReferenceChipRadius = 6.0f;
+constexpr float kReferenceChipGapFromAabb = 30.0f;
+constexpr float kReferenceChipMinFontSize = 15.0f;
+constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
 
 ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
   if (intent.kind == SelectionTransformHandleKind::Rotate) {
@@ -61,6 +84,144 @@ ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIn
   return ImGuiMouseCursor_ResizeAll;
 }
 
+void SetImGuiOsCursorManagementEnabled(bool enabled) {
+  ImGuiIO& io = ImGui::GetIO();
+  if (enabled) {
+    io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+  } else {
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+  }
+}
+
+bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point) {
+  return point.x >= rect.topLeft.x && point.x <= rect.bottomRight.x && point.y >= rect.topLeft.y &&
+         point.y <= rect.bottomRight.y;
+}
+
+std::string SelectionSizeChipLabel(const Box2d& screenBounds) {
+  const int width = std::max(0, static_cast<int>(std::lround(std::abs(screenBounds.width()))));
+  const int height = std::max(0, static_cast<int>(std::lround(std::abs(screenBounds.height()))));
+  return std::to_string(width) + " x " + std::to_string(height);
+}
+
+std::string SelectionPositionChipLabel(const Box2d& documentBounds) {
+  const int x = static_cast<int>(std::lround(documentBounds.topLeft.x));
+  const int y = static_cast<int>(std::lround(documentBounds.topLeft.y));
+  return "(" + std::to_string(x) + ", " + std::to_string(y) + ")";
+}
+
+std::string SelectionAngleChipLabel(const Transform2d& documentFromStartDocument) {
+  double degrees =
+      std::atan2(documentFromStartDocument.data[1], documentFromStartDocument.data[0]) *
+      kRadiansToDegrees;
+  while (degrees <= -180.0) {
+    degrees += 360.0;
+  }
+  while (degrees > 180.0) {
+    degrees -= 360.0;
+  }
+  return std::to_string(static_cast<int>(std::lround(degrees))) + " deg";
+}
+
+float SelectionSizeChipFontSize() {
+  return std::max(kSelectionSizeChipMinFontSize,
+                  ImGui::GetFontSize() - kSelectionSizeChipFontStepDown);
+}
+
+ImFont* SelectionSizeChipFont(ImFont* uiFontBold) {
+  return uiFontBold != nullptr ? uiFontBold : ImGui::GetFont();
+}
+
+ImVec2 SelectionSizeChipTextSize(std::string_view label, ImFont* font) {
+  return font->CalcTextSizeA(SelectionSizeChipFontSize(), FLT_MAX, -1.0f, label.data(),
+                             label.data() + label.size());
+}
+
+Box2d TransformDocumentBox(const Box2d& box, const Transform2d& documentFromBoundsDocument) {
+  const std::array<Vector2d, 4> corners{
+      box.topLeft,
+      Vector2d(box.bottomRight.x, box.topLeft.y),
+      box.bottomRight,
+      Vector2d(box.topLeft.x, box.bottomRight.y),
+  };
+
+  Box2d transformed = Box2d::CreateEmpty(documentFromBoundsDocument.transformPosition(corners[0]));
+  for (const Vector2d& corner : corners) {
+    transformed.addPoint(documentFromBoundsDocument.transformPosition(corner));
+  }
+  return transformed;
+}
+
+float ClampSourcePaneWidthForWindow(float requestedWidth, float windowWidth) {
+  const float sourcePaneUpperBound = std::max(
+      0.0f, std::min(kMaxSourcePaneWidth, windowWidth - kMinRightPaneWidth - kMinRightPaneWidth));
+  const float sourcePaneLowerBound = std::min(kMinSourcePaneWidth, sourcePaneUpperBound);
+  return std::clamp(requestedWidth, sourcePaneLowerBound, sourcePaneUpperBound);
+}
+
+std::string ReferenceHighlightChipLabel(const ReferenceHighlightSummary& summary) {
+  std::vector<std::string> parts;
+  if (!summary.referencedElements.empty()) {
+    parts.push_back("-> " + std::to_string(summary.referencedElements.size()));
+  }
+  if (!summary.referencingElements.empty()) {
+    parts.push_back("<- " + std::to_string(summary.referencingElements.size()));
+  }
+
+  std::string label;
+  for (std::size_t i = 0; i < parts.size(); ++i) {
+    if (i != 0) {
+      label += "  ";
+    }
+    label += parts[i];
+  }
+  return label;
+}
+
+float ReferenceHighlightChipFontSize() {
+  return std::max(kReferenceChipMinFontSize, ImGui::GetFontSize());
+}
+
+ImVec2 ReferenceHighlightChipTextSize(std::string_view label) {
+  ImFont* font = ImGui::GetFont();
+  return font->CalcTextSizeA(ReferenceHighlightChipFontSize(), FLT_MAX, -1.0f, label.data(),
+                             label.data() + label.size());
+}
+
+void AddUniqueElements(std::vector<svg::SVGElement>* target,
+                       std::span<const svg::SVGElement> elements) {
+  for (const svg::SVGElement& element : elements) {
+    const Entity entity = element.entityHandle().entity();
+    const auto it = std::ranges::find_if(*target, [entity](const svg::SVGElement& existing) {
+      return existing.entityHandle().entity() == entity;
+    });
+    if (it == target->end()) {
+      target->push_back(element);
+    }
+  }
+}
+
+bool ContainsElement(std::span<const svg::SVGElement> elements, const svg::SVGElement& element) {
+  return std::ranges::find(elements, element) != elements.end();
+}
+
+std::string ElementContextMenuLabel(const svg::SVGElement& element) {
+  const std::string_view tagName = element.tagName().name;
+  std::string label = "<";
+  label.append(tagName.data(), tagName.size());
+  label.push_back('>');
+
+  const RcString id = element.id();
+  const std::string_view idSv = id;
+  if (!idSv.empty()) {
+    label.push_back(' ');
+    label.push_back('#');
+    label.append(idSv.data(), idSv.size());
+  }
+
+  return label;
+}
+
 std::optional<std::string> LoadFile(const std::string& filename) {
   std::ifstream file(filename, std::ios::binary);
   if (!file) {
@@ -69,6 +230,21 @@ std::optional<std::string> LoadFile(const std::string& filename) {
   std::ostringstream out;
   out << file.rdbuf();
   return std::move(out).str();
+}
+
+std::string InitialDocumentSyncSource(const EditorShellOptions& options) {
+  if (options.initialSource.has_value()) {
+    return *options.initialSource;
+  }
+  return LoadFile(options.svgPath).value_or("");
+}
+
+std::string CanonicalizeForTextEditor(std::string_view source) {
+  std::string result(source);
+  if (!result.empty() && result.back() == '\n') {
+    result.pop_back();
+  }
+  return result;
 }
 
 Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
@@ -94,7 +270,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       textures_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
-      documentSyncController_(LoadFile(options_.svgPath).value_or("")),
+      documentSyncController_(InitialDocumentSyncSource(options_)),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
       layerInspectorPanel_(window.geodeDevice()),
@@ -179,6 +355,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     repro::ReproRecorderOptions recorderOptions;
     recorderOptions.outputPath = *options_.reproOutputPath;
     recorderOptions.svgPath = options_.svgPath;
+    recorderOptions.svgSource = *initialSource;
     const auto winSize = window_.windowSize();
     recorderOptions.windowWidth = winSize.x;
     recorderOptions.windowHeight = winSize.y;
@@ -291,18 +468,36 @@ bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
   textEditor_.setText(*contents);
   textEditor_.resetTextChanged();
   const std::string canonicalSource = textEditor_.getText();
-  documentSyncController_.resetForLoadedDocument(canonicalSource);
   app_.setCurrentFilePath(std::string(path));
+  resetPresentationForLoadedDocument(canonicalSource);
+  return true;
+}
+
+void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalSource) {
+  documentSyncController_.resetForLoadedDocument(std::string(canonicalSource));
   app_.setCleanSourceText(canonicalSource);
-  lastHighlightedSelection_.reset();
+  lastHighlightedSelection_.clear();
+  lastTreeSelection_.reset();
+  textEditor_.clearFocusPartition();
   lastPostedScreenPoint_.reset();
+  preserveSourceEditFocusCursor_ = false;
+  sourceSelectionOriginatedInText_ = false;
+  sourceFocusOriginatedInStyle_ = false;
+  referenceHighlightActive_ = false;
+  referenceHighlightChipHovered_ = false;
+  referenceHighlightSummary_ = ReferenceHighlightSummary{};
+  lastReferenceHighlightSelection_.clear();
+  renderContextMenuDocumentPoint_.reset();
+  renderContextMenuHitElement_.reset();
+  renderContextMenuOpenRequested_ = false;
+  treeSelectionOriginatedInTree_ = false;
+  treeviewPendingScroll_ = false;
   renderCoordinator_.resetForLoadedDocument();
   textures_.resetComposited();
   textures_.clearOverlay();
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   dialogPresenter_.clearOpenFileError();
   dialogPresenter_.clearSaveFileError();
-  return true;
 }
 
 bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
@@ -378,6 +573,23 @@ void EditorShell::requestSave() {
   }
 }
 
+void EditorShell::requestRevert() {
+  if (!app_.hasDocument() || !app_.isDirty() || app_.cleanSourceText().empty()) {
+    return;
+  }
+
+  const std::string source(app_.cleanSourceText());
+  if (!app_.revertToCleanSource()) {
+    return;
+  }
+
+  textEditor_.setText(source);
+  textEditor_.resetTextChanged();
+  resetPresentationForLoadedDocument(textEditor_.getText());
+  updateWindowTitle();
+  window_.wakeEventLoop();
+}
+
 void EditorShell::updateWindowTitle() {
   std::string title;
   if (app_.isDirty()) {
@@ -400,7 +612,9 @@ void EditorShell::handleGlobalShortcuts() {
   const bool cmd = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
   const bool shift = ImGui::GetIO().KeyShift;
   const bool pressedZ = ImGui::IsKeyPressed(ImGuiKey_Z, /*repeat=*/false);
-  const bool sourcePaneFocused = textEditor_.isFocused();
+  const bool pressedEnter = ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/false) ||
+                            ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false);
+  const bool sourcePaneFocused = sourcePaneVisible_ && textEditor_.isFocused();
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
@@ -444,6 +658,10 @@ void EditorShell::handleGlobalShortcuts() {
     interactionController_.resetToActualSize();
   }
 
+  if (CanToggleSourceFocusModeFromShortcut(pressedEnter, cmd, anyPopupOpen)) {
+    toggleSourceFocusMode();
+  }
+
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
       app_.hasSelection()) {
     app_.setSelection(std::nullopt);
@@ -453,29 +671,37 @@ void EditorShell::handleGlobalShortcuts() {
                          ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
   if (CanDeleteSelectedElementsFromShortcut(deleteKey, app_.hasSelection(), anyPopupOpen,
                                             sourcePaneFocused)) {
-    const std::vector<svg::SVGElement> selected = app_.selectedElements();
-    app_.setSelection(std::nullopt);
-    for (const auto& element : selected) {
-      if (auto target = captureAttributeWritebackTarget(element); target.has_value()) {
-        app_.enqueueElementRemoveWriteback(EditorApp::CompletedElementRemoveWriteback{
-            .target = *target,
-        });
-      }
-      app_.applyMutation(EditorCommand::DeleteElementCommand(element));
-    }
+    std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
   }
 }
 
-void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, ImFont* codeFont) {
+void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float paneWidth,
+                                   ImFont* codeFont) {
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
   ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
-  ImGui::SetNextWindowSize(ImVec2(kSourcePaneWidth, paneHeight), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(paneWidth, paneHeight), ImGuiCond_Always);
   ImGui::Begin("Source", nullptr, kPaneFlags);
   ImGui::PushFont(codeFont);
+  textEditor_.setSourceFocusModeContextMenu(sourceFocusMode_);
   textEditor_.render("##source");
+  updateSourceHoverPreview();
+  if (textEditor_.takeSourceFocusModeContextMenuToggleRequest()) {
+    toggleSourceFocusMode();
+  }
+  syncSelectionFromSourceCursorIfNeeded();
   ImGui::PopFont();
+  const bool sourceEditShouldPreserveCursor =
+      textEditor_.isTextChanged() && sourceFocusMode_ && textEditor_.isCursorInsideFocusRange();
+  if (textEditor_.isTextChanged()) {
+    preserveSourceEditFocusCursor_ = sourceEditShouldPreserveCursor;
+  }
+  const std::vector<svg::SVGElement> selectionBeforeTextSync = app_.selectedElements();
   documentSyncController_.handleTextEdits(app_, textEditor_, ImGui::GetIO().DeltaTime);
+  if (sourceEditShouldPreserveCursor && app_.selectedElements() != selectionBeforeTextSync) {
+    sourceSelectionOriginatedInText_ = true;
+  }
+  updateSourceHoverPreview();
   ImGui::End();
 }
 
@@ -509,9 +735,18 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     viewportInitialized_ = true;
   }
 
+  refreshReferenceHighlightSummaryIfNeeded();
+  const std::string referenceChipLabel = ReferenceHighlightChipLabel(referenceHighlightSummary_);
+  const bool hideReferenceChip = selectTool_.activeTransformBoundsPreview().has_value();
+  const std::optional<Box2d> referenceChipRect =
+      hideReferenceChip ? std::nullopt : referenceHighlightChipScreenRect(referenceChipLabel);
+  const bool referenceChipHovered = referenceChipRect.has_value() &&
+                                    ContainsScreenPoint(*referenceChipRect, ImGui::GetMousePos());
+
   ImGui::InvisibleButton("##render_canvas", contentRegion,
                          ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonMiddle);
   const bool paneHovered = ImGui::IsItemHovered();
+  const bool canvasHovered = paneHovered && !referenceChipHovered;
   const Box2d paneRect = Box2d::FromXYWH(interactionController_.viewport().paneOrigin.x,
                                          interactionController_.viewport().paneOrigin.y,
                                          interactionController_.viewport().paneSize.x,
@@ -519,11 +754,43 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
   const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
-  interactionController_.updatePanState(paneHovered, spaceHeld, middleDown,
+  const auto setActiveRotateCursor =
+      [&](const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
+        if (!activeGesturePreview.has_value() ||
+            activeGesturePreview->kind != SelectTool::ActiveGestureKind::Rotate) {
+          return false;
+        }
+
+        if (rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)) {
+          SetImGuiOsCursorManagementEnabled(false);
+        } else {
+          rotateCursorSet_.clearIfActive();
+          SetImGuiOsCursorManagementEnabled(true);
+          ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+        }
+        return true;
+      };
+  const auto activeGesturePreviewBeforeInput = selectTool_.activeGesturePreview();
+  const bool rotateCursorLocked = setActiveRotateCursor(activeGesturePreviewBeforeInput);
+  interactionController_.updatePanState(canvasHovered, spaceHeld, middleDown,
                                         ImGui::IsMouseDown(ImGuiMouseButton_Left),
                                         ImGui::GetMousePos());
+  const bool showPanCursor =
+      !rotateCursorLocked &&
+      ShouldShowRenderPanePanCursor(canvasHovered, spaceHeld, interactionController_.panning());
+  if (showPanCursor) {
+    const PanCursorKind panCursorKind =
+        interactionController_.panning() ? PanCursorKind::ClosedHand : PanCursorKind::OpenHand;
+    if (rotateCursorSet_.setPanCursor(panCursorKind)) {
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      SetImGuiOsCursorManagementEnabled(true);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+  }
 
-  const bool modalCapturingInput = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
+  const bool modalCapturingInput =
+      referenceChipHovered || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   interactionController_.consumeScrollEvents(inputBridge_.events(), paneRect, modalCapturingInput,
                                              kWheelZoomStep, kTrackpadPanPixelsPerScrollUnit);
 
@@ -532,7 +799,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         Vector2d(screenPoint.x, screenPoint.y));
   };
 
-  const bool toolEligible = paneHovered && !interactionController_.panning() && !spaceHeld;
+  if (canvasHovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right, /*repeat=*/false)) {
+    openRenderPaneContextMenu(screenToDocument(ImGui::GetMousePos()));
+  }
+
+  const bool toolEligible = canvasHovered && !interactionController_.panning() && !spaceHeld;
   const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint) {
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     if (boundsCache.lastSelection != app_.selectedElements()) {
@@ -541,24 +812,28 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     return HitTestSelectionTransformHandles(boundsCache.displayedBoundsDoc, documentPoint,
                                             interactionController_.viewport().pixelsPerDocUnit());
   };
-  if (toolEligible && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-    const SelectionTransformHandleIntent hoverIntent =
-        cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
-    if (hoverIntent.kind != SelectionTransformHandleKind::None) {
-      if (hoverIntent.kind == SelectionTransformHandleKind::Rotate &&
-          rotateCursorSet_.setRotateCursor(hoverIntent.corner)) {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+  SelectionTransformHandleIntent hoverTransformIntent;
+  if (!rotateCursorLocked && toolEligible && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
+    if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
+      if (hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate &&
+          rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)) {
+        SetImGuiOsCursorManagementEnabled(false);
       } else {
         rotateCursorSet_.clearIfActive();
-        ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverIntent));
+        SetImGuiOsCursorManagementEnabled(true);
+        ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverTransformIntent));
       }
     } else {
       rotateCursorSet_.clearIfActive();
+      SetImGuiOsCursorManagementEnabled(true);
     }
-  } else if (!toolEligible) {
+  } else if (!rotateCursorLocked && !toolEligible && !showPanCursor) {
     rotateCursorSet_.clearIfActive();
+    SetImGuiOsCursorManagementEnabled(true);
   }
   if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+    preserveSourceEditFocusCursor_ = false;
     MouseModifiers modifiers;
     modifiers.shift = ImGui::GetIO().KeyShift;
     modifiers.option = ImGui::GetIO().KeyAlt;
@@ -692,6 +967,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
+  const auto activeGesturePreview = selectTool_.activeGesturePreview();
+  if (!setActiveRotateCursor(activeGesturePreview) && rotateCursorLocked) {
+    rotateCursorSet_.clearIfActive();
+    SetImGuiOsCursorManagementEnabled(true);
+  }
   const auto activeDragPreview =
       renderCoordinator_.compositedPresentation().activePreviewForPresentation(
           liveActiveDragPreview);
@@ -705,8 +985,13 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .displayedDragPreview = displayedDragPreview,
       .overlayDragPreview = renderCoordinator_.presentedOverlayDragPreview(),
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
+      .suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_),
+      .suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_),
   };
   renderPanePresenter_.render(paneState);
+  renderSelectionSizeChip(hoverTransformIntent, activeGesturePreview);
+  renderReferenceHighlightChip();
+  renderRenderPaneContextMenu();
 
   ImGui::End();
 }
@@ -740,6 +1025,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   sidebarPresenter_.renderTreeView(liveAppForClicks, treeState);
   treeviewPendingScroll_ = treeState.pendingScroll;
   if (treeState.selectionChangedInTree) {
+    preserveSourceEditFocusCursor_ = false;
     treeSelectionOriginatedInTree_ = true;
     treeviewPendingScroll_ = false;
   }
@@ -787,6 +1073,66 @@ void EditorShell::renderLayerPanelContents() {
   layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
                               viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
                               documentCanvas, fastPath);
+}
+
+void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
+                                           float sourcePaneWidth) {
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+  constexpr ImGuiWindowFlags kSplitterFlags =
+      ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
+      ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
+
+  if (sourcePaneVisible_ && sourcePaneWidth > 0.0f) {
+    const float splitterLeft = sourcePaneWidth - kSourcePaneSplitterThickness * 0.5f;
+    ImGui::SetNextWindowPos(ImVec2(splitterLeft, paneOriginY), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kSourcePaneSplitterThickness, paneHeight), ImGuiCond_Always);
+    ImGui::Begin("##source_pane_splitter", nullptr, kSplitterFlags);
+    ImGui::InvisibleButton("##source_pane_splitter_handle",
+                           ImVec2(kSourcePaneSplitterThickness, paneHeight));
+    if (ImGui::IsItemActive()) {
+      const float nextWidth = sourcePaneWidth + ImGui::GetIO().MouseDelta.x;
+      if (nextWidth < kSourcePaneCollapseThreshold) {
+        setSourcePaneVisible(false);
+      } else {
+        sourcePaneWidth_ = ClampSourcePaneWidthForWindow(nextWidth, windowWidth);
+        window_.wakeEventLoop();
+      }
+    }
+  } else {
+    ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kSourcePaneRevealHandleWidth, paneHeight), ImGuiCond_Always);
+    ImGui::Begin("##source_pane_reveal_handle", nullptr, kSplitterFlags);
+    ImGui::InvisibleButton("##source_pane_reveal_handle",
+                           ImVec2(kSourcePaneRevealHandleWidth, paneHeight));
+    if (ImGui::IsItemActive()) {
+      const float nextWidth = std::max(0.0f, ImGui::GetMousePos().x);
+      if (nextWidth >= kSourcePaneCollapseThreshold) {
+        sourcePaneWidth_ = ClampSourcePaneWidthForWindow(nextWidth, windowWidth);
+        setSourcePaneVisible(true);
+      }
+    }
+  }
+
+  if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+  }
+
+  const bool splitterActive = ImGui::IsItemActive();
+  const bool splitterHovered = ImGui::IsItemHovered();
+  const ImU32 color = ImGui::GetColorU32(splitterActive    ? ImGuiCol_SeparatorActive
+                                         : splitterHovered ? ImGuiCol_SeparatorHovered
+                                                           : ImGuiCol_Separator);
+  const ImVec2 itemMin = ImGui::GetItemRectMin();
+  const ImVec2 itemMax = ImGui::GetItemRectMax();
+  if (sourcePaneVisible_) {
+    ImGui::GetWindowDrawList()->AddRectFilled(itemMin, itemMax, color);
+  } else if (splitterHovered || splitterActive) {
+    ImGui::GetWindowDrawList()->AddRectFilled(itemMin, ImVec2(itemMin.x + 2.0f, itemMax.y), color);
+  }
+  ImGui::End();
+  ImGui::PopStyleVar(2);
 }
 
 void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight) {
@@ -927,16 +1273,578 @@ void EditorShell::renderFloatingLayerPanel() {
 }
 
 bool EditorShell::highlightSelectionSourceIfNeeded() {
-  const auto& selectionNow = app_.selectedElement();
+  const auto& selectionNow = app_.selectedElements();
+  const bool preserveSourceEditCursor =
+      preserveSourceEditFocusCursor_ && sourceFocusMode_ && textEditor_.isCursorInsideFocusRange();
   if (selectionNow != lastHighlightedSelection_) {
-    if (selectionNow.has_value()) {
-      std::ignore = HighlightElementSource(textEditor_, *selectionNow);
+    referenceHighlightActive_ = false;
+    referenceHighlightChipHovered_ = false;
+    referenceHighlightSummary_ = ReferenceHighlightSummary{};
+    lastReferenceHighlightSelection_.clear();
+    if (sourceSelectionOriginatedInText_ || preserveSourceEditCursor) {
+      if (!sourceFocusOriginatedInStyle_) {
+        updateSourceFocusView(/*scrollToSelection=*/false);
+      }
+      sourceSelectionOriginatedInText_ = false;
+      preserveSourceEditFocusCursor_ = false;
+    } else if (!selectionNow.empty()) {
+      updateSourceFocusView(/*scrollToSelection=*/true);
+    } else {
+      textEditor_.clearFocusPartition();
     }
     lastHighlightedSelection_ = selectionNow;
     return true;
   }
 
+  if (preserveSourceEditFocusCursor_ &&
+      (!sourceFocusMode_ || !textEditor_.isCursorInsideFocusRange())) {
+    preserveSourceEditFocusCursor_ = false;
+  }
+
   return false;
+}
+
+std::optional<StyleFocus> EditorShell::styleFocusAtSourceOffset(std::size_t sourceOffset) const {
+  std::optional<StyleFocus> styleFocus =
+      ComputeStyleFocusAtSourceOffset(app_.document().document(), sourceOffset);
+  if (!styleFocus.has_value() && sourceOffset > 0) {
+    styleFocus = ComputeStyleFocusAtSourceOffset(app_.document().document(), sourceOffset - 1);
+  }
+
+  return styleFocus;
+}
+
+std::vector<svg::SVGElement> EditorShell::sourceHoverElements() const {
+  if (!app_.hasDocument() || textEditor_.isTextChanged() || app_.document().hasPendingMutations()) {
+    return {};
+  }
+
+  const std::optional<Coordinates> hoverPosition = textEditor_.hoveredTextPosition();
+  if (!hoverPosition.has_value()) {
+    return {};
+  }
+
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  const std::string editorSource = textEditor_.getText();
+  if (editorSource != documentSource) {
+    return {};
+  }
+
+  const std::size_t hoverOffset = textEditor_.getByteOffsetAtCoordinates(*hoverPosition);
+  if (std::optional<StyleFocus> styleFocus = styleFocusAtSourceOffset(hoverOffset)) {
+    return ExcludeSelectedSourceHoverElements(std::move(styleFocus->impactedElements),
+                                              app_.selectedElements());
+  }
+
+  std::optional<svg::SVGElement> element =
+      FindElementNearSourceOffset(app_.document().document(), editorSource, hoverOffset);
+  if (!element.has_value()) {
+    return {};
+  }
+
+  return ExcludeSelectedSourceHoverElements({*element}, app_.selectedElements());
+}
+
+std::vector<SourceByteRange> EditorShell::sourceHoverRangesForElements(
+    const std::vector<svg::SVGElement>& elements) const {
+  if (elements.empty() || !app_.hasDocument() || textEditor_.isTextChanged()) {
+    return {};
+  }
+
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  if (textEditor_.getText() != documentSource) {
+    return {};
+  }
+
+  std::vector<SourceByteRange> ranges;
+  ranges.reserve(elements.size());
+  for (const svg::SVGElement& element : elements) {
+    if (std::optional<SourceByteRange> range = ElementSourceByteRange(element, documentSource)) {
+      ranges.push_back(*range);
+    }
+  }
+  return ranges;
+}
+
+std::vector<svg::SVGElement> EditorShell::referenceHighlightElements() const {
+  std::vector<svg::SVGElement> elements;
+  if (!referenceHighlightActive_ && !referenceHighlightChipHovered_) {
+    return elements;
+  }
+
+  elements.reserve(referenceHighlightSummary_.totalCount());
+  AddUniqueElements(&elements, referenceHighlightSummary_.referencedElements);
+  AddUniqueElements(&elements, referenceHighlightSummary_.referencingElements);
+  return elements;
+}
+
+std::vector<svg::SVGElement> EditorShell::combinedSourcePreviewElements() const {
+  std::vector<svg::SVGElement> elements = sourceHoverElements();
+  AddUniqueElements(&elements, referenceHighlightElements());
+  return elements;
+}
+
+void EditorShell::updateSourceHoverPreview() {
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    const bool overlayChanged = renderCoordinator_.setSourceHoverElements({});
+    const bool sourceChanged = textEditor_.clearHoverSourceRanges();
+    if (overlayChanged || sourceChanged) {
+      window_.wakeEventLoop();
+    }
+    return;
+  }
+
+  const std::vector<svg::SVGElement> hoverElements = combinedSourcePreviewElements();
+  const bool overlayChanged = renderCoordinator_.setSourceHoverElements(hoverElements);
+  const bool sourceChanged =
+      textEditor_.setHoverSourceRanges(sourceHoverRangesForElements(hoverElements));
+  if (overlayChanged || sourceChanged) {
+    window_.wakeEventLoop();
+  }
+}
+
+void EditorShell::refreshReferenceHighlightSummaryIfNeeded() {
+  const std::vector<svg::SVGElement>& selection = app_.selectedElements();
+  if (selection == lastReferenceHighlightSelection_) {
+    return;
+  }
+
+  referenceHighlightActive_ = false;
+  referenceHighlightChipHovered_ = false;
+  referenceHighlightSummary_ = ReferenceHighlightSummary{};
+  if (!app_.hasDocument() || selection.empty()) {
+    lastReferenceHighlightSelection_ = selection;
+    return;
+  }
+
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    window_.wakeEventLoop();
+    return;
+  }
+
+  lastReferenceHighlightSelection_ = selection;
+  referenceHighlightSummary_ = ComputeReferenceHighlightSummary(
+      app_.document().document(), std::span<const svg::SVGElement>(selection));
+}
+
+void EditorShell::applyReferenceHighlightPreview() {
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    window_.wakeEventLoop();
+    return;
+  }
+
+  const std::vector<svg::SVGElement> previewElements = combinedSourcePreviewElements();
+  const bool overlayChanged = renderCoordinator_.setSourceHoverElements(previewElements);
+  const bool sourceChanged =
+      textEditor_.setHoverSourceRanges(sourceHoverRangesForElements(previewElements));
+  if (overlayChanged) {
+    renderCoordinator_.rasterizeOverlayForCurrentSelection(
+        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
+        selectTool_.activeTransformBoundsPreview());
+  }
+  if (overlayChanged || sourceChanged) {
+    window_.wakeEventLoop();
+  }
+}
+
+void EditorShell::setReferenceHighlightChipHovered(bool hovered) {
+  if (referenceHighlightChipHovered_ == hovered) {
+    return;
+  }
+
+  referenceHighlightChipHovered_ = hovered;
+  applyReferenceHighlightPreview();
+}
+
+std::optional<EditorShell::SelectionChipBounds> EditorShell::selectionChipBounds(
+    const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) const {
+  if (renderCoordinator_.selectionBoundsCache().lastSelection != app_.selectedElements() ||
+      renderCoordinator_.selectionBoundsCache().displayedBoundsDoc.empty()) {
+    return std::nullopt;
+  }
+
+  Box2d selectionBounds =
+      CombinedSelectionBounds(renderCoordinator_.selectionBoundsCache().displayedBoundsDoc);
+  Transform2d documentFromSelectionBoundsDocument;
+  if (activeGesturePreview.has_value()) {
+    selectionBounds = activeGesturePreview->startBoundsDoc;
+    documentFromSelectionBoundsDocument = activeGesturePreview->documentFromStartDocument;
+  }
+
+  const Box2d transformedSelectionBoundsDoc =
+      TransformDocumentBox(selectionBounds, documentFromSelectionBoundsDocument);
+  const Box2d selectionScreenBounds =
+      interactionController_.viewport().documentToScreen(transformedSelectionBoundsDoc);
+  if (selectionScreenBounds.isEmpty()) {
+    return std::nullopt;
+  }
+
+  Vector2d chipAnchorDoc = transformedSelectionBoundsDoc.topLeft;
+  if (activeGesturePreview.has_value() &&
+      activeGesturePreview->kind == SelectTool::ActiveGestureKind::Rotate) {
+    chipAnchorDoc = documentFromSelectionBoundsDocument.transformPosition(
+        activeGesturePreview->startBoundsDoc.topLeft);
+  }
+
+  return SelectionChipBounds{
+      .documentBounds = transformedSelectionBoundsDoc,
+      .screenBounds = selectionScreenBounds,
+      .chipAnchorScreen = interactionController_.viewport().documentToScreen(chipAnchorDoc),
+  };
+}
+
+std::optional<Box2d> EditorShell::selectionSizeChipScreenRect(
+    std::string_view label, const Vector2d& chipAnchorScreen) const {
+  if (label.empty()) {
+    return std::nullopt;
+  }
+
+  const Box2d imageRect = interactionController_.viewport().imageScreenRect();
+  const ImVec2 textSize = SelectionSizeChipTextSize(label, SelectionSizeChipFont(uiFontBold_));
+  const double width = static_cast<double>(textSize.x + 2.0f * kSelectionSizeChipPaddingX);
+  const double height = static_cast<double>(textSize.y + 2.0f * kSelectionSizeChipPaddingY);
+  const double maxX = std::max(imageRect.topLeft.x, imageRect.bottomRight.x - width);
+  const double x = std::clamp(chipAnchorScreen.x, imageRect.topLeft.x, maxX);
+  double y = chipAnchorScreen.y - height - kSelectionSizeChipGapFromAabb;
+  if (y < imageRect.topLeft.y) {
+    y = chipAnchorScreen.y + kSelectionSizeChipGapFromAabb;
+  }
+  const double maxY = std::max(imageRect.topLeft.y, imageRect.bottomRight.y - height);
+  y = std::clamp(y, imageRect.topLeft.y, maxY);
+  return Box2d::FromXYWH(x, y, width, height);
+}
+
+void EditorShell::renderSelectionSizeChip(
+    const SelectionTransformHandleIntent& hoverTransformIntent,
+    const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
+  const bool hoverResizeHandle = !activeGesturePreview.has_value() &&
+                                 hoverTransformIntent.kind == SelectionTransformHandleKind::Resize;
+  if (!activeGesturePreview.has_value() && !hoverResizeHandle) {
+    return;
+  }
+
+  const std::optional<SelectionChipBounds> bounds = selectionChipBounds(activeGesturePreview);
+  if (!bounds.has_value()) {
+    return;
+  }
+
+  std::string label;
+  if (!activeGesturePreview.has_value() ||
+      activeGesturePreview->kind == SelectTool::ActiveGestureKind::Resize) {
+    label = SelectionSizeChipLabel(bounds->screenBounds);
+  } else if (activeGesturePreview->kind == SelectTool::ActiveGestureKind::Rotate) {
+    label = SelectionAngleChipLabel(activeGesturePreview->documentFromStartDocument);
+  } else {
+    label = SelectionPositionChipLabel(bounds->documentBounds);
+  }
+
+  const std::optional<Box2d> rect = selectionSizeChipScreenRect(label, bounds->chipAnchorScreen);
+  if (!rect.has_value()) {
+    return;
+  }
+
+  ImFont* chipFont = SelectionSizeChipFont(uiFontBold_);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(
+      ImVec2(static_cast<float>(rect->topLeft.x), static_cast<float>(rect->topLeft.y)),
+      ImVec2(static_cast<float>(rect->bottomRight.x), static_cast<float>(rect->bottomRight.y)),
+      IM_COL32(0, 111, 149, 255), kSelectionSizeChipRadius);
+  drawList->AddText(chipFont, SelectionSizeChipFontSize(),
+                    ImVec2(static_cast<float>(rect->topLeft.x) + kSelectionSizeChipPaddingX,
+                           static_cast<float>(rect->topLeft.y) + kSelectionSizeChipPaddingY),
+                    IM_COL32(255, 255, 255, 255), label.c_str(), label.c_str() + label.size());
+}
+
+std::optional<Box2d> EditorShell::referenceHighlightChipScreenRect(std::string_view label) const {
+  if (label.empty() || referenceHighlightSummary_.totalCount() <= 1 ||
+      renderCoordinator_.selectionBoundsCache().lastSelection != app_.selectedElements() ||
+      renderCoordinator_.selectionBoundsCache().displayedBoundsDoc.empty()) {
+    return std::nullopt;
+  }
+
+  const Box2d selectionBounds =
+      CombinedSelectionBounds(renderCoordinator_.selectionBoundsCache().displayedBoundsDoc);
+  const Vector2d topLeft =
+      interactionController_.viewport().documentToScreen(selectionBounds.topLeft);
+  const Box2d imageRect = interactionController_.viewport().imageScreenRect();
+  const ImVec2 textSize = ReferenceHighlightChipTextSize(label);
+  const double width = static_cast<double>(textSize.x + 2.0f * kReferenceChipPaddingX);
+  const double height = static_cast<double>(textSize.y + 2.0f * kReferenceChipPaddingY);
+  const double maxX = std::max(imageRect.topLeft.x, imageRect.bottomRight.x - width);
+  const double x = std::clamp(topLeft.x, imageRect.topLeft.x, maxX);
+  double y = topLeft.y - height - kReferenceChipGapFromAabb;
+  if (y < imageRect.topLeft.y) {
+    y = topLeft.y + kReferenceChipGapFromAabb;
+  }
+  const double maxY = std::max(imageRect.topLeft.y, imageRect.bottomRight.y - height);
+  y = std::clamp(y, imageRect.topLeft.y, maxY);
+  return Box2d::FromXYWH(x, y, width, height);
+}
+
+void EditorShell::renderReferenceHighlightChip() {
+  if (selectTool_.activeTransformBoundsPreview().has_value()) {
+    setReferenceHighlightChipHovered(false);
+    return;
+  }
+
+  refreshReferenceHighlightSummaryIfNeeded();
+  const std::string label = ReferenceHighlightChipLabel(referenceHighlightSummary_);
+  const std::optional<Box2d> rect = referenceHighlightChipScreenRect(label);
+  if (!rect.has_value()) {
+    setReferenceHighlightChipHovered(false);
+    return;
+  }
+
+  const ImVec2 mouse = ImGui::GetMousePos();
+  const bool hovered = ContainsScreenPoint(*rect, mouse);
+  setReferenceHighlightChipHovered(hovered);
+  if (hovered) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left, /*repeat=*/false)) {
+      referenceHighlightActive_ = !referenceHighlightActive_;
+      applyReferenceHighlightPreview();
+    }
+  }
+
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const ImU32 bg = referenceHighlightActive_ ? IM_COL32(0, 135, 170, 245)
+                   : hovered                 ? IM_COL32(48, 70, 78, 245)
+                                             : IM_COL32(34, 48, 54, 235);
+  drawList->AddRectFilled(
+      ImVec2(static_cast<float>(rect->topLeft.x), static_cast<float>(rect->topLeft.y)),
+      ImVec2(static_cast<float>(rect->bottomRight.x), static_cast<float>(rect->bottomRight.y)), bg,
+      kReferenceChipRadius);
+  drawList->AddText(ImGui::GetFont(), ReferenceHighlightChipFontSize(),
+                    ImVec2(static_cast<float>(rect->topLeft.x) + kReferenceChipPaddingX,
+                           static_cast<float>(rect->topLeft.y) + kReferenceChipPaddingY),
+                    IM_COL32(255, 255, 255, 255), label.c_str(), label.c_str() + label.size());
+}
+
+void EditorShell::openRenderPaneContextMenu(const Vector2d& documentPoint) {
+  renderContextMenuDocumentPoint_ = documentPoint;
+  renderContextMenuHitElement_.reset();
+
+  if (app_.hasDocument() && !renderCoordinator_.asyncRenderer().isBusy()) {
+    if (std::optional<svg::SVGGeometryElement> hit = app_.hitTest(documentPoint)) {
+      renderContextMenuHitElement_ = *hit;
+    }
+  }
+
+  renderContextMenuOpenRequested_ = true;
+  window_.wakeEventLoop();
+}
+
+void EditorShell::renderRenderPaneContextMenu() {
+  if (renderContextMenuOpenRequested_) {
+    ImGui::OpenPopup(kRenderPaneContextMenuName.data());
+    renderContextMenuOpenRequested_ = false;
+  }
+
+  if (!ImGui::BeginPopup(kRenderPaneContextMenuName.data())) {
+    return;
+  }
+
+  bool selectionChanged = false;
+  const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
+  if (!app_.hasDocument()) {
+    ImGui::BeginDisabled();
+    ImGui::MenuItem("No document loaded");
+    ImGui::EndDisabled();
+  } else if (rendererBusy && !renderContextMenuHitElement_.has_value()) {
+    ImGui::BeginDisabled();
+    ImGui::MenuItem("Renderer busy");
+    ImGui::EndDisabled();
+  } else if (renderContextMenuHitElement_.has_value()) {
+    const svg::SVGElement hitElement = *renderContextMenuHitElement_;
+    const std::string label = ElementContextMenuLabel(hitElement);
+    ImGui::TextUnformatted(label.c_str(), label.c_str() + label.size());
+    ImGui::Separator();
+
+    const bool alreadySelected =
+        ContainsElement(std::span<const svg::SVGElement>(app_.selectedElements()), hitElement);
+    if (ImGui::MenuItem("Select Element")) {
+      app_.setSelection(hitElement);
+      selectionChanged = true;
+    }
+    if (ImGui::MenuItem("Add to Selection", nullptr, false, !alreadySelected)) {
+      app_.addToSelection(hitElement);
+      selectionChanged = true;
+    }
+  } else {
+    ImGui::BeginDisabled();
+    ImGui::MenuItem("No element under cursor");
+    ImGui::EndDisabled();
+  }
+
+  ImGui::Separator();
+  if (ImGui::MenuItem("Clear Selection", nullptr, false, app_.hasSelection())) {
+    app_.clearSelection();
+    selectionChanged = true;
+  }
+  if (ImGui::MenuItem("Delete Selection", nullptr, false, app_.hasSelection())) {
+    selectionChanged = app_.deleteSelectionWithUndo(textEditor_.getText());
+  }
+  if (referenceHighlightSummary_.totalCount() > 1) {
+    if (ImGui::MenuItem("Highlight Refs", nullptr, referenceHighlightActive_)) {
+      referenceHighlightActive_ = !referenceHighlightActive_;
+      applyReferenceHighlightPreview();
+    }
+  }
+  if (ImGui::MenuItem("Show Source", nullptr, sourcePaneVisible_)) {
+    setSourcePaneVisible(!sourcePaneVisible_);
+  }
+  if (ImGui::MenuItem("Source Focus Mode", nullptr, sourceFocusMode_)) {
+    toggleSourceFocusMode();
+  }
+
+  if (selectionChanged) {
+    referenceHighlightActive_ = false;
+    referenceHighlightChipHovered_ = false;
+    referenceHighlightSummary_ = ReferenceHighlightSummary{};
+    lastReferenceHighlightSelection_.clear();
+    updateSourceHoverPreview();
+  }
+
+  if (selectionChanged && !rendererBusy) {
+    renderCoordinator_.refreshSelectionBoundsCache(app_);
+    renderCoordinator_.rasterizeOverlayForCurrentSelection(
+        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
+        selectTool_.activeTransformBoundsPreview());
+    window_.wakeEventLoop();
+  }
+
+  ImGui::EndPopup();
+}
+
+std::optional<StyleFocus> EditorShell::styleFocusAtSourceCursor() {
+  if (!app_.hasDocument() || textEditor_.isTextChanged() || app_.document().hasPendingMutations()) {
+    return std::nullopt;
+  }
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  if (textEditor_.getText() != documentSource) {
+    return std::nullopt;
+  }
+
+  const std::size_t cursorOffset =
+      textEditor_.getByteOffsetAtCoordinates(textEditor_.getCursorPosition());
+  return styleFocusAtSourceOffset(cursorOffset);
+}
+
+void EditorShell::applyStyleFocus(StyleFocus styleFocus) {
+  applySourcePartition(std::move(styleFocus.partition));
+  sourceFocusOriginatedInStyle_ = true;
+  sourceSelectionOriginatedInText_ = false;
+  if (app_.selectedElements() != styleFocus.impactedElements) {
+    app_.setSelection(std::move(styleFocus.impactedElements));
+    sourceSelectionOriginatedInText_ = app_.selectedElements() != lastHighlightedSelection_;
+  }
+}
+
+void EditorShell::syncSelectionFromSourceCursorIfNeeded() {
+  const bool sourceCursorNavigationActive =
+      textEditor_.isFocused() || textEditor_.didMouseChangeCursorPosition();
+  if (!textEditor_.isCursorPositionChanged() || !sourceCursorNavigationActive ||
+      !app_.hasDocument() || textEditor_.isTextChanged() || textEditor_.hasSelection()) {
+    return;
+  }
+
+  const std::string documentSource = CanonicalizeForTextEditor(app_.document().document().source());
+  if (textEditor_.getText() != documentSource) {
+    return;
+  }
+
+  std::optional<StyleFocus> styleFocus = styleFocusAtSourceCursor();
+  if (styleFocus.has_value()) {
+    applyStyleFocus(std::move(*styleFocus));
+    window_.wakeEventLoop();
+    return;
+  }
+
+  if (sourceFocusOriginatedInStyle_ && textEditor_.isCursorInsideFocusRange()) {
+    return;
+  }
+
+  std::optional<svg::SVGElement> element =
+      FindElementAtSourceCursor(app_.document().document(), textEditor_);
+  if (!element.has_value()) {
+    return;
+  }
+
+  if (app_.selectedElements().size() == 1u && app_.selectedElements().front() == *element) {
+    sourceSelectionOriginatedInText_ = false;
+    if (sourceFocusOriginatedInStyle_) {
+      updateSourceFocusView(/*scrollToSelection=*/false);
+      window_.wakeEventLoop();
+    }
+    return;
+  }
+
+  app_.setSelection(*element);
+  sourceSelectionOriginatedInText_ = app_.selectedElements() != lastHighlightedSelection_;
+  updateSourceFocusView(/*scrollToSelection=*/false);
+  window_.wakeEventLoop();
+}
+
+void EditorShell::applySourcePartition(FocusPartition partition) {
+  if (!sourceFocusMode_) {
+    partition.fullColor.clear();
+    partition.dimmed.clear();
+    partition.hidden.clear();
+  }
+
+  textEditor_.setFocusPartition(partition);
+}
+
+void EditorShell::updateSourceFocusView(bool scrollToSelection) {
+  sourceFocusOriginatedInStyle_ = false;
+  if (!app_.hasDocument() || app_.selectedElements().empty()) {
+    textEditor_.clearFocusPartition();
+    return;
+  }
+
+  const svg::SVGElement selected = *app_.selectedElement();
+  applySourcePartition(ComputeFocusPartition(app_.document().document(), app_.selectedElements()));
+  if (scrollToSelection) {
+    std::ignore = HighlightElementSource(textEditor_, selected);
+  }
+}
+
+void EditorShell::setSourceFocusMode(bool enabled) {
+  sourceFocusMode_ = enabled;
+  if (sourceFocusOriginatedInStyle_) {
+    if (std::optional<StyleFocus> styleFocus = styleFocusAtSourceCursor()) {
+      applyStyleFocus(std::move(*styleFocus));
+      window_.wakeEventLoop();
+      return;
+    }
+  }
+  updateSourceFocusView(/*scrollToSelection=*/true);
+  window_.wakeEventLoop();
+}
+
+void EditorShell::toggleSourceFocusMode() {
+  setSourceFocusMode(!sourceFocusMode_);
+}
+
+void EditorShell::setSourcePaneVisible(bool visible) {
+  if (sourcePaneVisible_ == visible) {
+    return;
+  }
+
+  sourcePaneVisible_ = visible;
+  if (!sourcePaneVisible_) {
+    std::ignore = textEditor_.clearHoverSourceRanges();
+    if (renderCoordinator_.setSourceHoverElements({}) &&
+        !renderCoordinator_.asyncRenderer().isBusy()) {
+      renderCoordinator_.rasterizeOverlayForCurrentSelection(
+          app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+          RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
+          selectTool_.activeTransformBoundsPreview());
+    }
+  }
+  window_.wakeEventLoop();
 }
 
 void EditorShell::runFrame() {
@@ -995,14 +1903,19 @@ void EditorShell::runFrame() {
   const float menuBarHeight = ImGui::GetFrameHeight();
   const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - menuBarHeight);
-  rightPaneWidth_ =
-      std::clamp(rightPaneWidth_, kMinRightPaneWidth,
-                 std::max(kMinRightPaneWidth,
-                          std::min(kMaxRightPaneWidth, static_cast<float>(windowSize.x) -
-                                                           kSourcePaneWidth - kMinRightPaneWidth)));
-  const float renderPaneWidth =
-      std::max(0.0f, static_cast<float>(windowSize.x) - kSourcePaneWidth - rightPaneWidth_);
-  const float rightPaneX = static_cast<float>(windowSize.x) - rightPaneWidth_;
+  const EditorMainPaneLayout mainPaneLayout = ComputeEditorMainPaneLayout({
+      .windowWidth = static_cast<float>(windowSize.x),
+      .sourcePaneVisible = sourcePaneVisible_,
+      .sourcePaneWidth = sourcePaneWidth_,
+      .minSourcePaneWidth = kMinSourcePaneWidth,
+      .maxSourcePaneWidth = kMaxSourcePaneWidth,
+      .rightPaneWidth = rightPaneWidth_,
+      .minRightPaneWidth = kMinRightPaneWidth,
+      .maxRightPaneWidth = kMaxRightPaneWidth,
+      .minRenderPaneWidth = kMinRightPaneWidth,
+  });
+  rightPaneWidth_ = mainPaneLayout.rightPaneWidth;
+  const float rightPaneX = mainPaneLayout.rightPaneX;
   const float rightPaneGap = ImGui::GetStyle().ItemSpacing.y;
   const RightSidebarLayout rightSidebarLayout = ComputeRightSidebarLayout({
       .paneOriginY = paneOriginY,
@@ -1016,8 +1929,8 @@ void EditorShell::runFrame() {
       .minInspectorPaneHeight = kMinInspectorPaneHeight,
   });
   layerPanelHeightFraction_ = rightSidebarLayout.layerPanelHeightFraction;
-  const Vector2d renderPaneOrigin(kSourcePaneWidth, paneOriginY);
-  const Vector2d renderPaneSize(renderPaneWidth, paneHeight);
+  const Vector2d renderPaneOrigin(mainPaneLayout.renderPaneX, paneOriginY);
+  const Vector2d renderPaneSize(mainPaneLayout.renderPaneWidth, paneHeight);
 
   interactionController_.updatePaneLayout(
       renderPaneOrigin, renderPaneSize,
@@ -1027,10 +1940,12 @@ void EditorShell::runFrame() {
   handleGlobalShortcuts();
 
   MenuBarState menuState{
-      .sourcePaneFocused = textEditor_.isFocused(),
+      .sourcePaneFocused = sourcePaneVisible_ && textEditor_.isFocused(),
       .canSave = app_.hasDocument(),
+      .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
       .canUndo = app_.canUndo(),
       .canRedo = app_.canRedo(),
+      .sourceFocusMode = sourceFocusMode_,
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -1044,6 +1959,9 @@ void EditorShell::runFrame() {
   }
   if (menuActions.saveFileAs) {
     requestSaveAs();
+  }
+  if (menuActions.revertFile) {
+    requestRevert();
   }
   if (menuActions.quit) {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
@@ -1077,6 +1995,9 @@ void EditorShell::runFrame() {
   if (menuActions.actualSize) {
     interactionController_.resetToActualSize();
   }
+  if (menuActions.toggleSourceFocusMode) {
+    toggleSourceFocusMode();
+  }
 
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
@@ -1085,17 +2006,25 @@ void EditorShell::runFrame() {
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
   std::ignore = highlightSelectionSourceIfNeeded();
-  renderSourcePane(paneOriginY, paneHeight, codeFont_);
+  if (sourcePaneVisible_) {
+    renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
+  }
   renderRenderPane(renderPaneOrigin, renderPaneSize, kPaneFlags);
   renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, rightSidebarLayout, kPaneFlags);
   if (highlightSelectionSourceIfNeeded()) {
     window_.wakeEventLoop();
   }
+  renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
+                           mainPaneLayout.sourcePaneWidth);
   renderRightPaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight);
   if (!layerPanelDetached_) {
     renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
   }
   renderFloatingLayerPanel();
+  if (documentSyncController_.nextTextSyncWakeSeconds().has_value() ||
+      textEditor_.nextFlashWakeSeconds().has_value()) {
+    window_.wakeEventLoop();
+  }
 }
 
 }  // namespace donner::editor

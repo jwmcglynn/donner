@@ -92,6 +92,37 @@ std::filesystem::path ResolveSvgPath(const std::filesystem::path& reproPath,
   return direct;
 }
 
+struct RecordedSvgInput {
+  std::filesystem::path displayPath;
+  std::string source;
+};
+
+std::filesystem::path EmbeddedSvgDisplayPath(const repro::ReproMetadata& metadata) {
+  if (!metadata.svgBasename.empty()) {
+    return std::filesystem::path(metadata.svgBasename);
+  }
+  if (!metadata.svgPath.empty()) {
+    return std::filesystem::path(metadata.svgPath).filename();
+  }
+  return "embedded.svg";
+}
+
+RecordedSvgInput LoadRecordedSvgInput(const std::filesystem::path& reproPath,
+                                      const repro::ReproMetadata& metadata) {
+  if (metadata.svgSource.has_value()) {
+    return RecordedSvgInput{
+        .displayPath = EmbeddedSvgDisplayPath(metadata),
+        .source = *metadata.svgSource,
+    };
+  }
+
+  const std::filesystem::path svgPath = ResolveSvgPath(reproPath, metadata.svgPath);
+  return RecordedSvgInput{
+      .displayPath = svgPath,
+      .source = LoadFileOrEmpty(svgPath),
+  };
+}
+
 void ApplyRecordedViewport(ViewportState& viewport, const repro::ReproViewport& recordedViewport) {
   viewport.paneOrigin = Vector2d(recordedViewport.paneOriginX, recordedViewport.paneOriginY);
   viewport.paneSize = Vector2d(recordedViewport.paneSizeW, recordedViewport.paneSizeH);
@@ -331,13 +362,13 @@ protected:
     auto replay = repro::ReadReproFile(reproPath);
     ASSERT_TRUE(replay.has_value()) << "Failed to parse replay file: " << reproPath;
 
-    const std::filesystem::path svgPath = ResolveSvgPath(reproPath, replay->metadata.svgPath);
-    const std::string svgSource = LoadFileOrEmpty(svgPath);
-    ASSERT_FALSE(svgSource.empty()) << "SVG source missing: " << svgPath;
-    liveSource_ = svgSource;
+    const RecordedSvgInput svgInput = LoadRecordedSvgInput(reproPath, replay->metadata);
+    ASSERT_FALSE(svgInput.source.empty()) << "SVG source missing: " << svgInput.displayPath;
+    liveSource_ = svgInput.source;
 
     EditorApp app;
-    ASSERT_TRUE(app.loadFromString(svgSource)) << "Failed to load SVG fixture: " << svgPath;
+    ASSERT_TRUE(app.loadFromString(svgInput.source))
+        << "Failed to load SVG fixture: " << svgInput.displayPath;
 
     auto documentViewBox = app.document().document().svgElement().viewBox();
     ASSERT_TRUE(documentViewBox.has_value()) << "Loaded SVG is missing a root viewBox";
@@ -473,13 +504,13 @@ protected:
     auto replay = repro::ReadReproFile(reproPath);
     ASSERT_TRUE(replay.has_value()) << "Failed to parse replay file: " << reproPath;
 
-    const std::filesystem::path svgPath = ResolveSvgPath(reproPath, replay->metadata.svgPath);
-    const std::string svgSource = LoadFileOrEmpty(svgPath);
-    ASSERT_FALSE(svgSource.empty()) << "SVG source missing: " << svgPath;
-    liveSource_ = svgSource;
+    const RecordedSvgInput svgInput = LoadRecordedSvgInput(reproPath, replay->metadata);
+    ASSERT_FALSE(svgInput.source.empty()) << "SVG source missing: " << svgInput.displayPath;
+    liveSource_ = svgInput.source;
 
     EditorApp app;
-    ASSERT_TRUE(app.loadFromString(svgSource)) << "Failed to load SVG fixture: " << svgPath;
+    ASSERT_TRUE(app.loadFromString(svgInput.source))
+        << "Failed to load SVG fixture: " << svgInput.displayPath;
 
     auto documentViewBox = app.document().document().svgElement().viewBox();
     ASSERT_TRUE(documentViewBox.has_value()) << "Loaded SVG is missing a root viewBox";

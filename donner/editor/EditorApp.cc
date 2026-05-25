@@ -1,6 +1,7 @@
 #include "donner/editor/EditorApp.h"
 
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/TextPatch.h"
 
 namespace donner::editor {
 
@@ -42,6 +43,12 @@ svg::SVGElement ResolveSnapshotElement(AsyncSVGDocument& document, const UndoSna
 
 void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
                            const UndoSnapshot& snapshot) {
+  if (snapshot.kind == UndoSnapshot::Kind::DocumentSource) {
+    app.applyMutation(EditorCommand::ReplaceDocumentCommand(snapshot.documentSource,
+                                                            /*preserveUndoOnReparse=*/true));
+    return;
+  }
+
   svg::SVGElement liveElement = ResolveSnapshotElement(document, snapshot);
 
   // Route the restored transform through the command queue so every
@@ -98,6 +105,20 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   return result;
 }
 
+bool EditorApp::revertToCleanSource() {
+  const std::string source(cleanSourceText_);
+  if (source.empty()) {
+    return false;
+  }
+
+  if (!loadFromString(source)) {
+    return false;
+  }
+
+  setCleanSourceText(source);
+  return true;
+}
+
 bool EditorApp::flushFrame() {
   std::optional<svg::SVGDocument> documentBeforeFlush;
   std::vector<AttributeWritebackTarget> selectionTargets;
@@ -134,6 +155,50 @@ bool EditorApp::flushFrame() {
     if (!(documentFlush.replacedDocument && documentFlush.preserveUndoOnReparse)) {
       undoTimeline_.clear();
     }
+  }
+
+  return true;
+}
+
+bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
+  if (selection_.empty()) {
+    return false;
+  }
+
+  const std::vector<svg::SVGElement> selected = selection_;
+  std::vector<std::optional<AttributeWritebackTarget>> writebackTargets;
+  writebackTargets.reserve(selected.size());
+
+  std::vector<TextPatch> removePatches;
+  removePatches.reserve(selected.size());
+  for (const auto& element : selected) {
+    std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(element);
+    if (target.has_value()) {
+      if (std::optional<TextPatch> patch = buildElementRemoveWriteback(currentSourceText, *target);
+          patch.has_value()) {
+        removePatches.push_back(std::move(*patch));
+      }
+    }
+    writebackTargets.push_back(std::move(target));
+  }
+
+  std::string sourceAfterDelete(currentSourceText);
+  const ApplyPatchesResult patchResult = applyPatches(sourceAfterDelete, removePatches);
+  if (!removePatches.empty() && patchResult.applied == removePatches.size() &&
+      patchResult.rejectedBounds == 0 && sourceAfterDelete != currentSourceText) {
+    const char* label = selected.size() == 1u ? "Delete element" : "Delete elements";
+    undoTimeline_.record(label, captureDocumentSourceSnapshot(selected.front(), currentSourceText),
+                         captureDocumentSourceSnapshot(selected.front(), sourceAfterDelete));
+  }
+
+  setSelection(std::nullopt);
+  for (std::size_t i = 0; i < selected.size(); ++i) {
+    if (writebackTargets[i].has_value()) {
+      enqueueElementRemoveWriteback(CompletedElementRemoveWriteback{
+          .target = std::move(*writebackTargets[i]),
+      });
+    }
+    applyMutation(EditorCommand::DeleteElementCommand(selected[i]));
   }
 
   return true;
@@ -190,6 +255,10 @@ void EditorApp::undo() {
     return;
   }
 
+  if (snapshot->kind == UndoSnapshot::Kind::DocumentSource) {
+    pendingTransformWritebacks_.clear();
+    pendingElementRemoveWritebacks_.clear();
+  }
   ApplyTimelineSnapshot(*this, document_, *snapshot);
 }
 
@@ -199,6 +268,10 @@ void EditorApp::redo() {
     return;
   }
 
+  if (snapshot->kind == UndoSnapshot::Kind::DocumentSource) {
+    pendingTransformWritebacks_.clear();
+    pendingElementRemoveWritebacks_.clear();
+  }
   ApplyTimelineSnapshot(*this, document_, *snapshot);
 }
 

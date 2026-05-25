@@ -210,8 +210,23 @@ void DocumentSyncController::handleTextEdits(EditorApp& app, TextEditor& textEdi
   }
 }
 
+std::optional<float> DocumentSyncController::nextTextSyncWakeSeconds() const {
+  if (!textDispatchThrottled_) {
+    return std::nullopt;
+  }
+
+  return std::max(0.0f, kTextChangeDebounceSeconds - textChangeIdleTimer_);
+}
+
 void DocumentSyncController::applyPendingWritebacks(EditorApp& app, SelectTool& selectTool,
                                                     TextEditor& textEditor) {
+  const AsyncSVGDocument::FlushResult& lastFlush = app.document().lastFlushResult();
+  if (lastFlush.replacedDocument && lastFlush.preserveUndoOnReparse && app.hasDocument() &&
+      !app.document().lastParseError().has_value()) {
+    (void)MirrorDocumentSourceIntoTextEditor(app, textEditor, &previousSourceText_,
+                                             &lastWritebackSourceText_);
+  }
+
   if (auto completed = selectTool.consumeCompletedDragWriteback(); completed.has_value()) {
     pendingTransformWritebacks_.push_back(EditorApp::CompletedTransformWriteback{
         .target = std::move(completed->target),

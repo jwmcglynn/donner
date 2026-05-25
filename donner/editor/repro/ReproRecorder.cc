@@ -1,9 +1,13 @@
 #include "donner/editor/repro/ReproRecorder.h"
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <ctime>
+#include <filesystem>
+#include <iomanip>
 #include <sstream>
+#include <string_view>
 
 #include "donner/editor/ImGuiIncludes.h"
 
@@ -23,6 +27,18 @@ std::string FormatIso8601Now() {
   char buf[32];
   std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &gm);
   return buf;
+}
+
+std::string ContentHash(std::string_view source) {
+  std::uint64_t hash = 14695981039346656037ull;
+  for (unsigned char c : source) {
+    hash ^= c;
+    hash *= 1099511628211ull;
+  }
+
+  std::ostringstream out;
+  out << "fnv1a64:" << std::hex << std::setfill('0') << std::setw(16) << hash;
+  return out.str();
 }
 
 int PackCurrentModifiers() {
@@ -143,6 +159,11 @@ constexpr ImGuiKey kWatchedKeys[] = {
 
 ReproRecorder::ReproRecorder(ReproRecorderOptions options) : options_(std::move(options)) {
   file_.metadata.svgPath = options_.svgPath;
+  file_.metadata.svgBasename = std::filesystem::path(options_.svgPath).filename().string();
+  if (options_.svgSource.has_value()) {
+    file_.metadata.svgSource = options_.svgSource;
+    file_.metadata.svgContentHash = ContentHash(*options_.svgSource);
+  }
   file_.metadata.windowWidth = options_.windowWidth;
   file_.metadata.windowHeight = options_.windowHeight;
   file_.metadata.displayScale = options_.displayScale;

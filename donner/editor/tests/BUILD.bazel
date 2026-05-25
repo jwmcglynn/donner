@@ -1,6 +1,7 @@
 load(
     "//build_defs:rules.bzl",
     "donner_cc_binary",
+    "donner_cc_fuzzer",
     "donner_cc_library",
     "donner_cc_test",
     "donner_perf_cc_test",
@@ -106,6 +107,7 @@ donner_cc_test(
     deps = [
         "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
+        "//donner/editor:selection_aabb",
         "//donner/editor:text_editor",
         "@com_google_gtest//:gtest_main",
         "@imgui",
@@ -166,6 +168,38 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "focus_view_tests",
+    srcs = ["FocusView_tests.cc"],
+    deps = [
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:editor_app",
+        "//donner/editor:focus_view",
+        "//donner/editor:text_editor",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
+    name = "flash_decorations_tests",
+    srcs = ["FlashDecorations_tests.cc"],
+    deps = [
+        "//donner/editor:flash_decorations",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "soft_wrap_tests",
+    srcs = ["SoftWrap_tests.cc"],
+    deps = [
+        "//donner/editor:soft_wrap",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "render_pane_viewport_tests",
     srcs = ["RenderPaneViewport_tests.cc"],
     deps = [
@@ -202,6 +236,31 @@ donner_cc_test(
     deps = [
         "//donner/editor:presented_frame_composer",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_pane_presenter_tests",
+    srcs = ["RenderPanePresenter_tests.cc"],
+    deps = [
+        "//donner/editor:render_pane_presenter",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_pane_presenter_visual_repro_tests",
+    srcs = ["RenderPanePresenterVisualRepro_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:gl_texture_cache",
+        "//donner/editor:imgui_headers",
+        "//donner/editor:render_pane_presenter",
+        "//donner/editor/gui:editor_window",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -378,6 +437,23 @@ donner_cc_test(
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
         "@imgui",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "editor_state_machine_fuzzer",
+    srcs = ["EditorStateMachine_fuzzer.cc"],
+    corpus = "testdata/editor_state_machine_fuzzer_corpus",
+    deps = [
+        "//donner/editor:attribute_writeback",
+        "//donner/editor:editor_app",
+        "//donner/editor:focus_view",
+        "//donner/editor:selection_aabb",
+        "//donner/editor:source_sync",
+        "//donner/editor:text_editor_core",
+        "//donner/editor:text_patch",
+        "//donner/svg",
+        "//donner/svg/renderer",
     ],
 )
 
@@ -602,6 +678,7 @@ donner_cc_test(
     }),
     deps = [
         ":bitmap_golden_compare",
+        "//donner/editor:imgui_headers",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",
         "//donner/svg/renderer:renderer_interface",

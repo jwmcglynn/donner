@@ -837,6 +837,15 @@ private:
   /// `pendingDemotions_` and reuses the cached bitmap.
   void processPendingDemotions(Registry& registry);
 
+  /// Drop interaction hints for entities that no longer have a render instance.
+  ///
+  /// Demotion hysteresis deliberately keeps released drag layers alive for a short
+  /// window, but an entity that just became `display:none` has left paint order.
+  /// Keeping its interaction layer as a static-segment boundary lets preserved
+  /// segment caches describe the wrong paint range. Returns true when the layer
+  /// assignment must be re-resolved and every static segment should be rebuilt.
+  bool dropNonRenderableInteractionHints(Registry& registry);
+
   /// Returns true if the entity is currently within the layer's cached render range.
   bool layerContainsEntity(const CompositorLayer& layer, Entity entity) const;
 
@@ -929,11 +938,15 @@ private:
   /// doc 0033 M1+). Zero for slots that have never rasterized in the
   /// current session.
   std::vector<double> staticSegmentLastRasterizeMs_;
-  /// Monotonic counter used to seed `staticSegmentGeneration_[i]` when
-  /// a segment slot is freshly created. Survives layer-set shuffles
-  /// (i.e., when a segment splits in two, both new slots get fresh
-  /// generations from this counter).
-  uint64_t nextSegmentGeneration_ = 1;
+  /// Process-monotonic counter that seeds the `generation` of any freshly
+  /// rasterized tile — both static segments (`staticSegmentGeneration_[i]`)
+  /// and promoted layers (`CompositorLayer::setGeneration`). Survives
+  /// layer-set shuffles AND `resetAllLayers` document replaces, so a tile id
+  /// reused across a document swap never reuses a previously-published
+  /// generation (which the editor's GL texture cache keys uploads on). A
+  /// per-object counter would reset to 1 on replace and collide; see
+  /// `CompositorLayer::setGeneration`.
+  uint64_t nextTileGeneration_ = 1;
   /// Boundary identity for each segment in `staticSegments_`. Segment
   /// `i`'s identity is `(left, right)` — the entity ids of the promoted
   /// layers immediately to its left and right in paint order.
