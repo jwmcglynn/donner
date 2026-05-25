@@ -333,6 +333,7 @@ donner_cc_library(
         "//third_party/webgpu-cpp:webgpu_cpp",
     ] + select({
         ":text_enabled": [
+            ":placed_text_geometry",
             "//donner/svg/text:text_engine",
             "//donner/svg/text:text_layout_params",
         ],

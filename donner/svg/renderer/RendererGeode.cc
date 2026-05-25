@@ -39,6 +39,7 @@
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/base/MathUtils.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
 #endif
@@ -80,37 +81,10 @@ bool IsBgraTextureFormat(wgpu::TextureFormat format) {
   return static_cast<WGPUTextureFormat>(format) == WGPUTextureFormat_BGRA8Unorm;
 }
 
-/// Apply a `Transform2d` to every control point of a `Path`, returning a
-/// new `Path` whose commands mirror the input but whose coordinates are
-/// pre-transformed. Needed because `GeoEncoder::fillPath` draws in the
-/// encoder's current MVP and does not take a separate per-path matrix;
-/// for text we want to translate/rotate each glyph's outline before
-/// handing it to the encoder.
-Path transformPath(const Path& input, const Transform2d& transform) {
-  PathBuilder builder;
-  const auto points = input.points();
-  for (const Path::Command& command : input.commands()) {
-    switch (command.verb) {
-      case Path::Verb::MoveTo:
-        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
-        break;
-      case Path::Verb::LineTo:
-        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
-        break;
-      case Path::Verb::QuadTo:
-        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]));
-        break;
-      case Path::Verb::CurveTo:
-        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
-                        transform.transformPosition(points[command.pointIndex + 1]),
-                        transform.transformPosition(points[command.pointIndex + 2]));
-        break;
-      case Path::Verb::ClosePath: builder.closePath(); break;
-    }
-  }
-  return builder.build();
-}
+// NOTE: `transformPath` now lives in the shared (text-gated) PlacedTextGeometry
+// header so both backends share one definition; see docs/design_docs/0038. The
+// only geode callers (glyph + decoration placement) are inside the
+// DONNER_TEXT_ENABLED region.
 
 #ifdef DONNER_TEXT_ENABLED
 TextLayoutParams toTextLayoutParams(const TextParams& params) {
@@ -3246,27 +3220,18 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         continue;  // `.notdef` -- skip to match tiny-skia.
       }
 
-      Path glyphPath =
-          textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
-      if (glyphPath.empty()) {
+      // Placed outline in document space, shared with RendererTinySkia via
+      // PlacedTextGeometry so the two backends can't drift on placement (0038).
+      // This encodes tiny-skia's order (stretch the raw outline, then
+      // `Rotate * Translate`) — geode previously composed
+      // `Scale * Rotate * Translate`, which stretched in the post-rotation frame
+      // (the D4 divergence). Empty for outline-less glyphs; bitmap-only fonts
+      // were already skipped at the run level above.
+      const Path placed = placedGlyphOutline(textEngine, run.font, glyph, scale);
+      if (placed.empty()) {
         continue;
       }
 
-      // Build the local-space transform that takes the raw glyph
-      // outline (baseline-origin, em-scaled) to its placed position.
-      // Order matches `RendererTinySkia::drawText`:
-      //   stretchScale -> rotate (around glyph origin) -> translate.
-      Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-      if (glyph.rotateDegrees != 0.0) {
-        const double radians = glyph.rotateDegrees * MathConstants<double>::kPi / 180.0;
-        glyphFromLocal = Transform2d::Rotate(radians) * glyphFromLocal;
-      }
-      if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-        glyphFromLocal =
-            Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) * glyphFromLocal;
-      }
-
-      const Path placed = transformPath(glyphPath, glyphFromLocal);
       if (usePatternFill) {
         // Fill the glyph outline with the staged pattern tile, same as a
         // pattern-filled `<path>` (see Impl::fillResolved). The glyph path is
