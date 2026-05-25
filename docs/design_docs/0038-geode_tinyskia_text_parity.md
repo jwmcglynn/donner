@@ -42,47 +42,62 @@ durable fix belong in the proposed shared layer (Y), or is it genuinely backend-
 
 ### Open — genuine text divergences (parity-gated, reason → this doc)
 
-Final list from the **Phase 4b whole-suite parity run** (geode↔tiny-skia at the policy
-metric: per-pixel `kDefaultThreshold` 0.02, `includeAA=false`; px = diff count). All are
-gated in the `GeodeTinyParity` mode via `geodeParityGate` (reason references 0038) and stay
-green; root causes TBD. **19 tests** — 14 under `text/`, plus 5 text-rendering cases that
-sit under paint directories (`*-on-text` / `pattern text-child`) but are the same drawText
-re-derivation gaps.
+From the **Phase 4b whole-suite parity run** (geode↔tiny-skia at the policy metric: per-pixel
+`kDefaultThreshold` 0.02, `includeAA=false`; px = diff count). **Audited 2026-05-26** by
+eyeballing every diff PNG (geode + tiny + diff) — magnitude alone is *not* decisive
+(B10 is 3488px yet edge-floor; a baseline-shift offset is kilo-pixel AND structural).
+Classified by **where the diff lands**:
 
-| # | px | test | symptom (eyeballed) | suspected layer | Hoist |
-|---|---|---|---|---|---|
-| B1 | 19750 | `text/baseline-shift/nested-with-baseline-2` | nested baseline-shift offset accumulates wrong | (a) baseline-shift | **Y** |
-| B2 | 12886 | `text/baseline-shift/nested-with-baseline-1` | same family, single nest | (a) baseline-shift | **Y** |
-| B3 | 4338 | `text/baseline-shift/mixed-nested` | mixed sub/super nest offset | (a) baseline-shift | **Y** |
-| B4 | 4320 | `text/baseline-shift/deeply-nested-super` | deep super-nest offset | (a) baseline-shift | **Y** |
-| B5 | 2870 | `text/baseline-shift/nested-super` | super-nest offset | (a) baseline-shift | **Y** |
-| B6 | 2438 | `text/baseline-shift/nested-length` | length-based nest offset | (a) baseline-shift | **Y** |
-| B7 | 4643 | `text/text-decoration/underline-with-dy-list-2` | per-char `dy` list applied differently; doubled outlines | (a) per-char dy | **Y** |
-| B8 | 4561 | `text/text-decoration/underline-with-rotate-list-4` | per-glyph rotate-list drift | (a) per-char rotate | **Y** |
-| B9 | 1822 | `text/text-decoration/tspan-decoration` | glyph+decoration drift across styled spans | (a)+(c) | **Y** |
-| B10 | 3488 | `text/font-size/named-value` | named-size (`xx-small`…) lines vertically offset, accumulating | (d) font-size resolution | **Y** |
-| B11 | 2929 | `text/tspan/tspan-bbox-2` | solid fill-color diff (paint via text bbox) | (b) bbox paint | **Y** |
-| B12 | 1803 | `text/tspan/tspan-bbox-1` | solid fill-color diff (same family as B11) | (b) bbox paint | **Y** |
-| B13 | 2219 | `text/textPath/dy-with-tiny-coordinates` | glyphs drift along path (tiny `dy`) | (a) textPath dy | **Y** |
-| B14 | 932 | `text/letter-spacing/on-Arabic` | letter-spacing applied differently on Arabic shaping | (a) letter-spacing | **Y** |
-| B15 | 14562 | `painting/fill/radial-gradient-on-text` | radial-gradient fill on text — bbox/paint diff | (b) bbox paint | **Y** |
-| B16 | 13115 | `painting/stroke/pattern-on-text` | pattern stroke on text | (b) paint resolution | **Y** |
-| B17 | 11917 | `painting/stroke/linear-gradient-on-text` | linear-gradient stroke on text | (b) bbox paint | **Y** |
-| B18 | 10195 | `painting/fill/linear-gradient-on-text` | linear-gradient fill on text | (b) bbox paint | **Y** |
-| B19 | 1663 | `paint-servers/pattern/text-child` | `<pattern>` with a text child | (b) paint resolution | **Y** |
+- **STRUCTURAL** — geode renders *wrong* (whole-glyph offset / wrong paint / missing text);
+  solid-region diff. Stays in `kGenuineText`; the hoist's paint(b) + baseline-shift/dy-rotate
+  consume increments target these. **14 tests.**
+- **EDGE-FLOOR (was mislabeled)** — geode renders *correct* (right glyphs/positions/colors);
+  the diff is the thin 4× MSAA fringe, over 100px only from large cumulative perimeter (many
+  lines / long strings / tiled or on-path small text). Moved to `kEdgeFloor`. **5 tests.**
 
-Likely shared roots: **B1–B6** (one baseline-shift nesting bug — the largest cluster, newly
-surfaced by parity; was not in the strict-0 list); **B11+B12+B15+B17+B18** (per-span /
-text-bbox paint resolution — gradient/pattern-on-text); **B7+B8** (per-char `dy`/`rotate`
-list consumption).
+| # | px | test | class | symptom (eyeballed) | layer | Hoist |
+|---|---|---|---|---|---|---|
+| B1 | 19750 | `text/baseline-shift/nested-with-baseline-2` | **STRUCT** | tiny draws 2 strings (black shifted + red reset); **geode draws only 1 unshifted** — nested baseline-shift ignored | (a) baseline-shift | **Y** |
+| B2 | 12886 | `text/baseline-shift/nested-with-baseline-1` | **STRUCT** | same: geode drops the shifted/reset string | (a) baseline-shift | **Y** |
+| B3 | 4338 | `text/baseline-shift/mixed-nested` | **STRUCT** | center+right "Text" solid-offset vs tiny | (a) baseline-shift | **Y** |
+| B4 | 4320 | `text/baseline-shift/deeply-nested-super` | **STRUCT** | C/D/E/F progressively wrong super-shift (A/B match) | (a) baseline-shift | **Y** |
+| B5 | 2870 | `text/baseline-shift/nested-super` | **STRUCT** | rightmost "Text" solid-offset (left two match) | (a) baseline-shift | **Y** |
+| B6 | 2438 | `text/baseline-shift/nested-length` | **STRUCT** | rightmost "Text" solid-offset | (a) baseline-shift | **Y** |
+| B7 | 4643 | `text/text-decoration/underline-with-dy-list-2` | **STRUCT** | per-char `dy` staircase differs; whole-glyph vertical offset | (a) per-char dy | **Y** |
+| B8 | 4561 | `text/text-decoration/underline-with-rotate-list-4` | **STRUCT** | per-char rotate list differs; glyphs rotated to wrong angles | (a) per-char rotate | **Y** |
+| B11 | 2929 | `text/tspan/tspan-bbox-2` | **STRUCT** | both lines solid fill-color diff (paint via text bbox) | (b) bbox paint | **Y** |
+| B12 | 1803 | `text/tspan/tspan-bbox-1` | **STRUCT** | "long" span solid fill-color diff (bbox paint) | (b) bbox paint | **Y** |
+| B15 | 14562 | `painting/fill/radial-gradient-on-text` | **STRUCT** | gradient fill ramp differs across whole glyph bodies | (b) bbox paint | **Y** |
+| B16 | 13115 | `painting/stroke/pattern-on-text` | **STRUCT** | pattern stroke tiling/placement differs | (b) paint resolution | **Y** |
+| B17 | 11917 | `painting/stroke/linear-gradient-on-text` | **STRUCT** | linear-gradient stroke ramp differs | (b) bbox paint | **Y** |
+| B18 | 10195 | `painting/fill/linear-gradient-on-text` | **STRUCT** | linear-gradient fill ramp differs | (b) bbox paint | **Y** |
+| ~~B9~~ | 1822 | `text/text-decoration/tspan-decoration` | EDGE | geode renders correct multi-color text + underlines; thin fringe on long small string | — | n/a |
+| ~~B10~~ | 3488 | `text/font-size/named-value` | EDGE | 11 small (size-12) lines render correct; cumulative edge fringe | — | n/a |
+| ~~B13~~ | 2219 | `text/textPath/dy-with-tiny-coordinates` | EDGE | glyphs correctly on-path; fringe + 0.5px path line | — | n/a |
+| ~~B14~~ | 932 | `text/letter-spacing/on-Arabic` | EDGE | correct glyphs/spacing; fringe + ref lines | — | n/a |
+| ~~B19~~ | 1663 | `paint-servers/pattern/text-child` | EDGE | `<pattern>` tiled with text renders correct; fringe over tiled field | — | n/a |
+
+**Structural shared roots (the hoist targets):** **B1–B6** baseline-shift nesting (geode
+ignores/mis-applies nested baseline-shift — the largest, most clearly-broken cluster);
+**B11/B12/B15/B17/B18** per-span / text-bbox gradient paint resolution; **B16** pattern-on-
+text paint; **B7/B8** per-char `dy`/`rotate` list consumption. (B16 is pattern *as the text
+fill*, structural; the EDGE B19 `pattern/text-child` is a `<pattern>` *containing* text,
+which renders correctly.)
+
+> Surprise / contradiction to flag: B1/B2 show geode **drops an entire baseline-shifted
+> string**, and B7/B8 show whole-glyph dy/rotate offsets — yet increment-2 analysis found
+> `glyph.{x,y,rotate}` *identical* between backends (shared `runs` cache). So the baseline-
+> shift / dy-rotate divergence is **not** in the shared glyph positions — it's in a
+> per-backend consume path (decoration/second-pass placement, or geode re-deriving shift)
+> that the increment-3 (already-shared font-size/scale) finding did not cover. The
+> baseline-shift increment must locate where geode diverges despite identical layout input.
 
 > Note: the strict-0 characterization listed `font-size/negative-size` (5588) and
-> `tspan/with-opacity` (1599) as bugs; both drop below the 100-px flat budget at the policy
-> 0.02 threshold (negative-size: geode's near-empty render matches tiny's within tolerance;
-> with-opacity: a sub-visual alpha offset). They are NOT gated.
+> `tspan/with-opacity` (1599) as bugs; both drop below the 100-px flat budget at 0.02 and are
+> NOT gated.
 
-> Every catalogued divergence is a **Hoist = Y** — which is itself the argument for the
-> shared layer: there is no backend-specific reason for any of these to differ.
+> Every STRUCTURAL divergence is a **Hoist = Y** — there is no backend-specific reason for
+> any of them to differ.
 
 ### Open — non-text filter divergences (parity-gated, reason → 0021 §G2)
 
@@ -175,11 +190,15 @@ Key facts that shape the order (confirmed in code):
    impossible for any future stretch+rotate test, and converges the code path geode 3–5 build
    on), but it is a no-op at the pixel level. **← THIS INCREMENT (no gates flipped; none
    un-gated, per "un-gate only on measured ≤100px pass").**
-3. **Per-run scale + font-size resolution (d).** Hoist `spanFontSizePx` / `scale` /
-   `scaleForPixelHeight` / em-scale derivation into the builder (it's re-derived per backend
-   today). tiny adopts; geode converges. *Subsumes on geode-adopt:* B10 (named font-size).
-   *(Re-numbered: was step 2; the increments below shift by one.)*
-3. **Paint resolution (b) — `resolveSpanFill` / stroke / opacity / bbox.** The builder
+3. ~~**Per-run scale + font-size resolution (d).**~~ **SKIPPED — already shared.** Audited:
+   `spanFontSizePx` (element + per-span override, named/percent values) and
+   `scaleForPixelHeight` are computed by a **byte-identical** expression in both backends
+   (same inputs), so there is nothing to extract — it flips no gates. B10
+   (`font-size/named-value`) was *not* a font-size bug at all: the named keywords are on the
+   `<rect>`s, the text is all size-12, geode renders it correctly, and the 3488px is edge
+   fringe over 11 small lines → reclassified **edge-floor** (gate moved to `kEdgeFloor`).
+   The next real consume-path increment is paint resolution below.
+4. **Paint resolution (b) — `resolveSpanFill` / stroke / opacity / bbox.** The builder
    resolves each run's fill (solid/gradient/pattern), stroke, and the `objectBoundingBox`
    text bbox into backend-agnostic descriptors (color + a paint-server handle + bbox), so
    both backends map the *same* resolved paint to their own shader/pipeline. *Subsumes:*
@@ -211,5 +230,15 @@ byte-identical to pre-increment**: whole-suite parity 1035 ≤100 / 228 >100 (un
 GeodeGolden 1046 pass (unchanged), all 3 modes FAIL=0. **0 of the 228 gates flipped** — the
 D4 order fix is latent (no test triggers stretch+rotate together), so no `kGenuineText` /
 `kEdgeFloor` entry was removed. The real text divergences move in increments 3–5 (scale /
-paint / decoration / baseline-shift consume paths). Gate ledger remains 19 text + 37 G2 +
+paint / decoration / baseline-shift consume paths). Gate ledger then was 19 text + 37 G2 +
 172 edge-floor = 228.
+
+**Audit detail (2026-05-26 — triage pass, ledger-only, no refactor):** eyeballed all 19
+`kGenuineText` diff PNGs → 14 STRUCTURAL (stay) / 5 EDGE-FLOOR mislabeled (moved to
+`kEdgeFloor`): `font-size/named-value`, `text-decoration/tspan-decoration`,
+`textPath/dy-with-tiny-coordinates`, `letter-spacing/on-Arabic`, `paint-servers/pattern/
+text-child`. Also confirmed (increment-3 finding) per-run font-size/scale is already
+byte-identical between backends — no extraction needed. **Gate ledger now: 14 text + 37 G2 +
+177 edge-floor = 228** (total unchanged; all green; only the skip *reason* changed for the 5
+moved). The 14 STRUCTURAL are the explicit hoist-target list for the paint(b) +
+baseline-shift/dy-rotate consume increments.
