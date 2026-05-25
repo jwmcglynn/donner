@@ -294,10 +294,13 @@ jobs:
           rc=$?
           set -e
           if [ "$rc" != "0" ]; then
-            echo "=== [diag] geode parity failures from test.log (temp instrumentation) ==="
-            find bazel-testlogs -path '*resvg_test_suite_geode*' -name test.log \
-              -exec grep -hE "pixels differ \(budget|geode-vs-tiny-skia pixels differ|SIZEMISMATCH|\[  FAILED  \]" {} \; \
-              | sort -u | head -300
+            tl=$(bazelisk info bazel-testlogs 2>/dev/null)
+            echo "=== [diag] bazel-testlogs=$tl ==="
+            for log in "$tl"/donner/svg/renderer/tests/resvg_test_suite_geode/test.log \
+                       "$tl"/donner/svg/renderer/tests/resvg_test_suite_geode/shard_*/test.log \
+                       "$tl"/donner/svg/renderer/tests/resvg_test_suite_geode/attempt_*.log; do
+              [ -f "$log" ] && { echo "--- [diag] $log (tail 140) ---"; tail -140 "$log"; }
+            done
             echo "=== [diag] end ==="
           fi
           exit $rc
