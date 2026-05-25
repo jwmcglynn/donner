@@ -175,6 +175,45 @@ bool ReadOptionalInt(const json& arguments, std::string_view key, int fallback, 
   return true;
 }
 
+bool ReadOptionalUint64(const json& arguments, std::string_view key, std::uint64_t fallback,
+                        std::uint64_t* out, std::string* error) {
+  const auto it = arguments.find(key);
+  if (it == arguments.end() || it->is_null()) {
+    *out = fallback;
+    return true;
+  }
+  if (!it->is_number_integer()) {
+    *error = "argument must be an integer: " + std::string(key);
+    return false;
+  }
+  if (it->is_number_unsigned()) {
+    *out = it->get<std::uint64_t>();
+    return true;
+  }
+
+  const int64_t value = it->get<int64_t>();
+  if (value < 0) {
+    *error = "integer argument must be non-negative: " + std::string(key);
+    return false;
+  }
+  *out = static_cast<std::uint64_t>(value);
+  return true;
+}
+
+bool ReadNonNegativeIntMember(const json& object, std::string_view key, int* out,
+                              std::string* error) {
+  int value = 0;
+  if (!ReadOptionalInt(object, key, 0, &value, error)) {
+    return false;
+  }
+  if (value < 0) {
+    *error = "integer argument must be non-negative: " + std::string(key);
+    return false;
+  }
+  *out = value;
+  return true;
+}
+
 bool ReadOptionalDouble(const json& arguments, std::string_view key, double fallback, double* out,
                         std::string* error) {
   const auto it = arguments.find(key);
@@ -1055,6 +1094,62 @@ json EditorControlSession::toolList() {
            }},
       },
       {
+          {"name", "get_svg_source"},
+          {"description",
+           "Return the editable SVG source draft currently owned by the headless editor session."},
+          {"inputSchema",
+           {
+               {"type", "object"},
+               {"properties",
+                {
+                    {"offset", {{"type", "integer"}, {"minimum", 0}, {"default", 0}}},
+                    {"length", {{"type", "integer"}, {"minimum", 0}}},
+                }},
+           }},
+      },
+      {
+          {"name", "edit_svg_source"},
+          {"description",
+           "Apply incremental text edits to the editable SVG source draft, then parse and "
+           "optionally render the result when the draft is valid."},
+          {"inputSchema",
+           {
+               {"type", "object"},
+               {"properties",
+                {
+                    {"replace_source",
+                     {{"type", "string"},
+                      {"description", "Optional complete replacement for the SVG draft."}}},
+                    {"source_path", {{"type", "string"}}},
+                    {"expected_source_revision",
+                     {{"type", "integer"},
+                      {"minimum", 0},
+                      {"description",
+                       "Optional guard: reject the edit if the source draft has changed."}}},
+                    {"edits",
+                     {{"type", "array"},
+                      {"items",
+                       {{"type", "object"},
+                        {"properties",
+                         {
+                             {"offset", {{"type", "integer"}, {"minimum", 0}}},
+                             {"delete_count",
+                              {{"type", "integer"}, {"minimum", 0}, {"default", 0}}},
+                             {"insert", {{"type", "string"}, {"default", ""}}},
+                         }},
+                        {"required", json::array({"offset"})}}}}},
+                    {"allow_parse_failure", {{"type", "boolean"}, {"default", true}}},
+                    {"render_after_edit", {{"type", "boolean"}, {"default", true}}},
+                    {"canvas_width", {{"type", "integer"}, {"minimum", 1}}},
+                    {"canvas_height", {{"type", "integer"}, {"minimum", 1}}},
+                    {"device_pixel_ratio", {{"type", "number"}, {"default", 1.0}}},
+                    {"include_final_frame", {{"type", "boolean"}, {"default", true}}},
+                    {"include_tile_images", {{"type", "boolean"}, {"default", false}}},
+                    {"embed_png_base64", {{"type", "boolean"}, {"default", false}}},
+                }},
+           }},
+      },
+      {
           {"name", "select_by_selector"},
           {"description", "Select the first element matching a CSS selector."},
           {"inputSchema",
@@ -1200,6 +1295,8 @@ ToolCallResult EditorControlSession::handleToolCall(std::string_view name, const
   }
   if (name == "load_document") return loadDocument(arguments);
   if (name == "load_svg") return loadSvg(arguments);
+  if (name == "get_svg_source") return getSvgSource(arguments);
+  if (name == "edit_svg_source") return editSvgSource(arguments);
   if (name == "select_by_selector") return selectBySelector(arguments);
   if (name == "drag_selector") return dragSelector(arguments);
   if (name == "render_frame") return renderFrameTool(arguments);
@@ -1248,21 +1345,34 @@ ToolCallResult EditorControlSession::loadSvg(const json& arguments) {
   return loadSvgSource(source, options, sourcePath);
 }
 
-ToolCallResult EditorControlSession::loadSvgSource(std::string_view source,
-                                                   const LoadOptions& options,
-                                                   std::string_view sourcePath) {
-  std::string error;
-  if (!waitUntilIdle(&error)) {
-    return MakeErrorResult(error);
+json EditorControlSession::sourceStateJson() const {
+  return json{
+      {"source_path", currentSourcePath_},
+      {"source_revision", sourceRevision_},
+      {"loaded_source_revision", loadedSourceRevision_},
+      {"preview_stale", sourceRevision_ != loadedSourceRevision_},
+      {"source_length", currentSourceText_.size()},
+      {"source_hash", ReproContentHash(currentSourceText_)},
+      {"last_parse_error", lastParseError_.has_value() ? json(*lastParseError_) : json(nullptr)},
+  };
+}
+
+bool EditorControlSession::loadCurrentSourceText(const LoadOptions& options,
+                                                 std::string_view sourcePath,
+                                                 bool resetRenderVersion, json* loadInfo,
+                                                 std::string* error) {
+  if (!waitUntilIdle(error)) {
+    return false;
   }
 
-  if (!app_.loadFromString(source)) {
-    return MakeErrorResult("failed to parse SVG source");
+  if (!app_.loadFromString(currentSourceText_)) {
+    *error = "failed to parse SVG source";
+    return false;
   }
+
   currentSourcePath_ = std::string(sourcePath);
-  currentSourceText_ = std::string(source);
   app_.setCurrentFilePath(std::string(sourcePath));
-  app_.setCleanSourceText(source);
+  app_.setCleanSourceText(currentSourceText_);
   app_.flushFrame();
 
   selectTool_ = std::make_unique<SelectTool>();
@@ -1281,17 +1391,47 @@ ToolCallResult EditorControlSession::loadSvgSource(std::string_view source,
   devicePixelRatio_ = options.devicePixelRatio > 0.0 ? options.devicePixelRatio : 1.0;
   app_.document().document().setCanvasSize(canvasWidth_, canvasHeight_);
 
-  nextRenderVersion_ = 1;
+  if (resetRenderVersion) {
+    nextRenderVersion_ = 1;
+  }
+  loadedSourceRevision_ = sourceRevision_;
+  lastParseError_.reset();
 
-  ToolCallResult out;
-  out.body = json{
+  *loadInfo = json{
       {"ok", true},
       {"source_path", std::string(sourcePath)},
       {"canvas", {{"width", canvasWidth_}, {"height", canvasHeight_}}},
       {"device_pixel_ratio", devicePixelRatio_},
       {"document_view_box", BoxToJson(viewBox)},
       {"selection", selectedElementJson()},
+      {"source", sourceStateJson()},
   };
+  return true;
+}
+
+ToolCallResult EditorControlSession::loadSvgSource(std::string_view source,
+                                                   const LoadOptions& options,
+                                                   std::string_view sourcePath) {
+  const std::string previousSourcePath = currentSourcePath_;
+  const std::string previousSourceText = currentSourceText_;
+  const std::uint64_t previousSourceRevision = sourceRevision_;
+  const std::uint64_t previousLoadedSourceRevision = loadedSourceRevision_;
+  const std::optional<std::string> previousParseError = lastParseError_;
+
+  currentSourcePath_ = std::string(sourcePath);
+  currentSourceText_ = std::string(source);
+  ++sourceRevision_;
+
+  ToolCallResult out;
+  std::string error;
+  if (!loadCurrentSourceText(options, sourcePath, /*resetRenderVersion=*/true, &out.body, &error)) {
+    currentSourcePath_ = previousSourcePath;
+    currentSourceText_ = previousSourceText;
+    sourceRevision_ = previousSourceRevision;
+    loadedSourceRevision_ = previousLoadedSourceRevision;
+    lastParseError_ = previousParseError;
+    return MakeErrorResult(error);
+  }
 
   if (options.renderAfterLoad) {
     std::vector<CapturedRenderResult> renderResults;
@@ -1301,6 +1441,178 @@ ToolCallResult EditorControlSession::loadSvgSource(std::string_view source,
     out.body["render_stages"] =
         RenderResultsJson(renderResults, &out, options.captureOptions, "load");
   }
+  return out;
+}
+
+ToolCallResult EditorControlSession::getSvgSource(const json& arguments) const {
+  std::string error;
+  int requestedOffset = 0;
+  if (!ReadNonNegativeIntMember(arguments, "offset", &requestedOffset, &error)) {
+    return MakeErrorResult(error);
+  }
+
+  const std::size_t offset = static_cast<std::size_t>(requestedOffset);
+  if (offset > currentSourceText_.size()) {
+    return MakeErrorResult("offset is past the end of the SVG source");
+  }
+
+  std::size_t length = currentSourceText_.size() - offset;
+  if (arguments.contains("length") && !arguments["length"].is_null()) {
+    int requestedLength = 0;
+    if (!ReadNonNegativeIntMember(arguments, "length", &requestedLength, &error)) {
+      return MakeErrorResult(error);
+    }
+    length =
+        std::min(static_cast<std::size_t>(requestedLength), currentSourceText_.size() - offset);
+  }
+
+  ToolCallResult out;
+  out.body = json{
+      {"ok", true},
+      {"source", sourceStateJson()},
+      {"offset", offset},
+      {"length", length},
+      {"text", currentSourceText_.substr(offset, length)},
+  };
+  return out;
+}
+
+ToolCallResult EditorControlSession::editSvgSource(const json& arguments) {
+  if (rnrRecording_.active) {
+    return MakeErrorResult("editing SVG source while an .rnr recording is active is not supported");
+  }
+
+  std::string error;
+  (void)drainPendingWritebacks();
+
+  bool allowParseFailure = true;
+  bool renderAfterEdit = true;
+  std::uint64_t expectedSourceRevision = sourceRevision_;
+  std::string sourcePath;
+  if (!ReadOptionalBool(arguments, "allow_parse_failure", true, &allowParseFailure, &error) ||
+      !ReadOptionalBool(arguments, "render_after_edit", true, &renderAfterEdit, &error) ||
+      !ReadOptionalUint64(arguments, "expected_source_revision", sourceRevision_,
+                          &expectedSourceRevision, &error) ||
+      !ReadOptionalString(arguments, "source_path", currentSourcePath_, &sourcePath, &error)) {
+    return MakeErrorResult(error);
+  }
+  if (expectedSourceRevision != sourceRevision_) {
+    return MakeErrorResult("expected_source_revision does not match the current SVG source");
+  }
+
+  LoadOptions options;
+  options.canvasWidth = canvasWidth_;
+  options.canvasHeight = canvasHeight_;
+  options.devicePixelRatio = devicePixelRatio_ > 0.0 ? devicePixelRatio_ : 1.0;
+  options.renderAfterLoad = renderAfterEdit;
+  if (!ReadOptionalInt(arguments, "canvas_width", options.canvasWidth, &options.canvasWidth,
+                       &error) ||
+      !ReadOptionalInt(arguments, "canvas_height", options.canvasHeight, &options.canvasHeight,
+                       &error) ||
+      !ReadOptionalDouble(arguments, "device_pixel_ratio", options.devicePixelRatio,
+                          &options.devicePixelRatio, &error) ||
+      !ReadCaptureOptions(arguments, true, &options.captureOptions, &error)) {
+    return MakeErrorResult(error);
+  }
+
+  const auto replaceIt = arguments.find("replace_source");
+  const auto editsIt = arguments.find("edits");
+  if ((replaceIt == arguments.end() || replaceIt->is_null()) &&
+      (editsIt == arguments.end() || editsIt->is_null()) && currentSourceText_.empty()) {
+    return MakeErrorResult("edit_svg_source requires replace_source or edits for an empty session");
+  }
+
+  std::string nextSource = currentSourceText_;
+  if (replaceIt != arguments.end() && !replaceIt->is_null()) {
+    if (!replaceIt->is_string()) {
+      return MakeErrorResult("argument must be a string: replace_source");
+    }
+    nextSource = replaceIt->get<std::string>();
+  }
+
+  if (editsIt != arguments.end() && !editsIt->is_null()) {
+    if (!editsIt->is_array()) {
+      return MakeErrorResult("argument must be an array: edits");
+    }
+    int editIndex = 0;
+    for (const json& edit : *editsIt) {
+      if (!edit.is_object()) {
+        return MakeErrorResult("each edit must be an object");
+      }
+      if (!edit.contains("offset")) {
+        return MakeErrorResult("each edit requires offset");
+      }
+
+      int requestedOffset = 0;
+      int requestedDeleteCount = 0;
+      std::string insert;
+      if (!ReadNonNegativeIntMember(edit, "offset", &requestedOffset, &error) ||
+          !ReadNonNegativeIntMember(edit, "delete_count", &requestedDeleteCount, &error) ||
+          !ReadOptionalString(edit, "insert", "", &insert, &error)) {
+        return MakeErrorResult("edit " + std::to_string(editIndex) + ": " + error);
+      }
+
+      const std::size_t offset = static_cast<std::size_t>(requestedOffset);
+      const std::size_t deleteCount = static_cast<std::size_t>(requestedDeleteCount);
+      if (offset > nextSource.size()) {
+        return MakeErrorResult("edit " + std::to_string(editIndex) +
+                               ": offset is past the end of the SVG source");
+      }
+      if (deleteCount > nextSource.size() - offset) {
+        return MakeErrorResult("edit " + std::to_string(editIndex) +
+                               ": delete_count extends past the end of the SVG source");
+      }
+      nextSource.replace(offset, deleteCount, insert);
+      ++editIndex;
+    }
+  }
+
+  const std::string previousSourcePath = currentSourcePath_;
+  const std::string previousSourceText = currentSourceText_;
+  const std::uint64_t previousSourceRevision = sourceRevision_;
+  const std::uint64_t previousLoadedSourceRevision = loadedSourceRevision_;
+  const std::optional<std::string> previousParseError = lastParseError_;
+
+  currentSourcePath_ = sourcePath;
+  currentSourceText_ = std::move(nextSource);
+  ++sourceRevision_;
+
+  ToolCallResult out;
+  json loadInfo;
+  if (!loadCurrentSourceText(options, sourcePath, /*resetRenderVersion=*/true, &loadInfo, &error)) {
+    lastParseError_ = error;
+    if (!allowParseFailure) {
+      currentSourcePath_ = previousSourcePath;
+      currentSourceText_ = previousSourceText;
+      sourceRevision_ = previousSourceRevision;
+      loadedSourceRevision_ = previousLoadedSourceRevision;
+      lastParseError_ = previousParseError;
+      return MakeErrorResult(error);
+    }
+
+    out.body = json{
+        {"ok", true},
+        {"parsed", false},
+        {"preview_stale", true},
+        {"parse_error", error},
+        {"source", sourceStateJson()},
+        {"attached_image_count", 0},
+    };
+    return out;
+  }
+
+  out.body = std::move(loadInfo);
+  out.body["parsed"] = true;
+  out.body["preview_stale"] = false;
+  if (options.renderAfterLoad) {
+    std::vector<CapturedRenderResult> renderResults;
+    if (!renderCurrentFrame(&renderResults, &error)) {
+      return MakeErrorResult(error);
+    }
+    out.body["render_stages"] =
+        RenderResultsJson(renderResults, &out, options.captureOptions, "edit_svg_source");
+  }
+  out.body["attached_image_count"] = out.images.size();
   return out;
 }
 
@@ -1517,6 +1829,7 @@ ToolCallResult EditorControlSession::renderFrameTool(const json& arguments) {
   }
   out.body = json{
       {"ok", true},
+      {"source", sourceStateJson()},
       {"selection", selectedElementJson()},
       {"stages", RenderResultsJson(renderResults, &out, capture, "render_frame")},
   };
@@ -1531,6 +1844,7 @@ ToolCallResult EditorControlSession::sessionState(const json&) const {
       {"has_document", app_.hasDocument()},
       {"canvas", {{"width", canvasWidth_}, {"height", canvasHeight_}}},
       {"device_pixel_ratio", devicePixelRatio_},
+      {"source", sourceStateJson()},
       {"selection", selectedElementJson()},
       {"worker_compositor_entity", EntityToJsonValue(asyncRenderer_.workerCompositorEntity())},
   };
@@ -2334,7 +2648,14 @@ bool EditorControlSession::drainPendingWritebacks() {
 
   const std::vector<EditorApp::CompletedElementRemoveWriteback> elementRemoveWritebacks =
       app_.consumeElementRemoveWritebacks();
-  return changed || !elementRemoveWritebacks.empty();
+  changed = changed || !elementRemoveWritebacks.empty();
+  if (changed && app_.hasDocument()) {
+    currentSourceText_ = std::string(app_.document().document().source());
+    ++sourceRevision_;
+    loadedSourceRevision_ = sourceRevision_;
+    lastParseError_.reset();
+  }
+  return changed;
 }
 
 bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>* results,

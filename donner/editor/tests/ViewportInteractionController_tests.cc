@@ -32,6 +32,17 @@ TEST(ViewportInteractionControllerTest, ApplyZoomUsesViewportCenterMath) {
   EXPECT_NEAR(documentBefore.y, documentAfter.y, 1e-9);
 }
 
+TEST(ViewportInteractionControllerTest, PanCursorShowsForSpacePanModeOrActivePan) {
+  EXPECT_TRUE(ShouldShowRenderPanePanCursor(/*canvasHovered=*/true, /*spaceHeld=*/true,
+                                            /*panning=*/false));
+  EXPECT_TRUE(ShouldShowRenderPanePanCursor(/*canvasHovered=*/false, /*spaceHeld=*/false,
+                                            /*panning=*/true));
+  EXPECT_FALSE(ShouldShowRenderPanePanCursor(/*canvasHovered=*/false, /*spaceHeld=*/true,
+                                             /*panning=*/false));
+  EXPECT_FALSE(ShouldShowRenderPanePanCursor(/*canvasHovered=*/true, /*spaceHeld=*/false,
+                                             /*panning=*/false));
+}
+
 TEST(ViewportInteractionControllerTest, ConsumeScrollEventsAppliesPanAndZoom) {
   ViewportInteractionController controller;
   controller.viewport().paneOrigin = Vector2d::Zero();

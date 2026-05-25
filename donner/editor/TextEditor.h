@@ -1254,6 +1254,7 @@ private:
   void renderInternal(std::string_view title);
   void rebuildVisualLines(const ImVec2& contentSize);
   [[nodiscard]] bool isLineHiddenByFocus(int lineNo) const;
+  [[nodiscard]] bool isLineReferenceColoredByFocus(int lineNo) const;
   [[nodiscard]] bool isLineDimmedByFocus(int lineNo) const;
   [[nodiscard]] bool isLineExpandedHiddenByFocus(int lineNo) const;
   [[nodiscard]] std::optional<LineRange> focusHiddenRangeForLine(int lineNo) const;

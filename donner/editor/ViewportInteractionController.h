@@ -50,6 +50,15 @@ struct PendingClick {
   MouseModifiers modifiers;
 };
 
+/**
+ * Return whether the render pane should show the pan-mode cursor.
+ *
+ * @param canvasHovered True when the mouse is over the interactive canvas area.
+ * @param spaceHeld True while the spacebar pan modifier is held.
+ * @param panning True while an active mouse-pan drag is in progress.
+ */
+[[nodiscard]] bool ShouldShowRenderPanePanCursor(bool canvasHovered, bool spaceHeld, bool panning);
+
 /// Owns viewport/input state for the render pane: zoom/pan, pending click dispatch, and frame
 /// timing history.
 class ViewportInteractionController {

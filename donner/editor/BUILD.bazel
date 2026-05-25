@@ -88,6 +88,8 @@ donner_cc_library(
     srcs = ["RotateCursorSet.cc"],
     hdrs = ["RotateCursorSet.h"],
     deps = [
+        ":pan_closed_cursor_svg",
+        ":pan_cursor_svg",
         ":rotate_cursor_svg",
         ":selection_transform_handles",
         "//donner/base",
@@ -124,7 +126,6 @@ donner_cc_library(
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
-        "//donner/svg/components/style:style_system",
     ],
 )
 
@@ -670,6 +671,22 @@ filegroup(
 # exposes `donner::embedded::kEditorNoticeText` as a
 # `std::span<const unsigned char>`. The editor's Help → About dialog
 # displays this.
+embed_resources(
+    name = "pan_closed_cursor_svg",
+    header_output = "donner/editor/PanClosedCursorSvg.h",
+    resources = {
+        "kPanClosedCursorSvg": "pan_closed_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "pan_cursor_svg",
+    header_output = "donner/editor/PanCursorSvg.h",
+    resources = {
+        "kPanCursorSvg": "pan_cursor.svg",
+    },
+)
+
 embed_resources(
     name = "rotate_cursor_svg",
     header_output = "donner/editor/RotateCursorSvg.h",

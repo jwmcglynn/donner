@@ -2,11 +2,10 @@
 
 #include <optional>
 
-#include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
-#include "donner/svg/components/ElementTypeComponent.h"
 
 namespace donner::editor {
 
@@ -33,9 +32,7 @@ bool IsNonRenderedContainer(svg::ElementType type) {
 }
 
 bool HasLiveSvgTreeComponents(const svg::SVGElement& element) {
-  const EntityHandle handle = element.entityHandle();
-  return handle &&
-         handle.all_of<donner::components::TreeComponent, svg::components::ElementTypeComponent>();
+  return xml::XMLNode::TryCast(element.entityHandle()).has_value() && element.tryType().has_value();
 }
 
 std::optional<svg::SVGElement> SafeFirstChild(const svg::SVGElement& element) {
@@ -47,8 +44,7 @@ std::optional<svg::SVGElement> SafeFirstChild(const svg::SVGElement& element) {
 }
 
 std::optional<svg::SVGElement> SafeNextSibling(const svg::SVGElement& element) {
-  const EntityHandle handle = element.entityHandle();
-  if (!handle || !handle.all_of<donner::components::TreeComponent>()) {
+  if (!xml::XMLNode::TryCast(element.entityHandle()).has_value()) {
     return std::nullopt;
   }
 

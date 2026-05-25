@@ -6,6 +6,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/editor/DialogPresenter.h"
@@ -156,7 +157,19 @@ private:
   void refreshReferenceHighlightSummaryIfNeeded();
   void applyReferenceHighlightPreview();
   void setReferenceHighlightChipHovered(bool hovered);
+  struct SelectionChipBounds {
+    Box2d documentBounds;
+    Box2d screenBounds;
+    Vector2d chipAnchorScreen = Vector2d::Zero();
+  };
   [[nodiscard]] std::optional<Box2d> referenceHighlightChipScreenRect(std::string_view label) const;
+  [[nodiscard]] std::optional<SelectionChipBounds> selectionChipBounds(
+      const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) const;
+  [[nodiscard]] std::optional<Box2d> selectionSizeChipScreenRect(
+      std::string_view label, const Vector2d& chipAnchorScreen) const;
+  void renderSelectionSizeChip(
+      const SelectionTransformHandleIntent& hoverTransformIntent,
+      const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
   void renderReferenceHighlightChip();
   void openRenderPaneContextMenu(const Vector2d& documentPoint);
   void renderRenderPaneContextMenu();

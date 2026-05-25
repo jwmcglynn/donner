@@ -1,6 +1,7 @@
 #include "donner/editor/SelectTool.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -245,6 +246,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
           },
       .extras = {},
       .startDocumentPoint = documentPoint,
+      .startBoundsDoc = CombinedSelectionBounds(selectionBoundsDoc),
       .generation = nextDragGeneration_++,
   };
   return true;
@@ -402,6 +404,13 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 
   const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
   const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
+  std::vector<Box2d> dragStartBoundsDoc;
+  if (isMultiDrag) {
+    dragStartBoundsDoc = selectedBoundsDoc;
+  } else {
+    const std::array<svg::SVGElement, 1> startSelection{element};
+    dragStartBoundsDoc = SnapshotSelectionWorldBounds(startSelection);
+  }
 
   std::vector<PerElementDrag> extras;
   if (isMultiDrag) {
@@ -434,6 +443,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
           },
       .extras = std::move(extras),
       .startDocumentPoint = documentPoint,
+      .startBoundsDoc = CombinedSelectionBounds(dragStartBoundsDoc),
       .generation = nextDragGeneration_++,
   };
 }
@@ -638,6 +648,28 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
       .translation = dragState_->currentDocumentDelta,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
       .dragGeneration = dragState_->generation};
+}
+
+std::optional<SelectTool::ActiveGesturePreview> SelectTool::activeGesturePreview() const {
+  if (!dragState_.has_value()) {
+    return std::nullopt;
+  }
+
+  ActiveGestureKind kind = ActiveGestureKind::Move;
+  switch (dragState_->gestureKind) {
+    case DragState::GestureKind::Move: kind = ActiveGestureKind::Move; break;
+    case DragState::GestureKind::Resize: kind = ActiveGestureKind::Resize; break;
+    case DragState::GestureKind::Rotate: kind = ActiveGestureKind::Rotate; break;
+  }
+
+  return ActiveGesturePreview{
+      .kind = kind,
+      .corner = dragState_->corner,
+      .startBoundsDoc = dragState_->startBoundsDoc,
+      .documentFromStartDocument = dragState_->currentDocumentFromStartDocument,
+      .currentDocumentDelta = dragState_->currentDocumentDelta,
+      .hasMoved = dragState_->hasMoved,
+  };
 }
 
 std::optional<SelectTool::ActiveTransformBoundsPreview> SelectTool::activeTransformBoundsPreview()

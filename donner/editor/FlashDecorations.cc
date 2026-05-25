@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 
 namespace donner::editor {
 
@@ -22,11 +23,11 @@ void FlashDecorations::flash(SourceByteRange byteRange, TimePoint now, std::size
 void FlashDecorations::applySourceEdit(std::size_t offset, std::size_t removedLength,
                                        std::size_t insertedLength, std::size_t newBufferSize) {
   const std::size_t oldEditEnd = offset + removedLength;
-  const long long delta =
-      static_cast<long long>(insertedLength) - static_cast<long long>(removedLength);
+  const std::int64_t delta =
+      static_cast<std::int64_t>(insertedLength) - static_cast<std::int64_t>(removedLength);
 
   const auto shiftOffset = [delta, newBufferSize](std::size_t value) {
-    const long long shifted = static_cast<long long>(value) + delta;
+    const std::int64_t shifted = static_cast<std::int64_t>(value) + delta;
     if (shifted <= 0) {
       return std::size_t{0};
     }

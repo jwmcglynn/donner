@@ -1,28 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
   <g id="rotate-cursor-glyph" transform="rotate(0,16,16)">
-    <g transform="translate(16,16) scale(0.75) translate(-16,-16)">
-      <path
-        d="M 11.5 20.5 C 11.5 15.5 15.5 11.5 20.5 11.5"
-        fill="none"
-        stroke="#ffffff"
-        stroke-width="4.4"
-        stroke-linecap="round"
-        stroke-linejoin="round" />
-      <path
-        d="M 10.7 24.85 Q 11.5 26.2 12.3 24.85 L 15.45 19.5 Q 16.35 18.0 14.6 18.0 H 8.4 Q 6.65 18.0 7.55 19.5 Z"
-        fill="#ffffff" />
-      <path
-        d="M 24.85 10.7 Q 26.2 11.5 24.85 12.3 L 19.5 15.45 Q 18.0 16.35 18.0 14.6 V 8.4 Q 18.0 6.65 19.5 7.55 Z"
-        fill="#ffffff" />
-      <path
-        d="M 11.5 20.5 C 11.5 15.5 15.5 11.5 20.5 11.5"
-        fill="none"
-        stroke="#111111"
-        stroke-width="2.36"
-        stroke-linecap="round"
-        stroke-linejoin="round" />
-      <path d="M 11.5 24.25 L 8.7 19.45 L 14.3 19.45 Z" fill="#111111" />
-      <path d="M 24.25 11.5 L 19.45 8.7 L 19.45 14.3 Z" fill="#111111" />
-    </g>
+    <path
+      d="
+        M 11 25
+        L 7 19
+        L 10 19
+        C 10 14 14 10 19 10
+        L 19 7
+        L 25 11
+        L 19 15
+        L 19 12
+        C 15 12 12 15 12 19
+        L 15 19
+        Z"
+      fill="#000000"
+      stroke="#ffffff"
+      stroke-width="0.75"
+      stroke-linejoin="round" />
   </g>
 </svg>

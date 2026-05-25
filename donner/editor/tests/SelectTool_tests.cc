@@ -576,8 +576,17 @@ TEST_F(SelectToolTest, MultiSelectDragMovesAllSelectedElements) {
   ASSERT_TRUE(tool.isDragging()) << "click on selected element starts a drag";
   EXPECT_EQ(app.selectedElements().size(), 2u)
       << "selection preserved — clicking an already-selected element does not collapse";
+  const auto moveGestureBeforeMove = tool.activeGesturePreview();
+  ASSERT_TRUE(moveGestureBeforeMove.has_value());
+  EXPECT_EQ(moveGestureBeforeMove->kind, SelectTool::ActiveGestureKind::Move);
+  EXPECT_FALSE(moveGestureBeforeMove->hasMoved);
 
   tool.onMouseMove(app, Vector2d(65.0, 45.0), /*buttonHeld=*/true);  // delta (50, 30)
+  const auto moveGesture = tool.activeGesturePreview();
+  ASSERT_TRUE(moveGesture.has_value());
+  EXPECT_EQ(moveGesture->kind, SelectTool::ActiveGestureKind::Move);
+  EXPECT_TRUE(moveGesture->hasMoved);
+  EXPECT_EQ(moveGesture->currentDocumentDelta, Vector2d(50.0, 30.0));
   tool.onMouseUp(app, Vector2d(65.0, 45.0));
   ASSERT_TRUE(app.flushFrame());
 
@@ -1043,6 +1052,11 @@ TEST_F(SelectToolTest, ResizeGestureExposesAffinePreview) {
   EXPECT_EQ(preview->entity, elementById("#target").entityHandle().entity());
   EXPECT_FALSE(preview->documentFromCachedDocument.isTranslation())
       << "resize preview must carry an affine scale, not just a drag offset";
+  const auto resizeGesture = tool.activeGesturePreview();
+  ASSERT_TRUE(resizeGesture.has_value());
+  EXPECT_EQ(resizeGesture->kind, SelectTool::ActiveGestureKind::Resize);
+  EXPECT_TRUE(resizeGesture->hasMoved);
+  EXPECT_EQ(resizeGesture->startBoundsDoc, Box2d::FromXYWH(20.0, 20.0, 40.0, 20.0));
 
   const Vector2d anchoredCorner =
       preview->documentFromCachedDocument.transformPosition(Vector2d(20.0, 20.0));
@@ -1182,6 +1196,11 @@ TEST_F(SelectToolTest, RotateZoneRotatesAroundSelectionCenter) {
 
   tool.onMouseDown(app, Vector2d(44.0, 20.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(20.0, 44.0), /*buttonHeld=*/true);
+  const auto rotateGesture = tool.activeGesturePreview();
+  ASSERT_TRUE(rotateGesture.has_value());
+  EXPECT_EQ(rotateGesture->kind, SelectTool::ActiveGestureKind::Rotate);
+  EXPECT_EQ(rotateGesture->corner, SelectionTransformCorner::TopRight);
+  EXPECT_TRUE(rotateGesture->hasMoved);
   tool.onMouseUp(app, Vector2d(20.0, 44.0));
   ASSERT_TRUE(app.flushFrame());
 

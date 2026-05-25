@@ -33,6 +33,12 @@ build before the first proxied request after startup.
 
 - `load_document`: Load an SVG file into the headless editor session.
 - `load_svg`: Load SVG source bytes directly.
+- `get_svg_source`: Return the current editable SVG draft, optionally as a
+  byte range, with source revision, hash, and stale-preview metadata.
+- `edit_svg_source`: Apply source patches or replace the draft source, then
+  parse and optionally render the result. Invalid intermediate XML is kept as
+  the editable draft while the visual preview remains on the last successfully
+  parsed revision.
 - `select_by_selector`: Select an element by CSS selector and optionally prewarm
   the compositor.
 - `drag_selector`: Find an element by CSS selector, synthesize click/drag frames
@@ -62,6 +68,12 @@ build before the first proxied request after startup.
 `render_frame` and `drag_selector` can attach the final frame as PNG MCP image
 content. Tile PNGs are opt-in because the split layer list can be large on the
 splash SVG.
+
+Source editing is revision-guarded: pass `expected_source_revision` to
+`edit_svg_source` after a `get_svg_source` call to avoid applying offsets to a
+draft that changed underneath the MCP client. `render_frame`, `session_state`,
+and source-edit responses include `preview_stale` so an agent can tell when the
+attached image is the last valid rendering rather than the current draft.
 
 Each render stage includes both:
 

@@ -292,6 +292,8 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   EXPECT_TRUE(hasTool("select_by_selector"));
   EXPECT_TRUE(hasTool("drag_selector"));
   EXPECT_TRUE(hasTool("render_frame"));
+  EXPECT_TRUE(hasTool("get_svg_source"));
+  EXPECT_TRUE(hasTool("edit_svg_source"));
   EXPECT_TRUE(hasTool("start_rnr_recording"));
   EXPECT_TRUE(hasTool("stop_rnr_recording"));
   EXPECT_TRUE(hasTool("replay_rnr"));
@@ -304,6 +306,95 @@ TEST(EditorControlSessionTest, InvalidToolCallReturnsErrorResult) {
 
   EXPECT_TRUE(result.isError);
   EXPECT_TRUE(result.body["error"].is_string());
+}
+
+TEST(EditorControlSessionTest, EditsSvgSourceRangeAndRendersPreview) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+  <rect id="target" width="40" height="20" fill="red"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 40},
+                                                                {"canvas_height", 20},
+                                                                {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult source = session.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(source.body.value("ok", false)) << source.body.dump(2);
+  const std::string text = source.body.value("text", "");
+  const std::size_t fillOffset = text.find("red");
+  ASSERT_NE(fillOffset, std::string::npos);
+  const std::uint64_t revision =
+      source.body["source"].value("source_revision", static_cast<std::uint64_t>(0));
+
+  ToolCallResult edit = session.handleToolCall(
+      "edit_svg_source",
+      json{{"expected_source_revision", revision},
+           {"edits",
+            json::array({json{{"offset", fillOffset}, {"delete_count", 3}, {"insert", "blue"}}})},
+           {"canvas_width", 40},
+           {"canvas_height", 20},
+           {"include_final_frame", true}});
+  ASSERT_TRUE(edit.body.value("ok", false)) << edit.body.dump(2);
+  EXPECT_TRUE(edit.body.value("parsed", false));
+  EXPECT_FALSE(edit.body.value("preview_stale", true));
+  EXPECT_FALSE(edit.images.empty());
+
+  ToolCallResult editedSource = session.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(editedSource.body.value("ok", false)) << editedSource.body.dump(2);
+  EXPECT_NE(editedSource.body.value("text", "").find("fill=\"blue\""), std::string::npos);
+}
+
+TEST(EditorControlSessionTest, InvalidSvgSourceEditKeepsDraftAndStalePreview) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+  <rect id="target" width="40" height="20" fill="red"/>
+</svg>)svg";
+  constexpr std::string_view kFixedScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+  <circle id="target" cx="20" cy="10" r="8" fill="white" stroke="black"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 40},
+                                                                {"canvas_height", 20},
+                                                                {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+  const std::uint64_t initialRevision =
+      load.body["source"].value("source_revision", static_cast<std::uint64_t>(0));
+
+  ToolCallResult invalid = session.handleToolCall(
+      "edit_svg_source", json{{"expected_source_revision", initialRevision},
+                              {"replace_source", "<svg xmlns=\"http://www.w3.org/2000/svg\">"},
+                              {"render_after_edit", true}});
+  ASSERT_TRUE(invalid.body.value("ok", false)) << invalid.body.dump(2);
+  EXPECT_FALSE(invalid.body.value("parsed", true));
+  EXPECT_TRUE(invalid.body.value("preview_stale", false));
+  EXPECT_TRUE(invalid.body["parse_error"].is_string());
+  EXPECT_TRUE(invalid.images.empty());
+
+  ToolCallResult staleGuard =
+      session.handleToolCall("edit_svg_source", json{{"expected_source_revision", initialRevision},
+                                                     {"replace_source", std::string(kFixedScene)}});
+  EXPECT_TRUE(staleGuard.isError);
+
+  ToolCallResult draft = session.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(draft.body.value("ok", false)) << draft.body.dump(2);
+  EXPECT_EQ(draft.body.value("text", ""), "<svg xmlns=\"http://www.w3.org/2000/svg\">");
+  EXPECT_TRUE(draft.body["source"].value("preview_stale", false));
+
+  const std::uint64_t draftRevision =
+      draft.body["source"].value("source_revision", static_cast<std::uint64_t>(0));
+  ToolCallResult fixed =
+      session.handleToolCall("edit_svg_source", json{{"expected_source_revision", draftRevision},
+                                                     {"replace_source", std::string(kFixedScene)},
+                                                     {"render_after_edit", false}});
+  ASSERT_TRUE(fixed.body.value("ok", false)) << fixed.body.dump(2);
+  EXPECT_TRUE(fixed.body.value("parsed", false));
+  EXPECT_FALSE(fixed.body["source"].value("preview_stale", true));
 }
 
 TEST(EditorControlSessionTest, PreDragRenderUsesFullCanvasCompositedTile) {

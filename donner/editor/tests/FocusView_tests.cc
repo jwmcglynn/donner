@@ -246,10 +246,8 @@ TEST(FocusViewTest, IncludesReferencedPaintAndCompositingElements) {
 
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
 
-  EXPECT_EQ(partition.fullColor, (std::vector<LineRange>{
-                                     {.startLine = 2, .endLine = 10},
-                                     {.startLine = 11, .endLine = 14},
-                                 }));
+  EXPECT_EQ(partition.fullColor, (std::vector<LineRange>{{.startLine = 11, .endLine = 14}}));
+  EXPECT_EQ(partition.referenceColor, (std::vector<LineRange>{{.startLine = 2, .endLine = 10}}));
   EXPECT_EQ(partition.dimmed, (std::vector<LineRange>{
                                   {.startLine = 0, .endLine = 2},
                                   {.startLine = 10, .endLine = 11},
@@ -305,10 +303,8 @@ TEST(FocusViewTest, IncludesReferencesFromStyleAndDescendantHrefAttributes) {
 
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
 
-  EXPECT_EQ(partition.fullColor, (std::vector<LineRange>{
-                                     {.startLine = 2, .endLine = 4},
-                                     {.startLine = 5, .endLine = 8},
-                                 }));
+  EXPECT_EQ(partition.fullColor, (std::vector<LineRange>{{.startLine = 5, .endLine = 8}}));
+  EXPECT_EQ(partition.referenceColor, (std::vector<LineRange>{{.startLine = 2, .endLine = 4}}));
   EXPECT_EQ(partition.hidden, (std::vector<LineRange>{}));
   EXPECT_EQ(SortLinks(partition.referenceLinks),
             SortLinks(std::vector<FocusReferenceLink>{
@@ -331,16 +327,19 @@ TEST(FocusViewTest, IncludesMatchedCssRulesAndCssDeclarationReferences) {
 
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
 
-  EXPECT_TRUE(ContainsLine(partition.fullColor, PointForNeedle(kCssReferencedSvg, ".cls-92").line));
+  EXPECT_TRUE(
+      ContainsLine(partition.referenceColor, PointForNeedle(kCssReferencedSvg, ".cls-92").line));
   EXPECT_TRUE(ContainsLine(partition.dimmed, PointForNeedle(kCssReferencedSvg, "<style>").line));
   EXPECT_TRUE(ContainsLine(partition.dimmed, PointForNeedle(kCssReferencedSvg, "</style>").line));
   EXPECT_TRUE(
-      ContainsLine(partition.fullColor,
+      ContainsLine(partition.referenceColor,
                    PointForNeedle(kCssReferencedSvg, R"(<linearGradient id="paint")").line));
   EXPECT_TRUE(ContainsLine(partition.fullColor,
                            PointForNeedle(kCssReferencedSvg, R"(<rect id="target")").line));
   EXPECT_FALSE(
       ContainsLine(partition.fullColor, PointForNeedle(kCssReferencedSvg, "#unused").line));
+  EXPECT_FALSE(
+      ContainsLine(partition.referenceColor, PointForNeedle(kCssReferencedSvg, "#unused").line));
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kCssReferencedSvg, R"(<rect id="sibling")").line));
 
@@ -373,9 +372,9 @@ TEST(FocusViewTest, StyleOffsetFocusIncludesImpactedElementsAndCssDeclarationRef
   EXPECT_FALSE(ContainsLine(partition->hidden, PointForNeedle(kCssReferencedSvg, "<style>").line));
   EXPECT_FALSE(ContainsLine(partition->hidden, PointForNeedle(kCssReferencedSvg, "</style>").line));
   EXPECT_TRUE(
-      ContainsLine(partition->fullColor,
+      ContainsLine(partition->referenceColor,
                    PointForNeedle(kCssReferencedSvg, R"(<linearGradient id="paint")").line));
-  EXPECT_TRUE(ContainsLine(partition->fullColor,
+  EXPECT_TRUE(ContainsLine(partition->referenceColor,
                            PointForNeedle(kCssReferencedSvg, R"(<rect id="target")").line));
   EXPECT_TRUE(ContainsLine(partition->hidden,
                            PointForNeedle(kCssReferencedSvg, R"(<rect id="sibling")").line));
@@ -400,7 +399,7 @@ TEST(FocusViewTest, StyleOffsetFocusUsesSelectorListBranchUnderCursor) {
   const std::optional<FocusPartition> hitPartition = ComputeStyleFocusPartitionAtSourceOffset(
       app.document().document(), OffsetForNeedle(kSelectorListSvg, ".hit"));
   ASSERT_TRUE(hitPartition.has_value());
-  EXPECT_TRUE(ContainsLine(hitPartition->fullColor,
+  EXPECT_TRUE(ContainsLine(hitPartition->referenceColor,
                            PointForNeedle(kSelectorListSvg, R"(<rect id="hit")").line));
   EXPECT_TRUE(ContainsLine(hitPartition->hidden,
                            PointForNeedle(kSelectorListSvg, R"(<rect id="miss")").line));
@@ -408,9 +407,9 @@ TEST(FocusViewTest, StyleOffsetFocusUsesSelectorListBranchUnderCursor) {
   const std::optional<FocusPartition> blockPartition = ComputeStyleFocusPartitionAtSourceOffset(
       app.document().document(), OffsetForNeedle(kSelectorListSvg, "opacity"));
   ASSERT_TRUE(blockPartition.has_value());
-  EXPECT_TRUE(ContainsLine(blockPartition->fullColor,
+  EXPECT_TRUE(ContainsLine(blockPartition->referenceColor,
                            PointForNeedle(kSelectorListSvg, R"(<rect id="hit")").line));
-  EXPECT_TRUE(ContainsLine(blockPartition->fullColor,
+  EXPECT_TRUE(ContainsLine(blockPartition->referenceColor,
                            PointForNeedle(kSelectorListSvg, R"(<rect id="miss")").line));
 }
 
@@ -512,11 +511,13 @@ TEST(FocusViewTest, SelectingGroupIncludesCssRuleLinksForDescendantElements) {
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *group);
 
   EXPECT_TRUE(
-      ContainsLine(partition.fullColor, PointForNeedle(kGroupedCssChildrenSvg, ".glow").line));
-  EXPECT_TRUE(
-      ContainsLine(partition.fullColor, PointForNeedle(kGroupedCssChildrenSvg, ".bright").line));
+      ContainsLine(partition.referenceColor, PointForNeedle(kGroupedCssChildrenSvg, ".glow").line));
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
+                           PointForNeedle(kGroupedCssChildrenSvg, ".bright").line));
   EXPECT_FALSE(
       ContainsLine(partition.fullColor, PointForNeedle(kGroupedCssChildrenSvg, ".unused").line));
+  EXPECT_FALSE(ContainsLine(partition.referenceColor,
+                            PointForNeedle(kGroupedCssChildrenSvg, ".unused").line));
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kGroupedCssChildrenSvg, R"(<path id="sibling")").line));
 
@@ -550,9 +551,9 @@ TEST(FocusViewTest, SelectingMultipleElementsIncludesCssRuleLinksForEachSelectio
   EXPECT_TRUE(ContainsLine(partition.fullColor,
                            PointForNeedle(kGroupedCssChildrenSvg, R"(<path id="boltB")").line));
   EXPECT_TRUE(
-      ContainsLine(partition.fullColor, PointForNeedle(kGroupedCssChildrenSvg, ".glow").line));
-  EXPECT_TRUE(
-      ContainsLine(partition.fullColor, PointForNeedle(kGroupedCssChildrenSvg, ".bright").line));
+      ContainsLine(partition.referenceColor, PointForNeedle(kGroupedCssChildrenSvg, ".glow").line));
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
+                           PointForNeedle(kGroupedCssChildrenSvg, ".bright").line));
   EXPECT_TRUE(ContainsLink(
       partition.referenceLinks,
       FocusReferenceLink{
@@ -578,20 +579,20 @@ TEST(FocusViewTest, SelectingReferencedResourceIncludesReferringElementsAndCssRu
   EXPECT_TRUE(
       ContainsLine(partition.fullColor,
                    PointForNeedle(kResourceReferrersSvg, R"(<radialGradient id="paint")").line));
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
+                           PointForNeedle(kResourceReferrersSvg, ".from-css").line));
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
+                           PointForNeedle(kResourceReferrersSvg, ".from-chain").line));
   EXPECT_TRUE(
-      ContainsLine(partition.fullColor, PointForNeedle(kResourceReferrersSvg, ".from-css").line));
-  EXPECT_TRUE(
-      ContainsLine(partition.fullColor, PointForNeedle(kResourceReferrersSvg, ".from-chain").line));
-  EXPECT_TRUE(
-      ContainsLine(partition.fullColor,
+      ContainsLine(partition.referenceColor,
                    PointForNeedle(kResourceReferrersSvg, R"(<linearGradient id="chained")").line));
-  EXPECT_TRUE(ContainsLine(partition.fullColor,
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
                            PointForNeedle(kResourceReferrersSvg, R"(<rect id="cssTarget")").line));
   EXPECT_TRUE(
-      ContainsLine(partition.fullColor,
+      ContainsLine(partition.referenceColor,
                    PointForNeedle(kResourceReferrersSvg, R"(<circle id="attrTarget")").line));
   EXPECT_TRUE(
-      ContainsLine(partition.fullColor,
+      ContainsLine(partition.referenceColor,
                    PointForNeedle(kResourceReferrersSvg, R"(<path id="chainTarget")").line));
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kResourceReferrersSvg, R"(<rect id="sibling")").line));
@@ -654,13 +655,19 @@ TEST(FocusViewTest, ForwardFilterDependencyDoesNotReverseExpandOtherFilterReferr
 
   EXPECT_TRUE(ContainsLine(partition.fullColor,
                            PointForNeedle(kFilterFanoutSvg, R"(<path id="letterD")").line));
-  EXPECT_TRUE(ContainsLine(partition.fullColor,
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
                            PointForNeedle(kFilterFanoutSvg, R"(<filter id="glow")").line));
   EXPECT_FALSE(ContainsLine(partition.fullColor,
                             PointForNeedle(kFilterFanoutSvg, R"(<filter id="other")").line));
+  EXPECT_FALSE(ContainsLine(partition.referenceColor,
+                            PointForNeedle(kFilterFanoutSvg, R"(<filter id="other")").line));
   EXPECT_FALSE(
       ContainsLine(partition.fullColor, PointForNeedle(kFilterFanoutSvg, ".uses-other").line));
+  EXPECT_FALSE(
+      ContainsLine(partition.referenceColor, PointForNeedle(kFilterFanoutSvg, ".uses-other").line));
   EXPECT_FALSE(ContainsLine(partition.fullColor,
+                            PointForNeedle(kFilterFanoutSvg, R"(<path id="otherUser")").line));
+  EXPECT_FALSE(ContainsLine(partition.referenceColor,
                             PointForNeedle(kFilterFanoutSvg, R"(<path id="otherUser")").line));
 
   EXPECT_TRUE(ContainsLink(
@@ -681,11 +688,11 @@ TEST(FocusViewTest, SelectingFilterResourceStillIncludesTransitiveReferrers) {
 
   EXPECT_TRUE(ContainsLine(partition.fullColor,
                            PointForNeedle(kFilterFanoutSvg, R"(<filter id="glow")").line));
-  EXPECT_TRUE(ContainsLine(partition.fullColor,
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
                            PointForNeedle(kFilterFanoutSvg, R"(<filter id="other")").line));
   EXPECT_TRUE(
-      ContainsLine(partition.fullColor, PointForNeedle(kFilterFanoutSvg, ".uses-other").line));
-  EXPECT_TRUE(ContainsLine(partition.fullColor,
+      ContainsLine(partition.referenceColor, PointForNeedle(kFilterFanoutSvg, ".uses-other").line));
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
                            PointForNeedle(kFilterFanoutSvg, R"(<path id="otherUser")").line));
 
   EXPECT_TRUE(ContainsLink(
@@ -710,12 +717,14 @@ TEST(FocusViewTest, ReferencedGradientOmitsCssRulesMatchedOnlyByStopDescendants)
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
 
   EXPECT_TRUE(
-      ContainsLine(partition.fullColor,
+      ContainsLine(partition.referenceColor,
                    PointForNeedle(kNonRenderedStopStyleSvg, R"(<linearGradient id="paint")").line));
-  EXPECT_TRUE(
-      ContainsLine(partition.fullColor, PointForNeedle(kNonRenderedStopStyleSvg, ".target").line));
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
+                           PointForNeedle(kNonRenderedStopStyleSvg, ".target").line));
   EXPECT_FALSE(
       ContainsLine(partition.fullColor, PointForNeedle(kNonRenderedStopStyleSvg, "stop {").line));
+  EXPECT_FALSE(ContainsLine(partition.referenceColor,
+                            PointForNeedle(kNonRenderedStopStyleSvg, "stop {").line));
 }
 
 TEST(FocusViewTest, SelectingStopOmitsUniversalSelectorProvenance) {
@@ -730,6 +739,8 @@ TEST(FocusViewTest, SelectingStopOmitsUniversalSelectorProvenance) {
                            PointForNeedle(kUniversalStopStyleSvg, R"(<stop id="paintStop")").line));
   EXPECT_FALSE(
       ContainsLine(partition.fullColor, PointForNeedle(kUniversalStopStyleSvg, "* {").line));
+  EXPECT_FALSE(
+      ContainsLine(partition.referenceColor, PointForNeedle(kUniversalStopStyleSvg, "* {").line));
 }
 
 TEST(FocusViewTest, ReturnsEmptyPartitionWithoutSourceLocations) {

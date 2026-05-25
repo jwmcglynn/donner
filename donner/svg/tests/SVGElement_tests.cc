@@ -1015,6 +1015,19 @@ TEST_F(SVGElementTests, IsKnownType) {
   EXPECT_EQ(rect.type(), ElementType::Rect);
 }
 
+TEST_F(SVGElementTests, OptionalTypeAndTagNameHandleMissingComponents) {
+  SVGElement element = createRect();
+  EXPECT_THAT(element.tryType(), Optional(ElementType::Rect));
+  ASSERT_THAT(element.tryTagName(), testing::Ne(std::nullopt));
+  EXPECT_EQ(element.tryTagName()->name, "rect");
+
+  element.entityHandle().remove<components::ElementTypeComponent>();
+  EXPECT_THAT(element.tryType(), testing::Eq(std::nullopt));
+
+  element.entityHandle().remove<::donner::components::TreeComponent>();
+  EXPECT_THAT(element.tryTagName(), testing::Eq(std::nullopt));
+}
+
 TEST_F(SVGElementTests, IsKnownTypeWhenParsed) {
   auto rectDocument = parseSVG(R"(<svg><rect id="myRect" /></svg>)");
 

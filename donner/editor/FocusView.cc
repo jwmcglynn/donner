@@ -12,11 +12,8 @@
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/xml/XMLNode.h"
-#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
-#include "donner/svg/components/ElementTypeComponent.h"
-#include "donner/svg/components/IdComponent.h"
-#include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/SVGStyleQuery.h"
 
 namespace donner::editor {
 namespace {
@@ -133,46 +130,23 @@ std::optional<std::size_t> NodeStartOffset(std::string_view source,
 }
 
 bool HasTreeComponent(const svg::SVGElement& element) {
-  const EntityHandle handle = element.entityHandle();
-  return handle && handle.all_of<donner::components::TreeComponent>();
+  return xml::XMLNode::TryCast(element.entityHandle()).has_value();
 }
 
 std::optional<svg::ElementType> SafeElementType(const svg::SVGElement& element) {
-  const EntityHandle handle = element.entityHandle();
-  if (!handle) {
-    return std::nullopt;
-  }
-
-  const auto* component = handle.try_get<svg::components::ElementTypeComponent>();
-  if (component == nullptr) {
-    return std::nullopt;
-  }
-
-  return component->type();
+  return element.tryType();
 }
 
 std::optional<xml::XMLQualifiedNameRef> SafeTagName(const svg::SVGElement& element) {
-  const EntityHandle handle = element.entityHandle();
-  if (!handle) {
-    return std::nullopt;
-  }
-
-  const auto* tree = handle.try_get<donner::components::TreeComponent>();
-  if (tree == nullptr) {
-    return std::nullopt;
-  }
-
-  return tree->tagName();
+  return element.tryTagName();
 }
 
 RcString SafeId(const svg::SVGElement& element) {
-  const EntityHandle handle = element.entityHandle();
-  if (!handle) {
+  if (!SafeElementType(element).has_value()) {
     return "";
   }
 
-  const auto* component = handle.try_get<svg::components::IdComponent>();
-  return component != nullptr ? component->id() : RcString("");
+  return element.id();
 }
 
 bool HasLiveSvgTreeComponents(const svg::SVGElement& element) {
@@ -405,8 +379,8 @@ std::optional<svg::SVGElement> FindElementById(const svg::SVGElement& root, std:
   return std::nullopt;
 }
 
-bool MatchesStyleSourceRule(const svg::components::MatchedStyleRule& match,
-                            const svg::components::StyleRuleAtSourceOffset& sourceRule) {
+bool MatchesStyleSourceRule(const svg::SVGMatchedStyleRule& match,
+                            const svg::SVGStyleRuleAtSourceOffset& sourceRule) {
   if (match.stylesheetEntity != sourceRule.stylesheetEntity ||
       match.ruleIndex != sourceRule.ruleIndex) {
     return false;
@@ -474,12 +448,10 @@ bool IsRenderedStyleTarget(const svg::SVGElement& element) {
 }
 
 void AppendImpactedElementsForStyleRule(const svg::SVGElement& root,
-                                        const svg::components::StyleRuleAtSourceOffset& sourceRule,
-                                        svg::components::StyleSystem* styleSystem,
+                                        const svg::SVGStyleRuleAtSourceOffset& sourceRule,
                                         std::vector<svg::SVGElement>* impactedElements) {
   if (IsRenderedStyleTarget(root)) {
-    for (const svg::components::MatchedStyleRule& match :
-         styleSystem->collectMatchedStyleRules(root.entityHandle())) {
+    for (const svg::SVGMatchedStyleRule& match : svg::CollectMatchedStyleRules(root)) {
       if (MatchesStyleSourceRule(match, sourceRule)) {
         impactedElements->push_back(root);
         break;
@@ -490,7 +462,7 @@ void AppendImpactedElementsForStyleRule(const svg::SVGElement& root,
   for (auto child = SafeFirstChild(root); child.has_value();) {
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
-    AppendImpactedElementsForStyleRule(current, sourceRule, styleSystem, impactedElements);
+    AppendImpactedElementsForStyleRule(current, sourceRule, impactedElements);
   }
 }
 
@@ -598,8 +570,7 @@ bool CanReverseExpand(const svg::SVGElement& element,
 }
 
 std::optional<FocusCssRule> FocusCssRuleFromMatchedRule(
-    std::string_view source, Registry& registry,
-    const svg::components::MatchedStyleRule& matchedRule) {
+    std::string_view source, Registry& registry, const svg::SVGMatchedStyleRule& matchedRule) {
   if (!matchedRule.ruleSourceRange.has_value()) {
     return std::nullopt;
   }
@@ -616,8 +587,8 @@ std::optional<FocusCssRule> FocusCssRuleFromMatchedRule(
 }
 
 void AddMatchedCssRule(std::string_view source, Registry& registry,
-                       const svg::components::MatchedStyleRule& matchedRule,
-                       FocusElementCollection* result, std::vector<CssRuleKey>* visitedCssRules) {
+                       const svg::SVGMatchedStyleRule& matchedRule, FocusElementCollection* result,
+                       std::vector<CssRuleKey>* visitedCssRules) {
   const CssRuleKey key{
       .stylesheetEntity = matchedRule.stylesheetEntity,
       .ruleIndex = matchedRule.ruleIndex,
@@ -637,9 +608,7 @@ void AddMatchedCssRule(std::string_view source, Registry& registry,
 
 void AppendMatchedCssRulesInSubtree(std::string_view source,
                                     const std::vector<std::size_t>& lineStarts,
-                                    const svg::SVGElement& root,
-                                    svg::components::StyleSystem* styleSystem,
-                                    FocusElementCollection* result,
+                                    const svg::SVGElement& root, FocusElementCollection* result,
                                     std::vector<CssRuleKey>* visitedCssRules,
                                     std::vector<FragmentReference>* references) {
   if (!HasLiveSvgTreeComponents(root)) {
@@ -649,8 +618,7 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
   Registry& registry = *root.entityHandle().registry();
   const std::optional<std::size_t> selectorLinkSource = SelectorLinkSourceOffset(source, root);
   if (IsRenderedStyleTarget(root)) {
-    for (const svg::components::MatchedStyleRule& matchedRule :
-         styleSystem->collectMatchedStyleRules(root.entityHandle())) {
+    for (const svg::SVGMatchedStyleRule& matchedRule : svg::CollectMatchedStyleRules(root)) {
       if (!matchedRule.ruleSourceRange.has_value() ||
           !matchedRule.selectorSourceRange.has_value()) {
         continue;
@@ -681,8 +649,8 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
   for (auto child = SafeFirstChild(root); child.has_value();) {
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
-    AppendMatchedCssRulesInSubtree(source, lineStarts, current, styleSystem, result,
-                                   visitedCssRules, references);
+    AppendMatchedCssRulesInSubtree(source, lineStarts, current, result, visitedCssRules,
+                                   references);
   }
 }
 
@@ -718,7 +686,6 @@ void AppendReverseAttributeReferences(std::string_view source, const svg::SVGEle
 void AppendReverseCssReferences(std::string_view source, const std::vector<std::size_t>& lineStarts,
                                 const svg::SVGElement& root, std::string_view targetId,
                                 const svg::SVGElement& targetElement,
-                                svg::components::StyleSystem* styleSystem,
                                 FocusElementCollection* result, std::vector<Entity>* visited,
                                 std::vector<CssRuleKey>* visitedCssRules,
                                 std::vector<Entity>* reverseExpandableEntities) {
@@ -728,8 +695,7 @@ void AppendReverseCssReferences(std::string_view source, const std::vector<std::
 
   Registry& registry = *root.entityHandle().registry();
   if (IsRenderedStyleTarget(root)) {
-    for (const svg::components::MatchedStyleRule& matchedRule :
-         styleSystem->collectMatchedStyleRules(root.entityHandle())) {
+    for (const svg::SVGMatchedStyleRule& matchedRule : svg::CollectMatchedStyleRules(root)) {
       if (!matchedRule.ruleSourceRange.has_value()) {
         continue;
       }
@@ -781,8 +747,8 @@ void AppendReverseCssReferences(std::string_view source, const std::vector<std::
   for (auto child = SafeFirstChild(root); child.has_value();) {
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
-    AppendReverseCssReferences(source, lineStarts, current, targetId, targetElement, styleSystem,
-                               result, visited, visitedCssRules, reverseExpandableEntities);
+    AppendReverseCssReferences(source, lineStarts, current, targetId, targetElement, result,
+                               visited, visitedCssRules, reverseExpandableEntities);
   }
 }
 
@@ -809,15 +775,13 @@ void AppendReverseAttributeReferenceElements(std::string_view source, const svg:
 
 void AppendReverseCssReferenceElements(std::string_view source, const svg::SVGElement& root,
                                        std::string_view targetId,
-                                       svg::components::StyleSystem* styleSystem,
                                        std::vector<svg::SVGElement>* elements) {
   if (!HasLiveSvgTreeComponents(root)) {
     return;
   }
 
   if (IsRenderedStyleTarget(root)) {
-    for (const svg::components::MatchedStyleRule& matchedRule :
-         styleSystem->collectMatchedStyleRules(root.entityHandle())) {
+    for (const svg::SVGMatchedStyleRule& matchedRule : svg::CollectMatchedStyleRules(root)) {
       if (!matchedRule.ruleSourceRange.has_value()) {
         continue;
       }
@@ -841,7 +805,7 @@ void AppendReverseCssReferenceElements(std::string_view source, const svg::SVGEl
   for (auto child = SafeFirstChild(root); child.has_value();) {
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
-    AppendReverseCssReferenceElements(source, current, targetId, styleSystem, elements);
+    AppendReverseCssReferenceElements(source, current, targetId, elements);
   }
 }
 
@@ -860,7 +824,6 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
   }
 
   const svg::SVGElement root = document.svgElement();
-  svg::components::StyleSystem styleSystem;
   for (std::size_t i = 0; i < result.elements.size(); ++i) {
     const svg::SVGElement current = result.elements[i];
     std::vector<FragmentReference> references;
@@ -868,7 +831,7 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
       references.insert(references.end(), initialReferences.begin(), initialReferences.end());
     }
 
-    AppendMatchedCssRulesInSubtree(document.source(), lineStarts, current, &styleSystem, &result,
+    AppendMatchedCssRulesInSubtree(document.source(), lineStarts, current, &result,
                                    &visitedCssRules, &references);
     AppendReferencedFragmentsInSubtree(document.source(), current, &references);
 
@@ -896,7 +859,7 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
     AppendReverseAttributeReferences(document.source(), root, std::string_view(currentId), current,
                                      &result, &visited, &reverseExpandableEntities);
     AppendReverseCssReferences(document.source(), lineStarts, root, std::string_view(currentId),
-                               current, &styleSystem, &result, &visited, &visitedCssRules,
+                               current, &result, &visited, &visitedCssRules,
                                &reverseExpandableEntities);
   }
 
@@ -906,7 +869,6 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
 void AppendForwardReferenceElements(const svg::SVGDocument& document,
                                     const std::vector<std::size_t>& lineStarts,
                                     const svg::SVGElement& element,
-                                    svg::components::StyleSystem* styleSystem,
                                     std::vector<svg::SVGElement>* elements) {
   if (!HasLiveSvgTreeComponents(element)) {
     return;
@@ -915,8 +877,8 @@ void AppendForwardReferenceElements(const svg::SVGDocument& document,
   FocusElementCollection ignoredCollection;
   std::vector<CssRuleKey> ignoredCssRules;
   std::vector<FragmentReference> references;
-  AppendMatchedCssRulesInSubtree(document.source(), lineStarts, element, styleSystem,
-                                 &ignoredCollection, &ignoredCssRules, &references);
+  AppendMatchedCssRulesInSubtree(document.source(), lineStarts, element, &ignoredCollection,
+                                 &ignoredCssRules, &references);
   AppendReferencedFragmentsInSubtree(document.source(), element, &references);
 
   const svg::SVGElement root = document.svgElement();
@@ -1066,13 +1028,14 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
 
   for (std::size_t i = 0; i < focusElements.elements.size(); ++i) {
     std::optional<ByteRange> elementRange = NodeRange(source, focusElements.elements[i]);
-    if (elementRange.has_value()) {
-      partition.fullColor.push_back(RangeToLines(lineStarts, *elementRange));
-    }
-
     const bool selectedElement =
         std::ranges::find(selectedEntities, focusElements.elements[i].entityHandle().entity()) !=
         selectedEntities.end();
+    if (elementRange.has_value()) {
+      (selectedElement ? partition.fullColor : partition.referenceColor)
+          .push_back(RangeToLines(lineStarts, *elementRange));
+    }
+
     if (!AddAncestorTagLineRanges(source, lineStarts, focusElements.elements[i], &partition,
                                   /*required=*/selectedElement)) {
       return {};
@@ -1080,7 +1043,7 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   }
 
   for (const FocusCssRule& cssRule : focusElements.cssRules) {
-    partition.fullColor.push_back(RangeToLines(lineStarts, cssRule.ruleRange));
+    partition.referenceColor.push_back(RangeToLines(lineStarts, cssRule.ruleRange));
     if (cssRule.stylesheetNodeRange.has_value()) {
       AddNodeTagLineRanges(source, lineStarts, *cssRule.stylesheetNodeRange, &partition);
     }
@@ -1102,10 +1065,12 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   }
 
   Normalize(&partition.fullColor);
+  Normalize(&partition.referenceColor);
   Normalize(&partition.dimmed);
   DeduplicateLinks(&partition.referenceLinks);
 
   std::vector<LineRange> visible = partition.fullColor;
+  visible.insert(visible.end(), partition.referenceColor.begin(), partition.referenceColor.end());
   visible.insert(visible.end(), partition.dimmed.begin(), partition.dimmed.end());
   Normalize(&visible);
   partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts.size()), visible);
@@ -1124,10 +1089,8 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   }
 
   const std::vector<std::size_t> lineStarts = BuildLineStarts(source);
-  svg::components::StyleSystem styleSystem;
-  Registry& registry = *document.svgElement().entityHandle().registry();
-  std::optional<svg::components::StyleRuleAtSourceOffset> sourceRule =
-      styleSystem.findStyleRuleAtSourceOffset(registry, sourceOffset);
+  std::optional<svg::SVGStyleRuleAtSourceOffset> sourceRule =
+      svg::FindStyleRuleAtSourceOffset(document, sourceOffset);
   if (!sourceRule.has_value()) {
     return std::nullopt;
   }
@@ -1139,9 +1102,10 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
     return std::nullopt;
   }
 
+  const svg::SVGElement root = document.svgElement();
+  Registry& registry = *root.entityHandle().registry();
   std::vector<svg::SVGElement> impactedElements;
-  AppendImpactedElementsForStyleRule(document.svgElement(), *sourceRule, &styleSystem,
-                                     &impactedElements);
+  AppendImpactedElementsForStyleRule(root, *sourceRule, &impactedElements);
 
   std::vector<FragmentReference> cssReferences;
   AppendCssFragmentReferences(source, *ruleRange, &cssReferences);
@@ -1158,7 +1122,7 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
 
   for (const svg::SVGElement& element : focusElements.elements) {
     if (std::optional<ByteRange> elementRange = NodeRange(source, element)) {
-      partition.fullColor.push_back(RangeToLines(lineStarts, *elementRange));
+      partition.referenceColor.push_back(RangeToLines(lineStarts, *elementRange));
     }
 
     std::ignore = AddAncestorTagLineRanges(source, lineStarts, element, &partition,
@@ -1166,7 +1130,7 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   }
 
   for (const FocusCssRule& cssRule : focusElements.cssRules) {
-    partition.fullColor.push_back(RangeToLines(lineStarts, cssRule.ruleRange));
+    partition.referenceColor.push_back(RangeToLines(lineStarts, cssRule.ruleRange));
     if (cssRule.stylesheetNodeRange.has_value()) {
       AddNodeTagLineRanges(source, lineStarts, *cssRule.stylesheetNodeRange, &partition);
     }
@@ -1196,10 +1160,12 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   }
 
   Normalize(&partition.fullColor);
+  Normalize(&partition.referenceColor);
   Normalize(&partition.dimmed);
   DeduplicateLinks(&partition.referenceLinks);
 
   std::vector<LineRange> visible = partition.fullColor;
+  visible.insert(visible.end(), partition.referenceColor.begin(), partition.referenceColor.end());
   visible.insert(visible.end(), partition.dimmed.begin(), partition.dimmed.end());
   Normalize(&visible);
   partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts.size()), visible);
@@ -1229,14 +1195,12 @@ ReferenceHighlightSummary ComputeReferenceHighlightSummary(
   const std::string_view source = document.source();
   const std::vector<std::size_t> lineStarts = BuildLineStarts(source);
   const svg::SVGElement root = document.svgElement();
-  svg::components::StyleSystem styleSystem;
   for (const svg::SVGElement& selected : selectedElements) {
     if (!HasLiveSvgTreeComponents(selected)) {
       continue;
     }
 
-    AppendForwardReferenceElements(document, lineStarts, selected, &styleSystem,
-                                   &summary.referencedElements);
+    AppendForwardReferenceElements(document, lineStarts, selected, &summary.referencedElements);
 
     const RcString id = SafeId(selected);
     if (id.empty()) {
@@ -1245,7 +1209,7 @@ ReferenceHighlightSummary ComputeReferenceHighlightSummary(
 
     AppendReverseAttributeReferenceElements(source, root, std::string_view(id),
                                             &summary.referencingElements);
-    AppendReverseCssReferenceElements(source, root, std::string_view(id), &styleSystem,
+    AppendReverseCssReferenceElements(source, root, std::string_view(id),
                                       &summary.referencingElements);
     std::erase_if(summary.referencingElements, [&](const svg::SVGElement& element) {
       return element.entityHandle().entity() == selected.entityHandle().entity();

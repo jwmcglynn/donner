@@ -709,49 +709,6 @@ TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
       << "combined-AABB bottom-left corner missing from the unified Skia overlay";
 }
 
-TEST(OverlayRendererTest, SelectionAabbShowsPixelSizeChip) {
-  constexpr std::string_view kSvg =
-      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
-              <rect id="r1" x="40" y="60" width="40" height="50" fill="red"/>
-            </svg>)svg";
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(kSvg));
-  app.document().document().setCanvasSize(200, 200);
-
-  auto rect = app.document().document().querySelector("#r1");
-  ASSERT_TRUE(rect.has_value());
-  app.setSelection(*rect);
-
-  svg::Renderer overlayRenderer;
-  svg::RenderViewport viewport;
-  viewport.size = Vector2d(200.0, 200.0);
-  viewport.devicePixelRatio = 1.0;
-  overlayRenderer.beginFrame(viewport);
-
-  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
-  OverlayRenderer::drawChromeWithTransform(overlayRenderer, app.selectedElement(), canvasFromDoc);
-  overlayRenderer.endFrame();
-
-  const auto bitmap = overlayRenderer.takeSnapshot();
-  ASSERT_FALSE(bitmap.empty());
-  const auto pixelAt = [&](int x, int y, int channel) -> std::uint8_t {
-    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
-    return row[x * 4 + channel];
-  };
-
-  EXPECT_EQ(pixelAt(40, 38, 3), 0) << "chip should have rounded, transparent corners";
-
-  EXPECT_GT(pixelAt(42, 46, 3), 220) << "chip background should be above the AABB";
-  EXPECT_LT(pixelAt(42, 46, 0), 40);
-  EXPECT_GT(pixelAt(42, 46, 1), 80);
-  EXPECT_GT(pixelAt(42, 46, 2), 100);
-
-  EXPECT_GT(pixelAt(47, 43, 0), 220) << "white size text should render over the chip";
-  EXPECT_GT(pixelAt(47, 43, 1), 220);
-  EXPECT_GT(pixelAt(47, 43, 2), 220);
-  EXPECT_GT(pixelAt(47, 43, 3), 220);
-}
-
 // Marquee chrome also moved to the ImGui draw list. The path overlay
 // should stay transparent when there is no selected geometry.
 // Selecting a `<g filter="…">` elevates picker-wise to the group, but

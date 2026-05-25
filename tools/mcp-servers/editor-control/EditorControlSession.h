@@ -114,6 +114,8 @@ public:
 private:
   ToolCallResult loadDocument(const nlohmann::json& arguments);
   ToolCallResult loadSvg(const nlohmann::json& arguments);
+  ToolCallResult getSvgSource(const nlohmann::json& arguments) const;
+  ToolCallResult editSvgSource(const nlohmann::json& arguments);
   ToolCallResult selectBySelector(const nlohmann::json& arguments);
   ToolCallResult dragSelector(const nlohmann::json& arguments);
   ToolCallResult renderFrameTool(const nlohmann::json& arguments);
@@ -125,6 +127,10 @@ private:
 
   ToolCallResult loadSvgSource(std::string_view source, const LoadOptions& options,
                                std::string_view sourcePath);
+  [[nodiscard]] bool loadCurrentSourceText(const LoadOptions& options, std::string_view sourcePath,
+                                           bool resetRenderVersion, nlohmann::json* loadInfo,
+                                           std::string* error);
+  [[nodiscard]] nlohmann::json sourceStateJson() const;
 
   class HeadlessTextureCache {
   public:
@@ -186,6 +192,9 @@ private:
   RnrRecordingState rnrRecording_;
   std::string currentSourcePath_;
   std::string currentSourceText_;
+  std::uint64_t sourceRevision_ = 0;
+  std::uint64_t loadedSourceRevision_ = 0;
+  std::optional<std::string> lastParseError_;
   std::uint64_t nextRenderVersion_ = 1;
   int canvasWidth_ = 0;
   int canvasHeight_ = 0;

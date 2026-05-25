@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -51,12 +52,18 @@ constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
 constexpr int kMaxSaveSyncFlushPasses = 4;
+constexpr float kSelectionSizeChipPaddingX = 6.0f;
+constexpr float kSelectionSizeChipPaddingY = 3.0f;
+constexpr float kSelectionSizeChipRadius = 5.0f;
+constexpr float kSelectionSizeChipGapFromAabb = 4.0f;
+constexpr float kSelectionSizeChipMinFontSize = 13.0f;
+constexpr float kSelectionSizeChipFontStepDown = 2.0f;
+constexpr double kRadiansToDegrees = 180.0 / 3.14159265358979323846;
 constexpr float kReferenceChipPaddingX = 8.0f;
 constexpr float kReferenceChipPaddingY = 5.0f;
 constexpr float kReferenceChipRadius = 6.0f;
 constexpr float kReferenceChipGapFromAabb = 30.0f;
-constexpr float kReferenceChipMinFontSize = 14.0f;
-constexpr float kReferenceChipFontStepDown = 1.0f;
+constexpr float kReferenceChipMinFontSize = 15.0f;
 constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
 
 ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
@@ -77,9 +84,72 @@ ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIn
   return ImGuiMouseCursor_ResizeAll;
 }
 
+void SetImGuiOsCursorManagementEnabled(bool enabled) {
+  ImGuiIO& io = ImGui::GetIO();
+  if (enabled) {
+    io.ConfigFlags &= ~ImGuiConfigFlags_NoMouseCursorChange;
+  } else {
+    io.ConfigFlags |= ImGuiConfigFlags_NoMouseCursorChange;
+  }
+}
+
 bool ContainsScreenPoint(const Box2d& rect, const ImVec2& point) {
   return point.x >= rect.topLeft.x && point.x <= rect.bottomRight.x && point.y >= rect.topLeft.y &&
          point.y <= rect.bottomRight.y;
+}
+
+std::string SelectionSizeChipLabel(const Box2d& screenBounds) {
+  const int width = std::max(0, static_cast<int>(std::lround(std::abs(screenBounds.width()))));
+  const int height = std::max(0, static_cast<int>(std::lround(std::abs(screenBounds.height()))));
+  return std::to_string(width) + " x " + std::to_string(height);
+}
+
+std::string SelectionPositionChipLabel(const Box2d& documentBounds) {
+  const int x = static_cast<int>(std::lround(documentBounds.topLeft.x));
+  const int y = static_cast<int>(std::lround(documentBounds.topLeft.y));
+  return "(" + std::to_string(x) + ", " + std::to_string(y) + ")";
+}
+
+std::string SelectionAngleChipLabel(const Transform2d& documentFromStartDocument) {
+  double degrees =
+      std::atan2(documentFromStartDocument.data[1], documentFromStartDocument.data[0]) *
+      kRadiansToDegrees;
+  while (degrees <= -180.0) {
+    degrees += 360.0;
+  }
+  while (degrees > 180.0) {
+    degrees -= 360.0;
+  }
+  return std::to_string(static_cast<int>(std::lround(degrees))) + " deg";
+}
+
+float SelectionSizeChipFontSize() {
+  return std::max(kSelectionSizeChipMinFontSize,
+                  ImGui::GetFontSize() - kSelectionSizeChipFontStepDown);
+}
+
+ImFont* SelectionSizeChipFont(ImFont* uiFontBold) {
+  return uiFontBold != nullptr ? uiFontBold : ImGui::GetFont();
+}
+
+ImVec2 SelectionSizeChipTextSize(std::string_view label, ImFont* font) {
+  return font->CalcTextSizeA(SelectionSizeChipFontSize(), FLT_MAX, -1.0f, label.data(),
+                             label.data() + label.size());
+}
+
+Box2d TransformDocumentBox(const Box2d& box, const Transform2d& documentFromBoundsDocument) {
+  const std::array<Vector2d, 4> corners{
+      box.topLeft,
+      Vector2d(box.bottomRight.x, box.topLeft.y),
+      box.bottomRight,
+      Vector2d(box.topLeft.x, box.bottomRight.y),
+  };
+
+  Box2d transformed = Box2d::CreateEmpty(documentFromBoundsDocument.transformPosition(corners[0]));
+  for (const Vector2d& corner : corners) {
+    transformed.addPoint(documentFromBoundsDocument.transformPosition(corner));
+  }
+  return transformed;
 }
 
 float ClampSourcePaneWidthForWindow(float requestedWidth, float windowWidth) {
@@ -109,7 +179,7 @@ std::string ReferenceHighlightChipLabel(const ReferenceHighlightSummary& summary
 }
 
 float ReferenceHighlightChipFontSize() {
-  return std::max(kReferenceChipMinFontSize, ImGui::GetFontSize() - kReferenceChipFontStepDown);
+  return std::max(kReferenceChipMinFontSize, ImGui::GetFontSize());
 }
 
 ImVec2 ReferenceHighlightChipTextSize(std::string_view label) {
@@ -667,8 +737,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   refreshReferenceHighlightSummaryIfNeeded();
   const std::string referenceChipLabel = ReferenceHighlightChipLabel(referenceHighlightSummary_);
+  const bool hideReferenceChip = selectTool_.activeTransformBoundsPreview().has_value();
   const std::optional<Box2d> referenceChipRect =
-      referenceHighlightChipScreenRect(referenceChipLabel);
+      hideReferenceChip ? std::nullopt : referenceHighlightChipScreenRect(referenceChipLabel);
   const bool referenceChipHovered = referenceChipRect.has_value() &&
                                     ContainsScreenPoint(*referenceChipRect, ImGui::GetMousePos());
 
@@ -683,9 +754,40 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   const bool spaceHeld = ImGui::IsKeyDown(ImGuiKey_Space);
   const bool middleDown = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+  const auto setActiveRotateCursor =
+      [&](const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
+        if (!activeGesturePreview.has_value() ||
+            activeGesturePreview->kind != SelectTool::ActiveGestureKind::Rotate) {
+          return false;
+        }
+
+        if (rotateCursorSet_.setRotateCursor(activeGesturePreview->corner)) {
+          SetImGuiOsCursorManagementEnabled(false);
+        } else {
+          rotateCursorSet_.clearIfActive();
+          SetImGuiOsCursorManagementEnabled(true);
+          ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+        }
+        return true;
+      };
+  const auto activeGesturePreviewBeforeInput = selectTool_.activeGesturePreview();
+  const bool rotateCursorLocked = setActiveRotateCursor(activeGesturePreviewBeforeInput);
   interactionController_.updatePanState(canvasHovered, spaceHeld, middleDown,
                                         ImGui::IsMouseDown(ImGuiMouseButton_Left),
                                         ImGui::GetMousePos());
+  const bool showPanCursor =
+      !rotateCursorLocked &&
+      ShouldShowRenderPanePanCursor(canvasHovered, spaceHeld, interactionController_.panning());
+  if (showPanCursor) {
+    const PanCursorKind panCursorKind =
+        interactionController_.panning() ? PanCursorKind::ClosedHand : PanCursorKind::OpenHand;
+    if (rotateCursorSet_.setPanCursor(panCursorKind)) {
+      SetImGuiOsCursorManagementEnabled(false);
+    } else {
+      SetImGuiOsCursorManagementEnabled(true);
+      ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+  }
 
   const bool modalCapturingInput =
       referenceChipHovered || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
@@ -710,22 +812,25 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     return HitTestSelectionTransformHandles(boundsCache.displayedBoundsDoc, documentPoint,
                                             interactionController_.viewport().pixelsPerDocUnit());
   };
-  if (toolEligible && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-    const SelectionTransformHandleIntent hoverIntent =
-        cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
-    if (hoverIntent.kind != SelectionTransformHandleKind::None) {
-      if (hoverIntent.kind == SelectionTransformHandleKind::Rotate &&
-          rotateCursorSet_.setRotateCursor(hoverIntent.corner)) {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow);
+  SelectionTransformHandleIntent hoverTransformIntent;
+  if (!rotateCursorLocked && toolEligible && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+    hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
+    if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
+      if (hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate &&
+          rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)) {
+        SetImGuiOsCursorManagementEnabled(false);
       } else {
         rotateCursorSet_.clearIfActive();
-        ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverIntent));
+        SetImGuiOsCursorManagementEnabled(true);
+        ImGui::SetMouseCursor(CursorForTransformHandleIntent(hoverTransformIntent));
       }
     } else {
       rotateCursorSet_.clearIfActive();
+      SetImGuiOsCursorManagementEnabled(true);
     }
-  } else if (!toolEligible) {
+  } else if (!rotateCursorLocked && !toolEligible && !showPanCursor) {
     rotateCursorSet_.clearIfActive();
+    SetImGuiOsCursorManagementEnabled(true);
   }
   if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     preserveSourceEditFocusCursor_ = false;
@@ -862,6 +967,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
+  const auto activeGesturePreview = selectTool_.activeGesturePreview();
+  if (!setActiveRotateCursor(activeGesturePreview) && rotateCursorLocked) {
+    rotateCursorSet_.clearIfActive();
+    SetImGuiOsCursorManagementEnabled(true);
+  }
   const auto activeDragPreview =
       renderCoordinator_.compositedPresentation().activePreviewForPresentation(
           liveActiveDragPreview);
@@ -879,6 +989,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_),
   };
   renderPanePresenter_.render(paneState);
+  renderSelectionSizeChip(hoverTransformIntent, activeGesturePreview);
   renderReferenceHighlightChip();
   renderRenderPaneContextMenu();
 
@@ -1346,6 +1457,105 @@ void EditorShell::setReferenceHighlightChipHovered(bool hovered) {
   applyReferenceHighlightPreview();
 }
 
+std::optional<EditorShell::SelectionChipBounds> EditorShell::selectionChipBounds(
+    const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) const {
+  if (renderCoordinator_.selectionBoundsCache().lastSelection != app_.selectedElements() ||
+      renderCoordinator_.selectionBoundsCache().displayedBoundsDoc.empty()) {
+    return std::nullopt;
+  }
+
+  Box2d selectionBounds =
+      CombinedSelectionBounds(renderCoordinator_.selectionBoundsCache().displayedBoundsDoc);
+  Transform2d documentFromSelectionBoundsDocument;
+  if (activeGesturePreview.has_value()) {
+    selectionBounds = activeGesturePreview->startBoundsDoc;
+    documentFromSelectionBoundsDocument = activeGesturePreview->documentFromStartDocument;
+  }
+
+  const Box2d transformedSelectionBoundsDoc =
+      TransformDocumentBox(selectionBounds, documentFromSelectionBoundsDocument);
+  const Box2d selectionScreenBounds =
+      interactionController_.viewport().documentToScreen(transformedSelectionBoundsDoc);
+  if (selectionScreenBounds.isEmpty()) {
+    return std::nullopt;
+  }
+
+  Vector2d chipAnchorDoc = transformedSelectionBoundsDoc.topLeft;
+  if (activeGesturePreview.has_value() &&
+      activeGesturePreview->kind == SelectTool::ActiveGestureKind::Rotate) {
+    chipAnchorDoc = documentFromSelectionBoundsDocument.transformPosition(
+        activeGesturePreview->startBoundsDoc.topLeft);
+  }
+
+  return SelectionChipBounds{
+      .documentBounds = transformedSelectionBoundsDoc,
+      .screenBounds = selectionScreenBounds,
+      .chipAnchorScreen = interactionController_.viewport().documentToScreen(chipAnchorDoc),
+  };
+}
+
+std::optional<Box2d> EditorShell::selectionSizeChipScreenRect(
+    std::string_view label, const Vector2d& chipAnchorScreen) const {
+  if (label.empty()) {
+    return std::nullopt;
+  }
+
+  const Box2d imageRect = interactionController_.viewport().imageScreenRect();
+  const ImVec2 textSize = SelectionSizeChipTextSize(label, SelectionSizeChipFont(uiFontBold_));
+  const double width = static_cast<double>(textSize.x + 2.0f * kSelectionSizeChipPaddingX);
+  const double height = static_cast<double>(textSize.y + 2.0f * kSelectionSizeChipPaddingY);
+  const double maxX = std::max(imageRect.topLeft.x, imageRect.bottomRight.x - width);
+  const double x = std::clamp(chipAnchorScreen.x, imageRect.topLeft.x, maxX);
+  double y = chipAnchorScreen.y - height - kSelectionSizeChipGapFromAabb;
+  if (y < imageRect.topLeft.y) {
+    y = chipAnchorScreen.y + kSelectionSizeChipGapFromAabb;
+  }
+  const double maxY = std::max(imageRect.topLeft.y, imageRect.bottomRight.y - height);
+  y = std::clamp(y, imageRect.topLeft.y, maxY);
+  return Box2d::FromXYWH(x, y, width, height);
+}
+
+void EditorShell::renderSelectionSizeChip(
+    const SelectionTransformHandleIntent& hoverTransformIntent,
+    const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview) {
+  const bool hoverResizeHandle = !activeGesturePreview.has_value() &&
+                                 hoverTransformIntent.kind == SelectionTransformHandleKind::Resize;
+  if (!activeGesturePreview.has_value() && !hoverResizeHandle) {
+    return;
+  }
+
+  const std::optional<SelectionChipBounds> bounds = selectionChipBounds(activeGesturePreview);
+  if (!bounds.has_value()) {
+    return;
+  }
+
+  std::string label;
+  if (!activeGesturePreview.has_value() ||
+      activeGesturePreview->kind == SelectTool::ActiveGestureKind::Resize) {
+    label = SelectionSizeChipLabel(bounds->screenBounds);
+  } else if (activeGesturePreview->kind == SelectTool::ActiveGestureKind::Rotate) {
+    label = SelectionAngleChipLabel(activeGesturePreview->documentFromStartDocument);
+  } else {
+    label = SelectionPositionChipLabel(bounds->documentBounds);
+  }
+
+  const std::optional<Box2d> rect = selectionSizeChipScreenRect(label, bounds->chipAnchorScreen);
+  if (!rect.has_value()) {
+    return;
+  }
+
+  ImFont* chipFont = SelectionSizeChipFont(uiFontBold_);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  drawList->AddRectFilled(
+      ImVec2(static_cast<float>(rect->topLeft.x), static_cast<float>(rect->topLeft.y)),
+      ImVec2(static_cast<float>(rect->bottomRight.x), static_cast<float>(rect->bottomRight.y)),
+      IM_COL32(0, 111, 149, 255), kSelectionSizeChipRadius);
+  drawList->AddText(chipFont, SelectionSizeChipFontSize(),
+                    ImVec2(static_cast<float>(rect->topLeft.x) + kSelectionSizeChipPaddingX,
+                           static_cast<float>(rect->topLeft.y) + kSelectionSizeChipPaddingY),
+                    IM_COL32(255, 255, 255, 255), label.c_str(), label.c_str() + label.size());
+}
+
 std::optional<Box2d> EditorShell::referenceHighlightChipScreenRect(std::string_view label) const {
   if (label.empty() || referenceHighlightSummary_.totalCount() <= 1 ||
       renderCoordinator_.selectionBoundsCache().lastSelection != app_.selectedElements() ||
@@ -1373,6 +1583,11 @@ std::optional<Box2d> EditorShell::referenceHighlightChipScreenRect(std::string_v
 }
 
 void EditorShell::renderReferenceHighlightChip() {
+  if (selectTool_.activeTransformBoundsPreview().has_value()) {
+    setReferenceHighlightChipHovered(false);
+    return;
+  }
+
   refreshReferenceHighlightSummaryIfNeeded();
   const std::string label = ReferenceHighlightChipLabel(referenceHighlightSummary_);
   const std::optional<Box2d> rect = referenceHighlightChipScreenRect(label);

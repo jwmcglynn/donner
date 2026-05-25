@@ -12,6 +12,8 @@
 
 #include "GLFW/glfw3.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/editor/PanClosedCursorSvg.h"
+#include "donner/editor/PanCursorSvg.h"
 #include "donner/editor/RotateCursorSvg.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -24,6 +26,7 @@ constexpr int kCursorSizePx = 32;
 constexpr int kCursorRasterScale = 4;
 constexpr int kCursorRasterSizePx = kCursorSizePx * kCursorRasterScale;
 constexpr int kCursorHotspotPx = 16;
+constexpr int kPanCursorHotspotPx = 15;
 constexpr std::string_view kRotationPlaceholder = "rotate(0,16,16)";
 
 bool ReplaceFirst(std::string* text, std::string_view needle, std::string_view replacement) {
@@ -46,6 +49,14 @@ std::size_t CornerIndex(SelectionTransformCorner corner) {
   return 0;
 }
 
+std::size_t PanCursorIndex(PanCursorKind kind) {
+  switch (kind) {
+    case PanCursorKind::OpenHand: return 0;
+    case PanCursorKind::ClosedHand: return 1;
+  }
+  return 0;
+}
+
 double RotationDegreesForCorner(SelectionTransformCorner corner) {
   switch (corner) {
     case SelectionTransformCorner::TopLeft: return 0.0;
@@ -62,6 +73,27 @@ std::string BuildRotateCursorSvg(SelectionTransformCorner corner) {
   std::ostringstream replacement;
   replacement << "rotate(" << RotationDegreesForCorner(corner) << ",16,16)";
   ReplaceFirst(&svg, kRotationPlaceholder, replacement.str());
+
+  std::ostringstream rasterSize;
+  rasterSize << kCursorRasterSizePx;
+  const std::string rasterSizeText = rasterSize.str();
+  ReplaceFirst(&svg, R"svg(width="32")svg", std::string("width=\"") + rasterSizeText + "\"");
+  ReplaceFirst(&svg, R"svg(height="32")svg", std::string("height=\"") + rasterSizeText + "\"");
+  return svg;
+}
+
+std::string BuildPanCursorSvg(PanCursorKind kind) {
+  std::string svg;
+  switch (kind) {
+    case PanCursorKind::OpenHand:
+      svg.assign(reinterpret_cast<const char*>(embedded::kPanCursorSvg.data()),
+                 embedded::kPanCursorSvg.size());
+      break;
+    case PanCursorKind::ClosedHand:
+      svg.assign(reinterpret_cast<const char*>(embedded::kPanClosedCursorSvg.data()),
+                 embedded::kPanClosedCursorSvg.size());
+      break;
+  }
 
   std::ostringstream rasterSize;
   rasterSize << kCursorRasterSizePx;
@@ -163,6 +195,11 @@ std::optional<RotateCursorImage> RenderRotateCursorImage(
   return RenderImageFromSvg(BuildRotateCursorSvg(corner), std::move(geodeDevice));
 }
 
+std::optional<RotateCursorImage> RenderPanCursorImage(
+    PanCursorKind kind, std::shared_ptr<geode::GeodeDevice> geodeDevice) {
+  return RenderImageFromSvg(BuildPanCursorSvg(kind), std::move(geodeDevice));
+}
+
 RotateCursorSet::~RotateCursorSet() {
   destroy();
 }
@@ -202,6 +239,26 @@ bool RotateCursorSet::initialize(GLFWwindow* window,
     rotateCursors_[CornerIndex(corner)] = cursor;
   }
 
+  for (PanCursorKind kind : {PanCursorKind::OpenHand, PanCursorKind::ClosedHand}) {
+    std::optional<RotateCursorImage> panImage = RenderPanCursorImage(kind, geodeDevice);
+    if (!panImage.has_value()) {
+      destroy();
+      return false;
+    }
+
+    GLFWimage glfwImage{
+        .width = panImage->width,
+        .height = panImage->height,
+        .pixels = panImage->rgba.data(),
+    };
+    GLFWcursor* cursor = glfwCreateCursor(&glfwImage, kPanCursorHotspotPx, kPanCursorHotspotPx);
+    if (cursor == nullptr) {
+      destroy();
+      return false;
+    }
+    panCursors_[PanCursorIndex(kind)] = cursor;
+  }
+
   valid_ = true;
   return true;
 }
@@ -212,6 +269,21 @@ bool RotateCursorSet::setRotateCursor(SelectionTransformCorner corner) {
   }
 
   GLFWcursor* cursor = rotateCursors_[CornerIndex(corner)];
+  if (cursor == nullptr) {
+    return false;
+  }
+
+  glfwSetCursor(window_, cursor);
+  customCursorActive_ = true;
+  return true;
+}
+
+bool RotateCursorSet::setPanCursor(PanCursorKind kind) {
+  if (!valid_ || window_ == nullptr) {
+    return false;
+  }
+
+  GLFWcursor* cursor = panCursors_[PanCursorIndex(kind)];
   if (cursor == nullptr) {
     return false;
   }
@@ -233,6 +305,12 @@ void RotateCursorSet::clearIfActive() {
 void RotateCursorSet::destroy() {
   clearIfActive();
   for (GLFWcursor*& cursor : rotateCursors_) {
+    if (cursor != nullptr) {
+      glfwDestroyCursor(cursor);
+      cursor = nullptr;
+    }
+  }
+  for (GLFWcursor*& cursor : panCursors_) {
     if (cursor != nullptr) {
       glfwDestroyCursor(cursor);
       cursor = nullptr;

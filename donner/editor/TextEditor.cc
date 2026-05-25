@@ -796,7 +796,8 @@ bool LineRangeContains(const std::vector<LineRange>& ranges, int lineNo) {
 }
 
 bool FocusPartitionsEqual(const FocusPartition& lhs, const FocusPartition& rhs) {
-  return lhs.fullColor == rhs.fullColor && lhs.dimmed == rhs.dimmed && lhs.hidden == rhs.hidden &&
+  return lhs.fullColor == rhs.fullColor && lhs.referenceColor == rhs.referenceColor &&
+         lhs.dimmed == rhs.dimmed && lhs.hidden == rhs.hidden &&
          lhs.referenceLinks == rhs.referenceLinks;
 }
 
@@ -816,11 +817,17 @@ bool TextEditor::isLineHiddenByFocus(int lineNo) const {
          !isLineExpandedHiddenByFocus(lineNo);
 }
 
+bool TextEditor::isLineReferenceColoredByFocus(int lineNo) const {
+  return focusPartitionActive_ && LineRangeContains(focusPartition_.referenceColor, lineNo) &&
+         !LineRangeContains(focusPartition_.fullColor, lineNo);
+}
+
 bool TextEditor::isLineDimmedByFocus(int lineNo) const {
   return focusPartitionActive_ &&
          (LineRangeContains(focusPartition_.dimmed, lineNo) ||
           isLineExpandedHiddenByFocus(lineNo)) &&
-         !LineRangeContains(focusPartition_.fullColor, lineNo);
+         !LineRangeContains(focusPartition_.fullColor, lineNo) &&
+         !LineRangeContains(focusPartition_.referenceColor, lineNo);
 }
 
 bool TextEditor::isLineExpandedHiddenByFocus(int lineNo) const {
@@ -1764,6 +1771,7 @@ bool TextEditor::isPositionInsideFocusRange(const Coordinates& position) const {
 
   const int lineNo = sanitizeCoordinates(position).line;
   return LineRangeContains(focusPartition_.fullColor, lineNo) ||
+         LineRangeContains(focusPartition_.referenceColor, lineNo) ||
          LineRangeContains(focusPartition_.dimmed, lineNo);
 }
 
@@ -1806,6 +1814,15 @@ ImU32 dimmedTextColor(ImU32 color) {
   value.y = gray * 0.75f;
   value.z = gray * 0.75f;
   value.w *= 0.62f;
+  return ImGui::ColorConvertFloat4ToU32(value);
+}
+
+ImU32 referenceTextColor(ImU32 color) {
+  ImVec4 value = ImGui::ColorConvertU32ToFloat4(color);
+  value.x *= 0.72f;
+  value.y *= 0.72f;
+  value.z *= 0.72f;
+  value.w *= 0.82f;
   return ImGui::ColorConvertFloat4ToU32(value);
 }
 
@@ -1886,6 +1903,7 @@ void TextEditor::renderText(const VisualLine& visualLine, const Line& line, cons
       text_.getCharacterIndex(Coordinates(visualLine.lineNo, visualLine.startColumn));
   const int endIndex =
       text_.getCharacterIndex(Coordinates(visualLine.lineNo, visualLine.endColumn));
+  const bool referenceColored = isLineReferenceColoredByFocus(visualLine.lineNo);
   const bool dimmed = isLineDimmedByFocus(visualLine.lineNo);
 
   ImU32 prevColor = palette_[static_cast<int>(ColorIndex::Default)];
@@ -1899,7 +1917,9 @@ void TextEditor::renderText(const VisualLine& visualLine, const Line& line, cons
        glyphIndex < endIndex && glyphIndex < static_cast<int>(line.size());) {
     const Glyph& glyph = line[glyphIndex];
     ImU32 color = getGlyphColor(glyph);
-    if (dimmed) {
+    if (referenceColored) {
+      color = referenceTextColor(color);
+    } else if (dimmed) {
       color = dimmedTextColor(color);
     }
 
@@ -1917,14 +1937,25 @@ void TextEditor::renderText(const VisualLine& visualLine, const Line& line, cons
           (static_cast<float>(tabSize_) * spaceSize);
       const float arrowX = pos.x + oldX + (offset.x - oldX) * 0.5f;
       const float arrowY = pos.y + offset.y + ImGui::GetFontSize() * 0.2f;
-      drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(arrowX, arrowY),
-                        dimmed ? dimmedTextColor(0x99906060) : 0x99906060, "→");
+      ImU32 arrowColor = 0x99906060;
+      if (referenceColored) {
+        arrowColor = referenceTextColor(arrowColor);
+      } else if (dimmed) {
+        arrowColor = dimmedTextColor(arrowColor);
+      }
+      drawList->AddText(ImGui::GetFont(), ImGui::GetFontSize(), ImVec2(arrowX, arrowY), arrowColor,
+                        "→");
       ++glyphIndex;
     } else if (glyph.character == ' ') {
       const float centerX = pos.x + offset.x + spaceSize * 0.5f;
       const float centerY = pos.y + offset.y + ImGui::GetFontSize() * 0.5f;
-      drawList->AddCircleFilled(ImVec2(centerX, centerY), 1.0f,
-                                dimmed ? dimmedTextColor(0x99805050) : 0x99805050, 4);
+      ImU32 dotColor = 0x99805050;
+      if (referenceColored) {
+        dotColor = referenceTextColor(dotColor);
+      } else if (dimmed) {
+        dotColor = dimmedTextColor(dotColor);
+      }
+      drawList->AddCircleFilled(ImVec2(centerX, centerY), 1.0f, dotColor, 4);
       offset.x += spaceSize;
       ++glyphIndex;
     } else {

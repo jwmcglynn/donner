@@ -56,6 +56,29 @@ public:
     Transform2d documentFromStartDocument = Transform2d();
   };
 
+  /// Active selection gesture kind.
+  enum class ActiveGestureKind {
+    Move,
+    Resize,
+    Rotate,
+  };
+
+  /// Active selection gesture state for editor UI chrome.
+  struct ActiveGesturePreview {
+    /// Gesture kind currently being performed.
+    ActiveGestureKind kind = ActiveGestureKind::Move;
+    /// Transform handle corner that started the gesture.
+    SelectionTransformCorner corner = SelectionTransformCorner::TopLeft;
+    /// Selection bounds captured at gesture start.
+    Box2d startBoundsDoc;
+    /// Current transform from gesture-start document space to active document space.
+    Transform2d documentFromStartDocument = Transform2d();
+    /// Current drag delta in document coordinates.
+    Vector2d currentDocumentDelta = Vector2d::Zero();
+    /// Whether the gesture has moved past the drag threshold.
+    bool hasMoved = false;
+  };
+
   /// Payload needed to write a completed drag back into the source pane.
   /// For multi-element drags this is the primary; additional writeback
   /// entries are latched in `extras`.
@@ -131,6 +154,9 @@ public:
 
   /// Returns the current drag preview, if a drag is in progress.
   [[nodiscard]] std::optional<ActiveDragPreview> activeDragPreview() const;
+
+  /// Returns the current selection gesture preview, if a drag is in progress.
+  [[nodiscard]] std::optional<ActiveGesturePreview> activeGesturePreview() const;
 
   /// Returns active oriented-bounds chrome for in-progress rotation.
   [[nodiscard]] std::optional<ActiveTransformBoundsPreview> activeTransformBoundsPreview() const;

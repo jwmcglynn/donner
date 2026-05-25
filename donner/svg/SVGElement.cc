@@ -209,7 +209,23 @@ ElementType SVGElement::type() const {
   return handle_.get<components::ElementTypeComponent>().type();
 }
 
+std::optional<ElementType> SVGElement::tryType() const {
+  if (!handle_ || !handle_.all_of<components::ElementTypeComponent>()) {
+    return std::nullopt;
+  }
+
+  return handle_.get<components::ElementTypeComponent>().type();
+}
+
 xml::XMLQualifiedNameRef SVGElement::tagName() const {
+  return handle_.get<donner::components::TreeComponent>().tagName();
+}
+
+std::optional<xml::XMLQualifiedNameRef> SVGElement::tryTagName() const {
+  if (!handle_ || !handle_.all_of<donner::components::TreeComponent>()) {
+    return std::nullopt;
+  }
+
   return handle_.get<donner::components::TreeComponent>().tagName();
 }
 

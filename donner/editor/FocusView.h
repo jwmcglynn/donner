@@ -39,14 +39,16 @@ struct FocusReferenceLink {
 
 /// View-only source-pane partition for selected-element focus mode.
 struct FocusPartition {
-  std::vector<LineRange> fullColor;                ///< Selected element's source span.
+  std::vector<LineRange> fullColor;                ///< Immediate selected source spans.
+  std::vector<LineRange> referenceColor;           ///< Referenced/referencing source spans.
   std::vector<LineRange> dimmed;                   ///< Ancestor opening/closing tag context.
   std::vector<LineRange> hidden;                   ///< Lines hidden by focus mode.
   std::vector<FocusReferenceLink> referenceLinks;  ///< Attribute-reference connectors.
 
   /// Return true when the partition should be treated as "show everything".
   [[nodiscard]] bool empty() const {
-    return fullColor.empty() && dimmed.empty() && hidden.empty() && referenceLinks.empty();
+    return fullColor.empty() && referenceColor.empty() && dimmed.empty() && hidden.empty() &&
+           referenceLinks.empty();
   }
 };
 

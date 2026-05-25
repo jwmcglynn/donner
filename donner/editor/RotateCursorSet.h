@@ -29,11 +29,26 @@ struct RotateCursorImage {
   std::vector<unsigned char> rgba;
 };
 
+/// Visual state for the pan-mode cursor.
+enum class PanCursorKind {
+  /// Open hand while pan mode is armed.
+  OpenHand,
+  /// Closed hand while actively panning.
+  ClosedHand,
+};
+
 /// Render one oriented rotate-cursor SVG to straight-alpha RGBA pixels.
 [[nodiscard]] std::optional<RotateCursorImage> RenderRotateCursorImage(
     SelectionTransformCorner corner, std::shared_ptr<geode::GeodeDevice> geodeDevice);
 
-/// RAII owner for the editor's custom rotate cursors.
+/// Render the pan-mode cursor SVG for @p kind to straight-alpha RGBA pixels.
+///
+/// @param kind Pan cursor visual state to render.
+/// @param geodeDevice Shared Geode device for Geode editor builds.
+[[nodiscard]] std::optional<RotateCursorImage> RenderPanCursorImage(
+    PanCursorKind kind, std::shared_ptr<geode::GeodeDevice> geodeDevice);
+
+/// RAII owner for the editor's custom cursors.
 class RotateCursorSet {
 public:
   RotateCursorSet() = default;
@@ -44,7 +59,7 @@ public:
   RotateCursorSet(RotateCursorSet&&) = delete;
   RotateCursorSet& operator=(RotateCursorSet&&) = delete;
 
-  /// Create all rotate cursors for @p window.
+  /// Create all custom cursors for @p window.
   ///
   /// @param window GLFW window that will receive cursor changes.
   /// @param geodeDevice Shared Geode device for Geode editor builds.
@@ -58,10 +73,16 @@ public:
   /// @return true if a custom cursor was available and applied.
   [[nodiscard]] bool setRotateCursor(SelectionTransformCorner corner);
 
-  /// Restore GLFW's default cursor if a custom rotate cursor is active.
+  /// Set the custom pan cursor for @p kind.
+  ///
+  /// @param kind Pan cursor visual state to apply.
+  /// @return true if a custom cursor was available and applied.
+  [[nodiscard]] bool setPanCursor(PanCursorKind kind);
+
+  /// Restore GLFW's default cursor if a custom cursor is active.
   void clearIfActive();
 
-  /// Whether all rotate cursors were created successfully.
+  /// Whether all custom cursors were created successfully.
   [[nodiscard]] bool valid() const { return valid_; }
 
 private:
@@ -69,6 +90,7 @@ private:
 
   GLFWwindow* window_ = nullptr;
   std::array<GLFWcursor*, 4> rotateCursors_ = {};
+  std::array<GLFWcursor*, 2> panCursors_ = {};
   bool customCursorActive_ = false;
   bool valid_ = false;
 };
