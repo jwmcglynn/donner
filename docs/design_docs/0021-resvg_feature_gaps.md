@@ -165,13 +165,17 @@ before fixing.
 6. **Un-gate** via an **additive in-process backend matrix** — full plan in
    [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison).
    One geode-enabled binary runs three comparison modes per test (`TinyGolden`,
-   `GeodeGolden`, and a new `GeodeTinyParity` that ignores the golden). Parity un-gates
-   text at a documented **~800 px max-count** tolerance (the proven 4× MSAA edge floor —
-   *not* a `widenThresholdForGeode` per-pixel bump, which would mask solid-region bugs and
-   is the [G5](#g5-audit-the-aa-justified-geode-thresholds) pattern). Characterization done
-   (2026-05-24): of 250 runnable text tests, 86 pass-clean / 155 edge-floor (≤763 px) /
-   **9 genuine bugs** (≥1599 px) — the 9 get narrow per-test gates + repros, listed in
-   0017 §Phase 4b.
+   `GeodeGolden`, and `GeodeTinyParity` which ignores the golden). **Landed green
+   (2026-05-24)** at the final policy: parity = pixelmatch `includeAA=false`, per-pixel
+   `kDefaultThreshold` (0.02), **flat 100-px max-count, no per-test thresholds** (not the
+   rejected `widenThresholdForGeode` 0.3 bump, which masks solid-region bugs — the
+   [G5](#g5-audit-the-aa-justified-geode-thresholds) pattern). Tests >100 px are **binary-
+   gated** via `geodeParityGate`, organized as an inventory: **172 edge-floor** (4× MSAA
+   edge quantization, 101–763 px — one shared reason, ratchet out together with finer AA) +
+   **56 genuine** (**38 filter** → reference [G2](#g2-filter-primitive-correctness-16-of-23-disabled-tests);
+   **18 text/text-on-shape** → reference [0038](0038-geode_tinyskia_text_parity.md)).
+   Whole-suite parity: **1035 pass / 228 gated** (text 86/159, non-text 949/69). The ~137
+   sub-visual premultiply fills pass at 0.02 → [G5](#g5-audit-the-aa-justified-geode-thresholds).
 
 ### G2: Filter-primitive correctness (16 of 23 disabled tests)
 
@@ -216,6 +220,19 @@ threshold (the #582 pattern).
 (`actual/expected/diff` PNGs), and root-cause it. Replace the AA comment with the
 true cause or a tracking link. Don't reword the comments without doing the
 investigation — that just relabels the masking.
+
+**G5-premultiply (quantified 2026-05-24, the Phase 4b parity run):** ~137 non-text
+tests show a **uniform, sub-perceptual color/alpha offset across solid fills** — the
+*whole* fill region differs from tiny-skia at strict-0, but the diff collapses to
+<100 px at the suite's default 0.02 threshold (and is invisible to the eye). The
+likely single root cause is **premultiplied-alpha / color-space rounding** in Geode's
+solid + filter output path (e.g. unpremultiply-on-store rounding vs tiny-skia). These
+**pass** the Phase 4b parity gate at 0.02 (not gated), but they are exactly the G5
+"sub-threshold real diff" pattern at scale: a 1–2 level offset on a 400×400 fill =
+160000 px at threshold 0. **One premultiply/rounding fix likely clears most of them.**
+Repro: run the `GeodeTinyParity` mode at threshold 0 (vs 0.02) and diff a solid-fill
+test such as `filters/feBlend/mode=multiply` or `painting/fill/rgb-0-127-0-0.5` — the
+diff is the entire solid interior, uniformly. Tracked as the durable color-output item.
 
 ---
 

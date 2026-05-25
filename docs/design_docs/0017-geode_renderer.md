@@ -1513,37 +1513,52 @@ the `*_geode` wrapper under `bazel test //...`); the pure-CPU `resvg_test_suite`
 **Incremental landing (in-place, each step green on `main`):**
 
 1. ✅ Characterize (done — table above).
-2. **Backend dispatch refactor**: `ActiveRendererBackend()`/`RenderDocumentWithActiveBackend()`
-   → `RenderDocumentWithBackend(doc, backend)`; both backend TUs coexist; geode build links
-   both. No behavior change yet (each variant still runs its one backend).
-3. **`ComparisonMode` parameter dimension**: fixture param gains `ComparisonMode`; the
-   active mode list is build-dependent (CPU = `{single golden}`, geode = `{TinyGolden,
-   GeodeGolden, GeodeTinyParity}`); `INSTANTIATE_TEST_SUITE_P` sites use
-   `Combine(ValuesIn(tests), ValuesIn(activeModes()))`; gates become per-(backend, mode).
-4. **Implement `GeodeTinyParity`** in `renderAndCompare`: render geode + tiny in-process,
-   pixelmatch with the documented ~800 px count tolerance; productizes the temp
-   characterization harness.
-5. **Un-gate text for parity mode** + advertise `RendererBackendFeature::Text`; add narrow
-   per-test gates for the 9 genuine bugs (each linked to a repro to be written).
-6. **Repros + fixes for the 9 genuine bugs** (follow-on; ~4 root-cause themes below).
+2. ✅ **Backend dispatch refactor** (`be7de1653`): `ActiveRendererBackend()`/
+   `RenderDocumentWithActiveBackend()` → `RenderDocumentWithBackend(doc, backend)`; both
+   backend TUs coexist; geode build links both.
+3. ✅ **`ComparisonMode` parameter dimension** (`a924c84f9`): fixture param is
+   `std::tuple<ImageComparisonTestcase, ComparisonMode>`; active mode list is build-dependent
+   (CPU = `{TinyGolden}`, geode = `{TinyGolden, GeodeGolden, GeodeTinyParity}`);
+   `INSTANTIATE_TEST_SUITE_P` sites use `Combine(ValuesIn(tests), ValuesIn(ActiveComparisonModes()))`;
+   gates are per-(backend, mode); single-mode CPU build keeps historical names (no suffix).
+4. ✅ **Implement `GeodeTinyParity` + whole-suite activation** (increment 4): in
+   `renderAndCompare`, render geode + tiny in-process and pixelmatch geode-vs-tiny (golden
+   ignored). The parity mode **bypasses** the `requireFeature(Text/FilterEffects)` skips so
+   geode actually renders text/filters (this folds in increment 5's text un-gate — no
+   separate `requireFeature(Text)` flip needed); explicit `Skip()` / `disableBackend(Geode)`
+   stay honored.
+5. ✅ **Final parity policy (landed green):** pixelmatch `includeAA=false`, per-pixel
+   `kDefaultThreshold` (0.02 — the suite's own default for every golden compare), **flat
+   max-pixel-count = `kDefaultMismatchedPixels` (100); no per-test thresholds.** A diff
+   >100 px is gated, never absorbed by a larger budget (that would be masking). Rationale:
+   0.02 (not strict-0) keeps the ~137 sub-visual premultiply offsets passing while still
+   catching genuine bugs; the flat 100 (not the rejected blanket 0.3 bump) means a
+   solid-region regression still trips.
+6. ✅ **228 binary parity gates** via `geodeParityGate(category, filename)` (an in-place
+   extension of the existing gate system, folded into the deferred `geodeGate` so it touches
+   only the parity instance). Organized as an inventory by theme:
+   - **172 edge-floor (101–763 px)** — the proven 4× MSAA edge-coverage quantization. One
+     shared reason; these ratchet out together when Geode gains finer AA.
+   - **56 genuine (≥768 px)** — real divergences: **38 filter** color/algorithm bugs (reason
+     → [0021 §G2](0021-resvg_feature_gaps.md#g2-filter-primitive-correctness-16-of-23-disabled-tests)),
+     **18 text / text-on-shape** (reason → [0038](0038-geode_tinyskia_text_parity.md)).
+7. **Follow-on:** fix the 56 genuine (G2 filter + 0038 text), then drop those gates; fix the
+   137-fill premultiply root cause ([0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)), then no
+   change needed (they already pass at 0.02). Finer AA retires the 172 edge-floor gates.
 
-**The 9 genuine bugs (narrow-gate + repro backlog):**
+**Final numbers (geode build, all green):**
 
-| px | test | symptom (eyeballed) | theme |
+| Mode | pass | gated/skip | fail |
 |---|---|---|---|
-| 5588 | `font-size/negative-size` | Geode draws nothing; tiny-skia draws mirrored "Text" | font-size sign |
-| 3586 | `font-size/named-value` | 11 named-size lines vertically offset, accumulating | font-size resolution |
-| 4767 | `text-decoration/underline-with-dy-list-2` | per-char `dy` list applied differently; doubled outlines | per-char dy/rotate |
-| 4605 | `text-decoration/underline-with-rotate-list-4` | per-glyph rotate-list drift | per-char dy/rotate |
-| 2271 | `text-decoration/tspan-decoration` | glyph+decoration drift across styled spans | per-char dy/rotate |
-| 2929 | `tspan/tspan-bbox-2` | solid fill-color diff (paint via text bbox) | per-span paint/bbox |
-| 1805 | `tspan/tspan-bbox-1` | solid fill-color diff (same family) | per-span paint/bbox |
-| 1599 | `tspan/with-opacity` | span renders at different alpha | per-span paint/bbox |
-| 2228 | `textPath/dy-with-tiny-coordinates` | glyphs drift along path (tiny `dy`) | textPath dy |
+| `TinyGolden` (tiny-skia vs golden, unchanged) | 1335 | 4 | 0 |
+| `GeodeGolden` (geode vs golden, unchanged) | 1046 | 582 | 0 |
+| `GeodeTinyParity` (geode vs tiny-skia, NEW) | 1086 | 502 | 0 |
 
-The `tspan-bbox-1/2` + `with-opacity` trio likely shares one per-span paint-resolution
-root; the two `dy`/`rotate`-list cases likely share another. `negative-size` is the
-cleanest single check (Geode emits zero glyphs).
+Parity comparison (1263 tests that actually rendered + compared): **1035 pass / 228 gated**
+— text **86 pass / 159 gated** (14 genuine + 145 edge-floor), non-text **949 pass / 69 gated**
+(42 genuine + 27 edge-floor). (`GeodeTinyParity` OK=1086 > 1035 because `RenderOnly` UB tests
+count as OK without a parity compare; SKIP=502 = 228 parity gates + explicit
+`Skip()`/`onlyTextFull`/`disableBackend` honest skips.)
 
 **Risk:** parity uses tiny-skia as the geode oracle, so a tiny-skia text regression could
 mask a geode one — mitigated because `TinyGolden` gates tiny-skia against ground truth in
