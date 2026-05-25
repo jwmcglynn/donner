@@ -342,9 +342,9 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       .initialHeight = initialHeight,
       .visible = options.visible,
       // Capture replays hide their window by default. Linux uses GLFW's null
-      // platform + OSMesa for framebuffer readback; macOS keeps the native
-      // GPU-backed Cocoa context. An interactive (visible) replay keeps the
-      // native windowed platform.
+      // platform with Mesa's EGL/llvmpipe path for framebuffer readback; macOS
+      // keeps the native GPU-backed Cocoa context. An interactive (visible)
+      // replay keeps the native windowed platform.
       .offscreen = !options.visible,
       // Reproduce the recorded HiDPI scale during hidden replay so framebuffer
       // crops line up with captures taken on the recording host.

@@ -441,9 +441,9 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_EMSCRIPTEN);
 #else
 #if defined(__linux__)
-  // Use GLFW's windowless "null" platform (OSMesa software GL) for offscreen
-  // framebuffer-readback replay on Linux. We also fall back to it automatically
-  // when there is no X11/Wayland display, so headless runs degrade gracefully.
+  // Use GLFW's windowless "null" platform for offscreen Linux replay. We also
+  // fall back to it automatically when there is no X11/Wayland display, so
+  // headless runs degrade gracefully.
   useNullPlatform = options_.offscreen;
   const bool hasDisplay =
       std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr;
@@ -472,6 +472,12 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   glfwWindowHint(GLFW_VISIBLE, options_.visible ? GLFW_TRUE : GLFW_FALSE);
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 #else
+  if (useNullPlatform) {
+    // GLFW's native context on the null platform is OSMesa. Use EGL instead so
+    // Linux CI exercises Mesa's surfaceless llvmpipe path on both Ubuntu and
+    // NixOS, without requiring a physical GPU or libOSMesa.
+    glfwWindowHint(GLFW_CONTEXT_CREATION_API, GLFW_EGL_CONTEXT_API);
+  }
   // OpenGL 3.3 core is plenty — matches what imgui_impl_opengl3 targets
   // by default and what glad was generated for.
   glfwWindowHint(GLFW_VISIBLE, options_.visible ? GLFW_TRUE : GLFW_FALSE);

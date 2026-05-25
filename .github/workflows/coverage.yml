@@ -14,10 +14,20 @@ on:
     branches: [main]
   workflow_dispatch:  # Re-run on demand (e.g. before final merge)
 
+permissions:
+  contents: read
+
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
+#
+# Self-hosted coverage uses the same operator-only gate as CI's Linux lane:
+# SELFHOSTED_LINUX_RUNNER must be "true", and both actor identities must be
+# jwmcglynn. That prevents collaborator reruns from executing on the homelab
+# runner or seeing the Codecov secret there. Everyone else stays on hosted
+# Ubuntu.
 jobs:
   build:
     runs-on: ubuntu-24.04
+    if: ${{ vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -40,26 +50,103 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev
+          sudo apt-get install -y libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev \
+            mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libgl1-mesa-dev libosmesa6-dev
 
       - name: Generate coverage
         run: |
-          # Exclude //donner/editor/gui/... and //donner/editor:* — they
-          # depend on GLFW + imgui, which need X11/GL headers that the
-          # hermetic LLVM sysroot (used via --config=latest_llvm in
-          # coverage.sh) does not carry. //donner/editor/sandbox/... is
-          # GLFW-free and stays in scope.
           tools/coverage.sh --quiet --no-html \
             //donner/base/... \
             //donner/css/... \
             //donner/svg/... \
-            //donner/editor/sandbox/...
+            //donner/editor/...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-report/filtered_report.dat
+          flags: unittests
+          fail_ci_if_error: true
+          verbose: true
+
+  coverage-self-hosted:
+    runs-on: [self-hosted, linux, arm64, event-horizon]
+    if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Sync Bazel toolchain
+        run: |
+          find /var/cache/bazel/user-root -maxdepth 5 \
+            \( -name "*+local_config_cc" \
+            -o -name "local_config_cc" \
+            -o -name "*+local_config_cc_toolchains" \
+            -o -name "local_config_cc_toolchains" \
+            -o -name "*+local_config_cc.marker" \
+            -o -name "local_config_cc.marker" \
+            -o -name "*+local_config_cc_toolchains.marker" \
+            -o -name "local_config_cc_toolchains.marker" \) \
+            -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Prepare Bazel LLVM linker
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk fetch --config=latest_llvm \
+            //donner/base/... \
+            //donner/css/... \
+            //donner/svg/... \
+            //donner/editor/...
+          patch-bazel-llvm-tools /var/cache/bazel/user-root
+          # `fetch` starts a Bazel server before we patch the downloaded
+          # linker. Restart it so coverage action inputs are digested from the
+          # patched ELF instead of stale server state.
+          bazelisk shutdown
+
+      - name: Generate coverage
+        run: |
+          tools/coverage.sh --quiet --no-html \
+            //donner/base/... \
+            //donner/css/... \
+            //donner/svg/... \
+            //donner/editor/...
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: self-hosted-coverage-report
+          path: coverage-report/filtered_report.dat
+          if-no-files-found: error
+          retention-days: 1
+
+  upload-self-hosted-coverage:
+    needs: coverage-self-hosted
+    runs-on: ubuntu-24.04
+    if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: self-hosted-coverage-report
+          path: coverage-report
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage-report/filtered_report.dat
+          disable_search: true
           flags: unittests
           fail_ci_if_error: true
           verbose: true
