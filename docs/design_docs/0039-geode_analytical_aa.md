@@ -565,3 +565,44 @@ bit-match tiny's scan-converter (huge, defeats the GPU-native design, uncertain)
 shapes-only supersample (helps shapes, full offscreen rewrite + 4× perf, text stays gated — not
 worth it). PerfBot was not engaged: the parity gate failed first (text sample-independent), so the
 perf question is moot.
+
+---
+
+## 13. FINAL DECISION (2026-05-25): accept the edge floor; the content matches
+
+After the threshold sweep + sample-image review, the edge floor is **accepted as a by-design,
+non-bug geode-vs-tiny difference.** The decisive evidence:
+
+**The "7/255 sub-perceptual" framing was the wrong metric.** That was the *raw alpha* delta;
+pixelmatch uses **perceptual YIQ** (`kMaxDelta = 35215·threshold²`), and a black-glyph/crosshair
+edge on white is perceptually **~0.08–0.10**, not sub-perceptual. Threshold sweep (parity mode,
+includeAA=false, flat 100px):
+
+| threshold | edge-floor flips | note |
+|---|--:|---|
+| 0.022–0.030 | **1 / 191** | the authorized nudge does NOT absorb it |
+| 0.04 / 0.06 | 4 / 5 | — |
+| **0.10** | **165** | the cliff — but masking-adjacent (absorbs real ~10% solid diffs) |
+| 0.30 | 183 | **masks the genuine feGaussianBlur bug** — off-limits |
+
+So there is **no minimal/clean threshold change**: the value that flips the bulk is 0.10 (3.3× the
+sub-perceptual scope, masking-adjacent), and it was not authorized.
+
+**The sample images (text/text/simple-case diff) reframe the gates favorably:** the glyph edges are
+**yellow** — pixelmatch *already* excludes them as AA — and the only **red (counted)** pixels are the
+resvg template's **0.5px crosshair**. So geode's *text content matches tiny* modulo correctly-excluded
+AA fringe; the gates trip predominantly on the crosshair overlay's sub-pixel placement, which comes
+from tiny's `snapY` quarter-pixel quantization (TinyCoverage) — unfixable per-fragment on the GPU.
+
+**Decision:** keep the parity metric at 0.02 (no relaxation; honors the firm no-masking policy), keep
+the edge-floor gates, and reframe their reason to the accurate cause: *"geode-vs-tiny AAA coverage /
+crosshair sub-pixel delta; content matches, unfixable in-renderer."* These are **not** quality bugs and
+**not** 4× MSAA quantization (proven sample-independent). The whole AA effort (§§8–13) is closed:
+analytical AA, dual-ray, supersampling, MSAA-16, render-supersample, and a threshold nudge were all
+evaluated and rejected with evidence. **Redirect to the genuine remaining bugs:** feGaussianBlur CTM
+(the 1 real G2), [0040](0040-geode_slug_conformance.md) D2 (cubic→chord landmine), and the
+re-grounded D1/D5.
+
+> If reference-grade edge AA is ever required (e.g. a print/export path), the only viable approach is a
+> GPU compute-shader port of Skia AAA writing a coverage texture (0039 §9 option 3 / TinyCoverage
+> option B) — a new rasterizer, scoped separately. Not worth it for the resvg parity corpus.

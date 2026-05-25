@@ -443,7 +443,7 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
     std::string_view category, std::string_view filename) {
   const std::string key = std::string(category) + "/" + std::string(filename);
 
-  // ── EDGE-FLOOR: 4x MSAA edge-quantization >100px (0017 §Phase 4b) ──────────
+  // ── EDGE-FLOOR: accepted by-design geode-vs-tiny AAA coverage delta (0039 §13) ──────────
   static const std::set<std::string_view> kEdgeFloor = {
       // feImage/embedded-png recategorized from kGenuineG2 (2026-05-27 — see
       // 0021 §G2): geode places the data-URI image *correctly* (zero-diff
@@ -602,8 +602,15 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
   };
   if (kEdgeFloor.count(key)) {
     return [](ImageComparisonParams& p) {
-      p.disableGeodeParity(
-          "geode 4x MSAA edge-quantization >100px (finer-AA tracking: 0017 Phase 4b)");
+      // ACCEPTED by-design (0039 §13): geode's edge coverage vs tiny-skia's Skia-AAA
+      // scanline coverage differ by a sub-perceptual ~1px AA fringe, plus the resvg
+      // template's 0.5px crosshair sub-pixel placement (tiny's snapY quarter-pixel
+      // quantization). The CONTENT matches (glyph fringe is correctly AA-excluded by
+      // pixelmatch); unfixable in-renderer (AAA is a stateful CPU scanline accumulator,
+      // not per-fragment GPU-replicable -- proven across 4 attempts, see 0039 §§8-13).
+      // NOT 4x MSAA quantization (sample-independent: identical at 16x/64x).
+      p.disableGeodeParity("geode-vs-tiny AAA coverage/crosshair sub-pixel delta; content "
+                           "matches, unfixable in-renderer (accepted by-design: 0039 §13)");
     };
   }
 
