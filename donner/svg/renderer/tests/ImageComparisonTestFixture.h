@@ -139,6 +139,16 @@ struct ImageComparisonParams {
   /// `// comments` so the reason is discoverable from test logs.
   std::string_view reason;
 
+  // ── GeodeTinyParity-only knob (consumed only by the `GeodeTinyParity`
+  // comparison mode; ignored by `TinyGolden` / `GeodeGolden`). See
+  // docs/design_docs/0017 §Phase 4b. ──────────────────────────────────────────
+  /// If true, skip the `GeodeTinyParity` instance for this test (a genuine
+  /// geode-vs-tiny divergence tracked elsewhere — see `reason`). Does NOT affect
+  /// `TinyGolden` / `GeodeGolden`. Parity uses a flat `kDefaultMismatchedPixels`
+  /// budget at `kDefaultThreshold` (no per-test budgets); diffs above it that are
+  /// real bugs (not the 4× MSAA edge floor) get gated here.
+  bool disableGeodeTinyParity = false;
+
   /**
    * @brief Creates parameters to skip a test.
    * @param reason Human-readable explanation, shown in the skip message.
@@ -307,6 +317,24 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& withMaxPixelsDifferent(int pixels) {
     maxMismatchedPixels = pixels;
+    return *this;
+  }
+
+  /**
+   * @brief Skips the `GeodeTinyParity` instance for this test (genuine divergence).
+   *
+   * Use for a real geode-vs-tiny bug tracked elsewhere (G2 filters / 0038 text).
+   * Leaves `TinyGolden` / `GeodeGolden` untouched. NOT a budget bump — the
+   * divergence is large/structural and must be fixed, not masked.
+   *
+   * @param reason Tracking reference (e.g. "geode feComposite arithmetic — 0021 G2").
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& disableGeodeParity(std::string_view reason = std::string_view()) {
+    disableGeodeTinyParity = true;
+    if (!reason.empty()) {
+      this->reason = reason;
+    }
     return *this;
   }
 

@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <functional>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -422,6 +423,285 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
   return std::nullopt;
 }
 
+/// Parity-only gate for the Geode backend (Phase 4b final policy). The
+/// GeodeTinyParity mode renders geode + tiny-skia and pixelmatches them at the
+/// suite's default 0.02 threshold with a FLAT 100-px budget (no per-test
+/// thresholds). Tests whose geode-vs-tiny diff exceeds 100 px fall into two
+/// inventoried buckets, both gated here (the diff is real and tracked, never
+/// absorbed by a larger budget):
+///
+///  - EDGE-FLOOR (172): the proven 4x MSAA edge-coverage quantization (101-763
+///    px hugging glyph/shape edges). These ratchet out together when Geode gains
+///    finer AA. Tracked: docs/design_docs/0017 §Phase 4b.
+///  - GENUINE (56): real geode-vs-tiny divergences. Filter color/algorithm bugs
+///    reference 0021 §G2; text (incl. text-on-shape) reference 0038.
+///
+/// Keyed on `"<category>/<filename>"`. Returns a parity-disable mutator or
+/// nullopt. Applied only to the parity instance — TinyGolden / GeodeGolden are
+/// untouched.
+std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
+    std::string_view category, std::string_view filename) {
+  const std::string key = std::string(category) + "/" + std::string(filename);
+
+  // ── EDGE-FLOOR: 4x MSAA edge-quantization >100px (0017 §Phase 4b) ──────────
+  static const std::set<std::string_view> kEdgeFloor = {
+      "filters/feColorMatrix/type=saturate.svg",
+      "filters/feDropShadow/only-stdDeviation.svg",
+      "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-1.svg",
+      "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-2.svg",
+      "masking/mask/on-a-small-object.svg",
+      "paint-servers/pattern/tiny-pattern-upscaled.svg",
+      "painting/display/bBox-impact.svg",
+      "painting/marker/with-a-text-child.svg",
+      "painting/marker/with-an-image-child.svg",
+      "painting/stroke/control-points-clamping-1.svg",
+      "painting/visibility/collapse-on-tspan.svg",
+      "painting/visibility/hidden-on-tspan.svg",
+      "shapes/line/no-y1-coordinate.svg",
+      "structure/image/preserveAspectRatio=xMaxYMax-meet-on-svg.svg",
+      "structure/image/preserveAspectRatio=xMaxYMax-slice.svg",
+      "structure/image/preserveAspectRatio=xMidYMid-meet-on-svg.svg",
+      "structure/image/preserveAspectRatio=xMidYMid-slice-on-svg.svg",
+      "structure/image/preserveAspectRatio=xMidYMid-slice.svg",
+      "structure/image/preserveAspectRatio=xMinYMin-meet-on-svg.svg",
+      "structure/image/preserveAspectRatio=xMinYMin-slice-on-svg.svg",
+      "structure/image/preserveAspectRatio=xMinYMin-slice.svg",
+      "structure/svg/preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
+      "structure/svg/preserveAspectRatio=none.svg",
+      "structure/svg/preserveAspectRatio=xMaxYMax.svg",
+      "structure/svg/preserveAspectRatio=xMidYMid.svg",
+      "structure/svg/preserveAspectRatio=xMinYMin.svg",
+      "structure/svg/proportional-viewBox.svg",
+      "text/alignment-baseline/alphabetic.svg",
+      "text/alignment-baseline/auto.svg",
+      "text/alignment-baseline/central.svg",
+      "text/alignment-baseline/hanging-and-baseline-shift-eq-20-on-tspan.svg",
+      "text/alignment-baseline/hanging-on-tspan.svg",
+      "text/alignment-baseline/hanging-with-underline.svg",
+      "text/alignment-baseline/hanging.svg",
+      "text/alignment-baseline/inherit.svg",
+      "text/alignment-baseline/mathematical.svg",
+      "text/baseline-shift/-10.svg",
+      "text/baseline-shift/-50percent.svg",
+      "text/baseline-shift/0.svg",
+      "text/baseline-shift/10.svg",
+      "text/baseline-shift/2mm.svg",
+      "text/baseline-shift/50percent.svg",
+      "text/baseline-shift/baseline.svg",
+      "text/baseline-shift/inheritance-1.svg",
+      "text/baseline-shift/inheritance-2.svg",
+      "text/baseline-shift/inheritance-3.svg",
+      "text/baseline-shift/inheritance-4.svg",
+      "text/baseline-shift/inheritance-5.svg",
+      "text/baseline-shift/invalid-value.svg",
+      "text/baseline-shift/sub.svg",
+      "text/baseline-shift/super.svg",
+      "text/baseline-shift/with-rotate.svg",
+      "text/dominant-baseline/alphabetic.svg",
+      "text/dominant-baseline/auto.svg",
+      "text/dominant-baseline/central.svg",
+      "text/dominant-baseline/different-alignment-baseline-on-tspan.svg",
+      "text/dominant-baseline/equal-alignment-baseline-on-tspan.svg",
+      "text/dominant-baseline/ideographic.svg",
+      "text/dominant-baseline/mathematical.svg",
+      "text/font-kerning/as-property.svg",
+      "text/lengthAdjust/spacingAndGlyphs.svg",
+      "text/text-anchor/coordinates-list.svg",
+      "text/text-anchor/end-on-text.svg",
+      "text/text-anchor/end-with-letter-spacing.svg",
+      "text/text-anchor/inheritance-1.svg",
+      "text/text-anchor/inheritance-2.svg",
+      "text/text-anchor/inheritance-3.svg",
+      "text/text-anchor/invalid-value-on-text.svg",
+      "text/text-anchor/middle-on-text.svg",
+      "text/text-anchor/on-the-first-tspan.svg",
+      "text/text-anchor/on-tspan-with-arabic.svg",
+      "text/text-anchor/on-tspan.svg",
+      "text/text-anchor/start-on-text.svg",
+      "text/text-anchor/text-anchor-not-on-text-chunk.svg",
+      "text/text-decoration/all-types-inline-comma-separated.svg",
+      "text/text-decoration/all-types-inline-no-spaces.svg",
+      "text/text-decoration/all-types-inline.svg",
+      "text/text-decoration/all-types-nested.svg",
+      "text/text-decoration/indirect.svg",
+      "text/text-decoration/line-through.svg",
+      "text/text-decoration/outside-the-text-element.svg",
+      "text/text-decoration/overline.svg",
+      "text/text-decoration/style-resolving-1.svg",
+      "text/text-decoration/style-resolving-2.svg",
+      "text/text-decoration/style-resolving-3.svg",
+      "text/text-decoration/style-resolving-4.svg",
+      "text/text-decoration/underline-with-dy-list-1.svg",
+      "text/text-decoration/underline-with-rotate-list-3.svg",
+      "text/text-decoration/underline-with-y-list.svg",
+      "text/text-decoration/underline.svg",
+      "text/text-rendering/geometricPrecision.svg",
+      "text/text-rendering/on-tspan.svg",
+      "text/text-rendering/optimizeLegibility.svg",
+      "text/text-rendering/optimizeSpeed.svg",
+      "text/text-rendering/with-underline.svg",
+      "text/text/dx-and-dy-instead-of-x-and-y.svg",
+      "text/text/dx-and-dy-with-less-values-than-characters.svg",
+      "text/text/dx-and-dy-with-more-values-than-characters.svg",
+      "text/text/dx-and-dy-with-multiple-values.svg",
+      "text/text/em-and-ex-coordinates.svg",
+      "text/text/escaped-text-1.svg",
+      "text/text/escaped-text-2.svg",
+      "text/text/escaped-text-3.svg",
+      "text/text/escaped-text-4.svg",
+      "text/text/mm-coordinates.svg",
+      "text/text/nested.svg",
+      "text/text/no-coordinates.svg",
+      "text/text/rotate-with-an-invalid-angle.svg",
+      "text/text/rotate-with-less-values-than-characters.svg",
+      "text/text/rotate-with-more-values-than-characters.svg",
+      "text/text/rotate-with-multiple-values-underline-and-pattern.svg",
+      "text/text/rotate-with-multiple-values.svg",
+      "text/text/rotate.svg",
+      "text/text/simple-case.svg",
+      "text/text/transform.svg",
+      "text/text/x-and-y-with-dx-and-dy-lists.svg",
+      "text/text/x-and-y-with-dx-and-dy.svg",
+      "text/text/x-and-y-with-less-values-than-characters.svg",
+      "text/text/x-and-y-with-more-values-than-characters.svg",
+      "text/text/x-and-y-with-multiple-values-and-tspan.svg",
+      "text/text/x-and-y-with-multiple-values.svg",
+      "text/text/xml-lang=ja.svg",
+      "text/text/xml-space.svg",
+      "text/textLength/150-on-parent.svg",
+      "text/textLength/150-on-tspan.svg",
+      "text/textLength/150.svg",
+      "text/textLength/40mm.svg",
+      "text/textLength/75percent.svg",
+      "text/textLength/inherit.svg",
+      "text/textLength/negative.svg",
+      "text/textPath/m-L-Z-path.svg",
+      "text/tref/link-to-a-non-SVG-element.svg",
+      "text/tref/nested.svg",
+      "text/tspan/mixed-xml-space-1.svg",
+      "text/tspan/mixed-xml-space-2.svg",
+      "text/tspan/mixed.svg",
+      "text/tspan/multiple-coordinates.svg",
+      "text/tspan/nested-whitespaces.svg",
+      "text/tspan/nested.svg",
+      "text/tspan/only-with-y.svg",
+      "text/tspan/outside-the-text.svg",
+      "text/tspan/pseudo-multi-line.svg",
+      "text/tspan/rotate-and-display-none.svg",
+      "text/tspan/rotate-on-child.svg",
+      "text/tspan/sequential.svg",
+      "text/tspan/style-override.svg",
+      "text/tspan/text-shaping-across-multiple-tspan-1.svg",
+      "text/tspan/text-shaping-across-multiple-tspan-2.svg",
+      "text/tspan/transform.svg",
+      "text/tspan/with-dy.svg",
+      "text/tspan/with-opacity.svg",
+      "text/tspan/with-x-and-y.svg",
+      "text/tspan/without-attributes.svg",
+      "text/tspan/xml-space-1.svg",
+      "text/tspan/xml-space-2.svg",
+      "text/word-spacing/-5.svg",
+      "text/word-spacing/0.svg",
+      "text/word-spacing/10.svg",
+      "text/word-spacing/2mm.svg",
+      "text/word-spacing/5percent.svg",
+      "text/word-spacing/normal.svg",
+      "text/writing-mode/horizontal-tb.svg",
+      "text/writing-mode/inheritance.svg",
+      "text/writing-mode/invalid-value.svg",
+      "text/writing-mode/lr-tb.svg",
+      "text/writing-mode/lr.svg",
+      "text/writing-mode/on-tspan.svg",
+      "text/writing-mode/rl-tb.svg",
+      "text/writing-mode/rl.svg",
+      "text/writing-mode/tb-rl.svg",
+      "text/writing-mode/tb-with-alignment.svg",
+      "text/writing-mode/tb.svg",
+  };
+  if (kEdgeFloor.count(key)) {
+    return [](ImageComparisonParams& p) {
+      p.disableGeodeParity(
+          "geode 4x MSAA edge-quantization >100px (finer-AA tracking: 0017 Phase 4b)");
+    };
+  }
+
+  // ── GENUINE: filter color/algorithm divergences (0021 §G2) ─────────────────
+  static const std::set<std::string_view> kGenuineG2 = {
+      "filters/feColorMatrix/type=matrix-with-non-normalized-values.svg",
+      "filters/feComponentTransfer/type=linear-on-blue.svg",
+      "filters/feComponentTransfer/type=table-and-tableValues=1-0-1.svg",
+      "filters/feComponentTransfer/type=table-on-blue-twice.svg",
+      "filters/feComponentTransfer/type=table-on-blue.svg",
+      "filters/feComposite/operator=arithmetic-with-large-k1-4.svg",
+      "filters/feComposite/operator=arithmetic-with-opacity.svg",
+      "filters/feComposite/operator=arithmetic-with-some-k1-4.svg",
+      "filters/feComposite/operator=arithmetic.svg",
+      "filters/feConvolveMatrix/custom-divisor.svg",
+      "filters/feDiffuseLighting/linearRGB-color-interpolation.svg",
+      "filters/feGaussianBlur/complex-transform.svg",
+      "filters/feImage/chained-feImage.svg",
+      "filters/feImage/embedded-png.svg",
+      "filters/feImage/link-on-an-element-with-complex-transform.svg",
+      "filters/feImage/link-on-an-element-with-transform.svg",
+      "filters/feImage/link-to-an-element-with-opacity.svg",
+      "filters/feImage/link-to-an-element-with-transform.svg",
+      "filters/feImage/link-to-an-element.svg",
+      "filters/feImage/link-to-g.svg",
+      "filters/feImage/link-to-use.svg",
+      "filters/feMerge/color-interpolation-filters=linearRGB.svg",
+      "filters/feMerge/complex-transform.svg",
+      "filters/feSpecularLighting/specularExponent=256.svg",
+      "filters/feTurbulence/baseFrequency=0.01.svg",
+      "filters/feTurbulence/baseFrequency=0.05-0.01.svg",
+      "filters/feTurbulence/baseFrequency=0.05-0.05.svg",
+      "filters/feTurbulence/baseFrequency=0.05-0.svg",
+      "filters/feTurbulence/complex-transform.svg",
+      "filters/feTurbulence/numOctaves=5.svg",
+      "filters/feTurbulence/primitiveUnits=objectBoundingBox.svg",
+      "filters/feTurbulence/seed=-20.svg",
+      "filters/feTurbulence/seed=1.5.svg",
+      "filters/feTurbulence/seed=20.svg",
+      "filters/feTurbulence/type=fractalNoise.svg",
+      "filters/feTurbulence/type=invalid.svg",
+      "filters/filter/on-group-with-child-outside-of-canvas.svg",
+  };
+  if (kGenuineG2.count(key)) {
+    return [](ImageComparisonParams& p) {
+      p.disableGeodeParity("geode filter divergence vs tiny-skia (tracked: 0021 G2)");
+    };
+  }
+
+  // ── GENUINE: text / text-on-shape divergences (0038 catalog) ───────────────
+  static const std::set<std::string_view> kGenuineText = {
+      "paint-servers/pattern/text-child.svg",
+      "painting/fill/linear-gradient-on-text.svg",
+      "painting/fill/radial-gradient-on-text.svg",
+      "painting/stroke/linear-gradient-on-text.svg",
+      "painting/stroke/pattern-on-text.svg",
+      "text/baseline-shift/deeply-nested-super.svg",
+      "text/baseline-shift/mixed-nested.svg",
+      "text/baseline-shift/nested-length.svg",
+      "text/baseline-shift/nested-super.svg",
+      "text/baseline-shift/nested-with-baseline-1.svg",
+      "text/baseline-shift/nested-with-baseline-2.svg",
+      "text/font-size/named-value.svg",
+      "text/letter-spacing/on-Arabic.svg",
+      "text/text-decoration/tspan-decoration.svg",
+      "text/text-decoration/underline-with-dy-list-2.svg",
+      "text/text-decoration/underline-with-rotate-list-4.svg",
+      "text/textPath/dy-with-tiny-coordinates.svg",
+      "text/tspan/tspan-bbox-1.svg",
+      "text/tspan/tspan-bbox-2.svg",
+  };
+  if (kGenuineText.count(key)) {
+    return [](ImageComparisonParams& p) {
+      p.disableGeodeParity("geode text divergence vs tiny-skia (tracked: 0038)");
+    };
+  }
+
+  return std::nullopt;
+}
+
 // Discover every .svg test in one category directory under the resvg-test-suite
 // tree. Example: getTestsInCategory("painting/fill") → all .svg files in
 // <runfiles>/resvg-test-suite/tests/painting/fill/.
@@ -467,8 +747,13 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
     // mode keeps the strict golden thresholds. Combining both gates here keeps
     // the historical merge order (category first, then per-file).
     auto filenameGate = geodeFilenameGate(category, filename);
-    if (categoryGate || filenameGate) {
-      test.geodeGate = [categoryGate, filenameGate](ImageComparisonParams& p) {
+    // Parity gate sets `disableGeodeTinyParity` for the inventoried >100px
+    // geode-vs-tiny divergences (4x MSAA edge floor + genuine bugs). It only
+    // affects the GeodeTinyParity instance; GeodeGolden / TinyGolden ignore the
+    // flag. Folded into `geodeGate` (which the fixture applies for geode modes).
+    auto parityGate = geodeParityGate(category, filename);
+    if (categoryGate || filenameGate || parityGate) {
+      test.geodeGate = [categoryGate, filenameGate, parityGate](ImageComparisonParams& p) {
         if (p.skip) {
           return;  // Explicit Skip() takes precedence; don't re-gate.
         }
@@ -479,6 +764,9 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
         // category gate hadn't already turned the test into a Skip.
         if (!p.skip && filenameGate) {
           (*filenameGate)(p);
+        }
+        if (parityGate) {
+          (*parityGate)(p);
         }
       };
     }

@@ -346,6 +346,15 @@ std::vector<std::string> combineColumns(const std::vector<std::string>& left,
   return combined;
 }
 
+/// Directory for parity diff dumps: `$TEST_UNDECLARED_OUTPUTS_DIR` when set
+/// (Bazel collects it), else the system temp dir.
+std::filesystem::path parityOutputDir() {
+  if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
+    return std::filesystem::path(dir);
+  }
+  return std::filesystem::temp_directory_path();
+}
+
 std::string escapeFilename(std::string filename) {
   std::transform(filename.begin(), filename.end(), filename.begin(), [](char c) {
     if (c == '\\' || c == '/') {
@@ -378,6 +387,71 @@ std::string escapeFilename(std::string filename) {
     filename = std::string(hashBuf) + "_" + std::move(tail);
   }
   return filename;
+}
+
+/// Runs the GeodeTinyParity comparison: geode `actual` vs tiny-skia `reference`
+/// at a strict per-pixel threshold (AA excluded), failing on a max-pixel-count
+/// budget. Always logs `PARITY|<file>|<px>` for the characterization sweep, and
+/// dumps actual/expected/diff PNGs to `$TEST_UNDECLARED_OUTPUTS_DIR` when the
+/// diff exceeds the dump floor.
+void runGeodeTinyParityComparison(const RendererBitmap& actual, const RendererBitmap& reference,
+                                  const std::filesystem::path& svgFilename) {
+  // Both backends rendered the same document at the same canvas size, so the
+  // dimensions/stride should match. If they don't, that's itself a divergence.
+  if (actual.dimensions != reference.dimensions || actual.rowBytes != reference.rowBytes ||
+      actual.pixels.size() != reference.pixels.size()) {
+    std::cout << "PARITY|" << svgFilename.string() << "|SIZEMISMATCH geode=" << actual.dimensions.x
+              << "x" << actual.dimensions.y << " tiny=" << reference.dimensions.x << "x"
+              << reference.dimensions.y << "\n";
+    ADD_FAILURE() << "GeodeTinyParity size mismatch for " << svgFilename.string();
+    return;
+  }
+
+  const int width = actual.dimensions.x;
+  const int height = actual.dimensions.y;
+  const size_t strideInPixels = actual.rowBytes / 4u;
+
+  std::vector<uint8_t> diffImage(strideInPixels * static_cast<size_t>(height) * 4u);
+  pixelmatch::Options options;
+  // Use the suite's default per-pixel threshold (0.02), matching every golden
+  // comparison. NOT strict-0 (over-strict vs the suite — floods the diff count
+  // with sub-visual premultiply/color-space offsets on solid fills), and NOT a
+  // 0.3 bump (which masks solid-region bugs). 0.02 separates the 4× MSAA edge
+  // floor + genuine bugs from cosmetic uniform offsets. See 0017 §Phase 4b.
+  options.threshold = kDefaultThreshold;
+  options.includeAA = false;  // pixelmatch already excludes AA edges
+  const int mismatchedPixels = pixelmatch::pixelmatch(reference.pixels, actual.pixels, diffImage,
+                                                      width, height, strideInPixels, options);
+
+  // Always emit the raw count so the characterization sweep can bucket every
+  // test, not just the failures.
+  std::cout << "PARITY|" << svgFilename.string() << "|" << mismatchedPixels << "\n";
+
+  // Flat budget — no per-test thresholds (Phase 4b final policy). A diff above
+  // this is either the 4× MSAA edge floor or a genuine bug; both are handled by
+  // gating the test's parity instance via `disableGeodeParity()`, never by a
+  // larger budget here (that would be masking).
+  const int budget = kDefaultMismatchedPixels;
+
+  if (mismatchedPixels > budget) {
+    std::cout << "FAIL (" << mismatchedPixels << " geode-vs-tiny pixels differ, with " << budget
+              << " max)\n";
+    const std::filesystem::path outDir = parityOutputDir();
+    const std::string flat = escapeFilename(svgFilename.string());
+    RendererImageIO::writeRgbaPixelsToPngFile(
+        (outDir / ("parity_geode_" + flat + ".png")).string().c_str(), actual.pixels, width, height,
+        strideInPixels);
+    RendererImageIO::writeRgbaPixelsToPngFile(
+        (outDir / ("parity_tiny_" + flat + ".png")).string().c_str(), reference.pixels, width,
+        height, strideInPixels);
+    RendererImageIO::writeRgbaPixelsToPngFile(
+        (outDir / ("parity_diff_" + flat + ".png")).string().c_str(), diffImage, width, height,
+        strideInPixels);
+    ADD_FAILURE() << mismatchedPixels << " geode-vs-tiny-skia pixels differ (budget " << budget
+                  << ") for " << svgFilename.string();
+  } else {
+    std::cout << "PARITY-PASS (" << mismatchedPixels << " / " << budget << ")\n";
+  }
 }
 
 bool isBackendAllowed(RendererBackend backend, const ImageComparisonParams& params) {
@@ -488,9 +562,11 @@ std::string_view ComparisonModeName(ComparisonMode mode) {
 const std::vector<ComparisonMode>& ActiveComparisonModes() {
   static const std::vector<ComparisonMode> modes = [] {
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
-    // Geode build: golden vs tiny-skia (ground truth) AND golden vs geode
-    // (today's behavior). GeodeTinyParity is added in Phase 4b increment 4.
-    return std::vector<ComparisonMode>{ComparisonMode::TinyGolden, ComparisonMode::GeodeGolden};
+    // Geode build (Phase 4b increment 4): three comparisons per test —
+    // TinyGolden (ground truth), GeodeGolden (today's geode-vs-golden), and
+    // GeodeTinyParity (the geode-vs-tiny-skia metric that un-gates text/filters).
+    return std::vector<ComparisonMode>{ComparisonMode::TinyGolden, ComparisonMode::GeodeGolden,
+                                       ComparisonMode::GeodeTinyParity};
 #else
     return std::vector<ComparisonMode>{ComparisonMode::TinyGolden};
 #endif
@@ -668,8 +744,30 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
                                                   ComparisonMode mode) {
   const RendererBackend backend = BackendForMode(mode);
 
-  if (const std::optional<std::string> skipReason = skipReasonIfUnsupported(backend, params);
-      skipReason.has_value()) {
+  if (mode == ComparisonMode::GeodeTinyParity) {
+    // Parity mode bypasses the `requireFeature(Text/FilterEffects)` skips so
+    // geode actually renders text/filters and the geode-vs-tiny diff is
+    // surfaced (the whole point of the mode). Honest skips are still respected:
+    // explicit `Skip()` / `onlyTextFull` (`shouldSkip()`) and per-test
+    // `disableBackend(Geode)` (`!allowGeode`), which mark a hard geode
+    // limitation rather than a pixel diff.
+    if (params.shouldSkip()) {
+      GTEST_SKIP() << (params.reason.empty() ? "Test case disabled" : std::string(params.reason));
+    }
+    if (!params.allowGeode) {
+      GTEST_SKIP() << "Geode backend disabled for this test"
+                   << (params.backendRequirementReason.empty()
+                           ? ""
+                           : (": " + std::string(params.backendRequirementReason)));
+    }
+    if (params.disableGeodeTinyParity) {
+      // Genuine geode-vs-tiny divergence tracked elsewhere (0021 §G2 filters /
+      // 0038 text). Gated rather than absorbed with a giant budget.
+      GTEST_SKIP() << "GeodeTinyParity gated"
+                   << (params.reason.empty() ? "" : (": " + std::string(params.reason)));
+    }
+  } else if (const std::optional<std::string> skipReason = skipReasonIfUnsupported(backend, params);
+             skipReason.has_value()) {
     GTEST_SKIP() << *skipReason;
   }
 
@@ -735,6 +833,21 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
       std::cout << ": " << params.reason;
     }
     std::cout << "\n";
+    return;
+  }
+
+  // GeodeTinyParity: compare the geode render (the `snapshot` above) against an
+  // in-process tiny-skia render of the same document, ignoring the golden. This
+  // is the Phase 4b parity metric — it removes the tiny↔golden baseline offset,
+  // leaving the geode↔tiny diff (the proven 4× MSAA edge floor + any genuine
+  // geode bug). pixelmatch runs at the suite's default per-pixel threshold
+  // (0.02, AA excluded — not strict-0, not a 0.3 bump); the pass/fail bar is a
+  // max-pixel-*count* budget, never a per-pixel bump (a 0.3 bump masks
+  // solid-region bugs — proven on text). Golden is not read.
+  if (mode == ComparisonMode::GeodeTinyParity) {
+    const RendererBitmap reference =
+        NormalizeSnapshot(RenderDocumentWithBackend(document, RendererBackend::TinySkia));
+    runGeodeTinyParityComparison(snapshot, reference, svgFilename);
     return;
   }
 
