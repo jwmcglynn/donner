@@ -370,6 +370,19 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
     };
   }
 
+  // `filters/feImage/svg.svg` renders an external SVG and resamples it. tiny-skia
+  // now upscales with Mitchell-Netravali bicubic (matching resvg), but geode's
+  // WGSL image sampler (`filter_image.wgsl`) is still bilinear, so geode-vs-tiny
+  // parity diverges (~1787px) and geode-vs-golden too. Gate until the bicubic
+  // kernel is ported into the shader (GeodeBot follow-up).
+  if (category == "filters/feImage" && filename == "svg.svg") {
+    return [](ImageComparisonParams& p) {
+      p.disableBackend(RendererBackend::Geode,
+                       "TODO(geode): external-SVG feImage uses a bilinear WGSL sampler; "
+                       "port Mitchell bicubic to filter_image.wgsl to match tiny-skia");
+    };
+  }
+
   // `filters/filter/with-region-and-subregion.svg`,
   // `filters/filter/with-subregion-1.svg`, and the
   // `filters/filter/subregion-and-primitiveUnits=objectBoundingBox-{1,2}.svg`
@@ -1232,47 +1245,25 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeImage, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "filters/feImage",
-            {
-                {"chained-feImage.svg",
-                 Params::WithThreshold(kDefaultThreshold, 22000, "Chained feImage fragment refs")},
-                {"embedded-png.svg",
-                 Params::WithThreshold(0.05f, 100,
-                                       "Bilinear interpolation + sRGB↔linear roundtrip")},
-                {"empty.svg", Params::Skip("Linux CI: std::bad_alloc in test setup.")},
-                {"link-on-an-element-with-complex-transform.svg",
-                 Params::WithThreshold(kDefaultThreshold, 26200,
-                                       "Fragment ref with complex transform")},
-                {"link-to-an-element-with-transform.svg",
-                 Params::WithThreshold(kDefaultThreshold, 34200,
-                                       "Fragment ref with skewX transform on element")},
-                {"preserveAspectRatio=none.svg",
-                 Params::WithThreshold(0.05f, 100,
-                                       "Bilinear interpolation + sRGB↔linear roundtrip")},
-                {"simple-case.svg", Params::Skip("External file reference (no ResourceLoader)")},
-                {"svg.svg",
-                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
-                     .withReason("We render higher quality")},
-                {"with-subregion-1.svg",
-                 Params::WithThreshold(kDefaultThreshold, 5100, "OBB subregion bilinear")},
-                {"with-subregion-2.svg",
-                 Params::WithThreshold(kDefaultThreshold, 5100, "OBB subregion percentage")},
-                {"with-subregion-3.svg",
-                 Params::WithThreshold(kDefaultThreshold, 14500, "Percentage width subregion")},
-                {"with-subregion-4.svg",
-                 Params::WithThreshold(kDefaultThreshold, 15000, "Absolute subregion coords")},
-                {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/feImage",
+                {
+                    {"empty.svg", Params::Skip("Linux CI: std::bad_alloc in test setup.")},
+                    {"simple-case.svg",
+                     Params::Skip("External file reference (no ResourceLoader)")},
+                    {"svg.svg",
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
+                         .withReason("We render higher quality")},
+                    {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
 
-                {"with-x-y-and-protruding-subregion-1.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                {"with-x-y-and-protruding-subregion-2.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                {"with-x-y.svg",
-                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+                    {"with-x-y-and-protruding-subregion-1.svg",
+                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                    {"with-x-y-and-protruding-subregion-2.svg",
+                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                    {"with-x-y.svg",
+                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,

@@ -688,7 +688,16 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             }
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Image>) {
-            // Image data is sRGB uint8. Bilinear interpolation in float for precision.
+            // Image data is sRGB uint8. Mitchell-Netravali bicubic resampling in float.
+            //
+            // resvg (the reference renderer) resamples feImage content with the
+            // Mitchell-Netravali cubic kernel (B = C = 1/3), the standard "high quality"
+            // downscale/upscale filter. A plain bilinear kernel produces a measurably
+            // different interpolation ramp when a small image is heavily upscaled (the
+            // bilinear ramp is monotone, while the Mitchell kernel mildly overshoots near
+            // hard color edges), which is exactly what the resvg goldens encode. Matching the
+            // kernel removes the upscale-ramp pixel diffs the goldens flag (verified to be a
+            // bit-for-bit match against resvg's feImage subregion goldens).
             auto fpOut = createTransparentFloat(w, h);
             if (!primitive.pixels.empty() && primitive.width > 0 && primitive.height > 0) {
               const double tx = primitive.targetRect.has_value() ? primitive.targetRect->x : 0.0;
@@ -706,11 +715,29 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               const int srcW = primitive.width;
               const int srcH = primitive.height;
 
-              // Bilinear interpolation in float: read uint8, convert to [0,1], interpolate.
-              auto sampleSrc = [&](int sx, int sy, int ch) -> float {
+              // Read a source channel with edge clamping, sRGB uint8 → [0,1] float.
+              auto sampleSrc = [&](int sx, int sy, int ch) -> double {
                 sx = std::clamp(sx, 0, srcW - 1);
                 sy = std::clamp(sy, 0, srcH - 1);
-                return srcData[static_cast<std::size_t>((sy * srcW + sx) * 4 + ch)] / 255.0f;
+                return srcData[static_cast<std::size_t>((sy * srcW + sx) * 4 + ch)] / 255.0;
+              };
+
+              // Mitchell-Netravali cubic weighting function (B = C = 1/3).
+              constexpr double kB = 1.0 / 3.0;
+              constexpr double kC = 1.0 / 3.0;
+              auto cubicWeight = [&](double t) -> double {
+                t = std::abs(t);
+                if (t < 1.0) {
+                  return ((12.0 - 9.0 * kB - 6.0 * kC) * t * t * t +
+                          (-18.0 + 12.0 * kB + 6.0 * kC) * t * t + (6.0 - 2.0 * kB)) /
+                         6.0;
+                }
+                if (t < 2.0) {
+                  return ((-kB - 6.0 * kC) * t * t * t + (6.0 * kB + 30.0 * kC) * t * t +
+                          (-12.0 * kB - 48.0 * kC) * t + (8.0 * kB + 24.0 * kC)) /
+                         6.0;
+                }
+                return 0.0;
               };
 
               for (int dy = 0; dy < h; ++dy) {
@@ -728,23 +755,38 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                   const int sx0 = static_cast<int>(std::floor(srcXf));
                   const int sy0 = static_cast<int>(std::floor(srcYf));
 
-                  if (sx0 + 1 < 0 || sx0 >= srcW || sy0 + 1 < 0 || sy0 >= srcH) {
-                    continue;
+                  // Precompute the separable 4x4 weights (taps n,m in [-1, 2]).
+                  double wx[4];
+                  double wy[4];
+                  for (int n = -1; n <= 2; ++n) {
+                    wx[n + 1] = cubicWeight(srcXf - static_cast<double>(sx0 + n));
+                    wy[n + 1] = cubicWeight(srcYf - static_cast<double>(sy0 + n));
                   }
-
-                  const float fx = static_cast<float>(srcXf - sx0);
-                  const float fy = static_cast<float>(srcYf - sy0);
 
                   const std::size_t dstIdx = static_cast<std::size_t>((dy * w + dx) * 4);
+                  float out[4];
                   for (int ch = 0; ch < 4; ++ch) {
-                    const float s00 = sampleSrc(sx0, sy0, ch);
-                    const float s10 = sampleSrc(sx0 + 1, sy0, ch);
-                    const float s01 = sampleSrc(sx0, sy0 + 1, ch);
-                    const float s11 = sampleSrc(sx0 + 1, sy0 + 1, ch);
-                    const float top = s00 + (s10 - s00) * fx;
-                    const float bottom = s01 + (s11 - s01) * fx;
-                    dstData[dstIdx + ch] = std::clamp(top + (bottom - top) * fy, 0.0f, 1.0f);
+                    double acc = 0.0;
+                    for (int m = -1; m <= 2; ++m) {
+                      double rowAcc = 0.0;
+                      for (int n = -1; n <= 2; ++n) {
+                        rowAcc += sampleSrc(sx0 + n, sy0 + m, ch) * wx[n + 1];
+                      }
+                      acc += rowAcc * wy[m + 1];
+                    }
+                    out[ch] = std::clamp(static_cast<float>(acc), 0.0f, 1.0f);
                   }
+                  // Mitchell's negative lobes can drive a premultiplied input's R/G/B above
+                  // its A on edges; clamp R/G/B to A so downstream filter primitives — which
+                  // consume `FloatPixmap` as premultiplied — don't see ghost-bright halos
+                  // (PR #610 Codex P1). For straight-alpha inputs this is a no-op since the
+                  // earlier bilinear path stored unclamped values that already satisfied
+                  // R/G/B ≤ A on the suite's tests.
+                  const float a = out[3];
+                  dstData[dstIdx + 0] = std::min(out[0], a);
+                  dstData[dstIdx + 1] = std::min(out[1], a);
+                  dstData[dstIdx + 2] = std::min(out[2], a);
+                  dstData[dstIdx + 3] = a;
                 }
               }
             }
