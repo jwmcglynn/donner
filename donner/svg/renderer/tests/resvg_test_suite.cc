@@ -1278,25 +1278,10 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeMorphology, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "filters/feMorphology",
-            {
-                {"empty-radius.svg",
-                 Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
-                {"negative-radius.svg",
-                 Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
-                {"no-radius.svg",
-                 Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
-                {"radius-with-too-many-values.svg",
-                 Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
-                {"zero-radius.svg",
-                 Params::Skip("Bug: feMorphology edge cases (empty radius, non-numeric radius)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeMorphology, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/feMorphology")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeOffset, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("filters/feOffset")),
