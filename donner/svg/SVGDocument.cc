@@ -439,7 +439,14 @@ SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
                          EntityHandle ontoEntityHandle)
     : documentState_(std::move(documentState)) {
   Registry& registry = documentState_->registry();
-  auto& treeMutations = registry.ctx().emplace<donner::components::TreeMutationContext>();
+  // TreeMutationContext is now always installed (XMLDocument's ctor installs the basic-XML
+  // defaults when the registry is created via the XML path); on a fresh SVG-only registry we
+  // install it here, then override the individual callbacks with the SVG-specific implementations
+  // that layer invalidation and lifetime tracking on top of the tree mutations.
+  if (!registry.ctx().contains<donner::components::TreeMutationContext>()) {
+    registry.ctx().emplace<donner::components::TreeMutationContext>();
+  }
+  auto& treeMutations = registry.ctx().get<donner::components::TreeMutationContext>();
   treeMutations.insertBefore = components::TreeMutation::InsertBefore;
   treeMutations.appendChild = components::TreeMutation::AppendChild;
   treeMutations.replaceChild = components::TreeMutation::ReplaceChild;

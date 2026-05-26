@@ -4,18 +4,31 @@
 #include <functional>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/xml/components/TreeComponent.h"
 
 namespace donner::components {
 
 /**
- * Optional document-local hooks for tree mutations.
+ * Document-local hooks for tree mutations.
  *
- * \ref XMLNode uses these callbacks when a document installs them in `Registry::ctx()`. Plain XML
- * documents leave the hooks absent and mutate \ref TreeComponent directly. Higher-level document
- * models, such as SVG, use the hooks to layer invalidation and lifetime tracking over the shared
- * XML tree API without making the base XML library depend on SVG.
+ * Always installed in `Registry::ctx()` by the owning document model: \ref XMLDocument installs
+ * the `Default*` callbacks below (which operate on \ref TreeComponent directly), and higher-level
+ * models such as SVGDocument overwrite the individual callbacks after construction to layer
+ * invalidation and lifetime tracking on top. \ref XMLNode mutation methods always go through the
+ * context, so the lookup never needs to fall back to a direct \ref TreeComponent path —
+ * `Registry::ctx().contains<TreeMutationContext>()` is an invariant of any registry exposed
+ * through one of the document facades.
  */
 struct TreeMutationContext {
+  /// Default ctor installs the basic XML callbacks. Higher-level models (SVGDocument) overwrite
+  /// the individual function fields after construction.
+  TreeMutationContext()
+      : insertBefore(DefaultInsertBefore),
+        appendChild(DefaultAppendChild),
+        replaceChild(DefaultReplaceChild),
+        removeChild(DefaultRemoveChild),
+        remove(DefaultRemove) {}
+
   /// Callback for `insertBefore(parent, newNode, referenceNode)`.
   std::function<void(EntityHandle parent, EntityHandle newNode, EntityHandle referenceNode)>
       insertBefore;
@@ -32,6 +45,31 @@ struct TreeMutationContext {
 
   /// Callback for `remove(entity)`.
   std::function<void(EntityHandle entity)> remove;
+
+  /// Basic XML defaults — operate on \ref TreeComponent directly.
+  static void DefaultInsertBefore(EntityHandle parent, EntityHandle newNode,
+                                  EntityHandle referenceNode) {
+    parent.get<TreeComponent>().insertBefore(*parent.registry(), newNode.entity(),
+                                             referenceNode ? referenceNode.entity() : entt::null);
+  }
+
+  static void DefaultAppendChild(EntityHandle parent, EntityHandle child) {
+    parent.get<TreeComponent>().appendChild(*parent.registry(), child.entity());
+  }
+
+  static void DefaultReplaceChild(EntityHandle parent, EntityHandle newChild,
+                                  EntityHandle oldChild) {
+    parent.get<TreeComponent>().replaceChild(*parent.registry(), newChild.entity(),
+                                             oldChild.entity());
+  }
+
+  static void DefaultRemoveChild(EntityHandle parent, EntityHandle child) {
+    parent.get<TreeComponent>().removeChild(*parent.registry(), child.entity());
+  }
+
+  static void DefaultRemove(EntityHandle entity) {
+    entity.get<TreeComponent>().remove(*entity.registry());
+  }
 };
 
 }  // namespace donner::components

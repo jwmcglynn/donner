@@ -8,6 +8,7 @@
 
 #include "donner/base/xml/XMLEscape.h"
 #include "donner/base/xml/XMLIncrementalParser.h"
+#include "donner/base/xml/components/TreeMutationContext.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/base/xml/components/XMLValueComponent.h"
@@ -1201,13 +1202,25 @@ std::ostream& operator<<(std::ostream& os, ReparseScope scope) {
 }
 
 XMLDocument::XMLDocument() : registry_(std::make_shared<Registry>()) {
+  // Tree mutations always go through TreeMutationContext; install the basic XML defaults so
+  // higher-level models (SVGDocument) can just override individual callbacks. Done before
+  // XMLDocumentContext / XMLNamespaceContext so `XMLNode::CreateDocumentNode` below sees a
+  // fully-installed mutation context.
+  registry_->ctx().emplace<donner::components::TreeMutationContext>();
+
   auto& ctx = registry_->ctx().emplace<XMLDocumentContext>(XMLDocumentContext::InternalCtorTag{});
   ctx.rootEntity = XMLNode::CreateDocumentNode(*this).entityHandle().entity();
 
   registry_->ctx().emplace<XMLNamespaceContext>(*registry_);
 }
 
-XMLDocument::XMLDocument(std::shared_ptr<Registry> registry) : registry_(std::move(registry)) {}
+XMLDocument::XMLDocument(std::shared_ptr<Registry> registry) : registry_(std::move(registry)) {
+  // A shared registry may already have a TreeMutationContext installed (e.g. by a higher-level
+  // document model that owns the registry); install the basic XML defaults only if not.
+  if (!registry_->ctx().contains<donner::components::TreeMutationContext>()) {
+    registry_->ctx().emplace<donner::components::TreeMutationContext>();
+  }
+}
 
 XMLDocument XMLDocument::CreateFromRegistry(std::shared_ptr<Registry> registry) {
   UTILS_RELEASE_ASSERT_MSG(registry != nullptr, "Cannot create XMLDocument from null registry");
