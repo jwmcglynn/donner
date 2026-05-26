@@ -227,9 +227,12 @@ TEST_F(LayoutSystemTest, TransformOriginSupport) {
   auto rectA = document.querySelector("#a")->entityHandle();
   auto rectB = document.querySelector("#b")->entityHandle();
 
-  const Transform2d expectedOrigin50Percent = Transform2d::Translate({50.0, 50.0}) *
+  // transform-origin pivot in destFromSource / left-first `operator*` convention: translate the
+  // origin to (0,0) first, rotate, then translate back. Equivalent to the column-matrix product
+  // T(origin)·R·T(-origin).
+  const Transform2d expectedOrigin50Percent = Transform2d::Translate({-50.0, -50.0}) *
                                               Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                                              Transform2d::Translate({-50.0, -50.0});
+                                              Transform2d::Translate({50.0, 50.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectA),
               TransformEq(expectedOrigin50Percent));
@@ -250,9 +253,9 @@ TEST_F(LayoutSystemTest, TransformOriginBottomRight) {
 
   auto rectC = document.querySelector("#c")->entityHandle();
 
-  const Transform2d expected = Transform2d::Translate({100.0, 100.0}) *
+  const Transform2d expected = Transform2d::Translate({-100.0, -100.0}) *
                                Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                               Transform2d::Translate({-100.0, -100.0});
+                               Transform2d::Translate({100.0, 100.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectC), TransformEq(expected));
 }
@@ -270,9 +273,9 @@ TEST_F(LayoutSystemTest, TransformOriginQuarterThreeQuarter) {
 
   auto rectD = document.querySelector("#d")->entityHandle();
 
-  const Transform2d expected = Transform2d::Translate({25.0, 75.0}) *
+  const Transform2d expected = Transform2d::Translate({-25.0, -75.0}) *
                                Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                               Transform2d::Translate({-25.0, -75.0});
+                               Transform2d::Translate({25.0, 75.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectD), TransformEq(expected));
 }
@@ -290,9 +293,9 @@ TEST_F(LayoutSystemTest, TransformOriginPixels) {
 
   auto rectE = document.querySelector("#e")->entityHandle();
 
-  const Transform2d expected = Transform2d::Translate({10.0, 20.0}) *
+  const Transform2d expected = Transform2d::Translate({-10.0, -20.0}) *
                                Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                               Transform2d::Translate({-10.0, -20.0});
+                               Transform2d::Translate({10.0, 20.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectE), TransformEq(expected));
 }
@@ -810,9 +813,6 @@ TEST_F(LayoutSystemTest, CreateShadowSizedElementComponentReturnsFalseWhenNotMai
 /**
  * transform-origin: center center should resolve to 50% 50%.
  * For non-sized elements like <rect>, percentages are resolved against the inherited viewBox.
- *
- * Note: single-keyword "center" currently fails to parse (known issue in the CSS transform-origin
- * parser), so we use the two-keyword form "center center" here.
  */
 TEST_F(LayoutSystemTest, TransformOriginCenterKeyword) {
   auto document = ParseSVG(R"-(
@@ -825,10 +825,11 @@ TEST_F(LayoutSystemTest, TransformOriginCenterKeyword) {
   auto rectHandle = document.querySelector("#r")->entityHandle();
 
   // "center center" maps to 50% 50%, resolved against the viewBox (120x80).
-  // Origin offset = (60, 40).
-  const Transform2d expected = Transform2d::Translate({60.0, 40.0}) *
+  // Origin offset = (60, 40). Pivot sandwich in left-first `operator*` order: translate the origin
+  // to (0,0) first, rotate, then translate back (column-matrix product T(origin)·R·T(-origin)).
+  const Transform2d expected = Transform2d::Translate({-60.0, -40.0}) *
                                Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                               Transform2d::Translate({-60.0, -40.0});
+                               Transform2d::Translate({60.0, 40.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle), TransformEq(expected));
 }
@@ -848,9 +849,10 @@ TEST_F(LayoutSystemTest, TransformOriginRightBottom) {
   auto rectHandle = document.querySelector("#r")->entityHandle();
 
   // "right" = 100% of viewBox width (200), "bottom" = 100% of viewBox height (140).
-  const Transform2d expected = Transform2d::Translate({200.0, 140.0}) *
+  // Pivot sandwich in left-first `operator*` order: T(origin)·R·T(-origin) (column-matrix).
+  const Transform2d expected = Transform2d::Translate({-200.0, -140.0}) *
                                Transform2d::Rotate(MathConstants<double>::kHalfPi) *
-                               Transform2d::Translate({-200.0, -140.0});
+                               Transform2d::Translate({200.0, 140.0});
 
   EXPECT_THAT(layoutSystem.getEntityFromParentTransform(rectHandle), TransformEq(expected));
 }

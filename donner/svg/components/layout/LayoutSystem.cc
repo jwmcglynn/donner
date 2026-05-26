@@ -306,9 +306,13 @@ Transform2d LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
   const ComputedLocalTransformComponent& computedTransform =
       createComputedLocalTransformComponentWithStyle(entity, style, FontMetrics(), disabledSink);
 
-  return Transform2d::Translate(computedTransform.transformOrigin) *
+  // Apply the transform-origin pivot: translate the origin to (0,0), apply the element transform,
+  // then translate back. Donner's `operator*` is left-first (`A * B` applies A, then B), so the
+  // pivot-out translation `Translate(-origin)` must come first in the product and the pivot-back
+  // `Translate(origin)` last — equivalent to the column-matrix product T(origin)·M·T(-origin).
+  return Transform2d::Translate(-computedTransform.transformOrigin) *
          computedTransform.parentFromEntity *
-         Transform2d::Translate(-computedTransform.transformOrigin);
+         Transform2d::Translate(computedTransform.transformOrigin);
 }
 
 Transform2d LayoutSystem::getCanvasFromDocumentTransform(Registry& registry) {
