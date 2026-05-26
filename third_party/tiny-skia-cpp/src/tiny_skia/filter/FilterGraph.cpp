@@ -11,8 +11,8 @@
 #include "tiny_skia/filter/Composite.h"
 #include "tiny_skia/filter/ConvolveMatrix.h"
 #include "tiny_skia/filter/DisplacementMap.h"
-#include "tiny_skia/filter/Flood.h"
 #include "tiny_skia/filter/FloatPixmap.h"
+#include "tiny_skia/filter/Flood.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 #include "tiny_skia/filter/Lighting.h"
 #include "tiny_skia/filter/Merge.h"
@@ -189,8 +189,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
   if (graph.clipSourceToFilterRegion && graph.filterRegion.has_value()) {
     if (graph.filterFromDevice.has_value() && graph.userSpaceFilterRegion.has_value()) {
-      applySubregionClipping(sourceFloat, *graph.filterRegion, w, h,
-                             &*graph.filterFromDevice, &*graph.userSpaceFilterRegion);
+      applySubregionClipping(sourceFloat, *graph.filterRegion, w, h, &*graph.filterFromDevice,
+                             &*graph.userSpaceFilterRegion);
     } else {
       applySubregionClipping(sourceFloat, *graph.filterRegion, w, h);
     }
@@ -402,8 +402,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               srgbToLinear(fpIn1);
               srgbToLinear(fpIn2);
               auto fpOut = createTransparentFloat(w, h);
-              composite(fpIn1, fpIn2, fpOut, primitive.op, primitive.k1, primitive.k2,
-                        primitive.k3, primitive.k4);
+              composite(fpIn1, fpIn2, fpOut, primitive.op, primitive.k1, primitive.k2, primitive.k3,
+                        primitive.k4);
               linearToSrgb(fpOut);
               output = std::move(fpOut);
             } else {
@@ -527,9 +527,17 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             output = std::move(fpOut);
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Morphology>) {
-            auto fpOut = createTransparentFloat(w, h);
-            if (primitive.radiusX >= 0 && primitive.radiusY >= 0 &&
-                (primitive.radiusX > 0 || primitive.radiusY > 0)) {
+            // SVG Filter Effects §15.4: a negative radius, or a zero radius on both axes
+            // (which is also the lacuna value 0 used for an absent/empty/invalid `radius`),
+            // disables the effect — the result is the filter input image (pass-through), not
+            // transparent black. A zero radius on only one axis is a no-op along that axis,
+            // so the effect still applies (e.g. radius="10 0" erodes horizontally only).
+            const bool disabled = primitive.radiusX < 0 || primitive.radiusY < 0 ||
+                                  (primitive.radiusX == 0 && primitive.radiusY == 0);
+            if (disabled) {
+              output = FloatPixmap(*input);
+            } else {
+              auto fpOut = createTransparentFloat(w, h);
               if (nodeLinearRGB) {
                 auto fpIn = FloatPixmap(*input);
                 srgbToLinear(fpIn);
@@ -538,8 +546,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               } else {
                 morphology(*input, fpOut, primitive.op, primitive.radiusX, primitive.radiusY);
               }
+              output = std::move(fpOut);
             }
-            output = std::move(fpOut);
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Tile>) {
             // Pure pixel mover — color space doesn't affect the operation.
@@ -709,8 +717,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                 for (int dx = 0; dx < w; ++dx) {
                   const double pixelCenterX = static_cast<double>(dx) + 0.5;
                   const double pixelCenterY = static_cast<double>(dy) + 0.5;
-                  if (pixelCenterX < tx || pixelCenterX >= tx + tw ||
-                      pixelCenterY < ty || pixelCenterY >= ty + th) {
+                  if (pixelCenterX < tx || pixelCenterX >= tx + tw || pixelCenterY < ty ||
+                      pixelCenterY >= ty + th) {
                     continue;
                   }
 
