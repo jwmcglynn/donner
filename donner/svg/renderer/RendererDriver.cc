@@ -2148,14 +2148,28 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
     return;
   }
 
-  if (markerComponent->markerWidth <= 0.0 || markerComponent->markerHeight <= 0.0) {
+  components::LayoutSystem layoutSystem;
+  // Marker length attributes with percentage units resolve against the viewport of the element
+  // referencing the marker (its nearest ancestor viewport), which getViewBox returns. markerWidth/
+  // refX resolve against the width (Extent::X) and markerHeight/refY against the height
+  // (Extent::Y).
+  const Box2d markerPercentViewport = layoutSystem.getViewBox(markerHandle);
+  const FontMetrics markerFontMetrics;
+  const double markerWidthPx = markerComponent->markerWidth.toPixels(
+      markerPercentViewport, markerFontMetrics, Lengthd::Extent::X);
+  const double markerHeightPx = markerComponent->markerHeight.toPixels(
+      markerPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
+  const double refXPx =
+      markerComponent->refX.toPixels(markerPercentViewport, markerFontMetrics, Lengthd::Extent::X);
+  const double refYPx =
+      markerComponent->refY.toPixels(markerPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
+
+  if (markerWidthPx <= 0.0 || markerHeightPx <= 0.0) {
     return;
   }
 
-  const Box2d markerSize =
-      Box2d::FromXYWH(0, 0, markerComponent->markerWidth, markerComponent->markerHeight);
+  const Box2d markerSize = Box2d::FromXYWH(0, 0, markerWidthPx, markerHeightPx);
 
-  components::LayoutSystem layoutSystem;
   const std::optional<Box2d> markerViewBox =
       layoutSystem.overridesViewBox(markerHandle)
           ? std::optional<Box2d>(layoutSystem.getViewBox(markerHandle))
@@ -2175,9 +2189,8 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   const Transform2d markerUnitsFromViewBox =
       preserveAspectRatio.elementContentFromViewBoxTransform(markerSize, markerViewBox);
 
-  const Transform2d markerOffsetFromVertex =
-      Transform2d::Translate(-markerComponent->refX * markerUnitsFromViewBox.data[0],
-                             -markerComponent->refY * markerUnitsFromViewBox.data[3]);
+  const Transform2d markerOffsetFromVertex = Transform2d::Translate(
+      -refXPx * markerUnitsFromViewBox.data[0], -refYPx * markerUnitsFromViewBox.data[3]);
 
   const Transform2d vertexFromEntity = Transform2d::Scale(markerScale) *
                                        Transform2d::Rotate(angleRadians) *

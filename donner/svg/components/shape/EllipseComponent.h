@@ -40,7 +40,8 @@ struct EllipseProperties {
    */
   std::tuple<Lengthd, double> calculateRx(const Box2d& viewBox,
                                           const FontMetrics& fontMetrics) const {
-    return CalculateRadiusMaybeAuto(rx, ry, viewBox, fontMetrics);
+    return CalculateRadiusMaybeAuto(rx, ry, viewBox, fontMetrics, Lengthd::Extent::X,
+                                    Lengthd::Extent::Y);
   }
 
   /**
@@ -53,7 +54,8 @@ struct EllipseProperties {
    */
   std::tuple<Lengthd, double> calculateRy(const Box2d& viewBox,
                                           const FontMetrics& fontMetrics) const {
-    return CalculateRadiusMaybeAuto(ry, rx, viewBox, fontMetrics);
+    return CalculateRadiusMaybeAuto(ry, rx, viewBox, fontMetrics, Lengthd::Extent::Y,
+                                    Lengthd::Extent::X);
   }
 };
 

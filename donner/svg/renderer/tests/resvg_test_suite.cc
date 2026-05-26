@@ -560,6 +560,11 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
       "text/text/escaped-text-1.svg", "text/text/escaped-text-2.svg",
       "text/text/escaped-text-3.svg", "text/text/escaped-text-4.svg",
       "text/text/mm-coordinates.svg", "text/text/nested.svg", "text/text/no-coordinates.svg",
+      // Enabled by the B1 intrinsic-sizing + percent-resolution fix (non-square viewBox): tiny now
+      // matches the resvg golden (TinyGolden ~7px). Geode places the glyphs at the same (now
+      // correct) percent-resolved coordinates as the absolute-coordinate siblings above; the
+      // ~160px geode-vs-tiny residual is the same edge floor, not a structural divergence.
+      "text/text/percent-value-on-x-and-y.svg", "text/text/percent-value-on-dx-and-dy.svg",
       "text/text/rotate-with-an-invalid-angle.svg",
       "text/text/rotate-with-less-values-than-characters.svg",
       "text/text/rotate-with-more-values-than-characters.svg",
@@ -1503,16 +1508,11 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     PaintServersLinearGradient, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "paint-servers/linearGradient",
-                {
-                    {"invalid-gradientTransform.svg",
-                     Params::RenderOnly("UB: Invalid `gradientTransform`")},
-
-                    {"gradientUnits=userSpaceOnUse-with-percent.svg",
-                     Params::Skip("Bug: intrinsic sizing + percent resolution with "
-                                  "non-square viewBox; see ShapesEllipse")},
-                })),
+    Combine(ValuesIn(getTestsInCategory("paint-servers/linearGradient",
+                                        {
+                                            {"invalid-gradientTransform.svg",
+                                             Params::RenderOnly("UB: Invalid `gradientTransform`")},
+                                        })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1565,11 +1565,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"invalid-gradientUnits.svg",
                      Params::RenderOnly("UB: Invalid `gradientUnits`")},
                     {"negative-r.svg", Params::RenderOnly("UB: Negative `r`")},
-
-                    {"gradientUnits=objectBoundingBox-with-percent.svg",
-                     Params::Skip(
-                         "Bug: intrinsic sizing + percent resolution with non-square viewBox; see "
-                         "ShapesEllipse")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1722,9 +1717,6 @@ INSTANTIATE_TEST_SUITE_P(
 
                 {"marker-on-rounded-rect.svg",
                  Params::Skip("Bug: marker edge cases (rounded-rect path corners, recursive-5)")},
-                {"percent-values.svg",
-                 Params::Skip("Bug: intrinsic sizing + percent resolution with "
-                              "non-square viewBox; see ShapesEllipse")},
                 {"recursive-5.svg",
                  Params::Skip("Bug: marker edge cases (rounded-rect path corners, recursive-5)")},
             })),
@@ -1878,29 +1870,10 @@ INSTANTIATE_TEST_SUITE_P(ShapesCircle, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    ShapesEllipse, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "shapes/ellipse",
-                {
-                    // Bug: SVG has viewBox="0 0 200 100" with no width/height. Donner's
-                    // intrinsic document sizing computes 500x375 (wrong) instead of
-                    // 500x250, and percent-valued geometry (cx=50%, ry=20%, ...) then
-                    // resolves against that mis-sized viewport, so the ellipse is
-                    // larger than the golden and shifted. Root cause traced to
-                    // LayoutSystem::calculateRawDocumentSize's use of transformPosition
-                    // (which folds in the aspect-ratio letterbox translation) instead
-                    // of transformVector; fixing it in isolation breaks the percent
-                    // resolution pipeline downstream, so deferring to a dedicated PR.
-                    {"percent-values-missing-ry.svg",
-                     Params::Skip("Bug: intrinsic sizing + percent resolution with "
-                                  "non-square viewBox")},
-                    {"percent-values.svg",
-                     Params::Skip("Bug: intrinsic sizing + percent resolution with "
-                                  "non-square viewBox")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(ShapesEllipse, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("shapes/ellipse")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     ShapesLine, ImageComparisonTestFixture,
@@ -1910,10 +1883,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"simple-case.svg",
                      Params::WithThreshold(0.02f, kDefaultMismatchedPixels,
                                            "Larger threshold due to anti-aliasing")},
-                    // Bug: see ShapesEllipse — non-square viewBox + percent geometry.
-                    {"percent-units.svg",
-                     Params::Skip("Bug: intrinsic sizing + percent resolution with "
-                                  "non-square viewBox")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1933,21 +1902,10 @@ INSTANTIATE_TEST_SUITE_P(ShapesPolyline, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    ShapesRect, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "shapes/rect",
-                {
-                    // Bug: see ShapesEllipse — non-square viewBox + percent geometry.
-                    {"percentage-values-1.svg",
-                     Params::Skip("Bug: intrinsic sizing + percent resolution with "
-                                  "non-square viewBox")},
-                    {"percentage-values-2.svg",
-                     Params::Skip("Bug: intrinsic sizing + percent resolution with "
-                                  "non-square viewBox")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(ShapesRect, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("shapes/rect")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureA, ImageComparisonTestFixture,
@@ -2638,14 +2596,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"ligatures-handling-in-mixed-fonts-2.svg",
                      Params::Skip(
                          "Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},
-                    {"percent-value-on-dx-and-dy.svg",
-                     Params::Skip(
-                         "Bug: intrinsic sizing + percent resolution with non-square viewBox; see "
-                         "ShapesEllipse")},
-                    {"percent-value-on-x-and-y.svg",
-                     Params::Skip(
-                         "Bug: intrinsic sizing + percent resolution with non-square viewBox; see "
-                         "ShapesEllipse")},
                     {"real-text-height.svg",
                      Params::Skip(
                          "Bug: text rendering edge cases (mixed inline content, BiDi-adjacent)")},

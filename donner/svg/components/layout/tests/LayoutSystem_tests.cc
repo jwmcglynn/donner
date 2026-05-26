@@ -370,6 +370,26 @@ TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeInvalidReturnsZeroOrDefault) {
             Vector2i(512, 512));
 }
 
+// Regression test for B1: intrinsic sizing on a non-square viewBox.
+// A viewBox of 0 0 200 100 (aspect 2:1) with no width/height, fitted into a 500x500 canvas with
+// the default preserveAspectRatio (xMidYMid meet), must produce a 500x250 document — the *extent*
+// of the scaled viewBox, NOT a viewBox corner mapped through the letterboxed content transform
+// (which would fold in the 62.5px vertical centering offset and yield an incorrect 500x375).
+TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeNonSquareViewBox) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+    </svg>
+  )");
+
+  document.setCanvasSize(500, 500);
+
+  auto& registry = document.registry();
+  EXPECT_EQ(layoutSystem.calculateDocumentSize(registry), Vector2i(500, 250));
+  EXPECT_EQ(layoutSystem.calculateCanvasScaledDocumentSize(
+                registry, LayoutSystem::InvalidSizeBehavior::ZeroSize),
+            Vector2i(500, 250));
+}
+
 TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeClampsLargeDocuments) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100000 50000">

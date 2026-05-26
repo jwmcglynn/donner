@@ -19,21 +19,26 @@ namespace donner::svg::tests {
 
 namespace {
 
-// Helper matchers for verifying marker attributes.
+// Helper matchers for verifying marker attributes. Lengths are stored as Lengthd; bare numbers in
+// the tests are unitless (Lengthd::Unit::None).
 auto MarkerWidthEq(double expected) {
-  return testing::Property("markerWidth", &SVGMarkerElement::markerWidth, Eq(expected));
+  return testing::Property("markerWidth", &SVGMarkerElement::markerWidth,
+                           Eq(Lengthd(expected, Lengthd::Unit::None)));
 }
 
 auto MarkerHeightEq(double expected) {
-  return testing::Property("markerHeight", &SVGMarkerElement::markerHeight, Eq(expected));
+  return testing::Property("markerHeight", &SVGMarkerElement::markerHeight,
+                           Eq(Lengthd(expected, Lengthd::Unit::None)));
 }
 
 auto RefXEq(double expected) {
-  return testing::Property("refX", &SVGMarkerElement::refX, Eq(expected));
+  return testing::Property("refX", &SVGMarkerElement::refX,
+                           Eq(Lengthd(expected, Lengthd::Unit::None)));
 }
 
 auto RefYEq(double expected) {
-  return testing::Property("refY", &SVGMarkerElement::refY, Eq(expected));
+  return testing::Property("refY", &SVGMarkerElement::refY,
+                           Eq(Lengthd(expected, Lengthd::Unit::None)));
 }
 
 auto OrientEq(MarkerOrient expected) {
@@ -75,10 +80,10 @@ TEST(SVGMarkerElementTests, UpdateAttributes) {
   )");
 
   // Update the attributes.
-  marker->setMarkerWidth(15);
-  marker->setMarkerHeight(20);
-  marker->setRefX(7);
-  marker->setRefY(8);
+  marker->setMarkerWidth(Lengthd(15, Lengthd::Unit::None));
+  marker->setMarkerHeight(Lengthd(20, Lengthd::Unit::None));
+  marker->setRefX(Lengthd(7, Lengthd::Unit::None));
+  marker->setRefY(Lengthd(8, Lengthd::Unit::None));
   marker->setOrient(MarkerOrient::AngleDegrees(45));  // Set to a fixed 45° rotation
 
   EXPECT_THAT(marker, ElementHasMarkerAttributes(AllOf(MarkerWidthEq(15), MarkerHeightEq(20),

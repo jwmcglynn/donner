@@ -854,11 +854,15 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
 
   const Vector2d canvasSize(maybeCanvasSize.value());
 
-  // Scale the original viewBox to the canvas size.
-  const Transform2d transform = preserveAspectRatio.elementContentFromViewBoxTransform(
+  // Scale the original viewBox to fit the canvas (a "contain" constraint, per the default sizing
+  // algorithm). The concrete object size is the *extent* of the scaled viewBox, so we transform the
+  // viewBox size as a vector. Using transformPosition here would fold in the aspect-ratio letterbox
+  // translation (the centering offset for a non-square viewBox), inflating the reported size — e.g.
+  // a 200x100 viewBox in a 500x500 canvas would report 500x375 instead of the correct 500x250.
+  const Transform2d contentFromViewBox = preserveAspectRatio.elementContentFromViewBoxTransform(
       Box2d(Vector2d(), canvasSize), viewBox.viewBox);
 
-  return transform.transformPosition(viewBoxSize);
+  return contentFromViewBox.transformVector(viewBoxSize);
 }
 
 bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity shadowEntity,

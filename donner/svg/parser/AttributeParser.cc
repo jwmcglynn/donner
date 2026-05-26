@@ -1706,36 +1706,21 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGMarkerElement>(SVGParserContext
     // Warning already added if there was an error.
     return std::nullopt;
   } else if (name == XMLQualifiedNameRef("markerWidth")) {
-    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      element.setMarkerWidth(maybeNumber.value());
-    } else {
-      ParseDiagnostic err;
-      err.reason = "Invalid markerWidth value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    if (auto maybeLength = ParseLengthAttribute(context, value)) {
+      element.setMarkerWidth(maybeLength.value());
     }
+    // Warning already added by ParseLengthAttribute on error.
   } else if (name == XMLQualifiedNameRef("markerHeight")) {
-    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      element.setMarkerHeight(maybeNumber.value());
-    } else {
-      ParseDiagnostic err;
-      err.reason = "Invalid markerHeight value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    if (auto maybeLength = ParseLengthAttribute(context, value)) {
+      element.setMarkerHeight(maybeLength.value());
     }
   } else if (name == XMLQualifiedNameRef("refX")) {
-    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      element.setRefX(maybeNumber.value());
-    } else {
-      ParseDiagnostic err;
-      err.reason = "Invalid refX value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    if (auto maybeLength = ParseLengthAttribute(context, value)) {
+      element.setRefX(maybeLength.value());
     }
   } else if (name == XMLQualifiedNameRef("refY")) {
-    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      element.setRefY(maybeNumber.value());
-    } else {
-      ParseDiagnostic err;
-      err.reason = "Invalid refY value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    if (auto maybeLength = ParseLengthAttribute(context, value)) {
+      element.setRefY(maybeLength.value());
     }
   } else if (name == XMLQualifiedNameRef("orient")) {
     if (value == "auto") {

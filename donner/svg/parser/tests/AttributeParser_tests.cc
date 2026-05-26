@@ -470,10 +470,30 @@ TEST(AttributeParserTest, MarkerAttributes) {
   )");
 
   auto marker = QueryElement<SVGMarkerElement>(document, "#m");
-  EXPECT_THAT(marker.markerWidth(), DoubleNear(12.0, 0.001));
-  EXPECT_THAT(marker.markerHeight(), DoubleNear(8.0, 0.001));
-  EXPECT_THAT(marker.refX(), DoubleNear(6.0, 0.001));
-  EXPECT_THAT(marker.refY(), DoubleNear(4.0, 0.001));
+  EXPECT_THAT(marker.markerWidth(), LengthIs(DoubleNear(12.0, 0.001), Lengthd::Unit::None));
+  EXPECT_THAT(marker.markerHeight(), LengthIs(DoubleNear(8.0, 0.001), Lengthd::Unit::None));
+  EXPECT_THAT(marker.refX(), LengthIs(DoubleNear(6.0, 0.001), Lengthd::Unit::None));
+  EXPECT_THAT(marker.refY(), LengthIs(DoubleNear(4.0, 0.001), Lengthd::Unit::None));
+}
+
+TEST(AttributeParserTest, MarkerLengthAttributesWithUnits) {
+  // markerWidth/markerHeight/refX/refY accept length units, including percentages (which resolve
+  // against the referencing element's viewport at render time).
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+      <defs>
+        <marker id="m" markerWidth="10%" markerHeight="20%" refX="5%" refY="10px">
+          <path d="M0,0 L12,4 L0,8 Z"/>
+        </marker>
+      </defs>
+    </svg>
+  )");
+
+  auto marker = QueryElement<SVGMarkerElement>(document, "#m");
+  EXPECT_THAT(marker.markerWidth(), LengthIs(DoubleNear(10.0, 0.001), Lengthd::Unit::Percent));
+  EXPECT_THAT(marker.markerHeight(), LengthIs(DoubleNear(20.0, 0.001), Lengthd::Unit::Percent));
+  EXPECT_THAT(marker.refX(), LengthIs(DoubleNear(5.0, 0.001), Lengthd::Unit::Percent));
+  EXPECT_THAT(marker.refY(), LengthIs(DoubleNear(10.0, 0.001), Lengthd::Unit::Px));
 }
 
 TEST(AttributeParserTest, MarkerCommonAttributes) {
@@ -1005,7 +1025,7 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveVariantMatricesAndWarnings)
           <feGaussianBlur id="bad-blur-1" stdDeviation="1 2 extra"/>
           <feGaussianBlur id="bad-blur-2" stdDeviation="oops"/>
         </filter>
-        <marker id="bad-marker" markerWidth="1px" markerHeight="oops" refX="10px" refY="oops"
+        <marker id="bad-marker" markerWidth="oops" markerHeight="5px" refX="10px" refY="3"
                 orient="" markerUnits="bad"/>
         <pattern id="bad-pattern" patternUnits="bad" patternContentUnits="bad"
                  viewBox="oops" preserveAspectRatio="bad"/>
@@ -1024,9 +1044,11 @@ TEST(AttributeParserTest, ExperimentalFilterPrimitiveVariantMatricesAndWarnings)
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(&ParseDiagnostic::reason,
                                                testing::HasSubstr("Invalid stdDeviation value"))));
+  // markerWidth/markerHeight/refX/refY now accept length units (e.g. "5px"), so a non-numeric
+  // value like "oops" produces a length-parse warning rather than the old bespoke message.
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(&ParseDiagnostic::reason,
-                                               testing::HasSubstr("Invalid markerWidth value"))));
+                                               testing::HasSubstr("Failed to parse number"))));
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(&ParseDiagnostic::reason,
                                                testing::HasSubstr("Invalid angle value"))));
