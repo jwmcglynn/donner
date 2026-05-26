@@ -75,6 +75,17 @@ constexpr float kToolPalettePadding = 5.0f;
 constexpr float kToolPalettePaintWidgetWidth = 118.0f;
 constexpr float kToolPaletteTopInset = 8.0f;
 constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
+constexpr ImWchar kEditorGlyphRanges[] = {
+    0x0020, 0x00ff,  // Basic Latin + Latin Supplement.
+    0x2217, 0x2217,  // Asterisk operator.
+    0x2731, 0x2731,  // Heavy asterisk.
+    0,
+};
+constexpr ImWchar kEditorSymbolGlyphRanges[] = {
+    0x2217, 0x2217,  // Asterisk operator.
+    0x2731, 0x2731,  // Heavy asterisk.
+    0,
+};
 
 ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
   if (intent.kind == SelectionTransformHandleKind::Rotate) {
@@ -622,18 +633,24 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   ImFontConfig fontCfg;
   fontCfg.FontDataOwnedByAtlas = false;
   const double displayScale = window_.displayScale();
-  std::ignore =
-      io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
-                                     static_cast<int>(embedded::kRobotoRegularTtf.size()),
-                                     static_cast<float>(15.0 * displayScale), &fontCfg);
-  uiFontBold_ =
-      io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
-                                     static_cast<int>(embedded::kRobotoBoldTtf.size()),
-                                     static_cast<float>(15.0 * displayScale), &fontCfg);
+  std::ignore = io.Fonts->AddFontFromMemoryTTF(
+      const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+      static_cast<int>(embedded::kRobotoRegularTtf.size()), static_cast<float>(15.0 * displayScale),
+      &fontCfg, kEditorGlyphRanges);
+  uiFontBold_ = io.Fonts->AddFontFromMemoryTTF(
+      const_cast<unsigned char*>(embedded::kRobotoBoldTtf.data()),
+      static_cast<int>(embedded::kRobotoBoldTtf.size()), static_cast<float>(15.0 * displayScale),
+      &fontCfg, kEditorGlyphRanges);
   codeFont_ = io.Fonts->AddFontFromMemoryTTF(
       const_cast<unsigned char*>(embedded::kFiraCodeRegularTtf.data()),
       static_cast<int>(embedded::kFiraCodeRegularTtf.size()),
-      static_cast<float>(14.0 * displayScale), &fontCfg);
+      static_cast<float>(14.0 * displayScale), &fontCfg, kEditorGlyphRanges);
+  ImFontConfig codeSymbolFontCfg = fontCfg;
+  codeSymbolFontCfg.MergeMode = true;
+  std::ignore = io.Fonts->AddFontFromMemoryTTF(
+      const_cast<unsigned char*>(embedded::kRobotoRegularTtf.data()),
+      static_cast<int>(embedded::kRobotoRegularTtf.size()), static_cast<float>(14.0 * displayScale),
+      &codeSymbolFontCfg, kEditorSymbolGlyphRanges);
 
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
@@ -676,6 +693,23 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   }
 
   valid_ = true;
+}
+
+std::optional<float> EditorShell::nextIdleWakeSeconds() const {
+  std::optional<float> result;
+  const auto includeWake = [&result](std::optional<float> wakeSeconds) {
+    if (!wakeSeconds.has_value()) {
+      return;
+    }
+
+    const float clampedWakeSeconds = std::max(0.0f, *wakeSeconds);
+    result = result.has_value() ? std::min(*result, clampedWakeSeconds) : clampedWakeSeconds;
+  };
+
+  includeWake(documentSyncController_.nextTextSyncWakeSeconds());
+  includeWake(textEditor_.nextFlashWakeSeconds());
+  includeWake(textEditor_.nextRopeAnimationWakeSeconds());
+  return result;
 }
 
 EditorShell::~EditorShell() {
@@ -2786,10 +2820,6 @@ void EditorShell::runFrame() {
     renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
   }
   renderFloatingLayerPanel();
-  if (documentSyncController_.nextTextSyncWakeSeconds().has_value() ||
-      textEditor_.nextFlashWakeSeconds().has_value()) {
-    window_.wakeEventLoop();
-  }
 }
 
 }  // namespace donner::editor

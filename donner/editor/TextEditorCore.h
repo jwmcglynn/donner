@@ -450,6 +450,7 @@ public:
   std::function<void()> requestAutocompleteHook;
   std::function<void(char32_t, const Coordinates&)> functionTooltipHook;
   std::function<void()> onContentUpdateInternal;
+  std::function<void(const SourceEditIntent&)> sourceEditIntentHook;
 
 private:
   using RegexList = std::vector<std::pair<std::regex, ColorIndex>>;

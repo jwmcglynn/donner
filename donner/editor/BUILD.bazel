@@ -167,6 +167,15 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "rope_simulation",
+    srcs = ["RopeSimulation.cc"],
+    hdrs = ["RopeSimulation.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "render_pane_gesture",
     srcs = ["RenderPaneGesture.cc"],
     hdrs = ["RenderPaneGesture.h"],
@@ -876,6 +885,7 @@ donner_cc_library(
         ":flash_decorations",
         ":focus_view",
         ":imgui_headers",
+        ":rope_simulation",
         ":soft_wrap",
         ":source_edit_intent",
         ":text_buffer",

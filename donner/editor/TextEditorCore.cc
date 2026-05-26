@@ -182,17 +182,24 @@ void TextEditorCore::appendSourceEditIntent(SourceEditIntent intent) {
 
   intent.bufferVersion = ++sourceEditIntentVersion_;
   pendingSourceEditIntents_.push_back(std::move(intent));
+  if (sourceEditIntentHook) {
+    sourceEditIntentHook(pendingSourceEditIntents_.back());
+  }
 }
 
 void TextEditorCore::recordSourceEditIntent(const UndoRecord& record, SourceEditIntentKind kind) {
   std::string_view removed = record.removed;
   std::string_view replacement = record.added;
   Coordinates start = !record.removed.empty() ? record.removedStart : record.addedStart;
+  Coordinates removedEnd = !record.removed.empty() ? record.removedEnd : start;
+  Coordinates replacementEnd = !record.added.empty() ? record.addedEnd : start;
 
   if (kind == SourceEditIntentKind::Undo) {
     removed = record.added;
     replacement = record.removed;
     start = !record.added.empty() ? record.addedStart : record.removedStart;
+    removedEnd = !record.added.empty() ? record.addedEnd : start;
+    replacementEnd = !record.removed.empty() ? record.removedEnd : start;
   }
 
   SourceEditIntentKind classifiedKind = kind;
@@ -211,6 +218,10 @@ void TextEditorCore::recordSourceEditIntent(const UndoRecord& record, SourceEdit
       .removedLength = removed.size(),
       .replacement = std::string(replacement),
       .kind = classifiedKind,
+      .start = SourceEditPoint{.line = start.line, .column = start.column},
+      .removedEnd = SourceEditPoint{.line = removedEnd.line, .column = removedEnd.column},
+      .replacementEnd =
+          SourceEditPoint{.line = replacementEnd.line, .column = replacementEnd.column},
   });
 }
 

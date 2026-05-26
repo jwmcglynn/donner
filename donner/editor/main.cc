@@ -117,15 +117,18 @@ int main(int argc, char** argv) {
   while (!window.shouldClose()) {
     {
       ZoneScopedN("waitEvents");
-      // On native this blocks until a user input, window event, or a
-      // `wakeEventLoop()` post from the render worker. The editor is
-      // event-driven — no frames are produced between user inputs and
-      // worker results. Matches the original viewer prototype (commit
-      // 8e78aa49).
+      // On native this blocks until a user input, window event, timed
+      // UI wake, or a `wakeEventLoop()` post from the render worker.
+      // The editor is event-driven: no frames are produced between user
+      // inputs, worker results, and active timed UI work.
       //
       // On Emscripten `waitEvents` falls through to `glfwPollEvents`
       // since the browser drives the loop via `requestAnimationFrame`.
-      window.waitEvents();
+      if (const std::optional<float> wakeSeconds = shell.nextIdleWakeSeconds()) {
+        window.waitEventsTimeout(*wakeSeconds);
+      } else {
+        window.waitEvents();
+      }
     }
     {
       ZoneScopedN("beginFrame");

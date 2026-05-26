@@ -10,7 +10,7 @@
 /// The class is intentionally narrow — it exposes only what the main
 /// binary needs:
 ///   - construct/destruct (RAII handles cleanup)
-///   - `shouldClose()` / `pollEvents()` — event loop hooks
+///   - `shouldClose()` / `pollEvents()` / `waitEvents()` / `waitEventsTimeout()` — event loop hooks
 ///   - `beginFrame()` / `endFrame()` — ImGui frame bracketing + swap
 ///   - `uploadBitmap()` — moves a CPU-side RGBA buffer into a GL texture
 ///     (reuses the same texture ID across frames to avoid churn)
@@ -137,6 +137,12 @@ public:
   /// drives the main loop instead (`glfwWaitEvents` is unimplemented
   /// upstream).
   void waitEvents();
+
+  /// Blocks until an event arrives or \p timeoutSeconds elapses, then
+  /// pumps the event queue once.
+  ///
+  /// @param timeoutSeconds Maximum wait duration in seconds.
+  void waitEventsTimeout(double timeoutSeconds);
 
   /// Post an empty event into the window's queue, waking a concurrent
   /// `waitEvents()` call. Safe to call from any thread. Used by the

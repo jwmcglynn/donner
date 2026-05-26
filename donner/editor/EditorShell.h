@@ -111,6 +111,8 @@ public:
 
   [[nodiscard]] bool valid() const { return valid_; }
   void runFrame();
+  /// Return the next idle-loop wake interval needed for throttled UI work.
+  [[nodiscard]] std::optional<float> nextIdleWakeSeconds() const;
 
   /// Current render-pane viewport. Exposed for replay/readback harnesses
   /// that need to crop the presented framebuffer to the canvas region.

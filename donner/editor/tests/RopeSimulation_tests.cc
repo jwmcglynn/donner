@@ -1,0 +1,471 @@
+#include "donner/editor/RopeSimulation.h"
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <cmath>
+#include <span>
+#include <vector>
+
+namespace donner::editor {
+namespace {
+
+RopeSimulationOptions TestOptions() {
+  RopeSimulationOptions options;
+  options.segmentCount = 8;
+  options.constraintIterations = 10;
+  options.idleSwayPxPerSec2 = 0.0;
+  options.gravityPxPerSec2 = 80.0;
+  return options;
+}
+
+RopeSimulation MakeStraightRope(const RopeSimulationOptions& options) {
+  const std::vector<Vector2d> route = {
+      Vector2d(0.0, 0.0),
+      Vector2d(100.0, 0.0),
+  };
+  RopeSimulation rope;
+  rope.reset(route, options);
+  return rope;
+}
+
+double MaxDeviationFrom(std::span<const Vector2d> points, std::span<const Vector2d> reference) {
+  double result = 0.0;
+  const std::size_t count = std::min(points.size(), reference.size());
+  for (std::size_t i = 0; i < count; ++i) {
+    result = std::max(result, points[i].distance(reference[i]));
+  }
+  return result;
+}
+
+}  // namespace
+
+TEST(RopeSimulationTest, KeepsEndpointsPinnedAfterUpdates) {
+  const RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope = MakeStraightRope(options);
+
+  for (int i = 0; i < 30; ++i) {
+    rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0,
+                static_cast<double>(i) / 60.0, 123u, false, options);
+  }
+
+  ASSERT_GE(rope.points().size(), 2u);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+}
+
+TEST(RopeSimulationTest, GravityMovesInteriorParticlesDown) {
+  const RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope = MakeStraightRope(options);
+  const double beforeY = rope.points()[rope.points().size() / 2u].y;
+
+  for (int i = 0; i < 8; ++i) {
+    rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0,
+                static_cast<double>(i) / 60.0, 456u, false, options);
+  }
+
+  EXPECT_GT(rope.points()[rope.points().size() / 2u].y, beforeY);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+}
+
+TEST(RopeSimulationTest, ResetCatenaryHangsBetweenEndpoints) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  options.catenaryMinSlackPx = 24.0;
+  RopeSimulation rope;
+
+  rope.resetCatenary(Vector2d(0.0, 20.0), Vector2d(120.0, 20.0), options);
+
+  ASSERT_GE(rope.points().size(), 3u);
+  EXPECT_NEAR(rope.points().front().x, 0.0, 1e-9);
+  EXPECT_NEAR(rope.points().front().y, 20.0, 1e-9);
+  EXPECT_NEAR(rope.points().back().x, 120.0, 1e-9);
+  EXPECT_NEAR(rope.points().back().y, 20.0, 1e-9);
+  const Vector2d middle = rope.points()[rope.points().size() / 2u];
+  EXPECT_NEAR(middle.x, 60.0, 1.0);
+  EXPECT_GT(middle.y, 20.0);
+}
+
+TEST(RopeSimulationTest, ResetCatenaryStartsSettledWithZeroVelocity) {
+  RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), options);
+  const std::vector<Vector2d> before(rope.points().begin(), rope.points().end());
+
+  EXPECT_FALSE(rope.needsAnimation());
+  rope.update(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 123u, false,
+              options);
+
+  EXPECT_EQ(std::vector<Vector2d>(rope.points().begin(), rope.points().end()), before);
+  EXPECT_FALSE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, ScrollImpulseAffectsInteriorOnly) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation withoutScroll = MakeStraightRope(options);
+  RopeSimulation withScroll = MakeStraightRope(options);
+
+  withoutScroll.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 0.0, 789u, false,
+                       options);
+  withScroll.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 12.0, 0.0, 789u, false,
+                    options);
+
+  ASSERT_EQ(withoutScroll.points().size(), withScroll.points().size());
+  EXPECT_EQ(withScroll.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(withScroll.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_NE(withScroll.points()[withScroll.points().size() / 2u].y,
+            withoutScroll.points()[withoutScroll.points().size() / 2u].y);
+}
+
+TEST(RopeSimulationTest, ScrollImpulseIsCappedForFastScrolls) {
+  RopeSimulationOptions options = TestOptions();
+  options.constraintIterations = 0;
+  options.gravityPxPerSec2 = 0.0;
+  options.scrollResponse = 1.0;
+  options.maxScrollImpulsePx = 0.5;
+  RopeSimulation rope = MakeStraightRope(options);
+
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 1000.0, 1.0 / 60.0, 789u, false,
+              options);
+
+  ASSERT_GE(rope.points().size(), 3u);
+  EXPECT_LE(std::abs(rope.points()[rope.points().size() / 2u].y), 0.5 + 1e-9);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+}
+
+TEST(RopeSimulationTest, ApplyImpulseCreatesMotionOnNextUpdate) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), options);
+  const Vector2d before = rope.points()[rope.points().size() / 2u];
+
+  rope.applyImpulse(Vector2d(4.0, 0.0));
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 0.0, 123u, false, options);
+
+  EXPECT_GT(rope.points()[rope.points().size() / 2u].x, before.x);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+}
+
+TEST(RopeSimulationTest, BottomImpulseIsLocalizedNearCatenaryBottom) {
+  RopeSimulationOptions options = TestOptions();
+  options.constraintIterations = 0;
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), options);
+  std::size_t bottomIndex = 1;
+  for (std::size_t i = 2; i + 1 < rope.points().size(); ++i) {
+    if (rope.points()[i].y > rope.points()[bottomIndex].y) {
+      bottomIndex = i;
+    }
+  }
+  const std::vector<Vector2d> before(rope.points().begin(), rope.points().end());
+
+  rope.applyBottomImpulse(Vector2d(0.25, 0.0), 0.12);
+  rope.update(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 123u, false,
+              options);
+
+  const std::size_t shoulderIndex = 1;
+  const Vector2d bottomDelta = rope.points()[bottomIndex] - before[bottomIndex];
+  const Vector2d shoulderDelta = rope.points()[shoulderIndex] - before[shoulderIndex];
+  EXPECT_GT(std::abs(bottomDelta.x), std::abs(shoulderDelta.x) * 4.0);
+  EXPECT_GT(std::abs(bottomDelta.x), std::abs(bottomDelta.y) * 20.0);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(120.0, 0.0));
+}
+
+TEST(RopeSimulationTest, CatenaryBottomImpulseDecaysWithoutEnergyGain) {
+  RopeSimulationOptions options = TestOptions();
+  options.damping = 0.86;
+  options.gravityPxPerSec2 = 500.0;
+  options.idleSwayPxPerSec2 = 500.0;
+  options.settleMotionThresholdPx = 0.0;
+  options.settleStillnessSeconds = 100.0;
+  options.settleTimeSeconds = 100.0;
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), options);
+  const std::vector<Vector2d> rest(rope.points().begin(), rope.points().end());
+
+  rope.applyBottomImpulse(Vector2d(0.25, 0.0), 0.12);
+
+  double earlyPeak = 0.0;
+  double latePeak = 0.0;
+  for (int frame = 0; frame < 120; ++frame) {
+    rope.update(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), 1.0 / 60.0, 0.0,
+                static_cast<double>(frame + 1) / 60.0, 123u, false, options);
+
+    double maxDeviation = 0.0;
+    for (std::size_t i = 0; i < rope.points().size(); ++i) {
+      maxDeviation = std::max(maxDeviation, rope.points()[i].distance(rest[i]));
+    }
+
+    if (frame < 20) {
+      earlyPeak = std::max(earlyPeak, maxDeviation);
+    } else if (frame >= 90) {
+      latePeak = std::max(latePeak, maxDeviation);
+    }
+  }
+
+  EXPECT_GT(earlyPeak, 0.0);
+  EXPECT_LT(latePeak, earlyPeak * 0.35);
+  EXPECT_TRUE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, CatenaryBottomImpulseIsStableAcrossFrameCadences) {
+  RopeSimulationOptions options = TestOptions();
+  options.damping = 0.86;
+  options.gravityPxPerSec2 = 500.0;
+  options.idleSwayPxPerSec2 = 500.0;
+  options.settleMotionThresholdPx = 0.0;
+  options.settleStillnessSeconds = 100.0;
+  options.settleTimeSeconds = 100.0;
+  RopeSimulation sixtyHz;
+  RopeSimulation fastInputCadence;
+  RopeSimulation coarseCadence;
+  sixtyHz.resetCatenary(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), options);
+  fastInputCadence.resetCatenary(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), options);
+  coarseCadence.resetCatenary(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), options);
+  sixtyHz.applyBottomImpulse(Vector2d(0.25, 0.0), 0.12);
+  fastInputCadence.applyBottomImpulse(Vector2d(0.25, 0.0), 0.12);
+  coarseCadence.applyBottomImpulse(Vector2d(0.25, 0.0), 0.12);
+
+  for (int frame = 0; frame < 60; ++frame) {
+    sixtyHz.update(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), 1.0 / 60.0, 0.0,
+                   static_cast<double>(frame + 1) / 60.0, 123u, false, options);
+  }
+  for (int frame = 0; frame < 120; ++frame) {
+    fastInputCadence.update(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), 1.0 / 120.0, 0.0,
+                            static_cast<double>(frame + 1) / 120.0, 123u, false, options);
+  }
+  for (int frame = 0; frame < 15; ++frame) {
+    coarseCadence.update(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), 1.0 / 15.0, 0.0,
+                         static_cast<double>(frame + 1) / 15.0, 123u, false, options);
+  }
+
+  ASSERT_EQ(sixtyHz.points().size(), fastInputCadence.points().size());
+  ASSERT_EQ(sixtyHz.points().size(), coarseCadence.points().size());
+  for (std::size_t i = 0; i < sixtyHz.points().size(); ++i) {
+    EXPECT_LT(sixtyHz.points()[i].distance(fastInputCadence.points()[i]), 0.02);
+    EXPECT_LT(sixtyHz.points()[i].distance(coarseCadence.points()[i]), 0.02);
+  }
+}
+
+TEST(RopeSimulationTest, LargeFrameDeltaAdvancesThroughFixedRealtimeSubsteps) {
+  RopeSimulationOptions options = TestOptions();
+  options.constraintIterations = 0;
+  options.gravityPxPerSec2 = 0.0;
+  options.damping = 1.0;
+  options.maxDeltaTime = 1.0 / 60.0;
+  options.settleTimeSeconds = 1.0;
+
+  RopeSimulation singleFrame = MakeStraightRope(options);
+  RopeSimulation fourFrames = MakeStraightRope(options);
+  singleFrame.applyImpulse(Vector2d(4.0, 0.0));
+  fourFrames.applyImpulse(Vector2d(4.0, 0.0));
+
+  singleFrame.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 4.0 / 60.0, 0.0, 4.0 / 60.0, 123u,
+                     false, options);
+  for (int i = 0; i < 4; ++i) {
+    fourFrames.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0,
+                      static_cast<double>(i + 1) / 60.0, 123u, false, options);
+  }
+
+  ASSERT_EQ(singleFrame.points().size(), fourFrames.points().size());
+  const std::size_t middle = singleFrame.points().size() / 2u;
+  EXPECT_NEAR(singleFrame.points()[middle].x, fourFrames.points()[middle].x, 1e-9);
+  EXPECT_NEAR(singleFrame.points()[middle].y, fourFrames.points()[middle].y, 1e-9);
+}
+
+TEST(RopeSimulationTest, ShortFrameDeltasPreserveRealtimeVelocityScale) {
+  RopeSimulationOptions options = TestOptions();
+  options.constraintIterations = 0;
+  options.gravityPxPerSec2 = 0.0;
+  options.damping = 1.0;
+  options.maxDeltaTime = 1.0 / 60.0;
+  options.settleTimeSeconds = 1.0;
+
+  RopeSimulation singleFrame = MakeStraightRope(options);
+  RopeSimulation twoFrames = MakeStraightRope(options);
+  singleFrame.applyImpulse(Vector2d(4.0, 0.0));
+  twoFrames.applyImpulse(Vector2d(4.0, 0.0));
+
+  singleFrame.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 123u,
+                     false, options);
+  twoFrames.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 120.0, 0.0, 1.0 / 120.0, 123u,
+                   false, options);
+  twoFrames.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 120.0, 0.0, 1.0 / 60.0, 123u,
+                   false, options);
+
+  ASSERT_EQ(singleFrame.points().size(), twoFrames.points().size());
+  const std::size_t middle = singleFrame.points().size() / 2u;
+  EXPECT_NEAR(singleFrame.points()[middle].x, twoFrames.points()[middle].x, 1e-9);
+  EXPECT_NEAR(singleFrame.points()[middle].y, twoFrames.points()[middle].y, 1e-9);
+}
+
+TEST(RopeSimulationTest, SleepsAfterStillnessAndWakesOnImpulse) {
+  RopeSimulationOptions options = TestOptions();
+  options.constraintIterations = 0;
+  options.gravityPxPerSec2 = 0.0;
+  options.damping = 0.0;
+  options.maxDeltaTime = 1.0 / 60.0;
+  options.settleMotionThresholdPx = 0.001;
+  options.settleStillnessSeconds = 0.02;
+  options.settleTimeSeconds = 100.0;
+  RopeSimulation rope = MakeStraightRope(options);
+  rope.applyImpulse(Vector2d(3.0, 0.0));
+
+  ASSERT_TRUE(rope.needsAnimation());
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 123u, false,
+              options);
+  EXPECT_TRUE(rope.needsAnimation());
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 2.0 / 60.0, 123u, false,
+              options);
+  EXPECT_FALSE(rope.needsAnimation());
+
+  const std::vector<Vector2d> asleep(rope.points().begin(), rope.points().end());
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 3.0 / 60.0, 123u, false,
+              options);
+  EXPECT_EQ(std::vector<Vector2d>(rope.points().begin(), rope.points().end()), asleep);
+
+  rope.applyImpulse(Vector2d(1.0, 0.0));
+  EXPECT_TRUE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, OverdueDampingSleepsOnlyAfterStillnessAndResetsOnWake) {
+  RopeSimulationOptions options = TestOptions();
+  options.constraintIterations = 0;
+  options.gravityPxPerSec2 = 0.0;
+  options.damping = 1.0;
+  options.overdueDamping = 0.0;
+  options.overdueDampingRampSeconds = 0.0;
+  options.maxDeltaTime = 1.0 / 60.0;
+  options.settleMotionThresholdPx = 0.001;
+  options.settleStillnessSeconds = 0.02;
+  options.settleTimeSeconds = 0.0;
+  RopeSimulation rope = MakeStraightRope(options);
+  rope.applyImpulse(Vector2d(0.75, 0.0));
+
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 123u, false,
+              options);
+  EXPECT_TRUE(rope.needsAnimation());
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 2.0 / 60.0, 123u, false,
+              options);
+  EXPECT_TRUE(rope.needsAnimation());
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 3.0 / 60.0, 123u, false,
+              options);
+  ASSERT_FALSE(rope.needsAnimation());
+
+  const Vector2d beforeWake = rope.points()[rope.points().size() / 2u];
+  rope.applyImpulse(Vector2d(0.75, 0.0));
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 4.0 / 60.0, 123u, false,
+              options);
+
+  EXPECT_TRUE(rope.needsAnimation());
+  EXPECT_NE(rope.points()[rope.points().size() / 2u].x, beforeWake.x);
+}
+
+TEST(RopeSimulationTest, EndpointMotionCarriesBodyAndAddsVelocity) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  options.endpointFollow = 0.8;
+  options.endpointImpulse = 0.2;
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), options);
+  const Vector2d before = rope.points()[rope.points().size() / 2u];
+
+  rope.update(Vector2d(0.0, 12.0), Vector2d(100.0, 12.0), 1.0 / 60.0, 0.0, 0.0, 123u, false,
+              options);
+
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 12.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 12.0));
+  EXPECT_GT(rope.points()[rope.points().size() / 2u].y, before.y + 8.0);
+}
+
+TEST(RopeSimulationTest, EndpointMotionRetargetsAndDampsBackToCatenary) {
+  RopeSimulationOptions options = TestOptions();
+  options.segmentCount = 16;
+  options.constraintIterations = 12;
+  options.gravityPxPerSec2 = 0.0;
+  options.damping = 0.84;
+  options.overdueDamping = 0.2;
+  options.overdueDampingRampSeconds = 0.0;
+  options.settleTimeSeconds = 0.7;
+  options.settleMotionThresholdPx = 0.015;
+  options.settleStillnessSeconds = 0.12;
+  options.settleRestDistanceThresholdPx = 0.3;
+  options.catenaryRestoringForcePerSec2 = 900.0;
+  options.endpointFollow = 0.82;
+  options.endpointImpulse = 0.0;
+  options.endpointMotionVelocityRetention = 0.20;
+  options.endpointCatenaryBlend = 0.20;
+
+  RopeSimulation target;
+  target.resetCatenary(Vector2d(0.0, 0.0), Vector2d(112.0, 0.0), options);
+  const std::vector<Vector2d> targetPoints(target.points().begin(), target.points().end());
+
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), options);
+  rope.applyBottomImpulse(Vector2d(0.2, 0.0), 0.12);
+  rope.update(Vector2d(0.0, 0.0), Vector2d(112.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 123u, false,
+              options);
+  const double initialDeviation = MaxDeviationFrom(rope.points(), targetPoints);
+
+  for (int frame = 1; frame < 240 && rope.needsAnimation(); ++frame) {
+    rope.update(Vector2d(0.0, 0.0), Vector2d(112.0, 0.0), 1.0 / 60.0, 0.0,
+                static_cast<double>(frame + 1) / 60.0, 123u, false, options);
+  }
+
+  const double settledDeviation = MaxDeviationFrom(rope.points(), targetPoints);
+  EXPECT_GT(initialDeviation, 0.05);
+  EXPECT_LT(settledDeviation, 0.01);
+  EXPECT_FALSE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, IdleSwayIsDeterministicAndSubtle) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  options.idleSwayPxPerSec2 = 18.0;
+
+  RopeSimulation first = MakeStraightRope(options);
+  RopeSimulation second = MakeStraightRope(options);
+  first.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.25, 42u, false,
+               options);
+  second.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.25, 42u, false,
+                options);
+
+  ASSERT_EQ(first.points().size(), second.points().size());
+  const std::size_t middle = first.points().size() / 2u;
+  EXPECT_EQ(first.points()[middle], second.points()[middle]);
+  EXPECT_LT(std::abs(first.points()[middle].x - 50.0), 0.1);
+}
+
+TEST(RopeSimulationTest, HoverFreezePreservesBodyWhenAnchorsDoNotMove) {
+  const RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope = MakeStraightRope(options);
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 0.0, 12u, false, options);
+  const std::vector<Vector2d> before(rope.points().begin(), rope.points().end());
+
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 30.0, 1.0, 12u, true, options);
+
+  EXPECT_EQ(std::vector<Vector2d>(rope.points().begin(), rope.points().end()), before);
+}
+
+TEST(RopeSimulationTest, ConvertsToBezierPathEndingAtTarget) {
+  const RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope = MakeStraightRope(options);
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 0.0, 12u, false, options);
+
+  const Path path = rope.toPath(options);
+  ASSERT_FALSE(path.empty());
+  ASSERT_GE(path.commands().size(), 2u);
+  EXPECT_EQ(path.commands().front().verb, Path::Verb::MoveTo);
+  EXPECT_EQ(path.commands().back().verb, Path::Verb::QuadTo);
+  ASSERT_FALSE(path.points().empty());
+  EXPECT_EQ(path.points().back(), Vector2d(100.0, 0.0));
+}
+
+}  // namespace donner::editor

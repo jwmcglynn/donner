@@ -16,6 +16,7 @@
 #include "donner/base/RcString.h"
 #include "donner/editor/FlashDecorations.h"
 #include "donner/editor/FocusView.h"
+#include "donner/editor/RopeSimulation.h"
 #include "donner/editor/SoftWrap.h"
 #include "donner/editor/TextBuffer.h"
 #include "donner/editor/TextEditorCore.h"
@@ -622,6 +623,8 @@ public:
   void flashSourceRange(SourceByteRange byteRange);
   /// Return the next flash wake interval, or nullopt if no flash is active.
   [[nodiscard]] std::optional<float> nextFlashWakeSeconds() const;
+  /// Return the next rope-animation wake interval, or nullopt if every rope is idle.
+  [[nodiscard]] std::optional<float> nextRopeAnimationWakeSeconds() const;
   /// Remove expired flashes using the current steady-clock time.
   void tickSourceFlashes();
 
@@ -636,7 +639,7 @@ public:
   void setAutoIndentOnPaste(bool value) { core_.setAutoIndentOnPaste(value); }
   void setHighlightLine(bool value) { highlightLine_ = value; }
   void setCompleteBraces(bool value) { core_.setCompleteBraces(value); }
-  void setHorizontalScroll(bool value) { horizontalScroll_ = value; }
+  void setHorizontalScroll(bool /*value*/) { horizontalScroll_ = false; }
   void setSmartPredictions(bool value) { autocomplete_ = value; }
   void setFunctionDeclarationTooltip(bool value) { functionDeclarationTooltipEnabled_ = value; }
   void setFunctionTooltips(bool value) { funcTooltips_ = value; }
@@ -1097,23 +1100,59 @@ private:
   std::vector<VisualLine> visualLines_;
   int visualLayoutMaxColumns_ = 0;
 
+  struct FocusReferenceLinkLess {
+    bool operator()(const FocusReferenceLink& lhs, const FocusReferenceLink& rhs) const {
+      if (lhs.from.line != rhs.from.line) return lhs.from.line < rhs.from.line;
+      if (lhs.from.column != rhs.from.column) return lhs.from.column < rhs.from.column;
+      if (lhs.to.line != rhs.to.line) return lhs.to.line < rhs.to.line;
+      return lhs.to.column < rhs.to.column;
+    }
+  };
+
+  struct FocusReferenceRopeState {
+    RopeSimulation rope;
+    Path path;
+    Vector2d arrowDirection = Vector2d::XAxis();
+    double chordLength = 0.0;
+    bool hovered = false;
+    bool initialized = false;
+    uint64_t lastFrameSeen = 0;
+  };
+
+  struct FocusReferenceSourceUnderline {
+    ImVec2 start;
+    ImVec2 end;
+  };
+
   struct FocusReferenceConnectorLayout {
     ImVec2 start;
-    ImVec2 laneStart;
-    ImVec2 laneEnd;
     ImVec2 tip;
+    FocusReferenceSourceUnderline sourceUnderline;
     ImU32 color = 0;
+    bool hasSourceUnderline = false;
   };
+  std::map<FocusReferenceLink, FocusReferenceRopeState, FocusReferenceLinkLess>
+      focusReferenceRopes_;
+  uint64_t focusReferenceRopeFrame_ = 0;
+  float lastFocusReferenceRopeScrollY_ = 0.0f;
   [[nodiscard]] std::optional<FocusReferenceConnectorLayout> focusReferenceConnectorLayout(
       const FocusReferenceLink& link, int linkIndex) const;
+  [[nodiscard]] std::optional<FocusReferenceSourceUnderline> focusReferenceSourceUnderline(
+      const SourcePoint& source) const;
+  [[nodiscard]] RopeSimulationOptions focusReferenceRopeOptions() const;
+  [[nodiscard]] bool isFocusReferenceRopeHit(const Path& path, const ImVec2& mousePos,
+                                             float hitWidth) const;
+  bool tryNavigateToFocusReferenceRopeAt(const ImVec2& mousePos);
+  void navigateToFocusReferenceLink(const FocusReferenceLink& link);
+  void remapFocusMetadataForSourceEdit(const SourceEditIntent& intent);
   struct SourceStyleChipBounds {
     ImVec2 min;
     ImVec2 max;
   };
   [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForDecoration(
       const SourceStyleDecoration& decoration) const;
-  [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForAnchor(
-      const SourcePoint& anchor) const;
+  [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForReferenceTarget(
+      const SourcePoint& target) const;
   [[nodiscard]] const SourceStyleDecoration* sourceStyleDecorationAtByteOffset(
       std::size_t byteOffset, bool ineffectiveOnly) const;
   [[nodiscard]] bool isByteOffsetInIneffectiveStyleDecoration(std::size_t byteOffset) const;
