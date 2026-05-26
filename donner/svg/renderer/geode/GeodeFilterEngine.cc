@@ -1513,9 +1513,20 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         outputTex = applyBlend(arena, inputTex, in2Tex, *blend);
       }
     } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
-      const int rx = static_cast<int>(std::round(toPixelX(morph->radiusX)));
-      const int ry = static_cast<int>(std::round(toPixelY(morph->radiusY)));
-      outputTex = applyMorphology(arena, inputTex, *morph, rx, ry);
+      // Per SVG Filter Effects §15.4, a negative radius (on either axis) or an
+      // all-zero radius disables the primitive — the result is the input image
+      // (pass-through), matching RendererTinySkia's FilterGraph. Check the SIGNED
+      // source radius here: `toPixelX/Y` take `std::abs`, which would otherwise
+      // turn a negative radius into a positive pixel radius and erode the input.
+      const bool morphDisabled =
+          morph->radiusX < 0 || morph->radiusY < 0 || (morph->radiusX == 0 && morph->radiusY == 0);
+      if (morphDisabled) {
+        outputTex = inputTex;
+      } else {
+        const int rx = static_cast<int>(std::round(toPixelX(morph->radiusX)));
+        const int ry = static_cast<int>(std::round(toPixelY(morph->radiusY)));
+        outputTex = applyMorphology(arena, inputTex, *morph, rx, ry);
+      }
     } else if (const auto* ct = std::get_if<filter_primitive::ComponentTransfer>(&node.primitive)) {
       // Per SVG spec, feComponentTransfer operates in the filter's color-
       // interpolation-filters space (linearRGB by default). The per-channel
@@ -1527,7 +1538,8 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
           node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
           svg::ColorInterpolationFilters::SRGB;
       if (nodeLinearRGB) {
-        wgpu::Texture linearInput = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture linearInput =
+            applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
         wgpu::Texture transferOutput = applyComponentTransfer(arena, linearInput, *ct);
         outputTex = applyColorSpaceConversion(arena, transferOutput, /*srgbToLinear=*/false);
       } else {
@@ -1542,7 +1554,8 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
           node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
           svg::ColorInterpolationFilters::SRGB;
       if (nodeLinearRGB) {
-        wgpu::Texture linearInput = applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
+        wgpu::Texture linearInput =
+            applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
         wgpu::Texture convOutput = applyConvolveMatrix(arena, linearInput, *conv);
         outputTex = applyColorSpaceConversion(arena, convOutput, /*srgbToLinear=*/false);
       } else {
