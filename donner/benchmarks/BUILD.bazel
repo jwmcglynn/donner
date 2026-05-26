@@ -9,8 +9,8 @@ donner_cc_binary(
     name = "tinyskia_render_perf_bench",
     srcs = ["TinySkiaRenderPerfBench.cpp"],
     deps = [
-        "@tiny-skia-cpp//src:tiny_skia_lib_native",
         "@google_benchmark//:benchmark_main",
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
     ],
 )
 
@@ -33,5 +33,62 @@ donner_cc_binary(
         "//donner/svg",
         "//donner/svg/parser",
         "@google_benchmark//:benchmark_main",
+    ],
+)
+
+donner_cc_binary(
+    name = "svg_element_handle_bench",
+    srcs = ["SVGElementHandleBench.cpp"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "@google_benchmark//:benchmark_main",
+    ],
+)
+
+donner_cc_binary(
+    name = "detached_subtree_collection_bench",
+    srcs = ["DetachedSubtreeCollectionBench.cpp"],
+    deps = [
+        "//donner/svg",
+        "@google_benchmark//:benchmark_main",
+    ],
+)
+
+donner_cc_binary(
+    name = "render_snapshot_bench",
+    srcs = ["RenderSnapshotBench.cpp"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_driver",
+        "@google_benchmark//:benchmark_main",
+    ],
+)
+
+sh_test(
+    name = "dom_lifetime_perf_capture",
+    size = "large",
+    srcs = ["run_dom_lifetime_perf_bench.sh"],
+    args = [
+        "--bazel-test",
+        "$(COMPILATION_MODE)",
+        "$(location :svg_element_handle_bench)",
+        "$(location :detached_subtree_collection_bench)",
+        "$(location :render_snapshot_bench)",
+    ],
+    data = [
+        "budgets/dom_lifetime_default_eligibility_budget.json",
+        "budgets/dom_lifetime_perf_smoke_budget.json",
+        ":detached_subtree_collection_bench",
+        ":render_snapshot_bench",
+        ":svg_element_handle_bench",
+    ],
+    tags = [
+        "exclusive",
+        "manual",
+        "perf_benchmark",
     ],
 )

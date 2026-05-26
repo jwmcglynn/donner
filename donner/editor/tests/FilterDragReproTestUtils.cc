@@ -121,7 +121,7 @@ std::optional<double> DrainOneRender(AsyncRenderer& asyncRenderer, svg::Renderer
   request.structuralRemap = editorApp.document().consumePendingStructuralRemap();
   if (editorApp.selectedElement().has_value() &&
       editorApp.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-    request.selectedEntity = editorApp.selectedElement()->entityHandle().entity();
+    request.selectedEntity = editorApp.selectedElement()->unsafeEntityHandle().entity();
   }
   if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
     request.dragPreview = RenderRequest::DragPreview{
@@ -232,7 +232,7 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
         if (app.selectedElement().has_value() &&
             app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
           const svg::SVGElement sel = *app.selectedElement();
-          postSelect = sel.entityHandle().entity();
+          postSelect = sel.unsafeEntityHandle().entity();
           selId = std::string(sel.id());
           svg::SVGElement cursor = sel;
           while (auto parent = cursor.parentElement()) {
@@ -283,7 +283,7 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
 
     const Entity sel =
         app.selectedElement().has_value() && app.selectedElement()->isa<svg::SVGGraphicsElement>()
-            ? app.selectedElement()->entityHandle().entity()
+            ? app.selectedElement()->unsafeEntityHandle().entity()
             : entt::null;
     results.selectedEntityAtFrame.push_back(sel);
 

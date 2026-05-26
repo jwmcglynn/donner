@@ -105,7 +105,10 @@ public:
    * @param document Containing document.
    */
   static SVGEllipseElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGEllipseElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   /**

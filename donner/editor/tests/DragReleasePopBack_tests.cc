@@ -97,7 +97,7 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::compositor::CompositorController compositor(document, renderer);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -369,7 +369,7 @@ TEST(DragReleasePopBackTest, CpuSnapshotShowsCorrectImageAfterSettling) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::compositor::CompositorController compositor(document, renderer);
 
@@ -435,7 +435,7 @@ TEST(DragReleasePopBackTest, ResetAndRePromoteProducesSplitLayers) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::compositor::CompositorController compositor(document, renderer);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -477,7 +477,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::compositor::CompositorController compositor(document, renderer);
   ASSERT_TRUE(compositor.promoteEntity(entity));

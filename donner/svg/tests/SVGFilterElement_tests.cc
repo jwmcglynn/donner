@@ -158,6 +158,25 @@ TEST(SVGFilterElementTests, SetHrefCanClearAndInvalidatesComputedFilter) {
   EXPECT_FALSE(filter->entityHandle().all_of<components::ComputedFilterComponent>());
 }
 
+TEST(SVGFilterElementTests, RegionAndUnitsSettersInvalidateComputedFilter) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+
+  auto filter = instantiateSubtreeElementAs<SVGFilterElement>(R"(<filter />)", options);
+
+  filter->entityHandle().emplace<components::ComputedFilterComponent>();
+  filter->setX(Lengthd(1));
+  EXPECT_FALSE(filter->entityHandle().all_of<components::ComputedFilterComponent>());
+
+  filter->entityHandle().emplace<components::ComputedFilterComponent>();
+  filter->setFilterUnits(FilterUnits::UserSpaceOnUse);
+  EXPECT_FALSE(filter->entityHandle().all_of<components::ComputedFilterComponent>());
+
+  filter->entityHandle().emplace<components::ComputedFilterComponent>();
+  filter->setPrimitiveUnits(PrimitiveUnits::ObjectBoundingBox);
+  EXPECT_FALSE(filter->entityHandle().all_of<components::ComputedFilterComponent>());
+}
+
 TEST(SVGFilterElementTests, HrefInheritsPrimitivesAndRegion) {
   parser::SVGParser::Options options;
   options.enableExperimental = true;

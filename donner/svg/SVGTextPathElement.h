@@ -96,7 +96,10 @@ public:
    * @param document Containing document.
    */
   static SVGTextPathElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGTextPathElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   /**

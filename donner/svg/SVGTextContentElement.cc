@@ -31,10 +31,11 @@ TextEngine& getPreparedTextEngine(EntityHandle handle) {
 }  // namespace
 
 SVGTextContentElement::SVGTextContentElement(EntityHandle handle) : SVGGraphicsElement(handle) {
-  handle_.emplace<components::TextComponent>();
+  handle.emplace<components::TextComponent>();
 }
 
 void SVGTextContentElement::invalidateTextGeometry() {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   // Walk up to the text root and remove cached text layout.
   Registry& registry = *handle_.registry();
   Entity current = handle_.entity();
@@ -55,73 +56,95 @@ void SVGTextContentElement::invalidateTextGeometry() {
 }
 
 std::vector<Path> SVGTextContentElement::computedGlyphPaths() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).computedGlyphPaths(handle_);
 }
 
 Box2d SVGTextContentElement::computedInkBounds() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).computedInkBounds(handle_);
 }
 
 Box2d SVGTextContentElement::computedObjectBoundingBox() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).computedObjectBoundingBox(handle_);
 }
 
 std::optional<Lengthd> SVGTextContentElement::textLength() const {
-  return handle_.get<components::TextComponent>().textLength;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::TextComponent>();
+  return component ? component->textLength : std::nullopt;
 }
 
 void SVGTextContentElement::setTextLength(std::optional<Lengthd> value) {
-  handle_.get<components::TextComponent>().textLength = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextComponent>(access).textLength = value;
   invalidateTextGeometry();
 }
 
 LengthAdjust SVGTextContentElement::lengthAdjust() const {
-  return handle_.get<components::TextComponent>().lengthAdjust;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::TextComponent>();
+  return component ? component->lengthAdjust : components::TextComponent().lengthAdjust;
 }
 
 void SVGTextContentElement::setLengthAdjust(LengthAdjust value) {
-  handle_.get_or_emplace<components::TextComponent>().lengthAdjust = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextComponent>(access).lengthAdjust = value;
   invalidateTextGeometry();
 }
 
 long SVGTextContentElement::getNumberOfChars() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).getNumberOfChars(handle_);
 }
 
 double SVGTextContentElement::getComputedTextLength() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).getComputedTextLength(handle_);
 }
 
 double SVGTextContentElement::getSubStringLength(std::size_t charnum, std::size_t nchars) const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).getSubStringLength(handle_, charnum, nchars);
 }
 
 Vector2d SVGTextContentElement::getStartPositionOfChar(std::size_t charnum) const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).getStartPositionOfChar(handle_, charnum);
 }
 
 Vector2d SVGTextContentElement::getEndPositionOfChar(std::size_t charnum) const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).getEndPositionOfChar(handle_, charnum);
 }
 
 Box2d SVGTextContentElement::getExtentOfChar(std::size_t charnum) const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).getExtentOfChar(handle_, charnum);
 }
 
 double SVGTextContentElement::getRotationOfChar(std::size_t charnum) const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).getRotationOfChar(handle_, charnum);
 }
 
 long SVGTextContentElement::getCharNumAtPosition(const Vector2d& point) const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   return getPreparedTextEngine(handle_).getCharNumAtPosition(handle_, point);
 }
 
 void SVGTextContentElement::selectSubString(std::size_t /*charnum*/, std::size_t /*nchars*/) {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   // TODO: implement selection highlighting
 }
 
 void SVGTextContentElement::appendText(std::string_view text) {
-  auto& textComponent = handle_.get<components::TextComponent>();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
 
   if (textComponent.text.empty()) {
     textComponent.text = text;
@@ -141,7 +164,9 @@ void SVGTextContentElement::appendText(std::string_view text) {
 }
 
 void SVGTextContentElement::advanceTextChunk() {
-  auto& textComponent = handle_.get<components::TextComponent>();
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
   if (textComponent.textChunks.empty()) {
     textComponent.textChunks.push_back(RcString(""));
   }
@@ -150,7 +175,9 @@ void SVGTextContentElement::advanceTextChunk() {
 }
 
 RcString SVGTextContentElement::textContent() const {
-  return handle_.get<components::TextComponent>().text;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::TextComponent>();
+  return component ? component->text : "";
 }
 
 }  // namespace donner::svg

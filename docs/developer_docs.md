@@ -21,6 +21,8 @@
 - \subpage FilterEffectsGuide
 - \subpage ParserDiagnostics
 - \subpage CompileTimeMap
+- \subpage Multithreading
+- \subpage DomElementLifetime
 
 ## Design Docs
 

@@ -143,7 +143,10 @@ public:
    * @param document Containing document.
    */
   static SVGSVGElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGSVGElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   /**

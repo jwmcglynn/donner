@@ -1956,9 +1956,17 @@ void start(const std::array<StageFn, tiny_skia::pipeline::kMaxStages>& functions
            Context& ctx, MutableSubPixmapView* pixmapDst) {
   Pipeline p(functions, tailFunctions, rect, aaMaskCtx, maskCtx, ctx, pixmapDst);
 
-  for (std::size_t y = rect.y(); y < rect.bottom(); ++y) {
+  // Clamp the iteration to the destination bounds; see highp::start for the rationale (analytic-AA
+  // fills / 2px edge blits can reach one pixel past the right/bottom edge at the clip boundary).
+  const std::size_t maxY = pixmapDst != nullptr
+                               ? std::min<std::size_t>(rect.bottom(), pixmapDst->height())
+                               : rect.bottom();
+  const std::size_t maxX =
+      pixmapDst != nullptr ? std::min<std::size_t>(rect.right(), pixmapDst->width()) : rect.right();
+
+  for (std::size_t y = rect.y(); y < maxY; ++y) {
     std::size_t x = rect.x();
-    const std::size_t end = rect.right();
+    const std::size_t end = maxX;
 
     p.functions = &functions;
     p.scanlineDone = false;

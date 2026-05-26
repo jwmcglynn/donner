@@ -98,7 +98,10 @@ public:
    * @param document Containing document.
    */
   static SVGSymbolElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGSymbolElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   /**

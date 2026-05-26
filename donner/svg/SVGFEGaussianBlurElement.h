@@ -93,7 +93,10 @@ public:
    * @param document Containing document.
    */
   static SVGFEGaussianBlurElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGFEGaussianBlurElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   // TODO: Add attribute accessor

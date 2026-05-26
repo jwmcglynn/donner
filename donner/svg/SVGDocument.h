@@ -3,13 +3,18 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string_view>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Utils.h"
 #include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/core/ProcessingMode.h"
@@ -19,6 +24,7 @@ namespace donner::svg {
 
 class SVGElement;     // Forward declaration, #include "donner/svg/SVGElement.h"
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
+class SVGDocumentMutation;
 
 /**
  * Represents a parsed SVG document containing a tree of \ref SVGElement nodes.
@@ -32,8 +38,10 @@ class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement
  * `firstChild()`, `appendChild()`, `querySelector()`). Elements are lightweight value types that
  * can be copied and passed on the stack.
  *
- * SVGDocument is **not thread-safe** — do not access the same document from multiple threads
- * concurrently.
+ * SVGDocument defaults to \ref ThreadingMode::SingleThreaded. To access the DOM from multiple
+ * threads, opt into \ref ThreadingMode::ConcurrentDom and use the DOM facade APIs or scoped access
+ * helpers. Direct ECS access through `registry()` and `entityHandle()` is only conditionally safe
+ * while the caller holds an explicit document access guard.
  *
  * @note Internally, data is stored using an Entity Component System (ECS) for cache-friendly
  * access during rendering. The `registry()` and `entityHandle()` accessors expose this for
@@ -52,19 +60,20 @@ private:
   friend class SVGElement;
   friend class parser::SVGParserImpl;
 
-  /// Internal constructor used by \ref SVGElement, to rehydrate a SVGDocument from the Registry.
-  explicit SVGDocument(std::shared_ptr<Registry> registry) : registry_(std::move(registry)) {}
+  /// Internal constructor used by \ref SVGElement, to rehydrate a SVGDocument from shared state.
+  explicit SVGDocument(SVGDocumentHandle documentState)
+      : documentState_(std::move(documentState)) {}
 
   /**
    * Internal constructor used by the main SVGDocument constructor and \ref
    * donner::svg::parser::SVGParser.
    *
-   * @param registry Underlying registry for the document.
+   * @param documentState Shared state for the document.
    * @param settings Settings to configure the document.
    * @param ontoEntityHandle Optional handle to an existing entity, used by SVGParser to create the
    * SVG on an existing XML tree.
    */
-  explicit SVGDocument(std::shared_ptr<Registry> registry, Settings settings,
+  explicit SVGDocument(SVGDocumentHandle documentState, Settings settings,
                        EntityHandle ontoEntityHandle);
 
 public:
@@ -80,16 +89,87 @@ public:
    */
   explicit SVGDocument(Settings settings);
 
+  /**
+   * Get the underlying ECS Registry, which holds all data for the document.
+   *
+   * This is an unsafe advanced escape hatch. In \ref ThreadingMode::ConcurrentDom, callers must
+   * hold an explicit document access guard while reading or mutating the returned registry.
+   */
+  Registry& unsafeRegistry() { return documentState_->registry(); }
+
+  /**
+   * Get the underlying ECS Registry, which holds all data for the document.
+   *
+   * This is an unsafe advanced escape hatch. In \ref ThreadingMode::ConcurrentDom, callers must
+   * hold an explicit document access guard while reading the returned registry.
+   */
+  const Registry& unsafeRegistry() const { return documentState_->registry(); }
+
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
-  Registry& registry() { return *registry_; }
+  Registry& registry() {
+    assertScopedRegistryAccessAllowed();
+    return unsafeRegistry();
+  }
   /// Get the underlying ECS Registry, which holds all data for the document, for advanced use.
-  const Registry& registry() const { return *registry_; }
+  const Registry& registry() const {
+    assertScopedRegistryAccessAllowed();
+    return unsafeRegistry();
+  }
   /**
    * Get the internal shared document handle used by this value facade.
    *
    * @return Shared document-state handle backing this \ref SVGDocument.
    */
-  SVGDocumentHandle handle() const { return registry_; }
+  SVGDocumentHandle handle() const { return documentState_; }
+
+  /// Current DOM threading policy for this document.
+  ThreadingMode threadingMode() const { return documentState_->threadingMode(); }
+
+  /**
+   * Set the DOM threading policy for this document.
+   *
+   * @param mode New threading mode.
+   */
+  void setThreadingMode(ThreadingMode mode) { documentState_->setThreadingMode(mode); }
+
+  /// Acquire scoped read access to the underlying document state.
+  DocumentReadAccess readAccess() const { return documentState_->read(); }
+
+  /// Acquire scoped write access to the underlying document state.
+  DocumentWriteAccess writeAccess() const { return documentState_->write(); }
+
+  /**
+   * Run a callback with scoped read access to this document.
+   *
+   * In \ref ThreadingMode::ConcurrentDom, use this to batch repeated reads such as traversal or
+   * selector scans under one document read lock.
+   *
+   * @param callback Callable invoked as `callback(DocumentReadAccess&)`.
+   */
+  template <typename Callback>
+  decltype(auto) withReadAccess(Callback&& callback) const {
+    DocumentReadAccess access = readAccess();
+    using Result = std::invoke_result_t<Callback, DocumentReadAccess&>;
+    if constexpr (std::is_void_v<Result>) {
+      std::forward<Callback>(callback)(access);
+    } else {
+      return std::forward<Callback>(callback)(access);
+    }
+  }
+
+  /**
+   * Run a callback with scoped write access to this document.
+   *
+   * Nested DOM setters called by the callback reuse this write access and coalesce their mutation
+   * revision bumps into one revision increment for the whole callback. Callbacks can accept either
+   * \ref DocumentWriteAccess for raw ECS work or \ref SVGDocumentMutation for typed DOM mutation
+   * helpers.
+   *
+   * @param callback Callable invoked as `callback(DocumentWriteAccess&)` or
+   * `callback(SVGDocumentMutation&)`.
+   */
+  template <typename Callback>
+  decltype(auto) withWriteAccess(Callback&& callback) const;
 
   /**
    * Rehydrate an \ref SVGDocument facade from an internal shared document handle.
@@ -231,6 +311,10 @@ public:
   /**
    * Find the first element in the tree that matches the given CSS selector.
    *
+   * This method performs its own scoped read. For repeated DOM reads in
+   * \ref ThreadingMode::ConcurrentDom, wrap the whole scan in \ref withReadAccess so nested reads
+   * reuse the same document access.
+   *
    * ```
    * auto element = document.querySelector("#elementId");
    * ```
@@ -268,9 +352,140 @@ private:
    */
   std::optional<ParseDiagnostic> projectXMLSubtree(const xml::XMLNode& node);
 
-  /// Owned reference to the registry, which contains all information about the loaded document.
-  std::shared_ptr<Registry> registry_;
+  void assertScopedRegistryAccessAllowed() const {
+    UTILS_RELEASE_ASSERT_MSG(
+        documentState_->threadingMode() != ThreadingMode::ConcurrentDom ||
+            documentState_->currentThreadHasAccess(),
+        "SVGDocument::registry() requires withReadAccess() or withWriteAccess() in "
+        "ConcurrentDom; use unsafeRegistry() for intentionally unguarded ECS access");
+  }
+
+  /// Shared state containing the loaded document registry and mutation bookkeeping.
+  SVGDocumentHandle documentState_;
 };
+
+/// Typed DOM mutation helper used by \ref SVGDocument::withWriteAccess.
+class SVGDocumentMutation {
+public:
+  /**
+   * Create a mutation helper over an active document write access.
+   *
+   * @param document Document facade being mutated.
+   * @param access Active write access for the document.
+   */
+  explicit SVGDocumentMutation(SVGDocument document, DocumentWriteAccess& access);
+
+  /// Copying mutation helpers is not allowed.
+  SVGDocumentMutation(const SVGDocumentMutation& other) = delete;
+
+  /// Moving mutation helpers is not allowed.
+  SVGDocumentMutation(SVGDocumentMutation&& other) noexcept = delete;
+
+  /// Copying mutation helpers is not allowed.
+  SVGDocumentMutation& operator=(const SVGDocumentMutation& other) = delete;
+
+  /// Moving mutation helpers is not allowed.
+  SVGDocumentMutation& operator=(SVGDocumentMutation&& other) noexcept = delete;
+
+  /// Get the raw write access for advanced ECS mutation.
+  DocumentWriteAccess& access() const;
+
+  /**
+   * Set the canvas size.
+   *
+   * @param width Width of the canvas, in pixels.
+   * @param height Height of the canvas, in pixels.
+   */
+  void setCanvasSize(int width, int height);
+
+  /// Automatically determine the canvas size from the root `<svg>` element.
+  void useAutomaticCanvasSize();
+
+  /**
+   * Set an element attribute.
+   *
+   * @param element Element to mutate.
+   * @param name Attribute name.
+   * @param value Attribute value.
+   */
+  void setAttribute(SVGElement element, const xml::XMLQualifiedNameRef& name,
+                    std::string_view value);
+
+  /**
+   * Remove an element attribute.
+   *
+   * @param element Element to mutate.
+   * @param name Attribute name.
+   */
+  void removeAttribute(SVGElement element, const xml::XMLQualifiedNameRef& name);
+
+  /**
+   * Insert \p newNode into \p parent before \p referenceNode.
+   *
+   * @param parent Parent element to mutate.
+   * @param newNode Node to insert.
+   * @param referenceNode Existing child to insert before, or \c std::nullopt.
+   */
+  void insertBefore(SVGElement parent, const SVGElement& newNode,
+                    std::optional<SVGElement> referenceNode);
+
+  /**
+   * Append \p child to \p parent.
+   *
+   * @param parent Parent element to mutate.
+   * @param child Child to append.
+   */
+  void appendChild(SVGElement parent, const SVGElement& child);
+
+  /**
+   * Replace \p oldChild with \p newChild under \p parent.
+   *
+   * @param parent Parent element to mutate.
+   * @param newChild Child to insert.
+   * @param oldChild Existing child to remove.
+   */
+  void replaceChild(SVGElement parent, const SVGElement& newChild, const SVGElement& oldChild);
+
+  /**
+   * Remove \p child from \p parent.
+   *
+   * @param parent Parent element to mutate.
+   * @param child Child to remove.
+   */
+  void removeChild(SVGElement parent, const SVGElement& child);
+
+  /**
+   * Remove \p element from its parent, if it has one.
+   *
+   * @param element Element to remove.
+   */
+  void remove(SVGElement element);
+
+private:
+  SVGDocument document_;
+  DocumentWriteAccess* access_;
+};
+
+template <typename Callback>
+decltype(auto) SVGDocument::withWriteAccess(Callback&& callback) const {
+  DocumentMutationBatch batch(*documentState_);
+  if constexpr (std::is_invocable_v<Callback, DocumentWriteAccess&>) {
+    using Result = std::invoke_result_t<Callback, DocumentWriteAccess&>;
+    if constexpr (std::is_void_v<Result>) {
+      std::forward<Callback>(callback)(batch.access());
+    } else {
+      return std::forward<Callback>(callback)(batch.access());
+    }
+  } else {
+    SVGDocumentMutation mutation(SVGDocument::CreateFromHandle(documentState_), batch.access());
+    using Result = std::invoke_result_t<Callback, SVGDocumentMutation&>;
+    if constexpr (std::is_void_v<Result>) {
+      std::forward<Callback>(callback)(mutation);
+    } else {
+      return std::forward<Callback>(callback)(mutation);
+    }
+  }
+}
 
 /// Document settings which configure the document behavior.
 struct SVGDocument::Settings {

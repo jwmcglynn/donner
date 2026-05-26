@@ -38,7 +38,10 @@ public:
    * @param tagName XML type name.
    */
   static SVGUnknownElement Create(SVGDocument& document, const xml::XMLQualifiedNameRef& tagName) {
-    return CreateOn(CreateEmptyEntity(document), tagName);
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGUnknownElement result = CreateOn(CreateEmptyEntity(access), tagName);
+    return result;
   }
 };
 

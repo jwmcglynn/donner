@@ -762,7 +762,7 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   // Apply a transform to the DOM to simulate the drag having moved the target.
   target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 4.0)));
   request.dragPreview = RenderRequest::DragPreview{
-      .entity = target->entityHandle().entity(),
+      .entity = target->unsafeEntityHandle().entity(),
   };
 
   asyncRenderer.requestRender(request);
@@ -781,7 +781,7 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   // Tiny-skia keeps a CPU snapshot for diagnostics; Geode direct presentation
   // must not fall back to CPU readback.
   EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
-  EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity());
+  EXPECT_EQ(result->compositedPreview->entity, target->unsafeEntityHandle().entity());
   // M2C: promoted presentation payload now lives inside the `tiles` paint-order
   // list. Assert at least one Layer-kind tile carries non-empty
   // content for the dragged entity.
@@ -812,7 +812,7 @@ TEST(AsyncRendererTest, PreviewRequestWithoutDomTransformReturnsCompositedPrevie
   RenderRequest request(renderer, document);
   request.version = 1;
   request.dragPreview = RenderRequest::DragPreview{
-      .entity = target->entityHandle().entity(),
+      .entity = target->unsafeEntityHandle().entity(),
   };
 
   asyncRenderer.requestRender(request);
@@ -849,7 +849,7 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     RenderRequest request(renderer, document);
     request.version = 1;
     request.dragPreview = RenderRequest::DragPreview{
-        .entity = target->entityHandle().entity(),
+        .entity = target->unsafeEntityHandle().entity(),
     };
 
     asyncRenderer.requestRender(request);
@@ -870,7 +870,7 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     RenderRequest request(renderer, document);
     request.version = 2;
     request.dragPreview = RenderRequest::DragPreview{
-        .entity = target->entityHandle().entity(),
+        .entity = target->unsafeEntityHandle().entity(),
     };
 
     asyncRenderer.requestRender(request);
@@ -907,7 +907,7 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
 
   RenderRequest request(renderer, document);
   request.version = 1;
-  request.selectedEntity = target->entityHandle().entity();
+  request.selectedEntity = target->unsafeEntityHandle().entity();
   // No dragPreview — editor is holding a selection pre-warmed but not
   // dragging yet.
 
@@ -1117,9 +1117,9 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   {
     RenderRequest request(renderer, document);
     request.version = 1;
-    request.selectedEntity = target->entityHandle().entity();
+    request.selectedEntity = target->unsafeEntityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{
-        .entity = target->entityHandle().entity(),
+        .entity = target->unsafeEntityHandle().entity(),
     };
     asyncRenderer.requestRender(request);
   }
@@ -1157,7 +1157,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   {
     RenderRequest request(renderer, document);
     request.version = 1;
-    request.selectedEntity = target->entityHandle().entity();
+    request.selectedEntity = target->unsafeEntityHandle().entity();
     asyncRenderer.requestRender(request);
   }
   auto held = waitForResult();
@@ -1173,9 +1173,9 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   {
     RenderRequest request(renderer, document);
     request.version = 1;
-    request.selectedEntity = target->entityHandle().entity();
+    request.selectedEntity = target->unsafeEntityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{
-        .entity = target->entityHandle().entity(),
+        .entity = target->unsafeEntityHandle().entity(),
     };
     asyncRenderer.requestRender(request);
   }
@@ -1302,7 +1302,7 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -1820,7 +1820,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -2262,7 +2262,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   // Drag a letter from the Donner group — the user's reported flow.
   auto target = asyncDoc.document().querySelector("#Donner path");
   ASSERT_TRUE(target.has_value()) << "splash lacks #Donner path — has file structure changed?";
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   const auto stats = RunEditorFlowDragHarness(asyncDoc, renderer, targetEntity, *target, 20);
@@ -2305,6 +2305,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   // worker state.
   svg::Renderer referenceRenderer;
   {
+    svg::DocumentWriteAccess access = asyncDoc.document().writeAccess();
     svg::compositor::CompositorController refCompositor(asyncDoc.document(), referenceRenderer);
     refCompositor.renderFrame(
         svg::RenderViewport{.size = Vector2d(892, 512), .devicePixelRatio = 1.0});
@@ -2349,7 +2350,7 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnSplashShape) {
 
   auto target = asyncDoc.document().querySelector("#letter_2");
   ASSERT_TRUE(target.has_value());
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   const auto stats = RunEditorFlowDragHarness(asyncDoc, renderer, targetEntity, *target, 10);
@@ -2391,7 +2392,7 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnRealSplash) {
 
   auto target = asyncDoc.document().querySelector("#Donner path");
   ASSERT_TRUE(target.has_value()) << "splash lacks #Donner path";
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   const auto stats = RunEditorFlowDragHarness(asyncDoc, renderer, targetEntity, *target, 10);
@@ -2446,7 +2447,7 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
 
   auto target = asyncDoc.document().querySelector("#Donner path");
   ASSERT_TRUE(target.has_value()) << "splash lacks #Donner path";
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   const auto stats =
@@ -2537,7 +2538,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   auto donnerPath = asyncDoc.document().querySelector("#Donner path");
   ASSERT_TRUE(donnerPath.has_value())
       << "splash lacks #Donner path — did the fixture structure change?";
-  const Entity donnerEntity = donnerPath->entityHandle().entity();
+  const Entity donnerEntity = donnerPath->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -2617,7 +2618,7 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
     alternatePath = asyncDoc.document().querySelector("svg > path");
   }
   ASSERT_TRUE(alternatePath.has_value()) << "no alternate path to click on";
-  const Entity alternateEntity = alternatePath->entityHandle().entity();
+  const Entity alternateEntity = alternatePath->unsafeEntityHandle().entity();
   alternatePath->cast<svg::SVGGraphicsElement>().setTransform(
       Transform2d::Translate(Vector2d(4.0, 0.0)));
   runPhase("click-O (second promote)", alternateEntity, alternateEntity, 7);
@@ -2714,7 +2715,7 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
 
   auto donnerPath = asyncDoc.document().querySelector("#Donner path");
   ASSERT_TRUE(donnerPath.has_value());
-  const Entity donnerEntity = donnerPath->entityHandle().entity();
+  const Entity donnerEntity = donnerPath->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   if (renderer.requiresTextureSnapshotPresentation()) {
@@ -2806,7 +2807,7 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
     alternate = asyncDoc.document().querySelector("svg > path");
   }
   ASSERT_TRUE(alternate.has_value());
-  const Entity alternateEntity = alternate->entityHandle().entity();
+  const Entity alternateEntity = alternate->unsafeEntityHandle().entity();
   alternate->cast<svg::SVGGraphicsElement>().setTransform(
       Transform2d::Translate(Vector2d(4.0, 0.0)));
   post(7, alternateEntity, alternateEntity);
@@ -2836,7 +2837,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
 
   auto target = asyncDoc.document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   if (renderer.requiresTextureSnapshotPresentation()) {
@@ -2915,7 +2916,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   postReplaceRequest.version = 100;
   postReplaceRequest.documentGeneration = asyncDoc.documentGeneration();
   postReplaceRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
-  postReplaceRequest.selectedEntity = targetAfterReplace->entityHandle().entity();
+  postReplaceRequest.selectedEntity = targetAfterReplace->unsafeEntityHandle().entity();
   ASSERT_FALSE(postReplaceRequest.structuralRemap.empty())
       << "structural remap should be populated after preserve-undo ReplaceDocumentCommand";
   asyncRenderer.requestRender(postReplaceRequest);
@@ -3176,7 +3177,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
 
   auto target = asyncDoc.document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -3244,7 +3245,7 @@ TEST(AsyncRendererE2ETest, SourcePaneStructurallyEquivalentReparseAvoidsReset) {
   postEditRequest.version = 100;
   postEditRequest.documentGeneration = asyncDoc.documentGeneration();
   postEditRequest.structuralRemap = asyncDoc.consumePendingStructuralRemap();
-  postEditRequest.selectedEntity = targetAfterEdit->entityHandle().entity();
+  postEditRequest.selectedEntity = targetAfterEdit->unsafeEntityHandle().entity();
   asyncRenderer.requestRender(postEditRequest);
   ASSERT_TRUE(waitForResult().has_value());
 

@@ -32,7 +32,10 @@ bool IsSelectedInTree(std::span<const donner::svg::SVGElement> selection,
 }
 
 std::string BuildTreeNodeLabel(const donner::svg::SVGElement& element) {
-  const std::string_view tagName = element.tagName().name;
+  // Keep the returned XMLQualifiedNameRef alive: `.name` is an RcStringOrRef whose string_view can
+  // point into the returned value's own storage, so binding `.name` off a temporary dangles.
+  const donner::xml::XMLQualifiedNameRef qualifiedTagName = element.tagName();
+  const std::string_view tagName = qualifiedTagName.name;
   std::string label = "<";
   label.append(tagName.data(), tagName.size());
   label.push_back('>');
@@ -142,7 +145,10 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
   if (selectionList.size() == 1) {
     inspector.hasSelection = true;
     const donner::svg::SVGElement& selected = selectionList.front();
-    const std::string_view tagSv = selected.tagName().name;
+    // Keep the returned XMLQualifiedNameRef alive; see BuildTreeNodeLabel for why binding `.name`
+    // off the temporary dangles.
+    const donner::xml::XMLQualifiedNameRef selectedTagName = selected.tagName();
+    const std::string_view tagSv = selectedTagName.name;
     const donner::RcString idStr = selected.id();
     const std::string_view idSv = idStr;
     if (!idSv.empty()) {
@@ -216,7 +222,7 @@ void SidebarPresenter::renderTreeNode(EditorApp* liveApp, const TreeNodeSnapshot
     nodeFlags |= ImGuiTreeNodeFlags_Selected;
   }
 
-  const donner::Entity entity = node.element->entityHandle().entity();
+  const donner::Entity entity = node.element->unsafeEntityHandle().entity();
   ImGui::PushID(static_cast<int>(static_cast<std::uint32_t>(entity)));
   const bool nodeOpen = ImGui::TreeNodeEx(node.label.c_str(), nodeFlags);
 

@@ -15,11 +15,14 @@ SVGTextPathElement SVGTextPathElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGTextPathElement::setHref(const RcStringOrRef& href) {
-  handle_.get_or_emplace<components::TextPathComponent>().href = RcString(href);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextPathComponent>(access).href = RcString(href);
   invalidateTextGeometry();
 }
 
 std::optional<RcString> SVGTextPathElement::href() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* comp = handle_.try_get<components::TextPathComponent>()) {
     if (!comp->href.empty()) {
       return comp->href;
@@ -29,11 +32,14 @@ std::optional<RcString> SVGTextPathElement::href() const {
 }
 
 void SVGTextPathElement::setStartOffset(std::optional<Lengthd> offset) {
-  handle_.get_or_emplace<components::TextPathComponent>().startOffset = offset;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::TextPathComponent>(access).startOffset = offset;
   invalidateTextGeometry();
 }
 
 std::optional<Lengthd> SVGTextPathElement::startOffset() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* comp = handle_.try_get<components::TextPathComponent>()) {
     return comp->startOffset;
   }

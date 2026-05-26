@@ -14,7 +14,7 @@ Donner supports:
 - All 17 SVG filter primitives (feGaussianBlur, feColorMatrix, feComposite, etc.).
 - CSS3 parsing and cascading support, with a hand-rolled library.
 - Detailed validation and diagnostics, errors point to the exact location.
-- A game-engine-inspired [EnTT](https://github.com/skypjack/entt) ECS-backed document tree, optimized for performance.
+- A performance-oriented document tree optimized for dynamic inspection, mutation, and rendering.
 - A SVG DOM-style API to traverse, inspect, and modify documents in memory.
 - A two-phase renderer, which builds and caches a rendering tree for efficient frame-based rendering.
 - Two renderer backends: **tiny-skia** (default, a lightweight software renderer) and **Skia** (Chromium's renderer).
@@ -39,6 +39,7 @@ Detailed docs: \ref svg_tree_interaction.cc
 
 - \subpage GettingStarted
 - \ref DonnerAPI
+- \subpage SvgDomThreadingAndLifetime
 - [Examples](examples.html)
 - \subpage DeveloperDocs
 

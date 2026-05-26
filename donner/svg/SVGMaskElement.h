@@ -99,7 +99,10 @@ public:
    * @param document Containing document.
    */
   static SVGMaskElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGMaskElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   /**

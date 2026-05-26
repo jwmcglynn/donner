@@ -139,6 +139,25 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "renderer_snapshot_tests",
+    srcs = [
+        "RendererSnapshot_tests.cc",
+    ],
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":mock_renderer_interface",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_driver",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_tests",
     srcs = [
         "RendererAscii_tests.cc",
@@ -195,15 +214,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "renderer_error_paths_tests",
+    srcs = [
+        "RendererErrorPaths_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "RendererErrorPaths_tests.cc",
     ],
     deps = [
         "//donner/svg/parser",
@@ -215,15 +234,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "renderer_ascii_tests",
+    srcs = [
+        "RendererAscii_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "RendererAscii_tests.cc",
     ],
     deps = [
         ":renderer_test_utils",
@@ -233,6 +252,7 @@ donner_cc_test(
 
 donner_cc_test(
     name = "terminal_image_viewer_tests",
+    srcs = ["TerminalImageViewer_tests.cc"],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -240,7 +260,6 @@ donner_cc_test(
         "text_full",
         "geode",
     ],
-    srcs = ["TerminalImageViewer_tests.cc"],
     deps = [
         "//donner/svg/renderer:terminal_image_viewer",
         "@com_google_gtest//:gtest_main",
@@ -324,9 +343,9 @@ donner_multi_transitioned_test(
     # killed in 15 min instead of rolling up to the default 3600 s.
     size = "large",
     timeout = "long",
+    testonly = 1,
     dep = ":renderer_geode_golden_tests_impl",
     renderer_backend = "geode",
-    testonly = 1,
 )
 
 donner_cc_test(
@@ -350,8 +369,8 @@ donner_cc_test(
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/resources:image_resource",
-        "@tiny-skia-cpp//src/tiny_skia/filter",
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
+        "@tiny-skia-cpp//src/tiny_skia/filter",
     ],
 )
 
@@ -365,23 +384,23 @@ donner_multi_transitioned_test(
     # up to the default 3600 s.
     size = "large",
     timeout = "long",
+    testonly = 1,
     dep = ":renderer_geode_tests_impl",
     renderer_backend = "geode",
-    testonly = 1,
 )
 
 donner_cc_test(
     name = "renderer_driver_tests",
+    srcs = [
+        "RendererDriver_tests.cc",
+        "RenderingContext_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "RendererDriver_tests.cc",
-        "RenderingContext_tests.cc",
     ],
     deps = [
         ":mock_renderer_interface",
@@ -447,8 +466,18 @@ donner_variant_cc_test(
     timeout = "long",
     dep = ":resvg_test_suite_impl",
     named_variants = [
-        {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},
-        {"name": "max", "backend": "tiny_skia", "text": "true", "text_full": "true"},
+        {
+            "name": "default_text",
+            "backend": "tiny_skia",
+            "text": "true",
+            "text_full": "false",
+        },
+        {
+            "name": "max",
+            "backend": "tiny_skia",
+            "text": "true",
+            "text_full": "true",
+        },
         # Geode variant: runs the same suite on the WebGPU backend,
         # auto-transitioned into `--config=geode` + `enable_geode`. Text and
         # filters are implemented (not stubs): the text suite is gated off in

@@ -15,57 +15,81 @@ SVGRadialGradientElement SVGRadialGradientElement::CreateOn(EntityHandle handle)
 }
 
 void SVGRadialGradientElement::setCx(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::RadialGradientComponent>().cx = value;
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).cx = value;
 }
 
 void SVGRadialGradientElement::setCy(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::RadialGradientComponent>().cy = value;
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).cy = value;
 }
 
 void SVGRadialGradientElement::setR(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::RadialGradientComponent>().r = value;
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).r = value;
 }
 
 void SVGRadialGradientElement::setFx(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::RadialGradientComponent>().fx = value;
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).fx = value;
 }
 
 void SVGRadialGradientElement::setFy(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::RadialGradientComponent>().fy = value;
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).fy = value;
 }
 
 void SVGRadialGradientElement::setFr(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::RadialGradientComponent>().fr = value;
+  handle_.get_or_emplace<components::RadialGradientComponent>(access).fr = value;
 }
 
 std::optional<Lengthd> SVGRadialGradientElement::cx() const {
-  return handle_.get<components::RadialGradientComponent>().cx;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::RadialGradientComponent>();
+  return component ? component->cx : std::nullopt;
 }
 
 std::optional<Lengthd> SVGRadialGradientElement::cy() const {
-  return handle_.get<components::RadialGradientComponent>().cy;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::RadialGradientComponent>();
+  return component ? component->cy : std::nullopt;
 }
 
 std::optional<Lengthd> SVGRadialGradientElement::r() const {
-  return handle_.get<components::RadialGradientComponent>().r;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::RadialGradientComponent>();
+  return component ? component->r : std::nullopt;
 }
 
 std::optional<Lengthd> SVGRadialGradientElement::fx() const {
-  return handle_.get<components::RadialGradientComponent>().fx;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::RadialGradientComponent>();
+  return component ? component->fx : std::nullopt;
 }
 
 std::optional<Lengthd> SVGRadialGradientElement::fy() const {
-  return handle_.get<components::RadialGradientComponent>().fy;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::RadialGradientComponent>();
+  return component ? component->fy : std::nullopt;
 }
 
 std::optional<Lengthd> SVGRadialGradientElement::fr() const {
-  return handle_.get<components::RadialGradientComponent>().fr;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::RadialGradientComponent>();
+  return component ? component->fr : std::nullopt;
 }
 
 }  // namespace donner::svg

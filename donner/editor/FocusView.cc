@@ -1000,6 +1000,9 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
 
 FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
                                      std::span<const svg::SVGElement> selectedElements) {
+  // Hold a scoped read access for the whole analysis so the nested SVGElement / EntityHandle reads
+  // below are valid under ThreadingMode::ConcurrentDom (read access is reentrant per thread).
+  [[maybe_unused]] const svg::DocumentReadAccess focusReadAccess = document.readAccess();
   if (!document.hasSourceStore()) {
     return {};
   }
@@ -1079,6 +1082,9 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
 
 std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument& document,
                                                           std::size_t sourceOffset) {
+  // Hold a scoped read access for the whole analysis so the nested SVGElement / EntityHandle reads
+  // below are valid under ThreadingMode::ConcurrentDom (read access is reentrant per thread).
+  [[maybe_unused]] const svg::DocumentReadAccess focusReadAccess = document.readAccess();
   if (!document.hasSourceStore()) {
     return std::nullopt;
   }

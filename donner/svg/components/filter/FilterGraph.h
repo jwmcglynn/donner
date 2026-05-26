@@ -12,6 +12,7 @@
 #include "donner/base/Length.h"
 #include "donner/base/RcString.h"
 #include "donner/css/Color.h"
+#include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
@@ -260,7 +261,7 @@ struct Image {
 
   /// Shared handle to an external SVG sub-document. The renderer pre-renders this to pixel data
   /// before filter execution.
-  std::shared_ptr<Registry> svgSubDocument;
+  SVGDocumentHandle svgSubDocument;
 
   /// Fragment ID for same-document element references (e.g., href="#rect1" stores "rect1").
   /// The renderer resolves this to pixel data before filter execution.

@@ -15,39 +15,55 @@ SVGLinearGradientElement SVGLinearGradientElement::CreateOn(EntityHandle handle)
 }
 
 void SVGLinearGradientElement::setX1(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::LinearGradientComponent>().x1 = value;
+  handle_.get_or_emplace<components::LinearGradientComponent>(access).x1 = value;
 }
 
 void SVGLinearGradientElement::setY1(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::LinearGradientComponent>().y1 = value;
+  handle_.get_or_emplace<components::LinearGradientComponent>(access).y1 = value;
 }
 
 void SVGLinearGradientElement::setX2(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::LinearGradientComponent>().x2 = value;
+  handle_.get_or_emplace<components::LinearGradientComponent>(access).x2 = value;
 }
 
 void SVGLinearGradientElement::setY2(std::optional<Lengthd> value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   invalidate();
-  handle_.get<components::LinearGradientComponent>().y2 = value;
+  handle_.get_or_emplace<components::LinearGradientComponent>(access).y2 = value;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::x1() const {
-  return handle_.get<components::LinearGradientComponent>().x1;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::LinearGradientComponent>();
+  return component ? component->x1 : std::nullopt;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::y1() const {
-  return handle_.get<components::LinearGradientComponent>().y1;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::LinearGradientComponent>();
+  return component ? component->y1 : std::nullopt;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::x2() const {
-  return handle_.get<components::LinearGradientComponent>().x2;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::LinearGradientComponent>();
+  return component ? component->x2 : std::nullopt;
 }
 
 std::optional<Lengthd> SVGLinearGradientElement::y2() const {
-  return handle_.get<components::LinearGradientComponent>().y2;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::LinearGradientComponent>();
+  return component ? component->y2 : std::nullopt;
 }
 
 }  // namespace donner::svg

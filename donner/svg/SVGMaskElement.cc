@@ -3,8 +3,16 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/paint/MaskComponent.h"
+#include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
+namespace {
+
+void InvalidateMask(EntityHandle handle) {
+  components::RenderingContext(*handle.registry()).invalidateRenderTree();
+}
+
+}  // namespace
 
 SVGMaskElement SVGMaskElement::CreateOn(EntityHandle handle) {
   CreateEntityOn(handle, Tag, Type);
@@ -19,51 +27,81 @@ SVGMaskElement SVGMaskElement::CreateOn(EntityHandle handle) {
 }
 
 MaskUnits SVGMaskElement::maskUnits() const {
-  return handle_.get<components::MaskComponent>().maskUnits;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::MaskComponent>();
+  return component ? component->maskUnits : components::MaskComponent().maskUnits;
 }
 
 void SVGMaskElement::setMaskUnits(MaskUnits value) {
-  handle_.get<components::MaskComponent>().maskUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).maskUnits = value;
+  InvalidateMask(handle_);
 }
 
 MaskContentUnits SVGMaskElement::maskContentUnits() const {
-  return handle_.get<components::MaskComponent>().maskContentUnits;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::MaskComponent>();
+  return component ? component->maskContentUnits : components::MaskComponent().maskContentUnits;
 }
 
 void SVGMaskElement::setMaskContentUnits(MaskContentUnits value) {
-  handle_.get<components::MaskComponent>().maskContentUnits = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).maskContentUnits = value;
+  InvalidateMask(handle_);
 }
 
 void SVGMaskElement::setX(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<components::MaskComponent>().x = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).x = value;
+  InvalidateMask(handle_);
 }
 
 void SVGMaskElement::setY(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<components::MaskComponent>().y = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).y = value;
+  InvalidateMask(handle_);
 }
 
 void SVGMaskElement::setWidth(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<components::MaskComponent>().width = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).width = value;
+  InvalidateMask(handle_);
 }
 
 void SVGMaskElement::setHeight(std::optional<Lengthd> value) {
-  handle_.get_or_emplace<components::MaskComponent>().height = value;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::MaskComponent>(access).height = value;
+  InvalidateMask(handle_);
 }
 
 std::optional<Lengthd> SVGMaskElement::x() const {
-  return handle_.get_or_emplace<components::MaskComponent>().x;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::MaskComponent>();
+  return component ? component->x : std::nullopt;
 }
 
 std::optional<Lengthd> SVGMaskElement::y() const {
-  return handle_.get_or_emplace<components::MaskComponent>().y;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::MaskComponent>();
+  return component ? component->y : std::nullopt;
 }
 
 std::optional<Lengthd> SVGMaskElement::width() const {
-  return handle_.get_or_emplace<components::MaskComponent>().width;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::MaskComponent>();
+  return component ? component->width : std::nullopt;
 }
 
 std::optional<Lengthd> SVGMaskElement::height() const {
-  return handle_.get_or_emplace<components::MaskComponent>().height;
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* component = handle_.try_get<components::MaskComponent>();
+  return component ? component->height : std::nullopt;
 }
 
 }  // namespace donner::svg

@@ -745,7 +745,7 @@ TEST_F(SelectToolTest, SingleSelectDragWithCompositingUsesPreview) {
 
   auto preview = tool.activeDragPreview();
   ASSERT_TRUE(preview.has_value()) << "single-element drag with compositing on emits a preview";
-  EXPECT_EQ(preview->entity, elementById("#r1").entityHandle().entity());
+  EXPECT_EQ(preview->entity, elementById("#r1").unsafeEntityHandle().entity());
 
   tool.onMouseUp(app, Vector2d(45.0, 45.0));
 }

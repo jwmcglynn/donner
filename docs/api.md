@@ -77,9 +77,20 @@ flowchart TD
 
 - For APIs that want to store the string, use \ref donner::RcStringOrRef which can hold either a `std::string_view` or a \ref donner::RcString, and is used to avoid unnecessary copies. This allows string literals to be used at the API surface while still allowing RcString references to be transferred.
 
-## Limitations
+## Threading And Lifetime
 
-- Donner is **NOT** thread-safe, the caller must ensure they are not accessing the same document from multiple threads.
+`SVGDocument` uses single-threaded access by default for the lowest overhead. Applications that need
+to inspect or mutate the same document from multiple threads can opt into concurrent DOM mode with
+\ref donner::svg::SVGDocument::setThreadingMode "SVGDocument::setThreadingMode()".
+
+For repeated reads or groups of writes, use the batching APIs:
+\ref donner::svg::SVGDocument::withReadAccess "SVGDocument::withReadAccess()" and
+\ref donner::svg::SVGDocument::withWriteAccess "SVGDocument::withWriteAccess()". Batching is more
+efficient because it keeps one access scope for the whole operation instead of entering document
+access for each individual DOM call.
+
+See \ref SvgDomThreadingAndLifetime for the full public behavior, including removed-element
+lifetime and rendering while the DOM is being modified.
 
 ## Details
 
@@ -191,7 +202,9 @@ To remove an element from the tree:
 - \ref donner::svg::SVGElement::remove() "SVGElement::remove()"
 - \ref donner::svg::SVGElement::removeChild "SVGElement::removeChild(SVGElement child)"
 
-NOTE: The `remove()` method will remove the element from the tree, but the underlying data storage is not currently cleaned up.
+Removed elements stay valid while user code holds an `SVGElement` handle to them. Donner reclaims
+removed subtrees after public handles and in-progress renders no longer need them. See
+\ref SvgDomThreadingAndLifetime for details.
 
 To create an element, use the element-specific `Create` method:
 
@@ -238,8 +251,8 @@ To parse CSS stylesheets, style strings, or selectors, use the \ref donner::css:
 
 <div class="section_buttons">
 
-| Previous                               |                                           Next |
-| :------------------------------------- | ---------------------------------------------: |
-| [Getting started](GettingStarted.html) | [System architecture](SystemArchitecture.html) |
+| Previous                               |                                                Next |
+| :------------------------------------- | --------------------------------------------------: |
+| [Getting started](GettingStarted.html) | [SVG DOM threading and lifetime](SvgDomThreadingAndLifetime.html) |
 
 </div>

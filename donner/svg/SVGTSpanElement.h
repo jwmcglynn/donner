@@ -125,7 +125,10 @@ public:
    * @param document Containing document.
    */
   static SVGTSpanElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGTSpanElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
 private:

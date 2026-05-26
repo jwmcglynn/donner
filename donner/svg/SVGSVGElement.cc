@@ -24,54 +24,73 @@ SVGSVGElement SVGSVGElement::CreateOn(EntityHandle handle) {
 }
 
 std::optional<Box2d> SVGSVGElement::viewBox() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 
 PreserveAspectRatio SVGSVGElement::preserveAspectRatio() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
 }
 
 Lengthd SVGSVGElement::x() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::SizedElementComponent>().properties.x.getRequired();
 }
 
 Lengthd SVGSVGElement::y() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::SizedElementComponent>().properties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGSVGElement::width() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::SizedElementComponent>().properties.width.getRequired();
 }
 
 std::optional<Lengthd> SVGSVGElement::height() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::SizedElementComponent>().properties.height.getRequired();
 }
 
 void SVGSVGElement::setViewBox(std::optional<Box2d> viewBox) {
-  handle_.get<components::ViewBoxComponent>().viewBox = viewBox;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::ViewBoxComponent>(access).viewBox = viewBox;
 }
 
 void SVGSVGElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectRatio) {
-  handle_.get<components::PreserveAspectRatioComponent>().preserveAspectRatio = preserveAspectRatio;
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::PreserveAspectRatioComponent>(access).preserveAspectRatio =
+      preserveAspectRatio;
 }
 
 void SVGSVGElement::setX(Lengthd value) {
-  handle_.get<components::SizedElementComponent>().properties.x.set(value,
-                                                                    css::Specificity::Override());
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::SizedElementComponent>(access).properties.x.set(
+      value, css::Specificity::Override());
 }
 
 void SVGSVGElement::setY(Lengthd value) {
-  handle_.get<components::SizedElementComponent>().properties.y.set(value,
-                                                                    css::Specificity::Override());
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::SizedElementComponent>(access).properties.y.set(
+      value, css::Specificity::Override());
 }
 
 void SVGSVGElement::setWidth(std::optional<Lengthd> value) {
-  handle_.get<components::SizedElementComponent>().properties.width.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::SizedElementComponent>(access).properties.width.set(
       value, css::Specificity::Override());
 }
 
 void SVGSVGElement::setHeight(std::optional<Lengthd> value) {
-  handle_.get<components::SizedElementComponent>().properties.height.set(
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get<components::SizedElementComponent>(access).properties.height.set(
       value, css::Specificity::Override());
 }
 

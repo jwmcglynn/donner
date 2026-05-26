@@ -123,7 +123,10 @@ public:
    * @param document Containing document.
    */
   static SVGStopElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGStopElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   /**

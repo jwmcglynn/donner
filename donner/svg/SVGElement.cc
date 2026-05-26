@@ -1,17 +1,21 @@
 #include "donner/svg/SVGElement.h"
 
+#include <atomic>
+
 #include "donner/base/ParseWarningSink.h"
-#include "donner/base/element/ElementTraversalGenerators.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/parser/SelectorParser.h"
-#include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
+#include "donner/svg/components/NodeLifetimeCollector.h"
+#include "donner/svg/components/NodeLifetimeComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/TreeMutation.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
@@ -23,22 +27,6 @@
 namespace donner::svg {
 
 namespace {
-
-static std::optional<SVGElement> querySelectorSearch(const css::Selector& selector,
-                                                     const SVGElement& element) {
-  css::SelectorMatchOptions<SVGElement> options;
-  options.scopeElement = &element;
-
-  ElementTraversalGenerator<SVGElement> elements = allChildrenRecursiveGenerator(element);
-  while (elements.next()) {
-    SVGElement childElement = elements.getValue();
-    if (selector.matches(childElement, options).matched) {
-      return childElement;
-    }
-  }
-
-  return std::nullopt;
-}
 
 /// Mark an entity with dirty flags for incremental invalidation.
 void markDirty(EntityHandle handle, uint16_t flags) {
@@ -59,12 +47,6 @@ components::RenderTreeState& getRenderTreeState(EntityHandle handle) {
 
 void markNeedsFullStyleRecompute(EntityHandle handle) {
   getRenderTreeState(handle).needsFullStyleRecompute = true;
-}
-
-void markNeedsFullRebuild(EntityHandle handle) {
-  auto& renderState = getRenderTreeState(handle);
-  renderState.needsFullRebuild = true;
-  renderState.needsFullStyleRecompute = true;
 }
 
 void invalidateComputedStyleForDescendants(EntityHandle handle) {
@@ -103,19 +85,6 @@ void propagateWorldTransformDirtyToDescendants(EntityHandle handle) {
           markDirty(desc, components::DirtyFlagsComponent::WorldTransform |
                               components::DirtyFlagsComponent::RenderInstance);
         });
-  }
-}
-
-/// Mark an entity and all of its descendants with the given dirty flags.
-void markDirtySubtree(EntityHandle handle, uint16_t flags) {
-  markDirty(handle, flags);
-
-  auto& tree = handle.get<donner::components::TreeComponent>();
-  Registry& registry = *handle.registry();
-  for (entt::entity child = tree.firstChild(); child != entt::null;
-       child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-    donner::components::ForAllChildrenRecursive(
-        EntityHandle(registry, child), [flags](EntityHandle desc) { markDirty(desc, flags); });
   }
 }
 
@@ -191,21 +160,149 @@ std::optional<EntityHandle> NextElementSibling(EntityHandle handle) {
 
 }  // namespace
 
-SVGElement::SVGElement(EntityHandle handle) : handle_(handle) {}
-
-SVGElement::SVGElement(const SVGElement& other) = default;
-SVGElement::SVGElement(SVGElement&& other) noexcept {
-  *this = std::move(other);
+ElementAnchor::ElementAnchor(EntityHandle handle) : entity_(handle ? handle.entity() : entt::null) {
+  if (handle && handle.valid()) {
+    auto* context = handle.registry()->ctx().find<components::SVGDocumentContext>();
+    documentHandle_ = context != nullptr ? context->getSharedDocumentState() : nullptr;
+    auto* lifetime = handle.try_get<components::NodeLifetimeComponent>();
+    if (lifetime == nullptr) {
+      UTILS_RELEASE_ASSERT_MSG(
+          !documentHandle_ || documentHandle_->threadingMode() != ThreadingMode::ConcurrentDom ||
+              documentHandle_->currentThreadHasWriteAccess(),
+          "SVGElement anchor construction requires NodeLifetimeComponent in ConcurrentDom");
+      lifetime = &handle.get_or_emplace<components::NodeLifetimeComponent>();
+    }
+    generation_ = lifetime->generation;
+    externalRefs_ = lifetime->externalRefs;
+  }
 }
 
-SVGElement& SVGElement::operator=(const SVGElement& other) = default;
-SVGElement& SVGElement::operator=(SVGElement&& other) noexcept {
-  handle_ = other.handle_;
-  other.handle_ = EntityHandle();
+ElementAnchor::ElementAnchor(const ElementAnchor& other)
+    : documentHandle_(other.documentHandle_),
+      externalRefs_(other.externalRefs_),
+      entity_(other.entity_),
+      generation_(other.generation_) {}
+
+ElementAnchor::ElementAnchor(ElementAnchor&& other) noexcept
+    : documentHandle_(std::move(other.documentHandle_)),
+      externalRefs_(std::move(other.externalRefs_)),
+      entity_(other.entity_),
+      generation_(other.generation_) {
+  other.entity_ = entt::null;
+  other.generation_ = 0;
+}
+
+ElementAnchor::~ElementAnchor() noexcept {
+  release();
+}
+
+ElementAnchor& ElementAnchor::operator=(const ElementAnchor& other) {
+  if (this == &other) {
+    return *this;
+  }
+
+  release();
+  documentHandle_ = other.documentHandle_;
+  externalRefs_ = other.externalRefs_;
+  entity_ = other.entity_;
+  generation_ = other.generation_;
   return *this;
 }
 
+ElementAnchor& ElementAnchor::operator=(ElementAnchor&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+
+  release();
+  documentHandle_ = std::move(other.documentHandle_);
+  externalRefs_ = std::move(other.externalRefs_);
+  entity_ = other.entity_;
+  generation_ = other.generation_;
+  other.entity_ = entt::null;
+  other.generation_ = 0;
+  return *this;
+}
+
+EntityHandle ElementAnchor::resolve() const {
+  assertScopedEntityHandleAccessAllowed();
+  return unsafeResolve();
+}
+
+EntityHandle ElementAnchor::unsafeResolve() const {
+  if (!documentHandle_ || entity_ == entt::null || !documentHandle_->registry().valid(entity_)) {
+    return EntityHandle();
+  }
+
+  EntityHandle handle(documentHandle_->registry(), entity_);
+  if (const auto* lifetime = handle.try_get<components::NodeLifetimeComponent>()) {
+    UTILS_RELEASE_ASSERT_MSG(lifetime->generation == generation_,
+                             "SVGElement anchor generation mismatch");
+  }
+  return handle;
+}
+
+void ElementAnchor::assertScopedEntityHandleAccessAllowed() const {
+  if (!documentHandle_ || documentHandle_->threadingMode() != ThreadingMode::ConcurrentDom) {
+    return;
+  }
+
+  UTILS_RELEASE_ASSERT_MSG(
+      documentHandle_->currentThreadHasAccess(),
+      "SVGElement raw ECS access requires withReadAccess() or withWriteAccess() in ConcurrentDom; "
+      "use unsafeEntityHandle() for intentionally unguarded ECS access");
+}
+
+void ElementAnchor::release() noexcept {
+  if (!externalRefs_) {
+    return;
+  }
+
+  const bool lastPublicHandle = externalRefs_.use_count() == 2;
+  const bool potentiallyDetached = externalRefs_->isDetached.load(std::memory_order_acquire);
+  externalRefs_.reset();
+  if (!lastPublicHandle || !potentiallyDetached || !documentHandle_ || entity_ == entt::null) {
+    return;
+  }
+
+  // §concurrent-dom: if the calling thread already holds a read access (and not write), taking
+  // write here would self-deadlock — DocumentWriteAccess drains all readers without supporting a
+  // read→write upgrade, so the writer would wait on its own held read. (Write access is reentrant,
+  // so write-while-write is fine and proceeds.) The detached-node Collect call below is purely
+  // opportunistic eager cleanup; the next periodic NodeLifetimeCollector::Collect pass (e.g. on the
+  // next source edit, mutation batch commit, or end-of-frame) will pick this entity up, so it is
+  // safe to bail without leaking. Without this guard a perfectly-normal API pattern — a detached
+  // SVGElement local going out of scope inside a withReadAccess callback — would hang the thread.
+  if (documentHandle_->currentThreadHasAccess() &&
+      !documentHandle_->currentThreadHasWriteAccess()) {
+    return;
+  }
+
+  DocumentWriteAccess access = documentHandle_->write();
+  Registry& registry = access.registry();
+  if (!registry.valid(entity_)) {
+    return;
+  }
+
+  EntityHandle handle(registry, entity_);
+  if (auto* lifetime = handle.try_get<components::NodeLifetimeComponent>()) {
+    if (lifetime->generation == generation_ && !lifetime->isAttached() &&
+        lifetime->externalRefCount() == 0) {
+      components::NodeLifetimeCollector::Collect(registry);
+    }
+  }
+}
+
+SVGElement::SVGElement(EntityHandle handle) : handle_(handle) {}
+
+SVGElement::SVGElement(const SVGElement& other) = default;
+SVGElement::SVGElement(SVGElement&& other) noexcept = default;
+SVGElement::~SVGElement() noexcept = default;
+SVGElement& SVGElement::operator=(const SVGElement& other) = default;
+SVGElement& SVGElement::operator=(SVGElement&& other) noexcept = default;
+
 ElementType SVGElement::type() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::ElementTypeComponent>().type();
 }
 
@@ -218,6 +315,7 @@ std::optional<ElementType> SVGElement::tryType() const {
 }
 
 xml::XMLQualifiedNameRef SVGElement::tagName() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<donner::components::TreeComponent>().tagName();
 }
 
@@ -234,6 +332,7 @@ bool SVGElement::isKnownType() const {
 }
 
 RcString SVGElement::id() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* component = handle_.try_get<components::IdComponent>()) {
     return component->id();
   } else {
@@ -242,19 +341,22 @@ RcString SVGElement::id() const {
 }
 
 void SVGElement::setId(std::string_view id) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   // Explicitly remove and re-create, so that SVGDocumentContext can update its
   // id-to-entity map.
-  handle_.remove<components::IdComponent>();
+  handle_.remove<components::IdComponent>(access);
   if (!id.empty()) {
-    handle_.emplace<components::IdComponent>(RcString(id));
+    handle_.emplace<components::IdComponent>(access, RcString(id));
   }
 
-  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("id"), RcString(id));
   markNeedsFullStyleRecompute(handle_);
 }
 
 RcString SVGElement::className() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* component = handle_.try_get<components::ClassComponent>()) {
     return component->className;
   } else {
@@ -263,14 +365,16 @@ RcString SVGElement::className() const {
 }
 
 void SVGElement::setClassName(std::string_view name) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   if (!name.empty()) {
-    auto& component = handle_.get_or_emplace<components::ClassComponent>();
+    auto& component = handle_.get_or_emplace<components::ClassComponent>(access);
     component.className = name;
   } else {
-    handle_.remove<components::ClassComponent>();
+    handle_.remove<components::ClassComponent>(access);
   }
 
-  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("class"), RcString(name));
 
   // Class changes affect CSS selector matching, which can change any inherited property.
@@ -282,9 +386,11 @@ void SVGElement::setClassName(std::string_view name) {
 }
 
 void SVGElement::setStyle(std::string_view style) {
-  handle_.get_or_emplace<components::StyleComponent>().setStyle(style);
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  handle_.get_or_emplace<components::StyleComponent>(access).setStyle(style);
 
-  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
 
   components::StyleSystem().invalidateAll(handle_);
@@ -296,10 +402,11 @@ void SVGElement::setStyle(std::string_view style) {
 }
 
 void SVGElement::updateStyle(std::string_view style) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
   components::StyleSystem().updateStyle(handle_, style);
 
   // TODO(jwmcglynn): Update the style attribute too
-  // handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  // handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
   //     *handle_.registry(), xml::XMLQualifiedName("style"), RcString(style));
 
   markNeedsFullStyleRecompute(handle_);
@@ -312,6 +419,8 @@ void SVGElement::updateStyle(std::string_view style) {
 
 ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
                                                           std::string_view value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   std::string_view actualName = name;
 
   // gradientTransform and patternTransform are special, since they map to the
@@ -326,10 +435,11 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
   // Try common CSS properties first (fill, stroke, opacity, transform, etc.).
   auto trySetResult =
-      handle_.get_or_emplace<components::StyleComponent>().trySetPresentationAttribute(
+      handle_.get_or_emplace<components::StyleComponent>(access).trySetPresentationAttribute(
           handle_, actualName, value);
 
   if (trySetResult.hasError()) {
+    mutation.cancel();
     return trySetResult;
   }
 
@@ -341,7 +451,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
   if (trySetResult.hasResult() && trySetResult.result()) {
     // Set succeeded, so store the attribute value.
-    handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+    handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
         *handle_.registry(), xml::XMLQualifiedName(RcString(name)), RcString(value));
 
     // Mark dirty flags based on the attribute type.
@@ -364,21 +474,28 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
     return true;
   }
 
+  mutation.cancel();
   return trySetResult;
 }
 
 bool SVGElement::hasAttribute(const xml::XMLQualifiedNameRef& name) const {
-  return handle_.get_or_emplace<donner::components::AttributesComponent>().hasAttribute(name);
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
+  return attributes != nullptr && attributes->hasAttribute(name);
 }
 
 std::optional<RcString> SVGElement::getAttribute(const xml::XMLQualifiedNameRef& name) const {
-  return handle_.get_or_emplace<donner::components::AttributesComponent>().getAttribute(name);
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
+  return attributes != nullptr ? attributes->getAttribute(name) : std::nullopt;
 }
 
 SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
     const xml::XMLQualifiedNameRef& matcher) const {
-  return handle_.get_or_emplace<donner::components::AttributesComponent>().findMatchingAttributes(
-      matcher);
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
+  return attributes != nullptr ? attributes->findMatchingAttributes(matcher)
+                               : SmallVector<xml::XMLQualifiedNameRef, 1>();
 }
 
 void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value) {
@@ -388,6 +505,8 @@ void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_
 
 std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
     const xml::XMLQualifiedNameRef& name, std::string_view value) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -421,7 +540,7 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
 
     if (trySetResult.hasError()) {
       markNeedsFullStyleRecompute(handle_);
-      handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+      handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
           *handle_.registry(), name, RcString(value));
       return std::move(trySetResult).error();
     }
@@ -429,7 +548,7 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
 
   // Otherwise store as a generic attribute.
   markNeedsFullStyleRecompute(handle_);
-  handle_.get_or_emplace<donner::components::AttributesComponent>().setAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
       *handle_.registry(), name, RcString(value));
   return std::nullopt;
 }
@@ -440,6 +559,8 @@ void SVGElement::removeAttribute(const xml::XMLQualifiedNameRef& name) {
 }
 
 void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -459,25 +580,29 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
   }
 
   // Remove any storage for this attribute.
-  handle_.get_or_emplace<donner::components::AttributesComponent>().removeAttribute(
+  handle_.get_or_emplace<donner::components::AttributesComponent>(access).removeAttribute(
       *handle_.registry(), name);
 }
 
 SVGDocument SVGElement::ownerDocument() {
-  std::shared_ptr<Registry> sharedRegistry =
-      registry().ctx().get<components::SVGDocumentContext>().getSharedRegistry();
-  return SVGDocument(std::move(sharedRegistry));
+  DocumentReadAccess access = handle_.readAccess();
+  SVGDocumentHandle documentState =
+      access.registry().ctx().get<components::SVGDocumentContext>().getSharedDocumentState();
+  return SVGDocument(std::move(documentState));
 }
 
 std::optional<SVGElement> SVGElement::parentElement() const {
-  const auto& tree = handle_.get<donner::components::TreeComponent>();
-  const EntityHandle parent = toHandle(tree.parent());
+  DocumentReadAccess access = handle_.readAccess();
+  EntityHandle handle = handle_.resolve();
+  const auto& tree = handle.get<donner::components::TreeComponent>();
+  const EntityHandle parent(access.registry(), tree.parent());
   const bool isSVGElement = (parent && parent.all_of<components::ElementTypeComponent>());
 
   return isSVGElement ? std::make_optional(SVGElement(parent)) : std::nullopt;
 }
 
 std::optional<SVGElement> SVGElement::firstChild() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = FirstElementChild(handle_)) {
     return SVGElement(*handle);
   }
@@ -486,6 +611,7 @@ std::optional<SVGElement> SVGElement::firstChild() const {
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = LastElementChild(handle_)) {
     return SVGElement(*handle);
   }
@@ -494,6 +620,7 @@ std::optional<SVGElement> SVGElement::lastChild() const {
 }
 
 std::optional<SVGElement> SVGElement::previousSibling() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = PreviousElementSibling(handle_)) {
     return SVGElement(*handle);
   }
@@ -502,6 +629,7 @@ std::optional<SVGElement> SVGElement::previousSibling() const {
 }
 
 std::optional<SVGElement> SVGElement::nextSibling() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = NextElementSibling(handle_)) {
     return SVGElement(*handle);
   }
@@ -510,36 +638,30 @@ std::optional<SVGElement> SVGElement::nextSibling() const {
 }
 
 void SVGElement::insertBefore(const SVGElement& newNode, std::optional<SVGElement> referenceNode) {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   SVGDocument document = ownerDocument();
   if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
     (void)document.insertElement(*this, newNode, referenceNode);
     return;
   }
 
-  handle_.get<donner::components::TreeComponent>().insertBefore(
-      registry(), newNode.handle_.entity(),
-      referenceNode ? referenceNode->handle_.entity() : entt::null);
-  // Tree structure change: mark inserted subtree and parent for full recomputation.
-  markNeedsFullRebuild(handle_);
-  markDirty(handle_, components::DirtyFlagsComponent::All);
-  markDirtySubtree(newNode.handle_, components::DirtyFlagsComponent::All);
+  components::TreeMutation::InsertBefore(handle_, newNode.handle_,
+                                         referenceNode ? referenceNode->handle_ : EntityHandle());
 }
 
 void SVGElement::appendChild(const SVGElement& child) {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   SVGDocument document = ownerDocument();
   if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
     (void)document.insertElement(*this, child, std::nullopt);
     return;
   }
 
-  handle_.get<donner::components::TreeComponent>().appendChild(registry(),
-                                                               child.entityHandle().entity());
-  markNeedsFullRebuild(handle_);
-  markDirty(handle_, components::DirtyFlagsComponent::All);
-  markDirtySubtree(child.handle_, components::DirtyFlagsComponent::All);
+  components::TreeMutation::AppendChild(handle_, child.handle_);
 }
 
 void SVGElement::replaceChild(const SVGElement& newChild, const SVGElement& oldChild) {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   SVGDocument document = ownerDocument();
   if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
     xml::ApplySourceEditResult insertResult = document.insertElement(*this, newChild, oldChild);
@@ -549,14 +671,11 @@ void SVGElement::replaceChild(const SVGElement& newChild, const SVGElement& oldC
     return;
   }
 
-  handle_.get<donner::components::TreeComponent>().replaceChild(
-      registry(), newChild.handle_.entity(), oldChild.entityHandle().entity());
-  markNeedsFullRebuild(handle_);
-  markDirty(handle_, components::DirtyFlagsComponent::All);
-  markDirtySubtree(newChild.handle_, components::DirtyFlagsComponent::All);
+  components::TreeMutation::ReplaceChild(handle_, newChild.handle_, oldChild.handle_);
 }
 
 void SVGElement::removeChild(const SVGElement& child) {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   const std::optional<SVGElement> childParent = child.parentElement();
   if (childParent.has_value() && *childParent == *this) {
     SVGDocument document = ownerDocument();
@@ -566,15 +685,18 @@ void SVGElement::removeChild(const SVGElement& child) {
     }
   }
 
-  handle_.get<donner::components::TreeComponent>().removeChild(registry(),
-                                                               child.entityHandle().entity());
-  markNeedsFullRebuild(handle_);
-  markDirty(handle_, components::DirtyFlagsComponent::All);
+  components::TreeMutation::RemoveChild(handle_, child.handle_);
 }
 
 void SVGElement::remove() {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   SVGDocument document = ownerDocument();
-  (void)document.removeElement(*this);
+  if (document.hasSourceStore() && xml::XMLNode::TryCast(handle_).has_value()) {
+    (void)document.removeElement(*this);
+    return;
+  }
+
+  components::TreeMutation::Remove(handle_);
 }
 
 std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
@@ -584,19 +706,36 @@ std::optional<SVGElement> SVGElement::querySelector(std::string_view str) {
   }
 
   const css::Selector& selector = selectorResult.result();
-  return querySelectorSearch(selector, *this);
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  return details::QuerySelectorSearch(selector, handle_.resolve());
 }
 
 const PropertyRegistry& SVGElement::getComputedStyle() const {
+  [[maybe_unused]] DocumentWriteAccess access = handle_.writeAccess();
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStyleComponent& computedStyle =
       components::StyleSystem().computeStyle(handle_, disabledSink);
   return computedStyle.properties.value();
 }
 
+DocumentWriteAccess SVGElement::CreateElementWriteAccess(SVGDocument& document) {
+  return document.writeAccess();
+}
+
+DocumentMutationBatch SVGElement::CreateElementMutationBatch(SVGDocument& document) {
+  return DocumentMutationBatch(*document.handle(), true);
+}
+
 EntityHandle SVGElement::CreateEmptyEntity(SVGDocument& document) {
-  Registry& registry = document.registry();
-  Entity entity = document.registry().create();
+  DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+  DocumentWriteAccess& access = mutation.access();
+  EntityHandle handle = CreateEmptyEntity(access);
+  return handle;
+}
+
+EntityHandle SVGElement::CreateEmptyEntity(DocumentWriteAccess& access) {
+  Registry& registry = access.registry();
+  Entity entity = registry.create();
 
   return EntityHandle(registry, entity);
 }
@@ -606,8 +745,15 @@ void SVGElement::CreateEntityOn(EntityHandle handle, const xml::XMLQualifiedName
   if (!handle.all_of<donner::components::TreeComponent>()) {
     handle.emplace<donner::components::TreeComponent>(tagName);
   }
+  const auto& tree = handle.get<donner::components::TreeComponent>();
   handle.emplace<components::ElementTypeComponent>(type);
   handle.emplace<components::TransformComponent>();
+  auto& lifetime = handle.get_or_emplace<components::NodeLifetimeComponent>();
+  if (tree.parent() != entt::null) {
+    lifetime.markAttached();
+  } else {
+    lifetime.markDetached(handle.entity());
+  }
 }
 
 }  // namespace donner::svg

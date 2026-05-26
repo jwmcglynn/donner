@@ -107,7 +107,10 @@ public:
    * @param document Containing document.
    */
   static SVGFilterElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGFilterElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   /**

@@ -2,8 +2,9 @@
 
 namespace donner::svg::components {
 
-SVGDocumentContext::SVGDocumentContext(InternalCtorTag, const std::shared_ptr<Registry>& registry)
-    : registry_(registry) {
+SVGDocumentContext::SVGDocumentContext(InternalCtorTag, SVGDocumentHandle documentState)
+    : documentState_(documentState) {
+  std::shared_ptr<Registry> registry = documentState->sharedRegistry();
   registry->on_construct<IdComponent>().connect<&SVGDocumentContext::onIdSet>(this);
   registry->on_destroy<IdComponent>().connect<&SVGDocumentContext::onIdDestroy>(this);
 }

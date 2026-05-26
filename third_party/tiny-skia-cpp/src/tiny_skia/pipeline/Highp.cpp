@@ -1548,9 +1548,21 @@ void start(const std::array<StageFn, tiny_skia::pipeline::kMaxStages>& functions
            Context& ctx, const PixmapView& pixmapSrc, MutableSubPixmapView* pixmapDst) {
   Pipeline p(functions, tailFunctions, rect, aaMaskCtx, maskCtx, ctx, pixmapSrc, pixmapDst);
 
-  for (std::size_t y = rect.y(); y < rect.bottom(); ++y) {
+  // Clamp the iteration to the destination bounds. Analytic-AA fills and 2px edge blits
+  // (blitAntiH2/blitAntiV2) can emit a span reaching one pixel past the right/bottom edge when the
+  // path bounds touch the clip boundary (`path_contained_in_clip` skips per-scanline clamping in
+  // PathAa); without this guard load8888/store8888 read/write one pixel past the pixmap allocation.
+  // Trimming only the bottom/right keeps the AA coverage mask (anchored at the rect's top-left)
+  // aligned.
+  const std::size_t maxY = pixmapDst != nullptr
+                               ? std::min<std::size_t>(rect.bottom(), pixmapDst->height())
+                               : rect.bottom();
+  const std::size_t maxX =
+      pixmapDst != nullptr ? std::min<std::size_t>(rect.right(), pixmapDst->width()) : rect.right();
+
+  for (std::size_t y = rect.y(); y < maxY; ++y) {
     std::size_t x = rect.x();
-    const std::size_t end = rect.right();
+    const std::size_t end = maxX;
 
     p.functions = &functions;
     while (x + kStageWidth <= end) {

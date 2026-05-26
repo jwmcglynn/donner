@@ -10,6 +10,7 @@
 ##   --config=coverage          - Build with code coverage instrumentation.
 ##   --config=asan              - Build with address sanitizer.
 ##   --config=asan-fuzzer       - Build with address sanitizer and fuzzing engine.
+##   --config=tsan              - Build with thread sanitizer.
 ##   --config=clang-tidy        - Build with clang-tidy checks.
 ##   --config=dev               - Disable renderer backend test transitions.
 ##   --config=wasm              - Build for WebAssembly via Emscripten.
@@ -204,6 +205,15 @@ build:asan --test_env=ASAN_SYMBOLIZER_PATH
 build:asan --copt=-fno-sanitize=vptr,function
 build:asan --linkopt=-fno-sanitize=vptr,function
 build:asan --strip=never
+
+# Thread sanitizer builds
+build:tsan --config=latest_llvm
+build:tsan --linkopt=-ldl
+build:tsan --copt=-fsanitize=thread
+build:tsan --linkopt=-fsanitize=thread
+build:tsan --copt=-fno-omit-frame-pointer
+build:tsan --strip=never
+build:tsan --test_env=TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1
 
 # Fuzzing builds
 build:asan-fuzzer --config=asan

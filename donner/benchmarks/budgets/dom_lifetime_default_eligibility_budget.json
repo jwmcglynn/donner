@@ -1,0 +1,130 @@
+{
+  "schema": 1,
+  "description": "Draft release gate for making ConcurrentDom the default. Keeping this budget green is a prerequisite for default eligibility.",
+  "checks": [
+    {
+      "name": "Copy/destroy 100 ConcurrentDom ratio",
+      "type": "ratio",
+      "numerator": "BM_SVGElementHandle_CopyDestroy_ConcurrentDom/100",
+      "denominator": "BM_SVGElementHandle_CopyDestroy_SingleThreaded/100",
+      "max": 1.5
+    },
+    {
+      "name": "Copy/destroy 1000 ConcurrentDom ratio",
+      "type": "ratio",
+      "numerator": "BM_SVGElementHandle_CopyDestroy_ConcurrentDom/1000",
+      "denominator": "BM_SVGElementHandle_CopyDestroy_SingleThreaded/1000",
+      "max": 1.5
+    },
+    {
+      "name": "Copy/destroy 10000 ConcurrentDom ratio",
+      "type": "ratio",
+      "numerator": "BM_SVGElementHandle_CopyDestroy_ConcurrentDom/10000",
+      "denominator": "BM_SVGElementHandle_CopyDestroy_SingleThreaded/10000",
+      "max": 1.5
+    },
+    {
+      "name": "Copy/destroy does not take document write locks",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_CopyDestroy_ConcurrentDom/1000",
+      "counter": "write_locks_per_iter",
+      "max": 0
+    },
+    {
+      "name": "Final attached release does not take document write locks",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_FinalReleaseAttached_ConcurrentDom",
+      "counter": "write_locks_per_iter",
+      "max": 0
+    },
+    {
+      "name": "Final detached release performs at most one collection write lock",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_FinalReleaseDetached_ConcurrentDom",
+      "counter": "write_locks_per_iter",
+      "max": 1
+    },
+    {
+      "name": "NextSibling traversal 1000 ConcurrentDom ratio",
+      "type": "ratio",
+      "numerator": "BM_SVGElementHandle_NextSiblingTraversal_ConcurrentDom/1000",
+      "denominator": "BM_SVGElementHandle_NextSiblingTraversal_SingleThreaded/1000",
+      "max": 2.0
+    },
+    {
+      "name": "NextSibling traversal 1000 uses one read lock per scan",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_NextSiblingTraversal_ConcurrentDom/1000",
+      "counter": "read_locks_per_iter",
+      "max": 1
+    },
+    {
+      "name": "NextSibling traversal 1000 does not take write locks",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_NextSiblingTraversal_ConcurrentDom/1000",
+      "counter": "write_locks_per_iter",
+      "max": 0
+    },
+    {
+      "name": "QuerySelector 1000 ConcurrentDom ratio",
+      "type": "ratio",
+      "numerator": "BM_SVGElementHandle_QuerySelector_ConcurrentDom/1000",
+      "denominator": "BM_SVGElementHandle_QuerySelector_SingleThreaded/1000",
+      "max": 1.25
+    },
+    {
+      "name": "QuerySelector 1000 uses one read lock per scan",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_QuerySelector_ConcurrentDom/1000",
+      "counter": "read_locks_per_iter",
+      "max": 1
+    },
+    {
+      "name": "QuerySelector 1000 does not take write locks",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_QuerySelector_ConcurrentDom/1000",
+      "counter": "write_locks_per_iter",
+      "max": 0
+    },
+    {
+      "name": "Remove/reinsert ConcurrentDom ratio",
+      "type": "ratio",
+      "numerator": "BM_SVGElementHandle_RemoveReinsert_ConcurrentDom",
+      "denominator": "BM_SVGElementHandle_RemoveReinsert_SingleThreaded",
+      "max": 2.0
+    },
+    {
+      "name": "Remove/reinsert max write lock hold",
+      "type": "counter",
+      "benchmark": "BM_SVGElementHandle_RemoveReinsert_ConcurrentDom",
+      "counter": "max_write_lock_ns",
+      "max": 50000
+    },
+    {
+      "name": "Detached collection 1000 retained-by-descendant time",
+      "type": "real_time_ns",
+      "benchmark": "BM_DetachedSubtreeCollection_RetainedByDescendant/1000",
+      "max": 1000000
+    },
+    {
+      "name": "Detached collection 1000 reinsert-before-collection time",
+      "type": "real_time_ns",
+      "benchmark": "BM_DetachedSubtreeCollection_ReinsertBeforeCollection/1000",
+      "max": 1000000
+    },
+    {
+      "name": "Snapshot capture 1000 command storage",
+      "type": "counter",
+      "benchmark": "BM_RenderSnapshot_Capture/1000",
+      "counter": "snapshot_command_storage_bytes",
+      "max": 7000000
+    },
+    {
+      "name": "Snapshot capture 10000 command storage",
+      "type": "counter",
+      "benchmark": "BM_RenderSnapshot_Capture/10000",
+      "counter": "snapshot_command_storage_bytes",
+      "max": 70000000
+    }
+  ]
+}

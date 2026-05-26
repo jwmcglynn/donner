@@ -9,6 +9,7 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/TreeMutationContext.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/base/xml/components/XMLNamespaceContext.h"
 #include "donner/base/xml/components/XMLValueComponent.h"
@@ -543,25 +544,56 @@ std::optional<XMLNode> XMLNode::nextSibling() const {
 }
 
 void XMLNode::insertBefore(const XMLNode& newNode, std::optional<XMLNode> referenceNode) {
+  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
+      mutations != nullptr && mutations->insertBefore) {
+    mutations->insertBefore(handle_, newNode.handle_,
+                            referenceNode ? referenceNode->handle_ : EntityHandle());
+    return;
+  }
+
   handle_.get<TreeComponent>().insertBefore(
       registry(), newNode.handle_.entity(),
       referenceNode ? referenceNode->handle_.entity() : entt::null);
 }
 
 void XMLNode::appendChild(const XMLNode& child) {
+  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
+      mutations != nullptr && mutations->appendChild) {
+    mutations->appendChild(handle_, child.handle_);
+    return;
+  }
+
   handle_.get<TreeComponent>().appendChild(registry(), child.handle_.entity());
 }
 
 void XMLNode::replaceChild(const XMLNode& newChild, const XMLNode& oldChild) {
+  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
+      mutations != nullptr && mutations->replaceChild) {
+    mutations->replaceChild(handle_, newChild.handle_, oldChild.handle_);
+    return;
+  }
+
   handle_.get<TreeComponent>().replaceChild(registry(), newChild.handle_.entity(),
                                             oldChild.handle_.entity());
 }
 
 void XMLNode::removeChild(const XMLNode& child) {
+  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
+      mutations != nullptr && mutations->removeChild) {
+    mutations->removeChild(handle_, child.handle_);
+    return;
+  }
+
   handle_.get<TreeComponent>().removeChild(registry(), child.entityHandle().entity());
 }
 
 void XMLNode::remove() {
+  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
+      mutations != nullptr && mutations->remove) {
+    mutations->remove(handle_);
+    return;
+  }
+
   handle_.get<TreeComponent>().remove(registry());
 }
 

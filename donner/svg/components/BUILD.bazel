@@ -14,13 +14,48 @@ donner_cc_library(
     ],
     deps = [
         "//donner/base",
+        "//donner/svg:svg_document_handle",
+    ],
+)
+
+donner_cc_library(
+    name = "attached_id_lookup",
+    srcs = [
+        "AttachedIdLookup.cc",
+    ],
+    hdrs = [
+        "AttachedIdLookup.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        ":node_lifetime_component",
+        ":svg_document_context",
+        "//donner/base",
+        "//donner/base/xml/components",
+    ],
+)
+
+donner_cc_library(
+    name = "node_lifetime_component",
+    hdrs = [
+        "NodeLifetimeComponent.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        "//donner/base",
     ],
 )
 
 donner_cc_library(
     name = "components_core",
     srcs = [
+        "NodeLifetimeCollector.cc",
         "StylesheetComponent.cc",
+        "TreeMutation.cc",
     ],
     hdrs = [
         "ClassComponent.h",
@@ -28,17 +63,20 @@ donner_cc_library(
         "DirtyFlagsComponent.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
+        "NodeLifetimeCollector.h",
         "PathLengthComponent.h",
         "PreserveAspectRatioComponent.h",
         "RenderingBehaviorComponent.h",
         "RenderingInstanceComponent.h",
         "StylesheetComponent.h",
+        "TreeMutation.h",
     ],
     visibility = [
         "//donner/css:__pkg__",
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":node_lifetime_component",
         ":svg_document_context",
         "//donner/base",
         "//donner/base/xml",
@@ -59,6 +97,7 @@ donner_cc_library(
         "//donner/svg:__subpackages__",
     ],
     deps = [
+        ":attached_id_lookup",
         ":components_core",
         "//donner/svg/components/filter:filter_system",
         "//donner/svg/components/layout:layout_system",

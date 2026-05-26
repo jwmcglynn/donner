@@ -121,7 +121,10 @@ public:
    * @param document Containing document.
    */
   static SVGPolygonElement Create(SVGDocument& document) {
-    return CreateOn(CreateEmptyEntity(document));
+    DocumentMutationBatch mutation = CreateElementMutationBatch(document);
+    DocumentWriteAccess& access = mutation.access();
+    SVGPolygonElement result = CreateOn(CreateEmptyEntity(access));
+    return result;
   }
 
   /**

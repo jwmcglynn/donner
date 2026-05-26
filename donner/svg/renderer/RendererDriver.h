@@ -12,6 +12,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/core/MarkerOrient.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
+#include "donner/svg/renderer/RenderSnapshot.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/common/RenderingInstanceView.h"
 
@@ -33,6 +34,24 @@ public:
    * Render the given \ref SVGDocument using the configured backend.
    */
   void draw(SVGDocument& document);
+
+  /**
+   * Capture an immutable render snapshot from the given \ref SVGDocument.
+   *
+   * Snapshot capture prepares the live render tree under document access, then
+   * records backend-agnostic draw commands that can be replayed after access is
+   * released.
+   *
+   * @param document Document to snapshot.
+   */
+  [[nodiscard]] RenderSnapshot captureRenderSnapshot(SVGDocument& document);
+
+  /**
+   * Replay an already-captured render snapshot into the configured backend.
+   *
+   * @param snapshot Snapshot to render.
+   */
+  void draw(const RenderSnapshot& snapshot);
 
   /**
    * Render a range of entities from an already-prepared document's render tree.
@@ -111,6 +130,7 @@ private:
   /// Fetch the prepared filter region for an entity, if any.
   std::optional<Box2d> preparedFilterRegionFor(Entity entity) const;
 
+  void drawPreparedDocument(SVGDocument& document);
   void traverse(RenderingInstanceView& view, Registry& registry);
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);

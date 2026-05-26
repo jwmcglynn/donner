@@ -55,6 +55,9 @@ The document tree can be traversed via the Donner API, and the SVG can be modifi
 
 \snippet svg_tree_interaction.cc path_set_style
 
+For multi-threaded DOM access and removed-element lifetime behavior, see
+\ref SvgDomThreadingAndLifetime.
+
 Outputs
 
 ```
