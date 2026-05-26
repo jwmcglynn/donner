@@ -10,6 +10,7 @@
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGUnknownElement.h"
 
 namespace donner::editor {
@@ -358,6 +359,20 @@ TEST(FocusViewTest, ReferenceHighlightSummaryCountsForwardReferences) {
                               app.document().document().querySelector("#shadow")));
   EXPECT_TRUE(summary.referencingElements.empty());
   EXPECT_EQ(summary.totalCount(), 3u);
+}
+
+TEST(FocusViewTest, ReferenceHighlightSummaryAllowsConcurrentDom) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kReferencedSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
+      app.document().document(), std::span<const svg::SVGElement>(&*target, 1));
+
+  EXPECT_EQ(summary.referencedElements.size(), 3u);
+  EXPECT_TRUE(summary.referencingElements.empty());
 }
 
 TEST(FocusViewTest, GroupSelectionDrawsOnlyOwnReferenceArrows) {

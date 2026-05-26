@@ -1306,6 +1306,7 @@ std::optional<FocusPartition> ComputeStyleFocusPartitionAtSourceOffset(
 ReferenceHighlightSummary ComputeReferenceHighlightSummary(
     const svg::SVGDocument& document, std::span<const svg::SVGElement> selectedElements) {
   ReferenceHighlightSummary summary;
+  [[maybe_unused]] const svg::DocumentReadAccess focusReadAccess = document.readAccess();
   if (!document.hasSourceStore() || selectedElements.empty()) {
     return summary;
   }

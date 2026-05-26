@@ -5,6 +5,7 @@
 
 #include "donner/base/Transform.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -90,6 +91,26 @@ TEST(OverlayRendererTest, CaptureSnapshotIncludesSourceHoverChromeWithoutSelecti
   EXPECT_TRUE(snapshot.paths.empty());
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
   EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+  EXPECT_FALSE(snapshot.hoverPaths.empty());
+  EXPECT_FALSE(snapshot.hoverAabbsDoc.empty());
+}
+
+TEST(OverlayRendererTest, CaptureSnapshotAllowsConcurrentDomSelectionAndHover) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const std::array<svg::SVGElement, 1> hoverElements{*rect};
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      std::nullopt, std::span<const svg::SVGElement>(hoverElements));
+
+  EXPECT_FALSE(snapshot.paths.empty());
+  EXPECT_FALSE(snapshot.aabbsDoc.empty());
   EXPECT_FALSE(snapshot.hoverPaths.empty());
   EXPECT_FALSE(snapshot.hoverAabbsDoc.empty());
 }

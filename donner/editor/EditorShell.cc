@@ -288,12 +288,15 @@ std::optional<SourceByteRange> ResolveReferenceSourceRange(svg::SVGDocument& doc
     return std::nullopt;
   }
 
-  const std::optional<svg::ResolvedReference> resolved = reference.resolve(document.registry());
-  if (!resolved.has_value() || !resolved->valid()) {
-    return std::nullopt;
-  }
+  return document.withReadAccess(
+      [source, &reference](svg::DocumentReadAccess& access) -> std::optional<SourceByteRange> {
+        const std::optional<svg::ResolvedReference> resolved = reference.resolve(access.registry());
+        if (!resolved.has_value() || !resolved->valid()) {
+          return std::nullopt;
+        }
 
-  return EntitySourceByteRange(resolved->handle, source);
+        return EntitySourceByteRange(resolved->handle, source);
+      });
 }
 
 ToolbarPaintReferenceState ToolbarPaintReferenceStateFor(svg::SVGDocument* document,
@@ -514,11 +517,7 @@ ImVec2 ReferenceHighlightChipTextSize(std::string_view label) {
 void AddUniqueElements(std::vector<svg::SVGElement>* target,
                        std::span<const svg::SVGElement> elements) {
   for (const svg::SVGElement& element : elements) {
-    const Entity entity = element.entityHandle().entity();
-    const auto it = std::ranges::find_if(*target, [entity](const svg::SVGElement& existing) {
-      return existing.entityHandle().entity() == entity;
-    });
-    if (it == target->end()) {
+    if (std::ranges::find(*target, element) == target->end()) {
       target->push_back(element);
     }
   }

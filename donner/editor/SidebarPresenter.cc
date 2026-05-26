@@ -286,6 +286,8 @@ void SidebarPresenter::refreshSnapshot(const EditorApp& app) {
     return;
   }
 
+  [[maybe_unused]] const donner::svg::DocumentWriteAccess snapshotWriteAccess =
+      app.document().document().writeAccess();
   const auto& selectionList = app.selectedElements();
   TreeNodeSnapshot root;
   captureTreeNode(app.document().document().svgElement(), selectionList, root);

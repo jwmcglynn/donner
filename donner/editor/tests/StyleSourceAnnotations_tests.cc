@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/svg/DocumentState.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {
@@ -59,6 +60,22 @@ TEST(StyleSourceAnnotations, StylesheetRuleReportsSelectorMatchedElementChipCoun
   EXPECT_TRUE(fill->showChip);
   EXPECT_EQ(fill->matchedElementCount, 2);
   EXPECT_TRUE(fill->effective);
+}
+
+TEST(StyleSourceAnnotations, ComputeAllowsConcurrentDom) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>.hit { fill: red; }</style>
+  <rect class="hit"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+  document.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  const StyleSourceContribution* fill = FindContribution(
+      annotations, StyleContributionKind::StylesheetDeclaration, "fill", "fill: red", kSource);
+  ASSERT_NE(fill, nullptr);
+  EXPECT_EQ(fill->matchedElementCount, 1);
 }
 
 TEST(StyleSourceAnnotations, StylesheetChipAnchorsToSelectorRange) {

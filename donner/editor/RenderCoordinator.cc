@@ -62,7 +62,7 @@ std::optional<SelectTool::ActiveDragPreview> OverlayDragPreviewForSelection(
   }
 
   return SelectTool::ActiveDragPreview{
-      .entity = app.selectedElement()->entityHandle().entity(),
+      .entity = app.selectedElement()->unsafeEntityHandle().entity(),
       .translation = Vector2d::Zero(),
   };
 }

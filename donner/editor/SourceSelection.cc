@@ -157,32 +157,40 @@ std::vector<svg::SVGElement> ExcludeDocumentRootSourceHoverElement(
 std::optional<svg::SVGElement> FindElementAtSourceOffset(const svg::SVGDocument& document,
                                                          std::string_view source,
                                                          std::size_t offset) {
-  if (offset >= source.size()) {
-    return std::nullopt;
-  }
+  return document.withReadAccess(
+      [&document, source, offset](svg::DocumentReadAccess&) -> std::optional<svg::SVGElement> {
+        if (offset >= source.size()) {
+          return std::nullopt;
+        }
 
-  return FindElementAtSourceOffsetImpl(document.svgElement(), source, offset);
+        return FindElementAtSourceOffsetImpl(document.svgElement(), source, offset);
+      });
 }
 
 std::optional<svg::SVGElement> FindElementNearSourceOffset(const svg::SVGDocument& document,
                                                            std::string_view source,
                                                            std::size_t offset) {
-  std::optional<svg::SVGElement> current =
-      offset < source.size() ? FindElementAtSourceOffset(document, source, offset) : std::nullopt;
-  if (offset == 0) {
+  return document.withReadAccess([&document, source, offset](
+                                     svg::DocumentReadAccess&) -> std::optional<svg::SVGElement> {
+    const svg::SVGElement root = document.svgElement();
+    std::optional<svg::SVGElement> current =
+        offset < source.size() ? FindElementAtSourceOffsetImpl(root, source, offset) : std::nullopt;
+    if (offset == 0) {
+      return current;
+    }
+
+    std::optional<svg::SVGElement> previous =
+        FindElementAtSourceOffsetImpl(root, source, offset - 1);
+    if (previous.has_value() && ElementTagEndsAt(*previous, source, offset)) {
+      return previous;
+    }
+
+    if (previous.has_value() && (!current.has_value() || IsAncestorOrSelf(*current, *previous))) {
+      return previous;
+    }
+
     return current;
-  }
-
-  std::optional<svg::SVGElement> previous = FindElementAtSourceOffset(document, source, offset - 1);
-  if (previous.has_value() && ElementTagEndsAt(*previous, source, offset)) {
-    return previous;
-  }
-
-  if (previous.has_value() && (!current.has_value() || IsAncestorOrSelf(*current, *previous))) {
-    return previous;
-  }
-
-  return current;
+  });
 }
 
 std::optional<svg::SVGElement> FindElementAtSourceCursor(const svg::SVGDocument& document,

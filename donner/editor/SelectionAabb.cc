@@ -128,7 +128,9 @@ std::vector<Box2d> SnapshotGeometryWorldBounds(
 
 std::vector<svg::SVGGeometryElement> CollectRenderableGeometry(const svg::SVGElement& root) {
   std::vector<svg::SVGGeometryElement> out;
-  CollectRenderableGeometryImpl(root, out);
+  root.withReadAccess([&out, &root](svg::DocumentReadAccess&, EntityHandle) {
+    CollectRenderableGeometryImpl(root, out);
+  });
   return out;
 }
 
@@ -142,17 +144,21 @@ std::vector<Box2d> SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>
     // `<g filter>` it unions every descendant shape so the AABB
     // envelopes the visible group.
     std::optional<Box2d> merged;
-    for (const auto& geometry : CollectRenderableGeometry(element)) {
-      const auto wb = geometry.worldBounds();
-      if (!wb.has_value()) {
-        continue;
+    element.withWriteAccess([&element, &merged](svg::DocumentWriteAccess&, EntityHandle) {
+      std::vector<svg::SVGGeometryElement> geometryElements;
+      CollectRenderableGeometryImpl(element, geometryElements);
+      for (const auto& geometry : geometryElements) {
+        const auto wb = geometry.worldBounds();
+        if (!wb.has_value()) {
+          continue;
+        }
+        if (merged.has_value()) {
+          merged->addBox(*wb);
+        } else {
+          merged = *wb;
+        }
       }
-      if (merged.has_value()) {
-        merged->addBox(*wb);
-      } else {
-        merged = *wb;
-      }
-    }
+    });
     if (merged.has_value()) {
       bounds.push_back(*merged);
     }
@@ -168,14 +174,17 @@ std::vector<Box2d> SnapshotSelectionOccludingWorldBounds(
   }
 
   svg::SVGElement selected = selection.front();
-  if (!HasLiveSvgTreeComponents(selected)) {
-    return {};
-  }
+  return selected.withWriteAccess(
+      [&selected](svg::DocumentWriteAccess&, EntityHandle) -> std::vector<Box2d> {
+        if (!HasLiveSvgTreeComponents(selected)) {
+          return {};
+        }
 
-  const svg::SVGElement root = selected.ownerDocument().svgElement();
-  const std::vector<svg::SVGGeometryElement> laterGeometry =
-      CollectLaterRenderableGeometry(root, selected);
-  return SnapshotGeometryWorldBounds(laterGeometry);
+        const svg::SVGElement root = selected.ownerDocument().svgElement();
+        const std::vector<svg::SVGGeometryElement> laterGeometry =
+            CollectLaterRenderableGeometry(root, selected);
+        return SnapshotGeometryWorldBounds(laterGeometry);
+      });
 }
 
 void PromoteSelectionBoundsIfReady(SelectionBoundsCache& cache, std::uint64_t displayedDocVersion) {

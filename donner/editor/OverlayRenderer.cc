@@ -206,15 +206,17 @@ bool HasDisplayNoneInAncestorChain(const svg::SVGElement& element) {
 void AppendPathItems(std::span<const svg::SVGElement> elements,
                      std::vector<SelectionChromeSnapshot::PathItem>* out) {
   for (const auto& element : elements) {
-    for (const auto& geometry : CollectRenderableGeometry(element)) {
-      if (const auto spline = geometry.computedSpline(); spline.has_value()) {
-        SelectionChromeSnapshot::PathItem item;
-        const Transform2d documentFromElement = geometry.elementFromWorld();
-        item.pathDoc = TransformPathToDocument(*spline, documentFromElement);
-        item.displayNone = HasDisplayNoneInAncestorChain(geometry);
-        out->push_back(std::move(item));
+    element.withWriteAccess([&element, out](svg::DocumentWriteAccess&, EntityHandle) {
+      for (const auto& geometry : CollectRenderableGeometry(element)) {
+        if (const auto spline = geometry.computedSpline(); spline.has_value()) {
+          SelectionChromeSnapshot::PathItem item;
+          const Transform2d documentFromElement = geometry.elementFromWorld();
+          item.pathDoc = TransformPathToDocument(*spline, documentFromElement);
+          item.displayNone = HasDisplayNoneInAncestorChain(geometry);
+          out->push_back(std::move(item));
+        }
       }
-    }
+    });
   }
 }
 

@@ -13,6 +13,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/svg/DocumentState.h"
 
 namespace donner::editor {
 namespace {
@@ -76,6 +77,25 @@ TEST(SourceSelectionTest, FindsDeepestElementAtSourceOffset) {
       FindElementAtSourceOffset(app.document().document(), source, groupBodyOffset + 1);
   ASSERT_TRUE(group.has_value());
   EXPECT_EQ(group->id(), "layer");
+}
+
+TEST(SourceSelectionTest, FindsElementAtSourceOffsetAllowsConcurrentDom) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  const std::string source(app.document().document().source());
+
+  const std::size_t rectOffset = source.find("id=\"target\"");
+  ASSERT_NE(rectOffset, std::string::npos);
+  std::optional<svg::SVGElement> rect =
+      FindElementAtSourceOffset(app.document().document(), source, rectOffset);
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->id(), "target");
+
+  std::optional<svg::SVGElement> near =
+      FindElementNearSourceOffset(app.document().document(), source, rectOffset);
+  ASSERT_TRUE(near.has_value());
+  EXPECT_EQ(near->id(), "target");
 }
 
 TEST(SourceSelectionTest, ReturnsElementSourceByteRange) {

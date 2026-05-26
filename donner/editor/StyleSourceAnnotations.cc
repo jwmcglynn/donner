@@ -819,29 +819,31 @@ void MarkEffectiveContributionsForElement(
 
 StyleSourceAnnotations ComputeStyleSourceAnnotations(svg::SVGDocument& document,
                                                      std::string_view source) {
-  StyleSourceAnnotations annotations;
   if (source.empty()) {
+    return {};
+  }
+
+  return document.withWriteAccess([&document, source](svg::DocumentWriteAccess& access) {
+    StyleSourceAnnotations annotations;
+    std::unordered_map<ContributionKey, std::size_t, ContributionKeyHash> contributionIndexByKey;
+    Registry& registry = access.registry();
+    AddStylesheetContributions(registry, source, &annotations, &contributionIndexByKey);
+
+    std::vector<svg::SVGElement> elements;
+    CollectElements(document.svgElement(), &elements);
+    AddReferenceResourceContributions(registry, source, elements, &annotations,
+                                      &contributionIndexByKey);
+    for (const svg::SVGElement& element : elements) {
+      AddElementLocalContributions(element, source, &annotations, &contributionIndexByKey);
+    }
+
+    AddStylesheetMatches(elements, &annotations, contributionIndexByKey);
+    for (const svg::SVGElement& element : elements) {
+      MarkEffectiveContributionsForElement(element, &annotations, contributionIndexByKey);
+    }
+
     return annotations;
-  }
-
-  std::unordered_map<ContributionKey, std::size_t, ContributionKeyHash> contributionIndexByKey;
-  Registry& registry = document.registry();
-  AddStylesheetContributions(registry, source, &annotations, &contributionIndexByKey);
-
-  std::vector<svg::SVGElement> elements;
-  CollectElements(document.svgElement(), &elements);
-  AddReferenceResourceContributions(registry, source, elements, &annotations,
-                                    &contributionIndexByKey);
-  for (const svg::SVGElement& element : elements) {
-    AddElementLocalContributions(element, source, &annotations, &contributionIndexByKey);
-  }
-
-  AddStylesheetMatches(elements, &annotations, contributionIndexByKey);
-  for (const svg::SVGElement& element : elements) {
-    MarkEffectiveContributionsForElement(element, &annotations, contributionIndexByKey);
-  }
-
-  return annotations;
+  });
 }
 
 }  // namespace donner::editor
