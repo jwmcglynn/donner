@@ -48,6 +48,12 @@ enum class PanCursorKind {
 [[nodiscard]] std::optional<RotateCursorImage> RenderPanCursorImage(
     PanCursorKind kind, std::shared_ptr<geode::GeodeDevice> geodeDevice);
 
+/// Render the pen-tool cursor SVG to straight-alpha RGBA pixels.
+///
+/// @param geodeDevice Shared Geode device for Geode editor builds.
+[[nodiscard]] std::optional<RotateCursorImage> RenderPenCursorImage(
+    std::shared_ptr<geode::GeodeDevice> geodeDevice);
+
 /// RAII owner for the editor's custom cursors.
 class RotateCursorSet {
 public:
@@ -79,6 +85,11 @@ public:
   /// @return true if a custom cursor was available and applied.
   [[nodiscard]] bool setPanCursor(PanCursorKind kind);
 
+  /// Set the custom pen-tool cursor.
+  ///
+  /// @return true if a custom cursor was available and applied.
+  [[nodiscard]] bool setPenCursor();
+
   /// Restore GLFW's default cursor if a custom cursor is active.
   void clearIfActive();
 
@@ -91,6 +102,7 @@ private:
   GLFWwindow* window_ = nullptr;
   std::array<GLFWcursor*, 4> rotateCursors_ = {};
   std::array<GLFWcursor*, 2> panCursors_ = {};
+  GLFWcursor* penCursor_ = nullptr;
   bool customCursorActive_ = false;
   bool valid_ = false;
 };

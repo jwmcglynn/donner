@@ -2,7 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -140,6 +142,7 @@ protected:
   }
 
   [[nodiscard]] float LastScrollY() const { return editor.lastScroll_; }
+  [[nodiscard]] float LastScrollX() const { return editor.lastScrollX_; }
   [[nodiscard]] float LastScrollViewportHeight() const { return editor.scrollViewportHeight_; }
   [[nodiscard]] float CharacterAdvanceY() const { return editor.charAdvance_.y; }
   void EnterCharacter(ImWchar character) { editor.enterCharacter(character, /*shift=*/false); }
@@ -218,6 +221,8 @@ protected:
     };
   }
 
+  [[nodiscard]] int LineMaxColumn(int line) const { return editor.text_.getLineMaxColumn(line); }
+
   [[nodiscard]] bool HasActiveSourceFlash() const {
     return editor.nextFlashWakeSeconds().has_value() &&
            !editor.flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now()).empty();
@@ -226,6 +231,94 @@ protected:
   [[nodiscard]] std::optional<TextEditor::FocusReferenceConnectorLayout> FocusReferenceLayout(
       const FocusReferenceLink& link, int linkIndex) const {
     return editor.focusReferenceConnectorLayout(link, linkIndex);
+  }
+
+  [[nodiscard]] std::vector<FocusReferenceLink> FocusReferenceLinks() const {
+    return editor.focusPartition_.referenceLinks;
+  }
+
+  [[nodiscard]] RopeSimulationOptions FocusReferenceRopeOptions() const {
+    return editor.focusReferenceRopeOptions();
+  }
+
+  [[nodiscard]] const TextEditor::FocusReferenceRopeState* FocusReferenceRope(
+      const FocusReferenceLink& link) const {
+    const auto it = editor.focusReferenceRopes_.find(link);
+    return it == editor.focusReferenceRopes_.end() ? nullptr : &it->second;
+  }
+
+  [[nodiscard]] bool FocusReferenceRopeHit(const FocusReferenceLink& link,
+                                           const ImVec2& point) const {
+    const TextEditor::FocusReferenceRopeState* rope = FocusReferenceRope(link);
+    return rope != nullptr && editor.isFocusReferenceRopeHit(
+                                  rope->path, point, std::max(7.0f * editor.uiScale_, 5.0f));
+  }
+
+  [[nodiscard]] bool FocusReferenceRopeHovered(const FocusReferenceLink& link) const {
+    const TextEditor::FocusReferenceRopeState* rope = FocusReferenceRope(link);
+    return rope != nullptr && rope->hovered;
+  }
+
+  void ExpectFocusReferenceArrowMatchesTangent(const FocusReferenceLink& link) const {
+    const TextEditor::FocusReferenceRopeState* rope = FocusReferenceRope(link);
+    ASSERT_NE(rope, nullptr);
+    EXPECT_EQ(rope->arrowDirection, rope->rope.endTangent());
+  }
+
+  [[nodiscard]] bool FocusReferenceRopePathIsBezier(const FocusReferenceLink& link) const {
+    const TextEditor::FocusReferenceRopeState* rope = FocusReferenceRope(link);
+    return rope != nullptr && !rope->path.empty() && !rope->path.commands().empty() &&
+           rope->path.commands().back().verb == Path::Verb::QuadTo;
+  }
+
+  [[nodiscard]] std::optional<Box2d> FocusReferenceRopeBounds(
+      const FocusReferenceLink& link) const {
+    const TextEditor::FocusReferenceRopeState* rope = FocusReferenceRope(link);
+    if (rope == nullptr || rope->path.empty()) {
+      return std::nullopt;
+    }
+
+    return rope->path.bounds();
+  }
+
+  [[nodiscard]] std::vector<Vector2d> FocusReferenceRopePoints(
+      const FocusReferenceLink& link) const {
+    const TextEditor::FocusReferenceRopeState* rope = FocusReferenceRope(link);
+    if (rope == nullptr) {
+      return {};
+    }
+
+    return std::vector<Vector2d>(rope->rope.points().begin(), rope->rope.points().end());
+  }
+
+  void ResetFocusReferenceRopeToSettledCatenary(const FocusReferenceLink& link, int linkIndex,
+                                                float previousScrollY) {
+    const std::optional<TextEditor::FocusReferenceConnectorLayout> layout =
+        FocusReferenceLayout(link, linkIndex);
+    ASSERT_TRUE(layout.has_value());
+
+    TextEditor::FocusReferenceRopeState& rope = editor.focusReferenceRopes_[link];
+    const RopeSimulationOptions options = editor.focusReferenceRopeOptions();
+    const Vector2d start(layout->start.x, layout->start.y);
+    const Vector2d tip(layout->tip.x, layout->tip.y);
+    rope.rope.resetCatenary(start, tip, options);
+    rope.path = rope.rope.toPath(options);
+    rope.chordLength = start.distance(tip);
+    rope.hovered = false;
+    rope.initialized = true;
+    rope.lastFrameSeen = editor.focusReferenceRopeFrame_;
+    editor.lastFocusReferenceRopeScrollY_ = previousScrollY;
+  }
+
+  [[nodiscard]] std::optional<ImVec2> FocusReferenceRopeMidpoint(
+      const FocusReferenceLink& link) const {
+    const TextEditor::FocusReferenceRopeState* rope = FocusReferenceRope(link);
+    if (rope == nullptr || rope->path.empty()) {
+      return std::nullopt;
+    }
+
+    const Path::PointOnPath point = rope->path.pointAtArcLength(rope->path.pathLength() * 0.5);
+    return ImVec2(static_cast<float>(point.point.x), static_cast<float>(point.point.y));
   }
 
   [[nodiscard]] ImVec2 ScreenPointAtCoordinates(const Coordinates& position) const {
@@ -243,6 +336,31 @@ protected:
 
   [[nodiscard]] std::vector<ActiveFlash> ActiveSourceFlashes() const {
     return editor.flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now());
+  }
+
+  [[nodiscard]] bool IsByteOffsetInIneffectiveStyleDecoration(std::size_t byteOffset) const {
+    return editor.isByteOffsetInIneffectiveStyleDecoration(byteOffset);
+  }
+
+  [[nodiscard]] std::size_t SourceStyleChipHitRectCount() const {
+    return editor.sourceStyleChipHitRects_.size();
+  }
+
+  [[nodiscard]] ImVec2 SourceStyleChipHitRectCenter(std::size_t index) const {
+    const auto& hitRect = editor.sourceStyleChipHitRects_[index];
+    return ImVec2((hitRect.min.x + hitRect.max.x) * 0.5f, (hitRect.min.y + hitRect.max.y) * 0.5f);
+  }
+
+  [[nodiscard]] ImVec2 SourceStyleChipHitRectMin(std::size_t index) const {
+    return editor.sourceStyleChipHitRects_[index].min;
+  }
+
+  [[nodiscard]] ImVec2 SourceStyleChipHitRectMax(std::size_t index) const {
+    return editor.sourceStyleChipHitRects_[index].max;
+  }
+
+  [[nodiscard]] std::string SourceStyleChipHitRectTooltip(std::size_t index) const {
+    return editor.sourceStyleChipHitRects_[index].tooltip;
   }
 
   ImGuiContext* imguiContext_ = nullptr;
@@ -323,6 +441,138 @@ TEST_F(TextEditorTests, HoverSourceRangesAreClampedAndDeduplicated) {
   EXPECT_FALSE(editor.setHoverSourceRanges(editor.hoverSourceRanges()));
   EXPECT_TRUE(editor.clearHoverSourceRanges());
   EXPECT_TRUE(editor.hoverSourceRanges().empty());
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationsAreClampedAndCleared) {
+  editor.setText("abcdef");
+
+  EXPECT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 7,
+          .range = SourceByteRange{.start = 4, .end = 4},
+          .ineffective = true,
+      },
+      TextEditor::SourceStyleDecoration{
+          .id = 2,
+          .range = SourceByteRange{.start = 5, .end = 100},
+          .showChip = true,
+          .chipCount = -4,
+          .tooltip = "unused selector",
+      },
+      TextEditor::SourceStyleDecoration{
+          .id = 1,
+          .range = SourceByteRange{.start = 2, .end = 5},
+          .ineffective = true,
+          .tooltip = "fill is overridden",
+      },
+  }));
+
+  ASSERT_EQ(editor.sourceStyleDecorations().size(), 2u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].id, 1u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 2, .end = 5}));
+  EXPECT_TRUE(editor.sourceStyleDecorations()[0].ineffective);
+  EXPECT_EQ(editor.sourceStyleDecorations()[1].id, 2u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[1].range, (SourceByteRange{.start = 5, .end = 6}));
+  EXPECT_EQ(editor.sourceStyleDecorations()[1].chipCount, 0);
+
+  EXPECT_FALSE(editor.setSourceStyleDecorations(editor.sourceStyleDecorations()));
+  EXPECT_TRUE(editor.clearSourceStyleDecorations());
+  EXPECT_TRUE(editor.sourceStyleDecorations().empty());
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationsStrikeRangesWithoutRenderingHiddenChips) {
+  editor.setText("fill: red;");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 11,
+          .range = SourceByteRange{.start = 0, .end = 4},
+          .ineffective = true,
+          .showChip = false,
+          .chipCount = 5,
+          .tooltip = "fill is overridden",
+      },
+  }));
+
+  EXPECT_TRUE(IsByteOffsetInIneffectiveStyleDecoration(0));
+  EXPECT_TRUE(IsByteOffsetInIneffectiveStyleDecoration(3));
+  EXPECT_FALSE(IsByteOffsetInIneffectiveStyleDecoration(4));
+
+  RenderEditorFrame(ImVec2(360.0f, 120.0f));
+  EXPECT_EQ(SourceStyleChipHitRectCount(), 0u);
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationChipClickIsConsumable) {
+  editor.setText(".cls { fill: red; }\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 42,
+          .range = SourceByteRange{.start = 7, .end = 16},
+          .showChip = true,
+          .chipCount = 3,
+          .tooltip = "3 matched elements",
+      },
+  }));
+
+  RenderEditorFrame(ImVec2(420.0f, 120.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 1u);
+  const ImVec2 chipCenter = SourceStyleChipHitRectCenter(0);
+
+  RenderEditorFrameWithMouse(chipCenter, true, ImVec2(420.0f, 120.0f));
+
+  EXPECT_EQ(editor.takeClickedSourceStyleChipId(), std::optional<std::size_t>(42));
+  EXPECT_EQ(editor.takeClickedSourceStyleChipId(), std::nullopt);
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationChipUsesChipRangeAnchor) {
+  editor.setText(".hit {\n  fill: red;\n}\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 84,
+          .range = SourceByteRange{.start = 9, .end = 19},
+          .chipRange = SourceByteRange{.start = 0, .end = 4},
+          .showChip = true,
+          .chipCount = 2,
+          .tooltip = "fill is overridden",
+          .chipTooltip = "Selector matches 2 elements",
+      },
+  }));
+
+  RenderEditorFrame(ImVec2(420.0f, 120.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 1u);
+
+  const float selectorLineCenterY =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/4).y;
+  const float propertyLineCenterY =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/1, /*visualColumnOffset=*/12).y;
+  const float chipCenterY = SourceStyleChipHitRectCenter(0).y;
+  EXPECT_LT(std::abs(chipCenterY - selectorLineCenterY),
+            std::abs(chipCenterY - propertyLineCenterY));
+  EXPECT_EQ(SourceStyleChipHitRectTooltip(0), "Selector matches 2 elements");
+}
+
+TEST_F(TextEditorTests, SourceStyleDecorationOverflowMarkerHasTooltipAndIsNotClickable) {
+  editor.setText("<linearGradient id=\"paint\">\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 85,
+          .range = SourceByteRange{.start = 0, .end = 27},
+          .chipRange = SourceByteRange{.start = 0, .end = 27},
+          .showChip = true,
+          .chipCount = 6,
+          .showOverflowMarker = true,
+          .chipTooltip = "Referenced 6 times",
+          .overflowTooltip = "Too many reverse refs to draw lines",
+      },
+  }));
+
+  RenderEditorFrame(ImVec2(520.0f, 120.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 2u);
+  EXPECT_LT(SourceStyleChipHitRectCenter(0).x, SourceStyleChipHitRectCenter(1).x);
+  EXPECT_EQ(SourceStyleChipHitRectTooltip(0), "Referenced 6 times");
+  EXPECT_EQ(SourceStyleChipHitRectTooltip(1), "Too many reverse refs to draw lines");
+
+  RenderEditorFrameWithMouse(SourceStyleChipHitRectCenter(1), true, ImVec2(520.0f, 120.0f));
+  EXPECT_EQ(editor.takeClickedSourceStyleChipId(), std::nullopt);
 }
 
 TEST_F(TextEditorTests, MoveLeftRetractsCursor) {
@@ -768,6 +1018,17 @@ TEST_F(TextEditorTests, RenderBuildsWrappedVisualRowsForLongXmlLine) {
   EXPECT_FALSE(editor.isImGuiChildIgnored());
   EXPECT_TRUE(editor.wordWrapEnabled());
   EXPECT_FALSE(HorizontalScrollEnabled());
+  EXPECT_FLOAT_EQ(LastScrollX(), 0.0f);
+}
+
+TEST_F(TextEditorTests, HorizontalScrollSetterDoesNotEnableTextViewHorizontalScroll) {
+  editor.setText(R"(  <rect id="target" x="10" y="20" width="30" height="40" fill="red"/>)");
+  editor.setHorizontalScroll(true);
+
+  RenderEditorFrame(ImVec2(180.0f, 180.0f));
+
+  EXPECT_FALSE(HorizontalScrollEnabled());
+  EXPECT_FLOAT_EQ(LastScrollX(), 0.0f);
 }
 
 TEST_F(TextEditorTests, WrappedHitTestingMapsContinuationRowToLogicalColumn) {
@@ -930,7 +1191,7 @@ TEST_F(TextEditorTests, SourceFocusModeContextMenuStateAndToggleRequestAreConsum
   EXPECT_FALSE(SourceFocusModeContextMenuVisible());
 }
 
-TEST_F(TextEditorTests, FocusReferenceConnectorsRouteThroughDistinctRightSideLanes) {
+TEST_F(TextEditorTests, FocusReferenceConnectorsUseCatenaryRopesBetweenEndpoints) {
   editor.setText(
       "  <defs>\n"
       "    <linearGradient id=\"grad\"/>\n"
@@ -957,21 +1218,209 @@ TEST_F(TextEditorTests, FocusReferenceConnectorsRouteThroughDistinctRightSideLan
   ASSERT_TRUE(rectLayout.has_value());
   ASSERT_TRUE(circleLayout.has_value());
 
-  EXPECT_GT(rectLayout->laneStart.x, rectLayout->start.x);
-  EXPECT_FLOAT_EQ(rectLayout->laneStart.x, rectLayout->laneEnd.x);
-  EXPECT_GT(rectLayout->laneEnd.x, rectLayout->tip.x);
-  EXPECT_NE(rectLayout->laneStart.x, circleLayout->laneStart.x);
-
   const float baselineY = TextBaselineOffsetY();
   const ImVec2 rectSourceTop = ScreenPointAtCoordinates(Coordinates(3, 19));
   const ImVec2 gradientTargetTop = ScreenPointAtCoordinates(Coordinates(1, 4));
-  EXPECT_FLOAT_EQ(rectLayout->start.y, rectSourceTop.y + baselineY);
+  const ImVec2 rectReferenceStart = ScreenPointAtCoordinates(Coordinates(3, 18));
+  const ImVec2 rectReferenceEnd = ScreenPointAtCoordinates(Coordinates(3, 23));
+  EXPECT_TRUE(rectLayout->hasSourceUnderline);
+  EXPECT_FLOAT_EQ(rectLayout->sourceUnderline.start.x, rectReferenceStart.x);
+  EXPECT_FLOAT_EQ(rectLayout->sourceUnderline.end.x, rectReferenceEnd.x);
+  EXPECT_FLOAT_EQ(rectLayout->start.x,
+                  (rectLayout->sourceUnderline.start.x + rectLayout->sourceUnderline.end.x) * 0.5f);
+  EXPECT_FLOAT_EQ(rectLayout->start.y, rectLayout->sourceUnderline.start.y);
+  EXPECT_GT(rectLayout->start.y, rectSourceTop.y + baselineY);
   EXPECT_FLOAT_EQ(rectLayout->tip.y, gradientTargetTop.y + baselineY);
 
   EXPECT_NE(rectLayout->color, circleLayout->color);
   const float alpha = ImGui::ColorConvertU32ToFloat4(rectLayout->color).w;
   EXPECT_GE(alpha, 0.45f);
   EXPECT_LE(alpha, 0.55f);
+
+  EXPECT_TRUE(FocusReferenceRopePathIsBezier(rectLink));
+  const std::optional<Box2d> rectBounds = FocusReferenceRopeBounds(rectLink);
+  ASSERT_TRUE(rectBounds.has_value());
+  EXPECT_LE(rectBounds->bottomRight.x, std::max(rectLayout->start.x, rectLayout->tip.x) + 3.0f)
+      << "Catenary rope should hang between endpoints instead of routing through a right lane";
+  EXPECT_GT(rectBounds->bottomRight.y, std::max(rectLayout->start.y, rectLayout->tip.y));
+  ASSERT_TRUE(editor.nextRopeAnimationWakeSeconds().has_value());
+  EXPECT_FLOAT_EQ(*editor.nextRopeAnimationWakeSeconds(), 1.0f / 60.0f);
+}
+
+TEST_F(TextEditorTests, FocusReferenceRopeOptionsUseDenseFastRopeTuning) {
+  const RopeSimulationOptions options = FocusReferenceRopeOptions();
+
+  EXPECT_GE(options.segmentCount, 28);
+  EXPECT_GE(options.constraintIterations, 10);
+  EXPECT_GE(options.gravityPxPerSec2, 180.0);
+  EXPECT_LE(options.scrollResponse, 0.01);
+  EXPECT_LE(options.maxScrollImpulsePx, 0.8);
+  EXPECT_GE(options.catenarySlackRatio, 0.18);
+  EXPECT_GE(options.catenaryMinSlackPx, 30.0);
+  EXPECT_GE(options.catenaryMaxSlackPx, 120.0);
+  EXPECT_LE(options.initialImpulsePx, 0.25);
+  EXPECT_LE(options.settleRestDistanceThresholdPx, 0.45);
+  EXPECT_LT(options.overdueDamping, options.damping);
+  EXPECT_LE(options.overdueDampingRampSeconds, 1.5);
+  EXPECT_GE(options.catenaryRestoringForcePerSec2, 600.0);
+  EXPECT_EQ(options.endpointImpulse, 0.0);
+  EXPECT_EQ(options.maxEndpointImpulsePx, 0.0);
+  EXPECT_LE(options.endpointMotionVelocityRetention, 0.25);
+  EXPECT_GE(options.endpointCatenaryBlend, 0.15);
+}
+
+TEST_F(TextEditorTests, FocusReferenceConnectorTerminatesOnClosestSourceStyleChipEdge) {
+  editor.setText(
+      "<linearGradient id=\"paint\"> padding padding padding\n"
+      "<rect fill=\"url(#paint)\"/>\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 94,
+          .range = SourceByteRange{.start = 0, .end = 27},
+          .chipRange = SourceByteRange{.start = 0, .end = 27},
+          .showChip = true,
+          .chipCount = 1,
+          .chipKind = TextEditor::SourceStyleChipKind::ReferenceCount,
+          .chipTooltip = "Referenced 1 time",
+      },
+  }));
+
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 1, .column = 17},
+      .to = SourcePoint{.line = 0, .column = 27},
+  };
+  const FocusReferenceLink rightLink{
+      .from = SourcePoint{.line = 0, .column = 45},
+      .to = SourcePoint{.line = 0, .column = 27},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 0, .endLine = 2}},
+      .referenceLinks = {link, rightLink},
+  });
+
+  RenderEditorFrame(ImVec2(520.0f, 140.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 1u);
+
+  const auto layout = FocusReferenceLayout(link, 0);
+  ASSERT_TRUE(layout.has_value());
+  EXPECT_FALSE(layout->hasSourceStyleChip);
+  EXPECT_TRUE(layout->hasSourceUnderline);
+
+  const ImVec2 chipMin = SourceStyleChipHitRectMin(0);
+  const ImVec2 chipMax = SourceStyleChipHitRectMax(0);
+  EXPECT_FLOAT_EQ(layout->tip.x, (chipMin.x + chipMax.x) * 0.5f);
+  EXPECT_FLOAT_EQ(layout->tip.y, chipMax.y);
+  ExpectFocusReferenceArrowMatchesTangent(link);
+
+  const auto rightLayout = FocusReferenceLayout(rightLink, 1);
+  ASSERT_TRUE(rightLayout.has_value());
+  EXPECT_FLOAT_EQ(rightLayout->tip.x, chipMax.x);
+  EXPECT_FLOAT_EQ(rightLayout->tip.y, (chipMin.y + chipMax.y) * 0.5f);
+  ExpectFocusReferenceArrowMatchesTangent(rightLink);
+}
+
+TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) {
+  editor.setText(
+      ".hit { fill: red; }\n"
+      "\n"
+      "\n"
+      "<rect class=\"hit\"/>\n");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 95,
+          .range = SourceByteRange{.start = 7, .end = 16},
+          .chipRange = SourceByteRange{.start = 0, .end = 4},
+          .showChip = true,
+          .chipCount = 1,
+          .chipTooltip = "Selector matches 1 element",
+      },
+  }));
+
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 3, .column = 13},
+      .to = SourcePoint{.line = 0, .column = 0},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 0, .endLine = 4}},
+      .referenceLinks = {link},
+  });
+
+  RenderEditorFrame(ImVec2(360.0f, 120.0f));
+  ASSERT_EQ(SourceStyleChipHitRectCount(), 1u);
+
+  const auto layout = FocusReferenceLayout(link, 0);
+  ASSERT_TRUE(layout.has_value());
+
+  const ImVec2 chipMin = SourceStyleChipHitRectMin(0);
+  const ImVec2 chipMax = SourceStyleChipHitRectMax(0);
+  EXPECT_FLOAT_EQ(layout->tip.x, (chipMin.x + chipMax.x) * 0.5f);
+  EXPECT_FLOAT_EQ(layout->tip.y, chipMax.y);
+  EXPECT_TRUE(layout->hasSourceStyleChip);
+  EXPECT_FALSE(layout->hasSourceUnderline);
+  EXPECT_GT(layout->sourceStyleChip.min.x,
+            ScreenPointAtCoordinates(Coordinates(3, LineMaxColumn(3))).x);
+  EXPECT_GT(layout->sourceStyleChip.min.y, layout->tip.y);
+  EXPECT_FLOAT_EQ(layout->start.x, layout->sourceStyleChip.min.x);
+  EXPECT_FLOAT_EQ(layout->start.y,
+                  (layout->sourceStyleChip.min.y + layout->sourceStyleChip.max.y) * 0.5f);
+  ExpectFocusReferenceArrowMatchesTangent(link);
+}
+
+TEST_F(TextEditorTests, TypingRemapsFocusReferenceRopeEndpointsImmediately) {
+  const std::string source =
+      "<linearGradient id=\"grad\"/>\n"
+      "<rect fill=\"url(#grad)\"/>\n";
+  editor.setText(source);
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 96,
+          .range = SourceByteRange{.start = 0, .end = 27},
+          .chipRange = SourceByteRange{.start = 0, .end = 27},
+          .showChip = true,
+          .chipCount = 1,
+          .chipTooltip = "Referenced 1 time",
+      },
+  }));
+
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 1, .column = 17},
+      .to = SourcePoint{.line = 0, .column = 27},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 0, .endLine = 2}},
+      .referenceLinks = {link},
+  });
+
+  RenderEditorFrame(ImVec2(420.0f, 140.0f));
+  const auto beforeLayout = FocusReferenceLayout(link, 0);
+  ASSERT_TRUE(beforeLayout.has_value());
+  const std::vector<Vector2d> beforePoints = FocusReferenceRopePoints(link);
+  ASSERT_FALSE(beforePoints.empty());
+
+  constexpr std::string_view kInsertedLine = "<!-- live -->\n";
+  editor.setCursorPosition(Coordinates(0, 0));
+  editor.insertText(kInsertedLine);
+
+  const FocusReferenceLink remappedLink{
+      .from = SourcePoint{.line = 2, .column = 17},
+      .to = SourcePoint{.line = 1, .column = 27},
+  };
+  EXPECT_EQ(FocusReferenceLinks(), (std::vector<FocusReferenceLink>{remappedLink}));
+  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange,
+            (SourceByteRange{.start = kInsertedLine.size(), .end = kInsertedLine.size() + 27u}));
+  EXPECT_EQ(FocusReferenceRope(link), nullptr);
+  EXPECT_NE(FocusReferenceRope(remappedLink), nullptr);
+
+  RenderEditorFrame(ImVec2(420.0f, 160.0f));
+  const auto afterLayout = FocusReferenceLayout(remappedLink, 0);
+  ASSERT_TRUE(afterLayout.has_value());
+  EXPECT_GT(afterLayout->start.y, beforeLayout->start.y);
+  EXPECT_GT(afterLayout->tip.y, beforeLayout->tip.y);
+
+  const std::vector<Vector2d> afterPoints = FocusReferenceRopePoints(remappedLink);
+  ASSERT_EQ(afterPoints.size(), beforePoints.size());
+  EXPECT_GT(afterPoints[afterPoints.size() / 2u].y, beforePoints[beforePoints.size() / 2u].y);
 }
 
 TEST_F(TextEditorTests, ReferenceOnlyFocusPartitionLeavesAllLinesVisible) {
@@ -992,6 +1441,107 @@ TEST_F(TextEditorTests, ReferenceOnlyFocusPartitionLeavesAllLinesVisible) {
 
   EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2, 3}));
   EXPECT_TRUE(FocusReferenceLayout(link, 0).has_value());
+}
+
+TEST_F(TextEditorTests, FocusReferenceRopeHitTestDetectsMouseNearConnector) {
+  editor.setText(
+      "  <defs>\n"
+      "    <linearGradient id=\"grad\"/>\n"
+      "  </defs>\n"
+      "  <rect fill=\"url(#grad)\"/>\n");
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 3, .column = 19},
+      .to = SourcePoint{.line = 1, .column = 4},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 1, .endLine = 4}},
+      .referenceLinks = {link},
+  });
+
+  RenderEditorFrame(ImVec2(520.0f, 180.0f));
+
+  const std::optional<ImVec2> midpoint = FocusReferenceRopeMidpoint(link);
+  ASSERT_TRUE(midpoint.has_value());
+  EXPECT_TRUE(FocusReferenceRopeHit(link, *midpoint));
+}
+
+TEST_F(TextEditorTests, CanvasScrollFrameDoesNotApplyFocusReferenceRopeScrollImpulse) {
+  editor.setText(
+      "  <defs>\n"
+      "    <linearGradient id=\"grad\"/>\n"
+      "  </defs>\n"
+      "  <rect fill=\"url(#grad)\"/>\n");
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 3, .column = 19},
+      .to = SourcePoint{.line = 1, .column = 4},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 1, .endLine = 4}},
+      .referenceLinks = {link},
+  });
+
+  RenderEditorFrame(ImVec2(520.0f, 180.0f));
+  ResetFocusReferenceRopeToSettledCatenary(link, 0, /*previousScrollY=*/-40.0f);
+  const std::vector<Vector2d> before = FocusReferenceRopePoints(link);
+
+  RenderEditorFrameWithMouse(ImVec2(760.0f, 560.0f), /*mouseDown=*/false, ImVec2(520.0f, 180.0f));
+
+  EXPECT_EQ(FocusReferenceRopePoints(link), before);
+}
+
+TEST_F(TextEditorTests, HoveredFocusReferenceRopeGetsInteractiveStateAndFreezes) {
+  editor.setText(
+      "  <defs>\n"
+      "    <linearGradient id=\"grad\"/>\n"
+      "  </defs>\n"
+      "  <rect fill=\"url(#grad)\"/>\n");
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 3, .column = 19},
+      .to = SourcePoint{.line = 1, .column = 4},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 1, .endLine = 4}},
+      .referenceLinks = {link},
+  });
+
+  RenderEditorFrame(ImVec2(520.0f, 180.0f));
+  const std::optional<ImVec2> midpoint = FocusReferenceRopeMidpoint(link);
+  ASSERT_TRUE(midpoint.has_value());
+  const std::vector<Vector2d> beforeHover = FocusReferenceRopePoints(link);
+
+  RenderEditorFrameWithMouse(*midpoint, /*mouseDown=*/false, ImVec2(520.0f, 180.0f));
+
+  EXPECT_TRUE(FocusReferenceRopeHovered(link));
+  EXPECT_EQ(FocusReferenceRopePoints(link), beforeHover);
+  EXPECT_FALSE(editor.nextRopeAnimationWakeSeconds().has_value());
+}
+
+TEST_F(TextEditorTests, ClickingFocusReferenceRopeMovesCursorToDefinition) {
+  editor.setText(
+      "  <defs>\n"
+      "    <linearGradient id=\"grad\"/>\n"
+      "  </defs>\n"
+      "  <rect fill=\"url(#grad)\"/>\n");
+  const FocusReferenceLink link{
+      .from = SourcePoint{.line = 3, .column = 19},
+      .to = SourcePoint{.line = 1, .column = 4},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 1, .endLine = 4}},
+      .referenceLinks = {link},
+  });
+  editor.setCursorPosition(Coordinates(0, 0));
+  RenderEditorFrame(ImVec2(520.0f, 180.0f));
+  const std::optional<ImVec2> midpoint = FocusReferenceRopeMidpoint(link);
+  ASSERT_TRUE(midpoint.has_value());
+
+  RenderEditorFrameWithMouse(*midpoint, /*mouseDown=*/false, ImVec2(520.0f, 180.0f));
+  RenderEditorFrameWithMouse(*midpoint, /*mouseDown=*/true, ImVec2(520.0f, 180.0f));
+
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(link.to.line, link.to.column));
+  EXPECT_FALSE(editor.hasSelection());
+  EXPECT_TRUE(editor.isCursorPositionChanged());
+  EXPECT_TRUE(editor.didMouseChangeCursorPosition());
 }
 
 TEST_F(TextEditorTests, SelectAndFocusScrollsToWrappedVisualCursorLine) {

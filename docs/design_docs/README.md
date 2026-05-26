@@ -90,6 +90,7 @@ conventions automated agents should follow when editing design docs.
 | 0039 | [text_editor_focus_and_flash](0039-text_editor_focus_and_flash.md)                         | Implemented; see [Editor Source Focus](../editor_source_focus.md) | Source-pane focus view, changed-character flash highlight, and context-aware soft wrap without horizontal scrolling.         |
 | 0040 | [semantic_text_completion](0040-semantic_text_completion.md)                               | Design                                                            | Parser-backed text completion and source block movement that preserve cursor flow and document structure.                    |
 | 0041 | [geode_analytical_aa](0041-geode_analytical_aa.md) | Developer reference | Geode anti-aliasing & coverage: 4× MSAA `sample_mask`; the accepted sub-pixel floor vs tiny's Skia-AAA; appendix of rejected AA approaches. |
+| 0041-2 | [path_authoring_and_boolean_operations](0041-2-path_authoring_and_boolean_operations.md) | Prototype | Illustrator-like path authoring, direct path editing, and Donner-level boolean path operations for the editor. |
 | 0042 | [geode_slug_conformance](0042-geode_slug_conformance.md) | Developer reference | Geode Slug implementation reference: encoder + shader pipeline, invariants, and known limitations. |
 
 ## Cross-reference: developer docs

@@ -17,7 +17,9 @@
 ///    most recent transform. A drag that produces 60 mouse-move
 ///    `SetTransform` commands per second flushes as a single
 ///    `setTransform()` call.
-/// 3. No reordering across commands targeting different entities.
+/// 3. `InsertElement` and `DeleteElement` are structural and are never
+///    coalesced.
+/// 4. No reordering across commands targeting different entities.
 ///    Coalescing only collapses redundant writes.
 ///
 /// The queue is **single-threaded** — it must only be touched from the UI

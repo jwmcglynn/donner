@@ -828,6 +828,15 @@ void EditorWindow::waitEvents() {
 #endif
 }
 
+void EditorWindow::waitEventsTimeout(double timeoutSeconds) {
+#ifdef __EMSCRIPTEN__
+  // The browser already clocks frames through requestAnimationFrame.
+  glfwPollEvents();
+#else
+  glfwWaitEventsTimeout(std::max(0.0, timeoutSeconds));
+#endif
+}
+
 void EditorWindow::wakeEventLoop() {
 #ifdef __EMSCRIPTEN__
   // No-op — the browser's rAF cadence handles wake-ups implicitly.

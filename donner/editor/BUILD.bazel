@@ -90,6 +90,7 @@ donner_cc_library(
     deps = [
         ":pan_closed_cursor_svg",
         ":pan_cursor_svg",
+        ":pen_cursor_svg",
         ":rotate_cursor_svg",
         ":selection_transform_handles",
         "//donner/base",
@@ -119,12 +120,33 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "reference_fanout",
+    hdrs = ["ReferenceFanout.h"],
+    deps = [],
+)
+
+donner_cc_library(
     name = "focus_view",
     srcs = ["FocusView.cc"],
     hdrs = ["FocusView.h"],
     deps = [
+        ":reference_fanout",
         "//donner/base",
         "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "style_source_annotations",
+    srcs = ["StyleSourceAnnotations.cc"],
+    hdrs = ["StyleSourceAnnotations.h"],
+    deps = [
+        ":flash_decorations",
+        ":reference_fanout",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/css",
         "//donner/svg",
     ],
 )
@@ -141,6 +163,15 @@ donner_cc_library(
     srcs = ["SoftWrap.cc"],
     hdrs = ["SoftWrap.h"],
     deps = [],
+)
+
+donner_cc_library(
+    name = "rope_simulation",
+    srcs = ["RopeSimulation.cc"],
+    hdrs = ["RopeSimulation.h"],
+    deps = [
+        "//donner/base",
+    ],
 )
 
 donner_cc_library(
@@ -546,6 +577,7 @@ donner_cc_library(
         ":layer_inspector_diagnostics",
         ":layer_inspector_panel",
         ":menu_bar_presenter",
+        ":pen_tool",
         ":render_coordinator",
         ":render_pane_presenter",
         ":rotate_cursor_set",
@@ -553,6 +585,7 @@ donner_cc_library(
         ":selection_transform_handles",
         ":sidebar_presenter",
         ":source_selection",
+        ":style_source_annotations",
         ":text_editor",
         ":tracy_wrapper",
         ":viewport_interaction_controller",
@@ -643,6 +676,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "pen_tool",
+    srcs = ["PenTool.cc"],
+    hdrs = ["PenTool.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        ":tool",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
     name = "overlay_renderer",
     srcs = ["OverlayRenderer.cc"],
     hdrs = ["OverlayRenderer.h"],
@@ -684,6 +731,14 @@ embed_resources(
     header_output = "donner/editor/PanCursorSvg.h",
     resources = {
         "kPanCursorSvg": "pan_cursor.svg",
+    },
+)
+
+embed_resources(
+    name = "pen_cursor_svg",
+    header_output = "donner/editor/PenCursorSvg.h",
+    resources = {
+        "kPenCursorSvg": "pen_cursor.svg",
     },
 )
 
@@ -737,7 +792,7 @@ donner_cc_library(
 # pane and a click-and-drag render pane. The minimal viewer demo lives
 # at `//examples:svg_viewer`.
 #
-#     bazel run //donner/editor -- donner_splash.svg
+# bazel run //donner/editor -- donner_splash.svg
 donner_cc_binary(
     name = "editor",
     srcs = ["main.cc"],
@@ -829,6 +884,7 @@ donner_cc_library(
         ":flash_decorations",
         ":focus_view",
         ":imgui_headers",
+        ":rope_simulation",
         ":soft_wrap",
         ":source_edit_intent",
         ":text_buffer",

@@ -3,6 +3,7 @@
 #include <span>
 #include <string_view>
 
+#include "donner/svg/DocumentState.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -82,6 +83,24 @@ TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle)
   const std::string* colorValue = FindInspectorValue(computedStyle, "color");
   ASSERT_NE(colorValue, nullptr);
   EXPECT_EQ(*colorValue, "rgba(0, 0, 0, 255) (default)");
+}
+
+TEST(SidebarPresenterTest, RefreshSnapshotAllowsConcurrentDom) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kInspectorSvg));
+  app.setCleanSourceText(kInspectorSvg);
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+
+  EXPECT_TRUE(presenter.inspectorHasSelectionForTesting());
+  EXPECT_FALSE(presenter.inspectorXmlAttributesForTesting().empty());
+  EXPECT_FALSE(presenter.inspectorComputedStyleForTesting().empty());
 }
 
 TEST(SidebarPresenterTest, RefreshSnapshotOmitsInspectorDetailsForMultiSelection) {

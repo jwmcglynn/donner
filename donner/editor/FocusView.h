@@ -56,6 +56,7 @@ struct FocusPartition {
 struct StyleFocus {
   FocusPartition partition;                       ///< Source-pane partition for the matched rule.
   std::vector<svg::SVGElement> impactedElements;  ///< Elements matched by the selected rule.
+  bool reverseReferenceExpansionSuppressed = false;  ///< True when too many matches fan out.
 };
 
 /// Distinct same-document references related to the active selection.

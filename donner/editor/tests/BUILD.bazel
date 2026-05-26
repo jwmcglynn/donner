@@ -182,6 +182,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "style_source_annotations_tests",
+    srcs = ["StyleSourceAnnotations_tests.cc"],
+    deps = [
+        "//donner/editor:style_source_annotations",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "flash_decorations_tests",
     srcs = ["FlashDecorations_tests.cc"],
     deps = [
@@ -195,6 +205,15 @@ donner_cc_test(
     srcs = ["SoftWrap_tests.cc"],
     deps = [
         "//donner/editor:soft_wrap",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "rope_simulation_tests",
+    srcs = ["RopeSimulation_tests.cc"],
+    deps = [
+        "//donner/editor:rope_simulation",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -521,6 +540,21 @@ donner_cc_test(
     deps = [
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "pen_tool_tests",
+    srcs = ["PenTool_tests.cc"],
+    data = ["//:donner_splash.svg"],
+    deps = [
+        "//donner/editor:document_sync_controller",
+        "//donner/editor:editor_app",
+        "//donner/editor:pen_tool",
+        "//donner/editor:select_tool",
+        "//donner/editor:text_editor",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],

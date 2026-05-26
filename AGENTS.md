@@ -74,9 +74,10 @@ When creating a pull request:
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`clang-format -i` on every modified C/C++ file** before committing — `git clang-format` covers staged changes. The project `.clang-format` is tuned so clang-format 18 and 19 produce identical output, so any locally-installed clang-format works.
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
-4. **Monitor CI and code review** — after opening, check CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments`.
-5. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
-6. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
+4. **Monitor CI and code review by default for every created PR** — whenever you create or open a PR, automatically keep monitoring CI status, merge conflicts, and review comments every ~7 minutes until the PR is green and reviewed; do not wait for a separate user prompt. Use `gh pr checks <number>` and `gh api repos/jwmcglynn/donner/pulls/<number>/comments` when `gh` is authenticated, or the GitHub connector equivalents when `gh` is unavailable.
+5. **No agent branding in PR titles** — do not prefix pull request titles with `[codex]`, agent names, or other tool branding. Use a plain project-style title that describes the change.
+6. **Expect a Codex code review** within the first few minutes — address feedback promptly by pushing follow-up commits. If Codex finds no issues it will approve the PR (👍 / APPROVED state). A Codex approval alone is not sufficient to merge — a `jwmcglynn` review is always required.
+7. **Transient CI failures** (apt/bazel fetch/chromium rate-limits) are retried automatically. Test, compile, linker, and pixel-diff failures are never transient — investigate the root cause, don't re-run blindly.
 
 See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behind these checks and the taxonomy of CI escapes they prevent.
 

@@ -197,6 +197,20 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       break;
     }
 
+    case EditorCommand::Kind::InsertElement: {
+      if (!command.parentElement.has_value() || !command.element.has_value()) {
+        return;
+      }
+      xml::ApplySourceEditResult result = document_->insertElement(
+          *command.parentElement, *command.element, command.referenceElement);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
+      if (result.diagnostic.has_value()) {
+        lastParseError_ = std::move(result.diagnostic);
+      }
+      break;
+    }
+
     case EditorCommand::Kind::DeleteElement: {
       if (!command.element.has_value()) {
         return;

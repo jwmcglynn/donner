@@ -207,5 +207,21 @@ TEST_F(CommandQueueTest, DeleteElementCommandNotCoalesced) {
   EXPECT_EQ(effective[2].kind, EditorCommand::Kind::DeleteElement);
 }
 
+TEST_F(CommandQueueTest, InsertElementCommandNotCoalesced) {
+  CommandQueue queue;
+  queue.push(EditorCommand::InsertElementCommand(*a, *b));
+  queue.push(EditorCommand::InsertElementCommand(*a, *c));
+
+  const auto flushResult = queue.flush();
+  const auto& effective = flushResult.effectiveCommands;
+  ASSERT_EQ(effective.size(), 2u);
+  EXPECT_EQ(effective[0].kind, EditorCommand::Kind::InsertElement);
+  EXPECT_EQ(effective[1].kind, EditorCommand::Kind::InsertElement);
+  EXPECT_TRUE(effective[0].parentElement == a);
+  EXPECT_TRUE(effective[0].element == b);
+  EXPECT_TRUE(effective[1].parentElement == a);
+  EXPECT_TRUE(effective[1].element == c);
+}
+
 }  // namespace
 }  // namespace donner::editor

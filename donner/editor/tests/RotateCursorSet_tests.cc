@@ -75,6 +75,19 @@ TEST(RotateCursorSetTest, RendersPanCursorImage) {
   }
 }
 
+TEST(RotateCursorSetTest, PenCursorUsesBlackGlyphWithWhiteOutline) {
+  std::optional<RotateCursorImage> image = RenderPenCursorImage(nullptr);
+
+  ASSERT_TRUE(image.has_value());
+  EXPECT_EQ(image->width, 32);
+  EXPECT_EQ(image->height, 32);
+  EXPECT_EQ(image->rgba.size(), 32u * 32u * 4u);
+  EXPECT_GT(CountNonTransparentPixels(*image), 90u);
+  EXPECT_LT(CountNonTransparentPixels(*image), 32u * 32u);
+  EXPECT_GT(CountOpaqueBlackPixels(*image), 25u);
+  EXPECT_GT(CountOpaqueWhitePixels(*image), 8u);
+}
+
 TEST(RotateCursorSetTest, OpenAndClosedPanCursorsProduceDifferentBitmaps) {
   std::optional<RotateCursorImage> openHand =
       RenderPanCursorImage(PanCursorKind::OpenHand, nullptr);

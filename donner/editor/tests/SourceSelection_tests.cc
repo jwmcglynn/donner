@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <optional>
 #include <span>
 #include <sstream>
 #include <string>
@@ -12,6 +13,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/svg/DocumentState.h"
 
 namespace donner::editor {
 namespace {
@@ -77,6 +79,25 @@ TEST(SourceSelectionTest, FindsDeepestElementAtSourceOffset) {
   EXPECT_EQ(group->id(), "layer");
 }
 
+TEST(SourceSelectionTest, FindsElementAtSourceOffsetAllowsConcurrentDom) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  const std::string source(app.document().document().source());
+
+  const std::size_t rectOffset = source.find("id=\"target\"");
+  ASSERT_NE(rectOffset, std::string::npos);
+  std::optional<svg::SVGElement> rect =
+      FindElementAtSourceOffset(app.document().document(), source, rectOffset);
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->id(), "target");
+
+  std::optional<svg::SVGElement> near =
+      FindElementNearSourceOffset(app.document().document(), source, rectOffset);
+  ASSERT_TRUE(near.has_value());
+  EXPECT_EQ(near->id(), "target");
+}
+
 TEST(SourceSelectionTest, ReturnsElementSourceByteRange) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
@@ -90,6 +111,45 @@ TEST(SourceSelectionTest, ReturnsElementSourceByteRange) {
   const std::string selected = source.substr(range->start, range->end - range->start);
   EXPECT_NE(selected.find("<rect"), std::string::npos);
   EXPECT_NE(selected.find("id=\"target\""), std::string::npos);
+}
+
+TEST(SourceSelectionTest, ReturnsEntitySourceByteRangeForReferencedPaintServer) {
+  constexpr std::string_view source =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+  <defs>
+    <linearGradient id="paint">
+      <stop offset="0" stop-color="red"/>
+    </linearGradient>
+  </defs>
+  <rect id="target" fill="url(#paint)" width="20" height="20"/>
+</svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+
+  auto paint = app.document().document().querySelector("#paint");
+  ASSERT_TRUE(paint.has_value());
+
+  const std::string currentSource(app.document().document().source());
+  const std::optional<SourceByteRange> range =
+      EntitySourceByteRange(paint->entityHandle(), currentSource);
+  ASSERT_TRUE(range.has_value());
+  const std::string selected = currentSource.substr(range->start, range->end - range->start);
+  EXPECT_NE(selected.find("<linearGradient"), std::string::npos);
+  EXPECT_NE(selected.find("id=\"paint\""), std::string::npos);
+
+  TextEditor textEditor;
+  textEditor.setText(currentSource);
+  ASSERT_TRUE(HighlightSourceByteRange(textEditor, *range));
+  EXPECT_EQ(textEditor.getSelectedText(), selected);
+}
+
+TEST(SourceSelectionTest, RejectsInvalidRawSourceByteRange) {
+  TextEditor textEditor;
+  textEditor.setText("abc");
+
+  EXPECT_FALSE(HighlightSourceByteRange(textEditor, SourceByteRange{.start = 1, .end = 1}));
+  EXPECT_FALSE(HighlightSourceByteRange(textEditor, SourceByteRange{.start = 1, .end = 4}));
 }
 
 TEST(SourceSelectionTest, ExcludesSelectedElementsFromSourceHoverCandidates) {
@@ -106,6 +166,36 @@ TEST(SourceSelectionTest, ExcludesSelectedElementsFromSourceHoverCandidates) {
 
   ASSERT_EQ(filtered.size(), 1u);
   EXPECT_EQ(filtered.front().id(), "layer");
+}
+
+TEST(SourceSelectionTest, ExcludesDocumentRootFromSourceHoverCandidates) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  svg::SVGDocument& document = app.document().document();
+  const svg::SVGElement root = document.svgElement();
+  std::optional<svg::SVGElement> rect = document.querySelector("#target");
+  ASSERT_TRUE(rect.has_value());
+
+  std::vector<svg::SVGElement> filtered =
+      ExcludeDocumentRootSourceHoverElement({root, *rect}, document);
+  ASSERT_EQ(filtered.size(), 1u);
+  EXPECT_EQ(filtered.front().id(), "target");
+
+  filtered = ExcludeDocumentRootSourceHoverElement({root}, document);
+  EXPECT_TRUE(filtered.empty());
+}
+
+TEST(SourceSelectionTest, RootSvgStillResolvesAtSourceOffsetForExplicitSelection) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  const std::string source(app.document().document().source());
+
+  const std::size_t rootOffset = source.find("<svg");
+  ASSERT_NE(rootOffset, std::string::npos);
+  std::optional<svg::SVGElement> root =
+      FindElementNearSourceOffset(app.document().document(), source, rootOffset + 1);
+  ASSERT_TRUE(root.has_value());
+  EXPECT_EQ(*root, app.document().document().svgElement());
 }
 
 TEST(SourceSelectionTest, FindsElementAtTextEditorCursor) {

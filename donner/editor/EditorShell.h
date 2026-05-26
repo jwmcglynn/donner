@@ -19,11 +19,13 @@
 #include "donner/editor/LayerInspectorDiagnostics.h"
 #include "donner/editor/LayerInspectorPanel.h"
 #include "donner/editor/MenuBarPresenter.h"
+#include "donner/editor/PenTool.h"
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/RotateCursorSet.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
+#include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/editor/ViewportInteractionController.h"
 
@@ -109,6 +111,8 @@ public:
 
   [[nodiscard]] bool valid() const { return valid_; }
   void runFrame();
+  /// Return the next idle-loop wake interval needed for throttled UI work.
+  [[nodiscard]] std::optional<float> nextIdleWakeSeconds() const;
 
   /// Current render-pane viewport. Exposed for replay/readback harnesses
   /// that need to crop the presented framebuffer to the canvas region.
@@ -137,6 +141,10 @@ private:
   void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
   void renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
                         ImGuiWindowFlags paneFlags);
+  [[nodiscard]] Box2d toolPaletteScreenRect(const ImVec2& paneOrigin,
+                                            const ImVec2& contentRegion) const;
+  void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
+  void renderFillStrokeToolbarWidget();
   void renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
                       const RightSidebarLayout& layout, ImGuiWindowFlags paneFlags);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -171,6 +179,7 @@ private:
       const SelectionTransformHandleIntent& hoverTransformIntent,
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
   void renderReferenceHighlightChip();
+  void renderPenToolPreview();
   void openRenderPaneContextMenu(const Vector2d& documentPoint);
   void renderRenderPaneContextMenu();
   [[nodiscard]] std::optional<StyleFocus> styleFocusAtSourceOffset(std::size_t sourceOffset) const;
@@ -179,9 +188,12 @@ private:
   void syncSelectionFromSourceCursorIfNeeded();
   void applySourcePartition(FocusPartition partition);
   void updateSourceFocusView(bool scrollToSelection = false);
+  void updateSourceStyleDecorations();
+  void applySourceStyleDecorationChipClick();
   void setSourceFocusMode(bool enabled);
   void toggleSourceFocusMode();
   void setSourcePaneVisible(bool visible);
+  void revealSourceRange(SourceByteRange byteRange);
 
   gui::EditorWindow& window_;
   EditorShellOptions options_;
@@ -189,6 +201,12 @@ private:
 
   EditorApp app_;
   SelectTool selectTool_;
+  PenTool penTool_;
+  enum class ActiveTool : std::uint8_t {
+    Select,
+    Pen,
+  };
+  ActiveTool activeTool_ = ActiveTool::Select;
   TextEditor textEditor_;
   GlTextureCache textures_;
   RenderCoordinator renderCoordinator_;
@@ -236,6 +254,10 @@ private:
   std::vector<svg::SVGElement> lastReferenceHighlightSelection_;
   bool referenceHighlightActive_ = false;
   bool referenceHighlightChipHovered_ = false;
+  std::vector<StyleSourceContribution> styleSourceContributions_;
+  bool styleSourceDecorationsValid_ = false;
+  std::uint64_t styleSourceDecorationSourceVersion_ = 0;
+  std::string styleSourceDecorationText_;
   std::optional<Vector2d> renderContextMenuDocumentPoint_;
   std::optional<svg::SVGElement> renderContextMenuHitElement_;
   bool renderContextMenuOpenRequested_ = false;

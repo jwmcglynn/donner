@@ -5,6 +5,7 @@
 #include "donner/base/MathUtils.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGGraphicsElement.h"
 
 namespace donner::editor {
@@ -36,6 +37,22 @@ TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsSkipsNonGeometryWithoutBound
 
   ASSERT_EQ(bounds.size(), 1u);
   EXPECT_EQ(bounds[0], Box2d::FromXYWH(10.0, 15.0, 20.0, 25.0));
+}
+
+TEST(SelectionAabbTest, SnapshotBoundsAllowConcurrentDom) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  const std::vector<svg::SVGElement> selection = {*rect};
+
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 1u);
+  EXPECT_EQ(bounds[0], Box2d::FromXYWH(20.0, 20.0, 40.0, 40.0));
 }
 
 TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsMovesWithDrag) {
@@ -177,6 +194,27 @@ TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsIncludesOnlyLaterPaintedGeom
   ASSERT_EQ(bounds.size(), 2u);
   EXPECT_EQ(bounds[0], Box2d::FromXYWH(70.0, 80.0, 10.0, 20.0));
   EXPECT_EQ(bounds[1], Box2d::FromXYWH(100.0, 110.0, 30.0, 40.0));
+}
+
+TEST(SelectionAabbTest, SnapshotOccludingBoundsAllowConcurrentDom) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <rect id="selected" x="20" y="20" width="40" height="40" fill="red"/>
+              <rect id="front" x="70" y="80" width="10" height="20" fill="blue"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  auto selected = app.document().document().querySelector("#selected");
+  ASSERT_TRUE(selected.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*selected};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionOccludingWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 1u);
+  EXPECT_EQ(bounds[0], Box2d::FromXYWH(70.0, 80.0, 10.0, 20.0));
 }
 
 }  // namespace

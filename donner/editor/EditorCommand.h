@@ -51,6 +51,11 @@ struct EditorCommand {
     /// to the most-recently-queued value.
     SetAttribute,
 
+    /// Insert `element` as a child of `parentElement`, optionally before
+    /// `referenceElement`. Used by authoring tools that create new DOM
+    /// nodes. Not coalesced.
+    InsertElement,
+
     /// Detach the element from its parent, making it invisible to the
     /// renderer. The ECS entity itself is NOT destroyed — it stays in
     /// the registry, just orphaned. This is a "soft delete" so any
@@ -64,6 +69,13 @@ struct EditorCommand {
   /// Target element for SetTransform and DeleteElement. `std::nullopt`
   /// for ReplaceDocument.
   std::optional<svg::SVGElement> element;
+
+  /// Parent element for InsertElement.
+  std::optional<svg::SVGElement> parentElement;
+
+  /// Optional sibling for InsertElement; inserted before this element
+  /// when present, otherwise appended to the parent.
+  std::optional<svg::SVGElement> referenceElement;
 
   /// SetTransform payload. Default-constructed for ReplaceDocument /
   /// DeleteElement.
@@ -114,6 +126,18 @@ struct EditorCommand {
     cmd.element = std::move(element);
     cmd.attributeName = std::move(name);
     cmd.attributeValue = std::move(value);
+    return cmd;
+  }
+
+  /// Builds an InsertElement command.
+  static EditorCommand InsertElementCommand(
+      svg::SVGElement parent, svg::SVGElement element,
+      std::optional<svg::SVGElement> reference = std::nullopt) {
+    EditorCommand cmd;
+    cmd.kind = Kind::InsertElement;
+    cmd.parentElement = std::move(parent);
+    cmd.element = std::move(element);
+    cmd.referenceElement = std::move(reference);
     return cmd;
   }
 
