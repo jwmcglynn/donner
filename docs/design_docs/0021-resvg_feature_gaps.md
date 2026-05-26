@@ -43,28 +43,56 @@ nearly closed — see [Geode parity — resolved](#geode-parity--resolved-606).
 
 | | Count |
 |---|---:|
-| `Params::Skip(...)` | 288 |
+| `Params::Skip(...)` | 288 (→ ~260 once #608–#611 land — 28 un-skipped) |
 | `Params::RenderOnly(...)` | 51 (UB — render-must-not-crash, no pixel compare) |
-| CPU `WithThreshold` overrides (tiny-skia) | 87 (of which ~22 exceed 1000 px → masked-bug candidates) |
+| CPU `WithThreshold` overrides (tiny-skia) | 87 (→ ~78 after #610 drops the feImage caps; ~15 still over 1000 px → masked-bug candidates) |
 | Commented-out category blocks | 1 (`filters/filter-functions`) |
 | Geode binary parity gate (`geodeParityGate`) | 173 (172 edge-floor + 1 `feColorMatrix/hueRotate`); 0 text, 0 other genuine |
 
 ---
+
+## Recently fixed (PRs #608–#611)
+
+Landed 2026-05-25 from a parallel CPU-backend debugging sweep. IDs are burned (not reused).
+
+- **F2 — `transform-origin` regression (#514)** → [#609](https://github.com/jwmcglynn/donner/pull/609).
+  The pivot sandwich was written `Translate(O) * raw * Translate(-O)`, but
+  `Transform2d::operator*` is left-first, so the pivot-out translate applied *last* —
+  the pivot wasn't a fixed point. Swapped to `Translate(-O) * raw * Translate(O)`.
+  13 tests un-skipped (9.7k–151k px → pass). The 7 paint-server/`<image>`/text cases
+  were a *separate* never-implemented gap → re-filed as **F12** below.
+- **B1 — intrinsic sizing + percent on non-square viewBox** → [#611](https://github.com/jwmcglynn/donner/pull/611).
+  Three coupled causes: `calculateRawDocumentSize` used `transformPosition` (folded
+  the letterbox translation into the size); percent resolution used the viewBox
+  *diagonal* extent instead of per-axis X/Y; `<marker>` length attrs were parsed with
+  a no-suffix parser that rejected `%`. 10 tests un-skipped.
+- **B5 — `feMorphology` degenerate radius** → [#608](https://github.com/jwmcglynn/donner/pull/608).
+  Negative/zero/empty/absent radius blanked the shape to transparent black; per
+  Filter Effects §15.4 a disabled morphology passes the input through. 5 tests un-skipped.
+- **B6 — `feImage` resampling** → [#610](https://github.com/jwmcglynn/donner/pull/610).
+  The suspected fragment-ref-transform bug was a red herring — those 3 tests were
+  never broken (their 22k–34k px thresholds were pure over-inflation, now removed).
+  The real bug: tiny-skia upscaled feImage with **bilinear**; resvg uses
+  **Mitchell-Netravali bicubic**. 4 subregion tests 2.6k–8.7k px → 0. `svg.svg`'s
+  custom golden refreshed to bicubic; geode gated pending a WGSL bicubic port (see
+  the geode follow-up in [Geode parity](#geode-parity--resolved-606)).
 
 ## Priority 0: CPU-backend backlog (the active front)
 
 Highest-value first. "Out of scope" rows are correct-as-skipped and listed at the
 bottom for completeness.
 
+> **Recently fixed (PRs #608–#611, in review) — see [Recently fixed](#recently-fixed-prs-608611).**
+> F2 (transform-origin regression), B1 (intrinsic sizing), B5 (feMorphology), B6
+> (feImage resampling) are resolved; their IDs are burned. The rows below are
+> what's left.
+
 | ID | Gap | Impact | Kind |
 |---|---|---:|---|
-| **F2** | `transform-origin` rendering **regression** (#514) | 20 | **Regression — single PR, known-good prior state. Top payoff.** |
-| **B6** | `feImage` fragment-ref + transform broken (masked by fat thresholds) | 7 | **Bug — 22k–34k px diffs hidden at `maxPx`; not AA.** |
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
 | B3 | `<image>` embedded/data-URL sizing | 18 | Bug — one investigation |
-| B1 | intrinsic sizing + percent on non-square viewBox | ~10 | Bug — one root cause, many categories |
-| B5 | `feMorphology` edge cases | 5 | Bug |
 | B4 | `<use>` → inline `<svg>` sizing | 5 | Bug (shares machinery with B3) |
+| F12 | `transform-origin` on paint-servers / `<image>` / text | 7 | Feature (split out of the F2 regression) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
 | F4 | `<switch>` conditional processing | 12 (+systemLanguage 3) | Feature |
@@ -83,30 +111,6 @@ bottom for completeness.
 ---
 
 ## Tracked regressions & disabled blocks
-
-### F2: `transform-origin` rendering broken after #514
-
-**Impact:** 20 tests — all of `structure/transform-origin/` (category
-`StructureTransformOrigin`, [`resvg_test_suite.cc:2229`](../../donner/svg/renderer/tests/resvg_test_suite.cc)).
-
-**Symptom:** 10K–150K-pixel diffs — rendering is completely wrong, not slightly
-off. Every test tagged `Skip("transform-origin broken after #514")`.
-
-**Root cause:** PR #514 added single-keyword `transform-origin` parsing (e.g.
-`transform-origin: center`) and regressed the rendering path in the process.
-Before #514 the two-token forms applied correctly; after #514 the transform
-pivots around the wrong origin.
-
-**Next step:** bisect #514's diff. The parser change and the apply-at-render change
-are separable — verify `ParseTransformOrigin` output, then check
-`LayoutSystem::createComputedLocalTransformComponentWithStyle` consumes the
-resolved origin. Land the fix and un-skip all 20 in one PR. **Highest single-PR
-payoff in the backlog** (it's a regression, so there's a known-good prior state).
-
-> Note: this entry previously described `transform-origin` as a never-implemented
-> *presentation attribute*. That gap was closed; the current failure is the #514
-> *regression* above. The presentation-attribute form should be re-verified once
-> the regression is fixed.
 
 ### B2: `filters/filter-functions` category disabled on CI
 
@@ -140,38 +144,10 @@ the suite default (100). pixelmatch already excludes anti-aliased pixels, so a
 multi-thousand-px diff on the CPU backend is a *real* rendering difference. Per
 [CLAUDE.md §"Anti-Aliasing Is Never the Root Cause"](../../CLAUDE.md), "AA drift"
 is not a valid reason for these magnitudes. The full audit list lives in the test
-file; the two structural clusters are promoted to tracked bugs below.
-
-### B6: `feImage` fragment-ref + transform broken (CPU)
-
-**Impact:** 7 tests in `filters/feImage/`, all "passing" at inflated caps:
-
-| Test | `maxPx` | Comment in file |
-|---|---:|---|
-| `link-to-an-element-with-transform.svg` | 34200 | "Fragment ref with skewX transform on element" |
-| `link-on-an-element-with-complex-transform.svg` | 26200 | "Fragment ref with complex transform" |
-| `chained-feImage.svg` | 22000 | "Chained feImage fragment refs" |
-| `with-subregion-4.svg` | 15000 | "Absolute subregion coords" |
-| `with-subregion-3.svg` | 14500 | "Percentage width subregion" |
-| `with-subregion-1.svg` / `with-subregion-2.svg` | 5100 | "OBB subregion bilinear / percentage" |
-
-**Symptom:** a 34K-px diff on a single image means the **transform applied to a
-`feImage` fragment reference is wrong** (placement/scale/skew), and subregion
-placement disagrees with the golden. This is the same family as the Geode feImage
-divergence that #606 chased (resolved there with the shared-`RendererDriver`
-re-draw fix + driver-independent placement) — the CPU path was never audited, just
-thresholded.
-
-**Root cause:** needs investigation. Start at the `feImage` primitive's handling of
-(a) a fragment reference to a transformed element, and (b) the
-`x`/`y`/`width`/`height` subregion → device mapping. Cross-check against the Geode
-feImage fixes in [0017](0017-geode_renderer.md) / the #606 filter work — the
-correct placement math may already exist there.
-
-**Next step:** drop the thresholds to the default 100, capture
-`actual/expected/diff` PNGs for `link-to-an-element-with-transform`, and root-cause
-the transform composition. Overlaps [B3](#b3-image-embedded--data-url-sizing)
-(image placement) and [F8](#f8-primitive-subregion-clipping) (subregion).
+file. **B6 (feImage resampling) is now fixed** — see [Recently fixed](#recently-fixed-prs-608611);
+the real cause was a bilinear-vs-bicubic kernel, not the suspected transform bug, and
+the 3 "transform" tests were never broken (their fat thresholds were over-inflation,
+now removed). The remaining structural cluster is below.
 
 ### B7: font substitution — missing bundled families
 
@@ -202,33 +178,10 @@ likely map to already-bundled Noto faces (real diff to chase), while
 
 ## High-leverage bugs (one root cause, many tests)
 
-### B1: Intrinsic sizing + percent resolution on non-square viewBox
-
-**Impact:** ~10 tests across 7 categories (all carry the reason string
-`"… intrinsic sizing + percent resolution with non-square viewBox; see
-ShapesEllipse"`).
-
-**Symptom:** For SVGs with a non-square `viewBox` (e.g. `0 0 200 100`) and no
-explicit `width`/`height`, the intrinsic document size is wrong. Under the
-fixture's `setCanvasSize(500, 500)`, Donner produces 500×375 instead of 500×250,
-so percent-valued geometry (`cx="50%"`, `rx="40%"`, …) resolves against the wrong
-viewport and renders oversized / off-center.
-
-**Root cause:** `LayoutSystem::calculateRawDocumentSize`
-([LayoutSystem.cc:806](../../donner/svg/components/layout/LayoutSystem.cc)) uses
-`transformPosition()` on the viewBox→content transform, which folds in the
-letterbox translation. `transformVector()` (no translation) is the correct call.
-The percent-resolution pipeline is coupled to this, so fix both together.
-
-**Next step:** swap `transformPosition`→`transformVector`, audit percent
-resolution in `ComputedShapeComponent`/`LayoutSystem`, land as one PR.
-
-**Affected tests:** `shapes/ellipse/percent-values{,-missing-ry}`,
-`shapes/line/percent-units`, `shapes/rect/percentage-values-{1,2}`,
-`paint-servers/linearGradient/gradientUnits=userSpaceOnUse-with-percent`,
-`paint-servers/radialGradient/gradientUnits=objectBoundingBox-with-percent`,
-`painting/marker/percent-values`,
-`text/text/percent-value-on-{x-and-y,dx-and-dy}`.
+**B1 (intrinsic sizing + percent on non-square viewBox) is now fixed** — see
+[Recently fixed](#recently-fixed-prs-608611). It was three coupled causes, not just
+the suspected `transformPosition`→`transformVector` (also per-axis percent extent +
+`<marker>` `%` parsing).
 
 ### B3: `<image>` embedded / data-URL sizing
 
@@ -245,7 +198,7 @@ cases disagree with the golden.
 
 **Next step:** start with `embedded-png` + `preserveAspectRatio=none` (the
 simplest), then walk the no-width/no-height/auto matrix. Shares
-`preserveAspectRatio` math with [B6](#b6-feimage-fragment-ref--transform-broken-cpu)
+`preserveAspectRatio` math with [B6 (fixed)](#recently-fixed-prs-608611)
 and [B4](#b4-use-referencing-inline-svg-elements).
 
 ### B4: `<use>` referencing inline `<svg>` elements
@@ -258,15 +211,8 @@ combinations sizes the instance wrong.
 **Next step:** likely shares machinery with B3's viewport sizing; investigate
 together if convenient.
 
-### B5: `feMorphology` edge cases
-
-**Impact:** 5 tests in `filters/feMorphology/` (`empty-radius`, `negative-radius`,
-`no-radius`, `radius-with-too-many-values`, `zero-radius`).
-
-**Symptom:** degenerate/invalid radius values aren't handled to spec.
-
-**Next step:** add radius validation/clamping in the feMorphology primitive per
-Filter Effects §15.
+**B5 (feMorphology degenerate radius) is now fixed** — see
+[Recently fixed](#recently-fixed-prs-608611).
 
 ---
 
@@ -302,7 +248,7 @@ render order (fill/stroke/markers) is not reordered. On shapes, text, and tspan.
 
 **Impact:** 5 tests (`filters/feBlend` 2, `filters/feComposite` 3 incl. feFlood
 subregion). Filter primitives don't clip output to their `x`/`y`/`width`/`height`
-subregion. Overlaps [B6](#b6-feimage-fragment-ref--transform-broken-cpu)'s subregion cases.
+subregion. Overlaps [B6 (fixed)](#recently-fixed-prs-608611)'s subregion cases.
 
 ### F9: `textLength` + `lengthAdjust`
 
@@ -322,6 +268,21 @@ deferred vertical/`writing-mode=tb` cases.
 `text/text/bidi-reordering`, `text/tspan/bidi-reordering`,
 `text/letter-spacing/mixed-scripts`, `text/textLength` Arabic. Needs the BiDi
 algorithm + RTL shaping (`text-full`). Group as one workstream.
+
+### F12: `transform-origin` on paint-servers / `<image>` / text
+
+**Impact:** 7 tests in `structure/transform-origin/` (`on-gradient` ×2, `on-pattern`
+×2, `on-image`, `on-text`, `on-text-path`), kept skipped after the F2 regression fix.
+
+**Symptom:** these were *never* green — they are a separate never-implemented gap, not
+the #514 regression. Gradients/patterns route their transform through
+`getRawEntityFromParentTransform` (`SVGGradientElement.cc`, `SVGPatternElement.cc`),
+which intentionally drops the `transform-origin` pivot; for `<image>`/text the layout
+computes the correct origin (verified) but it doesn't compose with the content-placement
+transform, so they render off-screen.
+
+**Next step:** thread the resolved origin pivot through the paint-server and
+image/text content transforms (the shape path is now correct after #609 — mirror it).
 
 ### Smaller feature gaps
 
@@ -419,6 +380,11 @@ accepted AA floor.
   filter output path; one fix likely clears most. Repro: run `GeodeTinyParity` at
   threshold 0 and diff a solid-fill test (`painting/fill/rgb-0-127-0-0.5`). AA
   background + the accepted 4× MSAA edge floor: [0041 §2](0041-geode_analytical_aa.md).
+- **G6 — feImage bicubic shader (new, from #610).** tiny-skia now upscales feImage
+  with Mitchell-Netravali bicubic to match resvg; geode's WGSL image sampler
+  (`filter_image.wgsl`) is still bilinear, so `filters/feImage/svg.svg` is gated on
+  geode (`disableBackend(Geode)`). Port the bicubic kernel into the shader to match,
+  then un-gate.
 
 > The 172 `kEdgeFloor` entries are the **accepted-by-design** 4× MSAA edge-coverage
 > quantization (content matches tiny-skia; the sub-pixel edge differs). Geode stays
