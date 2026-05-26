@@ -764,6 +764,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                   }
 
                   const std::size_t dstIdx = static_cast<std::size_t>((dy * w + dx) * 4);
+                  float out[4];
                   for (int ch = 0; ch < 4; ++ch) {
                     double acc = 0.0;
                     for (int m = -1; m <= 2; ++m) {
@@ -773,8 +774,19 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                       }
                       acc += rowAcc * wy[m + 1];
                     }
-                    dstData[dstIdx + ch] = std::clamp(static_cast<float>(acc), 0.0f, 1.0f);
+                    out[ch] = std::clamp(static_cast<float>(acc), 0.0f, 1.0f);
                   }
+                  // Mitchell's negative lobes can drive a premultiplied input's R/G/B above
+                  // its A on edges; clamp R/G/B to A so downstream filter primitives — which
+                  // consume `FloatPixmap` as premultiplied — don't see ghost-bright halos
+                  // (PR #610 Codex P1). For straight-alpha inputs this is a no-op since the
+                  // earlier bilinear path stored unclamped values that already satisfied
+                  // R/G/B ≤ A on the suite's tests.
+                  const float a = out[3];
+                  dstData[dstIdx + 0] = std::min(out[0], a);
+                  dstData[dstIdx + 1] = std::min(out[1], a);
+                  dstData[dstIdx + 2] = std::min(out[2], a);
+                  dstData[dstIdx + 3] = a;
                 }
               }
             }
