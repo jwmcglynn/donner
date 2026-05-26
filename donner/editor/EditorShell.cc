@@ -78,11 +78,13 @@ constexpr std::string_view kRenderPaneContextMenuName = "Render Context Menu";
 constexpr ImWchar kEditorGlyphRanges[] = {
     0x0020, 0x00ff,  // Basic Latin + Latin Supplement.
     0x2217, 0x2217,  // Asterisk operator.
+    0x2726, 0x2726,  // Black four pointed star.
     0x2731, 0x2731,  // Heavy asterisk.
     0,
 };
 constexpr ImWchar kEditorSymbolGlyphRanges[] = {
     0x2217, 0x2217,  // Asterisk operator.
+    0x2726, 0x2726,  // Black four pointed star.
     0x2731, 0x2731,  // Heavy asterisk.
     0,
 };
@@ -2552,6 +2554,9 @@ void EditorShell::updateSourceStyleDecorations() {
         .showChip = contribution.showChip,
         .chipCount = contribution.matchedElementCount,
         .showOverflowMarker = contribution.showOverflowMarker,
+        .chipKind = contribution.kind == StyleContributionKind::ReferenceResourceElement
+                        ? TextEditor::SourceStyleChipKind::ReferenceCount
+                        : TextEditor::SourceStyleChipKind::SelectorMatchCount,
         .tooltip = contribution.tooltip,
         .chipTooltip = contribution.chipTooltip,
         .overflowTooltip = contribution.overflowTooltip,

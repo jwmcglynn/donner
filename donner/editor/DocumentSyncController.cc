@@ -23,6 +23,11 @@ struct SourceMirrorEdit {
   std::string_view replacement;
 };
 
+enum class OffsetMappingBias {
+  BeforeReplacement,
+  AfterReplacement,
+};
+
 std::optional<SourceMirrorEdit> BuildSingleSourceMirrorEdit(std::string_view oldSource,
                                                             std::string_view newSource) {
   if (oldSource == newSource) {
@@ -48,6 +53,72 @@ std::optional<SourceMirrorEdit> BuildSingleSourceMirrorEdit(std::string_view old
       .removedLength = oldSource.size() - prefixLength - suffixLength,
       .replacement = newSource.substr(prefixLength, newSource.size() - prefixLength - suffixLength),
   };
+}
+
+std::optional<std::size_t> MapOffsetThroughSourceMirrorEdit(std::size_t offset,
+                                                            const SourceMirrorEdit& edit,
+                                                            OffsetMappingBias bias) {
+  const std::size_t editEnd = edit.offset + edit.removedLength;
+  if (editEnd < edit.offset) {
+    return std::nullopt;
+  }
+
+  if (offset < edit.offset) {
+    return offset;
+  }
+
+  if (offset > editEnd) {
+    return offset - edit.removedLength + edit.replacement.size();
+  }
+
+  if (offset == edit.offset && bias == OffsetMappingBias::BeforeReplacement) {
+    return edit.offset;
+  }
+
+  return edit.offset + edit.replacement.size();
+}
+
+bool SourceRangeConflictsWithMirrorEdit(std::size_t offset, std::size_t length,
+                                        const SourceMirrorEdit& edit) {
+  const std::size_t end = offset + length;
+  const std::size_t editEnd = edit.offset + edit.removedLength;
+  if (end < offset || editEnd < edit.offset) {
+    return true;
+  }
+
+  if (length == 0) {
+    return offset > edit.offset && offset < editEnd;
+  }
+
+  if (edit.removedLength == 0) {
+    return offset <= edit.offset && edit.offset < end;
+  }
+
+  return offset < editEnd && edit.offset < end;
+}
+
+std::optional<std::size_t> MapOffsetByFollowingContext(std::string_view oldSource,
+                                                       std::string_view newSource,
+                                                       std::size_t offset) {
+  if (offset >= oldSource.size()) {
+    return std::nullopt;
+  }
+
+  constexpr std::size_t kMaxContextLength = 64;
+  const std::size_t maxContextLength = std::min(kMaxContextLength, oldSource.size() - offset);
+  for (std::size_t contextLength = 1; contextLength <= maxContextLength; ++contextLength) {
+    const std::string_view context = oldSource.substr(offset, contextLength);
+    const std::size_t firstMatch = newSource.find(context);
+    if (firstMatch == std::string_view::npos) {
+      continue;
+    }
+
+    if (newSource.find(context, firstMatch + 1) == std::string_view::npos) {
+      return firstMatch;
+    }
+  }
+
+  return std::nullopt;
 }
 
 std::string CanonicalizeForTextEditor(std::string_view source) {
@@ -98,23 +169,73 @@ bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
   }
 
   const std::string source = CanonicalizeForTextEditor(app.document().document().source());
+  std::string baselineSource = *previousSourceText;
+  std::string workingText = textEditor.getText();
   for (const xml::XMLSourceDelta& delta : sourceDeltas) {
-    const std::string currentText = textEditor.getText();
-    if (delta.offset > currentText.size() ||
-        delta.removedLength > currentText.size() - delta.offset || delta.offset > source.size() ||
-        delta.insertedLength > source.size() - delta.offset) {
+    if (delta.offset > baselineSource.size() ||
+        delta.removedLength > baselineSource.size() - delta.offset ||
+        delta.offset > source.size() || delta.insertedLength > source.size() - delta.offset) {
       return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
                                                 lastWritebackSourceText);
     }
 
-    textEditor.applyExternalSourceEdit(
-        delta.offset, delta.removedLength,
-        std::string_view(source).substr(delta.offset, delta.insertedLength));
+    std::size_t mappedOffset = delta.offset;
+    std::size_t mappedRemovedLength = delta.removedLength;
+    if (std::optional<SourceMirrorEdit> edit =
+            BuildSingleSourceMirrorEdit(baselineSource, workingText);
+        edit.has_value()) {
+      if (SourceRangeConflictsWithMirrorEdit(delta.offset, delta.removedLength, *edit)) {
+        if (delta.removedLength != 0) {
+          return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                                    lastWritebackSourceText);
+        }
+
+        std::optional<std::size_t> contextOffset =
+            MapOffsetByFollowingContext(baselineSource, workingText, delta.offset);
+        if (!contextOffset.has_value()) {
+          return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                                    lastWritebackSourceText);
+        }
+
+        mappedOffset = *contextOffset;
+        mappedRemovedLength = 0;
+      } else {
+        std::optional<std::size_t> mappedStart = MapOffsetThroughSourceMirrorEdit(
+            delta.offset, *edit, OffsetMappingBias::AfterReplacement);
+        std::optional<std::size_t> mappedEnd = MapOffsetThroughSourceMirrorEdit(
+            delta.offset + delta.removedLength, *edit, OffsetMappingBias::AfterReplacement);
+        if (!mappedStart.has_value() || !mappedEnd.has_value() || *mappedEnd < *mappedStart) {
+          return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                                    lastWritebackSourceText);
+        }
+
+        mappedOffset = *mappedStart;
+        mappedRemovedLength = *mappedEnd - *mappedStart;
+      }
+    }
+
+    if (mappedOffset > workingText.size() ||
+        mappedRemovedLength > workingText.size() - mappedOffset) {
+      return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
+                                                lastWritebackSourceText);
+    }
+
+    const std::string_view replacement =
+        std::string_view(source).substr(delta.offset, delta.insertedLength);
+    textEditor.applyExternalSourceEdit(mappedOffset, mappedRemovedLength, replacement);
+    workingText.replace(mappedOffset, mappedRemovedLength, replacement.data(), replacement.size());
+    baselineSource.replace(delta.offset, delta.removedLength, replacement.data(),
+                           replacement.size());
   }
 
-  if (textEditor.getText() != source) {
+  if (baselineSource != source) {
     return MirrorDocumentSourceIntoTextEditor(app, textEditor, previousSourceText,
                                               lastWritebackSourceText);
+  }
+
+  if (workingText != source) {
+    QueueSourceWritebackReparse(app, workingText, previousSourceText, lastWritebackSourceText);
+    return true;
   }
 
   MarkMirroredDocumentSource(app, source, previousSourceText, lastWritebackSourceText);

@@ -1740,6 +1740,13 @@ ImU32 SourceStyleStrikethroughColor() {
   return ImGui::ColorConvertFloat4ToU32(ImVec4(1.0f, 1.0f, 1.0f, 0.92f));
 }
 
+constexpr const char* kStyleSourceChipIcon = "✦";
+
+ImVec2 StyleSourceChipTextSize() {
+  return ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f,
+                                         kStyleSourceChipIcon);
+}
+
 }  // namespace
 
 std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusReferenceConnectorLayout(
@@ -1750,18 +1757,9 @@ std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusRefere
 
   FocusReferenceConnectorLayout layout;
   const float baselineY = TextBaselineOffsetY();
-  if (std::optional<FocusReferenceSourceUnderline> sourceUnderline =
-          focusReferenceSourceUnderline(link.from)) {
-    layout.sourceUnderline = *sourceUnderline;
-    layout.hasSourceUnderline = true;
-    layout.start = ImVec2((sourceUnderline->start.x + sourceUnderline->end.x) * 0.5f,
-                          sourceUnderline->start.y);
-  } else {
-    layout.start = coordinatesToScreenPos(Coordinates(link.from.line, link.from.column));
-    layout.start.x += charAdvance_.x * 0.5f;
-    layout.start.y += baselineY;
-  }
-
+  layout.start = coordinatesToScreenPos(Coordinates(link.from.line, link.from.column));
+  layout.start.x += charAdvance_.x * 0.5f;
+  layout.start.y += baselineY;
   if (std::optional<SourceStyleChipBounds> targetChip =
           sourceStyleChipBoundsForReferenceTarget(link.to)) {
     const ImVec2 chipCenter((targetChip->min.x + targetChip->max.x) * 0.5f,
@@ -1774,10 +1772,44 @@ std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusRefere
       const float sideX = leftDistance <= rightDistance ? targetChip->min.x : targetChip->max.x;
       layout.tip = ImVec2(sideX, chipCenter.y);
     }
+
+    if (targetChip->kind == SourceStyleChipKind::SelectorMatchCount) {
+      if (std::optional<SourceStyleChipBounds> sourceChip =
+              focusReferenceStyleSourceChipBounds(link.from)) {
+        layout.sourceStyleChip = *sourceChip;
+        layout.hasSourceStyleChip = true;
+        const ImVec2 sourceChipCenter((sourceChip->min.x + sourceChip->max.x) * 0.5f,
+                                      (sourceChip->min.y + sourceChip->max.y) * 0.5f);
+        if (layout.tip.y + uiScale_ < sourceChip->min.y) {
+          layout.start = ImVec2(sourceChipCenter.x, sourceChip->min.y);
+        } else if (layout.tip.y > sourceChip->max.y + uiScale_) {
+          layout.start = ImVec2(sourceChipCenter.x, sourceChip->max.y);
+        } else {
+          const float leftDistance = std::abs(layout.tip.x - sourceChip->min.x);
+          const float rightDistance = std::abs(layout.tip.x - sourceChip->max.x);
+          const float sideX = leftDistance <= rightDistance ? sourceChip->min.x : sourceChip->max.x;
+          layout.start = ImVec2(sideX, sourceChipCenter.y);
+        }
+      }
+    }
   } else {
     layout.tip = coordinatesToScreenPos(Coordinates(link.to.line, link.to.column));
     layout.tip.x -= 2.0f * uiScale_;
     layout.tip.y += baselineY;
+  }
+
+  if (!layout.hasSourceStyleChip) {
+    if (std::optional<FocusReferenceSourceUnderline> sourceUnderline =
+            focusReferenceSourceUnderline(link.from)) {
+      layout.sourceUnderline = *sourceUnderline;
+      layout.hasSourceUnderline = true;
+      layout.start = ImVec2((sourceUnderline->start.x + sourceUnderline->end.x) * 0.5f,
+                            sourceUnderline->start.y);
+    } else {
+      layout.start = coordinatesToScreenPos(Coordinates(link.from.line, link.from.column));
+      layout.start.x += charAdvance_.x * 0.5f;
+      layout.start.y += baselineY;
+    }
   }
 
   const float selectionAlpha =
@@ -1981,6 +2013,7 @@ std::optional<TextEditor::SourceStyleChipBounds> TextEditor::sourceStyleChipBoun
   return SourceStyleChipBounds{
       .min = min,
       .max = ImVec2(min.x + chipSize.x, min.y + chipSize.y),
+      .kind = decoration.chipKind,
   };
 }
 
@@ -2007,6 +2040,30 @@ TextEditor::sourceStyleChipBoundsForReferenceTarget(const SourcePoint& target) c
   }
 
   return std::nullopt;
+}
+
+std::optional<TextEditor::SourceStyleChipBounds> TextEditor::focusReferenceStyleSourceChipBounds(
+    const SourcePoint& source) const {
+  const Coordinates position = sanitizeCoordinates(Coordinates(source.line, source.column));
+  if (position.line < 0 || position.line >= text_.getTotalLines() ||
+      isLineHiddenByFocus(position.line)) {
+    return std::nullopt;
+  }
+
+  const Coordinates lineEnd(position.line, text_.getLineMaxColumn(position.line));
+  const float paddingX = std::max(4.0f * uiScale_, 4.0f);
+  const float paddingY = std::max(1.0f * uiScale_, 1.0f);
+  const float gap = std::max(5.0f * uiScale_, 5.0f);
+  const ImVec2 iconSize = StyleSourceChipTextSize();
+  const ImVec2 chipSize(iconSize.x + paddingX * 2.0f, iconSize.y + paddingY * 2.0f);
+  ImVec2 min = coordinatesToScreenPos(lineEnd);
+  min.x += gap;
+  min.y += std::max(0.0f, (charAdvance_.y - chipSize.y) * 0.5f);
+  return SourceStyleChipBounds{
+      .min = min,
+      .max = ImVec2(min.x + chipSize.x, min.y + chipSize.y),
+      .kind = SourceStyleChipKind::SelectorMatchCount,
+  };
 }
 
 void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
@@ -2074,6 +2131,9 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     if (layout->hasSourceUnderline) {
       drawList->AddLine(layout->sourceUnderline.start, layout->sourceUnderline.end, color,
                         std::max(1.0f, uiScale_));
+    }
+    if (layout->hasSourceStyleChip) {
+      renderFocusReferenceStyleSourceChip(drawList, layout->sourceStyleChip, color);
     }
     StrokeDonnerPath(drawList, ropeState.path, color,
                      ropeState.hovered ? hoverThickness : thickness);
@@ -2154,6 +2214,29 @@ void TextEditor::renderSourceStyleDecorationStrikethroughs(int lineNo, int start
         std::floor(start.y + ImGui::GetFontSize() * kStrikeHeightFraction + kStrikeOffsetY) + 0.5f;
     drawList->AddLine(ImVec2(start.x, y), ImVec2(end.x, y), color, thickness);
   }
+}
+
+void TextEditor::renderFocusReferenceStyleSourceChip(ImDrawList* drawList,
+                                                     const SourceStyleChipBounds& bounds,
+                                                     ImU32 color) const {
+  if (drawList == nullptr) {
+    return;
+  }
+
+  const float paddingX = std::max(4.0f * uiScale_, 4.0f);
+  const float paddingY = std::max(1.0f * uiScale_, 1.0f);
+  const float rounding = 4.0f * uiScale_;
+  const ImVec4 colorVec = ImGui::ColorConvertU32ToFloat4(color);
+  const ImU32 fillColor =
+      ImGui::ColorConvertFloat4ToU32(ImVec4(colorVec.x, colorVec.y, colorVec.z, 0.18f));
+  const ImU32 borderColor =
+      ImGui::ColorConvertFloat4ToU32(ImVec4(colorVec.x, colorVec.y, colorVec.z, 0.72f));
+
+  drawList->AddRectFilled(bounds.min, bounds.max, fillColor, rounding);
+  drawList->AddRect(bounds.min, bounds.max, borderColor, rounding, ImDrawFlags_None,
+                    std::max(1.0f, uiScale_));
+  drawList->AddText(ImVec2(bounds.min.x + paddingX, bounds.min.y + paddingY), borderColor,
+                    kStyleSourceChipIcon);
 }
 
 void TextEditor::renderSourceStyleDecorationChips(ImDrawList* drawList) {

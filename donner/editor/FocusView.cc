@@ -55,6 +55,12 @@ struct CssRuleKey {
   bool operator==(const CssRuleKey& other) const = default;
 };
 
+enum class FocusLinkSourceMode {
+  All,       ///< Links may originate from this element and descendants.
+  RootOnly,  ///< Links may originate from this element, but not descendants.
+  None,      ///< This subtree contributes context only, with no links.
+};
+
 std::optional<ByteRange> ResolveSourceRange(std::string_view source, const SourceRange& range) {
   const FileOffset start = range.start.resolveOffset(source);
   const FileOffset end = range.end.resolveOffset(source);
@@ -315,34 +321,10 @@ std::vector<FragmentReference> ReferencedFragments(std::string_view source,
   return result;
 }
 
-std::optional<std::size_t> AttributeValueStartOffset(std::string_view source,
-                                                     const xml::XMLNode& xmlNode,
-                                                     std::string_view attrName) {
-  if (std::optional<xml::XMLAttributeSourceLocation> location =
-          xmlNode.getAttributeSourceLocation(xml::XMLQualifiedNameRef(attrName))) {
-    if (std::optional<ByteRange> valueRange = ResolveSourceRange(source, location->valueRange)) {
-      return valueRange->start;
-    }
-  }
-
-  return std::nullopt;
-}
-
 std::optional<std::size_t> SelectorLinkSourceOffset(std::string_view source,
                                                     const svg::SVGElement& selected) {
-  std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(selected.entityHandle());
-  if (!xmlNode.has_value()) {
-    return std::nullopt;
-  }
-
-  for (std::string_view attrName : {std::string_view("class"), std::string_view("id")}) {
-    if (std::optional<std::size_t> offset = AttributeValueStartOffset(source, *xmlNode, attrName)) {
-      return offset;
-    }
-  }
-
-  if (std::optional<ByteRange> nodeRange = NodeRange(source, selected)) {
-    return nodeRange->start;
+  if (std::optional<ByteRange> openingTagRange = OpeningTagRange(source, selected)) {
+    return openingTagRange->end;
   }
 
   return std::nullopt;
@@ -358,16 +340,31 @@ void AppendCssFragmentReferences(std::string_view source, ByteRange range,
                               references);
 }
 
-void AppendReferencedFragmentsInSubtree(std::string_view source, const svg::SVGElement& root,
-                                        std::vector<FragmentReference>* references) {
-  for (const FragmentReference& reference : ReferencedFragments(source, root)) {
-    references->push_back(reference);
+FocusLinkSourceMode ChildLinkSourceMode(FocusLinkSourceMode mode) {
+  return mode == FocusLinkSourceMode::All ? FocusLinkSourceMode::All : FocusLinkSourceMode::None;
+}
+
+void AppendFragmentReferences(std::vector<FragmentReference> input, FocusLinkSourceMode mode,
+                              std::vector<FragmentReference>* references) {
+  if (mode == FocusLinkSourceMode::None) {
+    for (FragmentReference& reference : input) {
+      reference.sourceOffset = std::nullopt;
+    }
   }
+
+  references->insert(references->end(), input.begin(), input.end());
+}
+
+void AppendReferencedFragmentsInSubtree(std::string_view source, const svg::SVGElement& root,
+                                        FocusLinkSourceMode linkSourceMode,
+                                        std::vector<FragmentReference>* references) {
+  AppendFragmentReferences(ReferencedFragments(source, root), linkSourceMode, references);
 
   for (auto child = SafeFirstChild(root); child.has_value();) {
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
-    AppendReferencedFragmentsInSubtree(source, current, references);
+    AppendReferencedFragmentsInSubtree(source, current, ChildLinkSourceMode(linkSourceMode),
+                                       references);
   }
 }
 
@@ -457,6 +454,11 @@ bool IsRenderedStyleTarget(const svg::SVGElement& element) {
     case svg::ElementType::Use: return true;
     default: return false;
   }
+}
+
+bool IsGroupElement(const svg::SVGElement& element) {
+  const std::optional<svg::ElementType> type = SafeElementType(element);
+  return type.has_value() && *type == svg::ElementType::G;
 }
 
 void AppendImpactedElementsForStyleRule(const svg::SVGElement& root,
@@ -682,12 +684,14 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
                                     const std::vector<std::size_t>& lineStarts,
                                     const svg::SVGElement& root, FocusElementCollection* result,
                                     std::vector<CssRuleKey>* visitedCssRules,
+                                    FocusLinkSourceMode linkSourceMode,
                                     std::vector<FragmentReference>* references) {
   if (!HasLiveSvgTreeComponents(root)) {
     return;
   }
 
   Registry& registry = *root.entityHandle().registry();
+  const bool emitLinks = linkSourceMode != FocusLinkSourceMode::None;
   const std::optional<std::size_t> selectorLinkSource = SelectorLinkSourceOffset(source, root);
   if (IsRenderedStyleTarget(root)) {
     for (const svg::SVGMatchedStyleRule& matchedRule : svg::CollectMatchedStyleRules(root)) {
@@ -705,7 +709,7 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
 
       AddMatchedCssRule(source, registry, matchedRule, result, visitedCssRules);
 
-      if (selectorLinkSource.has_value() && *selectorLinkSource <= source.size()) {
+      if (emitLinks && selectorLinkSource.has_value() && *selectorLinkSource <= source.size()) {
         AddSourceReferenceLink(
             FocusReferenceLink{
                 .from = PointForOffset(lineStarts, *selectorLinkSource),
@@ -714,7 +718,9 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
             &result->cssLinks);
       }
 
-      AppendCssFragmentReferences(source, *ruleRange, references);
+      std::vector<FragmentReference> ruleReferences;
+      AppendCssFragmentReferences(source, *ruleRange, &ruleReferences);
+      AppendFragmentReferences(std::move(ruleReferences), linkSourceMode, references);
     }
   }
 
@@ -722,7 +728,7 @@ void AppendMatchedCssRulesInSubtree(std::string_view source,
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
     AppendMatchedCssRulesInSubtree(source, lineStarts, current, result, visitedCssRules,
-                                   references);
+                                   ChildLinkSourceMode(linkSourceMode), references);
   }
 }
 
@@ -903,25 +909,34 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
                                             const std::vector<std::size_t>& lineStarts) {
   FocusElementCollection result;
   std::vector<Entity> visited;
+  std::vector<Entity> selectedGroupEntities;
   std::vector<Entity> reverseExpandableEntities;
   std::vector<std::string> reverseProcessedIds;
   std::vector<CssRuleKey> visitedCssRules;
   for (const svg::SVGElement& element : initialElements) {
     AddFocusElement(element, &result, &visited);
+    if (IsGroupElement(element)) {
+      selectedGroupEntities.push_back(element.entityHandle().entity());
+    }
     MarkReverseExpandableIfResource(element, &reverseExpandableEntities);
   }
 
   const svg::SVGElement root = document.svgElement();
   for (std::size_t i = 0; i < result.elements.size(); ++i) {
     const svg::SVGElement current = result.elements[i];
+    const Entity currentEntity = current.entityHandle().entity();
+    const bool currentIsSelectedGroup =
+        std::ranges::find(selectedGroupEntities, currentEntity) != selectedGroupEntities.end();
+    const FocusLinkSourceMode linkSourceMode =
+        currentIsSelectedGroup ? FocusLinkSourceMode::RootOnly : FocusLinkSourceMode::All;
     std::vector<FragmentReference> references;
     if (i == 0) {
       references.insert(references.end(), initialReferences.begin(), initialReferences.end());
     }
 
     AppendMatchedCssRulesInSubtree(document.source(), lineStarts, current, &result,
-                                   &visitedCssRules, &references);
-    AppendReferencedFragmentsInSubtree(document.source(), current, &references);
+                                   &visitedCssRules, linkSourceMode, &references);
+    AppendReferencedFragmentsInSubtree(document.source(), current, linkSourceMode, &references);
 
     for (const FragmentReference& reference : references) {
       std::optional<svg::SVGElement> referenced = FindElementById(root, reference.fragmentId);
@@ -979,8 +994,9 @@ void AppendForwardReferenceElements(const svg::SVGDocument& document,
   std::vector<CssRuleKey> ignoredCssRules;
   std::vector<FragmentReference> references;
   AppendMatchedCssRulesInSubtree(document.source(), lineStarts, element, &ignoredCollection,
-                                 &ignoredCssRules, &references);
-  AppendReferencedFragmentsInSubtree(document.source(), element, &references);
+                                 &ignoredCssRules, FocusLinkSourceMode::All, &references);
+  AppendReferencedFragmentsInSubtree(document.source(), element, FocusLinkSourceMode::All,
+                                     &references);
 
   const svg::SVGElement root = document.svgElement();
   for (const FragmentReference& reference : references) {
@@ -1019,6 +1035,17 @@ void AddNodeTagLineRanges(std::string_view source, const std::vector<std::size_t
                           ByteRange nodeRange, FocusPartition* partition) {
   for (ByteRange tagRange : AncestorTagRanges(source, nodeRange)) {
     partition->dimmed.push_back(RangeToLines(lineStarts, tagRange));
+  }
+}
+
+void AddXmlAncestorTagLineRanges(std::string_view source,
+                                 const std::vector<std::size_t>& lineStarts,
+                                 const xml::XMLNode& node, FocusPartition* partition) {
+  for (std::optional<xml::XMLNode> ancestor = node.parentElement(); ancestor.has_value();
+       ancestor = ancestor->parentElement()) {
+    if (std::optional<ByteRange> ancestorRange = NodeRange(source, *ancestor)) {
+      AddNodeTagLineRanges(source, lineStarts, *ancestorRange, partition);
+    }
   }
 }
 
@@ -1221,6 +1248,10 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
           NodeRangeForEntity(source, registry, sourceRule->stylesheetEntity)) {
     AddNodeTagLineRanges(source, lineStarts, *stylesheetNodeRange, &partition);
   }
+  if (std::optional<xml::XMLNode> stylesheetNode =
+          xml::XMLNode::TryCast(EntityHandle(registry, sourceRule->stylesheetEntity))) {
+    AddXmlAncestorTagLineRanges(source, lineStarts, *stylesheetNode, &partition);
+  }
 
   if (!suppressReverseReferenceExpansion) {
     for (const svg::SVGElement& element : focusElements.elements) {
@@ -1240,15 +1271,6 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
     }
     partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),
                                     focusElements.cssLinks.end());
-
-    for (const svg::SVGElement& element : focusElements.elements) {
-      if (std::optional<std::size_t> elementStart = ReferenceLinkTargetOffset(source, element)) {
-        partition.referenceLinks.push_back(FocusReferenceLink{
-            .from = PointForOffset(lineStarts, selectorRange->start),
-            .to = PointForOffset(lineStarts, *elementStart),
-        });
-      }
-    }
 
     AppendElementReferenceLinks(source, lineStarts, focusElements.links, &partition);
   }

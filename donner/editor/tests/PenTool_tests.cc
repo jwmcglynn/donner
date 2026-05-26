@@ -243,5 +243,39 @@ TEST_F(PenToolTest, GenericSourceDeltasMirrorPenChangesIntoTextPane) {
   EXPECT_NE(textEditor.getText().find(R"(d="M 10 20 L 30 40")"), std::string::npos);
 }
 
+TEST_F(PenToolTest, FirstClickInDirtyTextPaneStaysInsideCurrentSvgRoot) {
+  constexpr std::string_view kSvgWithRect =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="old"/></svg>)";
+  constexpr std::string_view kDirtySvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>)";
+
+  ASSERT_TRUE(app.loadFromString(kSvgWithRect));
+  TextEditor textEditor;
+  textEditor.setText(kDirtySvg);
+  textEditor.resetTextChanged();
+  ASSERT_EQ(textEditor.getText(), kDirtySvg);
+  DocumentSyncController controller{std::string(kSvgWithRect)};
+  SelectTool selectTool;
+
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, selectTool, textEditor);
+
+  const std::string sourceText = textEditor.getText();
+  const std::size_t pathOffset = sourceText.find(R"(<path d="M 10 20")");
+  const std::size_t svgCloseOffset = sourceText.find("</svg>");
+  ASSERT_NE(pathOffset, std::string::npos);
+  ASSERT_NE(svgCloseOffset, std::string::npos);
+  EXPECT_LT(pathOffset, svgCloseOffset) << sourceText;
+  EXPECT_EQ(sourceText.find(R"(id="old")"), std::string::npos) << sourceText;
+
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, selectTool, textEditor);
+
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+  EXPECT_FALSE(app.document().document().querySelector("#old").has_value());
+  EXPECT_TRUE(app.document().document().querySelector("path").has_value());
+}
+
 }  // namespace
 }  // namespace donner::editor

@@ -221,6 +221,8 @@ protected:
     };
   }
 
+  [[nodiscard]] int LineMaxColumn(int line) const { return editor.text_.getLineMaxColumn(line); }
+
   [[nodiscard]] bool HasActiveSourceFlash() const {
     return editor.nextFlashWakeSeconds().has_value() &&
            !editor.flashDecorations_.activeBackgrounds(FlashDecorations::Clock::now()).empty();
@@ -1278,6 +1280,7 @@ TEST_F(TextEditorTests, FocusReferenceConnectorTerminatesOnClosestSourceStyleChi
           .chipRange = SourceByteRange{.start = 0, .end = 27},
           .showChip = true,
           .chipCount = 1,
+          .chipKind = TextEditor::SourceStyleChipKind::ReferenceCount,
           .chipTooltip = "Referenced 1 time",
       },
   }));
@@ -1300,6 +1303,8 @@ TEST_F(TextEditorTests, FocusReferenceConnectorTerminatesOnClosestSourceStyleChi
 
   const auto layout = FocusReferenceLayout(link, 0);
   ASSERT_TRUE(layout.has_value());
+  EXPECT_FALSE(layout->hasSourceStyleChip);
+  EXPECT_TRUE(layout->hasSourceUnderline);
 
   const ImVec2 chipMin = SourceStyleChipHitRectMin(0);
   const ImVec2 chipMax = SourceStyleChipHitRectMax(0);
@@ -1348,6 +1353,13 @@ TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) 
   const ImVec2 chipMax = SourceStyleChipHitRectMax(0);
   EXPECT_FLOAT_EQ(layout->tip.x, (chipMin.x + chipMax.x) * 0.5f);
   EXPECT_FLOAT_EQ(layout->tip.y, chipMax.y);
+  EXPECT_TRUE(layout->hasSourceStyleChip);
+  EXPECT_FALSE(layout->hasSourceUnderline);
+  EXPECT_GT(layout->sourceStyleChip.min.x,
+            ScreenPointAtCoordinates(Coordinates(1, LineMaxColumn(1))).x);
+  EXPECT_FLOAT_EQ(layout->start.x, layout->sourceStyleChip.min.x);
+  EXPECT_FLOAT_EQ(layout->start.y,
+                  (layout->sourceStyleChip.min.y + layout->sourceStyleChip.max.y) * 0.5f);
   ExpectFocusReferenceArrowMatchesTangent(link);
 }
 

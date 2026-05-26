@@ -76,6 +76,16 @@ constexpr std::string_view kSelectorListSvg =
   <rect id="miss" class="miss"/>
 </svg>)svg";
 
+constexpr std::string_view kStyleInDefsSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .hit { fill: red; }
+    </style>
+  </defs>
+  <rect id="hit" class="hit"/>
+</svg>)svg";
+
 constexpr std::string_view kStyleSourceMutationSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <style>
@@ -180,6 +190,17 @@ constexpr std::string_view kGroupedCssChildrenSvg =
     <path id="boltB" class="bright"/>
   </g>
   <path id="sibling" class="unused"/>
+</svg>)svg";
+
+constexpr std::string_view kGroupOwnAndChildCssSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .outer { opacity: 0.8; }
+    .inner { fill: white; }
+  </style>
+  <g id="group" class="outer">
+    <path id="child" class="inner"/>
+  </g>
 </svg>)svg";
 
 std::size_t OffsetForNeedle(std::string_view source, std::string_view needle) {
@@ -339,7 +360,7 @@ TEST(FocusViewTest, ReferenceHighlightSummaryCountsForwardReferences) {
   EXPECT_EQ(summary.totalCount(), 3u);
 }
 
-TEST(FocusViewTest, IncludesReferencesFromStyleAndDescendantHrefAttributes) {
+TEST(FocusViewTest, GroupSelectionDrawsOnlyOwnReferenceArrows) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSubtreeReferencedSvg));
   std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
@@ -355,10 +376,6 @@ TEST(FocusViewTest, IncludesReferencesFromStyleAndDescendantHrefAttributes) {
                 {
                     .from = PointForNeedle(kSubtreeReferencedSvg, "#arrow"),
                     .to = PointForOpeningTagEnd(kSubtreeReferencedSvg, R"(<marker id="arrow")"),
-                },
-                {
-                    .from = PointForNeedle(kSubtreeReferencedSvg, "#pathRef"),
-                    .to = PointForOpeningTagEnd(kSubtreeReferencedSvg, R"(<path id="pathRef")"),
                 },
             }));
 }
@@ -387,12 +404,12 @@ TEST(FocusViewTest, IncludesMatchedCssRulesAndCssDeclarationReferences) {
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kCssReferencedSvg, R"(<rect id="sibling")").line));
 
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedleAfter(kCssReferencedSvg, "cls-92", R"(<rect id="target")"),
-          .to = PointForNeedle(kCssReferencedSvg, ".cls-92"),
-      }));
+  EXPECT_TRUE(
+      ContainsLink(partition.referenceLinks,
+                   FocusReferenceLink{
+                       .from = PointForOpeningTagEnd(kCssReferencedSvg, R"(<rect id="target")"),
+                       .to = PointForNeedle(kCssReferencedSvg, ".cls-92"),
+                   }));
   EXPECT_TRUE(ContainsLink(
       partition.referenceLinks,
       FocusReferenceLink{
@@ -423,11 +440,17 @@ TEST(FocusViewTest, StyleOffsetFocusIncludesImpactedElementsAndCssDeclarationRef
   EXPECT_TRUE(ContainsLine(partition->hidden,
                            PointForNeedle(kCssReferencedSvg, R"(<rect id="sibling")").line));
 
-  EXPECT_TRUE(ContainsLink(partition->referenceLinks,
-                           FocusReferenceLink{
-                               .from = PointForNeedle(kCssReferencedSvg, ".cls-92"),
-                               .to = PointForNeedle(kCssReferencedSvg, R"(<rect id="target")"),
-                           }));
+  EXPECT_TRUE(
+      ContainsLink(partition->referenceLinks,
+                   FocusReferenceLink{
+                       .from = PointForOpeningTagEnd(kCssReferencedSvg, R"(<rect id="target")"),
+                       .to = PointForNeedle(kCssReferencedSvg, ".cls-92"),
+                   }));
+  EXPECT_FALSE(ContainsLink(partition->referenceLinks,
+                            FocusReferenceLink{
+                                .from = PointForNeedle(kCssReferencedSvg, ".cls-92"),
+                                .to = PointForNeedle(kCssReferencedSvg, R"(<rect id="target")"),
+                            }));
   EXPECT_TRUE(ContainsLink(
       partition->referenceLinks,
       FocusReferenceLink{
@@ -455,6 +478,24 @@ TEST(FocusViewTest, StyleOffsetFocusUsesSelectorListBranchUnderCursor) {
                            PointForNeedle(kSelectorListSvg, R"(<rect id="hit")").line));
   EXPECT_TRUE(ContainsLine(blockPartition->referenceColor,
                            PointForNeedle(kSelectorListSvg, R"(<rect id="miss")").line));
+}
+
+TEST(FocusViewTest, StyleOffsetFocusShowsStyleElementAncestors) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kStyleInDefsSvg));
+
+  const std::optional<FocusPartition> partition = ComputeStyleFocusPartitionAtSourceOffset(
+      app.document().document(), OffsetForNeedle(kStyleInDefsSvg, ".hit"));
+  ASSERT_TRUE(partition.has_value());
+
+  EXPECT_TRUE(ContainsLine(partition->dimmed, PointForNeedle(kStyleInDefsSvg, "<svg").line));
+  EXPECT_TRUE(ContainsLine(partition->dimmed, PointForNeedle(kStyleInDefsSvg, "<defs>").line));
+  EXPECT_TRUE(ContainsLine(partition->dimmed, PointForNeedle(kStyleInDefsSvg, "<style>").line));
+  EXPECT_TRUE(ContainsLine(partition->dimmed, PointForNeedle(kStyleInDefsSvg, "</style>").line));
+  EXPECT_TRUE(ContainsLine(partition->dimmed, PointForNeedle(kStyleInDefsSvg, "</defs>").line));
+  EXPECT_TRUE(ContainsLine(partition->dimmed, PointForNeedle(kStyleInDefsSvg, "</svg>").line));
+  EXPECT_FALSE(ContainsLine(partition->hidden, PointForNeedle(kStyleInDefsSvg, "<defs>").line));
+  EXPECT_FALSE(ContainsLine(partition->hidden, PointForNeedle(kStyleInDefsSvg, "</defs>").line));
 }
 
 TEST(FocusViewTest, StyleFocusReportsImpactedElementsForCanvasSelection) {
@@ -545,7 +586,7 @@ TEST(FocusViewTest, StyleOffsetFocusSurvivesStructuredSourceTypingMutations) {
   }
 }
 
-TEST(FocusViewTest, SelectingGroupIncludesCssRuleLinksForDescendantElements) {
+TEST(FocusViewTest, SelectingGroupShowsDescendantCssRulesWithoutDescendantLinks) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kGroupedCssChildrenSvg));
   std::optional<svg::SVGElement> group =
@@ -565,18 +606,28 @@ TEST(FocusViewTest, SelectingGroupIncludesCssRuleLinksForDescendantElements) {
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kGroupedCssChildrenSvg, R"(<path id="sibling")").line));
 
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedleAfter(kGroupedCssChildrenSvg, "glow", R"(<path id="boltA")"),
-          .to = PointForNeedle(kGroupedCssChildrenSvg, ".glow"),
-      }));
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedleAfter(kGroupedCssChildrenSvg, "bright", R"(<path id="boltB")"),
-          .to = PointForNeedle(kGroupedCssChildrenSvg, ".bright"),
-      }));
+  EXPECT_TRUE(partition.referenceLinks.empty());
+}
+
+TEST(FocusViewTest, SelectingGroupStillDrawsOwnCssRuleLink) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kGroupOwnAndChildCssSvg));
+  std::optional<svg::SVGElement> group = app.document().document().querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *group);
+
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
+                           PointForNeedle(kGroupOwnAndChildCssSvg, ".outer").line));
+  EXPECT_TRUE(ContainsLine(partition.referenceColor,
+                           PointForNeedle(kGroupOwnAndChildCssSvg, ".inner").line));
+  EXPECT_EQ(SortLinks(partition.referenceLinks),
+            SortLinks(std::vector<FocusReferenceLink>{
+                {
+                    .from = PointForOpeningTagEnd(kGroupOwnAndChildCssSvg, R"(<g id="group")"),
+                    .to = PointForNeedle(kGroupOwnAndChildCssSvg, ".outer"),
+                },
+            }));
 }
 
 TEST(FocusViewTest, SelectingMultipleElementsIncludesCssRuleLinksForEachSelection) {
@@ -598,18 +649,18 @@ TEST(FocusViewTest, SelectingMultipleElementsIncludesCssRuleLinksForEachSelectio
       ContainsLine(partition.referenceColor, PointForNeedle(kGroupedCssChildrenSvg, ".glow").line));
   EXPECT_TRUE(ContainsLine(partition.referenceColor,
                            PointForNeedle(kGroupedCssChildrenSvg, ".bright").line));
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedleAfter(kGroupedCssChildrenSvg, "glow", R"(<path id="boltA")"),
-          .to = PointForNeedle(kGroupedCssChildrenSvg, ".glow"),
-      }));
-  EXPECT_TRUE(ContainsLink(
-      partition.referenceLinks,
-      FocusReferenceLink{
-          .from = PointForNeedleAfter(kGroupedCssChildrenSvg, "bright", R"(<path id="boltB")"),
-          .to = PointForNeedle(kGroupedCssChildrenSvg, ".bright"),
-      }));
+  EXPECT_TRUE(
+      ContainsLink(partition.referenceLinks,
+                   FocusReferenceLink{
+                       .from = PointForOpeningTagEnd(kGroupedCssChildrenSvg, R"(<path id="boltA")"),
+                       .to = PointForNeedle(kGroupedCssChildrenSvg, ".glow"),
+                   }));
+  EXPECT_TRUE(
+      ContainsLink(partition.referenceLinks,
+                   FocusReferenceLink{
+                       .from = PointForOpeningTagEnd(kGroupedCssChildrenSvg, R"(<path id="boltB")"),
+                       .to = PointForNeedle(kGroupedCssChildrenSvg, ".bright"),
+                   }));
 }
 
 TEST(FocusViewTest, SelectingReferencedResourceIncludesReferringElementsAndCssRules) {

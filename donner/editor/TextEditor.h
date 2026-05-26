@@ -198,6 +198,12 @@ public:
   using LanguageDefinition = ::donner::editor::LanguageDefinition;
   using String = RcString;
 
+  /// Visual role for a rendered source style chip.
+  enum class SourceStyleChipKind {
+    SelectorMatchCount,  ///< Chip summarizes elements matched by a CSS selector.
+    ReferenceCount,      ///< Chip summarizes same-document references to a resource.
+  };
+
   /// Source decoration for style/cascade annotations in the editor.
   struct SourceStyleDecoration {
     std::size_t id = 0;         ///< Stable decoration id returned on chip clicks.
@@ -207,9 +213,11 @@ public:
     bool showChip = false;      ///< Render a selector-match count chip.
     int chipCount = 0;          ///< Count rendered inside the chip.
     bool showOverflowMarker = false;  ///< Render a chip-adjacent overflow marker.
-    std::string tooltip;              ///< Tooltip shown for the inactive source range.
-    std::string chipTooltip;          ///< Tooltip shown for the chip.
-    std::string overflowTooltip;      ///< Tooltip shown for the overflow marker.
+    SourceStyleChipKind chipKind =
+        SourceStyleChipKind::SelectorMatchCount;  ///< Semantic kind of the chip.
+    std::string tooltip;                          ///< Tooltip shown for the inactive source range.
+    std::string chipTooltip;                      ///< Tooltip shown for the chip.
+    std::string overflowTooltip;                  ///< Tooltip shown for the overflow marker.
 
     /// Equality operator.
     bool operator==(const SourceStyleDecoration& other) const = default;
@@ -1124,12 +1132,20 @@ private:
     ImVec2 end;
   };
 
+  struct SourceStyleChipBounds {
+    ImVec2 min;
+    ImVec2 max;
+    SourceStyleChipKind kind = SourceStyleChipKind::SelectorMatchCount;
+  };
+
   struct FocusReferenceConnectorLayout {
     ImVec2 start;
     ImVec2 tip;
     FocusReferenceSourceUnderline sourceUnderline;
+    SourceStyleChipBounds sourceStyleChip;
     ImU32 color = 0;
     bool hasSourceUnderline = false;
+    bool hasSourceStyleChip = false;
   };
   std::map<FocusReferenceLink, FocusReferenceRopeState, FocusReferenceLinkLess>
       focusReferenceRopes_;
@@ -1145,19 +1161,19 @@ private:
   bool tryNavigateToFocusReferenceRopeAt(const ImVec2& mousePos);
   void navigateToFocusReferenceLink(const FocusReferenceLink& link);
   void remapFocusMetadataForSourceEdit(const SourceEditIntent& intent);
-  struct SourceStyleChipBounds {
-    ImVec2 min;
-    ImVec2 max;
-  };
   [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForDecoration(
       const SourceStyleDecoration& decoration) const;
   [[nodiscard]] std::optional<SourceStyleChipBounds> sourceStyleChipBoundsForReferenceTarget(
       const SourcePoint& target) const;
+  [[nodiscard]] std::optional<SourceStyleChipBounds> focusReferenceStyleSourceChipBounds(
+      const SourcePoint& source) const;
   [[nodiscard]] const SourceStyleDecoration* sourceStyleDecorationAtByteOffset(
       std::size_t byteOffset, bool ineffectiveOnly) const;
   [[nodiscard]] bool isByteOffsetInIneffectiveStyleDecoration(std::size_t byteOffset) const;
   void renderSourceStyleDecorationStrikethroughs(int lineNo, int startColumn, int endColumn,
                                                  ImDrawList* drawList);
+  void renderFocusReferenceStyleSourceChip(ImDrawList* drawList,
+                                           const SourceStyleChipBounds& bounds, ImU32 color) const;
   void renderSourceStyleDecorationChips(ImDrawList* drawList);
   void hitTestSourceStyleDecorationChips();
   void renderSourceStyleDecorationTooltip();
