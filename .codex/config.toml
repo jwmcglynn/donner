@@ -3,6 +3,9 @@ When running Bazel in this repository, use `tools/llm-bazel-wrap.sh` instead of
 invoking `bazel` directly. The wrapper removes Codex-injected PATH entries that
 would otherwise perturb Bazel's effective client environment and action cache
 keys. When writing commands in docs and to the user, use `bazel` instead.
+
+When creating pull requests, do not prefix PR titles with `[codex]`, agent names,
+or other tool branding. Use plain project-style titles that describe the change.
 """
 
 [shell_environment_policy]

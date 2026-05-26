@@ -7,6 +7,8 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/FileOffset.h"
+#include "donner/css/Declaration.h"
+#include "donner/css/Specificity.h"
 
 namespace donner::svg {
 
@@ -18,6 +20,7 @@ struct SVGMatchedStyleRule {
   Entity stylesheetEntity = entt::null;  ///< Entity carrying the matched stylesheet.
   std::size_t ruleIndex = 0;             ///< Index of the matched rule within the stylesheet.
   std::size_t selectorEntryIndex = 0;    ///< Index of the matched selector-list entry.
+  css::Specificity specificity;          ///< Selector specificity for this match.
   bool isUserAgentStylesheet = false;    ///< True when this came from the built-in UA stylesheet.
   std::optional<SourceRange> ruleSourceRange;        ///< Matched rule range in SVG source.
   std::optional<SourceRange> selectorSourceRange;    ///< Matched selector branch in SVG source.
@@ -25,6 +28,22 @@ struct SVGMatchedStyleRule {
 
   /// Equality operator.
   bool operator==(const SVGMatchedStyleRule& other) const = default;
+};
+
+/// Source-backed declaration within a stylesheet rule.
+struct SVGStylesheetDeclaration {
+  std::size_t declarationIndex = 0;                   ///< Index within the rule.
+  css::Declaration declaration;                       ///< Parsed CSS declaration.
+  std::optional<SourceRange> declarationSourceRange;  ///< Declaration range in SVG source.
+};
+
+/// Source-backed author stylesheet rule in a document.
+struct SVGStylesheetRule {
+  Entity stylesheetEntity = entt::null;                ///< Entity carrying the stylesheet.
+  std::size_t ruleIndex = 0;                           ///< Index within the stylesheet.
+  std::optional<SourceRange> ruleSourceRange;          ///< Rule range in SVG source.
+  std::optional<SourceRange> selectorSourceRange;      ///< Selector range in SVG source.
+  std::vector<SVGStylesheetDeclaration> declarations;  ///< Rule declarations.
 };
 
 /// Stylesheet rule found at a document source offset.
@@ -46,6 +65,12 @@ struct SVGStyleRuleAtSourceOffset {
 /// @param element Element to inspect.
 /// @return Matched stylesheet rules in cascade scan order.
 std::vector<SVGMatchedStyleRule> CollectMatchedStyleRules(const SVGElement& element);
+
+/// Collect source-backed author stylesheet rules in \p document.
+///
+/// @param document SVG document to inspect.
+/// @return Source-backed stylesheet rules in document scan order.
+std::vector<SVGStylesheetRule> CollectStylesheetRules(const SVGDocument& document);
 
 /// Find the author stylesheet rule at \p documentSourceOffset.
 ///

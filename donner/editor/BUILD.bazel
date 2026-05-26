@@ -148,7 +148,6 @@ donner_cc_library(
         "//donner/base/xml",
         "//donner/css",
         "//donner/svg",
-        "//donner/svg/components/style:style_system",
     ],
 )
 

@@ -20,16 +20,11 @@
 #include "donner/css/Specificity.h"
 #include "donner/editor/ReferenceFanout.h"
 #include "donner/svg/ElementType.h"
-#include "donner/svg/components/StylesheetComponent.h"
-#include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/SVGStyleQuery.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
 namespace donner::editor {
 namespace {
-
-using donner::svg::components::MatchedStyleRule;
-using donner::svg::components::StylesheetComponent;
-using donner::svg::components::StyleSystem;
 
 constexpr css::Specificity kPresentationSpecificity = css::Specificity::FromABC(0, 0, 0);
 struct ContributionKey {
@@ -241,15 +236,13 @@ void AppendHrefFragmentReference(std::string_view value,
 }
 
 [[nodiscard]] std::optional<SourceByteRange> DeclarationDocumentRange(
-    const StylesheetComponent& stylesheet, const css::Declaration& declaration,
-    std::string_view source) {
-  std::optional<SourceRange> documentRange =
-      stylesheet.sourceMap.mapToDocumentSource(declaration.sourceRange);
-  if (!documentRange.has_value()) {
+    const svg::SVGStylesheetDeclaration& declaration, std::string_view source) {
+  if (!declaration.declarationSourceRange.has_value()) {
     return std::nullopt;
   }
 
-  std::optional<SourceByteRange> byteRange = ToByteRange(*documentRange, source.size());
+  std::optional<SourceByteRange> byteRange =
+      ToByteRange(*declaration.declarationSourceRange, source.size());
   if (!byteRange.has_value()) {
     return std::nullopt;
   }
@@ -258,14 +251,12 @@ void AppendHrefFragmentReference(std::string_view value,
 }
 
 [[nodiscard]] std::optional<SourceByteRange> SelectorDocumentRange(
-    const StylesheetComponent& stylesheet, const css::SelectorRule& rule, std::string_view source) {
-  std::optional<SourceRange> documentRange =
-      stylesheet.sourceMap.mapToDocumentSource(rule.selectorSourceRange);
-  if (!documentRange.has_value()) {
+    const svg::SVGStylesheetRule& rule, std::string_view source) {
+  if (!rule.selectorSourceRange.has_value()) {
     return std::nullopt;
   }
 
-  return ToByteRange(*documentRange, source.size());
+  return ToByteRange(*rule.selectorSourceRange, source.size());
 }
 
 [[nodiscard]] SourceByteRange InlineDeclarationDocumentRange(
@@ -351,50 +342,40 @@ void AddContribution(
 }
 
 void AddStylesheetContributions(
-    Registry& registry, std::string_view source, StyleSourceAnnotations* annotations,
+    std::span<const svg::SVGStylesheetRule> styleRules, std::string_view source,
+    StyleSourceAnnotations* annotations,
     std::unordered_map<ContributionKey, std::size_t, ContributionKeyHash>* contributionIndexByKey) {
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    const StylesheetComponent& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
-    if (stylesheet.isUserAgentStylesheet || stylesheet.sourceMap.empty()) {
-      continue;
-    }
-
-    const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
-    for (std::size_t ruleIndex = 0; ruleIndex < rules.size(); ++ruleIndex) {
-      const css::SelectorRule& rule = rules[ruleIndex];
-      const std::optional<SourceByteRange> selectorRange =
-          SelectorDocumentRange(stylesheet, rule, source);
-      bool chipAssignedForRule = false;
-      for (std::size_t declarationIndex = 0; declarationIndex < rule.declarations.size();
-           ++declarationIndex) {
-        const css::Declaration& declaration = rule.declarations[declarationIndex];
-        std::optional<SourceByteRange> sourceRange =
-            DeclarationDocumentRange(stylesheet, declaration, source);
-        if (!sourceRange.has_value()) {
-          continue;
-        }
-
-        StyleSourceContribution contribution;
-        contribution.sourceRange = *sourceRange;
-        contribution.chipRange = selectorRange.value_or(*sourceRange);
-        contribution.propertyName = std::string(declaration.name);
-        contribution.kind = StyleContributionKind::StylesheetDeclaration;
-        contribution.showChip = !chipAssignedForRule;
-        contribution.tooltip = std::string(declaration.name) +
-                               " is overridden by a later or higher-specificity CSS declaration";
-        contribution.chipTooltip = "Selector matches 0 elements";
-        chipAssignedForRule = true;
-
-        AddContribution(std::move(contribution),
-                        ContributionKey{
-                            .kind = StyleContributionKind::StylesheetDeclaration,
-                            .stylesheetEntity = stylesheetEntity,
-                            .ruleIndex = ruleIndex,
-                            .declarationIndex = declarationIndex,
-                            .propertyName = std::string(declaration.name),
-                        },
-                        annotations, contributionIndexByKey);
+  for (const svg::SVGStylesheetRule& rule : styleRules) {
+    const std::optional<SourceByteRange> selectorRange = SelectorDocumentRange(rule, source);
+    bool chipAssignedForRule = false;
+    for (const svg::SVGStylesheetDeclaration& stylesheetDeclaration : rule.declarations) {
+      const css::Declaration& declaration = stylesheetDeclaration.declaration;
+      std::optional<SourceByteRange> sourceRange =
+          DeclarationDocumentRange(stylesheetDeclaration, source);
+      if (!sourceRange.has_value()) {
+        continue;
       }
+
+      StyleSourceContribution contribution;
+      contribution.sourceRange = *sourceRange;
+      contribution.chipRange = selectorRange.value_or(*sourceRange);
+      contribution.propertyName = std::string(declaration.name);
+      contribution.kind = StyleContributionKind::StylesheetDeclaration;
+      contribution.showChip = !chipAssignedForRule;
+      contribution.tooltip = std::string(declaration.name) +
+                             " is overridden by a later or higher-specificity CSS declaration";
+      contribution.chipTooltip = "Selector matches 0 elements";
+      chipAssignedForRule = true;
+
+      AddContribution(std::move(contribution),
+                      ContributionKey{
+                          .kind = StyleContributionKind::StylesheetDeclaration,
+                          .stylesheetEntity = rule.stylesheetEntity,
+                          .ruleIndex = rule.ruleIndex,
+                          .declarationIndex = stylesheetDeclaration.declarationIndex,
+                          .propertyName = std::string(declaration.name),
+                      },
+                      annotations, contributionIndexByKey);
     }
   }
 }
@@ -420,42 +401,33 @@ void AppendAttributeFragmentReferences(const svg::SVGElement& element,
   }
 }
 
-void AppendStylesheetFragmentReferences(Registry& registry, std::string_view source,
+void AppendStylesheetFragmentReferences(std::span<const svg::SVGStylesheetRule> styleRules,
+                                        std::string_view source,
                                         std::vector<FragmentReference>* references) {
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    const StylesheetComponent& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
-    if (stylesheet.isUserAgentStylesheet || stylesheet.sourceMap.empty()) {
+  for (const svg::SVGStylesheetRule& rule : styleRules) {
+    if (!rule.ruleSourceRange.has_value()) {
       continue;
     }
 
-    for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
-      std::optional<SourceRange> documentRange =
-          stylesheet.sourceMap.mapToDocumentSource(rule.ruleSourceRange);
-      if (!documentRange.has_value()) {
-        continue;
-      }
-
-      std::optional<SourceByteRange> ruleRange = ToByteRange(*documentRange, source.size());
-      if (!ruleRange.has_value()) {
-        continue;
-      }
-
-      AppendUrlFragmentReferences(
-          source.substr(ruleRange->start, ruleRange->end - ruleRange->start), std::nullopt,
-          references);
+    std::optional<SourceByteRange> ruleRange = ToByteRange(*rule.ruleSourceRange, source.size());
+    if (!ruleRange.has_value()) {
+      continue;
     }
+
+    AppendUrlFragmentReferences(source.substr(ruleRange->start, ruleRange->end - ruleRange->start),
+                                std::nullopt, references);
   }
 }
 
 void AddReferenceResourceContributions(
-    Registry& registry, std::string_view source, const std::vector<svg::SVGElement>& elements,
-    StyleSourceAnnotations* annotations,
+    std::string_view source, std::span<const svg::SVGStylesheetRule> styleRules,
+    const std::vector<svg::SVGElement>& elements, StyleSourceAnnotations* annotations,
     std::unordered_map<ContributionKey, std::size_t, ContributionKeyHash>* contributionIndexByKey) {
   std::vector<FragmentReference> references;
   for (const svg::SVGElement& element : elements) {
     AppendAttributeFragmentReferences(element, &references);
   }
-  AppendStylesheetFragmentReferences(registry, source, &references);
+  AppendStylesheetFragmentReferences(styleRules, source, &references);
 
   std::unordered_map<std::string, std::size_t> referenceCountById;
   std::unordered_map<std::string, std::vector<svg::SVGElement>> referencingElementsById;
@@ -610,39 +582,41 @@ void AddElementLocalContributions(
   }
 }
 
+[[nodiscard]] const svg::SVGStylesheetRule* FindStylesheetRule(
+    std::span<const svg::SVGStylesheetRule> styleRules, Entity stylesheetEntity,
+    std::size_t ruleIndex) {
+  auto iter = std::find_if(
+      styleRules.begin(), styleRules.end(), [stylesheetEntity, ruleIndex](const auto& rule) {
+        return rule.stylesheetEntity == stylesheetEntity && rule.ruleIndex == ruleIndex;
+      });
+  return iter == styleRules.end() ? nullptr : &*iter;
+}
+
 void AddStylesheetMatches(const std::vector<svg::SVGElement>& elements,
+                          std::span<const svg::SVGStylesheetRule> styleRules,
                           StyleSourceAnnotations* annotations,
                           const std::unordered_map<ContributionKey, std::size_t,
                                                    ContributionKeyHash>& contributionIndexByKey) {
-  const StyleSystem styleSystem;
   for (const svg::SVGElement& element : elements) {
-    const std::vector<MatchedStyleRule> matches =
-        styleSystem.collectMatchedStyleRules(element.entityHandle());
-    for (const MatchedStyleRule& match : matches) {
+    const std::vector<svg::SVGMatchedStyleRule> matches = svg::CollectMatchedStyleRules(element);
+    for (const svg::SVGMatchedStyleRule& match : matches) {
       if (match.isUserAgentStylesheet) {
         continue;
       }
 
-      const auto* stylesheet =
-          element.entityHandle().registry()->try_get<StylesheetComponent>(match.stylesheetEntity);
-      if (stylesheet == nullptr) {
+      const svg::SVGStylesheetRule* rule =
+          FindStylesheetRule(styleRules, match.stylesheetEntity, match.ruleIndex);
+      if (rule == nullptr) {
         continue;
       }
 
-      const std::span<const css::SelectorRule> rules = stylesheet->stylesheet.rules();
-      if (match.ruleIndex >= rules.size()) {
-        continue;
-      }
-
-      const css::SelectorRule& rule = rules[match.ruleIndex];
-      for (std::size_t declarationIndex = 0; declarationIndex < rule.declarations.size();
-           ++declarationIndex) {
-        const css::Declaration& declaration = rule.declarations[declarationIndex];
+      for (const svg::SVGStylesheetDeclaration& stylesheetDeclaration : rule->declarations) {
+        const css::Declaration& declaration = stylesheetDeclaration.declaration;
         auto contributionIter = contributionIndexByKey.find(ContributionKey{
             .kind = StyleContributionKind::StylesheetDeclaration,
             .stylesheetEntity = match.stylesheetEntity,
             .ruleIndex = match.ruleIndex,
-            .declarationIndex = declarationIndex,
+            .declarationIndex = stylesheetDeclaration.declarationIndex,
             .propertyName = std::string(declaration.name),
         });
         if (contributionIter == contributionIndexByKey.end()) {
@@ -724,38 +698,29 @@ void AddLocalCascadeEntries(const svg::SVGElement& element,
 }
 
 void AddStylesheetCascadeEntries(
-    const svg::SVGElement& element,
+    const svg::SVGElement& element, std::span<const svg::SVGStylesheetRule> styleRules,
     const std::unordered_map<ContributionKey, std::size_t, ContributionKeyHash>&
         contributionIndexByKey,
     std::vector<CascadeEntry>* entries) {
-  const StyleSystem styleSystem;
-  const std::vector<MatchedStyleRule> matches =
-      styleSystem.collectMatchedStyleRules(element.entityHandle());
-  for (const MatchedStyleRule& match : matches) {
+  const std::vector<svg::SVGMatchedStyleRule> matches = svg::CollectMatchedStyleRules(element);
+  for (const svg::SVGMatchedStyleRule& match : matches) {
     if (match.isUserAgentStylesheet) {
       continue;
     }
 
-    const auto* stylesheet =
-        element.entityHandle().registry()->try_get<StylesheetComponent>(match.stylesheetEntity);
-    if (stylesheet == nullptr) {
+    const svg::SVGStylesheetRule* rule =
+        FindStylesheetRule(styleRules, match.stylesheetEntity, match.ruleIndex);
+    if (rule == nullptr) {
       continue;
     }
 
-    const std::span<const css::SelectorRule> rules = stylesheet->stylesheet.rules();
-    if (match.ruleIndex >= rules.size()) {
-      continue;
-    }
-
-    const css::SelectorRule& rule = rules[match.ruleIndex];
-    for (std::size_t declarationIndex = 0; declarationIndex < rule.declarations.size();
-         ++declarationIndex) {
-      const css::Declaration& declaration = rule.declarations[declarationIndex];
+    for (const svg::SVGStylesheetDeclaration& stylesheetDeclaration : rule->declarations) {
+      const css::Declaration& declaration = stylesheetDeclaration.declaration;
       auto contributionIter = contributionIndexByKey.find(ContributionKey{
           .kind = StyleContributionKind::StylesheetDeclaration,
           .stylesheetEntity = match.stylesheetEntity,
           .ruleIndex = match.ruleIndex,
-          .declarationIndex = declarationIndex,
+          .declarationIndex = stylesheetDeclaration.declarationIndex,
           .propertyName = std::string(declaration.name),
       });
       if (contributionIter == contributionIndexByKey.end()) {
@@ -772,12 +737,13 @@ void AddStylesheetCascadeEntries(
 }
 
 void MarkEffectiveContributionsForElement(
-    const svg::SVGElement& element, StyleSourceAnnotations* annotations,
+    const svg::SVGElement& element, std::span<const svg::SVGStylesheetRule> styleRules,
+    StyleSourceAnnotations* annotations,
     const std::unordered_map<ContributionKey, std::size_t, ContributionKeyHash>&
         contributionIndexByKey) {
   std::vector<CascadeEntry> entries;
   AddLocalCascadeEntries(element, contributionIndexByKey, &entries);
-  AddStylesheetCascadeEntries(element, contributionIndexByKey, &entries);
+  AddStylesheetCascadeEntries(element, styleRules, contributionIndexByKey, &entries);
 
   std::unordered_map<std::string, Winner> winnersByProperty;
   std::size_t order = 0;
@@ -823,23 +789,24 @@ StyleSourceAnnotations ComputeStyleSourceAnnotations(svg::SVGDocument& document,
     return {};
   }
 
-  return document.withWriteAccess([&document, source](svg::DocumentWriteAccess& access) {
+  return document.withWriteAccess([&document, source](svg::DocumentWriteAccess&) {
     StyleSourceAnnotations annotations;
     std::unordered_map<ContributionKey, std::size_t, ContributionKeyHash> contributionIndexByKey;
-    Registry& registry = access.registry();
-    AddStylesheetContributions(registry, source, &annotations, &contributionIndexByKey);
+    const std::vector<svg::SVGStylesheetRule> styleRules = svg::CollectStylesheetRules(document);
+    AddStylesheetContributions(styleRules, source, &annotations, &contributionIndexByKey);
 
     std::vector<svg::SVGElement> elements;
     CollectElements(document.svgElement(), &elements);
-    AddReferenceResourceContributions(registry, source, elements, &annotations,
+    AddReferenceResourceContributions(source, styleRules, elements, &annotations,
                                       &contributionIndexByKey);
     for (const svg::SVGElement& element : elements) {
       AddElementLocalContributions(element, source, &annotations, &contributionIndexByKey);
     }
 
-    AddStylesheetMatches(elements, &annotations, contributionIndexByKey);
+    AddStylesheetMatches(elements, styleRules, &annotations, contributionIndexByKey);
     for (const svg::SVGElement& element : elements) {
-      MarkEffectiveContributionsForElement(element, &annotations, contributionIndexByKey);
+      MarkEffectiveContributionsForElement(element, styleRules, &annotations,
+                                           contributionIndexByKey);
     }
 
     return annotations;
