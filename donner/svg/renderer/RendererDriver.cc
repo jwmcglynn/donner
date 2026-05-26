@@ -2149,11 +2149,14 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   components::LayoutSystem layoutSystem;
-  // Marker length attributes with percentage units resolve against the viewport of the element
-  // referencing the marker (its nearest ancestor viewport), which getViewBox returns. markerWidth/
-  // refX resolve against the width (Extent::X) and markerHeight/refY against the height
-  // (Extent::Y).
-  const Box2d markerPercentViewport = layoutSystem.getViewBox(markerHandle);
+  // Marker length attributes with percentage units resolve against the viewport of the
+  // *element referencing the marker* (the painted shape's nearest ancestor viewport),
+  // **not** the marker definition's own/inherited viewBox. Use `instance.dataHandle` (the
+  // painted entity) — `getViewBox(markerHandle)` was wrong for the common case of markers
+  // defined in a root `<defs>` and referenced from a nested `<svg>` viewport (PR #611
+  // Codex P1).  markerWidth/refX resolve against the width (Extent::X) and markerHeight/
+  // refY against the height (Extent::Y).
+  const Box2d markerPercentViewport = layoutSystem.getViewBox(instance.dataHandle(registry));
   const FontMetrics markerFontMetrics;
   const double markerWidthPx = markerComponent->markerWidth.toPixels(
       markerPercentViewport, markerFontMetrics, Lengthd::Extent::X);

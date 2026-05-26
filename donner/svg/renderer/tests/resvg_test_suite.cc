@@ -864,6 +864,33 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
 //     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
 //       -- --gtest_filter='*GeodeTextDecorationRepro*'
 // ----------------------------------------------------------------------------
+// CR repro (PR #611, Codex P1): `markerWidth` / `markerHeight` percentage values must
+// resolve against the viewport of the *element referencing* the marker (the painted
+// shape's nearest ancestor viewport), not the marker definition's own/inherited viewport.
+// The SVG has a marker in root `<defs>` (root viewport 100×100) used by a path inside a
+// nested `<svg viewBox="0 0 10 10">`. Per spec, `markerWidth="20%"` resolves to 2 in the
+// nested viewport. Pre-fix (`getViewBox(markerHandle)`) gave 20 — the marker covered the
+// whole nested viewport. Post-fix uses `getViewBox(instance.dataHandle(registry))`.
+//
+// Authoring the golden (from tiny-skia):
+//   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
+//     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
+//       -- --gtest_filter='*MarkerPercentRegression*'
+class MarkerPercentRegression : public ImageComparisonTestFixture {};
+
+TEST_F(MarkerPercentRegression, NestedViewportResolvesAgainstReferencingShape) {
+  const std::filesystem::path resvgRoot =
+      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
+  const char* svg = "donner/svg/renderer/testdata/marker_percent_nested_viewport.svg";
+  const char* golden = "donner/svg/renderer/testdata/golden/marker_percent_nested_viewport.png";
+
+  SVGDocument document = loadSVG(svg, resvgRoot);
+
+  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
+  params.enableGoldenUpdateFromEnv();
+  renderAndCompare(document, svg, golden, params);
+}
+
 class GeodeTextDecorationRepro : public ImageComparisonTestFixture {};
 
 TEST_F(GeodeTextDecorationRepro, UnderlineNotRenderedOnGeode) {

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+    <!-- CR repro (PR #611, Codex P1): `markerWidth`/`markerHeight` percentages must
+         resolve against the viewport of the element REFERENCING the marker (the
+         painted shape's nearest ancestor viewport), NOT the marker definition's own
+         inherited viewport. SVG 2 §marker-rendering.
+
+         Marker `m` in root <defs> (root viewport = 100×100). The path that uses it
+         lives inside a nested <svg viewBox="0 0 10 10"> (nested viewport = 10×10).
+         Per spec, `markerWidth="20%"` on this path = 20% of 10 = 2 (nested-viewport
+         units). Pre-fix, `getViewBox(markerHandle)` returned the marker's inherited
+         viewport (root, 100×100), giving markerWidth = 20 → the marker covered the
+         whole nested viewport. -->
+    <defs>
+        <marker id="m" markerWidth="20%" markerHeight="20%" refX="0" refY="0"
+                markerUnits="userSpaceOnUse" orient="0">
+            <rect width="100%" height="100%" fill="red"/>
+        </marker>
+    </defs>
+    <svg x="0" y="0" width="100" height="100" viewBox="0 0 10 10">
+        <path d="M 5 5 L 9 5" stroke="black" stroke-width="0.5" marker-start="url(#m)"/>
+    </svg>
+</svg>
