@@ -1747,6 +1747,19 @@ ImVec2 StyleSourceChipTextSize() {
                                          kStyleSourceChipIcon);
 }
 
+ImVec2 ChipConnectorPoint(const ImVec2& min, const ImVec2& max, const ImVec2& otherEndpoint,
+                          float verticalTolerance) {
+  const ImVec2 center((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+  if (max.y + verticalTolerance < otherEndpoint.y) {
+    return ImVec2(center.x, max.y);
+  }
+
+  const float leftDistance = std::abs(otherEndpoint.x - min.x);
+  const float rightDistance = std::abs(otherEndpoint.x - max.x);
+  const float sideX = leftDistance <= rightDistance ? min.x : max.x;
+  return ImVec2(sideX, center.y);
+}
+
 }  // namespace
 
 std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusReferenceConnectorLayout(
@@ -1762,34 +1775,14 @@ std::optional<TextEditor::FocusReferenceConnectorLayout> TextEditor::focusRefere
   layout.start.y += baselineY;
   if (std::optional<SourceStyleChipBounds> targetChip =
           sourceStyleChipBoundsForReferenceTarget(link.to)) {
-    const ImVec2 chipCenter((targetChip->min.x + targetChip->max.x) * 0.5f,
-                            (targetChip->min.y + targetChip->max.y) * 0.5f);
-    if (targetChip->max.y + uiScale_ < layout.start.y) {
-      layout.tip = ImVec2(chipCenter.x, targetChip->max.y);
-    } else {
-      const float leftDistance = std::abs(layout.start.x - targetChip->min.x);
-      const float rightDistance = std::abs(layout.start.x - targetChip->max.x);
-      const float sideX = leftDistance <= rightDistance ? targetChip->min.x : targetChip->max.x;
-      layout.tip = ImVec2(sideX, chipCenter.y);
-    }
+    layout.tip = ChipConnectorPoint(targetChip->min, targetChip->max, layout.start, uiScale_);
 
     if (targetChip->kind == SourceStyleChipKind::SelectorMatchCount) {
       if (std::optional<SourceStyleChipBounds> sourceChip =
               focusReferenceStyleSourceChipBounds(link.from)) {
         layout.sourceStyleChip = *sourceChip;
         layout.hasSourceStyleChip = true;
-        const ImVec2 sourceChipCenter((sourceChip->min.x + sourceChip->max.x) * 0.5f,
-                                      (sourceChip->min.y + sourceChip->max.y) * 0.5f);
-        if (layout.tip.y + uiScale_ < sourceChip->min.y) {
-          layout.start = ImVec2(sourceChipCenter.x, sourceChip->min.y);
-        } else if (layout.tip.y > sourceChip->max.y + uiScale_) {
-          layout.start = ImVec2(sourceChipCenter.x, sourceChip->max.y);
-        } else {
-          const float leftDistance = std::abs(layout.tip.x - sourceChip->min.x);
-          const float rightDistance = std::abs(layout.tip.x - sourceChip->max.x);
-          const float sideX = leftDistance <= rightDistance ? sourceChip->min.x : sourceChip->max.x;
-          layout.start = ImVec2(sideX, sourceChipCenter.y);
-        }
+        layout.start = ChipConnectorPoint(sourceChip->min, sourceChip->max, layout.tip, uiScale_);
       }
     }
   } else {

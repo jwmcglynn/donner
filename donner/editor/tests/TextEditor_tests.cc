@@ -1322,6 +1322,8 @@ TEST_F(TextEditorTests, FocusReferenceConnectorTerminatesOnClosestSourceStyleChi
 TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) {
   editor.setText(
       ".hit { fill: red; }\n"
+      "\n"
+      "\n"
       "<rect class=\"hit\"/>\n");
   ASSERT_TRUE(editor.setSourceStyleDecorations({
       TextEditor::SourceStyleDecoration{
@@ -1335,11 +1337,11 @@ TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) 
   }));
 
   const FocusReferenceLink link{
-      .from = SourcePoint{.line = 1, .column = 13},
+      .from = SourcePoint{.line = 3, .column = 13},
       .to = SourcePoint{.line = 0, .column = 0},
   };
   editor.setFocusPartition(FocusPartition{
-      .fullColor = {LineRange{.startLine = 0, .endLine = 2}},
+      .fullColor = {LineRange{.startLine = 0, .endLine = 4}},
       .referenceLinks = {link},
   });
 
@@ -1356,7 +1358,8 @@ TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) 
   EXPECT_TRUE(layout->hasSourceStyleChip);
   EXPECT_FALSE(layout->hasSourceUnderline);
   EXPECT_GT(layout->sourceStyleChip.min.x,
-            ScreenPointAtCoordinates(Coordinates(1, LineMaxColumn(1))).x);
+            ScreenPointAtCoordinates(Coordinates(3, LineMaxColumn(3))).x);
+  EXPECT_GT(layout->sourceStyleChip.min.y, layout->tip.y);
   EXPECT_FLOAT_EQ(layout->start.x, layout->sourceStyleChip.min.x);
   EXPECT_FLOAT_EQ(layout->start.y,
                   (layout->sourceStyleChip.min.y + layout->sourceStyleChip.max.y) * 0.5f);
