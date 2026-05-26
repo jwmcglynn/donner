@@ -561,8 +561,8 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesResourceElementSetters)
 
   std::thread markerMaskThread([marker, mask, clipPath]() mutable {
     for (int iteration = 0; iteration < kIterations; ++iteration) {
-      marker.setMarkerWidth(iteration + 1.0);
-      marker.setRefX(iteration);
+      marker.setMarkerWidth(Lengthd(iteration + 1.0));
+      marker.setRefX(Lengthd(iteration));
       marker.setOrient(MarkerOrient::AngleDegrees(iteration));
       mask.setX(Lengthd(iteration));
       mask.setMaskUnits(iteration % 2 == 0 ? MaskUnits::UserSpaceOnUse
