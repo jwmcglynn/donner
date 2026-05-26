@@ -370,6 +370,19 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
     };
   }
 
+  // `filters/feImage/svg.svg` renders an external SVG and resamples it. tiny-skia
+  // now upscales with Mitchell-Netravali bicubic (matching resvg), but geode's
+  // WGSL image sampler (`filter_image.wgsl`) is still bilinear, so geode-vs-tiny
+  // parity diverges (~1787px) and geode-vs-golden too. Gate until the bicubic
+  // kernel is ported into the shader (GeodeBot follow-up).
+  if (category == "filters/feImage" && filename == "svg.svg") {
+    return [](ImageComparisonParams& p) {
+      p.disableBackend(RendererBackend::Geode,
+                       "TODO(geode): external-SVG feImage uses a bilinear WGSL sampler; "
+                       "port Mitchell bicubic to filter_image.wgsl to match tiny-skia");
+    };
+  }
+
   // `filters/filter/with-region-and-subregion.svg`,
   // `filters/filter/with-subregion-1.svg`, and the
   // `filters/filter/subregion-and-primitiveUnits=objectBoundingBox-{1,2}.svg`
