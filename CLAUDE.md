@@ -46,6 +46,20 @@ When debugging bugs — **especially performance or UI bugs** — write an autom
 - **Do NOT use percentage thresholds.** They mask regressions smaller than the threshold and scale with scene size. Either the diff is zero (identity) or the test writes `actual_*.png` / `expected_*.png` / `diff_*.png` to `$TEST_UNDECLARED_OUTPUTS_DIR` for operator inspection.
 - If a new pixel-diff test needs composition the helper library doesn't provide, extend `bitmap_golden_compare` — do not inline a private variant in the test.
 
+## Test Diagnosability: gmock + ToTT-style failures
+
+- **Prioritize gmock matchers (`EXPECT_THAT` + matchers) over hand-rolled `EXPECT_TRUE(a == b)`-style assertions.** A failing test must localize the bug *without a rerun* — `EXPECT_THAT(pixel, RgbaNear(187, 0, 188, 255, 4))` prints the full expected-vs-actual RGBA and names the offending channel; `EXPECT_TRUE(pixel[0] == 187)` prints "false". This is the "Testing on the Toilet" (ToTT) standard: the failure message *is* the diagnostic.
+- **Promote repeated assertion shapes into a named gmock matcher** with a good `DescribeTo` / `result_listener` message (e.g. the `Rgba(...)` / `RgbaNear(...)` / `Alpha(...)` pixel matchers in `RendererGeode_tests.cc`). A repeated `EXPECT_NEAR` per channel is a smell — make one matcher that reports all channels.
+- Don't churn assertions that are already diagnosable; apply this to new/edited tests and anywhere a failure currently prints a bare boolean.
+
+## Anti-Aliasing Is Never the Root Cause
+
+- **Never attribute a pixel difference to anti-aliasing.** "AA quality", "MSAA drift", "sample-count difference", "4× vs 16× AA", "AA fringe", "supersampling difference" are **banned explanations** — in code comments, design docs, commit messages, test reasons, and chat. They are the universal lazy excuse that hides the actual bug: wrong glyph position, wrong transform/coordinate space, wrong coverage geometry, wrong color space, wrong premultiplication, wrong layer compositing. This is the same trap as "don't blame glyph outline differences."
+- **Our pixelmatch comparison already excludes AA pixels.** pixelmatch's anti-aliasing detection runs by default, so anti-aliased edge pixels are *already filtered out* before a diff count is reported. Any diff our harness flags has, by construction, had AA removed — so "it's just AA" doesn't merely lack proof, it contradicts the tool. This rule exists because past AA hand-waving repeatedly masked genuine bugs that the diff was correctly catching.
+- **Magnitude is the tell.** Genuine anti-aliasing differences are a thin sub-pixel fringe along edges — single-digit to low-tens of pixels, hugging boundaries. Hundreds of pixels, per-glyph drift, whole-shape offsets, or block-shaped diffs are a *real bug*, full stop. If a diff is large enough to gate a test off, AA is definitionally not the cause — find the real one.
+- **Stating a sample count is fine; blaming it is not.** "Geode renders at 4× MSAA" is a true config fact. "The text suite fails because of the 4× MSAA AA gap" is a banned root-cause claim. Describe the *symptom* (e.g. "~700px/glyph positional drift vs tiny-skia, root cause not yet identified") and open the investigation — do not close it with "AA".
+- If you genuinely believe a diff is edge-AA, prove it: show the diff is a 1px-wide edge band and quantify it. Absent that proof, treat "it's just AA" as an unfinished investigation.
+
 ## Bug-Fix Commit Discipline
 
 - **Commits claiming `Fixes #NNN` / `closes #NNN` must name a test file + test name that failed at the parent commit and passes at this commit.** If the test was introduced in the same PR, an earlier commit in the series must show it failing (red→green sequence on the branch).

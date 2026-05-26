@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/RendererGeode.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -74,6 +75,75 @@ std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
   const size_t off = static_cast<size_t>(y) * bitmap.rowBytes + static_cast<size_t>(x) * 4u;
   return {bitmap.pixels[off], bitmap.pixels[off + 1], bitmap.pixels[off + 2],
           bitmap.pixels[off + 3]};
+}
+
+// -- gmock pixel matchers --
+//
+// A failing pixel assertion should print the full expected-vs-actual RGBA, not a
+// bare boolean for one channel. These matchers operate on the `std::array<uint8_t, 4>`
+// returned by `pixelAt` and always describe the *whole* pixel on failure (ToTT:
+// "Testing on the Toilet" — a failure message must localize the bug without a rerun).
+
+/// Render an RGBA pixel as "RGBA(r, g, b, a)" for matcher messages.
+std::string FormatRgba(const std::array<uint8_t, 4>& px) {
+  return testing::PrintToString(std::array<int, 4>{px[0], px[1], px[2], px[3]});
+}
+
+/// Matches a pixel whose channels each satisfy their own sub-matcher. Prefer this
+/// over four separate `EXPECT_EQ`/`EXPECT_NEAR` calls: a mismatch on any channel
+/// prints all four channels at once and names the offending one.
+///
+/// Example: `EXPECT_THAT(center, Rgba(Near(187, 4), Eq(0), Near(188, 4), Near(255, 1)))`.
+MATCHER_P4(Rgba, rMatcher, gMatcher, bMatcher, aMatcher,
+           std::string("pixel RGBA matches {R=") + testing::DescribeMatcher<int>(rMatcher) +
+               ", G=" + testing::DescribeMatcher<int>(gMatcher) +
+               ", B=" + testing::DescribeMatcher<int>(bMatcher) +
+               ", A=" + testing::DescribeMatcher<int>(aMatcher) + "}") {
+  const std::array<uint8_t, 4> px = {arg[0], arg[1], arg[2], arg[3]};
+  const testing::Matcher<int> channelMatchers[4] = {
+      testing::SafeMatcherCast<int>(rMatcher), testing::SafeMatcherCast<int>(gMatcher),
+      testing::SafeMatcherCast<int>(bMatcher), testing::SafeMatcherCast<int>(aMatcher)};
+  static constexpr const char* kNames[4] = {"R", "G", "B", "A"};
+  bool ok = true;
+  for (int c = 0; c < 4; ++c) {
+    if (!channelMatchers[c].Matches(px[c])) {
+      ok = false;
+    }
+  }
+  *result_listener << "actual RGBA=" << FormatRgba(px);
+  if (!ok) {
+    for (int c = 0; c < 4; ++c) {
+      if (!channelMatchers[c].Matches(px[c])) {
+        *result_listener << "; " << kNames[c] << "=" << static_cast<int>(px[c]) << " fails ("
+                         << testing::DescribeMatcher<int>(channelMatchers[c]) << ")";
+      }
+    }
+  }
+  return ok;
+}
+
+/// Convenience: every channel exactly equal to the given RGBA.
+auto RgbaEq(int r, int g, int b, int a) {
+  using testing::Eq;
+  return Rgba(Eq(r), Eq(g), Eq(b), Eq(a));
+}
+
+/// A single-channel matcher: |value - expected| <= tol. Use inside `Rgba(...)`
+/// when channels need different tolerances.
+testing::Matcher<int> Near(int expected, int tol) {
+  return testing::AllOf(testing::Ge(expected - tol), testing::Le(expected + tol));
+}
+
+/// Matches a pixel whose alpha channel satisfies `alphaMatcher`, ignoring RGB.
+MATCHER_P(Alpha, alphaMatcher, "alpha " + testing::DescribeMatcher<int>(alphaMatcher)) {
+  const std::array<uint8_t, 4> px = {arg[0], arg[1], arg[2], arg[3]};
+  *result_listener << "actual RGBA=" << FormatRgba(px);
+  return testing::SafeMatcherCast<int>(alphaMatcher).Matches(static_cast<int>(px[3]));
+}
+
+/// Matches a fully transparent pixel (alpha == 0).
+testing::Matcher<std::array<uint8_t, 4>> IsTransparent() {
+  return Alpha(testing::Eq(0));
 }
 
 BitmapDiffStats DiffBitmapAgainstStraightRgba(const RendererBitmap& actual,
@@ -199,39 +269,6 @@ std::vector<uint8_t> CpuDiffuseLightingReferenceForFlatSource(
   }
 
   tiny_skia::filter::diffuseLighting(*src, *dst, params);
-  return UnpremultiplyRgba(dst->data());
-}
-
-std::vector<uint8_t> CpuSpecularLightingReferenceForFlatSource(
-    const components::filter_primitive::SpecularLighting& primitive,
-    const Transform2d& deviceFromFilter) {
-  auto src = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
-                                         static_cast<uint32_t>(kViewportSize));
-  auto dst = tiny_skia::Pixmap::fromSize(static_cast<uint32_t>(kViewportSize),
-                                         static_cast<uint32_t>(kViewportSize));
-  EXPECT_TRUE(src.has_value());
-  EXPECT_TRUE(dst.has_value());
-  if (!src.has_value() || !dst.has_value()) {
-    return {};
-  }
-
-  std::fill(src->data().begin(), src->data().end(), 255u);
-
-  tiny_skia::filter::SpecularLightingParams params;
-  params.surfaceScale = primitive.surfaceScale;
-  params.specularConstant = primitive.specularConstant;
-  params.specularExponent = primitive.specularExponent;
-  const css::RGBA rgba = primitive.lightingColor.asRGBA();
-  params.lightR = static_cast<double>(rgba.r) / 255.0;
-  params.lightG = static_cast<double>(rgba.g) / 255.0;
-  params.lightB = static_cast<double>(rgba.b) / 255.0;
-  params.pixelToUser = PixelToUserForLighting(deviceFromFilter);
-  params.hasShear = HasShearForLighting(deviceFromFilter);
-  if (primitive.light.has_value()) {
-    params.light = ToTinySkiaLightParams(*primitive.light, deviceFromFilter);
-  }
-
-  tiny_skia::filter::specularLighting(*src, *dst, params);
   return UnpremultiplyRgba(dst->data());
 }
 
@@ -1239,19 +1276,20 @@ TEST_F(RendererGeodeTest, FilterSourceAlphaInputExtractsAlphaChannel) {
   ASSERT_FALSE(snap.empty());
 
   const auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 0u);
-  EXPECT_EQ(center[1], 0u);
-  EXPECT_EQ(center[2], 0u);
-  EXPECT_EQ(center[3], 255u);
+  EXPECT_THAT(center, RgbaEq(0, 0, 0, 255));
 }
 
-TEST_F(RendererGeodeTest, FilterSpecularLightingPointLightExponentZeroMatchesCpuReference) {
+// Per SVG spec, feSpecularLighting `specularExponent` must be in [1, 128]; a value
+// < 1 produces transparent-black output (the same rule tiny-skia applies in its
+// filter pipeline — see FilterGraph.cpp's `specularExponent >= 1.0` guard).
+// GeodeFilterEngine clamps/short-circuits to match; this pins the spec behavior.
+TEST_F(RendererGeodeTest, FilterSpecularLightingExponentBelowOneIsTransparent) {
   components::FilterGraph graph;
   components::FilterNode specularNode;
   components::filter_primitive::SpecularLighting specular;
   specular.surfaceScale = 3.0;
   specular.specularConstant = 1.0;
-  specular.specularExponent = 0.0;
+  specular.specularExponent = 0.0;  // < 1 → transparent per spec.
   specular.lightingColor = css::Color(css::RGBA(255, 255, 255, 255));
 
   components::filter_primitive::LightSource light;
@@ -1268,20 +1306,18 @@ TEST_F(RendererGeodeTest, FilterSpecularLightingPointLightExponentZeroMatchesCpu
   const Transform2d deviceFromFilter = Transform2d();
   const RendererBitmap actual = renderFlatSourceThroughFilter(graph, deviceFromFilter);
   ASSERT_FALSE(actual.empty());
-  const std::vector<uint8_t> expected =
-      CpuSpecularLightingReferenceForFlatSource(specular, deviceFromFilter);
-  ASSERT_FALSE(expected.empty());
 
-  const BitmapDiffStats diff = DiffBitmapAgainstStraightRgba(actual, expected);
-  EXPECT_EQ(diff.differingChannels, 0)
-      << "maxDiff=" << diff.maxChannelDiff << " first=(" << diff.firstDiffX << ", "
-      << diff.firstDiffY << ") channel=" << diff.firstDiffChannel
-      << " actual=" << static_cast<int>(diff.actualValue)
-      << " expected=" << static_cast<int>(diff.expectedValue);
+  // Every pixel must be transparent black (the lighting dispatch is skipped).
+  EXPECT_THAT(pixelAt(actual, 32, 32), RgbaEq(0, 0, 0, 0));
+  EXPECT_THAT(pixelAt(actual, 18, 18), IsTransparent())
+      << "specularExponent<1 must produce transparent output everywhere";
 }
 
 TEST_F(RendererGeodeTest, FilterDiffuseLightingSpotLightConeMatchesCpuReference) {
   components::FilterGraph graph;
+  // The CPU reference runs the raw lighting kernel in sRGB; pin the graph to sRGB
+  // so geode matches (the linearRGB default is covered by the resvg suite).
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
   components::FilterNode diffuseNode;
   components::filter_primitive::DiffuseLighting diffuse;
   diffuse.surfaceScale = 2.0;
@@ -1340,11 +1376,7 @@ TEST_F(RendererGeodeTest, FilterEmptyMergeProducesTransparentBlack) {
   RendererBitmap snap = renderer.takeSnapshot();
   ASSERT_FALSE(snap.empty());
 
-  const auto center = pixelAt(snap, 32, 32);
-  EXPECT_EQ(center[0], 0u);
-  EXPECT_EQ(center[1], 0u);
-  EXPECT_EQ(center[2], 0u);
-  EXPECT_EQ(center[3], 0u);
+  EXPECT_THAT(pixelAt(snap, 32, 32), RgbaEq(0, 0, 0, 0));
 }
 
 /// feFlood: fill the filter region with a constant color.
@@ -1393,7 +1425,11 @@ TEST_F(RendererGeodeTest, FilterMergeCompositesInputs) {
   //   Node 0: feFlood red 50% → result="red"
   //   Node 1: feFlood blue 50% → result="blue"
   //   Node 2: feMerge(in="red", in="blue") → alpha-over composite
+  // This test validates the raw merge alpha-over math in sRGB, so pin the
+  // graph to sRGB color-interpolation (the SVG default is linearRGB, exercised
+  // by the resvg suite's feMerge/* parity tests instead).
   components::FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
 
   // Node 0: red flood.
   {
@@ -1561,15 +1597,21 @@ TEST_F(RendererGeodeTest, FilterCompositeOverDefault) {
   RendererBitmap snap = renderer.takeSnapshot();
   ASSERT_FALSE(snap.empty());
 
-  // in1 = blue 50% premul (0,0,128,128), in2 = red opaque (255,0,0,255).
-  // over: result = in1 + in2 * (1 - in1.a) = (0,0,128,128) + (255,0,0,255)*(1 - 0.502)
-  //     ≈ (0,0,128,128) + (127,0,0,127) = (127,0,128,255).
-  // Straight: R≈127, G=0, B≈128, A=255.
+  // feComposite operates in linearRGB by default (the `color-interpolation-
+  // filters` property), matching tiny-skia and the SVG spec. With pure blue
+  // (B=1.0) and red (R=1.0) the sRGB→linear conversion is the identity on the
+  // active channels, but the `over` blend mixes red's R into the 50%-alpha
+  // backdrop region, so the result is computed in linear light:
+  //   in1 = blue 50% linear-premul (0,0,0.502,0.502),
+  //   in2 = red opaque linear-premul (1.0,0,0,1.0).
+  //   over = in1 + in2*(1 - in1.a) = (0.498, 0, 0.502, 1.0) linear.
+  //   linear→sRGB: 0.498 → ~0.735 → 187, 0.502 → ~0.738 → 188.
+  // (Running this `over` in sRGB instead would give the wrong (127,0,128) — the
+  // pre-linearRGB-fix behavior. See GeodeFilterEngine::execute feComposite wrap.)
   auto center = pixelAt(snap, 32, 32);
-  EXPECT_NEAR(center[0], 127u, 4u) << "Composite-over R";
-  EXPECT_EQ(center[1], 0u) << "Composite-over G";
-  EXPECT_NEAR(center[2], 128u, 4u) << "Composite-over B";
-  EXPECT_NEAR(center[3], 255u, 1u) << "Composite-over A";
+  // `over` in linearRGB → R≈187, G=0, B≈188, A≈255 (sRGB would give the wrong 127,0,128).
+  EXPECT_THAT(center, Rgba(Near(187, 4), testing::Eq(0), Near(188, 4), Near(255, 1)))
+      << "feComposite `over` must be evaluated in linearRGB";
 }
 
 /// feComposite operator=arithmetic with k1=1,k2=0,k3=0,k4=0 → in1*in2 (multiply).

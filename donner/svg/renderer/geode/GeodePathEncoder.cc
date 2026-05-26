@@ -6,6 +6,7 @@
 #include "donner/base/FillRule.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/Path.h"
+#include "donner/base/Utils.h"
 
 namespace donner::geode {
 
@@ -174,21 +175,17 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
       }
 
       case Path::Verb::CurveTo: {
-        // Should not appear after cubicToQuadratic, but handle gracefully by taking endpoints.
-        const Vector2d& end = points[cmd.pointIndex + 2];
-        const Vector2d mid = (currentPoint + end) * 0.5;
-
-        const auto p0x = static_cast<float>(currentPoint.x);
-        const auto p0y = static_cast<float>(currentPoint.y);
-        const auto p1x = static_cast<float>(mid.x);
-        const auto p1y = static_cast<float>(mid.y);
-        const auto p2x = static_cast<float>(end.x);
-        const auto p2y = static_cast<float>(end.y);
-
-        allCurves.push_back(
-            {{p0x, p0y, p1x, p1y, p2x, p2y}, computeCurveRange(p0x, p0y, p1x, p1y, p2x, p2y)});
-        currentPoint = end;
-        subpathHasSegments = true;
+        // INVARIANT: `extractCurves` requires a cubic-free input. All callers
+        // run `cubicToQuadratic` first, which lowers every CurveTo into QuadTo
+        // segments, so a raw cubic must never reach here. The previous code
+        // silently collapsed the cubic to the chord between its endpoints
+        // (control point = endpoint midpoint), discarding both cubic control
+        // points and producing wrong fill geometry with no error. Hard-fail
+        // instead of silently flattening (D2; see docs/design_docs/0040).
+        UTILS_RELEASE_ASSERT_MSG(false,
+                                 "GeodePathEncoder::encode requires cubic-free input: run "
+                                 "cubicToQuadratic before encoding (raw CurveTo reached the "
+                                 "band encoder)");
         break;
       }
 

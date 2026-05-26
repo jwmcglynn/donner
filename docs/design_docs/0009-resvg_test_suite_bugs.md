@@ -1,52 +1,142 @@
-# Resvg Test Suite Golden Image Bugs
+# resvg-test-suite: Custom Golden Overrides
 
-Known cases where resvg's golden images differ from the correct rendering per the SVG/CSS spec.
-When a resvg golden is incorrect, we generate Donner's own golden and use `Params::WithGoldenOverride()`
-to compare against it instead.
+**Status:** Reference (current as of 2026-05-15)
 
-Custom goldens are stored in `donner/svg/renderer/testdata/golden/resvg-<test-name>.png`.
+When Donner's rendering of a resvg-test-suite case is correct but the upstream
+golden is *not* the right thing to compare against, the test pins
+`Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-<name>.png")`
+so it compares against a Donner-blessed golden instead. This doc is the catalog
+of every such override and the reason it exists.
 
-## a-filter-013: Drop-shadow blur on circle (mm units)
+There are two distinct reasons an override is justified:
 
-**SVG:** Circle with `filter: drop-shadow(5mm 5mm 1mm)`.
+1. **resvg's golden is wrong per spec** — Donner renders to the spec, resvg
+   doesn't. These are genuine upstream golden bugs.
+2. **Blessed minor diff** — Donner and resvg both render acceptably, but there's
+   a small, well-understood difference (sub-pixel char advance, anti-aliasing on
+   a curved baseline, a font-backend difference) where pinning a Donner golden is
+   cleaner than carrying a per-test pixel threshold.
 
-**Symptom:** ~9100 pixel diff between Donner and resvg golden at default threshold.
+Custom goldens live in `donner/svg/renderer/testdata/golden/resvg-<test-name>.png`,
+named with the **new** (post-Great-Rename) test stem. The rationale for each is
+the `.withReason("…")` argument chained onto the override in
+[`resvg_test_suite.cc`](../../donner/svg/renderer/tests/resvg_test_suite.cc) — grep
+the test name there to find it inline.
 
-**Root cause:** Blur algorithm difference. Donner uses a three-pass box blur approximation of
-Gaussian blur (per SVG spec recommendation). Resvg uses a different blur implementation that
-produces a visually different halo shape around the shadow. The difference is concentrated at
-the edges of the blur radius where the two approximation methods diverge.
+> Naming note: these used the old `a-*` / `e-*` convention before the suite
+> upgrade ([0022](0022-resvg_test_suite_upgrade.md)). The four originally
+> documented here mapped forward as: `a-filter-013`/`a-filter-015` →
+> `drop-shadow-function-mm-values`/`drop-shadow-function-em-values` (now parked,
+> see below); `e-marker-045`/`e-marker-051` (closed-shape / cusp marker
+> direction) were superseded upstream and retired — the surviving marker
+> override is `orient=auto-on-M-C-C-4`.
 
-**Ruled out:** Color space (sRGB vs linearRGB) was tested and made no difference to this test —
-switching to linearRGB changed the diff by <30 pixels.
+## Active overrides (34)
 
-**Resolution:** Custom golden generated from Donner's output. Donner's rendering is correct
-per CSS Filter Effects Level 1 §8 (sRGB color space) and SVG §15.9 (Gaussian blur approximation
-via three-pass box filter).
+### resvg golden is wrong per spec
 
-## a-filter-015: Drop-shadow blur on circle (em units)
+| Category | Test | Reason (`withReason`) |
+|---|---|---|
+| filters/feSpotLight | complex-transform | resvg bug: SpotLight Y |
+| filters/feImage | svg | We render higher quality |
+| filters/feSpecularLighting | with-fePointLight | resvg golden |
+| painting/marker | orient=auto-on-M-C-C-4 | Pre-existing rendering diff (stroke/AA), not cusp-related |
+| painting/marker | with-an-image-child | We (correctly) render the image child |
+| text/font-size | named-value | Donner uses CSS Fonts Level 4 |
+| text/font-size | named-value-without-a-parent | Donner uses CSS Fonts Level 4 |
 
-**SVG:** Circle with `filter: drop-shadow(1em 1em 0.2em)`.
+`named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
+named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
 
-**Symptom:** ~14600 pixel diff between Donner and resvg golden at default threshold.
+### Backend-difference goldens (text)
 
-**Root cause:** Same blur algorithm difference as a-filter-013. The larger blur radius (0.2em
-at the test's font size) amplifies the halo shape difference between the two blur implementations.
+These render correctly but differ from resvg because Donner's text stack (and the
+simple-vs-`text-full` split) shapes/composes differently. The golden is whichever
+Donner backend the test runs under.
 
-**Ruled out:** Unit resolution was verified correct — em units resolve against the element's
-computed font-size, and `Lengthd::toPixels()` produces the same pixel values as manual
-calculation. Color space switching had no effect.
+| Category | Test | Reason |
+|---|---|---|
+| text/text | complex-graphemes-and-coordinates-list | Simple text can't compose combining marks |
+| text/text | compound-emojis-and-coordinates-list | Emoji bitmap scaling differs from the golden |
+| text/text | rotate-on-Arabic | Arabic shaping requires text-full |
+| text/text | x-and-y-with-multiple-values-and-arabic-text | Arabic shaping; vertical-axis AA diff not the focus |
 
-**Resolution:** Custom golden generated from Donner's output.
+### Blessed minor diffs (textPath / text-decoration)
 
-## e-marker-045: Marker direction at beginning/end of closed shapes
+The `text/textPath` family carries the bulk of the overrides: sub-pixel character
+advance and anti-aliasing differences along curved baselines, which differ between
+the simple and `text-full` backends. All are `.withReason("Minor char")` unless
+noted.
 
-**Symptom:** Disagreement about direction to place markers at the beginning/end of closed paths.
+| Category | Test | Reason |
+|---|---|---|
+| text/textPath | dy-with-tiny-coordinates | AA + minor char advance diffs (text vs text-full) |
+| text/textPath | m-L-Z-path | Minor char |
+| text/textPath | mixed-children-1 | AA diffs |
+| text/textPath | nested | Minor char |
+| text/textPath | path-with-ClosePath | Minor char |
+| text/textPath | simple-case | Minor char |
+| text/textPath | startOffset=-100 | Minor char |
+| text/textPath | startOffset=10percent | Minor char |
+| text/textPath | startOffset=30 | Minor char |
+| text/textPath | startOffset=5mm | Minor char |
+| text/textPath | tspan-with-absolute-position | Minor char |
+| text/textPath | tspan-with-relative-position | Minor char |
+| text/textPath | two-paths | Minor char |
+| text/textPath | very-long-text | AA diffs |
+| text/textPath | with-baseline-shift | Minor char |
+| text/textPath | with-coordinates-on-text | Minor char |
+| text/textPath | with-coordinates-on-textPath | Minor char |
+| text/textPath | with-rotate | Minor char |
+| text/textPath | with-text-anchor | (no reason string) |
+| text/textPath | with-transform-on-a-referenced-path | Minor char |
+| text/textPath | with-transform-outside-a-referenced-path | Minor char |
+| text/textPath | with-underline | Minor char |
+| text/text-decoration | indirect | (no reason string) |
 
-**Resolution:** Custom golden generated from Donner's output.
+> Two entries (`textPath/with-text-anchor`, `text-decoration/indirect`) carry no
+> `withReason`. They should either get one or migrate to a per-test threshold; the
+> "Minor char" cluster is the precedent. Tracked in
+> [0021](0021-resvg_feature_gaps.md).
 
-## e-marker-051: Marker direction on cusp
+## Parked goldens (2) — filters/filter-functions disabled
 
-**Symptom:** Disagreement about marker direction on cusp points.
+`resvg-drop-shadow-function-mm-values.png` and
+`resvg-drop-shadow-function-em-values.png` are the migrated successors of the old
+`a-filter-013` / `a-filter-015` drop-shadow blur-halo cases: Donner's three-pass
+box-blur approximation (correct per CSS Filter Effects L1 §8 / SVG §15.9) produces
+a different halo shape than resvg's blur, so a Donner golden is required.
 
-**Resolution:** Custom golden generated from Donner's output.
+They are currently **unreferenced** because the entire `filters/filter-functions`
+`INSTANTIATE_TEST_SUITE_P` block is commented out — that category throws
+`"Data corrupted"` parse errors on CI x86_64 but passes locally on aarch64 (root
+cause unknown). **Keep both files**: re-enabling the block (tracked in
+[0021](0021-resvg_feature_gaps.md)) will need them. Do not delete as "orphans".
+
+## Removed goldens (cleanup, 2026-05-15)
+
+Three goldens added by [#515](https://github.com/jwmcglynn/donner/pull/515) were
+never referenced by any override and were removed as dead data (recoverable from
+git history if a real override need surfaces):
+
+- `resvg-em-on-the-root-element.png`
+- `resvg-ex-on-the-root-element.png`
+- `resvg-percent-value-without-a-parent.png`
+
+The corresponding `text/font-size` tests pass against the upstream golden — only
+`named-value{,-without-a-parent}` need an override. After this cleanup the
+`golden/` dir holds exactly 36 `resvg-*.png`: 34 active + the 2 parked drop-shadow
+goldens above.
+
+## Maintenance
+
+- Adding an override: place `resvg-<new-stem>.png` in
+  `donner/svg/renderer/testdata/golden/`, add `Params::WithGoldenOverride(…)
+  .withReason("…")` in `resvg_test_suite.cc`, and add a row here. The
+  `golden/*.png` glob in
+  [`testdata/BUILD.bazel`](../../donner/svg/renderer/testdata/BUILD.bazel) picks it
+  up automatically.
+- Per [project policy](../../CLAUDE.md), never overwrite a golden without explicit
+  approval — these encode deliberate spec/quality judgments.
+- When a `Skip`'d gap in [0021](0021-resvg_feature_gaps.md) is fixed, check whether
+  it needs an override here too.

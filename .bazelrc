@@ -242,5 +242,15 @@ build:ci --repository_cache=~/.cache/bazel-repo
 # Avoids needing the `ci:full-test` PR label as a workaround.
 build:ci --skip_incompatible_explicit_targets
 
+# Keep runner-sensitive wall-clock perf tests OFF the PR gate — they belong on
+# the nightly `perf.yml` (which runs them via an explicit `--test_tag_filters=perf`
+# that overrides this). The `perf` tests are tagged `["manual", "perf"]` so the
+# `//...` wildcard already skips them, but the affected-targets determinator lists
+# them EXPLICITLY when their deps change, and `manual` does not exclude explicit
+# targets — so a slow CI runner trips their wall-clock budgets on unrelated PRs.
+# Filtering by tag excludes them even when explicitly requested. See CLAUDE.md
+# ("wall-clock budgets move to nightly perf targets") and 0030.
+test:ci --test_tag_filters=-perf
+
 # Allow `bazel run` on sharded test targets (sharding only applies to `bazel test`).
 run --test_sharding_strategy=disabled

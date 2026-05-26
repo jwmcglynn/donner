@@ -148,6 +148,10 @@ bazel test --config=text-full //donner/svg/renderer/tests:resvg_test_suite
 UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer/tests:renderer_tests
 ```
 
+## Test Diagnosability (gmock + ToTT)
+
+- **Prioritize gmock (`EXPECT_THAT` + matchers) over `EXPECT_TRUE(a == b)`-style asserts.** A failure must localize the bug without a rerun — match the whole value and print expected-vs-actual, not a bare boolean (the "Testing on the Toilet" standard). Promote repeated assertion shapes into a named matcher with a descriptive failure message (e.g. the `Rgba`/`RgbaNear`/`Alpha` pixel matchers in `RendererGeode_tests.cc`). See CLAUDE.md §"Test Diagnosability".
+
 ## Pixel Diff & Threshold Philosophy
 
 - **Root-cause pixel diffs, always** — even in vendored libraries like tiny-skia-cpp. Don't bump thresholds or inflate max-diff pixels to mask failures; investigate *why* pixels differ. Threshold changes are a last resort requiring explicit human approval.

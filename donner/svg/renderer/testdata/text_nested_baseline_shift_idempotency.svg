@@ -1,0 +1,16 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"
+     font-family="Noto Sans" font-size="64">
+    <!-- Regression repro for the nested baseline-shift re-draw idempotency bug
+         (docs/design_docs/0038). `resolvePerSpanLayoutStyles` push_back'd into
+         span.ancestorBaselineShifts without clearing, and runs per draw(), so a
+         SECOND render of the same SVGDocument doubled the nested shift. Deeply
+         nested baseline-shift at a large font maximizes the per-draw drift, so
+         render #1 vs render #2 differ markedly unless layout is idempotent. -->
+    <text x="20" y="140">
+        <tspan baseline-shift="20%">
+            <tspan baseline-shift="20%">
+                <tspan baseline-shift="20%">Tg</tspan>
+            </tspan>
+        </tspan>
+    </text>
+</svg>

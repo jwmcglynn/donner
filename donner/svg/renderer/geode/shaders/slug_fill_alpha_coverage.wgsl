@@ -148,10 +148,14 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
     return roots;
   }
 
+  // Numerically-stable root extraction (Citardauq, matching the Slug
+  // reference): the naive `(-b ± √disc) / 2a` cancels when `b` and the root
+  // share a sign; compute the larger root via `q = -(b + sign(b)·√disc)/2` and
+  // the second via Vieta's `c / q`. See slug_fill.wgsl for the rationale.
   let sqrt_disc = sqrt(disc);
-  let inv_2a = 0.5 / a;
-  let t0 = (-b - sqrt_disc) * inv_2a;
-  let t1 = (-b + sqrt_disc) * inv_2a;
+  let q = -0.5 * (b + select(-sqrt_disc, sqrt_disc, b >= 0.0));
+  let t0 = q / a;
+  let t1 = select(c / q, (-b + sqrt_disc) * (0.5 / a), abs(q) < 1e-30);
 
   if (t0 >= 0.0 && t0 <= 1.0) {
     roots.x = t0;

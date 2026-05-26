@@ -24,6 +24,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
@@ -160,33 +161,8 @@ tiny_skia::Path toTinyPath(const Path& spline) {
   return builder.finish().value_or(tiny_skia::Path());
 }
 
-Path transformPath(const Path& spline, const Transform2d& transform) {
-  PathBuilder builder;
-  const auto points = spline.points();
-
-  for (const Path::Command& command : spline.commands()) {
-    switch (command.verb) {
-      case Path::Verb::MoveTo:
-        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
-        break;
-      case Path::Verb::LineTo:
-        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
-        break;
-      case Path::Verb::QuadTo:
-        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]));
-        break;
-      case Path::Verb::CurveTo:
-        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
-                        transform.transformPosition(points[command.pointIndex + 1]),
-                        transform.transformPosition(points[command.pointIndex + 2]));
-        break;
-      case Path::Verb::ClosePath: builder.closePath(); break;
-    }
-  }
-
-  return builder.build();
-}
+// `transformPath` now lives in the shared (text-gated) PlacedTextGeometry header
+// so both backends share one definition; see docs/design_docs/0038.
 
 inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
   if (!numbersArePercent) {
@@ -1399,51 +1375,13 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
 
-  // Compute text bounding box from glyph positions for objectBoundingBox gradient mapping.
-  // Per the SVG spec, the objectBoundingBox for text uses em-box cells defined by font metrics
-  // (ascent above baseline, |descent| below baseline), not the raw font size.
-  Box2d textBounds;
-  {
-    double minX = std::numeric_limits<double>::max();
-    double minY = std::numeric_limits<double>::max();
-    double maxX = std::numeric_limits<double>::lowest();
-    double maxY = std::numeric_limits<double>::lowest();
-    for (size_t runIdx = 0; runIdx < runs.size(); ++runIdx) {
-      const auto& run = runs[runIdx];
-
-      // Resolve per-run font size (spans may override the text element's font size).
-      float runFontSizePx = fontSizePx;
-      if (runIdx < text.spans.size() && text.spans[runIdx].fontSize.value != 0.0) {
-        runFontSizePx = static_cast<float>(text.spans[runIdx].fontSize.toPixels(
-            params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
-      }
-
-      // Get font metrics for this run to compute proper em-box vertical extent.
-      float runScale = run.font ? textEngine.scaleForPixelHeight(run.font, runFontSizePx) : 0.0f;
-      double emTop = static_cast<double>(runFontSizePx);  // fallback: full font size above baseline
-      double emBottom = 0.0;                              // fallback: baseline
-      if (run.font && runScale > 0.0f) {
-        const FontVMetrics metrics = textEngine.fontVMetrics(run.font);
-        // ascent is positive (above baseline), descent is negative (below baseline).
-        // In SVG's y-down space: top = baseline - ascent*scale, bottom = baseline - descent*scale.
-        emTop = static_cast<double>(metrics.ascent) * runScale;
-        emBottom = -static_cast<double>(metrics.descent) * runScale;
-      }
-
-      for (const auto& glyph : run.glyphs) {
-        if (glyph.glyphIndex == 0) {
-          continue;
-        }
-        minX = std::min(minX, glyph.xPosition);
-        maxX = std::max(maxX, glyph.xPosition + glyph.xAdvance);
-        minY = std::min(minY, glyph.yPosition - emTop);
-        maxY = std::max(maxY, glyph.yPosition + emBottom);
-      }
-    }
-    if (minX < maxX && minY < maxY) {
-      textBounds = Box2d({minX, minY}, {maxX, maxY});
-    }
-  }
+  // Text bounding box for objectBoundingBox gradient/pattern mapping — the same
+  // shared computation RendererGeode::drawText uses, so the two backends can't
+  // drift on the bbox (see docs/design_docs/0038). Per the SVG spec it uses
+  // em-box cells from font v-metrics (ascent above baseline, |descent| below),
+  // not the raw font size.
+  const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,
+                                             params.fontMetrics, fontSizePx);
 
   // Use makeFillPaint/makeStrokePaint to support gradients, patterns, and solid colors.
   // These read from paint_ (set by setPaint()) which the driver already populated.
@@ -1581,14 +1519,14 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         continue;  // .notdef glyph, skip.
       }
 
+      // Placed outline in document space (outline -> stretch -> translate ->
+      // rotate). Shared with RendererGeode via PlacedTextGeometry so the two
+      // backends can't drift on placement (0038). Empty for bitmap-only fonts
+      // / outline-less glyphs, which fall through to the bitmap branch below
+      // exactly as before.
       Path glyphPath;
       if (!isBitmapFont) {
-        glyphPath =
-            textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
-        if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-          glyphPath = transformPath(glyphPath,
-                                    Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
-        }
+        glyphPath = PlacedGlyphOutline(textEngine, run.font, glyph, scale);
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
@@ -1639,17 +1577,10 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         continue;
       }
 
-      // Place glyph geometry in document space, then let the renderer's current transform map it
-      // to device space. This avoids relying on composed affine semantics that differ from
-      // TinySkia's.
-      Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-      if (glyph.rotateDegrees != 0.0) {
-        glyphFromLocal =
-            Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-            glyphFromLocal;
-      }
-
-      const tiny_skia::Path tinyPath = toTinyPath(transformPath(glyphPath, glyphFromLocal));
+      // `glyphPath` is already placed in document space (translate/rotate baked
+      // in by placedGlyphOutline); the renderer's current transform maps it to
+      // device space below.
+      const tiny_skia::Path tinyPath = toTinyPath(glyphPath);
       auto pixmapView = currentPixmapView();
 
       // Fill.
@@ -1844,7 +1775,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                   segTransform;
             }
 
-            drawDecoPath(toTinyPath(transformPath(segPath, segTransform)));
+            drawDecoPath(toTinyPath(TransformPath(segPath, segTransform)));
           }
         } else {
           const auto isRenderedGlyph = [](const auto& glyph) {

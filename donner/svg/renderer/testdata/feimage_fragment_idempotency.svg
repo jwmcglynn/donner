@@ -1,0 +1,20 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink">
+    <!-- Regression repro for the feImage fragment re-draw idempotency bug
+         (docs/design_docs/0021 G2). `RendererDriver::preRenderFeImageFragments`
+         instantiates the referenced fragment (#rect3) as an OffscreenFeImage
+         shadow tree, which emplaces a RenderingInstanceComponent per shadow
+         entity into the global pool. Those instances are offscreen-only, but the
+         render-tree fast path skips a rebuild when nothing is dirty, so they
+         lingered between renders. On a SECOND render of the same SVGDocument the
+         main-entity snapshot picked them up and drew the fragment as if it were
+         main content, corrupting the output. The fix filters OffscreenFeImage
+         shadow instances out of the main snapshot. -->
+    <defs>
+        <filter id="filter1">
+            <feImage xlink:href="#rect3"/>
+        </filter>
+        <rect id="rect3" x="36" y="36" width="120" height="120" fill="green"/>
+    </defs>
+    <rect id="rect1" x="20" y="20" width="160" height="160" fill="red" filter="url(#filter1)"/>
+</svg>

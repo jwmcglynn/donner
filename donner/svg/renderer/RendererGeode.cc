@@ -39,6 +39,7 @@
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/base/MathUtils.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/renderer/PlacedTextGeometry.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
 #endif
@@ -80,37 +81,10 @@ bool IsBgraTextureFormat(wgpu::TextureFormat format) {
   return static_cast<WGPUTextureFormat>(format) == WGPUTextureFormat_BGRA8Unorm;
 }
 
-/// Apply a `Transform2d` to every control point of a `Path`, returning a
-/// new `Path` whose commands mirror the input but whose coordinates are
-/// pre-transformed. Needed because `GeoEncoder::fillPath` draws in the
-/// encoder's current MVP and does not take a separate per-path matrix;
-/// for text we want to translate/rotate each glyph's outline before
-/// handing it to the encoder.
-Path transformPath(const Path& input, const Transform2d& transform) {
-  PathBuilder builder;
-  const auto points = input.points();
-  for (const Path::Command& command : input.commands()) {
-    switch (command.verb) {
-      case Path::Verb::MoveTo:
-        builder.moveTo(transform.transformPosition(points[command.pointIndex]));
-        break;
-      case Path::Verb::LineTo:
-        builder.lineTo(transform.transformPosition(points[command.pointIndex]));
-        break;
-      case Path::Verb::QuadTo:
-        builder.quadTo(transform.transformPosition(points[command.pointIndex]),
-                       transform.transformPosition(points[command.pointIndex + 1]));
-        break;
-      case Path::Verb::CurveTo:
-        builder.curveTo(transform.transformPosition(points[command.pointIndex]),
-                        transform.transformPosition(points[command.pointIndex + 1]),
-                        transform.transformPosition(points[command.pointIndex + 2]));
-        break;
-      case Path::Verb::ClosePath: builder.closePath(); break;
-    }
-  }
-  return builder.build();
-}
+// NOTE: `transformPath` now lives in the shared (text-gated) PlacedTextGeometry
+// header so both backends share one definition; see docs/design_docs/0038. The
+// only geode callers (glyph + decoration placement) are inside the
+// DONNER_TEXT_ENABLED region.
 
 #ifdef DONNER_TEXT_ENABLED
 TextLayoutParams toTextLayoutParams(const TextParams& params) {
@@ -147,6 +121,123 @@ bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
     }
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Transformed-blur path detection (ported faithfully from
+// RendererTinySkia.cc's `isEligibleForTransformedBlurPath` /
+// `graphHasAnisotropicBlur` / `shouldUseTransformedBlurPath` /
+// `computeBlurPadding`). Keep in lockstep with tiny-skia — these decide when a
+// blur under a rotated/skewed CTM must be rasterized in filter-local space so
+// the (anisotropic) blur is oriented in the element's local axes rather than
+// device axes. tiny-skia is the parity reference for the result.
+// ---------------------------------------------------------------------------
+
+/// Eligible only for a linear chain of blur/offset primitives in user space (no
+/// named results, subregions, multi-input, OBB units, or other primitive types).
+bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph) {
+  if (filterGraph.nodes.empty()) {
+    return false;
+  }
+  if (filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
+    return false;
+  }
+
+  bool hasBlur = false;
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    const bool isBlur =
+        std::holds_alternative<components::filter_primitive::GaussianBlur>(node.primitive) ||
+        std::holds_alternative<components::filter_primitive::DropShadow>(node.primitive);
+    const bool isOffset =
+        std::holds_alternative<components::filter_primitive::Offset>(node.primitive);
+    if (!isBlur && !isOffset) {
+      return false;
+    }
+    hasBlur |= isBlur;
+
+    if (node.result.has_value()) {
+      return false;  // No named result reuse.
+    }
+    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
+        node.height.has_value()) {
+      return false;  // No primitive subregions.
+    }
+    if (node.inputs.size() > 1) {
+      return false;  // Linear chain only.
+    }
+    if (node.inputs.size() == 1) {
+      const auto& input = node.inputs[0];
+      if (std::holds_alternative<components::FilterInput::Previous>(input.value)) {
+        // OK
+      } else if (const auto* stdInput =
+                     std::get_if<components::FilterStandardInput>(&input.value)) {
+        if (*stdInput != components::FilterStandardInput::SourceGraphic) {
+          return false;
+        }
+      } else {
+        return false;  // Named input — not eligible.
+      }
+    }
+  }
+
+  return hasBlur;
+}
+
+/// True if any blur/drop-shadow has stdDeviationX != stdDeviationY.
+bool graphHasAnisotropicBlur(const components::FilterGraph& filterGraph) {
+  for (const auto& node : filterGraph.nodes) {
+    bool anisotropic = false;
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            anisotropic = !NearEquals(prim.stdDeviationX, prim.stdDeviationY, 1e-6);
+          }
+        },
+        node.primitive);
+    if (anisotropic) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// True when the CTM is skewed (always needs the local raster), or rotated with
+/// an anisotropic blur (whose orientation a device-axis blur can't reproduce).
+bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
+                                  const Transform2d& deviceFromFilter) {
+  const Vector2d xAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
+  const Vector2d yAxis = deviceFromFilter.transformVector(Vector2d(0.0, 1.0));
+  const double dot = xAxis.x * yAxis.x + xAxis.y * yAxis.y;
+  if (!NearZero(dot, 1e-6)) {
+    return true;  // Skew (non-orthogonal axes).
+  }
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (!hasRotation) {
+    return false;
+  }
+  return graphHasAnisotropicBlur(filterGraph);
+}
+
+/// 3σ + 1 padding (in user-space units) for the maximum blur stdDeviation.
+double computeBlurPadding(const components::FilterGraph& filterGraph) {
+  double maxSigma = 0.0;
+  for (const auto& node : filterGraph.nodes) {
+    std::visit(
+        [&](const auto& prim) {
+          using T = std::decay_t<decltype(prim)>;
+          if constexpr (std::is_same_v<T, components::filter_primitive::GaussianBlur>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          } else if constexpr (std::is_same_v<T, components::filter_primitive::DropShadow>) {
+            maxSigma = std::max({maxSigma, prim.stdDeviationX, prim.stdDeviationY});
+          }
+        },
+        node.primitive);
+  }
+  return maxSigma * 3.0 + 1.0;
 }
 
 /// WebGPU requires bytesPerRow alignment to 256 when copying textures to
@@ -353,6 +444,30 @@ size_t buildGradientStops(const components::ComputedGradientComponent& computedG
   }
   return stopCount;
 }
+
+#ifdef DONNER_TEXT_ENABLED
+/// True when a `ResolvedPaintServer` reference points at a (gradient) paint
+/// server entity rather than a pattern. Mirrors tiny-skia, which treats a ref
+/// as a gradient when `instantiateGradientShader` succeeds and as a pattern
+/// otherwise. Used to let a span's own gradient override an element-level
+/// pattern fill/stroke (the driver only stages a pattern slot for the
+/// *element*, so the `patternFillPaint`/`patternStrokePaint` flag must not
+/// suppress a span's own gradient ref). Only referenced from the text path, so
+/// it lives under `DONNER_TEXT_ENABLED` to avoid an unused-function warning in
+/// no-text builds.
+bool paintReferenceIsGradient(const components::ResolvedPaintServer& server) {
+  const auto* ref = std::get_if<components::PaintResolvedReference>(&server);
+  if (ref == nullptr) {
+    return false;
+  }
+  const EntityHandle handle = ref->reference.handle;
+  if (!handle) {
+    return false;
+  }
+  const auto* computedGradient = handle.try_get<components::ComputedGradientComponent>();
+  return computedGradient != nullptr && computedGradient->initialized;
+}
+#endif  // DONNER_TEXT_ENABLED
 
 /// Attempt to resolve a `PaintResolvedReference` into a concrete linear-gradient
 /// draw specification for the Geode encoder. Returns `std::nullopt` for any
@@ -2440,6 +2555,147 @@ void RendererGeode::popFilterLayer() {
                 Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
           : frame.deviceFromFilter;
 
+  // ── Transformed-blur path ────────────────────────────────────────────────
+  // An anisotropic blur under a rotated CTM (or any blur under skew) cannot be
+  // reproduced by Geode's device-axis separable blur — the blur would land in
+  // device axes instead of the element's local axes. Mirror tiny-skia: rasterize
+  // the captured device content into an axis-aligned filter-local raster, run the
+  // (now axis-aligned) blur there, then composite the result back through the CTM
+  // so the blur is oriented correctly. Eligible only for the simple blur/offset
+  // chain (see isEligibleForTransformedBlurPath) and only when no buffer offset
+  // is active (the local raster supplies its own blur padding). tiny-skia is the
+  // parity reference.
+  bool transformedBlurComposited = false;
+  if (impl_->filterEngine && !frame.filterGraph.empty() && frame.filterRegion.width() > 0 &&
+      frame.filterRegion.height() > 0 && frame.filterBufferOffsetX == 0 &&
+      frame.filterBufferOffsetY == 0 && !NearZero(frame.deviceFromFilter.determinant(), 1e-12) &&
+      isEligibleForTransformedBlurPath(frame.filterGraph) &&
+      shouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter)) {
+    const Transform2d& deviceFromFilter = frame.deviceFromFilter;
+    const Box2d& filterRegion = frame.filterRegion;
+
+    // Local raster density from the CTM basis vectors (min 1× to avoid collapse),
+    // matching tiny-skia's transformed-blur raster sizing.
+    const double scaleX =
+        std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
+    const double scaleY =
+        std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+
+    const double blurPadding = computeBlurPadding(frame.filterGraph);
+    const Box2d paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
+                             filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
+
+    const uint32_t localWidth = static_cast<uint32_t>(
+        std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX))));
+    const uint32_t localHeight = static_cast<uint32_t>(
+        std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY))));
+
+    // Cap the local raster to avoid pathological allocations under extreme CTMs.
+    constexpr uint32_t kMaxLocalDim = 8192u;
+    if (localWidth <= kMaxLocalDim && localHeight <= kMaxLocalDim) {
+      // Allocate the local-raster offscreen pair (1-sample resolve + 4× MSAA).
+      wgpu::TextureDescriptor localDesc{};
+      localDesc.label = wgpuLabel("RendererGeodeBlurLocal");
+      localDesc.size = {localWidth, localHeight, 1u};
+      localDesc.format = impl_->textureFormat;
+      localDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                        wgpu::TextureUsage::CopySrc;
+      localDesc.mipLevelCount = 1;
+      localDesc.sampleCount = 1;
+      localDesc.dimension = wgpu::TextureDimension::_2D;
+      wgpu::Texture localTexture = impl_->acquireTexture(localDesc);
+
+      wgpu::TextureDescriptor localMsaaDesc{};
+      localMsaaDesc.label = wgpuLabel("RendererGeodeBlurLocalMSAA");
+      localMsaaDesc.size = localDesc.size;
+      localMsaaDesc.format = impl_->textureFormat;
+      localMsaaDesc.usage = wgpu::TextureUsage::RenderAttachment;
+      localMsaaDesc.mipLevelCount = 1;
+      localMsaaDesc.sampleCount = 4;
+      localMsaaDesc.dimension = wgpu::TextureDimension::_2D;
+      wgpu::Texture localMsaaTexture =
+          impl_->device->sampleCount() > 1 ? impl_->acquireTexture(localMsaaDesc) : wgpu::Texture();
+
+      const bool needMsaa = impl_->device->sampleCount() > 1;
+      if (localTexture && (!needMsaa || localMsaaTexture)) {
+        // Transform chains mirror tiny-skia (operator* applies the left factor
+        // first): device pixel → filter user space → padded-raster origin → local
+        // raster pixels.
+        const Transform2d filterFromDevice = deviceFromFilter.inverse();
+        const Transform2d localFromDevice =
+            filterFromDevice *
+            Transform2d::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
+            Transform2d::Scale(scaleX, scaleY);
+
+        // Resample the captured device content into the local raster with a
+        // self-contained encoder (owns its CommandEncoder + submits on finish).
+        {
+          geode::GeoEncoder resampleEncoder(*impl_->device, *impl_->pipeline,
+                                            *impl_->gradientPipeline, *impl_->imagePipeline,
+                                            localMsaaTexture, localTexture);
+          resampleEncoder.setTransform(localFromDevice);
+          resampleEncoder.drawTexture(
+              frame.layerTexture,
+              Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
+                              static_cast<double>(frame.layerDesc.size.height)),
+              1.0, /*pixelated=*/false);
+          resampleEncoder.finish();
+        }
+
+        // Run the filter graph axis-aligned in local-raster space: deviceFromFilter
+        // is a pure Scale, and the filter region is in unscaled local units.
+        const Transform2d localDeviceFromFilter = Transform2d::Scale(scaleX, scaleY);
+        const Box2d localFilterRegion(
+            Vector2d(blurPadding, blurPadding),
+            Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
+        wgpu::Texture localFiltered = impl_->filterEngine->execute(
+            frame.filterGraph, localTexture, localFilterRegion, localDeviceFromFilter);
+
+        // Restore the outer target + encoder, then composite the local result back
+        // through the CTM. Transform chain (left factor first): local raster pixels
+        // → filter user space → device pixels.
+        const Transform2d deviceFromLocal =
+            Transform2d::Scale(1.0 / scaleX, 1.0 / scaleY) *
+            Transform2d::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
+            deviceFromFilter;
+
+        impl_->target = frame.savedTarget;
+        impl_->msaaTarget = frame.savedMsaaTarget;
+        auto compositeEncoder = std::make_unique<geode::GeoEncoder>(
+            *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
+            frame.savedMsaaTarget, frame.savedTarget, impl_->frameCommandEncoder.get());
+        compositeEncoder->setLoadPreserve();
+        impl_->encoder = std::move(compositeEncoder);
+        impl_->updateEncoderScissor();
+        impl_->encoder->setTransform(deviceFromLocal);
+        impl_->encoder->drawTexture(localFiltered,
+                                    Box2d::FromXYWH(0.0, 0.0, static_cast<double>(localWidth),
+                                                    static_cast<double>(localHeight)),
+                                    1.0, /*pixelated=*/false);
+        impl_->encoder->setTransform(Transform2d());
+
+        impl_->releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
+        if (localMsaaTexture) {
+          impl_->releaseTextureAtFrameEnd(std::move(localMsaaTexture), localMsaaDesc);
+        }
+        transformedBlurComposited = true;
+      } else {
+        if (localTexture) {
+          impl_->releaseTexture(std::move(localTexture), localDesc);
+        }
+        if (localMsaaTexture) {
+          impl_->releaseTexture(std::move(localMsaaTexture), localMsaaDesc);
+        }
+      }
+    }
+  }
+
+  if (transformedBlurComposited) {
+    impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+    impl_->releaseTextureAtFrameEnd(std::move(frame.layerMsaaTexture), frame.layerMsaaDesc);
+    return;
+  }
+
   // Run the filter graph on the captured layer texture.
   wgpu::Texture filteredTexture = frame.layerTexture;
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
@@ -3131,6 +3387,26 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   const float textFontSizePx = static_cast<float>(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
 
+  // Text bounding box for `objectBoundingBox` gradient/pattern paint. A tspan
+  // has no bbox, so span gradient/pattern paint maps through this element-level
+  // box — same computation as `RendererTinySkia::drawText` (shared helper). The
+  // bbox is passed to `drawPaintedPathAgainst` as the gradient *geometry* path
+  // while the glyph outline is the *draw* path.
+  const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,
+                                             params.fontMetrics, textFontSizePx);
+  const Path textBoundsPath =
+      textBounds.isEmpty() ? Path() : PathBuilder().addRect(textBounds).build();
+
+  // Element-level pattern fill: the driver stages a `patternFillPaint` slot
+  // (via renderPattern / endPatternTile) for a `<text fill="url(#pattern)">`,
+  // to be consumed by the next fill. Mirror `RendererTinySkia::drawText`, which
+  // fills the glyph outlines with the pattern (clipped to the glyphs). We must
+  // also reset the slot once below so it does not leak onto the next shape's
+  // `fillResolved` -- the bug this fixes was an unfilled glyph + the staged
+  // pattern bleeding onto the following element. Per-span pattern fill is a
+  // separate gap (matching the element-level handling here).
+  const bool hasPatternFill = impl_->patternFillPaint.has_value();
+
   // Resolve a default fill colour from the text-element-level paint
   // state. Per-span fills override below when present.
   std::optional<css::RGBA> defaultFill = impl_->resolveSolidFill();
@@ -3194,8 +3470,105 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     }
 
     const css::RGBA spanFill = resolveSpanFill(runIndex);
-    if (spanFill.a == 0) {
-      continue;
+    const bool hasFill = spanFill.a != 0;
+
+    // Effective per-run fill paint *server*: a span's own non-None fill overrides
+    // the element-level fill. This carries gradient refs that the solid
+    // `resolveSpanFill` collapses (it returns the inherited default for a ref) —
+    // `drawPaintedPathAgainst` resolves them against the text bbox below (mirrors
+    // `RendererTinySkia::drawText`). Patterns are NOT routed here: the driver
+    // stages a `patternFillPaint` slot for a pattern fill, so `hasPatternFill`
+    // distinguishes pattern from gradient (both are `PaintResolvedReference`).
+    // A span's own non-None fill overrides the element-level fill. Track whether
+    // the chosen server came from the span (an override) vs. was inherited from
+    // the element: a span-level gradient override must beat the element pattern,
+    // which the driver only staged for the element. Mirrors
+    // `RendererTinySkia::drawText`, where a span ref that instantiates as a
+    // gradient wins unconditionally and only falls to `patternFillPaint_` when
+    // it is not a gradient.
+    const bool spanOverridesFill =
+        runIndex < text.spans.size() &&
+        !std::holds_alternative<PaintServer::None>(text.spans[runIndex].resolvedFill);
+    const components::ResolvedPaintServer& fillServer =
+        spanOverridesFill ? text.spans[runIndex].resolvedFill : impl_->paint.fill;
+    // The fill is a gradient when (a) the span overrode with its own gradient
+    // ref — wins even if the element has a pattern, or (b) the element-level fill
+    // is a gradient ref and no element pattern was staged.
+    const bool fillIsGradient =
+        !textBoundsPath.empty() &&
+        (spanOverridesFill
+             ? paintReferenceIsGradient(fillServer)
+             : (std::holds_alternative<components::PaintResolvedReference>(fillServer) &&
+                !hasPatternFill));
+    const double fillOpacity = runIndex < text.spans.size()
+                                   ? text.spans[runIndex].fillOpacity * text.spans[runIndex].opacity
+                                   : impl_->paint.fillOpacity;
+
+    // A run inherits the element-level pattern fill when it has neither a solid
+    // fill nor a gradient of its own. `resolveSpanFill` returns alpha=0 for a
+    // ref, so `!hasFill` marks "no solid"; `!fillIsGradient` ensures a span's own
+    // gradient is drawn as a gradient (above) rather than the inherited pattern.
+    const bool usePatternFill = hasPatternFill && !hasFill && !fillIsGradient;
+
+    // Resolve per-run stroke. A per-span stroke overrides the element-level
+    // stroke. Solid is taken directly; gradient/pattern strokes route through
+    // the server below. Mirrors `RendererTinySkia::drawText`.
+    std::optional<css::RGBA> strokeColor;
+    std::optional<StrokeStyle> strokeStyle;
+    const components::ResolvedPaintServer* strokeServer = &impl_->paint.stroke;
+    double strokeOpacity = impl_->paint.strokeOpacity;
+    bool spanOverridesStroke = false;
+    {
+      StrokeParams runStrokeParams = params.strokeParams;
+      std::optional<css::RGBA> color = impl_->resolveSolidStroke();
+      if (runIndex < text.spans.size()) {
+        const auto& span = text.spans[runIndex];
+        if (span.strokeWidth > 0.0) {
+          runStrokeParams.strokeWidth = span.strokeWidth;
+        }
+        if (!std::holds_alternative<PaintServer::None>(span.resolvedStroke)) {
+          spanOverridesStroke = true;
+          strokeServer = &span.resolvedStroke;
+          strokeOpacity = span.strokeOpacity * span.opacity;
+          color = impl_->resolveSolidPaint(span.resolvedStroke, span.strokeOpacity * span.opacity);
+        }
+      }
+      if (runStrokeParams.strokeWidth > 0.0) {
+        // Solid stroke colour available → draw flat. Otherwise, a gradient/
+        // pattern stroke server drives the paint below.
+        if (color.has_value() && color->a != 0) {
+          strokeColor = color;
+        }
+        const bool strokeIsServer =
+            std::holds_alternative<components::PaintResolvedReference>(*strokeServer);
+        if (strokeColor.has_value() || strokeIsServer || impl_->patternStrokePaint.has_value()) {
+          strokeStyle = toStrokeStyle(runStrokeParams);
+        }
+      }
+    }
+    // A stroke is a gradient when (a) the span overrode with its own gradient ref
+    // — wins even if the element has a pattern stroke, or (b) the element-level
+    // stroke is a gradient ref and no element pattern stroke was staged. Pattern
+    // stroke stages a `patternStrokePaint` slot (driver), distinguishing it from
+    // a gradient stroke (both `PaintResolvedReference`). Mirrors the fill
+    // precedence above and `RendererTinySkia::drawText`.
+    const bool strokeIsGradient =
+        strokeStyle.has_value() && !strokeColor.has_value() && !textBoundsPath.empty() &&
+        (spanOverridesStroke
+             ? paintReferenceIsGradient(*strokeServer)
+             : (std::holds_alternative<components::PaintResolvedReference>(*strokeServer) &&
+                !impl_->patternStrokePaint.has_value()));
+    // Inherit the element-level pattern stroke only when the span did not provide
+    // its own gradient stroke (a span's own gradient is drawn above).
+    const bool usePatternStroke = strokeStyle.has_value() && !strokeColor.has_value() &&
+                                  !strokeIsGradient && impl_->patternStrokePaint.has_value();
+    const bool hasStrokePaint = strokeColor.has_value() || strokeIsGradient || usePatternStroke;
+
+    const TextDecoration spanDecoration =
+        runIndex < text.spans.size() ? text.spans[runIndex].textDecoration : params.textDecoration;
+    if (!hasFill && !usePatternFill && !fillIsGradient && !hasStrokePaint &&
+        spanDecoration == TextDecoration::None) {
+      continue;  // Nothing to fill, stroke, or decorate.
     }
 
     for (const auto& glyph : run.glyphs) {
@@ -3203,30 +3576,283 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         continue;  // `.notdef` -- skip to match tiny-skia.
       }
 
-      Path glyphPath =
-          textEngine.glyphOutline(run.font, glyph.glyphIndex, scale * glyph.fontSizeScale);
-      if (glyphPath.empty()) {
+      // Placed outline in document space, shared with RendererTinySkia via
+      // PlacedTextGeometry so the two backends can't drift on placement (0038).
+      // This encodes tiny-skia's order (stretch the raw outline, then
+      // `Rotate * Translate`) — geode previously composed
+      // `Scale * Rotate * Translate`, which stretched in the post-rotation frame
+      // (the D4 divergence). Empty for outline-less glyphs; bitmap-only fonts
+      // were already skipped at the run level above.
+      const Path placed = PlacedGlyphOutline(textEngine, run.font, glyph, scale);
+      if (placed.empty()) {
         continue;
       }
 
-      // Build the local-space transform that takes the raw glyph
-      // outline (baseline-origin, em-scaled) to its placed position.
-      // Order matches `RendererTinySkia::drawText`:
-      //   stretchScale -> rotate (around glyph origin) -> translate.
-      Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-      if (glyph.rotateDegrees != 0.0) {
-        const double radians = glyph.rotateDegrees * MathConstants<double>::kPi / 180.0;
-        glyphFromLocal = Transform2d::Rotate(radians) * glyphFromLocal;
+      if (fillIsGradient) {
+        // Gradient fill on text: resolve the gradient against the text bbox
+        // (the gradient *geometry*), fill the glyph outline (the *draw* path).
+        impl_->drawPaintedPathAgainst(textBoundsPath, placed, fillServer, fillOpacity,
+                                      FillRule::NonZero);
+      } else if (usePatternFill) {
+        // Fill the glyph outline with the staged pattern tile, same as a
+        // pattern-filled `<path>` (see Impl::fillResolved). The glyph path is
+        // already in the element's local space and `deviceFromLocalTransform`
+        // is set above, so `buildPatternPaint` composes the right sample space.
+        impl_->syncTransform();
+        impl_->encoder->fillPathPattern(
+            placed, FillRule::NonZero,
+            impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
+      } else if (hasFill) {
+        impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
       }
-      if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-        glyphFromLocal =
-            Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY) * glyphFromLocal;
+      if (hasStrokePaint) {
+        // Closed glyph contours expand to same-winding outer+inner subpaths, so
+        // the stroked outline needs `strokeFillRuleFor` (EvenOdd for the ring),
+        // not a hardcoded NonZero -- see RendererGeode::drawPath's stroke notes.
+        const Path stroked = placed.strokeToFill(*strokeStyle);
+        if (!stroked.empty()) {
+          const FillRule strokeRule = Impl::strokeFillRuleFor(stroked);
+          if (strokeIsGradient) {
+            // Gradient stroke: resolve against the text bbox (the *original*
+            // geometry, per SVG), fill the stroked outline.
+            impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
+                                          strokeRule);
+          } else if (usePatternStroke) {
+            impl_->syncTransform();
+            impl_->encoder->fillPathPattern(
+                stroked, strokeRule,
+                impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity));
+          } else {
+            impl_->encoder->fillPath(stroked, *strokeColor, strokeRule);
+          }
+        }
+      }
+    }
+
+    // Text-decoration lines (underline / overline / line-through). Mirrors
+    // `RendererTinySkia::drawText`; solid paint only (gradient decoration paint
+    // is a separate gap). Per CSS Text Decoration §3 the decoration uses the
+    // declaring element's paint + font metrics.
+    if (spanDecoration != TextDecoration::None && !run.glyphs.empty() &&
+        runIndex < text.spans.size()) {
+      const auto& span = text.spans[runIndex];
+
+      const float decoFontSizePx =
+          span.decorationFontSizePx > 0.0f ? span.decorationFontSizePx : spanFontSizePx;
+      const float decoScale = textEngine.scaleForPixelHeight(run.font, decoFontSizePx);
+      const float decoEmScale = textEngine.scaleForEmToPixels(run.font, decoFontSizePx);
+
+      const FontVMetrics vmetrics = textEngine.fontVMetrics(run.font);
+      const int ascent = vmetrics.ascent;
+      const int descent = vmetrics.descent;
+
+      double fontUnderlinePos = 0.0;
+      double fontUnderlineThick = 0.0;
+      if (auto ul = textEngine.underlineMetrics(run.font)) {
+        fontUnderlinePos = ul->position;
+        fontUnderlineThick = ul->thickness;
+      }
+      double fontStrikePos = 0.0;
+      double fontStrikeThick = 0.0;
+      if (auto strike = textEngine.strikeoutMetrics(run.font)) {
+        fontStrikePos = strike->position;
+        fontStrikeThick = strike->thickness;
       }
 
-      const Path placed = transformPath(glyphPath, glyphFromLocal);
-      impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
+      const double thickness = fontUnderlineThick > 0.0
+                                   ? fontUnderlineThick * decoEmScale
+                                   : static_cast<double>(ascent - descent) * decoScale / 18.0;
+
+      // Decoration fill colour (solid): declaring element's decoration fill,
+      // falling back to the span fill. When the element uses a pattern fill and
+      // the decoration has no explicit solid fill of its own, the decoration
+      // inherits the pattern too (per CSS Text Decoration §3 + tiny-skia).
+      css::RGBA decoFill = spanFill;
+      bool decoUsesPattern = usePatternFill;
+      if (!std::holds_alternative<PaintServer::None>(span.resolvedDecorationFill)) {
+        if (auto c = impl_->resolveSolidPaint(span.resolvedDecorationFill,
+                                              span.decorationFillOpacity * span.opacity)) {
+          decoFill = *c;
+          decoUsesPattern = false;
+        }
+      }
+      // Decoration stroke (solid).
+      std::optional<css::RGBA> decoStrokeColor;
+      std::optional<StrokeStyle> decoStrokeStyle;
+      if (span.decorationStrokeWidth > 0.0 &&
+          !std::holds_alternative<PaintServer::None>(span.resolvedDecorationStroke)) {
+        if (auto c = impl_->resolveSolidPaint(span.resolvedDecorationStroke,
+                                              span.decorationStrokeOpacity * span.opacity)) {
+          if (c->a != 0) {
+            decoStrokeColor = c;
+            StrokeParams decoSp;
+            decoSp.strokeWidth = span.decorationStrokeWidth;
+            decoStrokeStyle = toStrokeStyle(decoSp);
+          }
+        }
+      }
+
+      const auto drawDecoPath = [&](const Path& path) {
+        if (path.empty()) {
+          return;
+        }
+        if (decoUsesPattern) {
+          impl_->syncTransform();
+          impl_->encoder->fillPathPattern(
+              path, FillRule::NonZero,
+              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
+        } else if (decoFill.a != 0) {
+          impl_->encoder->fillPath(path, decoFill, FillRule::NonZero);
+        }
+        if (decoStrokeColor.has_value()) {
+          const Path stroked = path.strokeToFill(*decoStrokeStyle);
+          if (!stroked.empty()) {
+            impl_->encoder->fillPath(stroked, *decoStrokeColor, Impl::strokeFillRuleFor(stroked));
+          }
+        }
+      };
+
+      const auto isRenderedGlyph = [](const auto& g) {
+        return g.glyphIndex != 0 && g.xAdvance > 0.0;
+      };
+      const bool hasRotation = std::any_of(run.glyphs.begin(), run.glyphs.end(),
+                                           [](const auto& g) { return g.rotateDegrees != 0.0; });
+
+      for (const TextDecoration decoType :
+           {TextDecoration::Underline, TextDecoration::Overline, TextDecoration::LineThrough}) {
+        if (!hasFlag(spanDecoration, decoType)) {
+          continue;
+        }
+
+        double decoThickness = thickness;
+        if (decoType == TextDecoration::LineThrough && fontStrikeThick > 0.0) {
+          decoThickness = fontStrikeThick * decoEmScale;
+        }
+
+        double decoOffsetY = 0.0;
+        if (decoType == TextDecoration::Underline) {
+          decoOffsetY = fontUnderlinePos != 0.0 ? -fontUnderlinePos * decoEmScale
+                                                : -static_cast<double>(descent) * decoScale * 0.4;
+        } else if (decoType == TextDecoration::Overline) {
+          decoOffsetY = -static_cast<double>(ascent) * decoScale;
+        } else {  // LineThrough
+          decoOffsetY = fontStrikePos != 0.0 ? -fontStrikePos * decoEmScale
+                                             : -static_cast<double>(ascent) * decoScale * 0.35;
+        }
+
+        double decoTopY = decoOffsetY - decoThickness / 2.0;
+
+        const bool hasMultipleDecorationLines =
+            (hasFlag(spanDecoration, TextDecoration::Underline) ? 1 : 0) +
+                (hasFlag(spanDecoration, TextDecoration::Overline) ? 1 : 0) +
+                (hasFlag(spanDecoration, TextDecoration::LineThrough) ? 1 : 0) >
+            1;
+        if (span.decorationDeclarationCount == 1 && hasMultipleDecorationLines) {
+          if (decoType == TextDecoration::Overline) {
+            decoTopY += decoThickness * 1.5;
+          } else if (decoType == TextDecoration::LineThrough) {
+            decoTopY -= decoThickness;
+          }
+        }
+
+        if (hasRotation) {
+          for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+            const auto& glyph = run.glyphs[gi];
+            if (!isRenderedGlyph(glyph)) {
+              continue;
+            }
+            double segmentWidth = glyph.xAdvance;
+            for (size_t nj = gi + 1; nj < run.glyphs.size(); ++nj) {
+              if (!isRenderedGlyph(run.glyphs[nj])) {
+                continue;
+              }
+              segmentWidth = std::min(segmentWidth, run.glyphs[nj].xPosition - glyph.xPosition);
+              break;
+            }
+            if (segmentWidth <= 0.0) {
+              continue;
+            }
+            const Path segPath = PathBuilder()
+                                     .moveTo(Vector2d(0.0, decoTopY))
+                                     .lineTo(Vector2d(segmentWidth, decoTopY))
+                                     .lineTo(Vector2d(segmentWidth, decoTopY + decoThickness))
+                                     .lineTo(Vector2d(0.0, decoTopY + decoThickness))
+                                     .closePath()
+                                     .build();
+            Transform2d segFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+            if (glyph.rotateDegrees != 0.0) {
+              segFromLocal =
+                  Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+                  segFromLocal;
+            }
+            drawDecoPath(TransformPath(segPath, segFromLocal));
+          }
+        } else {
+          const auto firstGlyph =
+              std::find_if(run.glyphs.begin(), run.glyphs.end(), isRenderedGlyph);
+          const auto lastGlyph =
+              std::find_if(run.glyphs.rbegin(), run.glyphs.rend(), isRenderedGlyph);
+          if (firstGlyph == run.glyphs.end() || lastGlyph == run.glyphs.rend()) {
+            continue;
+          }
+          const double baselineY = firstGlyph->yPosition;
+          const bool sameBaseline =
+              std::all_of(run.glyphs.begin(), run.glyphs.end(), [&](const auto& g) {
+                return !isRenderedGlyph(g) || std::abs(g.yPosition - baselineY) < 1e-6;
+              });
+          if (sameBaseline) {
+            const double x0 = firstGlyph->xPosition;
+            const double x1 = lastGlyph->xPosition + lastGlyph->xAdvance;
+            const double y = baselineY + decoTopY;
+            drawDecoPath(PathBuilder()
+                             .moveTo(Vector2d(x0, y))
+                             .lineTo(Vector2d(x1, y))
+                             .lineTo(Vector2d(x1, y + decoThickness))
+                             .lineTo(Vector2d(x0, y + decoThickness))
+                             .closePath()
+                             .build());
+          } else {
+            PathBuilder decoBuilder;
+            for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+              const auto& glyph = run.glyphs[gi];
+              if (!isRenderedGlyph(glyph)) {
+                continue;
+              }
+              const double x0 = glyph.xPosition;
+              double x1 = glyph.xPosition + glyph.xAdvance;
+              for (size_t nj = gi + 1; nj < run.glyphs.size(); ++nj) {
+                if (!isRenderedGlyph(run.glyphs[nj])) {
+                  continue;
+                }
+                x1 = std::min(x1, run.glyphs[nj].xPosition);
+                break;
+              }
+              if (x1 <= x0) {
+                continue;
+              }
+              const double y = glyph.yPosition + decoTopY;
+              decoBuilder.moveTo(Vector2d(x0, y));
+              decoBuilder.lineTo(Vector2d(x1, y));
+              decoBuilder.lineTo(Vector2d(x1, y + decoThickness));
+              decoBuilder.lineTo(Vector2d(x0, y + decoThickness));
+              decoBuilder.closePath();
+            }
+            if (!decoBuilder.empty()) {
+              drawDecoPath(decoBuilder.build());
+            }
+          }
+        }
+      }
     }
   }
+
+  // Consume the element-level pattern fill/stroke slots exactly once. Even if no
+  // run actually used them (e.g. every glyph was .notdef), they must be reset
+  // here so the staged pattern does not leak onto the next shape's draw.
+  if (hasPatternFill) {
+    impl_->patternFillPaint.reset();
+  }
+  impl_->patternStrokePaint.reset();
 #else
   (void)registry;
   (void)text;

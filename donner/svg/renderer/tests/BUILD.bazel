@@ -58,29 +58,41 @@ donner_cc_library(
 donner_cc_library(
     name = "renderer_test_backend",
     testonly = 1,
-    srcs = select({
+    # The shared dispatcher (RendererTestBackend.cc) plus the tiny-skia backend
+    # TU are always linked; the geode build additionally links the geode
+    # backend TU so a single binary can dispatch to *both* renderers at runtime
+    # (geode-vs-tiny-skia parity — see docs/design_docs/0017 §Phase 4b). Each
+    # backend TU registers its ops into the dispatcher's table.
+    srcs = [
+        "RendererTestBackend.cc",
+        "RendererTestBackendTinySkia.cc",
+    ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
             "RendererTestBackendGeode.cc",
         ],
-        "//conditions:default": [
-            "RendererTestBackendTinySkia.cc",
-        ],
+        "//conditions:default": [],
     }),
     hdrs = [
         "RendererTestBackend.h",
     ],
-    # `DONNER_TEXT_ENABLED` flips the feature bit for
-    # `RendererBackendFeature::Text` inside `RendererTestBackendGeode.cc`
-    # -- Phase 4 text rendering is compiled into RendererGeode only when
-    # the build is configured with `--config=text` / `--config=text-full`,
-    # and the feature flag here needs to agree so the resvg test gate
-    # doesn't incorrectly skip text tests.
+    # `DONNER_TEXT_ENABLED` flips the feature bit for `RendererBackendFeature::Text`
+    # -- Phase 4 text rendering is compiled into the renderers only when the build
+    # is configured with `--config=text` / `--config=text-full`, and the feature
+    # flag here needs to agree so the resvg test gate doesn't incorrectly skip
+    # text tests. `DONNER_GEODE_BACKEND_AVAILABLE` (geode build only) makes the
+    # dispatcher link + register the geode backend and report it as the primary
+    # backend via `ActiveRendererBackend()`.
     defines = select({
         "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }) + select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GEODE_BACKEND_AVAILABLE"],
         "//conditions:default": [],
     }),
     deps = [
         "//donner/svg/renderer",
+        # The tiny-skia renderer is linked in every build (pure CPU, no wgpu).
+        "//donner/svg/renderer:renderer_tiny_skia",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer:renderer_geode",
@@ -438,12 +450,14 @@ donner_variant_cc_test(
         {"name": "default_text", "backend": "tiny_skia", "text": "true", "text_full": "false"},
         {"name": "max", "backend": "tiny_skia", "text": "true", "text_full": "true"},
         # Geode variant: runs the same suite on the WebGPU backend,
-        # auto-transitioned into `--config=geode` + `enable_geode`. Text
-        # and filters are still stubbed, so the fixture's
-        # `geodeCategoryGate` / `geodeFilenameGate` logic in
-        # `resvg_test_suite.cc` skips those categories automatically;
-        # everything else (fills, strokes, gradients, patterns, images,
-        # shapes, clipping, masking, markers, isolation) runs live.
+        # auto-transitioned into `--config=geode` + `enable_geode`. Text and
+        # filters are implemented (not stubs): the text suite is gated off in
+        # `geodeCategoryGate` pending root-cause of a large per-glyph divergence
+        # (a real defect, not AA), filters run live with widened thresholds, and
+        # `geodeFilenameGate` disables ~23 per-test pixel divergences. See
+        # `docs/design_docs/0021-resvg_feature_gaps.md` §Geode parity.
+        # Everything else (fills, strokes, gradients, patterns, images, shapes,
+        # clipping, masking, markers, isolation) runs live.
         {"name": "geode", "backend": "geode", "text": "true", "text_full": "false"},
     ],
 )
