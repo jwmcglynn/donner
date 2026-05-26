@@ -20,15 +20,24 @@ namespace donner::svg {
  *
  * This is used for \ref xml_rect or \ref xml_ellipse.
  *
+ * Percentages resolve against the axis of the property they belong to: `rx` against the viewport
+ * width (\ref Lengthd::Extent::X) and `ry` against the viewport height (\ref Lengthd::Extent::Y).
+ * The "auto" fallback uses the *other* property's value, which must resolve against the *other*
+ * axis — so the primary and fallback extents are distinct.
+ *
  * @param property The property to compute, the storage for either `rx` or `ry`.
  * @param fallbackProperty The other property to use if the first one is "auto".
  * @param viewBox The viewBox to use for computing the length.
  * @param fontMetrics The font metrics to use for computing the length.
+ * @param propertyExtent The viewport axis percentages of \p property resolve against.
+ * @param fallbackExtent The viewport axis percentages of \p fallbackProperty resolve against.
  * @return Tuple containing the resolved length, and the converted length to pixels.
  */
 std::tuple<Lengthd, double> CalculateRadiusMaybeAuto(const Property<Lengthd>& property,
                                                      const Property<Lengthd>& fallbackProperty,
                                                      const Box2d& viewBox,
-                                                     const FontMetrics& fontMetrics);
+                                                     const FontMetrics& fontMetrics,
+                                                     Lengthd::Extent propertyExtent,
+                                                     Lengthd::Extent fallbackExtent);
 
 }  // namespace donner::svg

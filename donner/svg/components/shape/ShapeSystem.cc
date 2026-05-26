@@ -326,9 +326,10 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
-  const Vector2d center(
-      computedEllipse.properties.cx.getRequired().toPixels(viewport, fontMetrics),
-      computedEllipse.properties.cy.getRequired().toPixels(viewport, fontMetrics));
+  const Vector2d center(computedEllipse.properties.cx.getRequired().toPixels(viewport, fontMetrics,
+                                                                             Lengthd::Extent::X),
+                        computedEllipse.properties.cy.getRequired().toPixels(viewport, fontMetrics,
+                                                                             Lengthd::Extent::Y));
   const Vector2d radius(std::get<1>(computedEllipse.properties.calculateRx(viewport, fontMetrics)),
                         std::get<1>(computedEllipse.properties.calculateRy(viewport, fontMetrics)));
 
@@ -346,10 +347,10 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     const FontMetrics& fontMetrics, ParseWarningSink& warningSink) {
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
-  const Vector2d start(line.x1.toPixels(viewport, fontMetrics),
-                       line.y1.toPixels(viewport, fontMetrics));
-  const Vector2d end(line.x2.toPixels(viewport, fontMetrics),
-                     line.y2.toPixels(viewport, fontMetrics));
+  const Vector2d start(line.x1.toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+                       line.y1.toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
+  const Vector2d end(line.x2.toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+                     line.y2.toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
 
   Path path = PathBuilder().moveTo(start).lineTo(end).build();
   return &emplaceComputedPathIfChanged(handle, std::move(path));

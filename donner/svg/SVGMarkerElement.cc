@@ -57,53 +57,53 @@ PreserveAspectRatio SVGMarkerElement::preserveAspectRatio() const {
   return component ? component->preserveAspectRatio : PreserveAspectRatio();
 }
 
-void SVGMarkerElement::setMarkerWidth(double value) {
+void SVGMarkerElement::setMarkerWidth(Lengthd value) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::MarkerComponent>(access).markerWidth = value;
   InvalidateMarker(handle_);
 }
 
-double SVGMarkerElement::markerWidth() const {
+Lengthd SVGMarkerElement::markerWidth() const {
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->markerWidth : components::MarkerComponent().markerWidth;
 }
 
-void SVGMarkerElement::setMarkerHeight(double value) {
+void SVGMarkerElement::setMarkerHeight(Lengthd value) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::MarkerComponent>(access).markerHeight = value;
   InvalidateMarker(handle_);
 }
 
-double SVGMarkerElement::markerHeight() const {
+Lengthd SVGMarkerElement::markerHeight() const {
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->markerHeight : components::MarkerComponent().markerHeight;
 }
 
-void SVGMarkerElement::setRefX(double value) {
+void SVGMarkerElement::setRefX(Lengthd value) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::MarkerComponent>(access).refX = value;
   InvalidateMarker(handle_);
 }
 
-double SVGMarkerElement::refX() const {
+Lengthd SVGMarkerElement::refX() const {
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->refX : components::MarkerComponent().refX;
 }
 
-void SVGMarkerElement::setRefY(double value) {
+void SVGMarkerElement::setRefY(Lengthd value) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::MarkerComponent>(access).refY = value;
   InvalidateMarker(handle_);
 }
 
-double SVGMarkerElement::refY() const {
+Lengthd SVGMarkerElement::refY() const {
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->refY : components::MarkerComponent().refY;

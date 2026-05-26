@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/Length.h"
 #include "donner/base/OptionalRef.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/core/MarkerOrient.h"
@@ -130,60 +131,62 @@ public:
   PreserveAspectRatio preserveAspectRatio() const;
 
   /**
-   * Set the marker width.
+   * Set the marker width. Percentage units resolve against the viewport width at render time.
    *
    * @param value Width of the marker viewport.
    */
-  void setMarkerWidth(double value);
+  void setMarkerWidth(Lengthd value);
 
   /**
    * Get the marker width.
    *
    * @return Width of the marker viewport.
    */
-  double markerWidth() const;
+  Lengthd markerWidth() const;
 
   /**
-   * Set the marker height.
+   * Set the marker height. Percentage units resolve against the viewport height at render time.
    *
    * @param value Height of the marker viewport.
    */
-  void setMarkerHeight(double value);
+  void setMarkerHeight(Lengthd value);
 
   /**
    * Get the marker height.
    *
    * @return Height of the marker viewport.
    */
-  double markerHeight() const;
+  Lengthd markerHeight() const;
 
   /**
-   * Set the reference point X coordinate.
+   * Set the reference point X coordinate. Percentage units resolve against the viewport width at
+   * render time.
    *
    * @param value X coordinate for the reference point of the marker.
    */
-  void setRefX(double value);
+  void setRefX(Lengthd value);
 
   /**
    * Get the reference point X coordinate.
    *
    * @return X coordinate for the reference point of the marker.
    */
-  double refX() const;
+  Lengthd refX() const;
 
   /**
-   * Set the reference point Y coordinate.
+   * Set the reference point Y coordinate. Percentage units resolve against the viewport height at
+   * render time.
    *
    * @param value Y coordinate for the reference point of the marker.
    */
-  void setRefY(double value);
+  void setRefY(Lengthd value);
 
   /**
    * Get the reference point Y coordinate.
    *
    * @return Y coordinate for the reference point of the marker.
    */
-  double refY() const;
+  Lengthd refY() const;
 
   /**
    * Get the `markerUnits` attribute which defines the coordinate system for attributes
