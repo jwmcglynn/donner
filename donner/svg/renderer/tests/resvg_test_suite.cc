@@ -94,6 +94,14 @@ std::optional<std::function<void(ImageComparisonParams&)>> geodeCategoryGate(
     };
   }
 
+  // transform-origin: the shapes here are rotated 45/90 degrees about their pivot, so every shape
+  // edge is a diagonal MSAA boundary. Geode matches tiny-skia exactly (GeodeTinyParity passes), but
+  // the GeodeGolden mode picks up the usual 4x-MSAA edge-sampling drift vs the resvg reference
+  // (~140-280px), handled the same way as the filter categories above.
+  if (category == "structure/transform-origin") {
+    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
+  }
+
   // Clip-paths (`masking/clip`, `masking/clipPath`, `masking/clip-rule`)
   // run through the Phase 3b mask pipeline, and `<mask>` elements run
   // through the Phase 3c mask-blit pipeline — no wholesale category
@@ -2212,40 +2220,41 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/transform-origin",
-                {
-                    // TODO(#514): transform-origin rendering is broken after #514's
-                    // single-keyword parsing changes — 10K-150K pixel diffs indicate
-                    // the rendering is completely wrong, not just slightly off. Disabled
-                    // until the root cause is investigated and fixed properly.
-                    {"bottom.svg", Params::Skip("transform-origin broken after #514")},
-                    {"center.svg", Params::Skip("transform-origin broken after #514")},
-                    {"keyword-length.svg", Params::Skip("transform-origin broken after #514")},
-                    {"left.svg", Params::Skip("transform-origin broken after #514")},
-                    {"length-percent.svg", Params::Skip("transform-origin broken after #514")},
-                    {"length-px.svg", Params::Skip("transform-origin broken after #514")},
-                    {"on-clippath-objectBoundingBox.svg",
-                     Params::Skip("transform-origin broken after #514")},
-                    {"on-clippath.svg", Params::Skip("transform-origin broken after #514")},
-                    {"on-gradient-object-bounding-box.svg",
-                     Params::Skip("transform-origin broken after #514")},
-                    {"on-gradient-user-space-on-use.svg",
-                     Params::Skip("transform-origin broken after #514")},
-                    {"on-group.svg", Params::Skip("transform-origin broken after #514")},
-                    {"on-image.svg", Params::Skip("transform-origin broken after #514")},
-                    {"on-pattern-object-bounding-box.svg",
-                     Params::Skip("transform-origin broken after #514")},
-                    {"on-pattern-user-space-on-use.svg",
-                     Params::Skip("transform-origin broken after #514")},
-                    {"on-shape.svg", Params::Skip("transform-origin broken after #514")},
-                    {"on-text-path.svg", Params::Skip("transform-origin broken after #514")},
-                    {"on-text.svg", Params::Skip("transform-origin broken after #514")},
-                    {"right-bottom.svg", Params::Skip("transform-origin broken after #514")},
-                    {"right.svg", Params::Skip("transform-origin broken after #514")},
-                    {"top.svg", Params::Skip("transform-origin broken after #514")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "structure/transform-origin",
+            {
+                // The remaining skips are not the #514 regression (that was an inverted
+                // transform-origin pivot-sandwich order, fixed in LayoutSystem). They are
+                // pre-existing feature gaps: transform-origin is not yet applied to element
+                // classes that carry their own transform machinery.
+                //
+                // Gradients/patterns route their transform through
+                // `getRawEntityFromParentTransform` (gradientTransform / patternTransform),
+                // which intentionally drops the transform-origin pivot — so the property has
+                // never been honored on these paint servers.
+                {"on-gradient-object-bounding-box.svg",
+                 Params::Skip("transform-origin not applied to gradientTransform (feature gap)")},
+                {"on-gradient-user-space-on-use.svg",
+                 Params::Skip("transform-origin not applied to gradientTransform (feature gap)")},
+                {"on-pattern-object-bounding-box.svg",
+                 Params::Skip("transform-origin not applied to patternTransform (feature gap)")},
+                {"on-pattern-user-space-on-use.svg",
+                 Params::Skip("transform-origin not applied to patternTransform (feature gap)")},
+                // <image>/<text>/<textPath> compute the correct origin in LayoutSystem, but the
+                // pivot does not yet compose correctly with their content-placement transforms,
+                // so the element renders off-screen. Pre-existing gap, separate from #514.
+                {"on-image.svg",
+                 Params::Skip("transform-origin pivot not composed with image content placement "
+                              "(feature gap)")},
+                {"on-text.svg",
+                 Params::Skip("transform-origin pivot not composed with text layout (feature "
+                              "gap)")},
+                {"on-text-path.svg",
+                 Params::Skip("transform-origin pivot not composed with textPath layout "
+                              "(feature gap)")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
