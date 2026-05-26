@@ -543,58 +543,34 @@ std::optional<XMLNode> XMLNode::nextSibling() const {
              : std::nullopt;
 }
 
+// `TreeMutationContext` is an invariant of any registry created through the document facades
+// (XMLDocument's ctor installs the basic XML defaults; SVGDocument overrides them with the
+// SVG-specific callbacks). We can therefore call through the context unconditionally instead of
+// gating on `find<TreeMutationContext>()` + falling back to a direct TreeComponent path.
 void XMLNode::insertBefore(const XMLNode& newNode, std::optional<XMLNode> referenceNode) {
-  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
-      mutations != nullptr && mutations->insertBefore) {
-    mutations->insertBefore(handle_, newNode.handle_,
-                            referenceNode ? referenceNode->handle_ : EntityHandle());
-    return;
-  }
-
-  handle_.get<TreeComponent>().insertBefore(
-      registry(), newNode.handle_.entity(),
-      referenceNode ? referenceNode->handle_.entity() : entt::null);
+  auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
+  mutations.insertBefore(handle_, newNode.handle_,
+                         referenceNode ? referenceNode->handle_ : EntityHandle());
 }
 
 void XMLNode::appendChild(const XMLNode& child) {
-  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
-      mutations != nullptr && mutations->appendChild) {
-    mutations->appendChild(handle_, child.handle_);
-    return;
-  }
-
-  handle_.get<TreeComponent>().appendChild(registry(), child.handle_.entity());
+  auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
+  mutations.appendChild(handle_, child.handle_);
 }
 
 void XMLNode::replaceChild(const XMLNode& newChild, const XMLNode& oldChild) {
-  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
-      mutations != nullptr && mutations->replaceChild) {
-    mutations->replaceChild(handle_, newChild.handle_, oldChild.handle_);
-    return;
-  }
-
-  handle_.get<TreeComponent>().replaceChild(registry(), newChild.handle_.entity(),
-                                            oldChild.handle_.entity());
+  auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
+  mutations.replaceChild(handle_, newChild.handle_, oldChild.handle_);
 }
 
 void XMLNode::removeChild(const XMLNode& child) {
-  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
-      mutations != nullptr && mutations->removeChild) {
-    mutations->removeChild(handle_, child.handle_);
-    return;
-  }
-
-  handle_.get<TreeComponent>().removeChild(registry(), child.entityHandle().entity());
+  auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
+  mutations.removeChild(handle_, child.handle_);
 }
 
 void XMLNode::remove() {
-  if (auto* mutations = handle_.registry()->ctx().find<donner::components::TreeMutationContext>();
-      mutations != nullptr && mutations->remove) {
-    mutations->remove(handle_);
-    return;
-  }
-
-  handle_.get<TreeComponent>().remove(registry());
+  auto& mutations = handle_.registry()->ctx().get<donner::components::TreeMutationContext>();
+  mutations.remove(handle_);
 }
 
 std::optional<FileOffset> XMLNode::sourceStartOffset() const {
