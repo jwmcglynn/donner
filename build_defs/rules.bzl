@@ -56,13 +56,8 @@ def llvm21_macos_workaround_linkopts():
     """
     No-op retained for call-site compatibility.
 
-    Previously forced linking against LLVM 21's static libc++ on macOS to
-    satisfy https://github.com/llvm/llvm-project/issues/155606. That path
-    only applied when `--config=latest_llvm` selected LLVM as the macOS CC
-    toolchain, but that registration was removed (see `.bazelrc` comment on
-    `--config=latest_llvm` and MODULE.bazel note on `llvm_toolchain_macos_aarch64`).
-    `--config=latest_llvm` on macOS now uses apple_support's Xcode clang,
-    which has its own libc++ and doesn't need the workaround.
+    macOS `--config=latest_llvm` now uses apple_support's Xcode clang instead
+    of LLVM 21, so the old static libc++ link workaround is no longer needed.
     """
     return []
 
@@ -110,10 +105,8 @@ def fuzzer_compatible_with():
     """
     Returns a list of labels that the fuzzer rules are compatible with.
 
-    Fuzzers are Linux-only: they depend on libclang_rt.fuzzer from the
-    hermetic LLVM 21 toolchain, and `--config=latest_llvm` now only
-    activates that toolchain on Linux exec platforms. macOS builds use
-    apple_support's Xcode clang, which doesn't ship the fuzzer runtime.
+    Fuzzers are Linux-only because macOS exec uses Xcode clang, which does not
+    ship the fuzzer runtime.
     """
     return select({
         "@platforms//os:linux": [],
