@@ -108,9 +108,13 @@ void WriteBitmapArtifact(const std::filesystem::path& path, const svg::RendererB
     return;
   }
 
+  ASSERT_EQ(bitmap.rowBytes % 4u, 0u) << path;
+  ASSERT_EQ(bitmap.pixels.size(), bitmap.rowBytes * static_cast<std::size_t>(bitmap.dimensions.y))
+      << path;
+  const std::size_t strideInPixels = bitmap.rowBytes / 4u;
   svg::RendererImageIO::writeRgbaPixelsToPngFile(path.string().c_str(), bitmap.pixels,
                                                  bitmap.dimensions.x, bitmap.dimensions.y,
-                                                 bitmap.rowBytes);
+                                                 strideInPixels);
 }
 
 svg::RendererBitmap BuildDiffBitmap(const svg::RendererBitmap& actual,
