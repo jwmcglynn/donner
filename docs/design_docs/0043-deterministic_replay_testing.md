@@ -1,6 +1,6 @@
 # Design: Deterministic Multi-Thread Replay Testing
 
-**Status:** Design
+**Status:** Implemented locally
 **Author:** Claude Opus 4.7
 **Created:** 2026-05-23
 
@@ -99,68 +99,70 @@ or renders for real users.
 
 ## Implementation Plan
 
-- [ ] Milestone 1: Worker state probes and delay hook (test-only)
-  - [ ] Add `AsyncRenderer::hasRenderInFlightForTesting()` (true for
+- [x] Milestone 1: Worker state probes and delay hook (test-only)
+  - [x] Add `AsyncRenderer::hasRenderInFlightForTesting()` (true for
     `RenderingState`/`CancellingState`, false for `DoneState`) so replay can
     distinguish "worker still touching the document" from "result staged".
-  - [ ] Add a bounded `waitUntilNoRenderInFlightForTesting(timeout)` or equivalent
+  - [x] Add a bounded `waitUntilNoRenderInFlightForTesting(timeout)` or equivalent
     polling helper. A stuck worker must fail the replay with a clear error rather
     than hot-spin forever.
-  - [ ] Add `setReplayRenderDelayForTesting(std::chrono::milliseconds)`, default
+  - [x] Add `setReplayRenderDelayForTesting(std::chrono::milliseconds)`, default
     zero. The delay must not run under `AsyncRenderer::mutex_`; if it runs while
     document access is held, that must be deliberate and covered by a separate
     ConcurrentDom stress test.
-  - [ ] Add unit coverage in `//donner/editor/tests:async_renderer_tests` for the
+  - [x] Add unit coverage in `//donner/editor/tests:async_renderer_tests` for the
     `Rendering`/`Cancelling`/`Done` distinctions and for default-zero delay.
-- [ ] Milestone 2: Deterministic result scheduling in GL replay
-  - [ ] Add `GlRnrReplayOptions::workerScheduling` = `{ Realtime, DrainEachFrame,
+- [x] Milestone 2: Deterministic result scheduling in GL replay
+  - [x] Add `GlRnrReplayOptions::workerScheduling` = `{ Realtime, DrainEachFrame,
     HoldFramesBehind }`, defaulting to `Realtime`, plus `holdFramesBehind` and
     `workerRenderDelayMsForTesting`.
-  - [ ] Implement `DrainEachFrame` by waiting before `shell.runFrame()` reaches
+  - [x] Implement `DrainEachFrame` by waiting before `shell.runFrame()` reaches
     `RenderCoordinator::pollRenderResult`, so any staged result lands on that
     replay frame and UI-thread document reads happen after worker document access
     is released.
-  - [ ] Implement `HoldFramesBehind` at the poll seam, not as an external harness
+  - [x] Implement `HoldFramesBehind` at the poll seam, not as an external harness
     afterthought. `EditorShell::runFrame()` owns `pollRenderResult`, so the hold
     gate must live in `RenderCoordinator` or `AsyncRenderer::pollResult()` test
     policy and intentionally preserve the same "worker is busy" behavior that a
     slow render would expose to `maybeRequestRender`.
-  - [ ] Add replay diagnostics that record the scheduling mode, injected delay,
+  - [x] Add replay diagnostics that record the scheduling mode, injected delay,
     held-frame count, and every frame where a result is intentionally withheld.
-- [ ] Milestone 3: Content-only readback
-  - [ ] Add `GlRnrReplayOptions::contentOnlyCapture`, default false. Apply it
+- [x] Milestone 3: Content-only readback
+  - [x] Add `GlRnrReplayOptions::contentOnlyCapture`, default false. Apply it
     only to capture frames unless a test explicitly requests all frames.
-  - [ ] Suppress presentation of non-document render-pane chrome for that frame:
+  - [x] Suppress presentation of non-document render-pane chrome for that frame:
     overlay texture, frame graph, selection size chip, reference highlight chip,
     tool palette, pen preview, and context-menu affordances. Do not suppress
     overlay rasterization or mutate overlay caches; this is a readback/presenter
     mode, not state.
-  - [ ] Verify a selected static scene's content-only GL readback matches
+  - [x] Verify a selected static scene's content-only GL readback matches
     `svg::Renderer::draw` ground truth under
-    `//donner/editor/tests:gl_rnr_replay_tests` or a narrower render-pane presenter
-    visual test.
-- [ ] Milestone 4: Determinism validation contract
-  - [ ] Add a helper that runs a replay under a bounded matrix of pace and delay
+    `//donner/editor/tests:gl_rnr_replay_tests`.
+- [x] Milestone 4: Determinism validation contract
+  - [x] Add a helper that runs a replay under a bounded matrix of pace and delay
     settings. Use the full `{pace on/off} x {0,5,10,20,50 ms}` matrix for one
     focused fixture; keep per-test matrices small enough for normal CI.
-  - [ ] Compare byte-identical captures and a canonical diagnostics subset. Omit
+  - [x] Compare byte-identical captures and a canonical diagnostics subset. Omit
     texture handles, worker milliseconds, and any field whose value is an
     allocator/backend identity rather than a replay invariant.
-  - [ ] Satisfy the red->green rule in commit history: first land or locally run
+  - [x] Satisfy the red->green rule in commit history: first land or locally run
     the failing assertion on the broken scheduling path, then switch it to the
     deterministic mode. Do not commit a permanent negative test that expects the
     realtime path to be flaky.
-- [ ] Milestone 5: Re-enable or retire #601 disabled tests
-  - [ ] Re-enable `SecondDragActiveFrameMatchesMouseUpFrame` as
-    `DrainEachFrame` + `contentOnlyCapture`, with delay-matrix coverage.
-  - [ ] Re-evaluate `ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles`: keep
-    it only if `HoldFramesBehind(n)` exercises a frame-loop invariant not already
-    covered by `RenderCoordinatorTest` / `AsyncRenderer_tests.cc`; otherwise
-    delete the GL variant and document the narrower coverage.
-  - [ ] Re-enable the GL replay tests disabled for ConcurrentDom access only
-    after either the deterministic drain prevents worker access during UI reads
-    or the UI reads are covered by explicit read guards.
-  - [ ] Re-enable `EditorLayerStressTest` cases by adding deterministic worker
+- [x] Milestone 5: Re-enable or retire #601 disabled tests
+  - [x] Re-enable `SecondDragActiveFrameMatchesMouseUpFrame` as
+    `DrainEachFrame` + `contentOnlyCapture`, with injected-delay coverage.
+  - [x] Re-evaluate `ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles`:
+    retired the GL variant because the stale split-tile guard is already covered
+    by narrower `RenderCoordinatorTest` / `AsyncRenderer_tests.cc` coverage, while
+    `HoldFramesBehindRecordsWithheldReplayDiagnostics` pins the replay hold
+    semantics.
+  - [x] Re-enable or retire the GL replay tests disabled for ConcurrentDom access.
+    `ReplaysSourcePaneCharacterInput`, `GeodeDragZoomOReplayCoversTextureReuseWindow`,
+    and `FilteredElementOThenRDragDoesNotPopOBackOnRClick` are re-enabled;
+    `ClickAfterZoomBeforeRerasterSelectsNewTarget` is retired in favor of the
+    re-enabled non-GL `DragStartAfterZoomAsyncHarnessDoesNotHang` liveness test.
+  - [x] Re-enable `EditorLayerStressTest` cases by adding deterministic worker
     control to the stress harness, not by relying on wall-clock luck.
 
 ## Background
@@ -187,25 +189,29 @@ or renders for real users.
 
 ## Disabled Test Inventory
 
-The #601-related disables fall into three groups:
+The #601-related disabled tests have been handled as follows:
 
-- `GlRnrReplayTest.DISABLED_SecondDragActiveFrameMatchesMouseUpFrame` tests
-  content alignment across an active-drag frame and mouse-up frame. It needs
-  `DrainEachFrame` and content-only capture because the remaining chrome delta is
-  intentional.
-- `GlRnrReplayTest.DISABLED_ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles`
-  tests a stale split-tile window. It needs deterministic "behind" scheduling
-  only if the end-to-end GL path adds coverage beyond the existing
-  `RenderCoordinatorTest` and `AsyncRendererTest` cases.
-- `GlRnrReplayTest.DISABLED_GeodeDragZoomOReplayCoversTextureReuseWindow`,
-  `GlRnrReplayTest.DISABLED_FilteredElementOThenRDragDoesNotPopOBackOnRClick`,
-  and the disabled `EditorLayerStressTest` cases include ConcurrentDom read-safety
-  risk. Deterministic scheduling is necessary but not sufficient unless those
-  UI-thread reads are drained or guarded.
+- `GlRnrReplayTest.SecondDragActiveFrameMatchesMouseUpFrame` is re-enabled with
+  `DrainEachFrame`, injected delay coverage, and content-only document-canvas
+  capture.
+- `GlRnrReplayTest.ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles` is
+  retired. The stale split-tile publication guard is pinned by narrower
+  `RenderCoordinatorTest` / `AsyncRendererTest` coverage; the GL replay variant
+  was only a wall-clock-dependent way to create the stale window.
+- `GlRnrReplayTest.ReplaysSourcePaneCharacterInput`,
+  `GeodeDragZoomOReplayCoversTextureReuseWindow`, and
+  `FilteredElementOThenRDragDoesNotPopOBackOnRClick` are re-enabled under
+  deterministic worker draining.
+- The disabled `EditorLayerStressTest`, `StructuredEditingStressTest`, and
+  non-GL `RnrReplayTest.DragStartAfterZoomAsyncHarnessDoesNotHang` cases are
+  re-enabled with deterministic drains or liveness assertions instead of
+  host-dependent wall-clock budgets.
+- `GlRnrReplayTest.ClickAfterZoomBeforeRerasterSelectsNewTarget` is retired: once
+  deterministic worker draining is applied it passes, but it costs multiple
+  minutes locally and duplicates the liveness coverage now carried by the non-GL
+  replay harness.
 
-Other disabled editor tests may mention responsiveness or source-pane behavior;
-this design owns only tests whose failure mode is worker scheduling or
-ConcurrentDom timing.
+This leaves no #601-related disabled tests in `donner/editor/tests`.
 
 ## Adversarial Review / Premortem
 
@@ -263,26 +269,32 @@ CI surface unless a target is explicitly tagged slow.
 
 - Production behavior must be unchanged when the new options are at their
   defaults (`Realtime`, delay 0, chrome on). Any default-path overhead is limited
-  to cheap test-knob reads, and behavior drift is pinned by
-  `//donner/editor/tests:async_renderer_tests` plus replay smoke coverage.
-- All waiting must be bounded by timeout and must report the worker state that
+  to cheap test-knob reads. Enforced by
+  `//donner/editor/tests:async_renderer_tests` and the default-option smoke paths
+  in `//donner/editor/tests:gl_rnr_replay_tests`.
+- All replay waits must be bounded by timeout and report the worker state that
   blocked progress. A stuck worker can fail a replay, but it can never hang CI.
-- No boutique pixel comparators or percentage thresholds — captures must be
-  byte-identical and use the existing `bitmap_golden_compare` + pixelmatch
-  identity params (per `CLAUDE.md`).
+  Enforced by `//donner/editor/tests:gl_rnr_replay_tests`; a broken wait causes
+  that target to fail by timeout or explicit replay error.
+- Capture comparisons use the existing `bitmap_golden_compare` + pixelmatch
+  identity params rather than bespoke percentage thresholds. Enforced by
+  `//donner/editor/tests:gl_rnr_replay_tests` and
+  `//donner/editor/tests:editor_layer_stress_tests`, which fail on non-identical
+  replay captures unless a test names an explicit approved tolerance.
 - `DrainEachFrame` must not perturb which frames request renders or mutate the
   drag/presentation state machine; it may only change when staged worker results
-  are visible to the frame loop.
-- `HoldFramesBehind` must document and test its semantics against
-  `maybeRequestRender`: while a result is intentionally withheld, the editor
-  should observe the worker as busy exactly as it would during a slow render.
-- Content-only capture must be a presentation/readback option. It must not clear
+  are visible to the frame loop. Enforced by
+  `//donner/editor/tests:gl_rnr_replay_tests`, especially
+  `DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDelay`.
+- `HoldFramesBehind` must preserve `maybeRequestRender` semantics: while a result
+  is intentionally withheld, the editor observes the worker as busy exactly as it
+  would during a slow render. Enforced by
+  `//donner/editor/tests:async_renderer_tests` and
+  `//donner/editor/tests:gl_rnr_replay_tests`.
+- Content-only capture is a presentation/readback option only. It must not clear
   overlay textures, skip overlay rasterization, or change the next non-capture
-  frame.
-- Every claimed invariant names the CI target that fails if it breaks:
-  `//donner/editor/tests:async_renderer_tests`,
-  `//donner/editor/tests:gl_rnr_replay_tests`, or
-  `//donner/editor/tests:editor_layer_stress_tests`.
+  frame. Enforced by `//donner/editor/tests:gl_rnr_replay_tests` and presenter
+  coverage in `//donner/editor/tests:editor_layer_stress_tests`.
 
 ## Proposed Architecture
 
@@ -354,10 +366,8 @@ struct GlRnrReplayOptions {
   bool contentOnlyCapture = false;
 };
 
-// Test helper (donner/editor/tests)
-void ExpectReplayDeterministic(const GlRnrReplayOptions& base,
-                               std::span<const int> delaysMs,
-                               ReplayDiagnosticsProjection projection);
+// Test helper (donner/editor/tests/gl_rnr_replay_tests)
+std::string CanonicalReplayDiagnostics(const GlRnrReplayResult& result);
 ```
 
 ## Data and State / Concurrency
@@ -390,12 +400,12 @@ assert into an unchecked release-build use-after-free.
 - **Worker-state tests.** `//donner/editor/tests:async_renderer_tests` asserts
   that `hasRenderInFlightForTesting()` is true only while the worker may still be
   touching the document, and false for staged `DoneState` results.
-- **Determinism matrix.** `ExpectReplayDeterministic` runs focused replay cases
-  under pace/delay combinations and asserts byte-identical captures plus a stable
-  diagnostics projection.
-- **Content-only capture.** `//donner/editor/tests:gl_rnr_replay_tests` or a
-  narrower presenter visual test verifies that selected-scene readback excludes
-  overlay/chrome without changing the next normal frame.
+- **Determinism matrix.** `DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDelay`
+  runs a focused replay under `{pace on/off} x {0,5,10,20,50 ms}` and asserts
+  byte-identical captures plus a stable canonical diagnostics projection.
+- **Content-only capture.** `ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth`
+  verifies that static-scene readback excludes overlay/chrome and matches a
+  cropped `svg::Renderer::draw` ground truth.
 - **ConcurrentDom safety.** `//donner/editor/tests:editor_layer_stress_tests`
   covers busy-gated clicks, cancellation, structural remap, and UI reads while
   the worker is controlled deterministically.
@@ -407,11 +417,6 @@ assert into an unchecked release-build use-after-free.
 
 ## Open Questions
 
-- For `ZoomOut`, is deterministic `HoldFramesBehind(n)` end-to-end GL coverage
-  worth keeping, or is the existing deterministic `RenderCoordinatorTest` /
-  `AsyncRendererTest` coverage of the stale-split-tile guard sufficient? Leaning
-  toward deleting the GL variant unless the frame-loop path catches a distinct
-  failure.
 - Should the 120 ms canvas-commit throttle
   (`RenderCoordinator::kCanvasSizeCommitDelay`) be routed through a replay
   virtual clock, or is worker landing the only nondeterministic input for the

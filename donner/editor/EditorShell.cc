@@ -1512,8 +1512,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         window_.wakeEventLoop();
       } else {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
-        renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                              textures_);
+        requestRenderAtEndOfFrame_ = true;
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
             app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
             RenderCoordinator::OverlayUploadMode::MatchDisplayedVersion,
@@ -1604,8 +1603,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
 
   if (!renderCoordinator_.asyncRenderer().isBusy() && app_.hasDocument()) {
-    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                          textures_);
+    requestRenderAtEndOfFrame_ = true;
   }
 
   const auto liveActiveDragPreview = selectTool_.activeDragPreview();
@@ -1629,13 +1627,17 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
       .suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_),
       .suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_),
+      .showOverlay = !contentOnlyCaptureThisFrame_,
+      .showFrameGraph = !contentOnlyCaptureThisFrame_,
   };
   renderPanePresenter_.render(paneState);
-  renderPenToolPreview();
-  renderSelectionSizeChip(hoverTransformIntent, activeGesturePreview);
-  renderReferenceHighlightChip();
-  renderToolPalette(paneOriginImGui, contentRegion);
-  renderRenderPaneContextMenu();
+  if (!contentOnlyCaptureThisFrame_) {
+    renderPenToolPreview();
+    renderSelectionSizeChip(hoverTransformIntent, activeGesturePreview);
+    renderReferenceHighlightChip();
+    renderToolPalette(paneOriginImGui, contentRegion);
+    renderRenderPaneContextMenu();
+  }
 
   ImGui::End();
 }
@@ -2652,6 +2654,9 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
+  contentOnlyCaptureThisFrame_ = contentOnlyCaptureForNextFrame_;
+  contentOnlyCaptureForNextFrame_ = false;
+  requestRenderAtEndOfFrame_ = false;
   textures_.advancePresentationFrame();
   layerInspectorPanel_.advancePresentationFrame();
   if (reproRecorder_) {
@@ -2824,6 +2829,13 @@ void EditorShell::runFrame() {
     renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
   }
   renderFloatingLayerPanel();
+  if (requestRenderAtEndOfFrame_ && !renderCoordinator_.asyncRenderer().isBusy() &&
+      app_.hasDocument()) {
+    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
+                                          textures_);
+  }
+  requestRenderAtEndOfFrame_ = false;
+  contentOnlyCaptureThisFrame_ = false;
 }
 
 }  // namespace donner::editor

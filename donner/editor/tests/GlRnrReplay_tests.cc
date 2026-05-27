@@ -8,15 +8,19 @@
 #include <cstring>
 #include <filesystem>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
 #include "donner/base/Vector2.h"
+#include "donner/editor/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
 #include "gtest/gtest.h"
@@ -84,28 +88,6 @@ const repro::GlRnrReplayFrameDiagnostics* FindFrameDiagnostics(
   }
   return nullptr;
 }
-
-bool CanvasSizeCloseEnoughForReplay(const Vector2i& lhs, const Vector2i& rhs) {
-  return std::abs(lhs.x - rhs.x) <= 1 && std::abs(lhs.y - rhs.y) <= 1;
-}
-
-bool HasStaleSplitTiles(const repro::GlRnrReplayFrameDiagnostics& frame) {
-  if (frame.tiles.empty()) {
-    return false;
-  }
-
-  if (frame.tiles.size() == 1u && frame.tiles.front().id == "full-canvas") {
-    return false;
-  }
-
-  for (const repro::GlRnrReplayTileDiagnostics& tile : frame.tiles) {
-    if (!CanvasSizeCloseEnoughForReplay(tile.rasterCanvasSize, frame.viewportDesiredCanvas)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 svg::RendererBitmap BitmapFromImage(const svg::Image& image) {
   svg::RendererBitmap bitmap;
   bitmap.dimensions = Vector2i(image.width, image.height);
@@ -129,6 +111,119 @@ std::optional<svg::RendererBitmap> LoadCaptureBitmap(const repro::GlRnrReplayRes
     return std::nullopt;
   }
   return BitmapFromImage(*image);
+}
+
+svg::RendererBitmap NormalizeBitmap(svg::RendererBitmap bitmap) {
+  const std::size_t tightRowBytes = static_cast<std::size_t>(bitmap.dimensions.x) * 4u;
+  if (bitmap.rowBytes == tightRowBytes) {
+    return bitmap;
+  }
+
+  svg::RendererBitmap normalized;
+  normalized.dimensions = bitmap.dimensions;
+  normalized.rowBytes = tightRowBytes;
+  normalized.alphaType = bitmap.alphaType;
+  normalized.pixels.resize(tightRowBytes * static_cast<std::size_t>(bitmap.dimensions.y));
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    std::memcpy(normalized.pixels.data() + static_cast<std::size_t>(y) * tightRowBytes,
+                bitmap.pixels.data() + static_cast<std::size_t>(y) * bitmap.rowBytes,
+                tightRowBytes);
+  }
+  return normalized;
+}
+
+std::optional<svg::RendererBitmap> RenderGroundTruth(std::string_view svgSource,
+                                                     const Vector2i& canvasSize) {
+  EditorApp referenceApp;
+  if (!referenceApp.loadFromString(svgSource)) {
+    ADD_FAILURE() << "Failed to load replay test SVG";
+    return std::nullopt;
+  }
+
+  referenceApp.document().document().setCanvasSize(canvasSize.x, canvasSize.y);
+  svg::Renderer renderer;
+  renderer.draw(referenceApp.document().document());
+  return NormalizeBitmap(renderer.takeSnapshot());
+}
+constexpr std::string_view kStaticContentOnlySvg =
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"120\" "
+    "viewBox=\"0 0 200 120\"><rect width=\"200\" height=\"120\" "
+    "fill=\"#102030\"/></svg>";
+
+std::optional<std::filesystem::path> WriteStaticContentReplay(
+    const std::filesystem::path& outputDir, std::string_view name, std::uint64_t lastFrame) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_static_content_input.svg";
+  file.metadata.svgBasename = "static_content_input.svg";
+  file.metadata.svgContentHash = "fnv1a64:test";
+  file.metadata.svgSource = std::string(kStaticContentOnlySvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  for (std::uint64_t frameIndex = 0; frameIndex <= lastFrame; ++frameIndex) {
+    repro::ReproFrame frame;
+    frame.index = frameIndex;
+    frame.timestampSeconds = static_cast<double>(frameIndex) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = 320.0;
+    frame.mouseY = 240.0;
+    file.frames.push_back(frame);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+std::string CanonicalReplayDiagnostics(const repro::GlRnrReplayResult& result) {
+  std::ostringstream out;
+  const auto writeVec = [&out](const Vector2i& value) { out << value.x << ',' << value.y; };
+  const auto writeVecD = [&out](const Vector2d& value) { out << value.x << ',' << value.y; };
+
+  for (const repro::GlRnrReplayFrameDiagnostics& frame : result.frameDiagnostics) {
+    out << "frame=" << frame.frameIndex << ";fresh=" << static_cast<int>(frame.canvasFreshness)
+        << ";status=" << frame.statusSuffix << ";viewport=";
+    writeVec(frame.viewportDesiredCanvas);
+    out << ";document=";
+    writeVec(frame.documentCanvas);
+    out << ";compositor=";
+    writeVec(frame.compositorCanvas);
+    out << ";metadata_miss=" << frame.metadataOnlyMissCount
+        << ";duplicate_textures=" << frame.duplicateLiveTextureCount << ";overlay_dims=";
+    writeVec(frame.overlayDimsPx);
+    out << ";scheduling=" << static_cast<int>(frame.replayWorkerScheduling)
+        << ";hold=" << frame.replayHoldFramesBehind
+        << ";withheld=" << frame.replayResultHoldPollsThisFrame << ";tiles=" << frame.tiles.size();
+    for (const repro::GlRnrReplayTileDiagnostics& tile : frame.tiles) {
+      out << "|" << tile.id << ",kind=" << static_cast<int>(tile.kind)
+          << ",generation=" << tile.generation << ",bitmap_px=";
+      writeVec(tile.bitmapDimsPx);
+      out << ",raster=";
+      writeVec(tile.rasterCanvasSize);
+      out << ",offset=";
+      writeVecD(tile.canvasOffsetDoc);
+      out << ",dims=";
+      writeVecD(tile.bitmapDimsDoc);
+      out << ",drag=";
+      writeVecD(tile.dragTranslationDoc);
+      out << ",presented_drag=";
+      writeVecD(tile.presentedDragTranslationDoc);
+      out << ",metadata=" << tile.metadataOnly << ",drag_target=" << tile.isDragTarget;
+    }
+    out << '\n';
+  }
+  return out.str();
 }
 
 svg::RendererBitmap CropBitmap(const svg::RendererBitmap& bitmap, const PixelCrop& crop) {
@@ -197,6 +292,132 @@ int CountBrightGreenPixels(const svg::RendererBitmap& bitmap) {
   return count;
 }
 
+TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "content_only_ground_truth";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteStaticContentReplay(outputDir, "content_only_ground_truth.rnr", 1);
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(1);
+  options.maxFrame = 1;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.contentOnlyCapture = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 1);
+  ASSERT_TRUE(actual.has_value());
+  std::optional<svg::RendererBitmap> fullExpected =
+      RenderGroundTruth(kStaticContentOnlySvg, Vector2i(200, 120));
+  ASSERT_TRUE(fullExpected.has_value());
+  const svg::RendererBitmap expected = CropBitmap(
+      *fullExpected,
+      PixelCrop{.x = 0, .y = 0, .width = actual->dimensions.x, .height = actual->dimensions.y});
+  tests::CompareBitmapToBitmap(NormalizeBitmap(*actual), expected,
+                               "gl_content_only_capture_vs_renderer",
+                               tests::PixelmatchIdentityParams());
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDelay) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "deterministic_replay_matrix";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteStaticContentReplay(outputDir, "deterministic_replay_matrix.rnr", 1);
+  ASSERT_TRUE(replayPath.has_value());
+
+  std::optional<svg::RendererBitmap> baselineCapture;
+  std::optional<std::string> baselineDiagnostics;
+  constexpr int kDelayMatrixMs[] = {0, 5, 10, 20, 50};
+  for (const bool pace : {false, true}) {
+    for (const int delayMs : kDelayMatrixMs) {
+      repro::GlRnrReplayOptions options;
+      options.rnrPath = *replayPath;
+      options.outputDir = outputDir / (std::string(pace ? "paced" : "unpaced") + "_delay_" +
+                                       std::to_string(delayMs));
+      options.captureFrames.insert(1);
+      options.maxFrame = 1;
+      options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+      options.pace = pace;
+      options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+      options.workerRenderDelayMsForTesting = delayMs;
+      options.contentOnlyCapture = true;
+
+      repro::GlRnrReplayResult result;
+      std::string error;
+      ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+      std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 1);
+      ASSERT_TRUE(capture.has_value());
+      const svg::RendererBitmap normalizedCapture = NormalizeBitmap(*capture);
+      const std::string diagnostics = CanonicalReplayDiagnostics(result);
+      const std::string label = std::string("gl_replay_matrix_") + (pace ? "paced" : "unpaced") +
+                                "_delay_" + std::to_string(delayMs);
+
+      if (!baselineCapture.has_value()) {
+        baselineCapture = normalizedCapture;
+        baselineDiagnostics = diagnostics;
+        continue;
+      }
+
+      tests::CompareBitmapToBitmap(normalizedCapture, *baselineCapture, label,
+                                   tests::PixelmatchIdentityParams());
+      EXPECT_EQ(diagnostics, *baselineDiagnostics) << label;
+    }
+  }
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "hold_frames_behind";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteStaticContentReplay(outputDir, "hold_frames_behind.rnr", 2);
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(2);
+  options.maxFrame = 2;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 1;
+  options.workerRenderDelayMsForTesting = 1;
+  options.contentOnlyCapture = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  const repro::GlRnrReplayFrameDiagnostics* withheld = FindFrameDiagnostics(result, 1);
+  ASSERT_NE(withheld, nullptr);
+  EXPECT_EQ(withheld->replayWorkerScheduling, repro::GlRnrReplayWorkerScheduling::HoldFramesBehind);
+  EXPECT_EQ(withheld->replayWorkerRenderDelayMsForTesting, 1);
+  EXPECT_EQ(withheld->replayHoldFramesBehind, 1);
+  EXPECT_EQ(withheld->replayResultHoldPollsThisFrame, 1u);
+  EXPECT_TRUE(withheld->replayResultWithheld);
+
+  const repro::GlRnrReplayFrameDiagnostics* released = FindFrameDiagnostics(result, 2);
+  ASSERT_NE(released, nullptr);
+  EXPECT_EQ(released->replayResultHoldPollsThisFrame, 0u);
+  EXPECT_FALSE(released->replayResultWithheld);
+  EXPECT_NE(FindCapture(result, 2), nullptr);
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
 TEST(GlRnrReplayTest, UsesEmbeddedSvgSourceWhenOriginalPathIsMissing) {
   const std::filesystem::path outputDir = DiagnosticOutputDir();
   const std::filesystem::path reproPath = outputDir / "embedded_svg_source_replay.rnr";
@@ -235,15 +456,9 @@ TEST(GlRnrReplayTest, UsesEmbeddedSvgSourceWhenOriginalPathIsMissing) {
   std::filesystem::remove(reproPath, ec);
 }
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands.
-// `pace=true` source-pane character input reparses the document while the async render worker is
-// mid-render, so the document is transiently `ThreadingMode::ConcurrentDom`. The editor still
-// performs unguarded live-document reads on the UI thread whose timing relative to the worker's
-// render window is nondeterministic, so the replay intermittently aborts on
-// `ElementAnchor::assertScopedEntityHandleAccessAllowed` (`SVGElement.cc:253`). Eliminating this
-// requires completing the editor's ConcurrentDom read-guarding plus deterministic replay, tracked
-// by the determinism-framework task (#601).
-TEST(GlRnrReplayTest, DISABLED_ReplaysSourcePaneCharacterInput) {
+// Regression coverage for #601: deterministic worker draining keeps the async renderer out
+// of ConcurrentDom while replayed source-pane input reparses the document.
+TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
   const std::filesystem::path outputDir = DiagnosticOutputDir();
   const std::filesystem::path reproPath = outputDir / "source_pane_character_input_replay.rnr";
   // The document renders at actual size in the replay (no zoom is applied), so a
@@ -315,7 +530,8 @@ TEST(GlRnrReplayTest, DISABLED_ReplaysSourcePaneCharacterInput) {
   options.outputDir = outputDir;
   options.captureFrames.insert(60);
   options.cropMode = repro::GlRnrReplayCropMode::Full;
-  options.pace = true;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
   options.maxFrame = 60;
 
   repro::GlRnrReplayResult result;
@@ -332,122 +548,9 @@ TEST(GlRnrReplayTest, DISABLED_ReplaysSourcePaneCharacterInput) {
   std::filesystem::remove(reproPath, ec);
 }
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands.
-// This `pace=true` recording races the async render worker against the UI thread.
-// During a render the document is transiently `ThreadingMode::ConcurrentDom`, and
-// the editor still performs unguarded live-document reads on the UI thread
-// (selection-chrome geometry via `CollectRenderableGeometry`, and others) whose
-// timing relative to the worker's render window is nondeterministic. Depending on
-// that timing the replay either aborts on a scoped-access assertion
-// (`ElementAnchor::assertScopedEntityHandleAccessAllowed`, an unguarded read
-// landing inside a ConcurrentDom window) or serializes the UI against the worker's
-// write-held render phases (`prepareDocumentForRendering` / `rasterizeLayer`) for
-// the entire gesture — observed flipping between a sub-second abort and a
-// multi-minute crawl across runs of the same binary. Making this both fast and
-// non-flaky requires completing the editor's ConcurrentDom read-guarding *and* the
-// deterministic replay framework, which is tracked by the determinism-framework
-// task (#601). Until then this scenario is not a deterministic invariant.
-TEST(GlRnrReplayTest, DISABLED_ClickAfterZoomBeforeRerasterSelectsNewTarget) {
-  constexpr std::string_view kSourceRnrPath = "donner/editor/tests/drag_start_hang_repro.rnr";
-  std::optional<repro::ReproFile> source = repro::ReadReproFile(RunfilePath(kSourceRnrPath));
-  ASSERT_TRUE(source.has_value());
-  ASSERT_TRUE(source->metadata.expect.has_value());
-  const repro::ReproExpectation& expect = *source->metadata.expect;
-  ASSERT_EQ(expect.proofKind, repro::ReproExpectationProofKind::WorkerLiveness);
-  ASSERT_TRUE(expect.expectedSelectionLabel.has_value());
-  ASSERT_TRUE(expect.statusStartFrameIndex.has_value());
-  ASSERT_TRUE(expect.statusMaxFrameIndex.has_value());
-  ASSERT_TRUE(expect.forbiddenStatusSubstring.has_value());
-
-  repro::ReproFile reproFile = *source;
-  const std::uint64_t kClickFrame = static_cast<std::uint64_t>(expect.minFrameIndex);
-  const std::uint64_t kLastZoomFrame = kClickFrame - 1;
-  reproFile.frames.erase(
-      std::remove_if(reproFile.frames.begin(), reproFile.frames.end(),
-                     [&](const repro::ReproFrame& frame) { return frame.index > kLastZoomFrame; }),
-      reproFile.frames.end());
-  ASSERT_FALSE(reproFile.frames.empty());
-
-  const repro::ReproFrame zoomedFrame = reproFile.frames.back();
-  ASSERT_TRUE(zoomedFrame.viewport.has_value());
-
-  constexpr double kFrameDtMs = 1000.0 / 60.0;
-  for (std::size_t i = 0; i < reproFile.frames.size(); ++i) {
-    reproFile.frames[i].index = static_cast<std::uint64_t>(i);
-    reproFile.frames[i].timestampSeconds = static_cast<double>(i) / 60.0;
-    reproFile.frames[i].deltaMs = kFrameDtMs;
-  }
-
-  const std::uint64_t kMouseUpFrame = kClickFrame + 16;
-  const std::uint64_t kFinalFrame = static_cast<std::uint64_t>(expect.maxFrameIndex);
-  for (std::uint64_t frameIndex = kClickFrame; frameIndex <= kFinalFrame; ++frameIndex) {
-    repro::ReproFrame frame = zoomedFrame;
-    frame.index = frameIndex;
-    frame.timestampSeconds = static_cast<double>(frameIndex) / 60.0;
-    frame.deltaMs = kFrameDtMs;
-    frame.mouseX = 761.0;
-    frame.mouseY = 838.0;
-    frame.mouseDocX.reset();
-    frame.mouseDocY.reset();
-    frame.mouseButtonMask = frameIndex < kMouseUpFrame ? 1 : 0;
-    frame.events.clear();
-    if (frameIndex == kClickFrame) {
-      repro::ReproEvent event;
-      event.kind = repro::ReproEvent::Kind::MouseDown;
-      event.mouseButton = 0;
-      frame.events.push_back(event);
-    } else if (frameIndex == kMouseUpFrame) {
-      repro::ReproEvent event;
-      event.kind = repro::ReproEvent::Kind::MouseUp;
-      event.mouseButton = 0;
-      frame.events.push_back(event);
-    }
-    reproFile.frames.push_back(frame);
-  }
-
-  const std::filesystem::path reproPath =
-      DiagnosticOutputDir() / "zoom_click_before_reraster_selects_new_target.rnr";
-  ASSERT_TRUE(repro::WriteReproFile(reproPath, reproFile));
-
-  repro::GlRnrReplayOptions options;
-  options.rnrPath = reproPath;
-  options.svgPathOverride = RunfilePath("donner_splash.svg");
-  options.outputDir = DiagnosticOutputDir() / "gl_zoom_click_before_reraster";
-  options.captureFrames = {kFinalFrame};
-  options.maxFrame = kFinalFrame;
-  options.cropMode = repro::GlRnrReplayCropMode::Full;
-  options.pace = true;
-  options.visible = false;
-
-  repro::GlRnrReplayResult result;
-  std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
-
-  ASSERT_TRUE(result.finalSelectedElementLabel.has_value());
-  EXPECT_EQ(*result.finalSelectedElementLabel, *expect.expectedSelectionLabel);
-
-  const repro::GlRnrReplayFrameDiagnostics* firstDiagnostics =
-      FindFrameDiagnostics(result, static_cast<std::uint64_t>(*expect.statusStartFrameIndex));
-  ASSERT_NE(firstDiagnostics, nullptr);
-  const repro::GlRnrReplayFrameDiagnostics* finalDiagnostics =
-      FindFrameDiagnostics(result, static_cast<std::uint64_t>(*expect.statusMaxFrameIndex));
-  ASSERT_NE(finalDiagnostics, nullptr);
-  EXPECT_EQ(finalDiagnostics->statusSuffix.find(*expect.forbiddenStatusSubstring),
-            std::string::npos)
-      << "stale compositor status persisted through the bounded replay window";
-}
-
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands.
-// This compares the active-drag frame against the mouse-up frame, but `pace=true`
-// lets the async render worker land between the two frames nondeterministically
-// (chronically flaky on CI across all branches). Making the replay deterministic
-// further showed the residual diff is the *selection chrome* (the active-drag
-// transform-preview bounding box vs the settled committed box), which changes
-// intentionally after the drag settles — so pixel-identity including chrome is
-// not a true invariant. The content "no-jump" invariant for this recording is
-// already covered deterministically by
-// `RnrReplayTest.FilterPostDragJumpReplayMatchesGroundTruth`.
-TEST(GlRnrReplayTest, DISABLED_SecondDragActiveFrameMatchesMouseUpFrame) {
+// Regression coverage for #601: deterministic draining fixes the worker landing frame, and
+// content-only capture removes intentional selection-chrome settle from the pixel assertion.
+TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
   constexpr std::string_view kRnrPath = "donner/editor/tests/filter_post_drag_jump.rnr";
   const std::filesystem::path rnrPath = RunfilePath(kRnrPath);
   std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(rnrPath);
@@ -469,7 +572,10 @@ TEST(GlRnrReplayTest, DISABLED_SecondDragActiveFrameMatchesMouseUpFrame) {
   options.captureFrames = {activeFrame, comparisonFrame};
   options.maxFrame = comparisonFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
-  options.pace = true;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.workerRenderDelayMsForTesting = 2;
+  options.contentOnlyCapture = true;
   options.visible = false;
 
   repro::GlRnrReplayResult result;
@@ -486,94 +592,9 @@ TEST(GlRnrReplayTest, DISABLED_SecondDragActiveFrameMatchesMouseUpFrame) {
                                tests::PixelmatchIdentityParams());
 }
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands.
-// The hard precondition `HasStaleSplitTiles(*guarded)` at frame 146 requires the
-// async render worker to still be several frames behind on the zoom re-raster — a
-// `pace=true` wall-clock race that is chronically flaky on CI (false ~50% of the
-// time, including on `main`). The guard invariant under test
-// (`ShouldUploadImmediateOverlayForPresentedTiles` rejecting stale split-tile
-// epochs) is already covered deterministically by `RenderCoordinatorTest`'s
-// `ImmediateOverlayUploadRequiresCurrentSplitCanvasEpoch` /
-// `SplitPreviewFromStaleCanvasEpochIsRejected` in AsyncRenderer_tests.cc.
-TEST(GlRnrReplayTest, DISABLED_ZoomOutDragDoesNotPublishNewOverlayOverStaleSplitTiles) {
-  constexpr std::string_view kRnrPath = "zoom-out-drag-jump.rnr";
-  constexpr std::uint64_t kBeforeFrame = 145;
-  constexpr std::uint64_t kGuardedFrame = 146;
-  // The zoom-out gesture re-rasterizes a 3298x1893 canvas down to 1896x1088 on
-  // the async render worker. Re-rasterization only completes well after the
-  // gesture ends (drag release is frame 186), so the caught-up frame is found by
-  // scanning rather than hard-coded — its exact index depends on worker speed.
-  // Replay the full recording so the catch-up is observable.
-  constexpr std::uint64_t kLastFrame = 252;
-
-  repro::GlRnrReplayOptions options;
-  options.rnrPath = RunfilePath(kRnrPath);
-  options.svgPathOverride = RunfilePath("donner_splash.svg");
-  options.outputDir = DiagnosticOutputDir() / "gl_zoom_out_drag_overlay_epoch";
-  options.captureFrames = {kLastFrame};
-  options.maxFrame = kLastFrame;
-  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
-  // The stale split-tile window only exists while the async render worker is
-  // genuinely behind the viewport, and that lag develops only under real-time
-  // pacing. With pace=false the worker never lands a render in this headless
-  // replay, so no composited tiles are published and the window can't be
-  // observed (the stale-tile precondition below would never hold).
-  options.pace = true;
-  options.visible = false;
-
-  repro::GlRnrReplayResult result;
-  std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
-
-  const repro::GlRnrReplayFrameDiagnostics* before = FindFrameDiagnostics(result, kBeforeFrame);
-  const repro::GlRnrReplayFrameDiagnostics* guarded = FindFrameDiagnostics(result, kGuardedFrame);
-  ASSERT_NE(before, nullptr);
-  ASSERT_NE(guarded, nullptr);
-
-  ASSERT_TRUE(HasStaleSplitTiles(*guarded))
-      << "The fixture should exercise the stale split-tile zoom window at frame " << kGuardedFrame;
-  EXPECT_EQ(guarded->overlayDimsPx, before->overlayDimsPx)
-      << "A current-canvas overlay must not publish over stale split tiles.";
-  EXPECT_EQ(guarded->overlayTextureHandle, before->overlayTextureHandle)
-      << "Frame " << kGuardedFrame
-      << " should retain the previous overlay until the split content catches up.";
-  EXPECT_FALSE(
-      CanvasSizeCloseEnoughForReplay(guarded->overlayDimsPx, guarded->viewportDesiredCanvas))
-      << "Publishing a viewport-current overlay over stale split tiles reintroduces the "
-         "one-frame texture splat repro.";
-
-  // Once the worker finishes re-rasterizing at the settled viewport, the split
-  // tiles catch up and the overlay tracks the viewport canvas again. How many
-  // frames that takes — or whether it lands within the recording at all —
-  // depends on the async render worker's wall-clock throughput, which varies
-  // across machines (a slower CI runner may still be catching up at the final
-  // recorded frame). So the catch-up is verified best-effort: when the replay
-  // does reach it, confirm the overlay tracks the viewport; never fail the test
-  // just because this machine didn't finish catching up in time. The hard
-  // guarantee under test is the stale-window invariant asserted above.
-  const repro::GlRnrReplayFrameDiagnostics* caughtUp = nullptr;
-  for (const repro::GlRnrReplayFrameDiagnostics& frame : result.frameDiagnostics) {
-    if (frame.frameIndex > kGuardedFrame && !HasStaleSplitTiles(frame) &&
-        CanvasSizeCloseEnoughForReplay(frame.overlayDimsPx, frame.viewportDesiredCanvas)) {
-      caughtUp = &frame;
-      break;
-    }
-  }
-  if (caughtUp != nullptr) {
-    EXPECT_FALSE(HasStaleSplitTiles(*caughtUp));
-    EXPECT_TRUE(
-        CanvasSizeCloseEnoughForReplay(caughtUp->overlayDimsPx, caughtUp->viewportDesiredCanvas));
-  }
-}
-
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands. Even with
-// `pace=false`, this replay drives the async render worker, so the document is transiently
-// `ThreadingMode::ConcurrentDom` while the UI thread performs unguarded live-document reads. Their
-// timing relative to the worker's render window is nondeterministic, so the replay intermittently
-// aborts on `ElementAnchor::assertScopedEntityHandleAccessAllowed` (`SVGElement.cc:253`). The race
-// exists regardless of pacing; eliminating it needs the editor's ConcurrentDom read-guarding plus
-// deterministic replay, tracked by the determinism-framework task (#601).
-TEST(GlRnrReplayTest, DISABLED_GeodeDragZoomOReplayCoversTextureReuseWindow) {
+// Regression coverage for #601: deterministic worker draining prevents ConcurrentDom
+// UI-thread reads while this replay covers the texture-reuse diagnostic window.
+TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
   constexpr std::string_view kRnrPath = "donner/editor/tests/geode_drag_zoom_o_pop.rnr";
   constexpr std::uint64_t kFirstCaptureFrame = 78;
   constexpr std::uint64_t kLastCaptureFrame = 81;
@@ -595,6 +616,7 @@ TEST(GlRnrReplayTest, DISABLED_GeodeDragZoomOReplayCoversTextureReuseWindow) {
   options.maxFrame = kLastCaptureFrame;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
   options.visible = false;
 
   repro::GlRnrReplayResult result;
@@ -616,13 +638,9 @@ TEST(GlRnrReplayTest, DISABLED_GeodeDragZoomOReplayCoversTextureReuseWindow) {
   }
 }
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands. `pace=true` drag
-// replay races the async render worker against UI-thread input under
-// `ThreadingMode::ConcurrentDom`; unguarded UI-thread live-document reads landing inside the
-// worker's render window intermittently abort on
-// `ElementAnchor::assertScopedEntityHandleAccessAllowed` (`SVGElement.cc:253`). Tracked by the
-// determinism-framework task (#601).
-TEST(GlRnrReplayTest, DISABLED_FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
+// Regression coverage for #601: deterministic worker draining makes the filtered drag replay
+// stable while content-only capture keeps the assertion focused on document pixels.
+TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
   constexpr std::string_view kRnrPath =
       "donner/editor/tests/filtered-element-flash-after-drags-2.rnr";
   const std::filesystem::path rnrPath = RunfilePath(kRnrPath);
@@ -643,7 +661,9 @@ TEST(GlRnrReplayTest, DISABLED_FilteredElementOThenRDragDoesNotPopOBackOnRClick)
   options.captureFrames = {beforeClickFrame, firstClickFrame, settledClickFrame};
   options.maxFrame = static_cast<std::uint64_t>(expect.maxFrameIndex);
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
-  options.pace = true;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.contentOnlyCapture = true;
   options.visible = false;
 
   repro::GlRnrReplayResult result;

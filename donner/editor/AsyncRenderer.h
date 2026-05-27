@@ -31,6 +31,7 @@
 /// `Renderer` at any time — it lives on the worker.
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
@@ -260,10 +261,41 @@ public:
   AsyncRenderer(AsyncRenderer&&) = delete;
   AsyncRenderer& operator=(AsyncRenderer&&) = delete;
 
-  /// Returns true while a render is in flight on the worker thread.
-  /// The UI thread must not touch the `Renderer` or mutate the
-  /// `SVGDocument` while this returns true.
+  /// Returns true while a render is in flight or a finished result is waiting to be polled.
+  /// The UI thread must not touch the `Renderer` or mutate the `SVGDocument` while this returns
+  /// true.
   [[nodiscard]] bool isBusy() const;
+
+  /// Returns true only while the worker may still be computing or cancelling a render.
+  /// Unlike `isBusy()`, a staged result waiting in `DoneState` is not in flight.
+  [[nodiscard]] bool hasRenderInFlightForTesting() const;
+
+  /**
+   * Wait until no worker render is actively in flight.
+   *
+   * @param deadline Steady-clock deadline for the bounded wait.
+   */
+  [[nodiscard]] bool waitUntilNoRenderInFlightForTesting(
+      std::chrono::steady_clock::time_point deadline);
+
+  /**
+   * Inject a fixed delay into each worker render attempt for replay tests.
+   *
+   * @param delay Delay duration. Negative durations are clamped to zero.
+   */
+  void setReplayRenderDelayForTesting(std::chrono::milliseconds delay);
+
+  /**
+   * Hold each staged result for a fixed number of poll attempts in replay tests.
+   *
+   * @param frameCount Number of poll attempts to withhold a newly staged result.
+   */
+  void setReplayResultHoldFramesForTesting(int frameCount);
+
+  /// Number of poll attempts that intentionally withheld a staged result for replay tests.
+  [[nodiscard]] std::uint64_t replayResultHoldPollCountForTesting() const {
+    return replayResultHoldPollCount_.load(std::memory_order_acquire);
+  }
 
   /// Post a render request to the worker. Non-blocking. If the worker is busy,
   /// this cancels the in-flight render at the next compositor safe point and
@@ -437,12 +469,15 @@ private:
   struct DoneState {
     /// Render result. Draining this transitions the worker state to idle.
     RenderResult result;
+    /// Replay-only poll attempts remaining before this staged result becomes visible.
+    int replayHoldPollsRemaining = 0;
   };
   struct ShutdownState {};
   using WorkerState =
       std::variant<IdleState, RenderingState, CancellingState, DoneState, ShutdownState>;
 
   [[nodiscard]] static bool workerStateBusy(const WorkerState& state);
+  [[nodiscard]] static bool workerStateRenderInFlight(const WorkerState& state);
 
   WorkerState workerState_;
   /// Structural remaps retained by document generation until the worker has
@@ -562,6 +597,15 @@ private:
   /// Default-true matches `CompositorConfig::tightBoundedSegments`. See
   /// `setTightBoundedSegmentsEnabled`.
   std::atomic<bool> tightBoundedSegments_{true};
+
+  /// Replay/test-only fixed delay injected into each worker render attempt.
+  std::atomic<std::chrono::milliseconds::rep> replayRenderDelayMsForTesting_{0};
+
+  /// Replay/test-only number of poll attempts to hold each newly staged result.
+  int replayResultHoldFramesForTesting_ = 0;
+
+  /// Replay/test-only count of poll attempts that withheld a staged result.
+  std::atomic<std::uint64_t> replayResultHoldPollCount_{0};
 };
 
 }  // namespace donner::editor

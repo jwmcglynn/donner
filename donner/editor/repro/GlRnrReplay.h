@@ -15,6 +15,13 @@
 
 namespace donner::editor::repro {
 
+/// Worker scheduling mode for deterministic GL replay tests.
+enum class GlRnrReplayWorkerScheduling {
+  Realtime,          //!< Preserve normal wall-clock worker scheduling.
+  DrainEachFrame,    //!< Wait for active worker renders before each frame poll.
+  HoldFramesBehind,  //!< Hold completed results for a fixed number of frame polls.
+};
+
 /// Output crop mode for GL framebuffer replay captures.
 enum class GlRnrReplayCropMode {
   Full,            //!< Capture the entire editor framebuffer.
@@ -40,6 +47,14 @@ struct GlRnrReplayOptions {
   GlRnrReplayCropMode cropMode = GlRnrReplayCropMode::Full;
   /// Pace replay by recorded timestamps.
   bool pace = true;
+  /// Replay-only worker scheduling control.
+  GlRnrReplayWorkerScheduling workerScheduling = GlRnrReplayWorkerScheduling::Realtime;
+  /// Number of frame polls to hold each completed worker result in HoldFramesBehind mode.
+  int holdFramesBehind = 0;
+  /// Replay-only fixed render delay injected into the async worker.
+  int workerRenderDelayMsForTesting = 0;
+  /// Suppress non-document render-pane chrome when writing captures.
+  bool contentOnlyCapture = false;
   /// Show the native editor window while replaying.
   bool visible = false;
 };
@@ -104,6 +119,16 @@ struct GlRnrReplayFrameDiagnostics {
   Vector2i overlayDimsPx = Vector2i::Zero();
   /// Backend overlay texture/view handle, represented as an integer for diagnostics.
   std::uint64_t overlayTextureHandle = 0;
+  /// Replay worker scheduling mode used for this frame.
+  GlRnrReplayWorkerScheduling replayWorkerScheduling = GlRnrReplayWorkerScheduling::Realtime;
+  /// Replay-only worker render delay in milliseconds.
+  int replayWorkerRenderDelayMsForTesting = 0;
+  /// Configured number of frame polls to hold each completed worker result.
+  int replayHoldFramesBehind = 0;
+  /// Number of completed worker results intentionally withheld during this frame.
+  std::uint64_t replayResultHoldPollsThisFrame = 0;
+  /// True when replay scheduling intentionally withheld a completed worker result this frame.
+  bool replayResultWithheld = false;
   /// Paint-order texture state currently visible to the presenter.
   std::vector<GlRnrReplayTileDiagnostics> tiles;
 };

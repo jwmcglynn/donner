@@ -37,6 +37,11 @@ struct PixelRect {
   int height = 0;
 };
 
+enum class PixelSnapMode {
+  Covering,
+  Contained,
+};
+
 [[nodiscard]] bool SetError(std::string* error, std::string message) {
   if (error != nullptr) {
     *error = std::move(message);
@@ -189,17 +194,26 @@ struct ReproSvgInput {
 
 [[nodiscard]] PixelRect LogicalRectToPixelRect(const Box2d& logicalRect,
                                                const svg::RendererBitmap& bitmap,
-                                               double devicePixelRatio) {
-  const int x0 = std::clamp(static_cast<int>(std::floor(logicalRect.topLeft.x * devicePixelRatio)),
-                            0, bitmap.dimensions.x);
-  const int y0 = std::clamp(static_cast<int>(std::floor(logicalRect.topLeft.y * devicePixelRatio)),
-                            0, bitmap.dimensions.y);
-  const int x1 =
-      std::clamp(static_cast<int>(std::ceil(logicalRect.bottomRight.x * devicePixelRatio)), x0,
-                 bitmap.dimensions.x);
-  const int y1 =
-      std::clamp(static_cast<int>(std::ceil(logicalRect.bottomRight.y * devicePixelRatio)), y0,
-                 bitmap.dimensions.y);
+                                               double devicePixelRatio, PixelSnapMode snapMode) {
+  const double left = logicalRect.topLeft.x * devicePixelRatio;
+  const double top = logicalRect.topLeft.y * devicePixelRatio;
+  const double right = logicalRect.bottomRight.x * devicePixelRatio;
+  const double bottom = logicalRect.bottomRight.y * devicePixelRatio;
+
+  const int unclampedX0 = snapMode == PixelSnapMode::Contained ? static_cast<int>(std::ceil(left))
+                                                               : static_cast<int>(std::floor(left));
+  const int unclampedY0 = snapMode == PixelSnapMode::Contained ? static_cast<int>(std::ceil(top))
+                                                               : static_cast<int>(std::floor(top));
+  const int unclampedX1 = snapMode == PixelSnapMode::Contained ? static_cast<int>(std::floor(right))
+                                                               : static_cast<int>(std::ceil(right));
+  const int unclampedY1 = snapMode == PixelSnapMode::Contained
+                              ? static_cast<int>(std::floor(bottom))
+                              : static_cast<int>(std::ceil(bottom));
+
+  const int x0 = std::clamp(unclampedX0, 0, bitmap.dimensions.x);
+  const int y0 = std::clamp(unclampedY0, 0, bitmap.dimensions.y);
+  const int x1 = std::clamp(unclampedX1, x0, bitmap.dimensions.x);
+  const int y1 = std::clamp(unclampedY1, y0, bitmap.dimensions.y);
   return PixelRect{
       .x = x0,
       .y = y0,
@@ -226,7 +240,11 @@ struct ReproSvgInput {
     logicalRect.bottomRight.y = std::min(paneRect.bottomRight.y, imageRect.bottomRight.y);
   }
 
-  PixelRect pixelRect = LogicalRectToPixelRect(logicalRect, bitmap, viewport.devicePixelRatio);
+  const PixelSnapMode snapMode = cropMode == GlRnrReplayCropMode::DocumentCanvas
+                                     ? PixelSnapMode::Contained
+                                     : PixelSnapMode::Covering;
+  PixelRect pixelRect =
+      LogicalRectToPixelRect(logicalRect, bitmap, viewport.devicePixelRatio, snapMode);
   if (pixelRect.width <= 0 || pixelRect.height <= 0) {
     return std::nullopt;
   }
@@ -275,6 +293,33 @@ struct ReproSvgInput {
   return true;
 }
 
+[[nodiscard]] bool ShouldDrainWorkerBeforeFrame(GlRnrReplayWorkerScheduling scheduling) {
+  switch (scheduling) {
+    case GlRnrReplayWorkerScheduling::Realtime: return false;
+    case GlRnrReplayWorkerScheduling::DrainEachFrame:
+    case GlRnrReplayWorkerScheduling::HoldFramesBehind: return true;
+  }
+
+  return false;
+}
+
+[[nodiscard]] bool WaitForReplayWorkerBeforeFrame(const GlRnrReplayOptions& options,
+                                                  EditorShell& shell, const ReproFrame& frame,
+                                                  std::string* error) {
+  if (!ShouldDrainWorkerBeforeFrame(options.workerScheduling)) {
+    return true;
+  }
+
+  constexpr std::chrono::seconds kReplayWorkerTimeout(30);
+  const auto deadline = std::chrono::steady_clock::now() + kReplayWorkerTimeout;
+  if (shell.asyncRendererForReplay().waitUntilNoRenderInFlightForTesting(deadline)) {
+    return true;
+  }
+
+  return SetError(
+      error, "timed out waiting for replay worker before frame " + std::to_string(frame.index));
+}
+
 }  // namespace
 
 std::optional<GlRnrReplayCropMode> ParseGlRnrReplayCropMode(std::string_view value) {
@@ -313,6 +358,16 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   }
   if (options.captureFrames.empty() && !options.captureLeftMouseDownOrdinal.has_value()) {
     return SetError(error, "at least one GL capture selector is required");
+  }
+  if (options.holdFramesBehind < 0) {
+    return SetError(error, "holdFramesBehind must be non-negative");
+  }
+  if (options.workerRenderDelayMsForTesting < 0) {
+    return SetError(error, "workerRenderDelayMsForTesting must be non-negative");
+  }
+  if (options.workerScheduling != GlRnrReplayWorkerScheduling::HoldFramesBehind &&
+      options.holdFramesBehind != 0) {
+    return SetError(error, "holdFramesBehind requires HoldFramesBehind worker scheduling");
   }
 
   const std::optional<ReproFile> repro = ReadReproFile(options.rnrPath);
@@ -365,6 +420,13 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     return SetError(error, "failed to initialize editor shell");
   }
 
+  AsyncRenderer& replayRenderer = shell.asyncRendererForReplay();
+  replayRenderer.setReplayRenderDelayForTesting(
+      std::chrono::milliseconds(options.workerRenderDelayMsForTesting));
+  if (options.workerScheduling == GlRnrReplayWorkerScheduling::HoldFramesBehind) {
+    replayRenderer.setReplayResultHoldFramesForTesting(options.holdFramesBehind);
+  }
+
   int leftMouseDownOrdinal = 0;
   const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 
@@ -392,12 +454,21 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       }
     }
 
+    if (!WaitForReplayWorkerBeforeFrame(options, shell, frame, error)) {
+      return false;
+    }
+
+    const std::uint64_t holdPollCountBefore = replayRenderer.replayResultHoldPollCountForTesting();
     window.pollEvents();
     window.beginFrameWithInput(InputFromFrame(frame));
     if (frame.viewport.has_value()) {
       shell.overrideViewportForReplay(ViewportFromReproViewport(*frame.viewport));
     }
+    shell.setContentOnlyCaptureForNextFrameForReplay(options.contentOnlyCapture &&
+                                                     captureReason.has_value());
     shell.runFrame();
+    const std::uint64_t holdPollCountAfter = replayRenderer.replayResultHoldPollCountForTesting();
+    const std::uint64_t holdPollsThisFrame = holdPollCountAfter - holdPollCountBefore;
     const LayerInspectorStatusReadback layerStatus = shell.layerInspectorStatusForReadback();
     GlRnrReplayFrameDiagnostics frameDiagnostics{
         .frameIndex = frame.index,
@@ -410,6 +481,11 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .duplicateLiveTextureCount = layerStatus.duplicateLiveTextureCount,
         .overlayDimsPx = layerStatus.overlayDimsPx,
         .overlayTextureHandle = layerStatus.overlayTextureHandle,
+        .replayWorkerScheduling = options.workerScheduling,
+        .replayWorkerRenderDelayMsForTesting = options.workerRenderDelayMsForTesting,
+        .replayHoldFramesBehind = options.holdFramesBehind,
+        .replayResultHoldPollsThisFrame = holdPollsThisFrame,
+        .replayResultWithheld = holdPollsThisFrame > 0,
     };
     frameDiagnostics.tiles.reserve(layerStatus.tiles.size());
     for (const LayerInspectorStatusReadback::Tile& tile : layerStatus.tiles) {
