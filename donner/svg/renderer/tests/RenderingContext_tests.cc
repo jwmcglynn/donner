@@ -141,7 +141,7 @@ TEST_F(RenderingContextTest, GetWorldBoundsRect) {
 
   auto element = document.querySelector("#r");
   ASSERT_TRUE(element.has_value());
-  auto bounds = ctx.getWorldBounds(element->entityHandle().entity());
+  auto bounds = ctx.getWorldBounds(element->unsafeEntityHandle().entity());
   ASSERT_TRUE(bounds.has_value());
   EXPECT_NEAR(bounds->topLeft.x, 10.0, 1.0);
   EXPECT_NEAR(bounds->topLeft.y, 20.0, 1.0);
@@ -208,7 +208,7 @@ TEST_F(RenderingContextTest, GroupedElements) {
   RenderingContext ctx(document.registry());
   ctx.instantiateRenderTree(false, warningSink_);
 
-  auto bounds = ctx.getWorldBounds(document.querySelector("#r")->entityHandle().entity());
+  auto bounds = ctx.getWorldBounds(document.querySelector("#r")->unsafeEntityHandle().entity());
   ASSERT_TRUE(bounds.has_value());
   EXPECT_NEAR(bounds->topLeft.x, 50.0, 1.0);
   EXPECT_NEAR(bounds->topLeft.y, 50.0, 1.0);
@@ -346,7 +346,7 @@ TEST_F(RenderingContextTest, PointerEventsBoundingBoxHitsWithoutPaint) {
   )");
 
   RenderingContext ctx(document.registry());
-  const Entity rectEntity = document.querySelector("#r")->entityHandle().entity();
+  const Entity rectEntity = document.querySelector("#r")->unsafeEntityHandle().entity();
   EXPECT_EQ(ctx.findIntersecting(Vector2d(50, 50)), rectEntity);
 }
 
@@ -359,7 +359,7 @@ TEST_F(RenderingContextTest, PointerEventsVisibleFillHitsTransparentFill) {
   )");
 
   RenderingContext ctx(document.registry());
-  const Entity rectEntity = document.querySelector("#r")->entityHandle().entity();
+  const Entity rectEntity = document.querySelector("#r")->unsafeEntityHandle().entity();
   EXPECT_EQ(ctx.findIntersecting(Vector2d(50, 50)), rectEntity);
 }
 
@@ -398,7 +398,7 @@ TEST_F(RenderingContextTest, PointerEventsStrokeHitsHiddenStrokeGeometry) {
   )");
 
   RenderingContext ctx(document.registry());
-  const Entity rectEntity = document.querySelector("#r")->entityHandle().entity();
+  const Entity rectEntity = document.querySelector("#r")->unsafeEntityHandle().entity();
   EXPECT_EQ(ctx.findIntersecting(Vector2d(15, 50)), rectEntity);
   EXPECT_TRUE(ctx.findIntersecting(Vector2d(50, 50)) == entt::null);
 }
@@ -413,8 +413,8 @@ TEST_F(RenderingContextTest, FindIntersectingRectReturnsFrontToBackOrder) {
   )");
 
   RenderingContext ctx(document.registry());
-  const Entity backEntity = document.querySelector("#back")->entityHandle().entity();
-  const Entity frontEntity = document.querySelector("#front")->entityHandle().entity();
+  const Entity backEntity = document.querySelector("#back")->unsafeEntityHandle().entity();
+  const Entity frontEntity = document.querySelector("#front")->unsafeEntityHandle().entity();
 
   const std::vector<Entity> hits = ctx.findIntersectingRect(Box2d::FromXYWH(30, 30, 10, 10));
   ASSERT_THAT(hits.size(), Gt(1u));

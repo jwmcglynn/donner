@@ -52,7 +52,7 @@ TEST_F(InteractionHintNoAllocationTest, SteadyStateDragDoesNotChurnECSState) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -93,7 +93,7 @@ TEST_F(InteractionHintNoAllocationTest, MandatoryDetectorIsIdleDuringSteadyState
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));

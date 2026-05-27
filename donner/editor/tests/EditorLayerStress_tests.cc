@@ -145,7 +145,7 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
     request.structuralRemap = app.document().consumePendingStructuralRemap();
     if (app.selectedElement().has_value() &&
         app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-      request.selectedEntity = app.selectedElement()->entityHandle().entity();
+      request.selectedEntity = app.selectedElement()->unsafeEntityHandle().entity();
     }
     if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
       request.dragPreview = RenderRequest::DragPreview{
@@ -278,7 +278,7 @@ protected:
     request.structuralRemap = app_.document().consumePendingStructuralRemap();
     if (app_.selectedElement().has_value() &&
         app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-      request.selectedEntity = app_.selectedElement()->entityHandle().entity();
+      request.selectedEntity = app_.selectedElement()->unsafeEntityHandle().entity();
     }
     if (auto preview = selectTool_.activeDragPreview(); preview.has_value()) {
       request.dragPreview = RenderRequest::DragPreview{

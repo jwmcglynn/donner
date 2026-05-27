@@ -500,7 +500,7 @@ void AddReferenceResourceContributions(
     AddContribution(std::move(contribution),
                     ContributionKey{
                         .kind = StyleContributionKind::ReferenceResourceElement,
-                        .elementEntity = element.entityHandle().entity(),
+                        .elementEntity = element.unsafeEntityHandle().entity(),
                         .propertyName = tagName,
                     },
                     annotations, contributionIndexByKey);
@@ -545,7 +545,7 @@ void AddElementLocalContributions(
     AddContribution(std::move(contribution),
                     ContributionKey{
                         .kind = StyleContributionKind::PresentationAttribute,
-                        .elementEntity = element.entityHandle().entity(),
+                        .elementEntity = element.unsafeEntityHandle().entity(),
                         .propertyName = propertyName,
                     },
                     annotations, contributionIndexByKey);
@@ -574,7 +574,7 @@ void AddElementLocalContributions(
     AddContribution(std::move(contribution),
                     ContributionKey{
                         .kind = StyleContributionKind::InlineStyleDeclaration,
-                        .elementEntity = element.entityHandle().entity(),
+                        .elementEntity = element.unsafeEntityHandle().entity(),
                         .declarationIndex = declarationIndex,
                         .propertyName = std::string(declaration.name),
                     },
@@ -656,7 +656,7 @@ void AddLocalCascadeEntries(const svg::SVGElement& element,
     std::optional<RcString> attrValue = xmlNode->getAttribute(attrName);
     auto contributionIter = contributionIndexByKey.find(ContributionKey{
         .kind = StyleContributionKind::PresentationAttribute,
-        .elementEntity = element.entityHandle().entity(),
+        .elementEntity = element.unsafeEntityHandle().entity(),
         .propertyName = propertyName,
     });
     if (!attrValue.has_value() || contributionIter == contributionIndexByKey.end()) {
@@ -681,7 +681,7 @@ void AddLocalCascadeEntries(const svg::SVGElement& element,
     const css::Declaration& declaration = declarations[declarationIndex];
     auto contributionIter = contributionIndexByKey.find(ContributionKey{
         .kind = StyleContributionKind::InlineStyleDeclaration,
-        .elementEntity = element.entityHandle().entity(),
+        .elementEntity = element.unsafeEntityHandle().entity(),
         .declarationIndex = declarationIndex,
         .propertyName = std::string(declaration.name),
     });

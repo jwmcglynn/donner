@@ -105,7 +105,7 @@ TEST(SVGElementLifetimeTests, DetachedElementCollectedAfterLastHandleIsReleased)
   SVGSVGElement root = document.svgElement();
   std::optional<SVGRectElement> rect;
   rect.emplace(SVGRectElement::Create(document));
-  const Entity rectEntity = rect->entityHandle().entity();
+  const Entity rectEntity = rect->unsafeEntityHandle().entity();
   root.appendChild(*rect);
 
   root.removeChild(*rect);
@@ -122,7 +122,7 @@ TEST(SVGElementLifetimeTests, DetachedRootsAreQueuedInDocumentState) {
   SVGSVGElement root = document.svgElement();
   std::optional<SVGRectElement> rect;
   rect.emplace(SVGRectElement::Create(document));
-  const Entity rectEntity = rect->entityHandle().entity();
+  const Entity rectEntity = rect->unsafeEntityHandle().entity();
   root.appendChild(*rect);
 
   root.removeChild(*rect);
@@ -142,7 +142,7 @@ TEST(SVGElementLifetimeTests, DetachedNodeDiagnosticsTrackRetainedAndCollectedRo
   rect.emplace(SVGRectElement::Create(document));
   std::optional<SVGElement> rectCopy;
   rectCopy.emplace(*rect);
-  const Entity rectEntity = rect->entityHandle().entity();
+  const Entity rectEntity = rect->unsafeEntityHandle().entity();
   root.appendChild(*rect);
 
   root.removeChild(*rect);
@@ -186,7 +186,7 @@ TEST(SVGElementLifetimeTests, CollectionDeferralRetainsDetachedRootsUntilGuardEx
   SVGSVGElement root = document.svgElement();
   std::optional<SVGRectElement> rect;
   rect.emplace(SVGRectElement::Create(document));
-  const Entity rectEntity = rect->entityHandle().entity();
+  const Entity rectEntity = rect->unsafeEntityHandle().entity();
   root.appendChild(*rect);
 
   {
@@ -224,7 +224,7 @@ TEST(SVGElementLifetimeTests, RepeatedCreateRemoveReinsertCyclesCollectDetachedN
   for (int cycle = 0; cycle < 64; ++cycle) {
     std::optional<SVGRectElement> rect;
     rect.emplace(SVGRectElement::Create(document));
-    const Entity rectEntity = rect->entityHandle().entity();
+    const Entity rectEntity = rect->unsafeEntityHandle().entity();
 
     root.appendChild(*rect);
     root.removeChild(*rect);
@@ -254,8 +254,8 @@ TEST(SVGElementLifetimeTests, DescendantHandleKeepsDetachedSubtreeAlive) {
   std::optional<SVGRectElement> rect;
   group.emplace(SVGGElement::Create(document));
   rect.emplace(SVGRectElement::Create(document));
-  const Entity groupEntity = group->entityHandle().entity();
-  const Entity rectEntity = rect->entityHandle().entity();
+  const Entity groupEntity = group->unsafeEntityHandle().entity();
+  const Entity rectEntity = rect->unsafeEntityHandle().entity();
   root.appendChild(*group);
   group->appendChild(*rect);
 
@@ -288,7 +288,7 @@ TEST(SVGElementLifetimeTests, ReattachedElementIsNotCollectedWhenHandleIsRelease
   SVGSVGElement root = document.svgElement();
   std::optional<SVGRectElement> rect;
   rect.emplace(SVGRectElement::Create(document));
-  const Entity rectEntity = rect->entityHandle().entity();
+  const Entity rectEntity = rect->unsafeEntityHandle().entity();
   root.appendChild(*rect);
   root.removeChild(*rect);
 
@@ -334,7 +334,7 @@ TEST(SVGElementLifetimeTests, DetachedDuplicateIdDoesNotMaskAttachedReference) {
   const std::optional<ResolvedReference> resolved =
       Reference("#target").resolve(document.registry());
   ASSERT_TRUE(resolved.has_value());
-  EXPECT_EQ(resolved->handle.entity(), attached.entityHandle().entity());
+  EXPECT_EQ(resolved->handle.entity(), attached.unsafeEntityHandle().entity());
 }
 
 TEST(SVGElementLifetimeTests, XmlNodeRemoveUsesLifetimeAwareSvgMutation) {
@@ -346,7 +346,7 @@ TEST(SVGElementLifetimeTests, XmlNodeRemoveUsesLifetimeAwareSvgMutation) {
   SVGDocument document = std::move(maybeDocument.result());
   std::optional<SVGElement> retained = document.querySelector("#target");
   ASSERT_TRUE(retained.has_value());
-  const Entity rectEntity = retained->entityHandle().entity();
+  const Entity rectEntity = retained->unsafeEntityHandle().entity();
   std::optional<xml::XMLNode> retainedNode = xml::XMLNode::TryCast(retained->entityHandle());
   ASSERT_TRUE(retainedNode.has_value());
 

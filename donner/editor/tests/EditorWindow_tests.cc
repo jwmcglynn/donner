@@ -238,7 +238,7 @@ std::optional<RenderResult::CompositedPreview> RenderBlurredGlowCompositedPrevie
     return std::nullopt;
   }
 
-  return RenderCompositedPreview(device, document, glow->entityHandle().entity());
+  return RenderCompositedPreview(device, document, glow->unsafeEntityHandle().entity());
 }
 
 void DrawCompositedTiles(const GlTextureCache& textures, const ImVec2& origin, double zoom) {
@@ -556,7 +556,7 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
   std::optional<svg::SVGElement> target = document->querySelector("#Big_lightning_glow");
   ASSERT_TRUE(target.has_value());
   std::optional<RenderResult::CompositedPreview> preview =
-      RenderCompositedPreview(window.geodeDevice(), *document, target->entityHandle().entity());
+      RenderCompositedPreview(window.geodeDevice(), *document, target->unsafeEntityHandle().entity());
   ASSERT_TRUE(preview.has_value());
   ASSERT_GE(preview->tiles.size(), 2u) << "Expected splash background plus selected filter layer";
 

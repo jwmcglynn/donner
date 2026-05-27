@@ -36,7 +36,7 @@ TEST_F(DragSessionTest, BeginPromotesEntity) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   auto session = DragSession::begin(compositor, entity);
@@ -53,7 +53,7 @@ TEST_F(DragSessionTest, EndDemotesEntity) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   auto session = DragSession::begin(compositor, entity);
@@ -75,7 +75,7 @@ TEST_F(DragSessionTest, DestructorDemotes) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   {
@@ -106,7 +106,7 @@ TEST_F(DragSessionTest, MoveConstructor) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   auto session = DragSession::begin(compositor, entity);
@@ -134,8 +134,8 @@ TEST_F(DragSessionTest, MoveAssignment) {
   auto b = document.querySelector("#b");
   ASSERT_TRUE(a.has_value());
   ASSERT_TRUE(b.has_value());
-  const Entity entityA = a->entityHandle().entity();
-  const Entity entityB = b->entityHandle().entity();
+  const Entity entityA = a->unsafeEntityHandle().entity();
+  const Entity entityB = b->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   auto sessionA = DragSession::begin(compositor, entityA);

@@ -1049,7 +1049,7 @@ TEST_F(SelectToolTest, ResizeGestureExposesAffinePreview) {
 
   const auto preview = tool.activeDragPreview();
   ASSERT_TRUE(preview.has_value());
-  EXPECT_EQ(preview->entity, elementById("#target").entityHandle().entity());
+  EXPECT_EQ(preview->entity, elementById("#target").unsafeEntityHandle().entity());
   EXPECT_FALSE(preview->documentFromCachedDocument.isTranslation())
       << "resize preview must carry an affine scale, not just a drag offset";
   const auto resizeGesture = tool.activeGesturePreview();
