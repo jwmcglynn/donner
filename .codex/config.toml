@@ -6,6 +6,10 @@ keys. When writing commands in docs and to the user, use `bazel` instead.
 
 When creating pull requests, do not prefix PR titles with `[codex]`, agent names,
 or other tool branding. Use plain project-style titles that describe the change.
+
+When monitoring pull requests, do not expect code-review comments while the PR is
+still a draft. Keep monitoring CI and mergeability, but treat review/comment
+silence as expected until the PR is published and out of draft.
 """
 
 [shell_environment_policy]
