@@ -5,8 +5,6 @@ query. That includes the parser/validator helpers plus the opt-in CMake
 build-validation helper exercised against synthetic source trees.
 """
 
-import os
-import shutil
 import sys
 import tempfile
 import textwrap
@@ -206,8 +204,14 @@ class ExtractTargetsAndRefsTest(unittest.TestCase):
             self.assertNotIn("fake", defined)
 
 
-@unittest.skipUnless(shutil.which("cmake"), "cmake is required for build validation tests")
 class CmakeBuildValidationTest(unittest.TestCase):
+    def _completed_cmake_process(self, returncode=0, stdout=""):
+        return g.subprocess.CompletedProcess(
+            args=[],
+            returncode=returncode,
+            stdout=stdout,
+        )
+
     def test_reports_missing_cmake_command(self):
         with tempfile.TemporaryDirectory() as source_dir_str:
             source_dir = Path(source_dir_str)
@@ -234,9 +238,38 @@ class CmakeBuildValidationTest(unittest.TestCase):
             )
             (source_dir / "smoke.c").write_text("int Smoke(void) { return 42; }\n")
 
-            error = g._run_cmake_build_validation(source_dir, build_dir, jobs=1)
+            with mock.patch.object(
+                g.subprocess,
+                "run",
+                side_effect=[
+                    self._completed_cmake_process(),
+                    self._completed_cmake_process(),
+                ],
+            ) as run:
+                error = g._run_cmake_build_validation(source_dir, build_dir, jobs=1)
 
             self.assertIsNone(error)
+            self.assertEqual(
+                run.call_args_list,
+                [
+                    mock.call(
+                        ["cmake", "-S", ".", "-B", str(build_dir)],
+                        cwd=source_dir,
+                        text=True,
+                        stdout=g.subprocess.PIPE,
+                        stderr=g.subprocess.STDOUT,
+                        check=False,
+                    ),
+                    mock.call(
+                        ["cmake", "--build", str(build_dir), "--parallel", "1"],
+                        cwd=source_dir,
+                        text=True,
+                        stdout=g.subprocess.PIPE,
+                        stderr=g.subprocess.STDOUT,
+                        check=False,
+                    ),
+                ],
+            )
 
     def test_build_reports_compile_failure(self):
         with tempfile.TemporaryDirectory() as source_dir_str:
@@ -256,7 +289,21 @@ class CmakeBuildValidationTest(unittest.TestCase):
                 "int Smoke(void) { return 42; }\n"
             )
 
-            error = g._run_cmake_build_validation(source_dir, build_dir, jobs=1)
+            with mock.patch.object(
+                g.subprocess,
+                "run",
+                side_effect=[
+                    self._completed_cmake_process(),
+                    self._completed_cmake_process(
+                        returncode=2,
+                        stdout=(
+                            "smoke.c:1:10: fatal error: "
+                            "'missing_header_for_build_validation.h' file not found\n"
+                        ),
+                    ),
+                ],
+            ):
+                error = g._run_cmake_build_validation(source_dir, build_dir, jobs=1)
 
             self.assertIsNotNone(error)
             self.assertIn("CMake build failed:", error)
