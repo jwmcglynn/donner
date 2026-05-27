@@ -12,6 +12,22 @@ function print_help() {
   exit 0
 }
 
+function file_mtime() {
+  local file="$1"
+
+  if stat -c %Y "$file" >/dev/null 2>&1; then
+    stat -c %Y "$file"
+    return
+  fi
+
+  if stat -f %m "$file" >/dev/null 2>&1; then
+    stat -f %m "$file"
+    return
+  fi
+
+  echo 0
+}
+
 TARGETS=()
 
 # Check for --quiet option
@@ -88,7 +104,7 @@ fi
   # early exit).
   BEFORE_TS=0
   if [ -f "$COVERAGE_REPORT" ]; then
-    BEFORE_TS=$(stat -f %m "$COVERAGE_REPORT" 2>/dev/null || stat -c %Y "$COVERAGE_REPORT" 2>/dev/null || echo 0)
+    BEFORE_TS=$(file_mtime "$COVERAGE_REPORT")
   fi
 
   if [ "$QUIET" = true ]; then
@@ -105,7 +121,7 @@ fi
     exit 1
   fi
 
-  AFTER_TS=$(stat -f %m "$COVERAGE_REPORT" 2>/dev/null || stat -c %Y "$COVERAGE_REPORT" 2>/dev/null || echo 0)
+  AFTER_TS=$(file_mtime "$COVERAGE_REPORT")
   if [ "$AFTER_TS" -le "$BEFORE_TS" ]; then
     echo "ERROR: Coverage report was not updated (stale data from a previous run)"
     exit 1
