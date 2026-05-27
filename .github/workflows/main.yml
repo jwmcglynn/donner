@@ -20,10 +20,10 @@ permissions:
 # are retried to survive transient GitHub/registry outages. Build/test steps
 # are NOT retried -- a real test failure should surface immediately.
 
-# Self-hosted Linux runner gate (repo Settings -> Variables). Setting
-# SELFHOSTED_LINUX_RUNNER to "true" routes the operator's own Linux runs onto
-# the homelab ARM64 runner on event-horizon and skips the matching
-# GitHub-hosted lane; everyone else stays GitHub-hosted. Gated on BOTH
+# Self-hosted runner gates (repo Settings -> Variables). Setting
+# SELFHOSTED_LINUX_RUNNER / SELFHOSTED_MACOS_RUNNER to "true" routes the
+# operator's own matching OS lane onto the homelab ARM64 runner and skips the
+# matching GitHub-hosted lane; everyone else stays GitHub-hosted. Gated on BOTH
 # github.actor and github.triggering_actor == jwmcglynn so that no collaborator
 # push -- and no rerun of the operator's run by someone else -- can execute on
 # the runner or poison the shared LAN Bazel cache. Unset is a no-op: behavior
@@ -392,7 +392,7 @@ jobs:
   macos:
     runs-on: macos-15
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -437,6 +437,58 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk test --config=ci --test_output=errors $TARGETS
+        # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
+        # nightly cron so it doesn't gate every main push. PRs touching
+        # fuzzer code re-trigger that workflow via path filter.
+
+
+  # Operator's ARM64 macOS runs on the deep-thought self-hosted runner.
+  # Replaces `macos` for operator runs. The host pre-provisions Bazelisk,
+  # Homebrew llvm@19, and Xcode Command Line Tools.
+  macos-self-hosted:
+    runs-on: [self-hosted, macOS, ARM64, deep-thought]
+    needs: [gatekeeper, determine-targets]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    env:
+      BAZEL_MACOS_CACHE_FLAGS: "--remote_cache=grpc://192.168.1.63:9092 --remote_upload_local_results=true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Prepare self-hosted macOS toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "/Users/jwm/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
+          test -x /Users/jwm/bin/bazelisk
+          test -x /Users/jwm/bin/bazel
+          test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk build --config=ci $BAZEL_MACOS_CACHE_FLAGS $TARGETS
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk test --config=ci --test_output=errors \
+            $BAZEL_MACOS_CACHE_FLAGS $TARGETS
         # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
