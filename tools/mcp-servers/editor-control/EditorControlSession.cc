@@ -696,7 +696,7 @@ int AttachPngFile(ToolCallResult* out, const std::string& label, const std::file
 
 json ElementJson(const svg::SVGElement& element) {
   return json{
-      {"entity", EntityToJsonValue(element.entityHandle().entity())},
+      {"entity", EntityToJsonValue(element.unsafeEntityHandle().entity())},
       {"tag", element.tagName().toString()},
       {"id", std::string(element.id())},
       {"class", std::string(element.className())},
@@ -2255,7 +2255,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       Entity selectedEntity = entt::null;
       if (app_.selectedElement().has_value() &&
           app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-        selectedEntity = app_.selectedElement()->entityHandle().entity();
+        selectedEntity = app_.selectedElement()->unsafeEntityHandle().entity();
       }
       const PresentationRenderScheduleDecision schedule =
           renderScheduler.evaluate(displayPresentation_, PresentationRenderScheduleInput{
@@ -2670,7 +2670,7 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
   Entity selectedEntity = entt::null;
   if (app_.selectedElement().has_value() &&
       app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-    selectedEntity = app_.selectedElement()->entityHandle().entity();
+    selectedEntity = app_.selectedElement()->unsafeEntityHandle().entity();
   }
   displayPresentation_.clearSettlingIfSelectionChanged(selectedEntity, activePreview.has_value());
 

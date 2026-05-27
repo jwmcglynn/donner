@@ -55,7 +55,7 @@ TEST_F(TextSystemTest, BasicTextElement) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -73,7 +73,7 @@ TEST_F(TextSystemTest, TextWithTspan) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -94,7 +94,7 @@ TEST_F(TextSystemTest, PositioningInheritedFromRoot) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -120,7 +120,7 @@ TEST_F(TextSystemTest, PerCharacterPositioning) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -147,7 +147,7 @@ TEST_F(TextSystemTest, DxDyPositioning) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -175,7 +175,7 @@ TEST_F(TextSystemTest, RootDxDyBecomesScalarStartPosition) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -201,7 +201,7 @@ TEST_F(TextSystemTest, RotateAttribute) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -224,7 +224,7 @@ TEST_F(TextSystemTest, EmptyTextElement) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -243,7 +243,7 @@ TEST_F(TextSystemTest, MultipleTspanWithPositioning) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -277,7 +277,7 @@ TEST_F(TextSystemTest, TextPathReference) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -301,7 +301,7 @@ TEST_F(TextSystemTest, TextPathWithStartOffset) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -330,7 +330,7 @@ TEST_F(TextSystemTest, TextPathWithAbsoluteStartOffsetAndTransform) {
   auto document = std::move(maybeResult).result();
 
   Registry& registry = document.registry();
-  auto pathEntity = document.querySelector("#p")->entityHandle().entity();
+  auto pathEntity = document.querySelector("#p")->unsafeEntityHandle().entity();
   registry.emplace_or_replace<ComputedLocalTransformComponent>(
       pathEntity, Transform2d::Translate({5, 7}), CssTransform(Transform2d::Translate({5, 7})),
       Vector2d::Zero());
@@ -338,7 +338,7 @@ TEST_F(TextSystemTest, TextPathWithAbsoluteStartOffsetAndTransform) {
   StyleSystem().computeAllStyles(registry, warningSink);
   TextSystem().instantiateAllComputedComponents(registry, warningSink);
 
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(2));
@@ -364,7 +364,7 @@ TEST_F(TextSystemTest, TextPathUsesSplineOverrideWhenComputedPathMissing) {
   ASSERT_THAT(maybeResult, NoParseError());
   auto document = std::move(maybeResult).result();
 
-  auto pathEntity = document.querySelector("#p")->entityHandle().entity();
+  auto pathEntity = document.querySelector("#p")->unsafeEntityHandle().entity();
   Registry& registry = document.registry();
   Path spline = PathBuilder().moveTo(Vector2d(1, 2)).lineTo(Vector2d(3, 4)).build();
   registry.get<PathComponent>(pathEntity).splineOverride = spline;
@@ -373,7 +373,7 @@ TEST_F(TextSystemTest, TextPathUsesSplineOverrideWhenComputedPathMissing) {
   StyleSystem().computeAllStyles(registry, warningSink);
   TextSystem().instantiateAllComputedComponents(registry, warningSink);
 
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(2));
@@ -390,7 +390,7 @@ TEST_F(TextSystemTest, TextPathWithInvalidReferenceMarksFailure) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(2));
@@ -407,7 +407,7 @@ TEST_F(TextSystemTest, TextPathWithEmptyReferencedPathMarksFailure) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(2));
@@ -434,7 +434,7 @@ TEST_F(TextSystemTest, MixedTextPathChildrenProduceSeparateSpans) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -469,7 +469,7 @@ TEST_F(TextSystemTest, NestedTextRootIsIgnored) {
   )svg");
 
   auto& registry = document.registry();
-  auto outerEntity = document.querySelector("#outer")->entityHandle().entity();
+  auto outerEntity = document.querySelector("#outer")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(outerEntity);
   ASSERT_NE(computed, nullptr);
 
@@ -491,7 +491,7 @@ TEST_F(TextSystemTest, NonTextChildrenAreIgnoredDuringSpanCollection) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
 
@@ -523,7 +523,7 @@ TEST_F(TextSystemTest, NestedTextPathContentIsHidden) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
 
@@ -566,7 +566,7 @@ TEST_F(TextSystemTest, TextPathTspanChildrenProduceSeparatePathSpans) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
 
@@ -609,7 +609,7 @@ TEST_F(TextSystemTest, TextPathWhitespaceAroundTspansIsPreservedInSpans) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
 
@@ -637,7 +637,7 @@ TEST_F(TextSystemTest, Utf8MultibyteCounting) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -655,7 +655,7 @@ TEST_F(TextSystemTest, Utf16CountingTreatsEmojiAsTwoCodeUnits) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(1));
@@ -670,7 +670,7 @@ TEST_F(TextSystemTest, RotateListStopsWhenGlobalIndicesRunOut) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(1));
@@ -686,7 +686,7 @@ TEST_F(TextSystemTest, InheritedRotateListStopsAcrossChildSpans) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(3));
@@ -705,7 +705,7 @@ TEST_F(TextSystemTest, XmlSpacePreserveKeepsWhitespaceAndInheritance) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(3));
@@ -722,7 +722,7 @@ TEST_F(TextSystemTest, TextPathWithoutHrefIsHidden) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(2));
@@ -739,7 +739,7 @@ TEST_F(TextSystemTest, TextPathNestedUnderTspanMarksFailure) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
 
@@ -774,8 +774,8 @@ TEST_F(TextSystemTest, TextPathTransformAppliesQuadAndCurveCommands) {
   auto document = std::move(maybeResult).result();
 
   Registry& registry = document.registry();
-  auto quadEntity = document.querySelector("#quad")->entityHandle().entity();
-  auto curveEntity = document.querySelector("#curve")->entityHandle().entity();
+  auto quadEntity = document.querySelector("#quad")->unsafeEntityHandle().entity();
+  auto curveEntity = document.querySelector("#curve")->unsafeEntityHandle().entity();
   registry.emplace_or_replace<ComputedLocalTransformComponent>(
       quadEntity, Transform2d::Translate({1, 2}), CssTransform(Transform2d::Translate({1, 2})),
       Vector2d::Zero());
@@ -787,7 +787,7 @@ TEST_F(TextSystemTest, TextPathTransformAppliesQuadAndCurveCommands) {
   StyleSystem().computeAllStyles(registry, warningSink);
   TextSystem().instantiateAllComputedComponents(registry, warningSink);
 
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   std::vector<const ComputedTextComponent::TextSpan*> pathSpans;
@@ -830,7 +830,7 @@ TEST_F(TextSystemTest, TextPathTransformAppliesClosePath) {
   auto document = std::move(maybeResult).result();
 
   Registry& registry = document.registry();
-  auto closedEntity = document.querySelector("#closed")->entityHandle().entity();
+  auto closedEntity = document.querySelector("#closed")->unsafeEntityHandle().entity();
   registry.emplace_or_replace<ComputedLocalTransformComponent>(
       closedEntity, Transform2d::Translate({2, 3}), CssTransform(Transform2d::Translate({2, 3})),
       Vector2d::Zero());
@@ -839,7 +839,7 @@ TEST_F(TextSystemTest, TextPathTransformAppliesClosePath) {
   StyleSystem().computeAllStyles(registry, warningSink);
   TextSystem().instantiateAllComputedComponents(registry, warningSink);
 
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
 
@@ -885,7 +885,7 @@ TEST_F(TextSystemTest, ListOnlyPositioning) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -910,7 +910,7 @@ TEST_F(TextSystemTest, NoDoubleApplication) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -933,7 +933,7 @@ TEST_F(TextSystemTest, ChildTspanPreservesListZero) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -957,7 +957,7 @@ TEST_F(TextSystemTest, StartsNewChunk) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -984,7 +984,7 @@ TEST_F(TextSystemTest, DisplayNoneConsumesRotateIndices) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
@@ -1028,7 +1028,7 @@ TEST_F(TextSystemTest, WhitespaceTspanBoundarySpace) {
       "</svg>");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto& textComp = registry.get<TextComponent>(textEntity);
   EXPECT_EQ(textComp.textChunks.size(), 2u);
@@ -1059,7 +1059,7 @@ TEST_F(TextSystemTest, WhitespaceInterTspanSpacing) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   std::string concatenated;
@@ -1080,7 +1080,7 @@ TEST_F(TextSystemTest, WhitespacePreserveLeadingSpaces) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   std::string concatenated;
@@ -1102,7 +1102,7 @@ TEST_F(TextSystemTest, WhitespaceDefaultRootPreserveTspan) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   std::string concatenated;
@@ -1121,7 +1121,7 @@ TEST_F(TextSystemTest, WhitespacePreserveRootDefaultTspan) {
   )");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   std::string concatenated;
@@ -1146,7 +1146,7 @@ TEST_F(TextSystemTest, WhitespaceGradientTspan) {
   )svg");
 
   auto& registry = document.registry();
-  auto textEntity = document.querySelector("#t")->entityHandle().entity();
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   std::string concatenated;

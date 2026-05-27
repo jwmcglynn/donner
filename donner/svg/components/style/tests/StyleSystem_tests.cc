@@ -144,7 +144,7 @@ TEST_F(StyleSystemTest, StylesheetSourceMapMapsRuleBackToSvgSource) {
   auto styleElement = document.querySelector("style");
   ASSERT_TRUE(styleElement.has_value());
   const auto& stylesheet =
-      document.registry().get<StylesheetComponent>(styleElement->entityHandle().entity());
+      document.registry().get<StylesheetComponent>(styleElement->unsafeEntityHandle().entity());
   ASSERT_EQ(stylesheet.stylesheet.rules().size(), 1u);
 
   const css::SelectorRule& rule = stylesheet.stylesheet.rules()[0];
@@ -431,7 +431,7 @@ TEST_F(StyleSystemTest, ComputeAllStylesFullRecomputeClearsAndRebuildsStyles) {
   auto element = document.querySelector("#r");
   ASSERT_TRUE(element.has_value());
 
-  auto styleEntity = document.querySelector("style")->entityHandle().entity();
+  auto styleEntity = document.querySelector("style")->unsafeEntityHandle().entity();
   auto& stylesheet = document.registry().get<StylesheetComponent>(styleEntity);
   stylesheet.parseStylesheet("rect { fill: blue; }");
   SetRenderTreeState(document.registry(), RenderTreeState{.needsFullRebuild = false,
@@ -442,7 +442,7 @@ TEST_F(StyleSystemTest, ComputeAllStylesFullRecomputeClearsAndRebuildsStyles) {
   styleSystem.computeAllStyles(document.registry(), warningSink);
 
   EXPECT_EQ(document.registry()
-                .get<ComputedStyleComponent>(element->entityHandle().entity())
+                .get<ComputedStyleComponent>(element->unsafeEntityHandle().entity())
                 .properties->fill.getRequired(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
 }
@@ -482,8 +482,8 @@ TEST_F(StyleSystemTest, ComputeStylesForSubsetOnlyComputesRequestedEntities) {
     </svg>
   )");
 
-  const Entity a = document.querySelector("#a")->entityHandle().entity();
-  const Entity b = document.querySelector("#b")->entityHandle().entity();
+  const Entity a = document.querySelector("#a")->unsafeEntityHandle().entity();
+  const Entity b = document.querySelector("#b")->unsafeEntityHandle().entity();
 
   ParseWarningSink warningSink;
   styleSystem.computeStylesFor(document.registry(), std::array<Entity, 1>{a}, warningSink);
@@ -514,9 +514,9 @@ TEST_F(StyleSystemTest, ShadowTreeSelectorsMatchSiblingAndAttributeState) {
   auto useElement = document.querySelector("#u");
   ASSERT_TRUE(useElement.has_value());
   auto& shadowTree = document.registry().get_or_emplace<ComputedShadowTreeComponent>(
-      useElement->entityHandle().entity());
+      useElement->unsafeEntityHandle().entity());
   auto target = document.registry()
-                    .get<ShadowTreeComponent>(useElement->entityHandle().entity())
+                    .get<ShadowTreeComponent>(useElement->unsafeEntityHandle().entity())
                     .mainTargetEntity(document.registry());
   ASSERT_TRUE(target.has_value());
 

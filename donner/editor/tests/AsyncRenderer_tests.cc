@@ -323,8 +323,8 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   auto elemB = document.querySelector("#b");
   ASSERT_TRUE(elemA.has_value());
   ASSERT_TRUE(elemB.has_value());
-  const Entity entityA = elemA->entityHandle().entity();
-  const Entity entityB = elemB->entityHandle().entity();
+  const Entity entityA = elemA->unsafeEntityHandle().entity();
+  const Entity entityB = elemB->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -425,7 +425,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDropsStaleCompositedLayerImmediately
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -506,8 +506,8 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   auto next = document.querySelector("#next");
   ASSERT_TRUE(hiddenSoon.has_value());
   ASSERT_TRUE(next.has_value());
-  const Entity hiddenSoonEntity = hiddenSoon->entityHandle().entity();
-  const Entity nextEntity = next->entityHandle().entity();
+  const Entity hiddenSoonEntity = hiddenSoon->unsafeEntityHandle().entity();
+  const Entity nextEntity = next->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -664,15 +664,15 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   {
     RenderRequest request(renderer, document);
     request.version = 1;
-    request.selectedEntity = elemA->entityHandle().entity();
-    request.dragPreview = RenderRequest::DragPreview{.entity = elemA->entityHandle().entity()};
+    request.selectedEntity = elemA->unsafeEntityHandle().entity();
+    request.dragPreview = RenderRequest::DragPreview{.entity = elemA->unsafeEntityHandle().entity()};
     asyncRenderer.requestRender(request);
   }
   {
     RenderRequest request(renderer, document);
     request.version = 2;
-    request.selectedEntity = elemB->entityHandle().entity();
-    request.dragPreview = RenderRequest::DragPreview{.entity = elemB->entityHandle().entity()};
+    request.selectedEntity = elemB->unsafeEntityHandle().entity();
+    request.dragPreview = RenderRequest::DragPreview{.entity = elemB->unsafeEntityHandle().entity()};
     asyncRenderer.requestRender(request);
   }
 
@@ -691,7 +691,7 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   // committed.
   EXPECT_EQ(result->version, 2u);
   ASSERT_TRUE(result->compositedPreview.has_value());
-  EXPECT_EQ(result->compositedPreview->entity, elemB->entityHandle().entity());
+  EXPECT_EQ(result->compositedPreview->entity, elemB->unsafeEntityHandle().entity());
 
   // On a micro-document like this two-rect scene the first render
   // may complete before the second `requestRender` lands. The
@@ -729,7 +729,7 @@ TEST(AsyncRendererTest, CancelInFlightDropsResultAndReturnsWorkerToIdle) {
   RenderRequest request(renderer, document);
   request.version = 1;
   request.documentGeneration = 1;
-  request.selectedEntity = target->entityHandle().entity();
+  request.selectedEntity = target->unsafeEntityHandle().entity();
   asyncRenderer.requestRender(request);
   EXPECT_TRUE(asyncRenderer.isBusy());
 
@@ -769,7 +769,7 @@ TEST(AsyncRendererTest, CancelInFlightFollowedByRequestRenderRunsCleanly) {
   RenderRequest request(renderer, document);
   request.version = 1;
   request.documentGeneration = 1;
-  request.selectedEntity = target->entityHandle().entity();
+  request.selectedEntity = target->unsafeEntityHandle().entity();
 
   asyncRenderer.requestRender(request);
   asyncRenderer.cancelInFlight();
@@ -1039,9 +1039,9 @@ TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
 
   RenderRequest request(renderer, document);
   request.version = 1;
-  request.selectedEntity = target->entityHandle().entity();
+  request.selectedEntity = target->unsafeEntityHandle().entity();
   request.dragPreview = RenderRequest::DragPreview{
-      .entity = target->entityHandle().entity(),
+      .entity = target->unsafeEntityHandle().entity(),
       .interactionKind = svg::compositor::InteractionHint::Selection,
   };
   asyncRenderer.requestRender(request);
@@ -1097,9 +1097,9 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
 
     RenderRequest request(renderer, document);
     request.version = 1;
-    request.selectedEntity = target->entityHandle().entity();
+    request.selectedEntity = target->unsafeEntityHandle().entity();
     request.dragPreview = RenderRequest::DragPreview{
-        .entity = target->entityHandle().entity(),
+        .entity = target->unsafeEntityHandle().entity(),
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
         .translation = Vector2d(3.0, 2.0),
     };
@@ -1127,10 +1127,10 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
     if (tile.textureSnapshot != nullptr) {
       EXPECT_EQ(tile.textureSnapshot->dimensions(), tile.bitmapDimsPx) << svgBody;
     }
-    EXPECT_EQ(result->compositedPreview->entity, target->entityHandle().entity()) << svgBody;
+    EXPECT_EQ(result->compositedPreview->entity, target->unsafeEntityHandle().entity()) << svgBody;
     ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value()) << svgBody;
     EXPECT_EQ(result->compositedPreview->representedDragPreview->entity,
-              target->entityHandle().entity())
+              target->unsafeEntityHandle().entity())
         << svgBody;
     EXPECT_EQ(result->compositedPreview->representedDragPreview->translation, Vector2d(3.0, 2.0))
         << svgBody;
@@ -1255,7 +1255,7 @@ TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -1453,7 +1453,7 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -1590,8 +1590,8 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
   auto ePolygon = app.document().document().querySelector("#Donner polygon.cls-85");
   ASSERT_TRUE(oPath.has_value());
   ASSERT_TRUE(ePolygon.has_value());
-  const Entity oEntity = oPath->entityHandle().entity();
-  const Entity eEntity = ePolygon->entityHandle().entity();
+  const Entity oEntity = oPath->unsafeEntityHandle().entity();
+  const Entity eEntity = ePolygon->unsafeEntityHandle().entity();
 
   SelectTool selectTool;
   svg::Renderer renderer;
@@ -1615,7 +1615,7 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
     request.structuralRemap = app.document().consumePendingStructuralRemap();
     if (app.selectedElement().has_value() &&
         app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-      request.selectedEntity = app.selectedElement()->entityHandle().entity();
+      request.selectedEntity = app.selectedElement()->unsafeEntityHandle().entity();
     }
     if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
       request.dragPreview = RenderRequest::DragPreview{
@@ -1707,7 +1707,7 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
   const Vector2d oDrag(354.0, 394.0);
   selectTool.onMouseDown(app, oStart, MouseModifiers{});
   ASSERT_TRUE(app.selectedElement().has_value());
-  ASSERT_EQ(app.selectedElement()->entityHandle().entity(), oEntity);
+  ASSERT_EQ(app.selectedElement()->unsafeEntityHandle().entity(), oEntity);
   ASSERT_TRUE(selectTool.activeDragPreview().has_value());
   ASSERT_TRUE(postRequest().has_value());
 
@@ -1734,12 +1734,12 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
   const Vector2d eClick(568.0, 315.0);
   selectTool.onMouseDown(app, eClick, MouseModifiers{});
   ASSERT_TRUE(app.selectedElement().has_value());
-  ASSERT_EQ(app.selectedElement()->entityHandle().entity(), eEntity);
+  ASSERT_EQ(app.selectedElement()->unsafeEntityHandle().entity(), eEntity);
   ASSERT_TRUE(selectTool.activeDragPreview().has_value());
 
   auto ePolygonAfterWriteback = app.document().document().querySelector("#Donner polygon.cls-85");
   ASSERT_TRUE(ePolygonAfterWriteback.has_value());
-  const Entity eEntityAfterWriteback = ePolygonAfterWriteback->entityHandle().entity();
+  const Entity eEntityAfterWriteback = ePolygonAfterWriteback->unsafeEntityHandle().entity();
   ASSERT_EQ(eEntityAfterWriteback, eEntity);
   ASSERT_TRUE(postRequest().has_value());
 
@@ -1776,7 +1776,7 @@ TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache)
     backgroundPath = app.document().document().querySelector("#Background_sticker path");
   }
   ASSERT_TRUE(backgroundPath.has_value());
-  const Entity backgroundEntity = backgroundPath->entityHandle().entity();
+  const Entity backgroundEntity = backgroundPath->unsafeEntityHandle().entity();
   app.setSelection(*backgroundPath);
 
   SelectTool selectTool;
@@ -3051,9 +3051,9 @@ TEST(AsyncRendererE2ETest, StructuralRemapSurvivesSupersededWritebackRequest) {
   RenderRequest initialRequest(renderer, asyncDoc.document());
   initialRequest.version = 1;
   initialRequest.documentGeneration = asyncDoc.documentGeneration();
-  initialRequest.selectedEntity = target->entityHandle().entity();
+  initialRequest.selectedEntity = target->unsafeEntityHandle().entity();
   initialRequest.dragPreview = RenderRequest::DragPreview{
-      .entity = target->entityHandle().entity(),
+      .entity = target->unsafeEntityHandle().entity(),
       .interactionKind = svg::compositor::InteractionHint::Selection,
   };
   asyncRenderer.requestRender(initialRequest);
@@ -3080,9 +3080,9 @@ TEST(AsyncRendererE2ETest, StructuralRemapSurvivesSupersededWritebackRequest) {
   RenderRequest followupRequest(renderer, asyncDoc.document());
   followupRequest.version = 3;
   followupRequest.documentGeneration = asyncDoc.documentGeneration();
-  followupRequest.selectedEntity = targetAfterWriteback->entityHandle().entity();
+  followupRequest.selectedEntity = targetAfterWriteback->unsafeEntityHandle().entity();
   followupRequest.dragPreview = RenderRequest::DragPreview{
-      .entity = targetAfterWriteback->entityHandle().entity(),
+      .entity = targetAfterWriteback->unsafeEntityHandle().entity(),
       .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
   };
   ASSERT_TRUE(followupRequest.structuralRemap.empty());
@@ -3158,9 +3158,9 @@ TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilt
     return std::nullopt;
   };
 
-  postRequest(1, target->entityHandle().entity());
+  postRequest(1, target->unsafeEntityHandle().entity());
   ASSERT_TRUE(waitForResult().has_value());
-  const auto glowGenerationBefore = layerGeneration(glow->entityHandle().entity());
+  const auto glowGenerationBefore = layerGeneration(glow->unsafeEntityHandle().entity());
   ASSERT_TRUE(glowGenerationBefore.has_value()) << "#glow should be a mandatory filter layer";
 
   asyncDoc.applyMutation(
@@ -3179,11 +3179,11 @@ TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilt
   ASSERT_TRUE(targetAfterWriteback.has_value());
   ASSERT_TRUE(glowAfterWriteback.has_value());
 
-  postRequest(2, targetAfterWriteback->entityHandle().entity());
+  postRequest(2, targetAfterWriteback->unsafeEntityHandle().entity());
   ASSERT_TRUE(waitForResult().has_value());
 
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
-  const auto glowGenerationAfter = layerGeneration(glowAfterWriteback->entityHandle().entity());
+  const auto glowGenerationAfter = layerGeneration(glowAfterWriteback->unsafeEntityHandle().entity());
   ASSERT_TRUE(glowGenerationAfter.has_value());
   EXPECT_EQ(*glowGenerationAfter, *glowGenerationBefore)
       << "Unchanged mandatory filter layer rerasterized across structural writeback; "
@@ -3367,7 +3367,7 @@ TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPromotedTilePresentati
 
   target->setStyle("display:none");
 
-  EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), target->entityHandle().entity())
+  EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), target->unsafeEntityHandle().entity())
       << "The live DOM has hidden the selected element, so stale promoted-layer pixels should not "
          "be drawn even while selection chrome remains visible.";
 }
@@ -3382,7 +3382,7 @@ TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPreReparseCachedLayer)
 
   auto target = app.document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity oldTargetEntity = target->entityHandle().entity();
+  const Entity oldTargetEntity = target->unsafeEntityHandle().entity();
   app.setSelection(*target);
 
   RenderCoordinator coordinator;
@@ -3399,7 +3399,7 @@ TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPreReparseCachedLayer)
   ASSERT_TRUE(app.flushFrame());
 
   ASSERT_TRUE(app.selectedElement().has_value());
-  const Entity newTargetEntity = app.selectedElement()->entityHandle().entity();
+  const Entity newTargetEntity = app.selectedElement()->unsafeEntityHandle().entity();
   ASSERT_NE(oldTargetEntity, newTargetEntity)
       << "This regression covers source-reparse selection remap, where the stale texture still "
          "belongs to the pre-reparse entity.";
@@ -3420,7 +3420,7 @@ TEST(RenderCoordinatorTest, DisplayNoneSelectionKeepsPreReparseSuppressionAfterC
 
   auto target = app.document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity oldTargetEntity = target->entityHandle().entity();
+  const Entity oldTargetEntity = target->unsafeEntityHandle().entity();
   app.setSelection(*target);
 
   RenderCoordinator coordinator;
@@ -3458,7 +3458,7 @@ TEST(RenderCoordinatorTest, DisplayNoneSuppressionSurvivesSelectingDifferentVisi
   auto next = app.document().document().querySelector("#next");
   ASSERT_TRUE(hiddenSoon.has_value());
   ASSERT_TRUE(next.has_value());
-  const Entity hiddenSoonEntity = hiddenSoon->entityHandle().entity();
+  const Entity hiddenSoonEntity = hiddenSoon->unsafeEntityHandle().entity();
   app.setSelection(*hiddenSoon);
 
   RenderCoordinator coordinator;
@@ -3487,7 +3487,7 @@ TEST(RenderCoordinatorTest, DisplayNoneSuppressionClearsWhenSameElementBecomesVi
 
   auto target = app.document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
   app.setSelection(*target);
 
   RenderCoordinator coordinator;

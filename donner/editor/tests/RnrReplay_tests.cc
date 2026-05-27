@@ -236,7 +236,7 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
   request.documentGeneration = app.document().documentGeneration();
   request.structuralRemap = app.document().consumePendingStructuralRemap();
   if (app.selectedElement().has_value() && app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-    request.selectedEntity = app.selectedElement()->entityHandle().entity();
+    request.selectedEntity = app.selectedElement()->unsafeEntityHandle().entity();
   }
   if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
     request.dragPreview = RenderRequest::DragPreview{
@@ -601,7 +601,7 @@ protected:
       const auto dragPreview = selectTool.activeDragPreview();
       const Entity prewarmEntity =
           app.selectedElement().has_value() && app.selectedElement()->isa<svg::SVGGraphicsElement>()
-              ? app.selectedElement()->entityHandle().entity()
+              ? app.selectedElement()->unsafeEntityHandle().entity()
               : entt::null;
 
       // Drop stale settling state on selection change. (Lighter than

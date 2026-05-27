@@ -112,7 +112,7 @@ TEST_F(CompositorGoldenTest, PromotedEntityMatchesFullRender) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
 
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
@@ -133,7 +133,7 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -184,7 +184,7 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   // Promote with ActiveDrag so the drag target sets up the single-
@@ -251,7 +251,7 @@ TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScale
 
     auto target = document.querySelector("#target");
     ASSERT_TRUE(target.has_value());
-    const Entity entity = target->entityHandle().entity();
+    const Entity entity = target->unsafeEntityHandle().entity();
 
     CompositorController compositor(document, renderer_);
     ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
@@ -328,7 +328,7 @@ TEST_F(CompositorGoldenTest, ScaledCanvasTranslationOnlyDragProducesCorrectPixel
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -399,7 +399,7 @@ TEST_F(CompositorGoldenTest, BucketedStandaloneRectRasterizesCorrectly) {
 
   // Explicit promote to set up the drag scenario. With `complexityBucketing`
   // on and aggressive threshold, the white-background rect also gets a bucket.
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(100.0, 0.0)));
   compositor.renderFrame(viewport_);
 
@@ -431,12 +431,12 @@ TEST_F(CompositorGoldenTest, BucketedStandaloneAfterResetRasterizesCorrectly) {
   CompositorController compositor(document, renderer_, config);
 
   // Phase 1: initial promote + render (warm the bucketer state).
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
 
   // Phase 2: resetAllLayers, then promote + render again.
   compositor.resetAllLayers();
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
 
   const RendererBitmap flat = renderer_.takeSnapshot();
@@ -458,7 +458,7 @@ TEST_F(CompositorGoldenTest, DragReleaseResetSequenceWithAggressiveBucketing) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorConfig config;
   config.complexityBucketing = true;
@@ -542,7 +542,7 @@ TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {
 
   auto glow = document.querySelector("#glow");
   ASSERT_TRUE(glow.has_value());
-  const Entity glowEntity = glow->entityHandle().entity();
+  const Entity glowEntity = glow->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   EXPECT_EQ(compositor.layerCount(), 0u) << "no render yet — detectors haven't run";
@@ -583,7 +583,7 @@ TEST_F(CompositorGoldenTest, FilteredLayerBoundsStopAtLayerSubtree) {
 
   auto glow = document.querySelector("#glow");
   ASSERT_TRUE(glow.has_value());
-  const Entity glowEntity = glow->entityHandle().entity();
+  const Entity glowEntity = glow->unsafeEntityHandle().entity();
 
   RenderViewport largeViewport;
   largeViewport.size = Vector2d(1000, 1000);
@@ -617,7 +617,7 @@ TEST_F(CompositorGoldenTest, RealSplashLightningBlurLayerUsesFilterBounds) {
   SVGDocument document = parseDocument(splashSource);
   auto glow = document.querySelector("#Lightning_glow_dark");
   ASSERT_TRUE(glow.has_value());
-  const Entity glowEntity = glow->entityHandle().entity();
+  const Entity glowEntity = glow->unsafeEntityHandle().entity();
 
   RenderViewport splashViewport;
   splashViewport.size = Vector2d(892, 512);
@@ -649,8 +649,8 @@ TEST_F(CompositorGoldenTest, EmptyStaticSegmentsArePrunedFromPublicTileSnapshots
   ASSERT_TRUE(b.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
-  ASSERT_TRUE(compositor.promoteEntity(b->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
 
   const auto uploadTiles = compositor.snapshotTilesForUpload();
@@ -717,7 +717,7 @@ TEST_F(CompositorGoldenTest, DualPathGate_ExplicitPromoteAtIdentity) {
   CompositorConfig config;
   config.verifyPixelIdentity = true;
   CompositorController compositor(document, renderer_, config);
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
 
   compositor.renderFrame(viewport_);
   compositor.renderFrame(viewport_);
@@ -740,7 +740,7 @@ TEST_F(CompositorGoldenTest, VerifyPixelIdentityGateCatchesNoDriftOnValidScene) 
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorConfig config;
   config.verifyPixelIdentity = true;  // Enable the in-tree dual-path assertion.
@@ -779,7 +779,7 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeMatchesFullRenderAfterPromotion
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
 
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
@@ -810,7 +810,7 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeRemainsVisibleDuringDrag) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -949,7 +949,7 @@ TEST_F(CompositorGoldenTest, ReducedSplashDraggingLetterPreservesGlow) {
   const Pixel glowBaseline = getPixel(baseline, kSampleX, kSampleY);
 
   // User clicks on letter A to start the drag.
-  ASSERT_TRUE(compositor.promoteEntity(letterA->entityHandle().entity()))
+  ASSERT_TRUE(compositor.promoteEntity(letterA->unsafeEntityHandle().entity()))
       << "letter A has no compositing ancestor, should promote";
 
   // Series of drag frames (editor drags at ~60fps). The user moves the DOM
@@ -1041,7 +1041,7 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
   auto letter2 = document.querySelector("#letter_2");
   ASSERT_TRUE(letter2.has_value());
 
-  ASSERT_TRUE(compositor.promoteEntity(letter2->entityHandle().entity()))
+  ASSERT_TRUE(compositor.promoteEntity(letter2->unsafeEntityHandle().entity()))
       << "letter_2 has no compositing ancestor, should promote";
 
   Pixel dragGlowA{}, dragGlowB{}, dragGlowC{};
@@ -1088,7 +1088,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   CompositorController compositor(document, renderer_);
   compositor.renderFrame(viewport_);
 
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
   compositor.renderFrame(viewport_);
 
@@ -1141,7 +1141,7 @@ TEST_F(CompositorGoldenTest, DragTargetOnlySnapshotKeepsNonDragTileMetadata) {
   CompositorController compositor(document, renderer_);
   compositor.renderFrame(viewport_);
 
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()).promotedLayer());
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()).promotedLayer());
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   compositor.renderFrame(viewport_);
 
@@ -1190,7 +1190,7 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
   )svg");
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity targetEntity = target->entityHandle().entity();
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.setSkipMainComposeDuringSplit(true);
@@ -1261,10 +1261,10 @@ TEST_F(CompositorGoldenTest, TransformMutationOnPromotedEntitySkipsFullPrepare) 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(bystander.has_value());
   ASSERT_TRUE(target.has_value());
-  const Entity bystanderEntity = bystander->entityHandle().entity();
+  const Entity bystanderEntity = bystander->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
 
   compositor.renderFrame(viewport_);
 
@@ -1309,7 +1309,7 @@ TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) 
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
 
   // Initial render populates every layer bitmap and bg/fg.
   compositor.renderFrame(viewport_);
@@ -1317,7 +1317,7 @@ TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) 
   // Capture the pre-mutation filter-layer bitmap pointer. An intervening
   // rasterizeLayer call would reallocate the vector and change `.data()`.
   const uint8_t* glowDataBefore =
-      compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
+      compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data();
   ASSERT_NE(glowDataBefore, nullptr);
 
   // Simulate the mutation the editor applies on drag release: bake the drag
@@ -1328,7 +1328,7 @@ TEST_F(CompositorGoldenTest, DragEntityMutationKeepsMandatoryFilterLayerCached) 
   compositor.renderFrame(viewport_);
 
   const uint8_t* glowDataAfter =
-      compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
+      compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data();
   EXPECT_EQ(glowDataBefore, glowDataAfter)
       << "glow filter layer must be reused across the drag-release mutation — re-rasterizing it "
          "is what the user felt as a ~2s hang on every new drag";
@@ -1398,10 +1398,10 @@ TEST_F(CompositorGoldenTest, SplashDragMultipleFilterLayersStableAcrossManyFrame
   ASSERT_TRUE(glowB.has_value());
   ASSERT_TRUE(glowC.has_value());
 
-  const Entity letter2Entity = letter2->entityHandle().entity();
-  const Entity glowAEntity = glowA->entityHandle().entity();
-  const Entity glowBEntity = glowB->entityHandle().entity();
-  const Entity glowCEntity = glowC->entityHandle().entity();
+  const Entity letter2Entity = letter2->unsafeEntityHandle().entity();
+  const Entity glowAEntity = glowA->unsafeEntityHandle().entity();
+  const Entity glowBEntity = glowB->unsafeEntityHandle().entity();
+  const Entity glowCEntity = glowC->unsafeEntityHandle().entity();
 
   // Editor default config: all auto-promotion sources on.
   CompositorConfig config;
@@ -1491,7 +1491,7 @@ TEST_F(CompositorGoldenTest, SplashDragOnGroupReExercisesRasterizePath) {
 
   auto donner = document.querySelector("#Donner_target");
   ASSERT_TRUE(donner.has_value());
-  const Entity donnerEntity = donner->entityHandle().entity();
+  const Entity donnerEntity = donner->unsafeEntityHandle().entity();
 
   CompositorConfig config;
   CompositorController compositor(document, renderer_, config);
@@ -1531,7 +1531,7 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   ASSERT_TRUE(after.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
 
   // First render populates both segments.
   compositor.renderFrame(viewport_);
@@ -1648,7 +1648,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsInvalidateOnViewportResize) {
 
   CompositorController compositor(document, renderer_);
 
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
 
   document.setCanvasSize(200, 100);
@@ -1793,7 +1793,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsSurviveExplicitDragTargetPromot
   // framebuffer back. With the flag on, the main renderer would be
   // untouched (the editor path) and the comparison would land on
   // whatever stale pixels were there before.
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   DualPathVerifier verifier(compositor, renderer_);
 
   // DOM is at identity (no drag motion). Composition transform is
@@ -1849,7 +1849,7 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
 
   // Promote as a drag target and apply a small DOM transform to
   // simulate the first drag frame.
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()))
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()))
       << "letter failed to promote — check compositing-breaking-ancestor";
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 0.0)));
 
@@ -1969,14 +1969,14 @@ TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
 
   CompositorController compositor(document, renderer_);
   // Two-phase drag flow (mirrors editor).
-  compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection);
+  compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection);
   compositor.renderFrame(viewport);
-  compositor.demoteEntity(group->entityHandle().entity());
+  compositor.demoteEntity(group->unsafeEntityHandle().entity());
   // §M9: flush so the demote-then-promote-different-kind sequence
   // rebuilds the layer (the path under test) rather than reusing
   // the hysteresis-preserved one.
   compositor.flushPendingDemotionsForTesting();
-  compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag);
+  compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag);
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
   compositor.renderFrame(viewport);
   const RendererBitmap composited = renderer_.takeSnapshot();
@@ -2068,7 +2068,7 @@ TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseNoClip) {
     CompositorConfig config;
     config.tightBoundedSegments = tight;
     CompositorController compositor(document, renderer_, config);
-    compositor.promoteEntity(trigger->entityHandle().entity(), InteractionHint::Selection);
+    compositor.promoteEntity(trigger->unsafeEntityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
     return renderer_.takeSnapshot();
   };
@@ -2133,7 +2133,7 @@ TEST_F(CompositorGoldenTest, TightBoundsGradientWithClipPathSublayer) {
     CompositorConfig config;
     config.tightBoundedSegments = tightBounds;
     CompositorController compositor(document, renderer_, config);
-    compositor.promoteEntity(left->entityHandle().entity(), InteractionHint::Selection);
+    compositor.promoteEntity(left->unsafeEntityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
     return renderer_.takeSnapshot();
   };
@@ -2214,7 +2214,7 @@ TEST_F(CompositorGoldenTest, TightBoundsWithRotatingGradientNoDrift) {
     CompositorConfig config;
     config.tightBoundedSegments = tightBounds;
     CompositorController compositor(document, renderer_, config);
-    compositor.promoteEntity(left->entityHandle().entity(), InteractionHint::Selection);
+    compositor.promoteEntity(left->unsafeEntityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
     return renderer_.takeSnapshot();
   };
@@ -2292,7 +2292,7 @@ TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
     CompositorConfig config;
     config.tightBoundedSegments = tight;
     CompositorController compositor(document, renderer_, config);
-    compositor.promoteEntity(trigger->entityHandle().entity(), InteractionHint::Selection);
+    compositor.promoteEntity(trigger->unsafeEntityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
     return renderer_.takeSnapshot();
   };
@@ -2360,10 +2360,10 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
     CompositorConfig config;
     config.tightBoundedSegments = tightBounds;
     CompositorController compositor(doc, renderer_, config);
-    compositor.promoteEntity(letter->entityHandle().entity(), InteractionHint::Selection);
+    compositor.promoteEntity(letter->unsafeEntityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
-    compositor.demoteEntity(letter->entityHandle().entity());
-    compositor.promoteEntity(orb->entityHandle().entity(), InteractionHint::Selection);
+    compositor.demoteEntity(letter->unsafeEntityHandle().entity());
+    compositor.promoteEntity(orb->unsafeEntityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
     return renderer_.takeSnapshot();
   };
@@ -2508,16 +2508,16 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
     auto target = doc.querySelector("#Clouds_with_gradients");
     EXPECT_TRUE(target.has_value());
     CompositorController compositor(doc, renderer_);
-    compositor.promoteEntity(target->entityHandle().entity(), InteractionHint::Selection);
+    compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
-    compositor.demoteEntity(target->entityHandle().entity());
+    compositor.demoteEntity(target->unsafeEntityHandle().entity());
     // §M9: flush the hysteresis window so the demote actually fires
     // before the kind-change re-promote — this test specifically
     // probes the demote+promote layer-rebuild path (vs. the
     // hysteresis-preserved layer reuse), so the hysteresis would
     // otherwise mask the very transition under test.
     compositor.flushPendingDemotionsForTesting();
-    compositor.promoteEntity(target->entityHandle().entity(), InteractionHint::ActiveDrag);
+    compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag);
     target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 0.0)));
     compositor.renderFrame(vp);
     return renderer_.takeSnapshot();
@@ -2593,15 +2593,15 @@ TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
   viewport.devicePixelRatio = 1.0;
 
   CompositorController compositor(document, renderer_);
-  compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection);
+  compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection);
   compositor.renderFrame(viewport);
-  compositor.demoteEntity(group->entityHandle().entity());
+  compositor.demoteEntity(group->unsafeEntityHandle().entity());
   // §M9: flush the hysteresis window so the demote actually fires
   // before the kind-change re-promote — this test probes the
   // demote+promote layer-rebuild path, which the M9 hysteresis would
   // otherwise short-circuit.
   compositor.flushPendingDemotionsForTesting();
-  compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag);
+  compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag);
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
   compositor.renderFrame(viewport);
   const RendererBitmap composited = renderer_.takeSnapshot();
@@ -2701,15 +2701,15 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
   // phase-1 snapshot.
 
   // Two-phase: Selection prewarm → demote → ActiveDrag re-promote.
-  ASSERT_TRUE(compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::Selection));
+  ASSERT_TRUE(compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection));
   compositor.renderFrame(viewport);
-  compositor.demoteEntity(group->entityHandle().entity());
+  compositor.demoteEntity(group->unsafeEntityHandle().entity());
   // §M9: flush the hysteresis so the demote+re-promote cycle this
   // test specifically probes still rebuilds the layer rather than
   // taking the hysteresis fast path.
   compositor.flushPendingDemotionsForTesting();
   ASSERT_TRUE(
-      compositor.promoteEntity(group->entityHandle().entity(), InteractionHint::ActiveDrag));
+      compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag));
   group->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(40.0, 0.0)));
   compositor.renderFrame(viewport);
 
@@ -2749,7 +2749,7 @@ TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
   ASSERT_TRUE(target.has_value());
   CompositorController compositorTight(documentTight, renderer_);
   ASSERT_TRUE(compositorTight.tightBoundedSegmentsEnabled());
-  ASSERT_TRUE(compositorTight.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositorTight.promoteEntity(target->unsafeEntityHandle().entity()));
   compositorTight.renderFrame(viewport_);
   // Flip the toggle off — all cached segments are marked dirty and
   // re-rasterize on the next frame at full canvas size.
@@ -2772,7 +2772,7 @@ TEST_F(CompositorGoldenTest, SetTightBoundedSegmentsEnabledTogglesAtRuntime) {
   CompositorConfig refConfig;
   refConfig.tightBoundedSegments = false;
   CompositorController compositorRef(documentRef, renderer_, refConfig);
-  ASSERT_TRUE(compositorRef.promoteEntity(targetRef->entityHandle().entity()));
+  ASSERT_TRUE(compositorRef.promoteEntity(targetRef->unsafeEntityHandle().entity()));
   compositorRef.renderFrame(viewport_);
   const RendererBitmap reference = renderer_.takeSnapshot();
 
@@ -2818,7 +2818,7 @@ TEST_F(CompositorGoldenTest, GradientInsideFilteredGroup_SingleFrame) {
   auto glow = document.querySelector("#glow");
   ASSERT_TRUE(glow.has_value());
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(glow->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(glow->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
   const RendererBitmap flat = renderer_.takeSnapshot();
   const Pixel halo = getPixel(flat, 70, 50);
@@ -2852,7 +2852,7 @@ TEST_F(CompositorGoldenTest, FlatColorInsideFilteredGroup_RepeatedFrames) {
   auto letter = document.querySelector("#letter");
   ASSERT_TRUE(letter.has_value());
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(letter->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(letter->unsafeEntityHandle().entity()));
   for (int i = 0; i < 5; ++i) {
     letter->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(i * 5.0, 0.0)));
     compositor.renderFrame(viewport_);
@@ -2888,7 +2888,7 @@ TEST_F(CompositorGoldenTest, DraggingLetterPreservesGradientFilteredGlowAcrossFr
 
   auto letterD = document.querySelector("#letter_D");
   ASSERT_TRUE(letterD.has_value());
-  const Entity entity = letterD->entityHandle().entity();
+  const Entity entity = letterD->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -2935,7 +2935,7 @@ TEST_F(CompositorGoldenTest, DraggingLetterInsideWrapperPreservesNestedGlow) {
   ASSERT_TRUE(letterD.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(letterD->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(letterD->unsafeEntityHandle().entity()));
 
   compositor.renderFrame(viewport_);
 
@@ -2975,7 +2975,7 @@ TEST_F(CompositorGoldenTest, DraggingLetterPreservesBackgroundGlow) {
 
   CompositorController compositor(document, renderer_);
   // User clicks on letter D to start a drag.
-  ASSERT_TRUE(compositor.promoteEntity(letterD->entityHandle().entity()))
+  ASSERT_TRUE(compositor.promoteEntity(letterD->unsafeEntityHandle().entity()))
       << "letter is not a descendant of any filtered/masked/clipped group, should promote";
 
   // Frame 1: initial render.
@@ -3023,7 +3023,7 @@ TEST_F(CompositorGoldenTest, FilteredGroupWithChildrenRasterizesIncludingChildre
   // drawEntityRange(glow, glow.lastRenderedEntity) should render the circle
   // inside the filter context.
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(glow->entityHandle().entity()))
+  ASSERT_TRUE(compositor.promoteEntity(glow->unsafeEntityHandle().entity()))
       << "the filter-bearing group itself should promote (it IS the compositing root)";
 
   DualPathVerifier verifier(compositor, renderer_);
@@ -3053,9 +3053,9 @@ TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRequiresFullCanvasPreview) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+  EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity()),
             CompositorController::PromoteResult::FullCanvasPreviewRequired);
-  EXPECT_FALSE(compositor.isPromoted(target->entityHandle().entity()));
+  EXPECT_FALSE(compositor.isPromoted(target->unsafeEntityHandle().entity()));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
@@ -3078,7 +3078,7 @@ TEST_F(CompositorGoldenTest, ChildOfClippedGroupRequiresFullCanvasPreview) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+  EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity()),
             CompositorController::PromoteResult::FullCanvasPreviewRequired);
 }
 
@@ -3101,7 +3101,7 @@ TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRequiresFullCanvasPreview) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_EQ(compositor.promoteEntity(target->entityHandle().entity()),
+  EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity()),
             CompositorController::PromoteResult::FullCanvasPreviewRequired);
 }
 
@@ -3121,9 +3121,9 @@ TEST_F(CompositorGoldenTest, PlainDescendantStillPromotes) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_TRUE(compositor.promoteEntity(target->entityHandle().entity()))
+  EXPECT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()))
       << "plain `<g>` ancestor without compositing features doesn't block promotion";
-  EXPECT_TRUE(compositor.isPromoted(target->entityHandle().entity()));
+  EXPECT_TRUE(compositor.isPromoted(target->unsafeEntityHandle().entity()));
 }
 
 // Regression: a radially-gradient-filled shape, auto-promoted, renders
@@ -3147,7 +3147,7 @@ TEST_F(CompositorGoldenTest, RadialGradientShapeMatchesFullRenderAfterPromotion)
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
 
   DualPathVerifier verifier(compositor, renderer_);
   const auto result = verifier.renderAndVerify(viewport_);
@@ -3271,7 +3271,7 @@ TEST_F(CompositorGoldenTest, SplashDragLatencyBudgetsOnRealRenderer) {
 
   auto letter2 = document.querySelector("#letter_2");
   ASSERT_TRUE(letter2.has_value());
-  const Entity letter2Entity = letter2->entityHandle().entity();
+  const Entity letter2Entity = letter2->unsafeEntityHandle().entity();
 
   // Phase 2 — first drag frame. Promotes the drag target for the first
   // time, triggers first-time rasterization of N+1 segments + all promoted
@@ -3378,7 +3378,7 @@ TEST_F(CompositorGoldenTest, SplashPrewarmMakesFirstDragFree) {
 
   auto letter2 = document.querySelector("#letter_2");
   ASSERT_TRUE(letter2.has_value());
-  const Entity letter2Entity = letter2->entityHandle().entity();
+  const Entity letter2Entity = letter2->unsafeEntityHandle().entity();
 
   using Clock = std::chrono::steady_clock;
   const auto elapsedMs = [](Clock::time_point start) {
@@ -3460,7 +3460,7 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
   auto firstLetter = document.querySelector("#Donner path");
   ASSERT_TRUE(firstLetter.has_value())
       << "splash has no `#Donner path` — has the file structure changed?";
-  const Entity letterEntity = firstLetter->entityHandle().entity();
+  const Entity letterEntity = firstLetter->unsafeEntityHandle().entity();
 
   // Phase 2 — first drag frame. Promotes + rasterizes everything.
   ASSERT_TRUE(compositor.promoteEntity(letterEntity))
@@ -3560,7 +3560,7 @@ TEST_F(CompositorGoldenTest, SplashDragEndReplaceDocumentReplayLatency) {
 
   auto letter2 = document.querySelector("#letter_2");
   ASSERT_TRUE(letter2.has_value());
-  const Entity letter2Entity = letter2->entityHandle().entity();
+  const Entity letter2Entity = letter2->unsafeEntityHandle().entity();
 
   // Prewarm + drag a few frames to match the steady-state compositor state.
   ASSERT_TRUE(compositor.promoteEntity(letter2Entity));
@@ -3629,7 +3629,7 @@ TEST_F(CompositorGoldenTest, ResetAllLayersAfterPromoteDoesNotCrash) {
   // Promote + render — populates activeHints_ with a ScopedCompositorHint
   // pinned to the current registry. This is the state that used to crash
   // when `resetAllLayers` ran after the document was replaced.
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
 
   // Drive a few drag frames so mandatoryDetector_ / complexityBucketer_
@@ -3647,13 +3647,13 @@ TEST_F(CompositorGoldenTest, ResetAllLayersAfterPromoteDoesNotCrash) {
   compositor.resetAllLayers();
 
   // Rebuild from scratch after the reset. Must complete without crashing.
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
 
   // A second reset-then-render cycle — the editor's source-writeback path
   // can fire this more than once if the user drags repeatedly.
   compositor.resetAllLayers();
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
 }
 
@@ -3681,7 +3681,7 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
   CompositorController compositor(document, renderer_);
   compositor.setSkipMainComposeDuringSplit(true);
 
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(viewport_);
   // Drive a few drag frames so every cache is warm.
   for (int i = 1; i <= 3; ++i) {
@@ -3691,9 +3691,9 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
   }
 
   const uint8_t* glowBitmapBefore =
-      compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data();
+      compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data();
   const uint8_t* targetBitmapBefore =
-      compositor.layerBitmapOf(target->entityHandle().entity()).pixels.data();
+      compositor.layerBitmapOf(target->unsafeEntityHandle().entity()).pixels.data();
 
   // Build an identity remap: every entity in the registry maps to itself.
   // Walk the whole registry so we don't miss ancillary entities.
@@ -3707,9 +3707,9 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
       << "identity remap must succeed — every required entity is present";
 
   // Cached bitmaps should be preserved (same `.pixels.data()` pointer).
-  EXPECT_EQ(compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data(), glowBitmapBefore)
+  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(), glowBitmapBefore)
       << "glow filter-layer bitmap was reallocated during identity remap — cache lost";
-  EXPECT_EQ(compositor.layerBitmapOf(target->entityHandle().entity()).pixels.data(),
+  EXPECT_EQ(compositor.layerBitmapOf(target->unsafeEntityHandle().entity()).pixels.data(),
             targetBitmapBefore)
       << "drag-target bitmap was reallocated during identity remap — cache lost";
 
@@ -3717,7 +3717,7 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  EXPECT_EQ(compositor.layerBitmapOf(glow->entityHandle().entity()).pixels.data(), glowBitmapBefore)
+  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(), glowBitmapBefore)
       << "glow bitmap was reallocated on the post-remap drag frame — fast path broke";
 }
 
@@ -3746,9 +3746,9 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapIdenticalTrees) {
   auto targetInB = docB.querySelector("#target");
   ASSERT_TRUE(targetInA.has_value());
   ASSERT_TRUE(targetInB.has_value());
-  const Entity oldTarget = targetInA->entityHandle().entity();
+  const Entity oldTarget = targetInA->unsafeEntityHandle().entity();
   ASSERT_TRUE(remap.contains(oldTarget)) << "#target is missing from remap";
-  EXPECT_EQ(remap.at(oldTarget), targetInB->entityHandle().entity())
+  EXPECT_EQ(remap.at(oldTarget), targetInB->unsafeEntityHandle().entity())
       << "#target in docA doesn't map to #target in docB";
 }
 
@@ -3809,7 +3809,7 @@ TEST_F(CompositorGoldenTest, BuildStructuralEntityRemapIgnoresAttributeValueChan
   auto dragA = docA.querySelector("#drag");
   auto dragB = docB.querySelector("#drag");
   ASSERT_TRUE(dragA.has_value() && dragB.has_value());
-  EXPECT_EQ(remap.at(dragA->entityHandle().entity()), dragB->entityHandle().entity());
+  EXPECT_EQ(remap.at(dragA->unsafeEntityHandle().entity()), dragB->unsafeEntityHandle().entity());
 }
 
 // Incremental GL-upload discipline: on the first click-to-drag after
@@ -3867,7 +3867,7 @@ TEST_F(CompositorGoldenTest, ClickToDragAdvancesAtMostThreeTileGenerations) {
   // Phase 1 — click + drag in one frame: the editor sets the drag
   // target's transform and posts a render with the letter as the
   // drag entity.
-  ASSERT_TRUE(compositor.promoteEntity(target->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
   compositor.renderFrame(vp);
 

@@ -115,7 +115,7 @@ TEST_F(PaintSystemTest, CreateComputedStopReturnsExistingComponent) {
   SVGDocument document;
   SVGStopElement stopElement = SVGStopElement::Create(document);
   auto& registry = document.registry();
-  auto entity = stopElement.entityHandle().entity();
+  auto entity = stopElement.unsafeEntityHandle().entity();
   auto& stop = registry.emplace<StopComponent>(entity);
   auto& style = registry.emplace<ComputedStyleComponent>(entity);
   style.properties.emplace();
@@ -237,7 +237,7 @@ TEST_F(PaintSystemTest, GradientInitializationStopsOnRecursiveShadowRoot) {
   ASSERT_TRUE(element.has_value());
   auto& shadow = element->entityHandle().emplace<ComputedShadowTreeComponent>();
   shadow.mainBranch = ComputedShadowTreeComponent::BranchStorage{
-      ShadowBranchType::Main, element->entityHandle().entity(), {}};
+      ShadowBranchType::Main, element->unsafeEntityHandle().entity(), {}};
 
   ParseWarningSink warningSink;
   StyleSystem().computeAllStyles(document.registry(), warningSink);

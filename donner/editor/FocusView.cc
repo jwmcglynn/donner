@@ -497,7 +497,7 @@ bool AddFocusElement(const svg::SVGElement& element, FocusElementCollection* res
     return false;
   }
 
-  const Entity entity = element.entityHandle().entity();
+  const Entity entity = element.unsafeEntityHandle().entity();
   if (std::ranges::find(*visited, entity) != visited->end()) {
     return false;
   }
@@ -513,10 +513,10 @@ void AddElementReferenceLink(std::size_t fromOffset, const svg::SVGElement& refe
     return;
   }
 
-  const Entity referencedEntity = referenced.entityHandle().entity();
+  const Entity referencedEntity = referenced.unsafeEntityHandle().entity();
   const auto it = std::ranges::find_if(result->links, [&](const ElementReferenceLink& link) {
     return link.fromOffset == fromOffset &&
-           link.referenced.entityHandle().entity() == referencedEntity &&
+           link.referenced.unsafeEntityHandle().entity() == referencedEntity &&
            link.reverseReference == reverseReference;
   });
   if (it == result->links.end()) {
@@ -567,9 +567,9 @@ bool AddUniqueElement(const svg::SVGElement& element, std::vector<svg::SVGElemen
     return false;
   }
 
-  const Entity entity = element.entityHandle().entity();
+  const Entity entity = element.unsafeEntityHandle().entity();
   const auto it = std::ranges::find_if(*elements, [entity](const svg::SVGElement& existing) {
-    return existing.entityHandle().entity() == entity;
+    return existing.unsafeEntityHandle().entity() == entity;
   });
   if (it != elements->end()) {
     return false;
@@ -624,7 +624,7 @@ void MarkReverseExpandable(const svg::SVGElement& element,
     return;
   }
 
-  const Entity entity = element.entityHandle().entity();
+  const Entity entity = element.unsafeEntityHandle().entity();
   if (std::ranges::find(*reverseExpandableEntities, entity) == reverseExpandableEntities->end()) {
     reverseExpandableEntities->push_back(entity);
   }
@@ -639,7 +639,7 @@ void MarkReverseExpandableIfResource(const svg::SVGElement& element,
 
 bool CanReverseExpand(const svg::SVGElement& element,
                       const std::vector<Entity>& reverseExpandableEntities) {
-  const Entity entity = element.entityHandle().entity();
+  const Entity entity = element.unsafeEntityHandle().entity();
   return std::ranges::find(reverseExpandableEntities, entity) != reverseExpandableEntities.end();
 }
 
@@ -916,7 +916,7 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
   for (const svg::SVGElement& element : initialElements) {
     AddFocusElement(element, &result, &visited);
     if (IsGroupElement(element)) {
-      selectedGroupEntities.push_back(element.entityHandle().entity());
+      selectedGroupEntities.push_back(element.unsafeEntityHandle().entity());
     }
     MarkReverseExpandableIfResource(element, &reverseExpandableEntities);
   }
@@ -924,7 +924,7 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
   const svg::SVGElement root = document.svgElement();
   for (std::size_t i = 0; i < result.elements.size(); ++i) {
     const svg::SVGElement current = result.elements[i];
-    const Entity currentEntity = current.entityHandle().entity();
+    const Entity currentEntity = current.unsafeEntityHandle().entity();
     const bool currentIsSelectedGroup =
         std::ranges::find(selectedGroupEntities, currentEntity) != selectedGroupEntities.end();
     const FocusLinkSourceMode linkSourceMode =
@@ -1150,7 +1150,7 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
     }
 
     initialElements.push_back(selected);
-    selectedEntities.push_back(selected.entityHandle().entity());
+    selectedEntities.push_back(selected.unsafeEntityHandle().entity());
   }
 
   FocusPartition partition;
@@ -1160,7 +1160,7 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   for (std::size_t i = 0; i < focusElements.elements.size(); ++i) {
     std::optional<ByteRange> elementRange = NodeRange(source, focusElements.elements[i]);
     const bool selectedElement =
-        std::ranges::find(selectedEntities, focusElements.elements[i].entityHandle().entity()) !=
+        std::ranges::find(selectedEntities, focusElements.elements[i].unsafeEntityHandle().entity()) !=
         selectedEntities.end();
     if (elementRange.has_value()) {
       (selectedElement ? partition.fullColor : partition.referenceColor)
@@ -1333,7 +1333,7 @@ ReferenceHighlightSummary ComputeReferenceHighlightSummary(
                                       &summary.referencingElements,
                                       std::numeric_limits<std::size_t>::max());
     std::erase_if(summary.referencingElements, [&](const svg::SVGElement& element) {
-      return element.entityHandle().entity() == selected.entityHandle().entity();
+      return element.unsafeEntityHandle().entity() == selected.unsafeEntityHandle().entity();
     });
   }
 

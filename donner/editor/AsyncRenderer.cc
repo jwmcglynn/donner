@@ -51,23 +51,6 @@ RenderResult::CompositedPreview BuildFullCanvasCompositedPreview(
   };
 }
 
-/// Restores a document's threading mode to SingleThreaded when a worker iteration exits.
-///
-/// The async worker flips the (UI-owned, normally SingleThreaded) document into ConcurrentDom for
-/// the duration of a render so it can hold an explicit \ref donner::svg::DocumentWriteAccess guard.
-/// This restores the prior mode on every exit path. Declare it *before* the write-access optional
-/// so the write access is released first.
-struct ScopedThreadingModeRestore {
-  svg::SVGDocument* document = nullptr;
-  bool restore = false;
-
-  ~ScopedThreadingModeRestore() {
-    if (restore && document != nullptr) {
-      document->setThreadingMode(svg::ThreadingMode::SingleThreaded);
-    }
-  }
-};
-
 }  // namespace
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
@@ -317,29 +300,18 @@ void AsyncRenderer::workerLoop() {
 
     // §concurrent-dom: serialize this worker render against UI-thread DOM reads. The lease shares
     // the live registry (it does not snapshot), and the worker cannot touch the document in
-    // SingleThreaded mode (owner-thread assert), so flip the normally-UI-owned document into
-    // ConcurrentDom and hold a write-access guard across the document-reading render work. The
-    // access is released via `releaseDocumentAccess()` *before* every `mutex_` section below to
-    // avoid a lock-order inversion against UI threads that read the DOM while holding `mutex_`.
-    // `restoreThreadingMode` is declared before `documentAccess` so the write access is released
-    // first, and restores the prior mode on any remaining exit path.
-    const bool restoreSingleThreadedMode =
-        requestDocument.threadingMode() == svg::ThreadingMode::SingleThreaded;
-    if (restoreSingleThreadedMode) {
+    // SingleThreaded mode (owner-thread assert). The document is flipped to ConcurrentDom on first
+    // render and stays there for the editor's lifetime — UI-thread reads are responsible for
+    // holding their own access guard (`withReadAccess` / a scoped `DocumentReadAccess`) where they
+    // touch the live document. The worker holds a write guard across the document-reading render
+    // work and releases it via `releaseDocumentAccess()` before every `mutex_` section below to
+    // avoid a lock-order inversion against UI threads holding `mutex_` while reading the DOM.
+    if (requestDocument.threadingMode() != svg::ThreadingMode::ConcurrentDom) {
       requestDocument.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
     }
-    const ScopedThreadingModeRestore restoreThreadingMode{&requestDocument,
-                                                          restoreSingleThreadedMode};
     std::optional<svg::DocumentWriteAccess> documentAccess;
-    if (requestDocument.threadingMode() == svg::ThreadingMode::ConcurrentDom) {
-      documentAccess.emplace(requestDocument.writeAccess());
-    }
-    const auto releaseDocumentAccess = [&]() {
-      documentAccess.reset();
-      if (restoreSingleThreadedMode) {
-        requestDocument.setThreadingMode(svg::ThreadingMode::SingleThreaded);
-      }
-    };
+    documentAccess.emplace(requestDocument.writeAccess());
+    const auto releaseDocumentAccess = [&]() { documentAccess.reset(); };
 
     // Compositor lifecycle is split into two independent decisions:
     //

@@ -465,6 +465,10 @@ protected:
     }
 
     const std::string source(app_.document().document().source());
+    // §concurrent-dom: hold a scoped read access for the XML/source inspection below — the call
+    // chain (XMLNode::TryCast → entity resolution → getNodeLocation) hits guarded EntityHandle
+    // accessors that assert under ConcurrentDom without a scoped access guard.
+    [[maybe_unused]] svg::DocumentReadAccess access = app_.document().document().readAccess();
     std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element->entityHandle());
     ASSERT_TRUE(xmlNode.has_value()) << phase << ": " << id << " is not backed by XML";
 
@@ -670,7 +674,7 @@ protected:
     request.selection = app_.selectedElement();
     if (app_.selectedElement().has_value() &&
         app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-      request.selectedEntity = app_.selectedElement()->entityHandle().entity();
+      request.selectedEntity = app_.selectedElement()->unsafeEntityHandle().entity();
     }
     if (std::optional<SelectTool::ActiveDragPreview> preview = selectTool_.activeDragPreview();
         preview.has_value()) {

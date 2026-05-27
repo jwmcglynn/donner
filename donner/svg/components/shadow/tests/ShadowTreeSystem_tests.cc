@@ -64,7 +64,7 @@ TEST_F(ShadowTreeSystemTest, UseElementReferencesRect) {
 
   // Verify the use element has a ShadowTreeComponent
   auto& registry = document.registry();
-  auto entity = useElement->entityHandle().entity();
+  auto entity = useElement->unsafeEntityHandle().entity();
   EXPECT_TRUE(registry.all_of<ShadowTreeComponent>(entity));
 
   auto& shadowTree = registry.get<ShadowTreeComponent>(entity);
@@ -171,7 +171,7 @@ TEST_F(ShadowTreeSystemTest, TeardownCleansShadowEntities) {
   )");
 
   auto& registry = document.registry();
-  auto useEntity = document.querySelector("#u")->entityHandle().entity();
+  auto useEntity = document.querySelector("#u")->unsafeEntityHandle().entity();
 
   // If a ComputedShadowTreeComponent exists, tear it down.
   auto* computed = registry.try_get<ComputedShadowTreeComponent>(useEntity);
@@ -196,7 +196,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceMainBranch) {
   )");
 
   auto hostEntity = document.querySelector("#host")->entityHandle();
-  auto targetEntity = document.querySelector("#target")->entityHandle().entity();
+  auto targetEntity = document.querySelector("#target")->unsafeEntityHandle().entity();
 
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
@@ -267,7 +267,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceParentRecursionWarns) {
   )");
 
   auto childEntity = document.querySelector("#child")->entityHandle();
-  auto parentEntity = document.querySelector("#parent")->entityHandle().entity();
+  auto parentEntity = document.querySelector("#parent")->unsafeEntityHandle().entity();
 
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
@@ -293,7 +293,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenBranchReturnsIndex) {
   )");
 
   auto hostEntity = document.querySelector("#host")->entityHandle();
-  auto targetEntity = document.querySelector("#target")->entityHandle().entity();
+  auto targetEntity = document.querySelector("#target")->unsafeEntityHandle().entity();
 
   ComputedShadowTreeComponent shadow;
   ShadowTreeSystem system;
@@ -369,7 +369,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceNestedShadowTreeInvokesHandlerAndCo
   auto hostEntity = document.querySelector("#host")->entityHandle();
   auto nestedEntity = document.querySelector("#nested")->entityHandle();
   registry.emplace<DoNotInheritFillOrStrokeTag>(
-      document.querySelector("#target")->entityHandle().entity());
+      document.querySelector("#target")->unsafeEntityHandle().entity());
 
   bool handlerCalled = false;
   ShadowTreeSystem system([&handlerCalled](Registry&, Entity, EntityHandle, Entity,
@@ -459,7 +459,7 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceMirrorsChildrenInNonNestedBranch) {
   )");
 
   auto hostEntity = document.querySelector("#host")->entityHandle();
-  auto targetEntity = document.querySelector("#target")->entityHandle().entity();
+  auto targetEntity = document.querySelector("#target")->unsafeEntityHandle().entity();
 
   ShadowTreeSystem system;
   ComputedShadowTreeComponent shadow;

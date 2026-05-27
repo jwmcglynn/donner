@@ -456,9 +456,9 @@ SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
   auto& ctx = registry.ctx().emplace<components::SVGDocumentContext>(
       components::SVGDocumentContext::InternalCtorTag{}, documentState_);
   if (ontoEntityHandle) {
-    ctx.rootEntity = SVGSVGElement::CreateOn(ontoEntityHandle).entityHandle().entity();
+    ctx.rootEntity = SVGSVGElement::CreateOn(ontoEntityHandle).unsafeEntityHandle().entity();
   } else {
-    ctx.rootEntity = SVGSVGElement::Create(*this).entityHandle().entity();
+    ctx.rootEntity = SVGSVGElement::Create(*this).unsafeEntityHandle().entity();
   }
   registry.get_or_emplace<components::NodeLifetimeComponent>(ctx.rootEntity).markAttached();
 
@@ -599,6 +599,11 @@ xml::ApplySourceEditResult SVGDocument::applySourceEdit(const xml::XMLEditIntent
     return result;
   }
 
+  // §concurrent-dom: applySourceEdit drives a tree-shaped mutation (insertions, removes, attribute
+  // changes) through `xmlDocument().applySourceEdit` and `applyXMLMutation`; acquire write access
+  // up front so all of that runs under one guard under ThreadingMode::ConcurrentDom.
+  [[maybe_unused]] DocumentWriteAccess access = writeAccess();
+
   xml::ApplySourceEditResult result;
   {
     // Defer detached-node collection across the reparse. ReplaceChildrenFromParsedNode removes
@@ -626,6 +631,10 @@ xml::ApplySourceEditResult SVGDocument::applySourceEdit(const xml::XMLEditIntent
 xml::ApplySourceEditResult SVGDocument::setElementAttribute(const SVGElement& element,
                                                             const xml::XMLQualifiedNameRef& name,
                                                             std::string_view value) {
+  // §concurrent-dom: this is a mutation entry point. Acquire write access up front so the implicit
+  // `EntityHandle` conversions of `element.handle_` below (resolve() through the guarded path)
+  // don't fire the scoped-access assert under ThreadingMode::ConcurrentDom.
+  [[maybe_unused]] DocumentWriteAccess access = writeAccess();
   if (hasSourceStore()) {
     std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
     if (xmlNode.has_value()) {
@@ -651,6 +660,10 @@ xml::ApplySourceEditResult SVGDocument::setElementAttribute(const SVGElement& el
 
 xml::ApplySourceEditResult SVGDocument::removeElementAttribute(
     const SVGElement& element, const xml::XMLQualifiedNameRef& name) {
+  // §concurrent-dom: this is a mutation entry point. Acquire write access up front so the implicit
+  // `EntityHandle` conversions of `element.handle_` below don't fire the scoped-access assert under
+  // ThreadingMode::ConcurrentDom.
+  [[maybe_unused]] DocumentWriteAccess access = writeAccess();
   if (hasSourceStore()) {
     std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(element.handle_);
     if (xmlNode.has_value()) {
@@ -673,6 +686,11 @@ xml::ApplySourceEditResult SVGDocument::removeElementAttribute(
 xml::ApplySourceEditResult SVGDocument::insertElement(const SVGElement& parent,
                                                       const SVGElement& element,
                                                       std::optional<SVGElement> referenceElement) {
+  // §concurrent-dom: this is a mutation entry point. Acquire write access up front so the implicit
+  // `EntityHandle` conversions of `parent.handle_`, `element.handle_`, and
+  // `referenceElement->handle_` below don't fire the scoped-access assert under
+  // ThreadingMode::ConcurrentDom.
+  [[maybe_unused]] DocumentWriteAccess access = writeAccess();
   if (hasSourceStore()) {
     std::optional<xml::XMLNode> parentNode = xml::XMLNode::TryCast(parent.handle_);
     if (parentNode.has_value()) {
@@ -715,6 +733,10 @@ xml::ApplySourceEditResult SVGDocument::insertElement(const SVGElement& parent,
 }
 
 xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element) {
+  // §concurrent-dom: this is a mutation entry point. Acquire write access up front so the implicit
+  // `EntityHandle` conversions of `element.handle_` and `parent.entityHandle()` below don't fire
+  // the scoped-access assert under ThreadingMode::ConcurrentDom.
+  [[maybe_unused]] DocumentWriteAccess access = writeAccess();
   const std::optional<SVGElement> parent = element.parentElement();
 
   if (hasSourceStore()) {

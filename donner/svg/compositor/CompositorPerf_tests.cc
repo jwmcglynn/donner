@@ -97,7 +97,7 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_1kNodes) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   auto drag = DragSession::begin(compositor, entity);
   ASSERT_TRUE(drag.has_value());
@@ -145,7 +145,7 @@ TEST_F(CompositorPerfTest, PromoteDemoteCycle_1kNodes) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   constexpr int kCycles = 1000;
   auto start = Clock::now();
@@ -174,7 +174,7 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_10kNodes) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   auto drag = DragSession::begin(compositor, entity);
   ASSERT_TRUE(drag.has_value());
@@ -236,7 +236,7 @@ TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_10kNodes) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   RenderViewport viewport;
   viewport.size = Vector2d(1000, 1000);
@@ -296,7 +296,7 @@ TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_1kNodes) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   RenderViewport viewport;
   viewport.size = Vector2d(1000, 1000);

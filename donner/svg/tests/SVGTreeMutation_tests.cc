@@ -32,7 +32,7 @@ TEST(SVGTreeMutationTests, RootStartsAttachedAndNewElementsStartDetached) {
 
   const SVGRectElement rect = SVGRectElement::Create(document);
   EXPECT_FALSE(LifetimeOf(rect).isAttached());
-  EXPECT_EQ(LifetimeOf(rect).detachedRoot, rect.entityHandle().entity());
+  EXPECT_EQ(LifetimeOf(rect).detachedRoot, rect.unsafeEntityHandle().entity());
 }
 
 TEST(SVGTreeMutationTests, AppendToDetachedParentKeepsInsertedSubtreeDetached) {
@@ -43,9 +43,9 @@ TEST(SVGTreeMutationTests, AppendToDetachedParentKeepsInsertedSubtreeDetached) {
   group.appendChild(rect);
 
   EXPECT_FALSE(LifetimeOf(group).isAttached());
-  EXPECT_EQ(LifetimeOf(group).detachedRoot, group.entityHandle().entity());
+  EXPECT_EQ(LifetimeOf(group).detachedRoot, group.unsafeEntityHandle().entity());
   EXPECT_FALSE(LifetimeOf(rect).isAttached());
-  EXPECT_EQ(LifetimeOf(rect).detachedRoot, group.entityHandle().entity());
+  EXPECT_EQ(LifetimeOf(rect).detachedRoot, group.unsafeEntityHandle().entity());
 }
 
 TEST(SVGTreeMutationTests, AppendDetachedSubtreeToRootMarksWholeSubtreeAttached) {
@@ -102,9 +102,9 @@ TEST(SVGTreeMutationTests, RemoveChildMarksWholeSubtreeDetached) {
   EXPECT_FALSE(group.parentElement().has_value());
   EXPECT_EQ(rect.parentElement(), group);
   EXPECT_FALSE(LifetimeOf(group).isAttached());
-  EXPECT_EQ(LifetimeOf(group).detachedRoot, group.entityHandle().entity());
+  EXPECT_EQ(LifetimeOf(group).detachedRoot, group.unsafeEntityHandle().entity());
   EXPECT_FALSE(LifetimeOf(rect).isAttached());
-  EXPECT_EQ(LifetimeOf(rect).detachedRoot, group.entityHandle().entity());
+  EXPECT_EQ(LifetimeOf(rect).detachedRoot, group.unsafeEntityHandle().entity());
 }
 
 TEST(SVGTreeMutationTests, ReappendDetachedSubtreeMarksWholeSubtreeAttachedAgain) {

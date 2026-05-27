@@ -417,7 +417,7 @@ void CompositorController::demoteEntity(Entity entity) {
   // Detached entities must leave `activeHints_` immediately so stale
   // paint-order ranges cannot survive deletion.
   Registry& registry = document().registry();
-  const Entity rootEntity = document().svgElement().entityHandle().entity();
+  const Entity rootEntity = document().svgElement().unsafeEntityHandle().entity();
   if (!IsEntityInLiveTree(registry, entity, rootEntity)) {
     activeHints_.erase(entity);
     pendingDemotions_.erase(entity);

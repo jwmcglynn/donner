@@ -799,7 +799,7 @@ TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
   ParseWarningSink warningSink;
 
   auto useHandle = document.querySelector("#u")->entityHandle();
-  auto symbolEntity = document.querySelector("#sym")->entityHandle().entity();
+  auto symbolEntity = document.querySelector("#sym")->unsafeEntityHandle().entity();
 
   EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
       registry, shadowEntity, useHandle, symbolEntity, ShadowBranchType::Main, warningSink));
@@ -824,7 +824,7 @@ TEST_F(LayoutSystemTest, CreateShadowSizedElementComponentReturnsFalseWhenNotMai
 
   EXPECT_FALSE(layoutSystem.createShadowSizedElementComponent(
       registry, shadowEntity, document.querySelector("#u")->entityHandle(),
-      document.querySelector("#sym")->entityHandle().entity(), ShadowBranchType::OffscreenFill,
+      document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::OffscreenFill,
       warningSink));
 }
 

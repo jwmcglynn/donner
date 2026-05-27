@@ -122,7 +122,7 @@ TEST_F(SVGElementTests, ScopedAccessExposesResolvedHandle) {
 
   const std::uint64_t initialRevision = document_.handle()->revision();
   rect.withWriteAccess([rect](DocumentWriteAccess&, EntityHandle handle) mutable {
-    EXPECT_EQ(handle.entity(), rect.entityHandle().entity());
+    EXPECT_EQ(handle.entity(), rect.unsafeEntityHandle().entity());
     rect.setX(Lengthd(10));
     rect.setY(Lengthd(20));
   });
@@ -1023,9 +1023,9 @@ TEST_F(SVGElementTests, ShadowTreesDoNotEnumerateChildren) {
   Entity child = registry.create();
   registry.emplace<::donner::components::TreeComponent>(child, xml::XMLQualifiedNameRef("rect"));
   registry.emplace<components::ElementTypeComponent>(child, ElementType::Rect);
-  registry.get<::donner::components::TreeComponent>(element.entityHandle().entity())
+  registry.get<::donner::components::TreeComponent>(element.unsafeEntityHandle().entity())
       .appendChild(registry, child);
-  registry.emplace<components::ShadowTreeComponent>(element.entityHandle().entity());
+  registry.emplace<components::ShadowTreeComponent>(element.unsafeEntityHandle().entity());
 
   EXPECT_EQ(element.firstChild(), std::nullopt);
   EXPECT_EQ(element.lastChild(), std::nullopt);

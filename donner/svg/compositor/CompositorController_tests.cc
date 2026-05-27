@@ -95,7 +95,7 @@ TEST_F(CompositorControllerTest, PromoteEntitySucceeds) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   EXPECT_TRUE(compositor.promoteEntity(entity));
@@ -110,7 +110,7 @@ TEST_F(CompositorControllerTest, PromoteSameEntityTwiceSucceeds) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   EXPECT_TRUE(compositor.promoteEntity(entity));
@@ -135,7 +135,7 @@ TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   EXPECT_TRUE(compositor.promoteEntity(entity));
@@ -162,7 +162,7 @@ TEST_F(CompositorControllerTest, M9DemoteIsLazyWithinHysteresisWindow) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -183,7 +183,7 @@ TEST_F(CompositorControllerTest, M9RepromoteSameEntityCancelsPendingDemote) {
   configureMockForCaching();
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::Selection));
@@ -216,7 +216,7 @@ TEST_F(CompositorControllerTest, M9DemoteFiresAfterHysteresisExpires) {
   configureMockForCaching();
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -254,8 +254,8 @@ TEST_F(CompositorControllerTest, M9PendingDemoteKeepsHasSplitStaticLayersTrue) {
   auto b = document.querySelector("#b");
   ASSERT_TRUE(a.has_value());
   ASSERT_TRUE(b.has_value());
-  const Entity entityA = a->entityHandle().entity();
-  const Entity entityB = b->entityHandle().entity();
+  const Entity entityA = a->unsafeEntityHandle().entity();
+  const Entity entityB = b->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entityA));
@@ -297,8 +297,8 @@ TEST_F(CompositorControllerTest, M9PendingDemoteDoesNotMaskLiveDragTarget) {
   auto b = document.querySelector("#b");
   ASSERT_TRUE(a.has_value());
   ASSERT_TRUE(b.has_value());
-  const Entity entityA = a->entityHandle().entity();
-  const Entity entityB = b->entityHandle().entity();
+  const Entity entityA = a->unsafeEntityHandle().entity();
+  const Entity entityB = b->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entityA));
@@ -336,7 +336,7 @@ TEST_F(CompositorControllerTest, M9FlushPendingDemotionsForTestingFiresImmediate
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -355,7 +355,7 @@ TEST_F(CompositorControllerTest, DemoteNonPromotedEntityIsNoOp) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.demoteEntity(entity);  // No-op, should not crash.
@@ -369,7 +369,7 @@ TEST_F(CompositorControllerTest, ComputedLayerAssignmentAttachedOnPromote) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
   Registry& registry = document.registry();
 
   CompositorController compositor(document, renderer_);
@@ -402,7 +402,7 @@ TEST_F(CompositorControllerTest, LayerLimitEnforced) {
   for (int i = 0; i < kMaxCompositorLayers; ++i) {
     auto elem = document.querySelector("#r" + std::to_string(i));
     ASSERT_TRUE(elem.has_value()) << "Element r" << i << " not found";
-    EXPECT_TRUE(compositor.promoteEntity(elem->entityHandle().entity()))
+    EXPECT_TRUE(compositor.promoteEntity(elem->unsafeEntityHandle().entity()))
         << "Failed to promote element " << i;
   }
 
@@ -411,7 +411,7 @@ TEST_F(CompositorControllerTest, LayerLimitEnforced) {
   // Next promotion should fail.
   auto extra = document.querySelector("#r" + std::to_string(kMaxCompositorLayers));
   ASSERT_TRUE(extra.has_value());
-  EXPECT_FALSE(compositor.promoteEntity(extra->entityHandle().entity()));
+  EXPECT_FALSE(compositor.promoteEntity(extra->unsafeEntityHandle().entity()));
 }
 
 TEST_F(CompositorControllerTest, PromoteMultipleEntities) {
@@ -426,12 +426,12 @@ TEST_F(CompositorControllerTest, PromoteMultipleEntities) {
   ASSERT_TRUE(b.has_value());
 
   CompositorController compositor(document, renderer_);
-  EXPECT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
-  EXPECT_TRUE(compositor.promoteEntity(b->entityHandle().entity()));
+  EXPECT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+  EXPECT_TRUE(compositor.promoteEntity(b->unsafeEntityHandle().entity()));
   EXPECT_EQ(compositor.layerCount(), 2u);
 
-  EXPECT_TRUE(compositor.isPromoted(a->entityHandle().entity()));
-  EXPECT_TRUE(compositor.isPromoted(b->entityHandle().entity()));
+  EXPECT_TRUE(compositor.isPromoted(a->unsafeEntityHandle().entity()));
+  EXPECT_TRUE(compositor.isPromoted(b->unsafeEntityHandle().entity()));
 }
 
 TEST_F(CompositorControllerTest, LayerComposeOffsetTracksDomTranslationDelta) {
@@ -441,7 +441,7 @@ TEST_F(CompositorControllerTest, LayerComposeOffsetTracksDomTranslationDelta) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   configureMockForCaching();
   CompositorController compositor(document, renderer_);
@@ -473,7 +473,7 @@ TEST_F(CompositorControllerTest, LayerComposeOffsetOfNonPromotedReturnsIdentity)
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
-  const Transform2d result = compositor.layerComposeOffset(target->entityHandle().entity());
+  const Transform2d result = compositor.layerComposeOffset(target->unsafeEntityHandle().entity());
   EXPECT_TRUE(result.isIdentity());
 }
 
@@ -505,7 +505,7 @@ TEST_F(CompositorControllerTest, SinglePromotedLayerBuildsSplitStaticLayers) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -538,8 +538,8 @@ TEST_F(CompositorControllerTest, MultiplePromotedLayersDoNotBuildSplitStaticLaye
   ASSERT_TRUE(b.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
-  ASSERT_TRUE(compositor.promoteEntity(b->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(b->unsafeEntityHandle().entity()));
 
   RenderViewport viewport;
   viewport.size = Vector2d(64, 64);
@@ -556,7 +556,7 @@ TEST_F(CompositorControllerTest, MoveConstructor) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
@@ -578,7 +578,7 @@ TEST_F(CompositorControllerTest, SimpleFillNoFallback) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
@@ -598,7 +598,7 @@ TEST_F(CompositorControllerTest, FilterTriggersFallback) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
@@ -618,7 +618,7 @@ TEST_F(CompositorControllerTest, ClipPathTriggersFallback) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
@@ -638,7 +638,7 @@ TEST_F(CompositorControllerTest, MaskTriggersFallback) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
@@ -655,7 +655,7 @@ TEST_F(CompositorControllerTest, OpacityTriggersFallback) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
@@ -679,7 +679,7 @@ TEST_F(CompositorControllerTest, GradientFillTriggersFallback) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   compositor.promoteEntity(entity);
@@ -694,7 +694,7 @@ TEST_F(CompositorControllerTest, FallbackReasonsOfUnpromotedEntity) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   EXPECT_EQ(compositor.fallbackReasonsOf(entity), FallbackReason::None);
@@ -709,7 +709,7 @@ TEST_F(CompositorControllerTest, ResetAllLayersClearsPromotedEntities) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   configureMockForCaching();
@@ -736,7 +736,7 @@ TEST_F(CompositorControllerTest, ResetAllLayersClearsComputedLayerAssignment) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   EXPECT_TRUE(compositor.promoteEntity(entity));
@@ -771,8 +771,8 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsRowPerLayerWithB
   auto b = document.querySelector("#b");
   ASSERT_TRUE(a.has_value());
   ASSERT_TRUE(b.has_value());
-  const Entity entityA = a->entityHandle().entity();
-  const Entity entityB = b->entityHandle().entity();
+  const Entity entityA = a->unsafeEntityHandle().entity();
+  const Entity entityB = b->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entityA));
@@ -804,7 +804,7 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsTracksRasterizeCountA
   configureMockForCaching();
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -833,7 +833,7 @@ TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
   configureMockForTextureCaching();
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
@@ -884,7 +884,7 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsThumbnailWithMax
   configureMockForCaching();
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -920,7 +920,7 @@ TEST_F(CompositorControllerTest, SnapshotSegmentInspectorRowsEmitsOneRowPerSlot)
   ASSERT_TRUE(a.has_value());
 
   CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(a->entityHandle().entity()));
+  ASSERT_TRUE(compositor.promoteEntity(a->unsafeEntityHandle().entity()));
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto rows = compositor.snapshotSegmentInspectorRows();
@@ -962,7 +962,7 @@ TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanv
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const auto* layer = compositor.findLayerForTest(target->entityHandle().entity());
+  const auto* layer = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
   ASSERT_NE(layer, nullptr);
   ASSERT_TRUE(layer->hasValidBitmap());
 
@@ -989,7 +989,7 @@ TEST_F(CompositorControllerTest, EditorPromotedLayerAlsoUsesIntrinsicSize) {
   configureMockForCaching();
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   ASSERT_TRUE(compositor.promoteEntity(entity));
@@ -1035,7 +1035,7 @@ TEST_F(CompositorControllerTest, IntrinsicSizeLayerFastPathTranslationStillWorks
 
   // Rasterize-time: canvasFromBitmap is identity, canvasOffset is the
   // bitmap's intrinsic position.
-  const auto* layerBefore = compositor.findLayerForTest(target->entityHandle().entity());
+  const auto* layerBefore = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
   ASSERT_NE(layerBefore, nullptr);
   const Vector2d offsetAtRasterize = layerBefore->canvasOffset();
 
@@ -1043,7 +1043,7 @@ TEST_F(CompositorControllerTest, IntrinsicSizeLayerFastPathTranslationStillWorks
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 10.0));
   compositor.renderFrame(RenderViewport{Vector2d(200, 100)});
 
-  const auto* layerAfter = compositor.findLayerForTest(target->entityHandle().entity());
+  const auto* layerAfter = compositor.findLayerForTest(target->unsafeEntityHandle().entity());
   ASSERT_NE(layerAfter, nullptr);
   EXPECT_EQ(layerAfter->canvasOffset(), offsetAtRasterize)
       << "canvasOffset stays put — only canvasFromBitmap encodes the drag delta.";
@@ -1143,7 +1143,7 @@ TEST_F(CompositorControllerTest, ResetAllLayersAllowsRepromotion) {
 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
-  const Entity entity = target->entityHandle().entity();
+  const Entity entity = target->unsafeEntityHandle().entity();
 
   CompositorController compositor(document, renderer_);
   configureMockForCaching();
