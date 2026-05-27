@@ -128,6 +128,20 @@ public:
   /// Current layer-inspector freshness status for replay/readback harnesses.
   [[nodiscard]] LayerInspectorStatusReadback layerInspectorStatusForReadback() const;
 
+  /// Async renderer access for replay harnesses.
+  [[nodiscard]] AsyncRenderer& asyncRendererForReplay() {
+    return renderCoordinator_.asyncRenderer();
+  }
+
+  /**
+   * Suppress non-document render-pane presentation on the next frame.
+   *
+   * @param enabled True to make the next frame's readback content-only.
+   */
+  void setContentOnlyCaptureForNextFrameForReplay(bool enabled) {
+    contentOnlyCaptureForNextFrame_ = enabled;
+  }
+
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
   bool trySavePath(std::string_view path, std::string* error);
@@ -214,6 +228,9 @@ private:
   DocumentSyncController documentSyncController_;
   ViewportInteractionController interactionController_;
   std::optional<ViewportState> pendingViewportReplayOverride_;
+  bool contentOnlyCaptureForNextFrame_ = false;
+  bool contentOnlyCaptureThisFrame_ = false;
+  bool requestRenderAtEndOfFrame_ = false;
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;

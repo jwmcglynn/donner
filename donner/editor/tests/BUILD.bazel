@@ -712,9 +712,11 @@ donner_cc_test(
     }),
     deps = [
         ":bitmap_golden_compare",
+        "//donner/editor:editor_app",
         "//donner/editor:imgui_headers",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",
+        "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:renderer_image_test_utils",
         "@com_google_gtest//:gtest_main",

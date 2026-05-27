@@ -260,7 +260,8 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   // frame. The ImGui-direct `AddRect` / `AddRectFilled` chrome path
   // was removed so there is a single invalidation envelope the GPU
   // backend (Geode) can optimize end-to-end.
-  if (state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0) {
+  if (state.showOverlay && state.textures.overlayWidth() > 0 &&
+      state.textures.overlayHeight() > 0) {
     const std::optional<PresentedDragBaseline> overlayBaseline =
         hasDragTargetTile ? TranslationOverlayBaselineFromSelectPreviews(state.activeDragPreview,
                                                                          state.overlayDragPreview)
@@ -286,11 +287,13 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
     paneDrawList->PopClipRect();
   }
 
-  constexpr float kFramePadding = 8.0f;
-  const float graphHeight = kFrameGraphHeight + ImGui::GetTextLineHeightWithSpacing();
-  ImGui::SetCursorPos(ImVec2(
-      kFramePadding, static_cast<float>(state.contentRegion.y - graphHeight - kFramePadding)));
-  RenderFrameGraph(state.frameHistory);
+  if (state.showFrameGraph) {
+    constexpr float kFramePadding = 8.0f;
+    const float graphHeight = kFrameGraphHeight + ImGui::GetTextLineHeightWithSpacing();
+    ImGui::SetCursorPos(ImVec2(
+        kFramePadding, static_cast<float>(state.contentRegion.y - graphHeight - kFramePadding)));
+    RenderFrameGraph(state.frameHistory);
+  }
 }
 
 }  // namespace donner::editor

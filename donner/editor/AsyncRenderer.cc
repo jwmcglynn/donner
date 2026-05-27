@@ -1,7 +1,9 @@
 #include "donner/editor/AsyncRenderer.h"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <thread>
 #include <utility>
 
 #include "donner/base/Utils.h"
@@ -136,9 +138,36 @@ bool AsyncRenderer::workerStateBusy(const WorkerState& state) {
          std::holds_alternative<CancellingState>(state) || std::holds_alternative<DoneState>(state);
 }
 
+bool AsyncRenderer::workerStateRenderInFlight(const WorkerState& state) {
+  return std::holds_alternative<RenderingState>(state) ||
+         std::holds_alternative<CancellingState>(state);
+}
+
 bool AsyncRenderer::isBusy() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return workerStateBusy(workerState_);
+}
+
+bool AsyncRenderer::hasRenderInFlightForTesting() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return workerStateRenderInFlight(workerState_);
+}
+
+bool AsyncRenderer::waitUntilNoRenderInFlightForTesting(
+    std::chrono::steady_clock::time_point deadline) {
+  std::unique_lock<std::mutex> lock(mutex_);
+  return cv_.wait_until(lock, deadline,
+                        [this] { return !workerStateRenderInFlight(workerState_); });
+}
+
+void AsyncRenderer::setReplayRenderDelayForTesting(std::chrono::milliseconds delay) {
+  const std::chrono::milliseconds clampedDelay = std::max(delay, std::chrono::milliseconds(0));
+  replayRenderDelayMsForTesting_.store(clampedDelay.count(), std::memory_order_release);
+}
+
+void AsyncRenderer::setReplayResultHoldFramesForTesting(int frameCount) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  replayResultHoldFramesForTesting_ = std::max(frameCount, 0);
 }
 
 void AsyncRenderer::requestRender(const RenderRequest& request) {
@@ -203,8 +232,15 @@ void AsyncRenderer::cancelInFlight() {
 std::optional<RenderResult> AsyncRenderer::pollResult() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (auto* done = std::get_if<DoneState>(&workerState_)) {
+    if (done->replayHoldPollsRemaining > 0) {
+      --done->replayHoldPollsRemaining;
+      replayResultHoldPollCount_.fetch_add(1, std::memory_order_release);
+      return std::nullopt;
+    }
+
     RenderResult result = std::move(done->result);
     workerState_ = IdleState{};
+    cv_.notify_all();
     return result;
   }
   return std::nullopt;
@@ -244,6 +280,7 @@ void AsyncRenderer::workerLoop() {
         std::function<void()> wake = wakeCallback_;
         workerState_ = IdleState{};
         lock.unlock();
+        cv_.notify_all();
         if (wake) {
           wake();
         }
@@ -589,7 +626,22 @@ void AsyncRenderer::workerLoop() {
     };
 
     bool renderCompleted = true;
-    {
+    const std::chrono::milliseconds replayDelay(
+        replayRenderDelayMsForTesting_.load(std::memory_order_acquire));
+    if (replayDelay.count() > 0) {
+      const auto delayDeadline = std::chrono::steady_clock::now() + replayDelay;
+      while (!cancelRender_.isCancelled()) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= delayDeadline) {
+          break;
+        }
+        const auto remaining =
+            std::chrono::duration_cast<std::chrono::milliseconds>(delayDeadline - now);
+        std::this_thread::sleep_for(std::min(remaining, std::chrono::milliseconds(1)));
+      }
+      renderCompleted = !cancelRender_.isCancelled();
+    }
+    if (renderCompleted) {
       ZoneScopedN("Compositor::renderFrame");
       // The final worker timing below intentionally covers the whole
       // presentation-gating iteration, including any readback or tile
@@ -606,12 +658,17 @@ void AsyncRenderer::workerLoop() {
       releaseDocumentAccess();
       cancelledRenderCount_.fetch_add(1, std::memory_order_release);
       std::function<void()> wake;
+      bool notifyStateChange = false;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         if (std::holds_alternative<CancellingState>(workerState_)) {
           workerState_ = IdleState{};
           wake = wakeCallback_;
+          notifyStateChange = true;
         }
+      }
+      if (notifyStateChange) {
+        cv_.notify_all();
       }
       if (wake) {
         wake();
@@ -662,6 +719,7 @@ void AsyncRenderer::workerLoop() {
     releaseDocumentAccess();
 
     std::function<void()> wake;
+    bool notifyStateChange = false;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       // Only transition to Done if we were not shut down, cancelled, or
@@ -677,6 +735,7 @@ void AsyncRenderer::workerLoop() {
         done.result.bitmap = std::move(bitmap);
         done.result.compositedPreview = std::move(compositedPreview);
         done.result.version = request.version;
+        done.replayHoldPollsRemaining = replayResultHoldFramesForTesting_;
         lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
         lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows();
         lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
@@ -689,6 +748,7 @@ void AsyncRenderer::workerLoop() {
             std::chrono::duration<double, std::milli>(workerEnd - workerStart).count();
         done.result.workerMs = workerMs;
         workerState_ = std::move(done);
+        notifyStateChange = true;
         // Snapshot the callback under the lock so a concurrent
         // `setWakeCallback` swap can't tear the invocation. Fire it
         // outside the lock to keep the hook cheap and avoid any
@@ -702,7 +762,11 @@ void AsyncRenderer::workerLoop() {
         // doesn't deadlock.
         workerState_ = IdleState{};
         wake = wakeCallback_;
+        notifyStateChange = true;
       }
+    }
+    if (notifyStateChange) {
+      cv_.notify_all();
     }
     if (wake) {
       wake();

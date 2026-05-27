@@ -159,9 +159,15 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
     return request;
   };
 
-  asyncRenderer.requestRender(buildRequest());
+  RenderRequest request = buildRequest();
+  std::optional<RenderRequest> repostRequest;
   if (repostWhileBusy) {
-    asyncRenderer.requestRender(buildRequest());
+    repostRequest.emplace(buildRequest());
+  }
+
+  asyncRenderer.requestRender(request);
+  if (repostRequest.has_value()) {
+    asyncRenderer.requestRender(*repostRequest);
   }
 
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -495,15 +501,9 @@ protected:
   std::uint64_t version_ = 0;
 };
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands. Same worker-race
-// nondeterminism as the sibling EditorLayerStress disables: an unguarded UI-thread live-document
-// read landing inside the worker's ConcurrentDom render window intermittently aborts on
-// `ElementAnchor::assertScopedEntityHandleAccessAllowed` (`SVGElement.cc:253`) — and on CI's NDEBUG
-// build the assert is compiled out so the race becomes a use-after-free segfault instead. Passed
-// locally; CI's slower/more-contended linux runner surfaced it. Tracked by the determinism-
-// framework task (#601).
-TEST_F(EditorLayerStressTest,
-       DISABLED_DragZoomWritebackStressKeepsCompositionAlignedAndDoesNotHang) {
+// Regression coverage for #601: reposted render requests are now built before the worker
+// starts, avoiding live-document reads during ConcurrentDom render windows.
+TEST_F(EditorLayerStressTest, DragZoomWritebackStressKeepsCompositionAlignedAndDoesNotHang) {
   ExpectSettledMatchesReference("cold");
 
   selectTool_.onMouseDown(app_, Vector2d(32.0, 42.0), MouseModifiers{});
@@ -539,15 +539,9 @@ TEST_F(EditorLayerStressTest,
       << "stress sequence rebuilt the compositor; cached layers should survive";
 }
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands.
-// This stress test races the async render worker against UI-thread input while the document is
-// transiently `ThreadingMode::ConcurrentDom`. Unguarded UI-thread live-document reads landing
-// inside the worker's render window intermittently abort on
-// `ElementAnchor::assertScopedEntityHandleAccessAllowed` (`SVGElement.cc:253`). Confirmed flaky on
-// a clean branch independent of any in-flight fix; full de-flaking needs the editor's ConcurrentDom
-// read-guarding plus deterministic replay, tracked by the determinism-framework task (#601).
-TEST_F(EditorLayerStressTest,
-       DISABLED_RepeatedScreenSpaceZoomDragKeepsActiveTileAnchoredAndDoesNotHang) {
+// Regression coverage for #601: repeated zoom/drag stress now avoids building replacement
+// render requests from live document state after the worker starts.
+TEST_F(EditorLayerStressTest, RepeatedScreenSpaceZoomDragKeepsActiveTileAnchoredAndDoesNotHang) {
   ExpectSettledMatchesReference("cold screen-space stress");
 
   const Vector2d startDoc(112.0, 44.0);
@@ -593,12 +587,9 @@ TEST_F(EditorLayerStressTest,
   EXPECT_FALSE(asyncRenderer_.isBusy()) << "worker stayed busy after repeated zoom/drag stress";
 }
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands. Same worker-race
-// nondeterminism as DISABLED_RepeatedScreenSpaceZoomDragKeepsActiveTileAnchoredAndDoesNotHang: an
-// unguarded UI-thread live-document read landing inside the worker's ConcurrentDom render window
-// intermittently aborts on `ElementAnchor::assertScopedEntityHandleAccessAllowed`
-// (`SVGElement.cc:253`). Tracked by the determinism-framework task (#601).
-TEST_F(EditorLayerStressTest, DISABLED_MixedClicksDragsDeletesAndFilteredMovesStayResponsive) {
+// Regression coverage for #601: mixed delete/filter stress now avoids repost-time
+// live-document reads while still exercising busy cancellation and settling renders.
+TEST_F(EditorLayerStressTest, MixedClicksDragsDeletesAndFilteredMovesStayResponsive) {
   ExpectSettledMatchesReference("mixed delete/filter cold");
 
   ClickSelectThroughBusyGate("mixed delete/filter click filtered glow", Vector2d(112.0, 44.0),
@@ -653,14 +644,9 @@ TEST_F(EditorLayerStressTest, DISABLED_MixedClicksDragsDeletesAndFilteredMovesSt
       << "worker stayed busy after mixed delete/filter interactions";
 }
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands. Worker-race
-// nondeterminism: with the async render worker contending against UI-thread input under
-// `ThreadingMode::ConcurrentDom`, the settle/responsiveness assertions (busy-gating, settled-frame
-// comparisons) intermittently fail because the worker lands relative to the UI's input sequence
-// nondeterministically. Unlike the sibling stress tests this surfaces as a settle/timing mismatch
-// rather than a scoped-access abort, but the root cause and fix are the same. Tracked by the
-// determinism-framework task (#601).
-TEST_F(EditorLayerStressTest, DISABLED_MixedClicksDragsAndZoomsKeepSelectionResponsive) {
+// Regression coverage for #601: mixed click/drag/zoom stress now keeps request construction
+// deterministic while still covering responsiveness and final settled pixels.
+TEST_F(EditorLayerStressTest, MixedClicksDragsAndZoomsKeepSelectionResponsive) {
   ExpectSettledMatchesReference("mixed cold");
 
   ClickSelectThroughBusyGate("mixed click drag-a", Vector2d(32.0, 42.0), "drag-a");

@@ -143,6 +143,59 @@ TEST(AsyncRendererTest, WakeCallbackFiresOnDoneTransitionBeforePollResult) {
   EXPECT_EQ(wakeCount.load(std::memory_order_acquire), 1);
 }
 
+TEST(AsyncRendererTest, RenderInFlightForTestingExcludesStagedDoneResult) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(1));
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+
+  EXPECT_TRUE(asyncRenderer.hasRenderInFlightForTesting());
+  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(5)));
+
+  EXPECT_FALSE(asyncRenderer.hasRenderInFlightForTesting());
+  EXPECT_TRUE(asyncRenderer.isBusy()) << "staged Done result should still block new requests";
+
+  std::optional<RenderResult> result = asyncRenderer.pollResult();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(asyncRenderer.isBusy());
+}
+
+TEST(AsyncRendererTest, ReplayResultHoldWithholdsStagedDoneResultForPollAttempts) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="0" y="0" width="16" height="16" fill="red" />
+  )svg");
+  document.setCanvasSize(32, 32);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setReplayResultHoldFramesForTesting(2);
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  asyncRenderer.requestRender(request);
+  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                                std::chrono::seconds(5)));
+
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+  EXPECT_TRUE(asyncRenderer.isBusy());
+  EXPECT_FALSE(asyncRenderer.pollResult().has_value());
+  EXPECT_TRUE(asyncRenderer.isBusy());
+  EXPECT_EQ(asyncRenderer.replayResultHoldPollCountForTesting(), 2u);
+
+  std::optional<RenderResult> result = asyncRenderer.pollResult();
+  ASSERT_TRUE(result.has_value());
+  EXPECT_FALSE(asyncRenderer.isBusy());
+}
+
 // A second wake should fire for a second render request — the worker
 // loop is reusable; the callback is not single-shot.
 TEST(AsyncRendererTest, WakeCallbackFiresPerRequest) {

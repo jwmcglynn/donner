@@ -19,6 +19,8 @@ struct RenderPanePresenterState {
   Vector2d contentRegion = Vector2d::Zero();
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
+  bool showOverlay = true;
+  bool showFrameGraph = true;
 };
 
 /**

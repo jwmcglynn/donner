@@ -810,15 +810,10 @@ TEST_F(StructuredEditingStressTest, SourceDeleteClearsStaleHitTargets) {
                      "clippedOpacity");
 }
 
-// TODO(#601): Re-enable once the multi-thread determinism test framework lands. This stress test
-// drives the async render worker (ExpectInSync / RecordAction) and then renders reference/live
-// snapshots in WriteFailureArtifactsToDirectory, so the document is transiently
-// ThreadingMode::ConcurrentDom while the UI thread reads it. The unguarded read race is caught as
-// an `ElementAnchor::assertScopedEntityHandleAccessAllowed` abort in asserts-on builds but becomes
-// a use-after-free segfault when the assert is compiled out (observed on CI's NDEBUG linux runner;
-// passes locally because the race is timing/load dependent). Tracked by the determinism-framework
-// task (#601).
-TEST_F(StructuredEditingStressTest, DISABLED_FailureArtifactsIncludeReplayAndBitmapDiffFiles) {
+// Artifact smoke coverage for the stress harness. The baseline `ExpectInSync` call drains
+// the async renderer before live/reference artifact rendering, so the artifact path does not race
+// the worker's ConcurrentDom window.
+TEST_F(StructuredEditingStressTest, FailureArtifactsIncludeReplayAndBitmapDiffFiles) {
   ExpectInSync("artifact smoke baseline");
   RecordAction("artifact smoke action");
 
