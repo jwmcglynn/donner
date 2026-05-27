@@ -52,9 +52,6 @@ common --//donner/svg/renderer:resvg_test_suite_available=true
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_aarch64//:all
 common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_x86_64//:all
 common:latest_llvm --//build_defs:llvm_latest=1
-# LLVM 21 trips NRVO warnings in Skia; keep this Linux-only because Xcode clang
-# rejects the flag.
-build:linux --copt=-Wno-nrvo
 # Use rules_python's hermetic Python launcher rather than the default
 # `#!/usr/bin/env python3` shebang. Without this, py_binary targets still rely
 # on a host python3 in PATH, which the Bazel remote-execution sandbox
