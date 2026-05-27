@@ -12,6 +12,22 @@ function print_help() {
   exit 0
 }
 
+function file_mtime() {
+  local file="$1"
+
+  if stat -c %Y "$file" >/dev/null 2>&1; then
+    stat -c %Y "$file"
+    return
+  fi
+
+  if stat -f %m "$file" >/dev/null 2>&1; then
+    stat -f %m "$file"
+    return
+  fi
+
+  echo 0
+}
+
 TARGETS=()
 
 # Check for --quiet option
