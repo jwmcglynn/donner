@@ -393,6 +393,11 @@ jobs:
     runs-on: macos-15
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
+    env:
+      # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
+      # Set the CI deployment target explicitly so hosted and self-hosted macOS
+      # compile the same target instead of inheriting host defaults.
+      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -425,7 +430,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci $TARGETS
+          bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
         shell: bash
@@ -436,7 +441,8 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk test --config=ci --test_output=errors $TARGETS
+          bazelisk test --config=ci --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $TARGETS
         # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
@@ -450,7 +456,10 @@ jobs:
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
-      BAZEL_MACOS_CACHE_FLAGS: "--remote_cache=grpc://192.168.1.63:9092 --remote_upload_local_results=true"
+      # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
+      # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS
+      # and only picks up cache settings declared in this workflow.
+      BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=grpc://192.168.1.63:9092 --remote_upload_local_results=true"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -476,7 +485,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci $BAZEL_MACOS_CACHE_FLAGS $TARGETS
+          bazelisk --nohome_rc build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
         shell: bash
@@ -487,8 +496,8 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk test --config=ci --test_output=errors \
-            $BAZEL_MACOS_CACHE_FLAGS $TARGETS
+          bazelisk --nohome_rc test --config=ci --test_output=errors \
+            $BAZEL_MACOS_BUILD_FLAGS $TARGETS
         # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
