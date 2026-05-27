@@ -12,9 +12,22 @@ concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+permissions:
+  contents: read
+  pull-requests: read
+
 # Retry policy: network-sensitive steps (checkout, apt install, bazel fetch)
 # are retried to survive transient GitHub/registry outages. Build/test steps
 # are NOT retried -- a real test failure should surface immediately.
+
+# Self-hosted Linux runner gate (repo Settings -> Variables). Setting
+# SELFHOSTED_LINUX_RUNNER to "true" routes the operator's own Linux runs onto
+# the homelab ARM64 runner on event-horizon and skips the matching
+# GitHub-hosted lane; everyone else stays GitHub-hosted. Gated on BOTH
+# github.actor and github.triggering_actor == jwmcglynn so that no collaborator
+# push -- and no rerun of the operator's run by someone else -- can execute on
+# the runner or poison the shared LAN Bazel cache. Unset is a no-op: behavior
+# is identical to the GitHub-hosted-only workflow.
 
 jobs:
   gatekeeper:
@@ -240,9 +253,11 @@ jobs:
           echo "affected=$affected" >> "$GITHUB_OUTPUT"
 
   linux:
+    # GitHub-hosted x86_64 baseline. Suppressed for operator runs when the
+    # self-hosted ARM64 lane is active (see gate comment above).
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -268,6 +283,87 @@ jobs:
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk build --config=ci $TARGETS
+
+      - name: Test
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk test --config=ci --test_output=errors \
+            $TARGETS
+
+
+  # Operator's ARM64 Linux runs on the event-horizon self-hosted runner.
+  # Replaces `linux` for operator runs (extra arch coverage + homelab cache).
+  # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
+  # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
+  # is no apt/setup-bazel step. The runner intentionally has no host GPU
+  # device passthrough; Mesa llvmpipe/lavapipe provide the same software
+  # rendering path used by GitHub-hosted Linux so this lane runs the same test
+  # surface instead of excluding graphics targets.
+  linux-self-hosted:
+    runs-on: [self-hosted, linux, arm64, event-horizon]
+    needs: [gatekeeper, determine-targets]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Sync Bazel toolchain
+        # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
+        # not track in cc_configure's cache key; a stale local_config_cc then
+        # omits them and the hermetic include scanner rejects /nix/store
+        # headers. Delete both Bzlmod repos and their markers to force fresh
+        # detection. Suffix-anchored patterns avoid clobbering apple_support's
+        # osx_cc_configure. Idempotent; a no-op on a cold cache.
+        run: |
+          find /var/cache/bazel/user-root -maxdepth 5 \
+            \( -name "*+local_config_cc" \
+            -o -name "local_config_cc" \
+            -o -name "*+local_config_cc_toolchains" \
+            -o -name "local_config_cc_toolchains" \
+            -o -name "*+local_config_cc.marker" \
+            -o -name "local_config_cc.marker" \
+            -o -name "*+local_config_cc_toolchains.marker" \
+            -o -name "local_config_cc_toolchains.marker" \) \
+            -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Prepare Bazel LLVM linker
+        # Bazel downloads the upstream LLVM toolchain into the persistent
+        # output_user_root. On NixOS the downloaded ld.lld needs an explicit
+        # RPATH for libxml2/zlib, but we still want to use Donner's Bazel
+        # toolchain rather than replacing the linker with nixpkgs' lld.
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGETS=$(if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..."
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}"
+          fi)
+          bazelisk fetch --config=ci $TARGETS
+          patch-bazel-llvm-tools /var/cache/bazel/user-root
+          # `fetch` starts a Bazel server before we patch the downloaded
+          # linker. Restart it so build/test action inputs are digested from
+          # the patched ELF instead of stale server state.
+          bazelisk shutdown
 
       - name: Build
         shell: bash
