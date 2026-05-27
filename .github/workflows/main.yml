@@ -470,10 +470,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          echo "/Users/jwm/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
-          test -x /Users/jwm/bin/bazelisk
-          test -x /Users/jwm/bin/bazel
+          test -x /opt/homebrew/bin/bazelisk
+          test -x /opt/homebrew/bin/bazel
           test -x /opt/homebrew/opt/llvm@19/bin/clang-tidy
 
       - name: Build
