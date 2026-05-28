@@ -593,6 +593,11 @@ public:
     bool staticHeuristicImmediate = false;
     /// True when timing expanded the span into immediate presentation.
     bool dynamicHeuristicImmediate = false;
+    /// True when the span was dynamically immediate last frame but this render exceeded budget, so
+    /// the freshly-rendered payload is retained as a cached tile instead of staying immediate.
+    bool demotedDynamicImmediate = false;
+    /// Human-readable first/last element range covered by this span.
+    std::string spanRangeLabel;
   };
 
   /// Snapshot the most recent static span plans. Test-only diagnostics.
@@ -636,8 +641,8 @@ public:
     /// `Background` / `Foreground` (those are *composed*, not
     /// rasterized, by `recomposeSplitBitmaps`).
     double lastRasterizeMs = 0.0;
-    /// True when this segment or promoted layer is presented as a transient immediate tile instead
-    /// of a retained bitmap/texture cache entry.
+    /// True when this static segment is presented as a transient immediate tile instead of a
+    /// retained bitmap/texture cache entry. Always false for Layer tiles.
     bool immediate = false;
     /// True when the static geometry-cost heuristic selected immediate presentation.
     bool staticHeuristicImmediate = false;
@@ -693,6 +698,24 @@ public:
   ///     mode.)
   [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles(
       SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;
+
+  /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
+  /// caused by immediate-mode transient spans or retained cached tiles.
+  struct RenderFrameStats {
+    /// Segment raster time caused by immediate-mode static spans.
+    double immediateRasterizeMs = 0.0;
+    /// Segment/layer raster time that produces retained cached bitmap/texture tiles.
+    double cachedRasterizeMs = 0.0;
+    /// Count of static spans charged to immediate raster work.
+    int immediateTileCount = 0;
+    /// Count of segment/layer tiles charged to cached raster work.
+    int cachedTileCount = 0;
+  };
+
+  /// Return the current render-frame raster cost split.
+  [[nodiscard]] const RenderFrameStats& lastRenderFrameStats() const {
+    return lastRenderFrameStats_;
+  }
 
   /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
   /// caused by immediate-mode transient spans or retained cached tiles.

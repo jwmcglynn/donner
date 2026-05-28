@@ -1042,6 +1042,7 @@ TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
   EXPECT_LE(plans[1].estimatedRedrawCost, plans[1].estimatedCacheOverheadCost);
   EXPECT_TRUE(plans[1].staticHeuristicImmediate);
   EXPECT_FALSE(plans[1].dynamicHeuristicImmediate);
+  EXPECT_THAT(plans[1].spanRangeLabel, HasSubstr("rect#cheap"));
 
   const auto immediateTiles =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
@@ -1050,6 +1051,17 @@ TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
                    [](const CompositorTile& tile) { return tile.immediate; });
   ASSERT_NE(immediateTileIt, immediateTiles.end());
   EXPECT_FALSE(immediateTileIt->bitmap.empty());
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  const auto inspectorTileIt =
+      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
+        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
+               tile.immediate;
+      });
+  ASSERT_NE(inspectorTileIt, inspectorTiles.end());
+  EXPECT_TRUE(inspectorTileIt->staticHeuristicImmediate);
+  EXPECT_FALSE(inspectorTileIt->dynamicHeuristicImmediate);
+  EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#cheap"));
 }
 
 TEST_F(CompositorControllerTest, StaticImmediateHeuristicDoesNotDemoteAfterSlowMeasurement) {
@@ -1071,7 +1083,7 @@ TEST_F(CompositorControllerTest, StaticImmediateHeuristicDoesNotDemoteAfterSlowM
   EXPECT_TRUE(plans[1].staticHeuristicImmediate);
   EXPECT_GT(plans[1].measuredRasterizeMs, plans[1].immediateBudgetMs);
   EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate)
-      << "Measured timing is expansion-only; slow machines must not demote the static heuristic.";
+      << "Slow measured timing must not demote the static cheapness heuristic.";
 }
 
 TEST_F(CompositorControllerTest, FastMeasuredStaticSpanCanExpandToImmediate) {
@@ -1096,6 +1108,64 @@ TEST_F(CompositorControllerTest, FastMeasuredStaticSpanCanExpandToImmediate) {
   EXPECT_LT(plans[1].measuredRasterizeMs, plans[1].immediateBudgetMs);
   EXPECT_TRUE(plans[1].dynamicHeuristicImmediate);
   EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+
+  const auto stats = compositor.lastRenderFrameStats();
+  EXPECT_EQ(stats.immediateTileCount, 1);
+  EXPECT_GE(stats.cachedTileCount, 1);
+}
+
+TEST_F(CompositorControllerTest, DynamicImmediateSpanDemotesToCachedAfterSlowRender) {
+  SVGDocument document = makeDocument(
+      R"svg(
+        <rect id="target" x="300" y="0" width="10" height="10" fill="red" />
+        <rect id="medium" x="20" y="20" width="80" height="80" fill="blue" />
+      )svg",
+      Vector2i(512, 512));
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
+
+  {
+    const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+    ASSERT_EQ(plans.size(), 2u);
+    ASSERT_FALSE(plans[1].staticHeuristicImmediate);
+    ASSERT_TRUE(plans[1].dynamicHeuristicImmediate);
+    ASSERT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  }
+
+  configureMockForCaching(std::chrono::milliseconds(5));
+  compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_FALSE(plans[1].staticHeuristicImmediate);
+  EXPECT_FALSE(plans[1].dynamicHeuristicImmediate);
+  EXPECT_TRUE(plans[1].demotedDynamicImmediate);
+  EXPECT_GT(plans[1].measuredRasterizeMs, plans[1].immediateBudgetMs);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::CachedTile);
+
+  const auto stats = compositor.lastRenderFrameStats();
+  EXPECT_EQ(stats.immediateTileCount, 1)
+      << "The slow rerender is charged to rnd-imm because the span was immediate entering this "
+         "frame.";
+  EXPECT_EQ(stats.cachedTileCount, 0);
+  EXPECT_GT(stats.immediateRasterizeMs, plans[1].immediateBudgetMs);
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  const auto inspectorTileIt =
+      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
+        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
+               tile.demotedDynamicImmediate;
+      });
+  ASSERT_NE(inspectorTileIt, inspectorTiles.end());
+  EXPECT_FALSE(inspectorTileIt->immediate);
+  EXPECT_GT(inspectorTileIt->lastRasterizeMs, inspectorTileIt->immediateBudgetMs);
+  EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#medium"));
 }
 
 TEST_F(CompositorControllerTest, PaintResourceStaticSpanPlanChoosesCachedTile) {

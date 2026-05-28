@@ -17,7 +17,6 @@
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
-#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -800,62 +799,45 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
   std::vector<CompositeTileSnapshot> tiles;
   const bool includeThumbnails = thumbnails == SnapshotThumbnails::Include;
 
-  const auto pushPayloadTile = [&tiles, includeThumbnails](
-                                   CompositeTileSnapshot::Kind kind, std::string id,
-                                   std::string label, const RendererBitmap* bitmap,
-                                   const std::shared_ptr<const RendererTextureSnapshot>& texture,
-                                   uint64_t generation, double lastRasterizeMs, bool isDragTarget,
-                                   const StaticSpanPlan* spanPlan,
-                                   const ImmediateLayerPlan* layerPlan) {
-    CompositeTileSnapshot tile;
-    tile.kind = kind;
-    tile.id = std::move(id);
-    tile.label = std::move(label);
-    tile.generation = generation;
-    tile.lastRasterizeMs = lastRasterizeMs;
-    tile.isDragTarget = isDragTarget;
-    if (spanPlan != nullptr) {
-      tile.immediate = spanPlan->mode == StaticSpanMode::Immediate;
-      tile.staticHeuristicImmediate = spanPlan->staticHeuristicImmediate;
-      tile.dynamicHeuristicImmediate = spanPlan->dynamicHeuristicImmediate;
-      tile.demotedDynamicImmediate = spanPlan->demotedDynamicImmediate;
-      tile.immediateBudgetChargeMs = spanPlan->immediateBudgetChargeMs;
-      tile.immediateBudgetMs = spanPlan->immediateBudgetMs;
-      tile.estimatedDrawOps = spanPlan->estimatedDrawOps;
-      tile.estimatedPathVerbs = spanPlan->estimatedPathVerbs;
-      tile.hasExpensiveEffect = spanPlan->hasExpensiveEffect;
-      tile.visible = spanPlan->visible;
-      tile.boundsCanvas = spanPlan->boundsCanvas;
-      tile.estimatedRetainedBytes = spanPlan->estimatedRetainedBytes;
-      tile.estimatedRedrawCost = spanPlan->estimatedRedrawCost;
-      tile.estimatedCacheOverheadCost = spanPlan->estimatedCacheOverheadCost;
-      tile.spanRangeLabel = spanPlan->spanRangeLabel;
-    } else if (layerPlan != nullptr) {
-      tile.immediate = layerPlan->immediate;
-      tile.staticHeuristicImmediate = layerPlan->staticHeuristicImmediate;
-      tile.dynamicHeuristicImmediate = layerPlan->dynamicHeuristicImmediate;
-      tile.demotedDynamicImmediate = layerPlan->demotedDynamicImmediate;
-      tile.immediateBudgetChargeMs = layerPlan->immediateBudgetChargeMs;
-      tile.immediateBudgetMs = layerPlan->immediateBudgetMs;
-      tile.estimatedDrawOps = layerPlan->estimatedDrawOps;
-      tile.estimatedPathVerbs = layerPlan->estimatedPathVerbs;
-      tile.hasExpensiveEffect = layerPlan->hasExpensiveEffect;
-      tile.visible = layerPlan->visible;
-      tile.boundsCanvas = layerPlan->boundsCanvas;
-      tile.estimatedRetainedBytes = layerPlan->estimatedRetainedBytes;
-      tile.estimatedRedrawCost = layerPlan->estimatedRedrawCost;
-      tile.estimatedCacheOverheadCost = layerPlan->estimatedCacheOverheadCost;
-    }
-    tile.hasValidBitmap = (bitmap != nullptr && !bitmap->empty()) || texture != nullptr;
-    if (tile.hasValidBitmap) {
-      tile.bitmapDims = bitmap != nullptr ? bitmap->dimensions : texture->dimensions();
-      if (includeThumbnails && bitmap != nullptr) {
-        BuildThumbnail(*bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
-      }
-      tile.textureSnapshot = texture;
-    }
-    tiles.push_back(std::move(tile));
-  };
+  const auto pushPayloadTile =
+      [&tiles](CompositeTileSnapshot::Kind kind, std::string id, std::string label,
+               const RendererBitmap& bitmap,
+               const std::shared_ptr<const RendererTextureSnapshot>& texture, uint64_t generation,
+               double lastRasterizeMs, bool isDragTarget, const StaticSpanPlan* spanPlan) {
+        CompositeTileSnapshot tile;
+        tile.kind = kind;
+        tile.id = std::move(id);
+        tile.label = std::move(label);
+        tile.generation = generation;
+        tile.lastRasterizeMs = lastRasterizeMs;
+        tile.isDragTarget = isDragTarget;
+        if (spanPlan != nullptr) {
+          tile.immediate = spanPlan->mode == StaticSpanMode::Immediate;
+          tile.staticHeuristicImmediate = spanPlan->staticHeuristicImmediate;
+          tile.dynamicHeuristicImmediate = spanPlan->dynamicHeuristicImmediate;
+          tile.demotedDynamicImmediate = spanPlan->demotedDynamicImmediate;
+          tile.immediateBudgetChargeMs = spanPlan->immediateBudgetChargeMs;
+          tile.immediateBudgetMs = spanPlan->immediateBudgetMs;
+          tile.estimatedDrawOps = spanPlan->estimatedDrawOps;
+          tile.estimatedPathVerbs = spanPlan->estimatedPathVerbs;
+          tile.hasExpensiveEffect = spanPlan->hasExpensiveEffect;
+          tile.visible = spanPlan->visible;
+          tile.boundsCanvas = spanPlan->boundsCanvas;
+          tile.estimatedRetainedBytes = spanPlan->estimatedRetainedBytes;
+          tile.estimatedRedrawCost = spanPlan->estimatedRedrawCost;
+          tile.estimatedCacheOverheadCost = spanPlan->estimatedCacheOverheadCost;
+          tile.spanRangeLabel = spanPlan->spanRangeLabel;
+        }
+        tile.hasValidBitmap = !bitmap.empty() || texture != nullptr;
+        if (tile.hasValidBitmap) {
+          tile.bitmapDims = !bitmap.empty() ? bitmap.dimensions : texture->dimensions();
+          if (!bitmap.empty()) {
+            BuildThumbnail(bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
+          }
+          tile.textureSnapshot = texture;
+        }
+        tiles.push_back(std::move(tile));
+      };
 
   // Always emit the full segments+layers paint-order breakdown — even
   // when the editor's split-bitmap optimization is active. User
@@ -883,9 +865,9 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
       const double segMs =
           i < staticSegmentLastRasterizeMs_.size() ? staticSegmentLastRasterizeMs_[i] : 0.0;
       const StaticSpanPlan* spanPlan = i < staticSpanPlans_.size() ? &staticSpanPlans_[i] : nullptr;
-      pushPayloadTile(CompositeTileSnapshot::Kind::Segment, id, label, segmentBitmap,
-                      segmentTexture, segGen, segMs, /*isDragTarget=*/false, spanPlan,
-                      /*layerPlan=*/nullptr);
+      pushPayloadTile(CompositeTileSnapshot::Kind::Segment, id, label,
+                      segmentBitmap != nullptr ? *segmentBitmap : RendererBitmap{}, segmentTexture,
+                      segGen, segMs, /*isDragTarget=*/false, spanPlan);
     }
     if (i < layerCount) {
       const CompositorLayer& layer = layers_[i];
@@ -903,7 +885,7 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
       const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
       pushPayloadTile(CompositeTileSnapshot::Kind::Layer, id, label, layerBitmap,
                       layer.textureSnapshot(), layer.generation(), layer.lastRasterizeMs(),
-                      isDragTarget, /*spanPlan=*/nullptr, &layer.immediatePlan());
+                      isDragTarget, nullptr);
     }
   }
 
@@ -1357,6 +1339,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport,
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
+  lastRenderFrameStats_ = RenderFrameStats{};
 
   const bool surfaceChanged =
       hasLastSurfaceFromCanvas_ && !SameTransformNear(lastSurfaceFromCanvas_, surfaceFromCanvas);
@@ -1853,6 +1836,8 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           for (auto& layer : layers_) {
             if (!layer.hasRenderablePayload()) {
               rasterizeLayer(layer, viewport, surfaceFromCanvas);
+              lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
+              ++lastRenderFrameStats_.cachedTileCount;
             }
           }
         }
@@ -2062,6 +2047,8 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           return;
         }
         rasterizeLayer(layer, viewport, surfaceFromCanvas);
+        lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
+        ++lastRenderFrameStats_.cachedTileCount;
       }
     }
   }
@@ -2431,9 +2418,15 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
 
     StaticSpanPlan spanPlan;
     spanPlan.slotIndex = i;
+    const StaticSpanPlan previousSpanPlan =
+        i < staticSpanPlans_.size() ? staticSpanPlans_[i] : StaticSpanPlan{};
+    const bool wasImmediate = previousSpanPlan.mode == StaticSpanMode::Immediate;
+    const bool wasDynamicImmediate = wasImmediate && previousSpanPlan.dynamicHeuristicImmediate &&
+                                     !previousSpanPlan.staticHeuristicImmediate;
     if (!segmentIsEmpty) {
       spanPlan.firstEntity = paintOrder[startIdx];
       spanPlan.lastEntity = paintOrder[endIdx];
+      spanPlan.spanRangeLabel = SpanRangeLabel(registry, spanPlan.firstEntity, spanPlan.lastEntity);
     }
 
     if (segmentIsEmpty) {
@@ -2586,6 +2579,20 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         spanPlan.mode = StaticSpanMode::Immediate;
         spanPlan.dynamicHeuristicImmediate = true;
         immediateBudgetUsedMs += budgetChargeMs;
+      }
+    }
+    if (wasDynamicImmediate && spanPlan.mode != StaticSpanMode::Immediate &&
+        elapsedMs > spanPlan.immediateBudgetMs) {
+      spanPlan.demotedDynamicImmediate = true;
+    }
+    if (!segmentIsEmpty) {
+      const bool chargeAsImmediate = wasImmediate || spanPlan.mode == StaticSpanMode::Immediate;
+      if (chargeAsImmediate) {
+        lastRenderFrameStats_.immediateRasterizeMs += elapsedMs;
+        ++lastRenderFrameStats_.immediateTileCount;
+      } else {
+        lastRenderFrameStats_.cachedRasterizeMs += elapsedMs;
+        ++lastRenderFrameStats_.cachedTileCount;
       }
     }
     staticSpanPlans_[i] = spanPlan;
