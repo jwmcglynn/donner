@@ -776,8 +776,10 @@ struct RendererGeode::Impl {
   // they're reallocated.
   int targetWidth = 0;
   int targetHeight = 0;
-  wgpu::Texture target;      // 1-sample resolve: RenderAttachment | CopySrc | TextureBinding.
-  wgpu::Texture msaaTarget;  // 4× MSAA color attachment companion to `target`.
+  wgpu::Texture target;      // Borrowed active 1-sample resolve target.
+  wgpu::Texture msaaTarget;  // Borrowed active 4× MSAA color attachment companion to `target`.
+  geode::ScopedWgpuHandle<wgpu::Texture> ownedTarget;
+  geode::ScopedWgpuHandle<wgpu::Texture> ownedMsaaTarget;
 
   // Single CommandEncoder owned by RendererGeode for the whole frame
   // (design doc 0030 Milestone 3). All `GeoEncoder` instances created
@@ -1895,6 +1897,8 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
 
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
+    impl_->ownedTarget.reset();
+    impl_->ownedMsaaTarget.reset();
     impl_->target = wgpu::Texture();
     impl_->msaaTarget = wgpu::Texture();
     impl_->targetWidth = 0;
@@ -1912,6 +1916,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   if (impl_->hostTarget) {
     // Embedded mode: render into the host-provided target texture.
     // Override pixel dimensions from the texture itself.
+    impl_->ownedTarget.reset();
     impl_->pixelWidth = static_cast<int>(impl_->hostTarget.getWidth());
     impl_->pixelHeight = static_cast<int>(impl_->hostTarget.getHeight());
     impl_->target = impl_->hostTarget;
@@ -1930,9 +1935,11 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
       msaaDesc.mipLevelCount = 1;
       msaaDesc.sampleCount = sc;
       msaaDesc.dimension = wgpu::TextureDimension::_2D;
-      impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
+      impl_->ownedMsaaTarget.reset(impl_->device->device().createTexture(msaaDesc));
+      impl_->msaaTarget = impl_->ownedMsaaTarget.get();
       impl_->device->countTexture();
     } else {
+      impl_->ownedMsaaTarget.reset();
       impl_->msaaTarget = wgpu::Texture();
     }
   } else {
@@ -1940,7 +1947,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
     // 0030 Milestone 4.1). Content is cleared by the encoder's first
     // render-pass `LoadOp::Clear`, so lingering pixels from the previous
     // frame don't leak into this one.
-    const bool canReuseTargets = impl_->target && impl_->targetWidth == impl_->pixelWidth &&
+    const bool canReuseTargets = impl_->ownedTarget && impl_->targetWidth == impl_->pixelWidth &&
                                  impl_->targetHeight == impl_->pixelHeight;
 
     if (!canReuseTargets) {
@@ -1956,7 +1963,8 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
       td.mipLevelCount = 1;
       td.sampleCount = 1;
       td.dimension = wgpu::TextureDimension::_2D;
-      impl_->target = impl_->device->device().createTexture(td);
+      impl_->ownedTarget.reset(impl_->device->device().createTexture(td));
+      impl_->target = impl_->ownedTarget.get();
       impl_->device->countTexture();
 
       // 4× MSAA color attachment (when sampleCount > 1): all draws land here,
@@ -1973,13 +1981,18 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
         msaaDesc.mipLevelCount = 1;
         msaaDesc.sampleCount = sc;
         msaaDesc.dimension = wgpu::TextureDimension::_2D;
-        impl_->msaaTarget = impl_->device->device().createTexture(msaaDesc);
+        impl_->ownedMsaaTarget.reset(impl_->device->device().createTexture(msaaDesc));
+        impl_->msaaTarget = impl_->ownedMsaaTarget.get();
         impl_->device->countTexture();
       } else {
+        impl_->ownedMsaaTarget.reset();
         impl_->msaaTarget = wgpu::Texture();
       }
       impl_->targetWidth = impl_->pixelWidth;
       impl_->targetHeight = impl_->pixelHeight;
+    } else {
+      impl_->target = impl_->ownedTarget.get();
+      impl_->msaaTarget = impl_->ownedMsaaTarget.get();
     }
   }
 
@@ -4016,16 +4029,20 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
 }
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
-  if (!impl_->device || !impl_->target || impl_->hostTarget || impl_->pixelWidth <= 0 ||
+  if (!impl_->device || !impl_->ownedTarget || impl_->hostTarget || impl_->pixelWidth <= 0 ||
       impl_->pixelHeight <= 0) {
     return nullptr;
   }
 
-  wgpu::Texture texture = impl_->target;
+  wgpu::Texture texture = impl_->ownedTarget.take();
   const Vector2i dimensions(impl_->pixelWidth, impl_->pixelHeight);
   impl_->target = wgpu::Texture();
+  impl_->msaaTarget = wgpu::Texture();
   impl_->targetWidth = 0;
   impl_->targetHeight = 0;
+  if (impl_->ownedMsaaTarget) {
+    impl_->device->deferDestroy(impl_->ownedMsaaTarget.take());
+  }
 
   return std::make_shared<RendererGeodeTextureSnapshot>(impl_->device, std::move(texture),
                                                         dimensions, impl_->textureFormat);
@@ -4046,24 +4063,24 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   bd.label = wgpuLabel("RendererGeodeReadback");
   bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
   bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  wgpu::Buffer readback = impl_->device->device().createBuffer(bd);
+  geode::ScopedWgpuHandle<wgpu::Buffer> readback(impl_->device->device().createBuffer(bd));
   impl_->device->countBuffer();
 
   // Copy texture → readback buffer.
-  wgpu::CommandEncoder enc = impl_->device->device().createCommandEncoder();
+  geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(impl_->device->device().createCommandEncoder());
   wgpu::TexelCopyTextureInfo src = {};
   src.texture = impl_->target;
   src.mipLevel = 0;
   src.origin = {0, 0, 0};
   wgpu::TexelCopyBufferInfo dst = {};
-  dst.buffer = readback;
+  dst.buffer = readback.get();
   dst.layout.bytesPerRow = bytesPerRow;
   dst.layout.rowsPerImage = height;
   wgpu::Extent3D copySize = {width, height, 1};
-  enc.copyTextureToBuffer(src, dst, copySize);
+  enc.get().copyTextureToBuffer(src, dst, copySize);
 
-  wgpu::CommandBuffer cmd = enc.finish();
-  impl_->device->queue().submit(1, &cmd);
+  geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmd(enc.get().finish());
+  impl_->device->queue().submit(1, &cmd.get());
   impl_->device->countSubmit();
 
   // Map for read. wgpu-native's C++ wrapper (`webgpu.hpp`) only exposes the
@@ -4095,7 +4112,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   // microtask tick that runs while we're sleeping. wgpu-native also
   // accepts spontaneous mode and fires callbacks during `wgpuDevicePoll`.
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
-  readback.mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
+  readback.get().mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
   int pollIter = 0;
   while (!mapState.done) {
     impl_->device->device().poll(true, nullptr);
@@ -4108,7 +4125,8 @@ RendererBitmap RendererGeode::takeSnapshot() const {
     return bitmap;
   }
 
-  const uint8_t* mapped = static_cast<const uint8_t*>(readback.getConstMappedRange(0, bd.size));
+  const uint8_t* mapped =
+      static_cast<const uint8_t*>(readback.get().getConstMappedRange(0, bd.size));
 
   // Strip row padding and unpremultiply alpha so the consumer gets a tightly
   // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies
@@ -4153,7 +4171,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
       dstRow[x * 4 + 3] = srcA;
     }
   }
-  readback.unmap();
+  readback.get().unmap();
   return bitmap;
 }
 

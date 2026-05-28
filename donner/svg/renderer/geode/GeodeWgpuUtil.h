@@ -17,6 +17,7 @@
 /// acquire calls. The vendored `webgpu.hpp` objects are typed raw handles, not
 /// owning smart handles.
 
+#include <atomic>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -89,10 +90,16 @@ public:
   /// True when a non-null handle is owned.
   [[nodiscard]] explicit operator bool() const noexcept { return static_cast<bool>(handle_); }
 
+  /// Number of non-null handles released by this scoped-handle specialization.
+  [[nodiscard]] static uint64_t releaseCountForTesting() noexcept {
+    return releaseCount_.load(std::memory_order_relaxed);
+  }
+
   /// Release the current handle and optionally take ownership of a replacement.
   void reset(Handle handle = Handle()) noexcept {
     if (handle_) {
       handle_.release();
+      releaseCount_.fetch_add(1, std::memory_order_relaxed);
     }
     handle_ = std::move(handle);
   }
@@ -105,6 +112,7 @@ public:
   }
 
 private:
+  static inline std::atomic<uint64_t> releaseCount_{0};
   Handle handle_;
 };
 

@@ -625,5 +625,42 @@ TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
                                                "(arenas + readback + slack). See issue #575.";
 }
 
+TEST_F(GeodePerfTest, TextureSnapshotStressReleasesMsaaTargets) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  if (device->sampleCount() <= 1u) {
+    GTEST_SKIP() << "MSAA target leak regression only applies when Geode allocates MSAA targets.";
+  }
+
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kSimpleShapesSvg, sink);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  const uint64_t textureReleasesBefore =
+      geode::ScopedWgpuHandle<wgpu::Texture>::releaseCountForTesting();
+
+  constexpr int kFrameCount = 12;
+  for (int frame = 0; frame < kFrameCount; ++frame) {
+    renderer.draw(document);
+    std::shared_ptr<const RendererTextureSnapshot> snapshot = renderer.takeTextureSnapshot();
+    ASSERT_NE(snapshot, nullptr);
+    snapshot.reset();
+    device->drainDeferredDestroys();
+  }
+
+  const uint64_t textureReleaseDelta =
+      geode::ScopedWgpuHandle<wgpu::Texture>::releaseCountForTesting() - textureReleasesBefore;
+
+  // Each texture-snapshot frame creates two owned render targets on the MSAA path:
+  // the resolved target transferred to the snapshot and the MSAA attachment used
+  // only while rendering. The pre-fix code released only the snapshot target;
+  // the raw `msaaTarget` handle was overwritten on the next frame.
+  EXPECT_GE(textureReleaseDelta, static_cast<uint64_t>(kFrameCount * 2))
+      << "Repeated texture snapshots should release both resolved and MSAA targets. "
+         "A lower count means the MSAA target is still being overwritten as a raw handle.";
+}
+
 }  // namespace
 }  // namespace donner::svg
