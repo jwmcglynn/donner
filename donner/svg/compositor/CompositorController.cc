@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "donner/base/Utils.h"
@@ -19,6 +20,10 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
+#include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/compositor/ComputedLayerAssignmentComponent.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -152,9 +157,11 @@ Vector2i BitmapDimensionsForViewport(const RenderViewport& viewport) {
 
 LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Registry& registry,
                                                Entity firstEntity, Entity lastEntity,
-                                               const RenderViewport& viewport) {
+                                               const RenderViewport& viewport,
+                                               const Transform2d& surfaceFromCanvas) {
   LayerRasterGeometry result;
   result.viewport = viewport;
+  result.surfaceFromCanvas = surfaceFromCanvas;
 
   // Intrinsic-size rasterization (design doc 0033 §M2): size the
   // offscreen to the layer's tight canvas bounds instead of the full
@@ -173,7 +180,7 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
     ZoneScopedN("Compositor::computeLayerRasterGeometry::computeBounds");
     RendererDriver boundsDriver(renderer);
     tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(registry, firstEntity, lastEntity,
-                                                              viewport, Transform2d());
+                                                              viewport, surfaceFromCanvas);
   }
 
   // Snap to integer pixels and pad for AA. The padding matters: filter
@@ -202,11 +209,21 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
 
   if (result.tight) {
     result.viewport.size = tightBoundsSnapped.size();
-    result.surfaceFromCanvas = Transform2d::Translate(-tightBoundsSnapped.topLeft);
+    result.surfaceFromCanvas =
+        surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft);
     result.canvasOffset = tightBoundsSnapped.topLeft;
   }
 
   return result;
+}
+
+bool SameTransformNear(const Transform2d& lhs, const Transform2d& rhs) {
+  for (size_t i = 0; i < 6; ++i) {
+    if (!NearEquals(lhs.data[i], rhs.data[i])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool IsIntegerTranslation(const Transform2d& transform, Vector2d* roundedTranslation) {
@@ -224,6 +241,121 @@ bool IsIntegerTranslation(const Transform2d& transform, Vector2d* roundedTransla
 
   *roundedTranslation = rounded;
   return true;
+}
+
+struct StaticSpanCostEstimate {
+  int drawOps = 0;
+  int pathVerbs = 0;
+  bool hasExpensiveEffect = false;
+};
+
+struct StaticSpanPresentationCost {
+  uint64_t retainedBytes = 0;
+  double redrawCost = 0.0;
+  double cacheOverheadCost = 0.0;
+};
+
+bool PaintUsesResource(const components::ResolvedPaintServer& paint) {
+  return std::holds_alternative<components::PaintResolvedReference>(paint);
+}
+
+StaticSpanCostEstimate EstimateStaticSpanCost(Registry& registry,
+                                              const std::vector<Entity>& paintOrder,
+                                              size_t startIdx, size_t endIdx) {
+  StaticSpanCostEstimate estimate;
+  for (size_t i = startIdx; i <= endIdx && i < paintOrder.size(); ++i) {
+    const Entity entity = paintOrder[i];
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+    if (instance == nullptr) {
+      estimate.hasExpensiveEffect = true;
+      continue;
+    }
+
+    const auto* style =
+        instance->styleHandle(registry).try_get<components::ComputedStyleComponent>();
+    if (style == nullptr || !style->properties.has_value()) {
+      continue;
+    }
+    if (!instance->visible || style->properties->display.getRequired() == Display::None) {
+      continue;
+    }
+
+    if (instance->isolatedLayer || instance->resolvedFilter.has_value() ||
+        instance->clipPath.has_value() || (instance->mask.has_value() && instance->mask->valid()) ||
+        instance->markerStart.has_value() || instance->markerMid.has_value() ||
+        instance->markerEnd.has_value() || PaintUsesResource(instance->resolvedFill) ||
+        PaintUsesResource(instance->resolvedStroke)) {
+      estimate.hasExpensiveEffect = true;
+    }
+
+    EntityHandle dataHandle = instance->dataHandle(registry);
+    if (const auto* path = dataHandle.try_get<components::ComputedPathComponent>()) {
+      ++estimate.drawOps;
+      estimate.pathVerbs += static_cast<int>(path->spline.verbCount());
+      continue;
+    }
+
+    if (dataHandle.try_get<components::ComputedTextComponent>() ||
+        dataHandle.try_get<components::LoadedImageComponent>() ||
+        dataHandle.try_get<components::LoadedSVGImageComponent>() ||
+        dataHandle.try_get<components::ExternalUseComponent>()) {
+      estimate.hasExpensiveEffect = true;
+      continue;
+    }
+
+    if (!instance->subtreeInfo.has_value()) {
+      estimate.hasExpensiveEffect = true;
+    }
+  }
+  return estimate;
+}
+
+uint64_t EstimateStaticSpanRetainedBytes(const Box2d& boundsCanvas) {
+  const double width = std::ceil(std::max(0.0, boundsCanvas.width()));
+  const double height = std::ceil(std::max(0.0, boundsCanvas.height()));
+  return static_cast<uint64_t>(width * height) * 4u;
+}
+
+StaticSpanPresentationCost EstimateStaticSpanPresentationCost(
+    const StaticSpanCostEstimate& spanCost, const Box2d& boundsCanvas) {
+  const uint64_t retainedBytes = EstimateStaticSpanRetainedBytes(boundsCanvas);
+  const double retainedPixels = static_cast<double>(retainedBytes) / 4.0;
+
+  // Relative cost model: compare rerendering a simple span against the fixed
+  // bookkeeping and retained-memory cost of keeping a presentation texture.
+  constexpr double kRasterPixelCost = 1.0;
+  constexpr double kRasterDrawOpCost = 16.0;
+  constexpr double kRasterPathVerbCost = 4.0;
+  constexpr double kCachedTextureFixedCost = 512.0;
+  constexpr double kRetainedByteCost = 1.0 / 16.0;
+
+  return StaticSpanPresentationCost{
+      .retainedBytes = retainedBytes,
+      .redrawCost = retainedPixels * kRasterPixelCost +
+                    static_cast<double>(spanCost.drawOps) * kRasterDrawOpCost +
+                    static_cast<double>(spanCost.pathVerbs) * kRasterPathVerbCost,
+      .cacheOverheadCost =
+          kCachedTextureFixedCost + static_cast<double>(retainedBytes) * kRetainedByteCost,
+  };
+}
+
+bool IsStaticSpanImmediateSafe(const CompositorController::StaticSpanPlan& spanPlan) {
+  return spanPlan.visible && !spanPlan.hasExpensiveEffect && spanPlan.estimatedDrawOps > 0;
+}
+
+double ImmediateStaticSpanBudgetMs() {
+  // 120 Hz leaves 8.33 ms total. Immediate spans rerender on the UI cadence,
+  // so dynamic expansion gets one quarter of that frame to leave room for
+  // input, presentation, and editor chrome.
+  return (1000.0 / 120.0) * 0.25;
+}
+
+double ImmediateStaticSpanBudgetChargeMs(double measuredRasterizeMs) {
+  constexpr double kMinimumChargeMs = 0.05;
+  if (!(measuredRasterizeMs >= 0.0) || !std::isfinite(measuredRasterizeMs)) {
+    return ImmediateStaticSpanBudgetMs();
+  }
+  return std::max(measuredRasterizeMs, kMinimumChargeMs);
 }
 
 }  // namespace
@@ -979,6 +1111,8 @@ bool CompositorController::remapAfterStructuralReplace(
                                                          .size = Vector2d(document().canvasSize()),
                                                          .devicePixelRatio = 1.0,
                                                      };
+  const Transform2d surfaceFromCanvas =
+      hasLastSurfaceFromCanvas_ ? lastSurfaceFromCanvas_ : Transform2d();
   for (auto& layer : layers_) {
     if (layer.isDirty() || !layer.hasRenderablePayload()) {
       continue;
@@ -991,13 +1125,14 @@ bool CompositorController::remapAfterStructuralReplace(
     if (layer.bitmapEntityFromWorldTransform().has_value() &&
         registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
       const auto& instance = registry.get<components::RenderingInstanceComponent>(layer.entity());
-      const Transform2d delta =
-          layer.bitmapEntityFromWorldTransform()->inverse() * instance.worldFromEntityTransform;
+      const Transform2d delta = layer.bitmapEntityFromWorldTransform()->inverse() *
+                                (instance.worldFromEntityTransform * surfaceFromCanvas);
 
       Vector2d roundedTranslation;
       if (IsIntegerTranslation(delta, &roundedTranslation)) {
-        const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
-            renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport);
+        const LayerRasterGeometry geometry =
+            ComputeLayerRasterGeometry(renderer(), registry, layer.firstEntity(),
+                                       layer.lastEntity(), viewport, surfaceFromCanvas);
         const Vector2i expectedBitmapDims = BitmapDimensionsForViewport(geometry.viewport);
         const Vector2d composedCanvasOffset = layer.canvasOffset() + roundedTranslation;
         cacheStillValid = LayerPayloadDimensions(layer) == expectedBitmapDims &&
@@ -1054,7 +1189,9 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   staticSegmentGeneration_.clear();
   staticSegmentLastRasterizeMs_.clear();
   staticSegmentOffsets_.clear();
+  staticSpanPlans_.clear();
   staticSegmentsCanvas_ = Vector2i::Zero();
+  hasStaticSegmentsSurfaceFromCanvas_ = false;
   staticSegmentsLayerCount_ = 0;
   splitStaticLayersEntity_ = entt::null;
   splitStaticLayersViewport_ = Vector2i::Zero();
@@ -1064,6 +1201,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
   // Main renderer's cached frame is for the old document — invalidate
   // so the next `composeLayers` does a full first-frame compose.
   mainRendererHasCachedFrame_ = false;
+  hasLastSurfaceFromCanvas_ = false;
 }
 
 void CompositorController::setTightBoundedSegmentsEnabled(bool enabled) {
@@ -1079,20 +1217,50 @@ void CompositorController::setTightBoundedSegmentsEnabled(bool enabled) {
 }
 
 bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token) {
+  return renderFrame(viewport, token, Transform2d());
+}
+
+bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token,
+                                       const Transform2d& surfaceFromCanvas) {
   // §M4: stash the token where the rasterize loops can poll it via
   // `isCancelled()`. The reference is active only for this render attempt.
   cancelToken_.emplace(token);
-  renderFrame(viewport);
+  renderFrameImpl(viewport, surfaceFromCanvas);
   const bool cancelled = token.isCancelled();
   cancelToken_.reset();
   return !cancelled;
 }
 
 void CompositorController::renderFrame(const RenderViewport& viewport) {
+  renderFrameImpl(viewport, Transform2d());
+}
+
+void CompositorController::renderFrame(const RenderViewport& viewport,
+                                       const Transform2d& surfaceFromCanvas) {
+  renderFrameImpl(viewport, surfaceFromCanvas);
+}
+
+void CompositorController::renderFrameImpl(const RenderViewport& viewport,
+                                           const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
 
+  const bool surfaceChanged =
+      hasLastSurfaceFromCanvas_ && !SameTransformNear(lastSurfaceFromCanvas_, surfaceFromCanvas);
+  const bool viewportSizeChanged = hasLastViewport_ && BitmapDimensionsForViewport(lastViewport_) !=
+                                                           BitmapDimensionsForViewport(viewport);
+  if (surfaceChanged || viewportSizeChanged) {
+    for (auto& layer : layers_) {
+      layer.markDirty();
+    }
+    markAllSegmentsDirty();
+    splitStaticLayersEntity_ = entt::null;
+    splitStaticLayersViewport_ = Vector2i::Zero();
+    mainRendererHasCachedFrame_ = false;
+  }
   lastViewport_ = viewport;
   hasLastViewport_ = true;
+  lastSurfaceFromCanvas_ = surfaceFromCanvas;
+  hasLastSurfaceFromCanvas_ = true;
   Registry& registry = document().registry();
 
   // Design doc 0033 §M9 — age the hysteresis queue and flush
@@ -1254,7 +1422,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
       // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` for
       // the regression pin.
       const Transform2d bitmapEntityFromEntity =
-          matchedLayer->bitmapEntityFromWorldTransform()->inverse() * newWorldFromEntity;
+          matchedLayer->bitmapEntityFromWorldTransform()->inverse() *
+          (newWorldFromEntity * surfaceFromCanvas);
 
       const bool isSubtree = matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
       // Subtree layers require a pure-translation delta: only then can we
@@ -1428,7 +1597,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     RendererDriver driver(renderer());
     {
       ZoneScopedN("Compositor::driver.draw (first-frame)");
-      driver.draw(document());
+      driver.draw(document(), viewport, surfaceFromCanvas);
     }
     // `driver.draw` runs preparation for the first frame. Defensively clear
     // the rebuild flag so the eager-warmed compositor caches survive the next
@@ -1440,7 +1609,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     staticSegmentTextures_.clear();
     staticSegmentOffsets_.clear();
     staticSegmentLastRasterizeMs_.clear();
+    staticSpanPlans_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
+    hasStaticSegmentsSurfaceFromCanvas_ = false;
     staticSegmentsLayerCount_ = 0;
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
@@ -1486,22 +1657,22 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
           ZoneScopedN("Compositor::eagerWarmupRasterizeLayers");
           for (auto& layer : layers_) {
             if (!layer.hasRenderablePayload()) {
-              rasterizeLayer(layer, viewport);
+              rasterizeLayer(layer, viewport, surfaceFromCanvas);
             }
           }
         }
-        const Vector2i currentCanvasSize = document().canvasSize();
+        const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
         // Seed segment state via the preserving resync path so
         // `staticSegmentBoundaries_` is consistent with the new layer
         // set. Nothing to preserve yet (segments are empty), so every
         // slot is marked dirty and rasterized.
         {
           ZoneScopedN("Compositor::resyncSegmentsToLayerSet (first)");
-          resyncSegmentsToLayerSet(currentCanvasSize);
+          resyncSegmentsToLayerSet(currentCanvasSize, surfaceFromCanvas);
         }
         {
           ZoneScopedN("Compositor::rasterizeDirtyStaticSegments (first)");
-          rasterizeDirtyStaticSegments(viewport);
+          rasterizeDirtyStaticSegments(viewport, surfaceFromCanvas);
         }
       } else {
         offscreenSupportKnown_ = true;
@@ -1562,14 +1733,16 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   if (layers_.empty()) {
     ZoneScopedN("Compositor::emptyLayerSetAfterPrepare");
     RendererDriver driver(renderer());
-    driver.draw(document());
+    driver.draw(document(), viewport, surfaceFromCanvas);
     staticSegments_.clear();
     staticSegmentTextures_.clear();
     staticSegmentBoundaries_.clear();
     staticSegmentDirty_.clear();
     staticSegmentOffsets_.clear();
     staticSegmentLastRasterizeMs_.clear();
+    staticSpanPlans_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
+    hasStaticSegmentsSurfaceFromCanvas_ = false;
     staticSegmentsLayerCount_ = 0;
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
@@ -1614,7 +1787,8 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     // the current RIC transform walks forward to the current canvas position.
     // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` pins the
     // non-identity-scale case.
-    const Transform2d delta = bitmapStamp.inverse() * instance.worldFromEntityTransform;
+    const Transform2d delta =
+        bitmapStamp.inverse() * (instance.worldFromEntityTransform * surfaceFromCanvas);
     if (delta.isTranslation()) {
       layer.setCanvasFromBitmap(delta);
     }
@@ -1631,7 +1805,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
 
   if (!offscreenSupported_) {
     RendererDriver driver(renderer());
-    driver.draw(document());
+    driver.draw(document(), viewport, surfaceFromCanvas);
     rootDirty_ = false;
     return;
   }
@@ -1672,7 +1846,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
         if (isCancelled()) {
           return;
         }
-        rasterizeLayer(layer, viewport);
+        rasterizeLayer(layer, viewport, surfaceFromCanvas);
       }
     }
   }
@@ -1683,7 +1857,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   // Structural changes (layer count, canvas size, `rootDirty_` from a
   // full tree rebuild) flip every slot dirty; per-entity mutations only
   // flip the containing slot dirty via `consumeDirtyFlags`.
-  const Vector2i currentCanvasSize = document().canvasSize();
+  const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
   // Resync `staticSegments_` to the current layer set, preserving
   // cached bitmaps whose boundary identity survived. When the user
   // clicks-to-drag, the ONLY segment that structurally changes is the
@@ -1704,7 +1878,9 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     staticSegmentDirty_.clear();
     staticSegmentOffsets_.clear();
     staticSegmentLastRasterizeMs_.clear();
+    staticSpanPlans_.clear();
     staticSegmentsCanvas_ = Vector2i::Zero();
+    hasStaticSegmentsSurfaceFromCanvas_ = false;
     staticSegmentsLayerCount_ = 0;
     splitStaticLayersEntity_ = entt::null;
     splitStaticLayersViewport_ = Vector2i::Zero();
@@ -1713,7 +1889,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   bool anySegmentDirty = false;
   {
     ZoneScopedN("Compositor::resyncSegmentsToLayerSet");
-    anySegmentDirty = resyncSegmentsToLayerSet(currentCanvasSize);
+    anySegmentDirty = resyncSegmentsToLayerSet(currentCanvasSize, surfaceFromCanvas);
   }
   if (anySegmentDirty) {
     // Segment set changed; clear the drag-target tracking so the
@@ -1727,7 +1903,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
   }
   {
     ZoneScopedN("Compositor::rasterizeDirtyStaticSegments");
-    rasterizeDirtyStaticSegments(viewport);
+    rasterizeDirtyStaticSegments(viewport, surfaceFromCanvas);
   }
 
   // In the single-drag-target split path, publish the editor-facing
@@ -1784,7 +1960,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport) {
     RendererBitmap compositedSnapshot = renderer().takeSnapshot();
 
     RendererDriver referenceDriver(renderer());
-    referenceDriver.draw(document());
+    referenceDriver.draw(document(), viewport, surfaceFromCanvas);
     RendererBitmap referenceSnapshot = renderer().takeSnapshot();
 
     if (compositedSnapshot.dimensions == referenceSnapshot.dimensions &&
@@ -1852,13 +2028,14 @@ const CompositorLayer* CompositorController::findLayer(Entity entity) const {
   return it != layers_.end() ? &(*it) : nullptr;
 }
 
-void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport) {
+void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
+                                          const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::rasterizeLayer");
   const auto rasterizeStart = std::chrono::steady_clock::now();
 
   Registry& registry = document().registry();
   const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
-      renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport);
+      renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport, surfaceFromCanvas);
 
   auto offscreen = renderer().createOffscreenInstance();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
@@ -1881,10 +2058,11 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // the tree was prepared — treat it as transform identity, which makes
   // the subsequent fast-path delta equal to the new transform, which is
   // correct for the "bitmap was drawn at origin" case.
-  Transform2d worldFromEntity;
+  Transform2d surfaceFromEntity;
   if (registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
-    worldFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
-                          .worldFromEntityTransform;
+    surfaceFromEntity = registry.get<components::RenderingInstanceComponent>(layer.entity())
+                            .worldFromEntityTransform *
+                        surfaceFromCanvas;
   }
   if (offscreen->requiresTextureSnapshotPresentation()) {
     std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
@@ -1892,9 +2070,9 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
         texture != nullptr,
         "Geode compositor layer rasterization did not produce a GPU texture. Refusing CPU "
         "readback/upload fallback in Geode presentation mode.");
-    layer.setTextureSnapshot(std::move(texture), worldFromEntity);
+    layer.setTextureSnapshot(std::move(texture), surfaceFromEntity);
   } else {
-    layer.setBitmap(offscreen->takeSnapshot(), worldFromEntity);
+    layer.setBitmap(offscreen->takeSnapshot(), surfaceFromEntity);
   }
   // `setBitmap`/`setTextureSnapshot` bump a per-object generation that resets
   // to 1 for every freshly-built layer. After a document replace reuses entity
@@ -1916,7 +2094,8 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // bitmap's content and the stamped `bitmapEntityFromWorldTransform`.
 }
 
-void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport) {
+void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& viewport,
+                                                        const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::rasterizeDirtyStaticSegmentsImpl");
   Registry& registry = document().registry();
   const size_t layerCount = layers_.size();
@@ -1935,6 +2114,9 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
   }
   if (staticSegmentLastRasterizeMs_.size() != layerCount + 1) {
     staticSegmentLastRasterizeMs_.resize(layerCount + 1, 0.0);
+  }
+  if (staticSpanPlans_.size() != layerCount + 1) {
+    staticSpanPlans_.resize(layerCount + 1);
   }
 
   // Snapshot paint order once per frame. Each segment is a slice of this list,
@@ -1977,6 +2159,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     layerRanges[i] = {firstIdx, lastIdx};
   }
 
+  double immediateBudgetUsedMs = 0.0;
   for (size_t i = 0; i <= layerCount; ++i) {
     if (!staticSegmentDirty_[i]) {
       continue;
@@ -2002,6 +2185,13 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
 
     const bool segmentIsEmpty =
         paintOrder.empty() || startIdx > endIdx || startIdx >= paintOrder.size();
+
+    StaticSpanPlan spanPlan;
+    spanPlan.slotIndex = i;
+    if (!segmentIsEmpty) {
+      spanPlan.firstEntity = paintOrder[startIdx];
+      spanPlan.lastEntity = paintOrder[endIdx];
+    }
 
     if (segmentIsEmpty) {
       // No entities in this segment's paint-order range. Use a 1×1
@@ -2033,7 +2223,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         ZoneScopedN("Compositor::segment::computeBounds");
         RendererDriver boundsDriver(renderer());
         tightBoundsCanvas = boundsDriver.computeEntityRangeBounds(
-            registry, paintOrder[startIdx], paintOrder[endIdx], viewport, Transform2d());
+            registry, paintOrder[startIdx], paintOrder[endIdx], viewport, surfaceFromCanvas);
       }
       // The bounds-compute overhead per segment is ~O(entities) with
       // no pixel work — negligible vs any render. But tight-bound
@@ -2066,6 +2256,24 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         }
       }
 
+      const StaticSpanCostEstimate cost =
+          EstimateStaticSpanCost(registry, paintOrder, startIdx, endIdx);
+      spanPlan.estimatedDrawOps = cost.drawOps;
+      spanPlan.estimatedPathVerbs = cost.pathVerbs;
+      spanPlan.hasExpensiveEffect = cost.hasExpensiveEffect;
+      spanPlan.visible = useTight;
+      if (useTight) {
+        spanPlan.boundsCanvas = tightBoundsSnapped;
+        const StaticSpanPresentationCost presentationCost =
+            EstimateStaticSpanPresentationCost(cost, tightBoundsSnapped);
+        spanPlan.estimatedRetainedBytes = presentationCost.retainedBytes;
+        spanPlan.estimatedRedrawCost = presentationCost.redrawCost;
+        spanPlan.estimatedCacheOverheadCost = presentationCost.cacheOverheadCost;
+        spanPlan.staticHeuristicImmediate =
+            IsStaticSpanImmediateSafe(spanPlan) &&
+            presentationCost.redrawCost <= presentationCost.cacheOverheadCost;
+      }
+
       std::unique_ptr<RendererInterface> offscreen;
       {
         ZoneScopedN("Compositor::segment::createOffscreen");
@@ -2079,8 +2287,9 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         tightViewport.size = tightBoundsSnapped.size();
         tightViewport.devicePixelRatio = viewport.devicePixelRatio;
         RendererDriver driver(*offscreen);
-        driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
-                               Transform2d::Translate(-tightBoundsSnapped.topLeft));
+        driver.drawEntityRange(
+            registry, paintOrder[startIdx], paintOrder[endIdx], tightViewport,
+            surfaceFromCanvas * Transform2d::Translate(-tightBoundsSnapped.topLeft));
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
           UTILS_RELEASE_ASSERT_MSG(
@@ -2098,7 +2307,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         ZoneScopedN("Compositor::segment::drawEntityRange");
         RendererDriver driver(*offscreen);
         driver.drawEntityRange(registry, paintOrder[startIdx], paintOrder[endIdx], viewport,
-                               Transform2d());
+                               surfaceFromCanvas);
         if (offscreen->requiresTextureSnapshotPresentation()) {
           std::shared_ptr<const RendererTextureSnapshot> texture = offscreen->takeTextureSnapshot();
           UTILS_RELEASE_ASSERT_MSG(
@@ -2114,23 +2323,41 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         staticSegmentOffsets_[i] = Vector2d::Zero();
       }
     }
-    staticSegmentDirty_[i] = false;
+    const auto segmentRasterizeEnd = std::chrono::steady_clock::now();
+    const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                               segmentRasterizeEnd - segmentRasterizeStart)
+                               .count();
+    const double elapsedMs = static_cast<double>(elapsedUs) / 1000.0;
+    spanPlan.measuredRasterizeMs = elapsedMs;
+    spanPlan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
+    if (IsStaticSpanImmediateSafe(spanPlan)) {
+      const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(elapsedMs);
+      spanPlan.immediateBudgetChargeMs = budgetChargeMs;
+      if (spanPlan.staticHeuristicImmediate) {
+        spanPlan.mode = StaticSpanMode::Immediate;
+        immediateBudgetUsedMs += budgetChargeMs;
+      } else if (elapsedMs <= spanPlan.immediateBudgetMs &&
+                 immediateBudgetUsedMs + budgetChargeMs <= spanPlan.immediateBudgetMs) {
+        spanPlan.mode = StaticSpanMode::Immediate;
+        spanPlan.dynamicHeuristicImmediate = true;
+        immediateBudgetUsedMs += budgetChargeMs;
+      }
+    }
+    staticSpanPlans_[i] = spanPlan;
+    staticSegmentDirty_[i] = spanPlan.mode == StaticSpanMode::Immediate;
     // Bump the generation so the editor's GL texture cache sees this
     // slot's pixel content changed and re-uploads on next frame.
     if (i < staticSegmentGeneration_.size()) {
       staticSegmentGeneration_[i] = nextTileGeneration_++;
     }
-    const auto segmentRasterizeEnd = std::chrono::steady_clock::now();
-    const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                               segmentRasterizeEnd - segmentRasterizeStart)
-                               .count();
     if (i < staticSegmentLastRasterizeMs_.size()) {
-      staticSegmentLastRasterizeMs_[i] = static_cast<double>(elapsedUs) / 1000.0;
+      staticSegmentLastRasterizeMs_[i] = elapsedMs;
     }
   }
 }
 
-bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanvasSize) {
+bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanvasSize,
+                                                    const Transform2d& surfaceFromCanvas) {
   const size_t newCount = layers_.size() + 1;
 
   // Compute the NEW boundary identity for each slot. Slot i sits between
@@ -2147,6 +2374,9 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   // be reused at a different resolution (would be scaled or leave
   // transparent gaps). Full invalidation.
   const bool canvasChanged = staticSegmentsCanvas_ != currentCanvasSize;
+  const bool surfaceChanged =
+      hasStaticSegmentsSurfaceFromCanvas_ &&
+      !SameTransformNear(staticSegmentsSurfaceFromCanvas_, surfaceFromCanvas);
 
   std::vector<RendererBitmap> newSegments(newCount);
   std::vector<std::shared_ptr<const RendererTextureSnapshot>> newTextures(newCount);
@@ -2154,8 +2384,9 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   std::vector<uint64_t> newGeneration(newCount, 0);
   std::vector<Vector2d> newOffsets(newCount, Vector2d::Zero());
   std::vector<double> newLastRasterizeMs(newCount, 0.0);
+  std::vector<StaticSpanPlan> newPlans(newCount);
 
-  if (!canvasChanged && !staticSegments_.empty()) {
+  if (!canvasChanged && !surfaceChanged && !staticSegments_.empty()) {
     // Build a lookup from old boundary identity → (old slot index).
     // Small N (kMaxCompositorLayers = 32), so a linear scan beats a hash.
     for (size_t i = 0; i < newCount; ++i) {
@@ -2184,6 +2415,10 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
           if (j < staticSegmentLastRasterizeMs_.size()) {
             newLastRasterizeMs[i] = staticSegmentLastRasterizeMs_[j];
           }
+          if (j < staticSpanPlans_.size()) {
+            newPlans[i] = staticSpanPlans_[j];
+            newPlans[i].slotIndex = i;
+          }
           break;
         }
       }
@@ -2207,15 +2442,19 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
   staticSegmentGeneration_ = std::move(newGeneration);
   staticSegmentOffsets_ = std::move(newOffsets);
   staticSegmentLastRasterizeMs_ = std::move(newLastRasterizeMs);
+  staticSpanPlans_ = std::move(newPlans);
   staticSegmentsCanvas_ = currentCanvasSize;
+  staticSegmentsSurfaceFromCanvas_ = surfaceFromCanvas;
+  hasStaticSegmentsSurfaceFromCanvas_ = true;
   staticSegmentsLayerCount_ = layers_.size();
 
   // bg/fg cache is ONLY reusable if every constituent bitmap survived.
   // Any preserved-segment map-miss means at least one rasterize is
   // pending, so bg/fg needs recompositing regardless. Caller drops the
   // cache when we return true.
-  return canvasChanged || std::any_of(staticSegmentDirty_.begin(), staticSegmentDirty_.end(),
-                                      [](bool dirty) { return dirty; });
+  return canvasChanged || surfaceChanged ||
+         std::any_of(staticSegmentDirty_.begin(), staticSegmentDirty_.end(),
+                     [](bool dirty) { return dirty; });
 }
 
 namespace {
@@ -2268,11 +2507,17 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
       [this](size_t idx) -> std::shared_ptr<const RendererTextureSnapshot> {
     return idx < staticSegmentTextures_.size() ? staticSegmentTextures_[idx] : nullptr;
   };
-  const auto includePayload = [payload](bool hasPayload, bool isDragTarget) {
+  const auto segmentImmediateAt = [this](size_t idx) {
+    return idx < staticSpanPlans_.size() && staticSpanPlans_[idx].mode == StaticSpanMode::Immediate;
+  };
+  const auto includePayload = [payload](bool hasPayload, bool isDragTarget, bool immediate) {
     if (!hasPayload) return false;
     switch (payload) {
       case CompositorTileBitmapPayload::All: return true;
       case CompositorTileBitmapPayload::DragTargetOnly: return isDragTarget;
+      case CompositorTileBitmapPayload::ImmediateOnly: return immediate;
+      case CompositorTileBitmapPayload::ImmediateAndDragTargetOnly:
+        return immediate || isDragTarget;
       case CompositorTileBitmapPayload::MetadataOnly: return false;
     }
     return false;
@@ -2290,7 +2535,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
             : nullptr;
     const std::shared_ptr<const RendererTextureSnapshot> segTexture = segmentTextureAt(i);
     if (segBitmap != nullptr || segTexture != nullptr) {
-      const bool includeSegPayload = includePayload(/*hasPayload=*/true, /*isDragTarget=*/false);
+      const bool immediate = segmentImmediateAt(i);
+      const bool includeSegPayload =
+          includePayload(/*hasPayload=*/true, /*isDragTarget=*/false, immediate);
       const Vector2i bitmapDims =
           segBitmap != nullptr ? segBitmap->dimensions : segTexture->dimensions();
       tiles.push_back(CompositorTile{
@@ -2304,6 +2551,7 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
           .canvasOffsetPx = segmentOffsetAt(i),
           .canvasFromBitmap = Transform2d(),
           .isDragTarget = false,
+          .immediate = immediate,
       });
     }
     // Layer tile.
@@ -2312,7 +2560,8 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
     const std::shared_ptr<const RendererTextureSnapshot> layerTexture = layer.textureSnapshot();
     const bool isDragTarget = layer.entity() == splitStaticLayersEntity_;
     const bool includeLayerPayload =
-        includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget);
+        includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget,
+                       /*immediate=*/false);
     tiles.push_back(CompositorTile{
         .tileId = kLayerTileBit | static_cast<uint64_t>(entt::to_integral(layer.entity())),
         .generation = layer.generation(),
@@ -2326,6 +2575,7 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
         .canvasOffsetPx = layer.canvasOffset(),
         .canvasFromBitmap = layer.canvasFromBitmap(),
         .isDragTarget = isDragTarget,
+        .immediate = false,
     });
   }
   // Trailing segment after the last layer.
@@ -2341,7 +2591,9 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
           : nullptr;
   const std::shared_ptr<const RendererTextureSnapshot> tailTexture = segmentTextureAt(tailIdx);
   if (tailBitmap != nullptr || tailTexture != nullptr) {
-    const bool includeTailPayload = includePayload(/*hasPayload=*/true, /*isDragTarget=*/false);
+    const bool immediate = segmentImmediateAt(tailIdx);
+    const bool includeTailPayload =
+        includePayload(/*hasPayload=*/true, /*isDragTarget=*/false, immediate);
     const Vector2i bitmapDims =
         tailBitmap != nullptr ? tailBitmap->dimensions : tailTexture->dimensions();
     tiles.push_back(CompositorTile{
@@ -2355,6 +2607,7 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
         .canvasOffsetPx = segmentOffsetAt(tailIdx),
         .canvasFromBitmap = Transform2d(),
         .isDragTarget = false,
+        .immediate = immediate,
     });
   }
   return tiles;

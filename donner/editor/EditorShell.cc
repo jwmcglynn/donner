@@ -751,6 +751,8 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
   const Vector2i compositorCanvas = renderCoordinator_.asyncRenderer().compositorState().canvasSize;
   const CanvasFreshness freshness =
       ClassifyCanvasFreshness(viewportDesiredCanvas, documentCanvas, compositorCanvas);
+  FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
+  frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
   LayerInspectorStatusReadback readback{
       .canvasFreshness = freshness,
       .statusSuffix = std::string(CanvasFreshnessStatusSuffix(freshness)),
@@ -761,6 +763,7 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
       .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
       .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
+      .frameCost = frameCost,
   };
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
       selectTool_.activeDragPreview();
@@ -1510,7 +1513,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         requestRenderAtEndOfFrame_ = true;
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
             app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-            RenderCoordinator::OverlayUploadMode::MatchDisplayedVersion,
             selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
       }
       interactionController_.clearPendingClick();
@@ -1552,8 +1554,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
               app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-              RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-              selectTool_.activeTransformBoundsPreview());
+              selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         }
       }
     }
@@ -1576,8 +1577,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
               previewBeforeRelease, app_.document().currentFrameVersion());
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-              RenderCoordinator::OverlayUploadMode::Immediate);
+              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
         }
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
@@ -1612,23 +1612,35 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           liveActiveDragPreview);
   const auto displayedDragPreview =
       renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
+  const Entity suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_);
+  const bool suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_);
+  const bool hasPresentableActiveDragTarget = HasPresentableDragTargetTile(
+      textures_, activeDragPreview, suppressedLayerEntity, suppressDragTargetTiles);
+  const auto representedDragPreview = OverlayRepresentedDragPreviewForPresentation(
+      activeDragPreview, displayedDragPreview, hasPresentableActiveDragTarget);
+  const auto representedGesturePreview = OverlayGesturePreviewForPresentation(
+      activeGesturePreview, liveActiveDragPreview, representedDragPreview);
+  if (!contentOnlyCaptureThisFrame_) {
+    renderCoordinator_.rasterizeOverlayForPresentation(app_, selectTool_,
+                                                       interactionController_.viewport(), textures_,
+                                                       activeDragPreview, representedDragPreview);
+  }
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .frameHistory = interactionController_.frameHistory(),
       .textures = textures_,
       .activeDragPreview = activeDragPreview,
       .displayedDragPreview = displayedDragPreview,
-      .overlayDragPreview = renderCoordinator_.presentedOverlayDragPreview(),
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
-      .suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_),
-      .suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_),
+      .suppressedLayerEntity = suppressedLayerEntity,
+      .suppressDragTargetTiles = suppressDragTargetTiles,
       .showOverlay = !contentOnlyCaptureThisFrame_,
       .showFrameGraph = !contentOnlyCaptureThisFrame_,
   };
   renderPanePresenter_.render(paneState);
   if (!contentOnlyCaptureThisFrame_) {
     renderPenToolPreview();
-    renderSelectionSizeChip(hoverTransformIntent, activeGesturePreview);
+    renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
     renderToolPalette(paneOriginImGui, contentRegion);
     renderRenderPaneContextMenu();
@@ -2089,8 +2101,7 @@ void EditorShell::applyReferenceHighlightPreview() {
   if (overlayChanged) {
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
         app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-        selectTool_.activeTransformBoundsPreview());
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
   if (overlayChanged || sourceChanged) {
     window_.wakeEventLoop();
@@ -2405,8 +2416,7 @@ void EditorShell::renderRenderPaneContextMenu() {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
         app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-        selectTool_.activeTransformBoundsPreview());
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
     window_.wakeEventLoop();
   }
 
@@ -2596,8 +2606,7 @@ void EditorShell::applySourceStyleDecorationChipClick() {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
         app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-        selectTool_.activeTransformBoundsPreview());
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
 
   window_.wakeEventLoop();
@@ -2632,8 +2641,7 @@ void EditorShell::setSourcePaneVisible(bool visible) {
         !renderCoordinator_.asyncRenderer().isBusy()) {
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
           app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-          RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-          selectTool_.activeTransformBoundsPreview());
+          selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
     }
   }
   window_.wakeEventLoop();
@@ -2649,6 +2657,7 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
+  renderCoordinator_.beginFrameCostTracking();
   contentOnlyCaptureThisFrame_ = contentOnlyCaptureForNextFrame_;
   contentOnlyCaptureForNextFrame_ = false;
   requestRenderAtEndOfFrame_ = false;
@@ -2826,9 +2835,13 @@ void EditorShell::runFrame() {
   renderFloatingLayerPanel();
   if (requestRenderAtEndOfFrame_ && !renderCoordinator_.asyncRenderer().isBusy() &&
       app_.hasDocument()) {
-    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                          textures_);
+    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport());
   }
+  FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
+  if (sourcePaneVisible_) {
+    frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
+  }
+  interactionController_.frameHistory().setLatestFrameCost(frameCost);
   requestRenderAtEndOfFrame_ = false;
   contentOnlyCaptureThisFrame_ = false;
 }

@@ -22,13 +22,15 @@
 /// 4. If busy: skip flushFrame, leave pending mutations in the queue.
 ///    They apply on the next idle frame. Input (drags, typing) still
 ///    gets processed and queued — just not dispatched to the ECS.
+/// 5. The editor overlay is the exception: it may take guarded document access for immediate
+///    presentation chrome. That access serializes behind the worker's render access instead of
+///    racing it, and must not be taken while holding `AsyncRenderer`'s mutex.
 ///
 /// The safety invariant: between `requestRender()` and a non-`nullopt`
 /// return from `pollResult()`, the UI thread must not mutate the
-/// `SVGDocument`, and must not touch state the overlay renderer reads
-/// (selection, etc. — those are snapshotted at request time, see
-/// `RenderRequest`). The UI thread must not call any method on the
-/// `Renderer` at any time — it lives on the worker.
+/// `SVGDocument`. Registry-reading UI paths should normally gate on
+/// `!isBusy()` unless they are using guarded access for immediate overlay presentation. The UI
+/// thread must not call any method on the worker `Renderer` at any time — it lives on the worker.
 
 #include <atomic>
 #include <chrono>
@@ -47,6 +49,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -145,6 +148,10 @@ struct RenderRequest {
   Entity selectedEntity = entt::null;
   /// Optional in-progress drag preview rendered through the compositor fast path.
   std::optional<DragPreview> dragPreview;
+  /// Raster viewport for this request. The UI thread computes it from the
+  /// editor camera so the worker can render a bounded high-zoom output
+  /// surface without reading live UI state.
+  EditorRasterViewport rasterViewport;
 };
 
 /// Final full-canvas snapshot work needed after compositor rendering.
@@ -170,11 +177,12 @@ struct RenderResult {
   /// One composite tile from the worker's `CompositorController::
   /// snapshotCompositorTiles()` snapshot (design doc 0033 §M2C). The
   /// editor uploads one GL texture per tile (keyed on `id`) and
-  /// blits each tile at its canvas offset. Geometry fields are doc-unit
-  /// quantities so the editor can scale them by the current
+  /// blits each tile at its canvas offset. Immediate tiles intentionally use
+  /// transient ids and always carry a fresh payload. Geometry fields are
+  /// doc-unit quantities so the editor can scale them by the current
   /// `pixelsPerDocUnit` during canvas-resize debouncing.
   struct CompositedTile {
-    enum class Kind : std::uint8_t { Segment, Layer };
+    enum class Kind : std::uint8_t { Segment, Layer, Immediate };
 
     Kind kind = Kind::Segment;
     /// Stable id from the compositor — `"seg:{i}"` or
@@ -242,6 +250,8 @@ struct RenderResult {
 
   svg::RendererBitmap bitmap;
   std::optional<CompositedPreview> compositedPreview;
+  /// Raster viewport used to produce this result.
+  EditorRasterViewport rasterViewport;
   std::uint64_t version = 0;
   /// Wall-clock milliseconds spent in the worker iteration after a request is
   /// dequeued, including `CompositorController::renderFrame`, final
@@ -439,14 +449,10 @@ public:
     return lastWorkerCompositorEntity_;
   }
 
-  /// Canvas size in the request the worker is currently processing
-  /// (read from the request's document lease). Surfaces the
-  /// document's actual canvas size at the worker's last-completed
-  /// render, separate from the compositor's `staticSegmentsCanvas_`
-  /// (which is the size of the last successful rasterize). When
-  /// `documentCanvasAtLastDispatch != compositorCanvas`, the doc was
-  /// re-sized but the compositor hasn't re-rasterized at the new
-  /// size yet.
+  /// Output raster size from the worker's last-completed render. This is the
+  /// presentation epoch: at high zoom it can be smaller than the SVG
+  /// document's semantic canvas size because the worker rendered only the
+  /// visible viewport plus margin.
   [[nodiscard]] Vector2i lastDocumentCanvasSize() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return lastDocumentCanvasSize_;

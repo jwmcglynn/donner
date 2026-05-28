@@ -181,7 +181,6 @@ svg::RendererBitmap CapturePresenterFrame(gui::EditorWindow* window, GlTextureCa
       .textures = *textures,
       .activeDragPreview = noDragPreview,
       .displayedDragPreview = noDragPreview,
-      .overlayDragPreview = noDragPreview,
       .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
       .suppressedLayerEntity = suppressedLayerEntity,
   });

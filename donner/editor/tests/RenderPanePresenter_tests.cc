@@ -1,6 +1,7 @@
 #include "donner/editor/RenderPanePresenter.h"
 
 #include <cstdint>
+#include <optional>
 
 #include "gtest/gtest.h"
 
@@ -78,6 +79,55 @@ TEST(RenderPanePresenterTest, MissingTextureIsNotPresented) {
   tile.isDragTarget = false;
 
   EXPECT_FALSE(ShouldPresentCompositedTile(tile, entt::null));
+}
+
+TEST(RenderPanePresenterTest, PresentedTileQuadIntersectingPaneIsVisible) {
+  PresentedTileQuad quad;
+  quad.topLeft = Vector2d(10.0, 10.0);
+  quad.topRight = Vector2d(30.0, 10.0);
+  quad.bottomRight = Vector2d(30.0, 30.0);
+  quad.bottomLeft = Vector2d(10.0, 30.0);
+
+  EXPECT_TRUE(PresentedTileQuadIntersectsScreenRect(
+      quad, Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/20.0, /*height=*/20.0)));
+}
+
+TEST(RenderPanePresenterTest, PresentedTileQuadOutsidePaneIsCulled) {
+  PresentedTileQuad quad;
+  quad.topLeft = Vector2d(30.0, 10.0);
+  quad.topRight = Vector2d(40.0, 10.0);
+  quad.bottomRight = Vector2d(40.0, 20.0);
+  quad.bottomLeft = Vector2d(30.0, 20.0);
+
+  EXPECT_FALSE(PresentedTileQuadIntersectsScreenRect(
+      quad, Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/20.0, /*height=*/20.0)));
+}
+
+TEST(RenderPanePresenterTest, PresentedTileQuadTouchingPaneEdgeIsCulled) {
+  PresentedTileQuad quad;
+  quad.topLeft = Vector2d(20.0, 5.0);
+  quad.topRight = Vector2d(30.0, 5.0);
+  quad.bottomRight = Vector2d(30.0, 15.0);
+  quad.bottomLeft = Vector2d(20.0, 15.0);
+
+  EXPECT_FALSE(PresentedTileQuadIntersectsScreenRect(
+      quad, Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/20.0, /*height=*/20.0)));
+}
+
+TEST(RenderPanePresenterTest, PresentedImageClipRectIntersectsPaneWithArtboard) {
+  const std::optional<Box2d> clip = PresentedImageClipRect(
+      Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/100.0, /*height=*/80.0),
+      Box2d::FromXYWH(/*x=*/20.0, /*y=*/10.0, /*width=*/120.0, /*height=*/40.0));
+
+  ASSERT_TRUE(clip.has_value());
+  EXPECT_EQ(*clip, Box2d::FromXYWH(/*x=*/20.0, /*y=*/10.0, /*width=*/80.0, /*height=*/40.0));
+}
+
+TEST(RenderPanePresenterTest, PresentedImageClipRectRejectsDisjointArtboard) {
+  EXPECT_FALSE(PresentedImageClipRect(
+                   Box2d::FromXYWH(/*x=*/0.0, /*y=*/0.0, /*width=*/100.0, /*height=*/80.0),
+                   Box2d::FromXYWH(/*x=*/100.0, /*y=*/10.0, /*width=*/40.0, /*height=*/40.0))
+                   .has_value());
 }
 
 }  // namespace

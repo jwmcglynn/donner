@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/Utf8.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/ImGuiInternalIncludes.h"
@@ -22,6 +23,8 @@ namespace donner::editor {
 namespace {
 
 constexpr float kFocusReferenceRopeWakeSeconds = 1.0f / 60.0f;
+constexpr int kMaxAnimatedFocusReferenceRopes = 64;
+constexpr double kFocusReferenceRopeCullMarginPx = 48.0;
 
 /**
  * Compare two ranges for equality using a binary predicate.
@@ -35,6 +38,11 @@ bool rangesEqual(InputIt1 first1, InputIt1 last1, InputIt2 first2, InputIt2 last
     }
   }
   return first1 == last1 && first2 == last2;
+}
+
+double MillisecondsSince(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+      .count();
 }
 
 }  // namespace
@@ -1507,6 +1515,27 @@ ImVec2 ToImVec2(const Vector2d& value) {
   return ImVec2(static_cast<float>(value.x), static_cast<float>(value.y));
 }
 
+Box2d BoxFromCorners(const ImVec2& lhs, const ImVec2& rhs) {
+  const Vector2d topLeft(std::min(lhs.x, rhs.x), std::min(lhs.y, rhs.y));
+  const Vector2d bottomRight(std::max(lhs.x, rhs.x), std::max(lhs.y, rhs.y));
+  return Box2d(topLeft, bottomRight);
+}
+
+void AddPointToBox(Box2d* box, const ImVec2& point) {
+  box->addPoint(Vector2d(point.x, point.y));
+}
+
+Box2d InflatedBox(Box2d box, double margin) {
+  box.topLeft -= Vector2d(margin, margin);
+  box.bottomRight += Vector2d(margin, margin);
+  return box;
+}
+
+bool BoxesIntersect(const Box2d& lhs, const Box2d& rhs) {
+  return lhs.bottomRight.x >= rhs.topLeft.x && lhs.topLeft.x <= rhs.bottomRight.x &&
+         lhs.bottomRight.y >= rhs.topLeft.y && lhs.topLeft.y <= rhs.bottomRight.y;
+}
+
 float VecLength(const ImVec2& value) {
   return std::sqrt(value.x * value.x + value.y * value.y);
 }
@@ -2063,8 +2092,12 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
   if (!focusPartitionActive_ || focusPartition_.referenceLinks.empty()) {
     focusReferenceRopes_.clear();
     lastFocusReferenceRopeScrollY_ = lastScroll_;
+    lastSourceRopeCost_ = FrameCostBreakdown::SourceRopes{};
     return;
   }
+
+  FrameCostBreakdown::SourceRopes ropeCost;
+  ropeCost.candidateCount = static_cast<int>(focusPartition_.referenceLinks.size());
 
   const float thickness = 1.75f * uiScale_;
   const float hoverThickness = 2.45f * uiScale_;
@@ -2084,17 +2117,95 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
   ++focusReferenceRopeFrame_;
 
   int visibleLinkIndex = 0;
+  int animatedLinkCount = 0;
   bool hoveredAny = false;
   const bool canHover = sourceWindowHovered && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                         !ImGui::IsMouseDown(ImGuiMouseButton_Right);
   const ImVec2 mousePos = ImGui::GetMousePos();
+  const ImVec2 contentMax = ImGui::GetWindowContentRegionMax();
+  const ImVec2 clipMin(uiCursorPos_.x, uiCursorPos_.y + lastScroll_);
+  const ImVec2 clipMax(uiCursorPos_.x + contentMax.x,
+                       uiCursorPos_.y + lastScroll_ + visibleTextRegionHeight());
+  const Box2d clipRect = BoxFromCorners(clipMin, clipMax);
+  const Box2d visibleTextBounds =
+      InflatedBox(clipRect, kFocusReferenceRopeCullMarginPx * static_cast<double>(uiScale_));
+
+  const auto layoutBounds = [](const FocusReferenceConnectorLayout& layout) {
+    Box2d bounds = BoxFromCorners(layout.start, layout.tip);
+    if (layout.hasSourceUnderline) {
+      AddPointToBox(&bounds, layout.sourceUnderline.start);
+      AddPointToBox(&bounds, layout.sourceUnderline.end);
+    }
+    if (layout.hasSourceStyleChip) {
+      AddPointToBox(&bounds, layout.sourceStyleChip.min);
+      AddPointToBox(&bounds, layout.sourceStyleChip.max);
+    }
+    return bounds;
+  };
+  const auto sourcePointIntersectsVisibleRows = [&](const SourcePoint& point) {
+    if (isLineHiddenByFocus(point.line)) {
+      return false;
+    }
+
+    int visualIndex = point.line;
+    if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
+      visualIndex = visualLineIndexForCoordinates(Coordinates(point.line, point.column));
+      if (visualIndex < 0 || visualIndex >= static_cast<int>(visualLines_.size()) ||
+          visualLines_[visualIndex].lineNo != point.line) {
+        return false;
+      }
+    }
+
+    const double rowTop = uiCursorPos_.y + static_cast<double>(visualIndex) * charAdvance_.y;
+    const double rowBottom = rowTop + charAdvance_.y;
+    return rowBottom >= visibleTextBounds.topLeft.y && rowTop <= visibleTextBounds.bottomRight.y;
+  };
+
+  drawList->PushClipRect(clipMin, clipMax, true);
   for (const FocusReferenceLink& link : focusPartition_.referenceLinks) {
-    std::optional<FocusReferenceConnectorLayout> layout =
-        focusReferenceConnectorLayout(link, visibleLinkIndex);
-    if (!layout.has_value()) {
+    if (!sourcePointIntersectsVisibleRows(link.from)) {
+      ++ropeCost.culledCount;
       continue;
     }
 
+    const auto layoutStart = std::chrono::steady_clock::now();
+    std::optional<FocusReferenceConnectorLayout> layout =
+        focusReferenceConnectorLayout(link, visibleLinkIndex);
+    ropeCost.layoutMs += MillisecondsSince(layoutStart);
+    if (!layout.has_value()) {
+      continue;
+    }
+    ++ropeCost.laidOutCount;
+    if (!BoxesIntersect(layoutBounds(*layout), visibleTextBounds)) {
+      ++ropeCost.culledCount;
+      continue;
+    }
+
+    const auto drawStaticConnector = [&] {
+      const auto drawStart = std::chrono::steady_clock::now();
+      const ImU32 color = layout->color;
+      if (layout->hasSourceUnderline) {
+        drawList->AddLine(layout->sourceUnderline.start, layout->sourceUnderline.end, color,
+                          std::max(1.0f, uiScale_));
+      }
+      if (layout->hasSourceStyleChip) {
+        renderFocusReferenceStyleSourceChip(drawList, layout->sourceStyleChip, color);
+      }
+      drawList->AddLine(layout->start, layout->tip, color, thickness);
+      DrawArrowhead(drawList, layout->tip, NormalizeVec(SubVec(layout->tip, layout->start)), color,
+                    arrowLength, arrowHalfWidth);
+      ropeCost.drawMs += MillisecondsSince(drawStart);
+      ++ropeCost.drawnCount;
+      ++ropeCost.staticDrawnCount;
+      ++visibleLinkIndex;
+    };
+
+    if (animatedLinkCount >= kMaxAnimatedFocusReferenceRopes) {
+      drawStaticConnector();
+      continue;
+    }
+
+    const auto updateStart = std::chrono::steady_clock::now();
     const Vector2d start = ToVector2d(layout->start);
     const Vector2d tip = ToVector2d(layout->tip);
     const double chordLength = start.distance(tip);
@@ -2119,7 +2230,17 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     ropeState.hovered = canHover && isFocusReferenceRopeHit(ropeState.path, mousePos, hitWidth);
     ropeState.chordLength = chordLength;
     ropeState.lastFrameSeen = focusReferenceRopeFrame_;
+    ropeCost.updateMs += MillisecondsSince(updateStart);
+    ++animatedLinkCount;
 
+    const std::optional<Box2d> routeBounds = ropeState.path.bounds();
+    if (routeBounds.has_value() && !BoxesIntersect(*routeBounds, visibleTextBounds)) {
+      ++ropeCost.culledCount;
+      ++visibleLinkIndex;
+      continue;
+    }
+
+    const auto drawStart = std::chrono::steady_clock::now();
     const ImU32 color = ropeState.hovered ? BrightenReferenceColor(layout->color) : layout->color;
     if (layout->hasSourceUnderline) {
       drawList->AddLine(layout->sourceUnderline.start, layout->sourceUnderline.end, color,
@@ -2133,12 +2254,15 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     ropeState.arrowDirection = ropeState.rope.endTangent();
     DrawArrowhead(drawList, layout->tip, ToImVec2(ropeState.arrowDirection), color, arrowLength,
                   arrowHalfWidth);
+    ropeCost.drawMs += MillisecondsSince(drawStart);
+    ++ropeCost.drawnCount;
     if (ropeState.hovered && !hoveredAny) {
       hoveredAny = true;
       ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     }
     ++visibleLinkIndex;
   }
+  drawList->PopClipRect();
 
   for (auto it = focusReferenceRopes_.begin(); it != focusReferenceRopes_.end();) {
     if (it->second.lastFrameSeen != focusReferenceRopeFrame_) {
@@ -2147,6 +2271,8 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
       ++it;
     }
   }
+  ropeCost.activeStateCount = static_cast<int>(focusReferenceRopes_.size());
+  lastSourceRopeCost_ = ropeCost;
 }
 
 const TextEditor::SourceStyleDecoration* TextEditor::sourceStyleDecorationAtByteOffset(

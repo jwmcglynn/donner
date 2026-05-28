@@ -157,6 +157,44 @@ class CmakeTargetNameTest(unittest.TestCase):
         )
 
 
+class BazelXmlTargetInfoTest(unittest.TestCase):
+    def test_parse_cc_target_info_xml(self):
+        xml = textwrap.dedent(
+            """\
+            <?xml version="1.1" encoding="UTF-8" standalone="no"?>
+            <query version="2">
+                <rule class="cc_library" name="//donner/base:base">
+                    <list name="tags"/>
+                    <list name="srcs">
+                        <label value="//donner/base:Foo.cc"/>
+                        <label value="//other/package:Ignore.cc"/>
+                    </list>
+                    <list name="hdrs">
+                        <label value="//donner/base:Foo.h"/>
+                        <label value="//donner/base:nested/Bar.h"/>
+                        <label value="@entt//:entt.hpp"/>
+                    </list>
+                    <list name="copts">
+                        <string value="-I."/>
+                        <string value="-isystem/opt/include"/>
+                        <string value="-DNAME=&quot;a&amp;b&quot;"/>
+                    </list>
+                    <list name="includes">
+                        <string value="generated/include"/>
+                    </list>
+                </rule>
+            </query>
+            """
+        )
+
+        info = g._parse_cc_target_info_xml(xml, "//donner/base:base")
+
+        self.assertEqual(info.srcs, ["Foo.cc"])
+        self.assertEqual(info.hdrs, ["Foo.h", "nested/Bar.h"])
+        self.assertEqual(info.copts, ['-DNAME="a&b"'])
+        self.assertEqual(info.includes, ["generated/include"])
+
+
 class ExtractTargetsAndRefsTest(unittest.TestCase):
     """Smoke test the CMake parser on synthetic input."""
 

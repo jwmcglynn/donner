@@ -115,6 +115,88 @@ TEST(OverlayRendererTest, CaptureSnapshotAllowsConcurrentDomSelectionAndHover) {
   EXPECT_FALSE(snapshot.hoverAabbsDoc.empty());
 }
 
+TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenSelectionAndHoverChrome) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 100">
+              <rect id="visible" x="10" y="10" width="20" height="20" fill="red"/>
+              <rect id="offscreen" x="250" y="10" width="20" height="20" fill="blue"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.document().document().setCanvasSize(400, 100);
+
+  auto visible = app.document().document().querySelector("#visible");
+  auto offscreen = app.document().document().querySelector("#offscreen");
+  ASSERT_TRUE(visible.has_value());
+  ASSERT_TRUE(offscreen.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*visible, *offscreen});
+  const std::array<svg::SVGElement, 1> hoverElements{*offscreen};
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      std::nullopt, std::span<const svg::SVGElement>(hoverElements),
+      Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+
+  ASSERT_EQ(snapshot.paths.size(), 1u);
+  ASSERT_EQ(snapshot.aabbsDoc.size(), 1u);
+  EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0));
+  EXPECT_TRUE(snapshot.hoverPaths.empty());
+  EXPECT_TRUE(snapshot.hoverAabbsDoc.empty());
+  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+}
+
+TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenHandles) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+              <rect id="target" x="0" y="0" width="100" height="100" fill="red"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.document().document().setCanvasSize(100, 100);
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      std::nullopt, std::span<const svg::SVGElement>(), Box2d::FromXYWH(40.0, 40.0, 20.0, 20.0));
+
+  EXPECT_EQ(snapshot.paths.size(), 1u);
+  EXPECT_EQ(snapshot.aabbsDoc.size(), 1u);
+  EXPECT_TRUE(snapshot.handleBoxesDoc.empty());
+}
+
+TEST(OverlayRendererTest, CaptureSnapshotCombinedBoundsOnlySkipsSelectionPaths) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+              <rect id="a" x="10" y="10" width="20" height="20" fill="red"/>
+              <rect id="b" x="50" y="40" width="10" height="30" fill="blue"/>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  app.document().document().setCanvasSize(100, 100);
+
+  auto a = app.document().document().querySelector("#a");
+  auto b = app.document().document().querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*a, *b});
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d(),
+      std::nullopt, std::span<const svg::SVGElement>(), std::nullopt,
+      SelectionChromeDetail::CombinedBoundsOnly);
+
+  EXPECT_TRUE(snapshot.paths.empty());
+  ASSERT_EQ(snapshot.aabbsDoc.size(), 1u);
+  EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(10.0, 10.0, 50.0, 60.0));
+  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+}
+
 // The editor draws selection chrome into a *second* renderer's frame
 // (separate from the document bitmap) so clicks don't pay a full SVG
 // re-rasterize. This test mirrors that exact sequence: fresh Renderer,
@@ -259,6 +341,30 @@ TEST(OverlayRendererTest, ActiveRotationUsesOrientedBoundsUntilGestureEnds) {
   EXPECT_FALSE(settledSnapshot.orientedBoundsDoc.has_value());
   ASSERT_EQ(settledSnapshot.aabbsDoc.size(), 1u);
   EXPECT_EQ(settledSnapshot.aabbsDoc.front(), startBounds);
+}
+
+TEST(OverlayRendererTest, CaptureSnapshotCanProjectLiveDragBackToRepresentedDocument) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  rect->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(50.0, 0.0));
+  (void)app.flushFrame();
+  app.setSelection(*rect);
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, canvasFromDoc,
+      std::nullopt, std::span<const svg::SVGElement>(),
+      /*cullRectDoc=*/std::nullopt, SelectionChromeDetail::Full,
+      Transform2d::Translate(-50.0, 0.0));
+
+  ASSERT_EQ(snapshot.aabbsDoc.size(), 1u);
+  EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0));
+  ASSERT_EQ(snapshot.paths.size(), 1u);
+  EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(), Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0));
 }
 
 // Calling the overlay-only render path repeatedly (the click→reselect

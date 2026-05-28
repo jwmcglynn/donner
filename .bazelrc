@@ -110,9 +110,10 @@ common:wasm --//donner/svg/renderer:text_full=false
 # toolchain without cross-configuration link conflicts.
 common:wasm --//build_defs:disable_perf_opt_transition=true
 
-# Full editor wasm build. Usage:
+# Full editor WASM build. Uses Geode/WebGPU by default because the editor
+# presentation and performance work target Geode. Usage:
 #   bazel build --config=editor-wasm //donner/editor/wasm:wasm
-common:editor-wasm --config=wasm
+common:editor-wasm --config=wasm-geode
 common:editor-wasm --//donner/editor/wasm:enable_wasm=true
 build:editor-wasm --copt=-pthread
 build:editor-wasm --linkopt=-pthread
@@ -128,12 +129,9 @@ common:wasm-geode --//donner/svg/renderer:renderer_backend=geode
 common:wasm-geode --//donner/svg/renderer/geode:enable_geode=true
 build:wasm-geode --cxxopt=-fconstexpr-steps=10000000
 
-# Full editor WASM + Geode. Usage:
+# Backwards-compatible alias for the old explicit editor Geode config. Usage:
 #   bazel build --config=editor-wasm-geode //donner/editor/wasm:wasm
-common:editor-wasm-geode --config=wasm-geode
-common:editor-wasm-geode --//donner/editor/wasm:enable_wasm=true
-build:editor-wasm-geode --copt=-pthread
-build:editor-wasm-geode --linkopt=-pthread
+common:editor-wasm-geode --config=editor-wasm
 
 # Clang with libc++
 build:libc++ --action_env=CXXFLAGS=-stdlib=libc++

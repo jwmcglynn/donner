@@ -29,9 +29,31 @@
 /// window.
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 
 namespace donner::editor {
+
+/// Raster target derived from an editor viewport.
+///
+/// `semanticCanvasSizePx` is the canvas size used for SVG layout / render-tree
+/// preparation. `outputSizePx` is the bitmap or texture size actually rendered
+/// for presentation. At low zoom they are the same full-document raster. At
+/// high zoom, `outputSizePx` is capped to the pane plus margin and
+/// `outputFromDocument` maps the visible document window into that smaller
+/// surface.
+struct EditorRasterViewport {
+  /// Document-space rectangle covered by the output raster.
+  Box2d documentRect;
+  /// Output raster size in device pixels.
+  Vector2i outputSizePx = Vector2i::Zero();
+  /// Full-document canvas size in device pixels used for SVG layout semantics.
+  Vector2i semanticCanvasSizePx = Vector2i::Zero();
+  /// Transform from document/viewBox coordinates to output raster pixels.
+  Transform2d outputFromDocument;
+  /// True when the output raster covers only the pane window plus margin.
+  bool viewportBounded = false;
+};
 
 /// All viewport state for a single frame of the render pane. Plain
 /// data, side-effect-free, copyable, ~80 bytes.
@@ -42,9 +64,13 @@ struct ViewportState {
   static constexpr double kMaxZoom = 32.0;
   /// Hard cap on the rasterized canvas dimension on either axis. A
   /// 32x zoom on a 4K display would otherwise rasterize a multi-GB
-  /// bitmap; this clamp keeps us in a safe place at the cost of
-  /// transient pixelation when the user zooms very far in.
+  /// bitmap; this clamp keeps us in a safe place.
   static constexpr int kMaxCanvasDim = 8192;
+  /// Extra logical pixels around the pane that may be included in a
+  /// high-zoom raster target. This keeps small pans from immediately
+  /// needing a larger target while avoiding whole-document rasters at
+  /// extreme zoom.
+  static constexpr int kHighZoomRasterMarginScreenPx = 128;
 
   // ---------------------------------------------------------------------------
   // Inputs (set once per frame from user state).
@@ -104,10 +130,11 @@ struct ViewportState {
   /// regardless of texture resolution.
   [[nodiscard]] Box2d imageScreenRect() const { return documentToScreen(documentViewBox); }
 
-  /// Canvas size (in device pixels) the SVG renderer should produce
-  /// for the current zoom and DPR. Equal to
-  /// `documentViewBox.size() * zoom * devicePixelRatio`, clamped to
-  /// `[1, kMaxCanvasDim]` per axis.
+  /// Raster viewport the SVG renderer should produce for this editor view.
+  [[nodiscard]] EditorRasterViewport rasterViewport() const;
+
+  /// Output canvas size (in device pixels) the SVG renderer should produce.
+  /// Equivalent to `rasterViewport().outputSizePx`.
   [[nodiscard]] Vector2i desiredCanvasSize() const;
 
   // ---------------------------------------------------------------------------

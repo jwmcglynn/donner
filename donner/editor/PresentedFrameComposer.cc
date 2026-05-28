@@ -75,29 +75,6 @@ Transform2d ResolvePresentedTileDocumentTransform(
   return tileDocumentFromCachedDocument;
 }
 
-Vector2d ResolvePresentedOverlayDragTranslation(
-    const std::optional<PresentedDragBaseline>& dragBaseline) {
-  if (!dragBaseline.has_value()) {
-    return Vector2d::Zero();
-  }
-
-  return dragBaseline->activeTranslationDoc - dragBaseline->representedTranslationDoc;
-}
-
-Transform2d ResolvePresentedOverlayDocumentTransform(
-    const std::optional<PresentedDragBaseline>& dragBaseline) {
-  if (!dragBaseline.has_value()) {
-    return Transform2d();
-  }
-
-  const Transform2d representedDocumentFromCachedDocument =
-      DocumentFromCachedWithTranslationFallback(dragBaseline->representedDocumentFromCachedDocument,
-                                                dragBaseline->representedTranslationDoc);
-  const Transform2d activeDocumentFromCachedDocument = DocumentFromCachedWithTranslationFallback(
-      dragBaseline->activeDocumentFromCachedDocument, dragBaseline->activeTranslationDoc);
-  return representedDocumentFromCachedDocument.inverse() * activeDocumentFromCachedDocument;
-}
-
 std::optional<PresentedTileQuad> ComputePresentedTileQuad(
     const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
     const std::optional<PresentedDragBaseline>& dragBaseline) {

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -16,9 +17,11 @@
 #include "glad/glad.h"
 #endif
 
+#include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::geode {
@@ -32,6 +35,8 @@ namespace donner::editor {
 struct CompositedTileTextureIdentity {
   RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
   std::uint64_t generation = 0;
+  /// Payload dimensions in pixels. This is intentionally the valid content size, not the
+  /// power-of-two backing allocation size.
   Vector2i textureDimsPx = Vector2i::Zero();
   Vector2i rasterCanvasSize = Vector2i::Zero();
 
@@ -55,6 +60,44 @@ struct CompositedTileTextureIdentity {
  */
 [[nodiscard]] bool TextureIdentityMatchesCompositedTile(
     const CompositedTileTextureIdentity& cachedIdentity, const RenderResult::CompositedTile& tile);
+
+/**
+ * Return the power-of-two backing texture dimensions for a payload.
+ *
+ * @param payloadDimensions Valid content dimensions in pixels.
+ */
+[[nodiscard]] Vector2i PowerOfTwoTextureDimensionsForPayload(const Vector2i& payloadDimensions);
+
+/**
+ * Return the max UV that samples only the payload inside a backing texture.
+ *
+ * @param payloadDimensions Valid content dimensions in pixels.
+ * @param allocationDimensions Backing texture allocation dimensions in pixels.
+ */
+[[nodiscard]] Vector2d TextureUvBottomRightForPayload(const Vector2i& payloadDimensions,
+                                                      const Vector2i& allocationDimensions);
+
+/**
+ * Return the byte size of a CPU bitmap payload as submitted to the presentation cache.
+ *
+ * @param bitmap CPU renderer bitmap.
+ */
+[[nodiscard]] std::uint64_t BitmapPayloadBytes(const svg::RendererBitmap& bitmap);
+
+/**
+ * Return the approximate byte size of a backend texture payload, assuming RGBA8 storage.
+ *
+ * @param dimensions Texture dimensions in pixels.
+ */
+[[nodiscard]] std::uint64_t TexturePayloadBytes(const Vector2i& dimensions);
+
+/**
+ * Compute upload-cost counters for a composited preview without touching GL/WGPU state.
+ *
+ * @param preview Composited preview to inspect.
+ */
+[[nodiscard]] FrameCostBreakdown::CompositedUpload CostForCompositedPreviewUpload(
+    const RenderResult::CompositedPreview& preview);
 
 /**
  * Owns the GL textures the advanced editor uses for overlay and composited presentation.
@@ -85,7 +128,8 @@ public:
   /// Allocates/reuses one texture per tile id; bumps a per-tile
   /// upload-generation so identity uploads short-circuit; evicts
   /// textures whose tile is absent from the snapshot.
-  void uploadComposited(const RenderResult::CompositedPreview& preview);
+  void uploadComposited(const RenderResult::CompositedPreview& preview,
+                        std::optional<EditorRasterViewport> rasterViewport = std::nullopt);
 
   /// Advance one presentation frame, retiring WGPU texture snapshots whose
   /// handles have aged past the backend's frames-in-flight window.
@@ -98,6 +142,18 @@ public:
 
   [[nodiscard]] int overlayWidth() const { return overlayWidth_; }
   [[nodiscard]] int overlayHeight() const { return overlayHeight_; }
+  /// Bottom-right UV for sampling the valid overlay payload from its backing texture.
+  [[nodiscard]] const Vector2d& overlayUvBottomRight() const { return overlayUvBottomRight_; }
+  /// Screen rect for viewport-space overlay textures.
+  ///
+  /// Nullopt means the overlay texture uses the legacy document-viewBox
+  /// placement path.
+  [[nodiscard]] const std::optional<Box2d>& overlayScreenRect() const { return overlayScreenRect_; }
+  /// Record the screen-space placement for the currently uploaded overlay.
+  ///
+  /// @param screenRect ImGui screen rect covered by the overlay texture, or nullopt to use the
+  ///   legacy document-viewBox placement path.
+  void setOverlayScreenRect(std::optional<Box2d> screenRect);
 
   /// One composite-tile entry as the presenter sees it: the GL
   /// texture handle (resolved from the upload cache) plus the
@@ -113,6 +169,7 @@ public:
     Vector2d canvasOffsetDoc = Vector2d::Zero();
     Vector2d bitmapDimsDoc = Vector2d::Zero();
     Vector2d dragTranslationDoc = Vector2d::Zero();
+    Vector2d uvBottomRight = Vector2d(1.0, 1.0);
     Transform2d documentFromCachedDocument = Transform2d();
     bool metadataOnly = false;
     bool isDragTarget = false;
@@ -121,12 +178,25 @@ public:
   /// Paint-order tile view; empty when no composited preview has been
   /// uploaded yet (or the preview was cleared via `resetComposited`).
   [[nodiscard]] const std::vector<TileView>& tiles() const { return tiles_; }
+  /// Last retained unbounded full-document tile set, drawn underneath
+  /// viewport-bounded tiles as a coherent zoom-out fallback.
+  [[nodiscard]] const std::vector<TileView>& overviewTiles() const { return overviewTiles_; }
+  /// True when the active tile set was rendered from a viewport-bounded raster target.
+  [[nodiscard]] bool activeTilesViewportBounded() const { return activeTilesViewportBounded_; }
   /// Number of metadata-only tiles skipped during the most recent composited
   /// upload because their cached texture identity was absent or stale.
   [[nodiscard]] int metadataOnlyMissCount() const { return metadataOnlyMissCount_; }
   /// Number of duplicate live texture handles found in the most recent
   /// composited upload across different tile ids.
   [[nodiscard]] int duplicateLiveTextureCount() const { return duplicateLiveTextureCount_; }
+  /// Cost counters for the most recent composited upload.
+  [[nodiscard]] const FrameCostBreakdown::CompositedUpload& lastCompositedUploadCost() const {
+    return lastCompositedUploadCost_;
+  }
+  /// Cost counters for the most recent overlay upload or clear.
+  [[nodiscard]] const FrameCostBreakdown::Overlay& lastOverlayUploadCost() const {
+    return lastOverlayUploadCost_;
+  }
 
 private:
 #ifdef DONNER_EDITOR_WGPU
@@ -139,11 +209,14 @@ private:
   static ImTextureID ToImTextureId(NativeTextureHandle texture);
 #ifdef DONNER_EDITOR_WGPU
   static ImTextureID ToImTextureId(const svg::RendererTextureSnapshot* textureSnapshot);
-  std::shared_ptr<WgpuUploadedTexture> uploadBitmapToWgpu(const svg::RendererBitmap& bitmap);
+  std::shared_ptr<WgpuUploadedTexture> uploadBitmapToWgpu(
+      const svg::RendererBitmap& bitmap,
+      const std::shared_ptr<WgpuUploadedTexture>& reusableTexture = nullptr);
 #endif
 #ifndef DONNER_EDITOR_WGPU
   static void UploadBitmap(GLuint texture, const svg::RendererBitmap& bitmap, int* outWidth,
-                           int* outHeight);
+                           int* outHeight, int* outAllocatedWidth, int* outAllocatedHeight,
+                           Vector2d* outUvBottomRight);
   static void InitializeTexture(GLuint texture);
 #endif
 
@@ -157,6 +230,9 @@ private:
     std::uint64_t uploadedGeneration = 0;
     int width = 0;
     int height = 0;
+    int allocatedWidth = 0;
+    int allocatedHeight = 0;
+    Vector2d uvBottomRight = Vector2d(1.0, 1.0);
   };
 
 #ifdef DONNER_EDITOR_WGPU
@@ -185,17 +261,30 @@ private:
 
   int overlayWidth_ = 0;
   int overlayHeight_ = 0;
+  int overlayAllocatedWidth_ = 0;
+  int overlayAllocatedHeight_ = 0;
+  Vector2d overlayUvBottomRight_ = Vector2d(1.0, 1.0);
+  std::optional<Box2d> overlayScreenRect_;
 
   /// Tile texture cache keyed on `CompositedTile::id`. Entries
   /// persist across frames so identical tiles re-use the same GL
   /// texture (only re-uploaded when their `generation` advances).
   std::unordered_map<std::string, CachedTextureEntry> tileTextures_;
+  /// Separately-owned copy of the last unbounded tile set. Active
+  /// high-zoom uploads may reuse the same tile ids at a smaller raster
+  /// size, so overview textures cannot share the active cache entries.
+  std::unordered_map<std::string, CachedTextureEntry> overviewTileTextures_;
 
   /// Paint-order view of the most recent `uploadComposited` call.
   /// Rebuilt every upload (cheap — N tiles, plain values).
   std::vector<TileView> tiles_;
+  /// Paint-order view of `overviewTileTextures_`.
+  std::vector<TileView> overviewTiles_;
+  bool activeTilesViewportBounded_ = false;
   int metadataOnlyMissCount_ = 0;
   int duplicateLiveTextureCount_ = 0;
+  FrameCostBreakdown::CompositedUpload lastCompositedUploadCost_;
+  FrameCostBreakdown::Overlay lastOverlayUploadCost_;
 
 #ifdef DONNER_EDITOR_WGPU
   RetiredSnapshotBatch pendingRetiredSnapshots_;

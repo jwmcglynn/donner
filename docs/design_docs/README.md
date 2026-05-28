@@ -99,6 +99,7 @@ conventions automated agents should follow when editing design docs.
 | 0042 | [geode_slug_conformance](0042-geode_slug_conformance.md) | Developer reference | Geode Slug implementation reference: encoder + shader pipeline, invariants, and known limitations. |
 | 0043 | [deterministic_replay_testing](0043-deterministic_replay_testing.md) | Design | Deterministic multi-thread replay framework and premortem for re-enabling #601-related tests. |
 | 0044 | [coverage_improvement_2026q2](0044-coverage_improvement_2026q2.md) | Implemented | Raised line coverage 81.5%→85.6% (phases 0–4); also fixed 3 bugs the push surfaced (2 TextEditor crashes + EncodeColor CurrentColor). |
+| 0044 | [editor_fluid_canvas_rendering](0044-editor_fluid_canvas_rendering.md) | Implementation in progress | Viewport-bounded high-zoom rendering, immediate-mode editor chrome/spans, and large-selection LOD for fluid editor UX. |
 
 ## Cross-reference: developer docs
 

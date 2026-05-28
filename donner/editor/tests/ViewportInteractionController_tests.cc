@@ -16,6 +16,49 @@ TEST(ViewportInteractionControllerTest, FrameHistoryTracksLatestAndMax) {
   EXPECT_FLOAT_EQ(controller.frameHistory().max(), 24.0f);
 }
 
+TEST(ViewportInteractionControllerTest, FrameHistoryTracksProfilerCostForLatestFrame) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  FrameCostBreakdown cost;
+  cost.overlay.captureMs = 1.25;
+  cost.overlay.drawMs = 2.5;
+  cost.overlay.snapshotMs = 0.75;
+  cost.overlay.uploadMs = 0.5;
+  cost.compositedUpload.uploadMs = 1.0;
+  cost.sourceRopes.layoutMs = 0.25;
+  cost.sourceRopes.updateMs = 0.125;
+  cost.sourceRopes.drawMs = 0.375;
+  controller.frameHistory().setLatestFrameCost(cost);
+
+  const std::size_t latestIdx =
+      (controller.frameHistory().writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  const FrameProfilerSample& profiler = controller.frameHistory().profiler[latestIdx];
+  EXPECT_FLOAT_EQ(profiler.overlayCaptureMs, 1.25f);
+  EXPECT_FLOAT_EQ(profiler.overlayDrawMs, 2.5f);
+  EXPECT_FLOAT_EQ(profiler.overlaySnapshotMs, 0.75f);
+  EXPECT_FLOAT_EQ(profiler.overlayUploadMs, 0.5f);
+  EXPECT_FLOAT_EQ(profiler.compositedUploadMs, 1.0f);
+  EXPECT_FLOAT_EQ(profiler.sourceRopeLayoutMs, 0.25f);
+  EXPECT_FLOAT_EQ(profiler.sourceRopeUpdateMs, 0.125f);
+  EXPECT_FLOAT_EQ(profiler.sourceRopeDrawMs, 0.375f);
+  EXPECT_FLOAT_EQ(profiler.totalProfiledMs(), 6.75f);
+}
+
+TEST(ViewportInteractionControllerTest, NewFrameClearsProfilerCostSlot) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  FrameCostBreakdown cost;
+  cost.overlay.captureMs = 1.0;
+  controller.frameHistory().setLatestFrameCost(cost);
+  controller.noteFrameDelta(17.0f);
+
+  const std::size_t latestIdx =
+      (controller.frameHistory().writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  EXPECT_FLOAT_EQ(controller.frameHistory().profiler[latestIdx].totalProfiledMs(), 0.0f);
+}
+
 TEST(ViewportInteractionControllerTest, ApplyZoomUsesViewportCenterMath) {
   ViewportInteractionController controller;
   controller.viewport().paneOrigin = Vector2d::Zero();

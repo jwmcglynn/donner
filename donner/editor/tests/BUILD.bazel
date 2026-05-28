@@ -435,7 +435,13 @@ donner_cc_test(
     deps = [
         "//donner/editor:gl_texture_cache",
         "@com_google_gtest//:gtest_main",
-    ],
+    ] + select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+            "//donner/svg/renderer/geode:geode_device",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_test(
@@ -724,6 +730,7 @@ donner_cc_test(
         "//:zoom-out-drag-jump.rnr",
     ],
     target_compatible_with = select({
+        "@platforms//os:macos": [],
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),

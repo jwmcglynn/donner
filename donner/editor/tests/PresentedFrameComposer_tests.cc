@@ -82,17 +82,6 @@ TEST(PresentedFrameComposerTest, NonDragTilesKeepCachedTileTranslation) {
   EXPECT_EQ(ResolvePresentedTileDragTranslation(tile, baseline), Vector2d(1.0, 2.0));
 }
 
-TEST(PresentedFrameComposerTest, OverlayAddsLiveDeltaToCachedTranslation) {
-  const std::optional<PresentedDragBaseline> baseline =
-      Baseline(Entity{123}, Vector2d(14.0, 6.0), Vector2d(20.0, 8.0));
-
-  EXPECT_EQ(ResolvePresentedOverlayDragTranslation(baseline), Vector2d(6.0, 2.0));
-}
-
-TEST(PresentedFrameComposerTest, OverlayWithoutBaselineStaysAtCachedPlacement) {
-  EXPECT_EQ(ResolvePresentedOverlayDragTranslation(std::nullopt), Vector2d::Zero());
-}
-
 TEST(PresentedFrameComposerTest, ComputesTileRectFromDocumentGeometry) {
   PresentedFrameTileGeometry tile;
   tile.canvasOffsetDoc = Vector2d(10.0, 20.0);
@@ -148,19 +137,6 @@ TEST(PresentedFrameComposerTest, RepresentedAffineTransformDoesNotDoubleApply) {
 
   ASSERT_TRUE(quad.has_value());
   EXPECT_EQ(quad->bottomRight, Vector2d(20.0, 20.0));
-}
-
-TEST(PresentedFrameComposerTest, OverlayAffineTransformUsesRepresentedToActiveDelta) {
-  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
-      .entity = Entity{123},
-      .representedDocumentFromCachedDocument = Transform2d::Scale(2.0),
-      .activeDocumentFromCachedDocument = Transform2d::Scale(3.0),
-  };
-
-  const Transform2d documentFromOverlayDocument =
-      ResolvePresentedOverlayDocumentTransform(baseline);
-
-  EXPECT_EQ(documentFromOverlayDocument.transformPosition(Vector2d(2.0, 2.0)), Vector2d(3.0, 3.0));
 }
 
 TEST(PresentedFrameComposerTest, ComputesTileRectFromNonZeroCanvasOrigin) {

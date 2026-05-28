@@ -36,6 +36,22 @@ public:
   void draw(SVGDocument& document);
 
   /**
+   * Render the given \ref SVGDocument into @p viewport after applying
+   * @p surfaceFromCanvas to every canvas-space draw command.
+   *
+   * This is used by editor-style camera rendering: SVG layout can still use
+   * the document's semantic full canvas, while the backend only allocates the
+   * visible output surface.
+   *
+   * @param document Document to render.
+   * @param viewport Output viewport for the backend frame.
+   * @param surfaceFromCanvas Transform from document canvas coordinates to the
+   *   output surface.
+   */
+  void draw(SVGDocument& document, const RenderViewport& viewport,
+            const Transform2d& surfaceFromCanvas);
+
+  /**
    * Capture an immutable render snapshot from the given \ref SVGDocument.
    *
    * Snapshot capture prepares the live render tree under document access, then
@@ -131,6 +147,8 @@ private:
   std::optional<Box2d> preparedFilterRegionFor(Entity entity) const;
 
   void drawPreparedDocument(SVGDocument& document);
+  void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
+                            const Transform2d& surfaceFromCanvas);
   void traverse(RenderingInstanceView& view, Registry& registry);
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);

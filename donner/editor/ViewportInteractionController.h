@@ -5,6 +5,7 @@
 #include <optional>
 #include <vector>
 
+#include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/RenderPaneGesture.h"
 #include "donner/editor/Tool.h"
@@ -13,6 +14,29 @@
 namespace donner::editor {
 
 constexpr std::size_t kFrameHistoryCapacity = 120;
+
+/// Render-pane profiler costs aligned with one UI frame-history sample.
+struct FrameProfilerSample {
+  /// Time spent collecting overlay chrome geometry.
+  float overlayCaptureMs = 0.0f;
+  /// Time spent drawing overlay chrome into the overlay renderer.
+  float overlayDrawMs = 0.0f;
+  /// Time spent snapshotting overlay chrome from the renderer.
+  float overlaySnapshotMs = 0.0f;
+  /// Time spent uploading or registering overlay presentation payloads.
+  float overlayUploadMs = 0.0f;
+  /// Time spent uploading or registering composited content tiles.
+  float compositedUploadMs = 0.0f;
+  /// Time spent laying out source-focus ropes.
+  float sourceRopeLayoutMs = 0.0f;
+  /// Time spent updating source-focus rope simulation/state.
+  float sourceRopeUpdateMs = 0.0f;
+  /// Time spent issuing source-focus rope draw commands.
+  float sourceRopeDrawMs = 0.0f;
+
+  /// Sum of known profiled costs.
+  [[nodiscard]] float totalProfiledMs() const;
+};
 
 struct FrameHistory {
   /// ImGui frame delta per UI-thread frame — populated from
@@ -24,6 +48,8 @@ struct FrameHistory {
   /// consumers skip zero entries so the graph doesn't drop to zero between
   /// drags.
   std::array<float, kFrameHistoryCapacity> backendMs{};
+  /// Known frame-cost divisions drawn as the color-bar profiler.
+  std::array<FrameProfilerSample, kFrameHistoryCapacity> profiler{};
   std::size_t writeIndex = 0;
   std::size_t samples = 0;
   /// Most recent non-zero worker sample, so latched-worker-latency
@@ -41,6 +67,9 @@ struct FrameHistory {
   /// yet. Also updates `lastBackendMs` so UI elements that want to show the
   /// latest measured worker latency have a persistent value.
   void setLatestBackendMs(float ms);
+  /// Record the editor render-cost breakdown for the most recently pushed
+  /// frame. No-op if no frame has been pushed yet.
+  void setLatestFrameCost(const FrameCostBreakdown& cost);
   [[nodiscard]] float latest() const;
   [[nodiscard]] float max() const;
 };

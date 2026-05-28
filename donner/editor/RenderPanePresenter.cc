@@ -21,6 +21,41 @@ constexpr float kTargetFrameMs = 1000.0f / 60.0f;
 constexpr float kOverBudgetThresholdMs = kTargetFrameMs * 1.1f;
 constexpr float kFrameGraphWidth = 240.0f;
 constexpr float kFrameGraphHeight = 32.0f;
+constexpr ImU32 kFrameGraphOtherColor = IM_COL32(85, 140, 95, 255);
+constexpr ImU32 kFrameGraphOverBudgetOtherColor = IM_COL32(150, 65, 65, 255);
+constexpr ImU32 kFrameGraphOverlayCaptureColor = IM_COL32(255, 205, 86, 255);
+constexpr ImU32 kFrameGraphOverlayRenderColor = IM_COL32(255, 145, 61, 255);
+constexpr ImU32 kFrameGraphOverlayUploadColor = IM_COL32(212, 92, 255, 255);
+constexpr ImU32 kFrameGraphCompositedUploadColor = IM_COL32(0, 220, 240, 255);
+constexpr ImU32 kFrameGraphSourceRopeColor = IM_COL32(117, 132, 255, 255);
+
+ImVec4 ImU32ToImVec4(ImU32 color) {
+  return ImGui::ColorConvertU32ToFloat4(color);
+}
+
+void DrawProfilerLegendItem(ImU32 color, const char* label, bool sameLine) {
+  if (sameLine) {
+    ImGui::SameLine();
+  }
+  ImGui::PushStyleColor(ImGuiCol_Text, ImU32ToImVec4(color));
+  ImGui::TextUnformatted(label);
+  ImGui::PopStyleColor();
+}
+
+void DrawStackSegment(ImDrawList* dl, const ImVec2& barTopLeft, float barWidth, float graphHeight,
+                      float scaleMs, float* stackedMs, float segmentMs, ImU32 color) {
+  if (segmentMs <= 0.0f || scaleMs <= 0.0f) {
+    return;
+  }
+
+  const float y0 = barTopLeft.y + graphHeight - (*stackedMs / scaleMs) * graphHeight;
+  *stackedMs += segmentMs;
+  const float y1 =
+      barTopLeft.y + graphHeight - (std::min(*stackedMs, scaleMs) / scaleMs) * graphHeight;
+  if (y1 < y0) {
+    dl->AddRectFilled(ImVec2(barTopLeft.x, y1), ImVec2(barTopLeft.x + barWidth, y0), color);
+  }
+}
 
 void RenderFrameGraph(const FrameHistory& history) {
   const ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -64,14 +99,29 @@ void RenderFrameGraph(const FrameHistory& history) {
     const std::size_t readIdx =
         (history.writeIndex + kFrameHistoryCapacity - history.samples + i) % kFrameHistoryCapacity;
     const float ms = history.deltaMs[readIdx];
-    const float clamped = std::min(ms, scaleMs);
-    const float barHeight = (clamped / scaleMs) * kFrameGraphHeight;
     const bool overBudget = ms > kOverBudgetThresholdMs;
-    const ImU32 color = overBudget ? IM_COL32(220, 60, 60, 255) : IM_COL32(80, 200, 100, 255);
-
     const float x = origin.x + static_cast<float>(i) * barWidth;
-    dl->AddRectFilled(ImVec2(x, origin.y + kFrameGraphHeight - barHeight),
-                      ImVec2(x + barWidth, origin.y + kFrameGraphHeight), color);
+    const FrameProfilerSample& profiler = history.profiler[readIdx];
+    const float overlayRenderMs = profiler.overlayDrawMs + profiler.overlaySnapshotMs;
+    const float sourceRopesMs =
+        profiler.sourceRopeLayoutMs + profiler.sourceRopeUpdateMs + profiler.sourceRopeDrawMs;
+    const float profiledMs = profiler.overlayCaptureMs + overlayRenderMs +
+                             profiler.overlayUploadMs + profiler.compositedUploadMs + sourceRopesMs;
+    const float otherMs = std::max(0.0f, ms - profiledMs);
+    float stackedMs = 0.0f;
+    const ImVec2 barOrigin(x, origin.y);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, scaleMs, &stackedMs, otherMs,
+                     overBudget ? kFrameGraphOverBudgetOtherColor : kFrameGraphOtherColor);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, scaleMs, &stackedMs,
+                     profiler.overlayCaptureMs, kFrameGraphOverlayCaptureColor);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, scaleMs, &stackedMs,
+                     overlayRenderMs, kFrameGraphOverlayRenderColor);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, scaleMs, &stackedMs,
+                     profiler.overlayUploadMs, kFrameGraphOverlayUploadColor);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, scaleMs, &stackedMs,
+                     profiler.compositedUploadMs, kFrameGraphCompositedUploadColor);
+    DrawStackSegment(dl, barOrigin, barWidth, kFrameGraphHeight, scaleMs, &stackedMs, sourceRopesMs,
+                     kFrameGraphSourceRopeColor);
   }
 
   // Async worker/presentation time overlay. Only non-zero samples are plotted —
@@ -121,6 +171,12 @@ void RenderFrameGraph(const FrameHistory& history) {
     ImGui::Text("  worker %.2f ms", displayedBackendMs);
     ImGui::PopStyleColor();
   }
+  DrawProfilerLegendItem(kFrameGraphOtherColor, "other", /*sameLine=*/false);
+  DrawProfilerLegendItem(kFrameGraphOverlayCaptureColor, "cap", /*sameLine=*/true);
+  DrawProfilerLegendItem(kFrameGraphOverlayRenderColor, "draw", /*sameLine=*/true);
+  DrawProfilerLegendItem(kFrameGraphOverlayUploadColor, "up", /*sameLine=*/true);
+  DrawProfilerLegendItem(kFrameGraphCompositedUploadColor, "tile", /*sameLine=*/true);
+  DrawProfilerLegendItem(kFrameGraphSourceRopeColor, "rope", /*sameLine=*/true);
 }
 
 void DrawCheckerboard(ImDrawList* drawList, const ImVec2& topLeft, const ImVec2& bottomRight) {
@@ -175,19 +231,20 @@ std::optional<PresentedDragBaseline> PresentedBaselineFromSelectPreviews(
   };
 }
 
-std::optional<PresentedDragBaseline> TranslationOverlayBaselineFromSelectPreviews(
-    const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-    const std::optional<SelectTool::ActiveDragPreview>& displayedPreview) {
-  if (!activePreview.has_value() || !displayedPreview.has_value() ||
-      !activePreview->documentFromCachedDocument.isTranslation() ||
-      !displayedPreview->documentFromCachedDocument.isTranslation()) {
-    return std::nullopt;
-  }
-  return PresentedBaselineFromSelectPreviews(activePreview, displayedPreview);
-}
-
 ImVec2 ToImVec2(const Vector2d& value) {
   return ImVec2(static_cast<float>(value.x), static_cast<float>(value.y));
+}
+
+bool IsFinite(const Vector2d& value) {
+  return std::isfinite(value.x) && std::isfinite(value.y);
+}
+
+Box2d PresentedTileQuadBounds(const PresentedTileQuad& tileQuad) {
+  Box2d bounds = Box2d::CreateEmpty(tileQuad.topLeft);
+  bounds.addPoint(tileQuad.topRight);
+  bounds.addPoint(tileQuad.bottomRight);
+  bounds.addPoint(tileQuad.bottomLeft);
+  return bounds;
 }
 
 }  // namespace
@@ -211,24 +268,99 @@ bool ShouldPresentCompositedTile(const GlTextureCache::TileView& tile, Entity su
   return true;
 }
 
+bool HasPresentableDragTargetTile(
+    const GlTextureCache& textures,
+    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
+    Entity suppressedLayerEntity, bool suppressDragTargetTiles) {
+  if (!activeDragPreview.has_value()) {
+    return false;
+  }
+
+  const auto matchesActiveDragTarget = [&](const GlTextureCache::TileView& tile) {
+    return tile.isDragTarget && tile.layerEntity == activeDragPreview->entity &&
+           ShouldPresentCompositedTile(tile, suppressedLayerEntity, suppressDragTargetTiles);
+  };
+
+  if (std::ranges::any_of(textures.tiles(), matchesActiveDragTarget)) {
+    return true;
+  }
+
+  return textures.activeTilesViewportBounded() &&
+         std::ranges::any_of(textures.overviewTiles(), matchesActiveDragTarget);
+}
+
+bool PresentedTileQuadIntersectsScreenRect(const PresentedTileQuad& tileQuad,
+                                           const Box2d& screenRect) {
+  if (!IsFinite(tileQuad.topLeft) || !IsFinite(tileQuad.topRight) ||
+      !IsFinite(tileQuad.bottomRight) || !IsFinite(tileQuad.bottomLeft) ||
+      !IsFinite(screenRect.topLeft) || !IsFinite(screenRect.bottomRight)) {
+    return false;
+  }
+  if (screenRect.bottomRight.x <= screenRect.topLeft.x ||
+      screenRect.bottomRight.y <= screenRect.topLeft.y) {
+    return false;
+  }
+
+  const Box2d tileBounds = PresentedTileQuadBounds(tileQuad);
+  return tileBounds.bottomRight.x > screenRect.topLeft.x &&
+         tileBounds.topLeft.x < screenRect.bottomRight.x &&
+         tileBounds.bottomRight.y > screenRect.topLeft.y &&
+         tileBounds.topLeft.y < screenRect.bottomRight.y;
+}
+
+std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect, const Box2d& imageRect) {
+  if (!IsFinite(paneRect.topLeft) || !IsFinite(paneRect.bottomRight) ||
+      !IsFinite(imageRect.topLeft) || !IsFinite(imageRect.bottomRight)) {
+    return std::nullopt;
+  }
+
+  const Box2d clipRect(Vector2d(std::max(paneRect.topLeft.x, imageRect.topLeft.x),
+                                std::max(paneRect.topLeft.y, imageRect.topLeft.y)),
+                       Vector2d(std::min(paneRect.bottomRight.x, imageRect.bottomRight.x),
+                                std::min(paneRect.bottomRight.y, imageRect.bottomRight.y)));
+  if (clipRect.bottomRight.x <= clipRect.topLeft.x ||
+      clipRect.bottomRight.y <= clipRect.topLeft.y) {
+    return std::nullopt;
+  }
+
+  return clipRect;
+}
+
 void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   const bool hasVisibleTiles =
       std::ranges::any_of(state.textures.tiles(), [&](const GlTextureCache::TileView& tile) {
         return ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
                                            state.suppressDragTargetTiles);
       });
+  const bool drawOverviewTiles = state.textures.activeTilesViewportBounded();
+  const bool hasVisibleOverviewTiles =
+      drawOverviewTiles &&
+      std::ranges::any_of(state.textures.overviewTiles(),
+                          [&](const GlTextureCache::TileView& tile) {
+                            return ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
+                                                               state.suppressDragTargetTiles);
+                          });
   const bool hasOverlay = state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0;
-  if (!hasVisibleTiles && !hasOverlay) {
+  if (!hasVisibleTiles && !hasVisibleOverviewTiles && !hasOverlay) {
     ImGui::TextUnformatted("(no rendered image)");
     return;
   }
 
+  const Box2d paneRect = Box2d::FromXYWH(state.viewport.paneOrigin.x, state.viewport.paneOrigin.y,
+                                         state.viewport.paneSize.x, state.viewport.paneSize.y);
+  if (paneRect.bottomRight.x <= paneRect.topLeft.x ||
+      paneRect.bottomRight.y <= paneRect.topLeft.y) {
+    return;
+  }
   const Box2d screenRect = state.viewport.imageScreenRect();
+  const std::optional<Box2d> imageClipRect = PresentedImageClipRect(paneRect, screenRect);
   const ImVec2 imageOrigin(static_cast<float>(screenRect.topLeft.x),
                            static_cast<float>(screenRect.topLeft.y));
   const ImVec2 imageBottomRight(static_cast<float>(screenRect.bottomRight.x),
                                 static_cast<float>(screenRect.bottomRight.y));
   ImDrawList* paneDrawList = ImGui::GetWindowDrawList();
+  paneDrawList->PushClipRect(ToImVec2(paneRect.topLeft), ToImVec2(paneRect.bottomRight),
+                             /*intersect_with_current_clip_rect=*/true);
   DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
 
   const double pxPerDoc = state.viewport.pixelsPerDocUnit();
@@ -237,22 +369,45 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
       Transform2d::Scale(pxPerDoc) * Transform2d::Translate(imageOriginScreen);
   const std::optional<PresentedDragBaseline> dragBaseline =
       PresentedBaselineFromSelectPreviews(state.activeDragPreview, state.displayedDragPreview);
-  bool hasDragTargetTile = false;
-  for (const auto& tile : state.textures.tiles()) {
+  const auto drawTile = [&](const GlTextureCache::TileView& tile) {
     if (!ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
                                      state.suppressDragTargetTiles)) {
-      continue;
+      return;
     }
-    hasDragTargetTile = hasDragTargetTile || tile.isDragTarget;
     const std::optional<PresentedTileQuad> tileQuad = ComputePresentedTileQuad(
         PresentedGeometryFromTile(tile), screenFromCanvasTransform, dragBaseline);
     if (!tileQuad.has_value()) {
-      continue;
+      return;
     }
+    if (!imageClipRect.has_value() ||
+        !PresentedTileQuadIntersectsScreenRect(*tileQuad, *imageClipRect)) {
+      return;
+    }
+    const ImVec2 uvTopLeft(0.0f, 0.0f);
+    const ImVec2 uvTopRight(static_cast<float>(tile.uvBottomRight.x), 0.0f);
+    const ImVec2 uvBottomRight(static_cast<float>(tile.uvBottomRight.x),
+                               static_cast<float>(tile.uvBottomRight.y));
+    const ImVec2 uvBottomLeft(0.0f, static_cast<float>(tile.uvBottomRight.y));
     paneDrawList->AddImageQuad(tile.texture, ToImVec2(tileQuad->topLeft),
                                ToImVec2(tileQuad->topRight), ToImVec2(tileQuad->bottomRight),
-                               ToImVec2(tileQuad->bottomLeft));
+                               ToImVec2(tileQuad->bottomLeft), uvTopLeft, uvTopRight, uvBottomRight,
+                               uvBottomLeft);
+  };
+  if (imageClipRect.has_value()) {
+    paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
+                               ToImVec2(imageClipRect->bottomRight),
+                               /*intersect_with_current_clip_rect=*/true);
+    if (drawOverviewTiles) {
+      for (const auto& tile : state.textures.overviewTiles()) {
+        drawTile(tile);
+      }
+    }
+    for (const auto& tile : state.textures.tiles()) {
+      drawTile(tile);
+    }
+    paneDrawList->PopClipRect();
   }
+  paneDrawList->PopClipRect();
 
   // All editor chrome — path outlines, selection AABBs, and the
   // marquee rect — is rasterized into `overlayTexture` by
@@ -261,35 +416,43 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   // was removed so there is a single invalidation envelope the GPU
   // backend (Geode) can optimize end-to-end.
   if (state.showOverlay && state.textures.overlayWidth() > 0 &&
-      state.textures.overlayHeight() > 0) {
-    const std::optional<PresentedDragBaseline> overlayBaseline =
-        hasDragTargetTile ? TranslationOverlayBaselineFromSelectPreviews(state.activeDragPreview,
-                                                                         state.overlayDragPreview)
-                          : std::nullopt;
-    const Transform2d documentFromOverlayDocument =
-        ResolvePresentedOverlayDocumentTransform(overlayBaseline);
-    const Vector2d docTopLeft = state.viewport.documentViewBox.topLeft;
-    const Vector2d docTopRight(state.viewport.documentViewBox.bottomRight.x,
-                               state.viewport.documentViewBox.topLeft.y);
-    const Vector2d docBottomRight = state.viewport.documentViewBox.bottomRight;
-    const Vector2d docBottomLeft(state.viewport.documentViewBox.topLeft.x,
-                                 state.viewport.documentViewBox.bottomRight.y);
-    const auto overlayPoint = [&](const Vector2d& documentPoint) {
-      return state.viewport.documentToScreen(
-          documentFromOverlayDocument.transformPosition(documentPoint));
-    };
-    paneDrawList->PushClipRect(imageOrigin, imageBottomRight,
-                               /*intersect_with_current_clip_rect=*/true);
-    paneDrawList->AddImageQuad(state.textures.overlayTexture(), ToImVec2(overlayPoint(docTopLeft)),
-                               ToImVec2(overlayPoint(docTopRight)),
-                               ToImVec2(overlayPoint(docBottomRight)),
-                               ToImVec2(overlayPoint(docBottomLeft)));
-    paneDrawList->PopClipRect();
+      state.textures.overlayHeight() > 0 && imageClipRect.has_value()) {
+    if (state.textures.overlayScreenRect().has_value()) {
+      const Box2d& overlayScreenRect = *state.textures.overlayScreenRect();
+      paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
+                                 ToImVec2(imageClipRect->bottomRight),
+                                 /*intersect_with_current_clip_rect=*/true);
+      paneDrawList->AddImage(state.textures.overlayTexture(), ToImVec2(overlayScreenRect.topLeft),
+                             ToImVec2(overlayScreenRect.bottomRight), ImVec2(0.0f, 0.0f),
+                             ToImVec2(state.textures.overlayUvBottomRight()));
+      paneDrawList->PopClipRect();
+    } else {
+      const Vector2d docTopLeft = state.viewport.documentViewBox.topLeft;
+      const Vector2d docTopRight(state.viewport.documentViewBox.bottomRight.x,
+                                 state.viewport.documentViewBox.topLeft.y);
+      const Vector2d docBottomRight = state.viewport.documentViewBox.bottomRight;
+      const Vector2d docBottomLeft(state.viewport.documentViewBox.topLeft.x,
+                                   state.viewport.documentViewBox.bottomRight.y);
+      const auto overlayPoint = [&](const Vector2d& documentPoint) {
+        return state.viewport.documentToScreen(documentPoint);
+      };
+      paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
+                                 ToImVec2(imageClipRect->bottomRight),
+                                 /*intersect_with_current_clip_rect=*/true);
+      const Vector2d overlayUvBottomRight = state.textures.overlayUvBottomRight();
+      paneDrawList->AddImageQuad(
+          state.textures.overlayTexture(), ToImVec2(overlayPoint(docTopLeft)),
+          ToImVec2(overlayPoint(docTopRight)), ToImVec2(overlayPoint(docBottomRight)),
+          ToImVec2(overlayPoint(docBottomLeft)), ImVec2(0.0f, 0.0f),
+          ImVec2(static_cast<float>(overlayUvBottomRight.x), 0.0f), ToImVec2(overlayUvBottomRight),
+          ImVec2(0.0f, static_cast<float>(overlayUvBottomRight.y)));
+      paneDrawList->PopClipRect();
+    }
   }
 
   if (state.showFrameGraph) {
     constexpr float kFramePadding = 8.0f;
-    const float graphHeight = kFrameGraphHeight + ImGui::GetTextLineHeightWithSpacing();
+    const float graphHeight = kFrameGraphHeight + 2.0f * ImGui::GetTextLineHeightWithSpacing();
     ImGui::SetCursorPos(ImVec2(
         kFramePadding, static_cast<float>(state.contentRegion.y - graphHeight - kFramePadding)));
     RenderFrameGraph(state.frameHistory);

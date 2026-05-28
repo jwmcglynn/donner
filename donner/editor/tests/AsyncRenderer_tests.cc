@@ -76,6 +76,40 @@ bool TileCoversDocPoint(const RenderResult::CompositedTile& tile, const Vector2d
          point.y < bottomRight.y;
 }
 
+std::string MakeManyRectsSvg(int count) {
+  std::ostringstream svg;
+  svg << R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">)svg";
+  for (int i = 0; i < count; ++i) {
+    svg << "<rect id=\"r" << i << "\" x=\"" << ((i % 13) * 10) << "\" y=\"" << ((i / 13) * 10)
+        << "\" width=\"4\" height=\"4\" fill=\"red\"/>";
+  }
+  svg << "</svg>";
+  return svg.str();
+}
+
+std::vector<svg::SVGElement> QueryNumberedRects(svg::SVGDocument& document, int count) {
+  std::vector<svg::SVGElement> elements;
+  elements.reserve(static_cast<std::size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    std::optional<svg::SVGElement> element = document.querySelector("#r" + std::to_string(i));
+    if (element.has_value()) {
+      elements.push_back(*element);
+    }
+  }
+  return elements;
+}
+
+std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
+  for (int i = 0; i < 400; ++i) {
+    auto result = asyncRenderer.pollResult();
+    if (result.has_value()) {
+      return result;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return std::nullopt;
+}
+
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotWhenTilesExist) {
   const PresentationSnapshotPlan plan = ChoosePresentationSnapshotPlan(
       /*hasCompositedPreview=*/true, /*requiresTextureSnapshotPresentation=*/true);
@@ -106,6 +140,98 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTil
 
   EXPECT_TRUE(plan.captureCpuSnapshot);
   EXPECT_FALSE(plan.captureTextureSnapshot);
+}
+
+TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect x="150" y="250" width="20" height="20" fill="red" />
+  )svg");
+  document.svgElement().setViewBox(100.0, 200.0, 1000.0, 1000.0);
+  document.setCanvasSize(8192, 8192);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.rasterViewport = EditorRasterViewport{
+      .documentRect = Box2d::FromXYWH(150.0, 250.0, 100.0, 80.0),
+      .outputSizePx = Vector2i(400, 320),
+      .semanticCanvasSizePx = Vector2i(8192, 8192),
+      .outputFromDocument =
+          Transform2d::Translate(Vector2d(-150.0, -250.0)) * Transform2d::Scale(4.0),
+      .viewportBounded = true,
+  };
+  asyncRenderer.requestRender(request);
+
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_EQ(result->compositedPreview->tiles.size(), 1u);
+  const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
+  EXPECT_EQ(tile.id, "full-canvas");
+  EXPECT_EQ(tile.rasterCanvasSize, Vector2i(400, 320));
+  EXPECT_EQ(tile.canvasOffsetDoc, Vector2d(50.0, 50.0));
+  EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(100.0, 80.0));
+}
+
+TEST(AsyncRendererTest, ImmediateStaticSpansCarryPayloadAcrossPublishedFrames) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 400; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) {
+        return result;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return std::nullopt;
+  };
+  const auto postSelection = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = targetEntity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = targetEntity,
+        .interactionKind = svg::compositor::InteractionHint::Selection,
+    };
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+  const auto expectImmediatePayload = [](const RenderResult& result) {
+    ASSERT_TRUE(result.compositedPreview.has_value());
+    int immediateTileCount = 0;
+    for (const RenderResult::CompositedTile& tile : result.compositedPreview->tiles) {
+      if (tile.kind != RenderResult::CompositedTile::Kind::Immediate) {
+        continue;
+      }
+      ++immediateTileCount;
+      EXPECT_TRUE(HasPresentationPayload(tile))
+          << "Immediate spans must not be published as metadata-only texture reuse.";
+    }
+    EXPECT_GT(immediateTileCount, 0);
+  };
+
+  const std::optional<RenderResult> first = postSelection(1);
+  ASSERT_TRUE(first.has_value());
+  expectImmediatePayload(*first);
+
+  const std::optional<RenderResult> second = postSelection(2);
+  ASSERT_TRUE(second.has_value());
+  expectImmediatePayload(*second);
 }
 
 constexpr bool kAsyncRendererWallclockTestsEnabled =
@@ -539,6 +665,10 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   const Entity nextEntity = next->unsafeEntityHandle().entity();
 
   svg::Renderer renderer;
+  if (renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "This regression asserts CPU bitmap pixels; Geode editor presentation uses "
+                    "direct texture snapshots.";
+  }
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
@@ -641,7 +771,8 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
       sawNextLayer = true;
       continue;
     }
-    if (tile.kind != RenderResult::CompositedTile::Kind::Segment) {
+    if (tile.kind != RenderResult::CompositedTile::Kind::Segment &&
+        tile.kind != RenderResult::CompositedTile::Kind::Immediate) {
       continue;
     }
     const std::optional<std::array<uint8_t, 4>> hiddenPixel =
@@ -3529,11 +3660,11 @@ TEST(RenderCoordinatorTest, DisplayNoneSuppressionClearsWhenSameElementBecomesVi
          "cached layer to render again.";
 }
 
-TEST(RenderCoordinatorTest, ImmediateOverlayUploadBypassesDisplayedVersionGate) {
+TEST(RenderCoordinatorTest, OverlayUploadPublishesCurrentFrameWithoutVersionGate) {
   svg::Renderer rendererProbe;
   if (!rendererProbe.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "Immediate tiny-skia overlay upload needs a live GL context; the Geode "
-                    "direct-texture path exercises this regression.";
+    GTEST_SKIP() << "Tiny-skia overlay upload needs a live GL context; the Geode direct-texture "
+                    "path exercises this regression.";
   }
 
   EditorApp app;
@@ -3542,26 +3673,72 @@ TEST(RenderCoordinatorTest, ImmediateOverlayUploadBypassesDisplayedVersionGate) 
       <rect x="8" y="8" width="16" height="16" fill="red"/>
     </svg>
   )svg"));
-  app.document().document().setCanvasSize(64, 64);
+  auto target = app.document().document().querySelector("rect");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  app.document().document().setCanvasSize(512, 512);
   ASSERT_NE(app.document().currentFrameVersion(), 0u);
 
   ViewportState viewport;
-  viewport.paneSize = Vector2d(64.0, 64.0);
+  viewport.paneOrigin = Vector2d(12.0, 34.0);
+  viewport.paneSize = Vector2d(32.0, 48.0);
   viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.panDocPoint = Vector2d::Zero();
+  viewport.panScreenPoint = viewport.paneOrigin;
+
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  EXPECT_TRUE(
+      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
+  EXPECT_EQ(textures.overlayWidth(), 64);
+  EXPECT_EQ(textures.overlayHeight(), 96);
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(12.0, 34.0, 32.0, 48.0));
+}
+
+TEST(RenderCoordinatorTest, LargeSelectionAutoDetailPromotesFromBoundsOnlyToFullAfterIdle) {
+  svg::Renderer rendererProbe;
+  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Immediate overlay upload needs a live GL context; the Geode direct-texture "
+                    "path exercises the coordinator auto-detail heuristic.";
+  }
+
+  constexpr int kSelectedRectCount = 130;
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(MakeManyRectsSvg(kSelectedRectCount)));
+  app.document().document().setCanvasSize(200, 200);
+  ASSERT_NE(app.document().currentFrameVersion(), 0u);
+
+  std::vector<svg::SVGElement> selection =
+      QueryNumberedRects(app.document().document(), kSelectedRectCount);
+  ASSERT_EQ(selection.size(), static_cast<std::size_t>(kSelectedRectCount));
+  app.setSelection(std::move(selection));
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 200.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0);
   viewport.devicePixelRatio = 1.0;
 
   GlTextureCache textures;
-  RenderCoordinator versionMatchedCoordinator;
-  EXPECT_TRUE(versionMatchedCoordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
-                                                                            std::nullopt));
-  EXPECT_TRUE(versionMatchedCoordinator.hasPendingOverlayForTesting())
-      << "default overlay mode should wait for the displayed async-render version";
+  RenderCoordinator coordinator;
+  ASSERT_TRUE(
+      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
+  const FrameCostBreakdown::Overlay firstOverlayCost = coordinator.lastFrameCostBreakdown().overlay;
+  EXPECT_TRUE(firstOverlayCost.selectionBoundsOnly);
+  EXPECT_EQ(firstOverlayCost.pathCount, 0);
+  EXPECT_EQ(firstOverlayCost.aabbCount, 1);
+  EXPECT_EQ(firstOverlayCost.selectedElementCount, kSelectedRectCount);
 
-  RenderCoordinator immediateCoordinator;
-  EXPECT_TRUE(immediateCoordinator.rasterizeOverlayForCurrentSelection(
-      app, viewport, textures, std::nullopt, RenderCoordinator::OverlayUploadMode::Immediate));
-  EXPECT_FALSE(immediateCoordinator.hasPendingOverlayForTesting())
-      << "active-drag overlay mode must publish current-frame chrome immediately";
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+  ASSERT_TRUE(
+      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
+  const FrameCostBreakdown::Overlay secondOverlayCost =
+      coordinator.lastFrameCostBreakdown().overlay;
+  EXPECT_FALSE(secondOverlayCost.selectionBoundsOnly);
+  EXPECT_EQ(secondOverlayCost.pathCount, kSelectedRectCount);
+  EXPECT_EQ(secondOverlayCost.aabbCount, kSelectedRectCount);
 }
 
 TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
@@ -3594,22 +3771,27 @@ TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
 
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-      app, viewport, textures, std::nullopt, RenderCoordinator::OverlayUploadMode::Immediate,
-      selectTool.activeDragPreview()));
-  ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
-  EXPECT_EQ(coordinator.presentedOverlayDragPreview()->translation, Vector2d::Zero());
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt,
+                                                              selectTool.activeDragPreview()));
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
 
   selectTool.onMouseMove(app, Vector2d(20.0, 12.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.flushFrame());
   ASSERT_TRUE(selectTool.activeDragPreview().has_value());
   EXPECT_EQ(selectTool.activeDragPreview()->translation, Vector2d(8.0, 0.0));
 
-  coordinator.maybeRequestRender(app, selectTool, viewport, textures);
+  const std::optional<SelectTool::ActiveDragPreview> presentationDragPreview =
+      selectTool.activeDragPreview();
+  EXPECT_TRUE(coordinator.rasterizeOverlayForPresentation(
+      app, selectTool, viewport, textures, presentationDragPreview, presentationDragPreview));
 
-  ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
-  EXPECT_EQ(coordinator.presentedOverlayDragPreview()->translation, Vector2d(8.0, 0.0))
-      << "Pure translation drags should rerasterize overlay chrome for the current frame.";
+  EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.selectedElementCount, 1);
+  EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.pathCount, 1)
+      << "Pure translation drags should rerasterize overlay chrome for the current frame instead "
+         "of carrying a cached overlay drag baseline.";
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
 }
 
 TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingTextureTransform) {
@@ -3640,54 +3822,60 @@ TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingT
 
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
-      app, viewport, textures, std::nullopt, RenderCoordinator::OverlayUploadMode::Immediate,
-      selectTool.activeDragPreview()));
-  ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
-  EXPECT_TRUE(coordinator.presentedOverlayDragPreview()->documentFromCachedDocument.isIdentity());
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt,
+                                                              selectTool.activeDragPreview()));
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
 
   selectTool.onMouseMove(app, Vector2d(32.0, 32.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.flushFrame());
   ASSERT_TRUE(selectTool.activeDragPreview().has_value());
   ASSERT_FALSE(selectTool.activeDragPreview()->documentFromCachedDocument.isTranslation());
 
-  coordinator.maybeRequestRender(app, selectTool, viewport, textures);
+  const std::optional<SelectTool::ActiveDragPreview> presentationDragPreview =
+      selectTool.activeDragPreview();
+  EXPECT_TRUE(coordinator.rasterizeOverlayForPresentation(
+      app, selectTool, viewport, textures, presentationDragPreview, presentationDragPreview));
 
-  ASSERT_TRUE(coordinator.presentedOverlayDragPreview().has_value());
-  EXPECT_FALSE(
-      coordinator.presentedOverlayDragPreview()->documentFromCachedDocument.isTranslation())
+  EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.selectedElementCount, 1);
+  EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.pathCount, 1)
       << "Affine resize/rotate drags should rerasterize chrome instead of stretching the previous "
          "overlay texture at presentation time.";
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
 }
 
-TEST(RenderCoordinatorTest, ImmediateOverlayUploadAllowsEmptyOrFullCanvasContent) {
-  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles(
-      std::span<const GlTextureCache::TileView>(), Vector2i(1896, 1088)));
+TEST(RenderCoordinatorTest, OverlayGesturePreviewUsesRepresentedDragTransformForChip) {
+  const Entity targetEntity = static_cast<Entity>(42);
+  SelectTool::ActiveGesturePreview liveGesturePreview{
+      .kind = SelectTool::ActiveGestureKind::Move,
+      .corner = SelectionTransformCorner::TopLeft,
+      .startBoundsDoc = Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0),
+      .documentFromStartDocument = Transform2d::Translate(Vector2d(6.0, -2.0)),
+      .currentDocumentDelta = Vector2d(6.0, -2.0),
+      .hasMoved = true,
+  };
+  const SelectTool::ActiveDragPreview liveDragPreview{
+      .entity = targetEntity,
+      .translation = Vector2d(6.0, -2.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(6.0, -2.0)),
+      .dragGeneration = 7,
+  };
+  const SelectTool::ActiveDragPreview representedDragPreview{
+      .entity = targetEntity,
+      .translation = Vector2d::Zero(),
+      .documentFromCachedDocument = Transform2d(),
+      .dragGeneration = 7,
+  };
 
-  GlTextureCache::TileView fullCanvas;
-  fullCanvas.id = "full-canvas";
-  fullCanvas.rasterCanvasSize = Vector2i(3203, 1838);
-  const std::vector<GlTextureCache::TileView> tiles{fullCanvas};
+  const std::optional<SelectTool::ActiveGesturePreview> representedGesturePreview =
+      OverlayGesturePreviewForPresentation(liveGesturePreview, liveDragPreview,
+                                           representedDragPreview);
 
-  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles(tiles, Vector2i(1896, 1088)));
-}
-
-TEST(RenderCoordinatorTest, ImmediateOverlayUploadRequiresCurrentSplitCanvasEpoch) {
-  GlTextureCache::TileView segment;
-  segment.id = "segment-0";
-  segment.rasterCanvasSize = Vector2i(1896, 1088);
-  GlTextureCache::TileView layer;
-  layer.id = "layer-7";
-  layer.rasterCanvasSize = Vector2i(1897, 1087);
-  const std::vector<GlTextureCache::TileView> currentTiles{segment, layer};
-
-  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles(currentTiles, Vector2i(1896, 1088)));
-
-  segment.rasterCanvasSize = Vector2i(3298, 1893);
-  layer.rasterCanvasSize = Vector2i(3298, 1893);
-  const std::vector<GlTextureCache::TileView> staleTiles{segment, layer};
-
-  EXPECT_FALSE(ShouldUploadImmediateOverlayForPresentedTiles(staleTiles, Vector2i(1896, 1088)));
+  ASSERT_TRUE(representedGesturePreview.has_value());
+  EXPECT_EQ(representedGesturePreview->currentDocumentDelta, Vector2d::Zero());
+  EXPECT_NEAR(representedGesturePreview->documentFromStartDocument.data[4], 0.0, 1e-9);
+  EXPECT_NEAR(representedGesturePreview->documentFromStartDocument.data[5], 0.0, 1e-9);
 }
 
 TEST(RenderCoordinatorTest, SplitPreviewFromStaleCanvasEpochIsRejected) {

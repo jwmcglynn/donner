@@ -52,6 +52,14 @@ struct SelectionChromeBoundsPreview {
   Transform2d documentFromStartDocument = Transform2d();
 };
 
+/// Detail level used when capturing selection chrome.
+enum class SelectionChromeDetail {
+  /// Capture visible path outlines plus selection bounds.
+  Full,
+  /// Capture only the combined selection bounds, skipping path extraction.
+  CombinedBoundsOnly,
+};
+
 /// Frozen view of everything `OverlayRenderer::drawChromeWithTransform`
 /// would normally read off the live registry: per-element path splines
 /// transformed into document space, per-element AABBs in document space,
@@ -162,11 +170,17 @@ public:
   ///   drawn as a filled + stroked rectangle matching the prior
   ///   ImGui chrome style.
   /// @param canvasFromDoc Maps document coordinates into canvas pixels.
+  /// @param cullRectDoc Optional document-space cull rect. Chrome fully outside this rect is
+  ///   skipped before draw.
+  /// @param selectionDetail Detail level for selected-element chrome.
   static void drawChromeWithTransform(
       svg::Renderer& renderer, std::span<const svg::SVGElement> selection,
       const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc,
       const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt,
-      std::span<const svg::SVGElement> sourceHover = {});
+      std::span<const svg::SVGElement> sourceHover = {},
+      const std::optional<Box2d>& cullRectDoc = std::nullopt,
+      SelectionChromeDetail selectionDetail = SelectionChromeDetail::Full,
+      const Transform2d& representedDocumentFromLiveDocument = Transform2d());
 
   /// Back-compat overload without marquee. Kept for existing callers
   /// that don't need a marquee rect (older tests, worker-thread
@@ -180,6 +194,10 @@ public:
   /// `elementFromWorld`, and `SnapshotSelectionWorldBounds` for every
   /// selected element — MUST be called when the worker is idle or
   /// otherwise not mutating these components on the same registry.
+  /// When `cullRectDoc` is present, path outlines, AABBs, and handles
+  /// fully outside that document-space rect are skipped before draw.
+  /// `CombinedBoundsOnly` skips selected path extraction and stores one
+  /// combined bounds box for low-latency large-selection feedback.
   ///
   /// Design doc 0033 §M7. Returned snapshot is movable and self-
   /// contained: it holds no registry pointers and survives any
@@ -188,7 +206,10 @@ public:
       std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
       const Transform2d& canvasFromDoc,
       const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt,
-      std::span<const svg::SVGElement> sourceHover = {});
+      std::span<const svg::SVGElement> sourceHover = {},
+      const std::optional<Box2d>& cullRectDoc = std::nullopt,
+      SelectionChromeDetail selectionDetail = SelectionChromeDetail::Full,
+      const Transform2d& representedDocumentFromLiveDocument = Transform2d());
 
   /// Race-free chrome rasterize: reads only the snapshot, never the
   /// registry. Safe to call while the async-renderer worker is

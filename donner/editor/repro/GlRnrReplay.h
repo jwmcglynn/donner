@@ -11,6 +11,7 @@
 
 #include "donner/base/Vector2.h"
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 
 namespace donner::editor::repro {
@@ -119,6 +120,8 @@ struct GlRnrReplayFrameDiagnostics {
   Vector2i overlayDimsPx = Vector2i::Zero();
   /// Backend overlay texture/view handle, represented as an integer for diagnostics.
   std::uint64_t overlayTextureHandle = 0;
+  /// Latest editor rendering cost counters.
+  FrameCostBreakdown frameCost;
   /// Replay worker scheduling mode used for this frame.
   GlRnrReplayWorkerScheduling replayWorkerScheduling = GlRnrReplayWorkerScheduling::Realtime;
   /// Replay-only worker render delay in milliseconds.

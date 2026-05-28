@@ -20,8 +20,10 @@ struct PresentationRenderScheduleInput {
   std::optional<SelectTool::ActiveDragPreview> activeDragPreview;
   /// Current document frame version.
   std::uint64_t currentVersion = 0;
-  /// Current document canvas size in pixels.
+  /// Current output raster canvas size in pixels.
   Vector2i currentCanvasSize = Vector2i::Zero();
+  /// Current raster viewport derived from the editor camera.
+  EditorRasterViewport currentRasterViewport;
 };
 
 /// Result of one editor-style render scheduling decision.
@@ -41,8 +43,10 @@ struct PresentationRenderScheduleDecision {
   std::optional<RenderRequest::DragPreview> dragPreview;
   /// Version evaluated by the scheduler.
   std::uint64_t currentVersion = 0;
-  /// Canvas size evaluated by the scheduler.
+  /// Output raster canvas size evaluated by the scheduler.
   Vector2i currentCanvasSize = Vector2i::Zero();
+  /// Raster viewport evaluated by the scheduler.
+  EditorRasterViewport currentRasterViewport;
 };
 
 /// Shared editor/MCP scheduler for deciding when to post presentation renders.
@@ -65,13 +69,16 @@ public:
    * Record that a final render result landed.
    *
    * @param completedVersion Document frame version in the completed result.
-   * @param completedCanvasSize Document canvas size used by the completed result.
+   * @param completedCanvasSize Output raster canvas size used by the completed result.
+   * @param completedRasterViewport Raster viewport used by the completed result.
    */
-  void noteRenderCompleted(std::uint64_t completedVersion, const Vector2i& completedCanvasSize);
+  void noteRenderCompleted(std::uint64_t completedVersion, const Vector2i& completedCanvasSize,
+                           const EditorRasterViewport& completedRasterViewport);
 
 private:
   std::uint64_t lastRenderedVersion_ = 0;
   Vector2i lastRenderedCanvasSize_ = Vector2i::Zero();
+  std::optional<EditorRasterViewport> lastRenderedRasterViewport_;
 };
 
 }  // namespace donner::editor

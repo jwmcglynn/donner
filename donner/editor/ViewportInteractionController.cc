@@ -4,11 +4,17 @@
 
 namespace donner::editor {
 
+float FrameProfilerSample::totalProfiledMs() const {
+  return overlayCaptureMs + overlayDrawMs + overlaySnapshotMs + overlayUploadMs +
+         compositedUploadMs + sourceRopeLayoutMs + sourceRopeUpdateMs + sourceRopeDrawMs;
+}
+
 void FrameHistory::push(float ms) {
   deltaMs[writeIndex] = ms;
   // Reset the worker slot to zero — `setLatestBackendMs` will fill it in when
   // a render result lands during the same UI frame.
   backendMs[writeIndex] = 0.0f;
+  profiler[writeIndex] = FrameProfilerSample{};
   writeIndex = (writeIndex + 1) % kFrameHistoryCapacity;
   if (samples < kFrameHistoryCapacity) {
     ++samples;
@@ -24,6 +30,24 @@ void FrameHistory::setLatestBackendMs(float ms) {
   if (ms > 0.0f) {
     lastBackendMs = ms;
   }
+}
+
+void FrameHistory::setLatestFrameCost(const FrameCostBreakdown& cost) {
+  if (samples == 0) {
+    return;
+  }
+
+  const std::size_t latestIdx = (writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  profiler[latestIdx] = FrameProfilerSample{
+      .overlayCaptureMs = static_cast<float>(cost.overlay.captureMs),
+      .overlayDrawMs = static_cast<float>(cost.overlay.drawMs),
+      .overlaySnapshotMs = static_cast<float>(cost.overlay.snapshotMs),
+      .overlayUploadMs = static_cast<float>(cost.overlay.uploadMs),
+      .compositedUploadMs = static_cast<float>(cost.compositedUpload.uploadMs),
+      .sourceRopeLayoutMs = static_cast<float>(cost.sourceRopes.layoutMs),
+      .sourceRopeUpdateMs = static_cast<float>(cost.sourceRopes.updateMs),
+      .sourceRopeDrawMs = static_cast<float>(cost.sourceRopes.drawMs),
+  };
 }
 
 float FrameHistory::latest() const {

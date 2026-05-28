@@ -832,6 +832,45 @@ void RendererDriver::draw(SVGDocument& document) {
   drawPreparedDocument(document);
 }
 
+void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
+                          const Transform2d& surfaceFromCanvas) {
+  if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
+    RenderSnapshot snapshot;
+    {
+      DocumentWriteAccess access = document.writeAccess();
+
+      ParseWarningSink warnings;
+      RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+
+      if (warnings.hasWarnings()) {
+        for (const ParseDiagnostic& warning : warnings.warnings()) {
+          std::cerr << warning << '\n';
+        }
+      }
+
+      snapshot.setSourceRevision(document.handle()->revision());
+      RenderSnapshotRecorder recorder(snapshot, renderer_);
+      RendererDriver snapshotDriver(recorder, verbose_);
+      snapshotDriver.drawPreparedDocument(document, viewport, surfaceFromCanvas);
+    }
+    draw(snapshot);
+    return;
+  }
+
+  DocumentWriteAccess access = document.writeAccess();
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, verbose_, warnings);
+
+  if (warnings.hasWarnings()) {
+    for (const ParseDiagnostic& warning : warnings.warnings()) {
+      std::cerr << warning << '\n';
+    }
+  }
+
+  drawPreparedDocument(document, viewport, surfaceFromCanvas);
+}
+
 RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
   RenderSnapshot snapshot;
   DocumentWriteAccess access = document.writeAccess();
@@ -864,6 +903,13 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
   RenderViewport viewport;
   viewport.size = Vector2d(renderingSize_.x, renderingSize_.y);
   viewport.devicePixelRatio = 1.0;
+  drawPreparedDocument(document, viewport, Transform2d());
+}
+
+void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
+                                          const Transform2d& surfaceFromCanvas) {
+  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
 
@@ -900,6 +946,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
   RenderingInstanceView view(document.registry(), mainEntities);
   traverse(view, document.registry());
   renderer_.endFrame();
+  surfaceFromCanvasTransform_ = Transform2d();
   preparedFilterGraphs_.clear();
   preparedFilterRegions_.clear();
 }
@@ -1426,16 +1473,16 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
     // Set the absolute transform for this entity. This uses setMatrix (no save/restore),
     // so it doesn't interact with the clip/layer save stack.
-    // surfaceFromCanvasTransform_ is composed with the entity's transform to support sub-document
-    // rendering where a base transform maps from the parent document's coordinate space.
+    // `Transform2d::operator*` is left-first: entity-local coords must map
+    // through entity->canvas first, then canvas->surface.
     if (verbose_) {
-      const Transform2d combined = surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
+      const Transform2d combined = instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
       std::cout << "[traverse] entity=" << entt::to_integral(entity)
                 << " visible=" << instance.visible << " maskDepth=" << instance.mask.has_value()
                 << " hasSubtree=" << instance.subtreeInfo.has_value() << " transform=" << combined
                 << "\n";
     }
-    renderer_.setTransform(surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
+    renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
     const double opacity = style.properties->opacity.get().value();
     const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
@@ -1517,7 +1564,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                 LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
-              surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
+              instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
           const Box2d deviceBox = deviceFromLocal.transformBox(*localBounds);
           cullDraw = ShouldCullDeviceBox(deviceBox, renderingSize_);
         }
@@ -1558,7 +1605,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
             drawSubDocument(subDoc, sizedElement->bounds, aspectRatio, opacity,
-                            surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
+                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
           }
         }
       } else if (const auto* externalUse =
@@ -1570,7 +1617,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
 
           if (!externalUse->fragment.empty()) {
             const Transform2d parentAbsoluteTransform =
-                surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
+                instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
             drawSubDocumentElement(subDoc, externalUse->fragment, parentAbsoluteTransform,
                                    style.properties->opacity.get().value());
           } else {
@@ -1578,7 +1625,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             const Box2d viewportBounds = Box2d::WithSize(Vector2d(subDocSize.x, subDocSize.y));
             drawSubDocument(subDoc, viewportBounds, PreserveAspectRatio::Default(),
                             style.properties->opacity.get().value(),
-                            surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
+                            instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
           }
 
           clearSubDocumentContextPaint(subDoc);
@@ -1779,14 +1826,14 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     bool cullDraw = false;
     if (instance.visible && !filterHidesElement) {
       const bool insideFilterLayer =
-          std::any_of(subtreeMarkers_.begin(), subtreeMarkers_.end(),
+          std::any_of(localDeferred.begin(), localDeferred.end(),
                       [](const DeferredPop& m) { return m.hasFilterLayer; });
       if (!insideFilterLayer) {
         if (const auto localBounds =
                 LocalDrawableBoundsWithStroke(instance.dataHandle(registry), style);
             localBounds.has_value()) {
           const Transform2d deviceFromLocal =
-              surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
+              instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
           const Box2d deviceBox = deviceFromLocal.transformBox(*localBounds);
           cullDraw = ShouldCullDeviceBox(deviceBox, renderingSize_);
         }
@@ -1999,7 +2046,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     renderer_.transitionMaskToContent();
   }
 
-  renderer_.setTransform(surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
+  renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
   return static_cast<int>(chain.size());
 }
 
@@ -2251,7 +2298,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
                                        Transform2d::Translate(vertexPosition);
 
   const Transform2d vertexFromWorld =
-      vertexFromEntity * surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
+      vertexFromEntity * instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
 
   const Transform2d markerUserSpaceFromWorld =
       Transform2d::Scale(markerUnitsFromViewBox.data[0], markerUnitsFromViewBox.data[3]) *

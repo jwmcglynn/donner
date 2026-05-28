@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import filecmp
+import html
 import subprocess
 import sys
 import re
@@ -33,7 +34,6 @@ from typing import DefaultDict, Dict, List, Optional, Set, Tuple
 from dataclasses import dataclass
 import json
 import os
-import xml.etree.ElementTree as ElementTree
 
 #
 # Bazel helpers
@@ -520,6 +520,7 @@ def query_labels(attr: str, target: str, *, relative_to: str) -> List[str]:
             results.append(str(Path(pkg, label).relative_to(relative_to)))
     return results
 
+
 @dataclass
 class CcTargetInfo:
     hdrs: List[str]
@@ -527,23 +528,20 @@ class CcTargetInfo:
     copts: List[str]
     includes: List[str]
 
-def get_cc_target_info(target_label: str) -> CcTargetInfo:
-    """
-    Return a CcTargetInfo containing headers, sources, copts, and includes
-    for *target_label* using a single Bazel XML query.
 
-    The paths in ``hdrs`` and ``srcs`` are made relative to the package
-    directory to match the expectations of downstream CMake generation.
-    """
-    # Query Bazel once and parse the XML.  This is substantially faster than
-    # issuing separate ``labels()`` queries for each attribute.
-    xml_out = _run_bazel(["query", target_label, "--output=xml"])
+def _xml_attr(tag_attrs: str, name: str) -> Optional[str]:
+    """Return XML attribute *name* from a Bazel query tag attribute string."""
+    match = re.search(rf'\b{re.escape(name)}="([^"]*)"', tag_attrs)
+    if not match:
+        return None
 
-    # The XML root looks like:
-    # <query><rule ...> ... </rule></query>
-    root = ElementTree.fromstring(xml_out)
-    rule = root.find("rule")
-    if rule is None:
+    return html.unescape(match.group(1))
+
+
+def _parse_cc_target_info_xml(xml_out: str, target_label: str) -> CcTargetInfo:
+    """Parse the small Bazel XML subset used by :func:`get_cc_target_info`."""
+    rule_match = re.search(r"<rule(?:\s[^>]*)?>(.*?)</rule>", xml_out, re.DOTALL)
+    if rule_match is None:
         raise RuntimeError(f"Failed to parse XML for {target_label}")
 
     pkg = target_label.split(":", 1)[0].removeprefix("//")
@@ -560,28 +558,56 @@ def get_cc_target_info(target_label: str) -> CcTargetInfo:
             rel = value[len(pkg_prefix):]
             out.append(str(Path(rel)))
 
-    # Traverse <list name="..."> nodes to gather attributes.
-    for lst in rule.findall("list"):
-        name = lst.attrib.get("name", "")
+    # We intentionally parse only the direct <list> shape emitted by
+    # ``bazel query --output=xml`` for cc rule attributes. Python's
+    # ElementTree lazily imports pyexpat when parsing; Homebrew Python can pick
+    # up the system libexpat first on macOS, making this check fail before any
+    # Donner code is involved.
+    rule_body = rule_match.group(1)
+    for list_match in re.finditer(r"<list\b([^/>]*)>(.*?)</list>", rule_body, re.DOTALL):
+        name = _xml_attr(list_match.group(1), "name") or ""
+        body = list_match.group(2)
         if name == "hdrs":
-            for elem in lst.findall("label"):
-                _maybe_add_label(elem.attrib["value"], hdrs)
+            for elem in re.finditer(r"<label\b([^>]*)/>", body):
+                value = _xml_attr(elem.group(1), "value")
+                if value is not None:
+                    _maybe_add_label(value, hdrs)
         elif name == "srcs":
-            for elem in lst.findall("label"):
-                _maybe_add_label(elem.attrib["value"], srcs)
+            for elem in re.finditer(r"<label\b([^>]*)/>", body):
+                value = _xml_attr(elem.group(1), "value")
+                if value is not None:
+                    _maybe_add_label(value, srcs)
         elif name == "copts":
-            for elem in lst.findall("string"):
-                value = elem.attrib["value"]
+            for elem in re.finditer(r"<string\b([^>]*)/>", body):
+                value = _xml_attr(elem.group(1), "value")
+                if value is None:
+                    continue
                 if value.startswith("-I") or value.startswith("-isystem"):
                     # Skip, these are handled in includes
                     continue
 
                 copts.append(value)
         elif name == "includes":
-            for elem in lst.findall("string"):
-                includes.append(elem.attrib["value"])
+            for elem in re.finditer(r"<string\b([^>]*)/>", body):
+                value = _xml_attr(elem.group(1), "value")
+                if value is not None:
+                    includes.append(value)
 
     return CcTargetInfo(hdrs=hdrs, srcs=srcs, copts=copts, includes=includes)
+
+
+def get_cc_target_info(target_label: str) -> CcTargetInfo:
+    """
+    Return a CcTargetInfo containing headers, sources, copts, and includes
+    for *target_label* using a single Bazel XML query.
+
+    The paths in ``hdrs`` and ``srcs`` are made relative to the package
+    directory to match the expectations of downstream CMake generation.
+    """
+    # Query Bazel once and parse the XML.  This is substantially faster than
+    # issuing separate ``labels()`` queries for each attribute.
+    xml_out = _run_bazel(["query", target_label, "--output=xml"])
+    return _parse_cc_target_info_xml(xml_out, target_label)
 
 
 def query_deps(target_label: str) -> List[str]:
@@ -594,6 +620,7 @@ def query_deps(target_label: str) -> List[str]:
     ).splitlines()
 
     return deps
+
 
 def cmake_target_name(pkg: str, lib: str) -> str:
     """
