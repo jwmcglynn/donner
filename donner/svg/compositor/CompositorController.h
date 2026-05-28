@@ -586,6 +586,11 @@ public:
     bool staticHeuristicImmediate = false;
     /// True when timing expanded the span into immediate presentation.
     bool dynamicHeuristicImmediate = false;
+    /// True when the span was dynamically immediate last frame but this render exceeded budget, so
+    /// the freshly-rendered payload is retained as a cached tile instead of staying immediate.
+    bool demotedDynamicImmediate = false;
+    /// Human-readable first/last element range covered by this span.
+    std::string spanRangeLabel;
   };
 
   /// Snapshot the most recent static span plans. Test-only diagnostics.
@@ -629,6 +634,38 @@ public:
     /// `Background` / `Foreground` (those are *composed*, not
     /// rasterized, by `recomposeSplitBitmaps`).
     double lastRasterizeMs = 0.0;
+    /// True when this static segment is presented as a transient immediate tile instead of a
+    /// retained bitmap/texture cache entry. Always false for Layer tiles.
+    bool immediate = false;
+    /// True when the static geometry-cost heuristic selected immediate presentation.
+    bool staticHeuristicImmediate = false;
+    /// True when measured raster time expanded the span into immediate presentation.
+    bool dynamicHeuristicImmediate = false;
+    /// True when this span just left dynamic immediate mode because the last immediate render was
+    /// over budget.
+    bool demotedDynamicImmediate = false;
+    /// Budget charged by this immediate tile against the 120 Hz immediate-span budget.
+    double immediateBudgetChargeMs = 0.0;
+    /// Total 120 Hz immediate-span budget for this frame.
+    double immediateBudgetMs = 0.0;
+    /// Estimated direct geometry draw count used by the immediate/cached heuristic.
+    int estimatedDrawOps = 0;
+    /// Estimated path verb count used by the immediate/cached heuristic.
+    int estimatedPathVerbs = 0;
+    /// True when this span contains effects/resources that force cached presentation.
+    bool hasExpensiveEffect = false;
+    /// True when this span has a visible, bounded contribution to the canvas.
+    bool visible = false;
+    /// Snapped canvas-space bounds used by the immediate/cached heuristic.
+    Box2d boundsCanvas;
+    /// Estimated retained texture bytes if this span is cached.
+    uint64_t estimatedRetainedBytes = 0;
+    /// Relative redraw cost estimated by the immediate/cached heuristic.
+    double estimatedRedrawCost = 0.0;
+    /// Relative cached-texture overhead estimated by the immediate/cached heuristic.
+    double estimatedCacheOverheadCost = 0.0;
+    /// Human-readable first/last element range covered by this static segment.
+    std::string spanRangeLabel;
     /// Whether the source bitmap has pixels.
     bool hasValidBitmap = false;
     /// Whether this tile is the active drag-target layer (highlighted
@@ -653,6 +690,24 @@ public:
   ///     …, `Segment N`. (Editor-facing bg/fg are inactive in this
   ///     mode.)
   [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles() const;
+
+  /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
+  /// caused by immediate-mode transient spans or retained cached tiles.
+  struct RenderFrameStats {
+    /// Segment raster time caused by immediate-mode static spans.
+    double immediateRasterizeMs = 0.0;
+    /// Segment/layer raster time that produces retained cached bitmap/texture tiles.
+    double cachedRasterizeMs = 0.0;
+    /// Count of static spans charged to immediate raster work.
+    int immediateTileCount = 0;
+    /// Count of segment/layer tiles charged to cached raster work.
+    int cachedTileCount = 0;
+  };
+
+  /// Return the current render-frame raster cost split.
+  [[nodiscard]] const RenderFrameStats& lastRenderFrameStats() const {
+    return lastRenderFrameStats_;
+  }
 
   /// Compositor-wide state useful for diagnosing why the editor's
   /// expected drag fast path didn't engage. Lets the operator confirm
@@ -1026,6 +1081,8 @@ private:
   /// per-object counter would reset to 1 on replace and collide; see
   /// `CompositorLayer::setGeneration`.
   uint64_t nextTileGeneration_ = 1;
+  /// Raster work charged to the current/most recent render frame.
+  RenderFrameStats lastRenderFrameStats_;
   /// Boundary identity for each segment in `staticSegments_`. Segment
   /// `i`'s identity is `(left, right)` — the entity ids of the promoted
   /// layers immediately to its left and right in paint order.
