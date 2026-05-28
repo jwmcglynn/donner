@@ -48,14 +48,21 @@ This design proposes a second responsiveness pass:
 
 ## Next Steps
 
-- Use the M1 `FrameCostBreakdown` counters now exposed through layer/readback replay diagnostics to
-  baseline selection chrome, source ropes, tile coverage, uploaded bytes, and full-document canvas
-  commits.
-- Land viewport-bounded overlay/chrome first; it is lower risk than changing content compositing and
-  directly addresses select-all lag.
-- Prototype high-zoom visible-viewport rendering in tests first, then replace whole-document canvas
-  rendering directly once parity and perf counters pass. Do not add a runtime or build feature flag
-  for the new path.
+- Rebaseline with current Geode offline and live-editor telemetry before changing the next
+  architectural piece. The current offline worker paths are mostly green; the live regression needs
+  frame-graph and layer-heuristic samples from the actual editor loop.
+- Capture manual telemetry for the regressed flow first: far zoom in/out followed by drag on a
+  Donner letter, especially after the worker is busy or the surface has just resized. Record the
+  frame graph, terminal WGPU timing logs, and Layers-panel heuristic history JSONL from the default
+  path `/tmp/donner-compositor-heuristics.jsonl` or an explicit run-specific path.
+- Keep select-all and source-reference ropes in the queue, but treat them as secondary until the
+  zoom+drag regression is explained.
+- Add the missing M1 offline fixtures for the manual regressions: high-zoom pan/drag near the old
+  8192 px clamp, zoom-then-drag click-to-first-feedback latency, and then large-selection/select-all
+  real-splash feedback.
+- Finish M5's explicit low-resolution overview refresh, then move to M6 tile pyramid/prioritization.
+  Start M7 Geode chrome migration after the live telemetry confirms ropes/chips are still a visible
+  part of the frame budget.
 
 ## Implementation Plan
 
@@ -122,44 +129,79 @@ This design proposes a second responsiveness pass:
 
 ## Profiling Snapshot
 
-Measured on `main` at `a5a40f21` on 2026-05-27.
+Updated on `main` at `7cb6fb30` on 2026-05-28 on an Apple M1 Pro, using
+`-c opt --config=geode` for Geode-specific targets.
 
 Commands:
 
 ```sh
-bazel test //donner/editor/tests:async_renderer_wallclock_tests \
-  --test_filter='AsyncRendererE2ETest.*RealSplash*:AsyncRendererE2ETest.MultiShapeClickDragHiDpiRepro' \
+tools/llm-bazel-wrap.sh test -c opt --config=geode \
+  //donner/editor/tests:async_renderer_wallclock_tests \
+  --test_filter='AsyncRendererE2ETest.ClickThenDragOnSplashShapeMeetsLatencyBudget:AsyncRendererE2ETest.EndToEndDragHarnessOnRealSplash:AsyncRendererE2ETest.FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost:AsyncRendererE2ETest.MultiShapeClickDragHiDpiRepro' \
   --test_output=all
 
-bazel test //donner/editor/tests:rnr_replay_tests \
-  --test_filter=RnrReplayTest.DragStartAfterZoomAsyncHarnessDoesNotHang \
+tools/llm-bazel-wrap.sh test -c opt --config=geode \
+  //donner/editor/tests:filter_drag_repro_tests_wallclock \
+  //donner/editor/tests:async_renderer_filter_group_perf_tests_wallclock \
+  --test_output=all
+
+tools/llm-bazel-wrap.sh test -c opt \
+  //donner/svg/compositor:compositor_perf_tests \
+  --test_output=all
+
+tools/llm-bazel-wrap.sh run -c opt --config=geode \
+  //donner/svg/renderer/benchmarks:renderer_bench -- \
+  --iterations=5 --warmup=1 donner_splash.svg
+
+tools/llm-bazel-wrap.sh test -c opt --config=geode \
+  //donner/svg/renderer/geode:geode_perf_tests \
+  --test_output=all
+
+tools/llm-bazel-wrap.sh test -c opt --config=geode \
+  //donner/editor/tests:gl_rnr_replay_tests \
+  --test_filter='GlRnrReplayTest.GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame:GlRnrReplayTest.GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedContent:GlRnrReplayTest.GeodeZoomThenDragDoesNotFreezeLiveDragPreviewWhileWorkerBusy:GlRnrReplayTest.GeodeFarZoomThenDragKeepsDonnerNOverlayLockedToPresentedContent' \
+  --test_output=all
+
+tools/llm-bazel-wrap.sh test -c opt --config=geode \
+  //donner/editor/tests:rnr_replay_tests \
+  --test_filter='RnrReplayTest.DragStartAfterZoomAsyncHarnessDoesNotHang' \
   --test_output=all
 ```
 
 Headline results:
 
-| Scenario                               |                                          Current measurement | Why it matters                                                                                 |
-| -------------------------------------- | -----------------------------------------------------------: | ---------------------------------------------------------------------------------------------- |
-| Real splash drag, natural canvas       |                                           33.8 ms steady avg | Misses 60 Hz; roughly 28.4 ms worker + 5.4 ms overlay.                                         |
-| Overlay bitmap upload, natural canvas  |                                               1.74 MiB/frame | Scales with full canvas, not visible chrome.                                                   |
-| Composited tile upload, natural canvas |                                               9.71 MiB/frame | Upload bandwidth remains a drag-frame cost.                                                    |
-| HiDPI multi-shape drag at 1784x1024    |                                 ~108 ms repeated drag frames | Explains "zoom too far things slow down" before the 8192 px clamp.                             |
-| HiDPI promote/switch                   |                                                   360-540 ms | Visible pause on selection or drag-target switches.                                            |
-| Zoom-after-drag replay                 | 1.78 s second click-to-drag render; 1.64 s max worker render | The post-zoom render remains far over interactive latency.                                     |
-| Splash source size                     |                     63 KiB, 142 geometry elements, 28 groups | Select-all is small enough that multi-second lag is architectural overhead, not document size. |
+| Scenario                                      |                               Current measurement | Why it matters                                                                 |
+| --------------------------------------------- | ------------------------------------------------: | ------------------------------------------------------------------------------ |
+| Real splash worker-only drag                  |                          1.51 ms steady avg / max | Compositor worker is not the current broad drag-frame bottleneck.              |
+| Faithful real splash drag frame               |                      10.18 ms avg, 23.70 ms max | Misses the 120 Hz frame budget and occasionally exceeds 60 Hz.                 |
+| Faithful frame worker portion                 |                       1.51 ms avg, 10.56 ms max | Worker spikes exist, but the average is small.                                 |
+| Faithful frame overlay portion                |                       8.66 ms avg, 22.19 ms max | Overlay raster/upload dominates the faithful offline frame.                    |
+| Overlay upload, natural canvas                |                                    1.74 MiB/frame | Still a real per-frame payload in the faithful harness.                        |
+| HiDPI multi-shape repro at 1784x1024          | 9-11 ms click/promote, ~1.51 ms repeated drags | The old offline 100+ ms repeated-drag repro is green.                          |
+| Filter drag replay worker frames              |                0.03 ms avg first drag, 0.02 ms second | The filter drag worker fast path remains green.                                |
+| Filter group subtree drag                     |                           1.51 ms avg / max | Filter-group drag is not reproducing the live regression offline.              |
+| Mock compositor drag overhead, 10k nodes       |                                  0.05 ms/frame | Warm compositor traversal is cheap after the recent immediate-span work.       |
+| Mock compositor click-to-first, 10k nodes      |      464 ms prewarm, 0.067 ms first drag frame | Cold prewarm is still linear and worth keeping out of interactive gestures.    |
+| RendererGeode `donner_splash.svg`             |      6.59 ms parse, 11.15 ms draw, 29.87 ms snapshot | Full-document Geode snapshot is over interactive budgets if forced per frame.  |
+| Geode no-dirty perf counters                  |                          0 path encodes / textures | No-dirty renderer counters are green; counter regressions are not obvious.     |
+| Geode zoom+drag GL replay correctness          |                             4 focused tests passed | Lockstep/freeze correctness is green, but this is not a frame-time gate.       |
+| GL replay surface acquisition                  |                     392 ms and 579 ms log spikes | Strong signal for surface acquisition/GPU backpressure during zoom+drag.       |
+| Async zoom-after-drag replay                   | max worker 131.9 ms; click-to-drag 19.8 ms and 43.6 ms | The second zoom+drag click misses 60 Hz/120 Hz feedback budgets offline.       |
 
-Code inspection attributes the remaining lag to these paths:
+Interpretation:
 
-- `RenderCoordinator::rasterizeOverlayForCurrentSelection` renders chrome into a document-canvas-sized
-  overlay and uploads it even when only a few pixels of chrome changed.
-- `OverlayRenderer::captureChromeSnapshot` expands every selected element to renderable geometry,
-  transforms every selected path to document space, and computes bounds for every selected item.
-- `ViewportState::desiredCanvasSize` scales the full document viewBox by zoom and DPR, clamped at
-  `8192`, so high zoom still asks the renderer for a whole-document texture.
-- `RenderPanePresenter` already clips the final overlay image to the canvas, but the expensive work
-  happened earlier: rasterization and upload were full canvas.
-- `TextEditor::renderFocusReferenceLinks` iterates every reference rope and simulates/draws it
-  without a surrounding text-area clip or viewport cull.
+- The broad async worker/filter paths do not reproduce the user's current live-editor FPS miss.
+- The nearest offline miss is presentation chrome: the faithful harness spends most of its frame in
+  overlay rasterization/upload and misses 120 Hz even though the worker averages about 1.5 ms.
+- Raw `RendererGeode` whole-document snapshot is far over a 120 Hz or 60 Hz interactive budget for
+  `donner_splash.svg`. Any live path that still snapshots whole-document chrome/content during an
+  interaction will be visible.
+- Zoom+drag needs its own lane. The correctness replays are green, but they already show slow
+  `surface.getCurrentTexture` calls and one async click-to-drag path over 40 ms. That matches the
+  user's report better than the generic drag/filter benchmarks.
+- The next measurement needs to happen in the live editor with the color-bar profiler and Layers
+  panel heuristic telemetry, because final ImGui composition, source-pane chrome, and live
+  immediate-span decisions are not fully covered by the offline worker tests.
 
 ## Background and Prior Art
 
