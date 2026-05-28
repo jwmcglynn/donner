@@ -458,6 +458,7 @@ donner_cc_library(
     hdrs = ["LayerInspectorDiagnostics.h"],
     deps = [
         "//donner/base",
+        "//donner/svg/compositor",
     ],
 )
 

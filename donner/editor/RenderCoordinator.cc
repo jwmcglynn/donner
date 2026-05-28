@@ -163,6 +163,16 @@ void ApplyOverlayUploadCost(FrameCostBreakdown::Overlay* overlay,
   }
 }
 
+FrameCostBreakdown::CompositedRender CompositedRenderCostFromStats(
+    const svg::compositor::CompositorController::RenderFrameStats& stats) {
+  return FrameCostBreakdown::CompositedRender{
+      .immediateMs = stats.immediateRasterizeMs,
+      .cachedMs = stats.cachedRasterizeMs,
+      .immediateTileCount = stats.immediateTileCount,
+      .cachedTileCount = stats.cachedTileCount,
+  };
+}
+
 bool IsUnsetTimePoint(std::chrono::steady_clock::time_point timePoint) {
   return timePoint == std::chrono::steady_clock::time_point{};
 }
@@ -484,6 +494,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   const auto& result = *resultOpt;
+  lastFrameCostBreakdown_.compositedRender =
+      CompositedRenderCostFromStats(renderWorker_.asyncRenderer.compositorRenderFrameStats());
   // Forward the worker-measured presentation latency to the frame history so
   // `RenderFrameGraph` can overlay async worker time on the UI frame graph.
   // The frame history's latest slot corresponds to the current UI frame

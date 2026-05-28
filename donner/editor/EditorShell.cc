@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -88,6 +89,29 @@ constexpr ImWchar kEditorSymbolGlyphRanges[] = {
     0x2731, 0x2731,  // Heavy asterisk.
     0,
 };
+
+bool ResourceDiagnosticsEnabled() {
+  return std::getenv("DONNER_EDITOR_RESOURCE_LOG") != nullptr;
+}
+
+std::uint64_t MegabytesRoundedUp(std::uint64_t bytes) {
+  constexpr std::uint64_t kBytesPerMiB = 1024u * 1024u;
+  return (bytes + kBytesPerMiB - 1u) / kBytesPerMiB;
+}
+
+FrameMemorySample MemorySampleFromPresentationResources(
+    const PresentationResourceStats& resources) {
+  return FrameMemorySample{
+      .overlayBytes = resources.overlayBytes,
+      .activeTileBytes = resources.activeTileBytes,
+      .overviewTileBytes = resources.overviewTileBytes,
+      .retiredBytes = resources.pendingRetiredBytes + resources.agedRetiredBytes,
+      .totalTrackedBytes = resources.totalTrackedBytes,
+      .peakTrackedBytes = resources.peakTrackedBytes,
+      .wgpuLifetimeTextureCreates = resources.wgpuLifetimeTextureCreates,
+      .wgpuLifetimeBufferCreates = resources.wgpuLifetimeBufferCreates,
+  };
+}
 
 ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
   if (intent.kind == SelectionTransformHandleKind::Rotate) {
@@ -763,6 +787,7 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
       .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
       .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
+      .presentationResources = textures_.presentationResourceStats(),
       .frameCost = frameCost,
   };
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
@@ -796,6 +821,51 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
     });
   }
   return readback;
+}
+
+void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost) {
+  if (!ResourceDiagnosticsEnabled()) {
+    return;
+  }
+
+  ++resourceDiagnosticsFrame_;
+  const PresentationResourceStats resources = textures_.presentationResourceStats();
+  const bool firstFrame = resourceDiagnosticsFrame_ == 1;
+  const bool periodic = resourceDiagnosticsFrame_ % 60 == 0;
+  constexpr std::uint64_t kPeakLogStepBytes = 16u * 1024u * 1024u;
+  const bool peakAdvanced =
+      resources.peakTrackedBytes >= lastLoggedPresentationPeakBytes_ + kPeakLogStepBytes;
+  if (!firstFrame && !periodic && !peakAdvanced) {
+    return;
+  }
+
+  const std::uint64_t textureCreateDelta =
+      resources.wgpuLifetimeTextureCreates - lastLoggedWgpuTextureCreates_;
+  const std::uint64_t bufferCreateDelta =
+      resources.wgpuLifetimeBufferCreates - lastLoggedWgpuBufferCreates_;
+  lastLoggedWgpuTextureCreates_ = resources.wgpuLifetimeTextureCreates;
+  lastLoggedWgpuBufferCreates_ = resources.wgpuLifetimeBufferCreates;
+  lastLoggedPresentationPeakBytes_ =
+      std::max(lastLoggedPresentationPeakBytes_, resources.peakTrackedBytes);
+  std::cerr << "[DonnerResource] frame=" << resourceDiagnosticsFrame_
+            << " tracked_mib=" << MegabytesRoundedUp(resources.totalTrackedBytes)
+            << " peak_mib=" << MegabytesRoundedUp(resources.peakTrackedBytes)
+            << " overlay_mib=" << MegabytesRoundedUp(resources.overlayBytes)
+            << " active_tile_mib=" << MegabytesRoundedUp(resources.activeTileBytes)
+            << " overview_tile_mib=" << MegabytesRoundedUp(resources.overviewTileBytes)
+            << " retired_mib="
+            << MegabytesRoundedUp(resources.pendingRetiredBytes + resources.agedRetiredBytes)
+            << " active_tiles=" << resources.activeTileTextures
+            << " overview_tiles=" << resources.overviewTileTextures << " retired_textures="
+            << resources.pendingRetiredTextures + resources.agedRetiredTextures
+            << " largest_allocation_px=" << resources.largestAllocationPx.x << "x"
+            << resources.largestAllocationPx.y
+            << " wgpu_texture_creates=" << resources.wgpuLifetimeTextureCreates
+            << " wgpu_texture_creates_delta=" << textureCreateDelta
+            << " wgpu_buffer_creates=" << resources.wgpuLifetimeBufferCreates
+            << " wgpu_buffer_creates_delta=" << bufferCreateDelta
+            << " overlay_upload_bytes=" << frameCost.overlay.payloadBytes
+            << " tile_upload_bytes=" << frameCost.compositedUpload.payloadBytes << "\n";
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
@@ -1645,6 +1715,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                                        interactionController_.viewport(), textures_,
                                                        activeDragPreview, representedDragPreview);
   }
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .frameHistory = interactionController_.frameHistory(),
@@ -1747,9 +1819,10 @@ void EditorShell::renderLayerPanelContents() {
                                       ? app_.document().document().canvasSize()
                                       : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
   const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
+  const auto renderStats = renderCoordinator_.asyncRenderer().compositorRenderFrameStats();
   layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
                               viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
-                              documentCanvas, fastPath);
+                              documentCanvas, fastPath, renderStats);
 }
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -2862,6 +2935,9 @@ void EditorShell::runFrame() {
     frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
   }
   interactionController_.frameHistory().setLatestFrameCost(frameCost);
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
+  maybeLogResourceDiagnostics(frameCost);
   requestRenderAtEndOfFrame_ = false;
   contentOnlyCaptureThisFrame_ = false;
 }

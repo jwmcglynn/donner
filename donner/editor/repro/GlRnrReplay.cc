@@ -481,6 +481,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .duplicateLiveTextureCount = layerStatus.duplicateLiveTextureCount,
         .overlayDimsPx = layerStatus.overlayDimsPx,
         .overlayTextureHandle = layerStatus.overlayTextureHandle,
+        .presentationResources = layerStatus.presentationResources,
         .frameCost = layerStatus.frameCost,
         .replayWorkerScheduling = options.workerScheduling,
         .replayWorkerRenderDelayMsForTesting = options.workerRenderDelayMsForTesting,

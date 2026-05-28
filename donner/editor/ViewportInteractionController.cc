@@ -6,7 +6,8 @@ namespace donner::editor {
 
 float FrameProfilerSample::totalProfiledMs() const {
   return overlayCaptureMs + overlayDrawMs + overlaySnapshotMs + overlayUploadMs +
-         compositedUploadMs + sourceRopeLayoutMs + sourceRopeUpdateMs + sourceRopeDrawMs;
+         compositedUploadMs + compositedRenderImmediateMs + compositedRenderCachedMs +
+         sourceRopeLayoutMs + sourceRopeUpdateMs + sourceRopeDrawMs;
 }
 
 void FrameHistory::push(float ms) {
@@ -15,6 +16,7 @@ void FrameHistory::push(float ms) {
   // a render result lands during the same UI frame.
   backendMs[writeIndex] = 0.0f;
   profiler[writeIndex] = FrameProfilerSample{};
+  memory[writeIndex] = FrameMemorySample{};
   writeIndex = (writeIndex + 1) % kFrameHistoryCapacity;
   if (samples < kFrameHistoryCapacity) {
     ++samples;
@@ -44,10 +46,33 @@ void FrameHistory::setLatestFrameCost(const FrameCostBreakdown& cost) {
       .overlaySnapshotMs = static_cast<float>(cost.overlay.snapshotMs),
       .overlayUploadMs = static_cast<float>(cost.overlay.uploadMs),
       .compositedUploadMs = static_cast<float>(cost.compositedUpload.uploadMs),
+      .compositedRenderImmediateMs = static_cast<float>(cost.compositedRender.immediateMs),
+      .compositedRenderCachedMs = static_cast<float>(cost.compositedRender.cachedMs),
       .sourceRopeLayoutMs = static_cast<float>(cost.sourceRopes.layoutMs),
       .sourceRopeUpdateMs = static_cast<float>(cost.sourceRopes.updateMs),
       .sourceRopeDrawMs = static_cast<float>(cost.sourceRopes.drawMs),
   };
+}
+
+void FrameHistory::setLatestMemorySample(const FrameMemorySample& sample) {
+  if (samples == 0) {
+    return;
+  }
+
+  const std::size_t latestIdx = (writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  memory[latestIdx] = sample;
+}
+
+FrameMemorySample FrameHistory::latestNonZeroMemorySample() const {
+  for (std::size_t i = 0; i < samples; ++i) {
+    const std::size_t idx = (writeIndex + kFrameHistoryCapacity - 1 - i) % kFrameHistoryCapacity;
+    const FrameMemorySample& sample = memory[idx];
+    if (sample.totalTrackedBytes > 0u || sample.peakTrackedBytes > 0u) {
+      return sample;
+    }
+  }
+
+  return FrameMemorySample{};
 }
 
 float FrameHistory::latest() const {

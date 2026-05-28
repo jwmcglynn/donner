@@ -763,6 +763,7 @@ void AsyncRenderer::workerLoop() {
         done.result.version = request.version;
         done.replayHoldPollsRemaining = replayResultHoldFramesForTesting_;
         lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
+        lastCompositorRenderFrameStats_ = compositor_->lastRenderFrameStats();
         lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows();
         lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
         lastCompositeTiles_ = compositor_->snapshotCompositeTiles();

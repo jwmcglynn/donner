@@ -9,17 +9,20 @@
 /// Design doc 0033 §M1++. The "comprehensive composite" view replaces
 /// the earlier separate per-layer / per-segment / split-bitmap tables.
 
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/LayerInspectorDiagnostics.h"
 
 #ifdef __EMSCRIPTEN__
 #define GLFW_INCLUDE_ES3
@@ -77,7 +80,8 @@ public:
               const svg::compositor::CompositorController::StateSnapshot& state,
               Entity workerCompositorEntity, double viewportZoom, double viewportDpr,
               const Vector2i& viewportDesiredCanvas, const Vector2i& documentCanvas,
-              const svg::compositor::CompositorController::FastPathCounters& fastPath);
+              const svg::compositor::CompositorController::FastPathCounters& fastPath,
+              const svg::compositor::CompositorController::RenderFrameStats& renderStats);
 
   /// Advance one UI presentation frame for backend texture retirement.
   void advancePresentationFrame();
@@ -110,6 +114,19 @@ private:
   void evictAbsentTiles(
       std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles);
 
+  /// Record newly-observed segment heuristic samples into the bounded telemetry history.
+  void recordHeuristicTelemetrySamples(
+      std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles,
+      const CompositorHeuristicTelemetryContext& context);
+
+  /// Return the current telemetry history as a JSONL payload.
+  [[nodiscard]] std::string heuristicTelemetryHistoryJson() const;
+
+  struct HeuristicTelemetryHistoryEntry {
+    std::string key;
+    std::string jsonLine;
+  };
+
 #ifdef DONNER_EDITOR_WGPU
   struct RetiredSnapshot {
     ThumbnailTextureHandle texture = 0;
@@ -132,6 +149,11 @@ private:
   std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
 #endif
 
+  std::array<char, 4096> telemetryPathBuffer_{};
+  std::string telemetryStatus_;
+  std::deque<HeuristicTelemetryHistoryEntry> telemetryHistory_;
+  std::unordered_set<std::string> telemetryHistoryKeys_;
+  std::uint64_t telemetrySequence_ = 0;
   std::unordered_map<std::string, ThumbnailTexture> textures_;
 #ifdef DONNER_EDITOR_WGPU
   RetiredSnapshotBatch pendingRetiredSnapshots_;

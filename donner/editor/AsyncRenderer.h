@@ -397,6 +397,14 @@ public:
     return lastFastPathCounters_;
   }
 
+  /// Snapshot of the worker compositor's immediate-vs-cached raster costs from the latest
+  /// completed render.
+  [[nodiscard]] svg::compositor::CompositorController::RenderFrameStats compositorRenderFrameStats()
+      const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return lastCompositorRenderFrameStats_;
+  }
+
   /// Snapshot of the compositor's per-layer diagnostic rows (design doc
   /// 0033 M1). Captured under the worker mutex at every Done transition;
   /// the UI thread copies the cached vector out under the lock. Empty
@@ -569,6 +577,9 @@ private:
   /// this via `compositorFastPathCountersForTesting`. Mutable because we
   /// lock in a const method.
   svg::compositor::CompositorController::FastPathCounters lastFastPathCounters_;
+
+  /// Most recent compositor render-cost split captured at the Done transition.
+  svg::compositor::CompositorController::RenderFrameStats lastCompositorRenderFrameStats_;
 
   /// Most recent per-layer diagnostic snapshot, captured under `mutex_`
   /// at every Done transition. UI-thread reads this via

@@ -1,9 +1,16 @@
 #include "donner/editor/LayerInspectorPanel.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
+#include <iomanip>
 #include <iterator>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <unordered_set>
 #include <utility>
 
@@ -21,6 +28,7 @@ namespace donner::editor {
 namespace {
 
 constexpr float kThumbnailDisplayHeight = 48.0f;
+constexpr std::size_t kTelemetryHistoryLimit = 4096u;
 #ifdef DONNER_EDITOR_WGPU
 constexpr std::size_t kRetiredSnapshotFrameLimit = 3;
 constexpr uint32_t kWgpuBytesPerRowAlignment = 256u;
@@ -58,6 +66,68 @@ const char* RefusalReasonLabel(svg::compositor::CompositorController::PromoteRef
   return "?";
 }
 
+const char* TileStorageLabel(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+  if (tile.kind == Kind::Segment && tile.immediate) {
+    return "immediate";
+  }
+
+  return "bitmap";
+}
+
+const char* ImmediateReasonLabel(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  if (tile.demotedDynamicImmediate) {
+    return "demoted";
+  }
+
+  if (tile.staticHeuristicImmediate) {
+    return "static";
+  }
+
+  if (tile.dynamicHeuristicImmediate) {
+    return "measured";
+  }
+
+  return "";
+}
+
+bool ImmediateTileOverBudget(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  return tile.immediate && tile.immediateBudgetMs > 0.0 &&
+         tile.lastRasterizeMs > tile.immediateBudgetMs;
+}
+
+double KiBFromBytes(std::uint64_t bytes) {
+  return static_cast<double>(bytes) / 1024.0;
+}
+
+std::string DefaultTelemetryPath() {
+  std::error_code error;
+  std::filesystem::path directory = std::filesystem::temp_directory_path(error);
+  if (error) {
+    directory = ".";
+  }
+
+  directory /= "donner-compositor-heuristics.jsonl";
+  return directory.string();
+}
+
+std::string TelemetrySampleKey(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile,
+    const CompositorHeuristicTelemetryContext& context) {
+  std::ostringstream os;
+  os << std::fixed << std::setprecision(3);
+  os << tile.id << '|' << tile.generation << '|' << (tile.immediate ? 1 : 0) << '|'
+     << (tile.dynamicHeuristicImmediate ? 1 : 0) << '|' << (tile.demotedDynamicImmediate ? 1 : 0)
+     << '|' << tile.lastRasterizeMs << '|' << context.viewportZoom << '|' << context.viewportDpr
+     << '|' << context.viewportDesiredCanvas.x << 'x' << context.viewportDesiredCanvas.y << '|'
+     << context.documentCanvas.x << 'x' << context.documentCanvas.y << '|'
+     << context.state.canvasSize.x << 'x' << context.state.canvasSize.y;
+  return os.str();
+}
+
 }  // namespace
 
 #ifdef DONNER_EDITOR_WGPU
@@ -75,6 +145,9 @@ LayerInspectorPanel::LayerInspectorPanel(std::shared_ptr<::donner::geode::GeodeD
 #ifndef DONNER_EDITOR_WGPU
   (void)geodeDevice;
 #endif
+  const std::string defaultTelemetryPath = DefaultTelemetryPath();
+  std::strncpy(telemetryPathBuffer_.data(), defaultTelemetryPath.c_str(),
+               telemetryPathBuffer_.size() - 1u);
 }
 
 LayerInspectorPanel::~LayerInspectorPanel() {
@@ -97,6 +170,42 @@ LayerInspectorPanel::~LayerInspectorPanel() {
     }
   }
 #endif
+}
+
+void LayerInspectorPanel::recordHeuristicTelemetrySamples(
+    std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles,
+    const CompositorHeuristicTelemetryContext& context) {
+  using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+  for (const auto& tile : tiles) {
+    if (tile.kind != Kind::Segment) {
+      continue;
+    }
+
+    const std::string key = TelemetrySampleKey(tile, context);
+    if (telemetryHistoryKeys_.find(key) != telemetryHistoryKeys_.end()) {
+      continue;
+    }
+
+    const std::string jsonLine =
+        BuildCompositorHeuristicTelemetrySampleJson(tile, context, telemetrySequence_++);
+    telemetryHistoryKeys_.insert(key);
+    telemetryHistory_.push_back(HeuristicTelemetryHistoryEntry{
+        .key = key,
+        .jsonLine = jsonLine,
+    });
+    while (telemetryHistory_.size() > kTelemetryHistoryLimit) {
+      telemetryHistoryKeys_.erase(telemetryHistory_.front().key);
+      telemetryHistory_.pop_front();
+    }
+  }
+}
+
+std::string LayerInspectorPanel::heuristicTelemetryHistoryJson() const {
+  std::string result;
+  for (const HeuristicTelemetryHistoryEntry& entry : telemetryHistory_) {
+    result += entry.jsonLine;
+  }
+  return result;
 }
 
 LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail(
@@ -281,7 +390,8 @@ void LayerInspectorPanel::render(
     const svg::compositor::CompositorController::StateSnapshot& state,
     Entity workerCompositorEntity, double viewportZoom, double viewportDpr,
     const Vector2i& viewportDesiredCanvas, const Vector2i& documentCanvas,
-    const svg::compositor::CompositorController::FastPathCounters& fastPath) {
+    const svg::compositor::CompositorController::FastPathCounters& fastPath,
+    const svg::compositor::CompositorController::RenderFrameStats& renderStats) {
   ImGui::Text("Fast path: %" PRIu64 " fast / %" PRIu64 " slow / %" PRIu64 " no-dirty",
               fastPath.fastPathFrames, fastPath.slowPathFramesWithDirty, fastPath.noDirtyFrames);
 
@@ -329,6 +439,63 @@ void LayerInspectorPanel::render(
   }
   ImGui::Separator();
 
+  double immediateRasterMs = 0.0;
+  double cachedRasterMs = 0.0;
+  int immediateRasterTiles = 0;
+  int cachedRasterTiles = 0;
+  for (const auto& tile : tiles) {
+    using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+    if (tile.kind != Kind::Segment && tile.kind != Kind::Layer) {
+      continue;
+    }
+
+    if (tile.kind == Kind::Segment && tile.immediate) {
+      immediateRasterMs += tile.lastRasterizeMs;
+      ++immediateRasterTiles;
+    } else {
+      cachedRasterMs += tile.lastRasterizeMs;
+      ++cachedRasterTiles;
+    }
+  }
+
+  ImGui::Text("Raster last frame: rnd-imm %.1fms (%d)  rnd-cache %.1fms (%d)",
+              renderStats.immediateRasterizeMs, renderStats.immediateTileCount,
+              renderStats.cachedRasterizeMs, renderStats.cachedTileCount);
+  ImGui::Text("Raster inventory: immediate %.1fms (%d)  cached %.1fms (%d)", immediateRasterMs,
+              immediateRasterTiles, cachedRasterMs, cachedRasterTiles);
+  const CompositorHeuristicTelemetryContext telemetryContext{
+      .viewportZoom = viewportZoom,
+      .viewportDpr = viewportDpr,
+      .viewportDesiredCanvas = viewportDesiredCanvas,
+      .documentCanvas = documentCanvas,
+      .state = state,
+      .fastPath = fastPath,
+      .renderStats = renderStats,
+  };
+  recordHeuristicTelemetrySamples(tiles, telemetryContext);
+  ImGui::SetNextItemWidth(-1.0f);
+  ImGui::InputText("Telemetry path", telemetryPathBuffer_.data(), telemetryPathBuffer_.size());
+  ImGui::TextDisabled("Telemetry history: %zu segment samples", telemetryHistory_.size());
+  if (ImGui::Button("Save heuristic telemetry history")) {
+    const std::string json = heuristicTelemetryHistoryJson();
+    std::string error;
+    if (SaveCompositorHeuristicTelemetry(std::string_view(telemetryPathBuffer_.data()), json,
+                                         &error)) {
+      telemetryStatus_ = "saved " + std::to_string(telemetryHistory_.size()) + " samples";
+    } else {
+      telemetryStatus_ = std::move(error);
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Clear telemetry")) {
+    telemetryHistory_.clear();
+    telemetryHistoryKeys_.clear();
+    telemetryStatus_ = "cleared telemetry";
+  }
+  if (!telemetryStatus_.empty()) {
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", telemetryStatus_.c_str());
+  }
   ImGui::TextUnformatted("Composite tiles (paint order)");
   if (tiles.empty()) {
     ImGui::TextDisabled("(no tiles)");
@@ -339,16 +506,17 @@ void LayerInspectorPanel::render(
   constexpr ImGuiTableFlags kFlags = ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg |
                                      ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_ScrollY |
                                      ImGuiTableFlags_Resizable;
-  if (!ImGui::BeginTable("##composite_tiles_table", 5, kFlags)) {
+  if (!ImGui::BeginTable("##composite_tiles_table", 6, kFlags)) {
     return;
   }
   ImGui::TableSetupScrollFreeze(0, 1);
   ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed,
                           kThumbnailDisplayHeight * 1.4f);
   ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
-  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch, 1.6f);
+  ImGui::TableSetupColumn("Mode", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+  ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch, 1.5f);
   ImGui::TableSetupColumn("Bitmap", ImGuiTableColumnFlags_WidthStretch, 1.0f);
-  ImGui::TableSetupColumn("Raster", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  ImGui::TableSetupColumn("Raster", ImGuiTableColumnFlags_WidthStretch, 1.1f);
   ImGui::TableHeadersRow();
 
   double totalRasterMs = 0.0;
@@ -391,30 +559,62 @@ void LayerInspectorPanel::render(
     ImGui::TextUnformatted(KindLabel(tile.kind));
 
     ImGui::TableSetColumnIndex(2);
-    ImGui::TextUnformatted(tile.label.c_str());
+    const bool overBudget = ImmediateTileOverBudget(tile);
+    const bool demoted = tile.demotedDynamicImmediate;
+    const ImVec4 modeColor = tile.immediate ? ImVec4(1.0f, 0.65f, 0.25f, 1.0f)
+                                            : (demoted ? ImVec4(1.0f, 0.72f, 0.35f, 1.0f)
+                                                       : ImGui::GetStyle().Colors[ImGuiCol_Text]);
+    ImGui::TextColored(modeColor, "%s", TileStorageLabel(tile));
+    if (const char* reason = ImmediateReasonLabel(tile); reason[0] != '\0') {
+      ImGui::TextDisabled("%s", reason);
+    }
 
     ImGui::TableSetColumnIndex(3);
+    ImGui::TextUnformatted(tile.label.c_str());
+    if (!tile.spanRangeLabel.empty()) {
+      ImGui::TextDisabled("%s", tile.spanRangeLabel.c_str());
+    }
+
+    ImGui::TableSetColumnIndex(4);
     if (tile.hasValidBitmap) {
-      ImGui::Text("%d×%d", tile.bitmapDims.x, tile.bitmapDims.y);
+      if (tile.immediate) {
+        ImGui::Text("transient %d×%d", tile.bitmapDims.x, tile.bitmapDims.y);
+      } else {
+        ImGui::Text("retained %d×%d", tile.bitmapDims.x, tile.bitmapDims.y);
+      }
+      if (tile.estimatedRetainedBytes > 0u) {
+        ImGui::TextDisabled("%.0f KiB est", KiBFromBytes(tile.estimatedRetainedBytes));
+      }
     } else {
       ImGui::TextDisabled("(empty)");
     }
 
-    ImGui::TableSetColumnIndex(4);
+    ImGui::TableSetColumnIndex(5);
     using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
     if (tile.kind == Kind::Background || tile.kind == Kind::Foreground) {
       // bg/fg are composed, not rasterized. Show the generation so
       // the operator can see when the cache rebuilds.
       ImGui::Text("gen %" PRIu64, tile.generation);
     } else {
-      ImGui::Text("%.1fms (gen %" PRIu64 ")", tile.lastRasterizeMs, tile.generation);
+      if (overBudget || demoted) {
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%.1fms", tile.lastRasterizeMs);
+      } else {
+        ImGui::Text("%.1fms", tile.lastRasterizeMs);
+      }
+      if (tile.immediateBudgetMs > 0.0) {
+        ImGui::TextDisabled("budget %.1fms", tile.immediateBudgetMs);
+      }
+      if (tile.estimatedDrawOps > 0 || tile.estimatedPathVerbs > 0) {
+        ImGui::TextDisabled("ops %d / verbs %d", tile.estimatedDrawOps, tile.estimatedPathVerbs);
+      }
+      ImGui::TextDisabled("gen %" PRIu64, tile.generation);
       totalRasterMs += tile.lastRasterizeMs;
     }
   }
   ImGui::EndTable();
 
   ImGui::Separator();
-  ImGui::TextDisabled("Total raster (layers + segments): %.1fms — bg/fg are composed",
+  ImGui::TextDisabled("Total raster inventory (layers + segments): %.1fms — bg/fg are composed",
                       totalRasterMs);
 
   evictAbsentTiles(tiles);
