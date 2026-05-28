@@ -47,8 +47,10 @@ build --incompatible_enable_cc_toolchain_resolution
 # @resvg-test-suite, which lives in the dev-only non_bcr_deps extension.
 common --//donner/svg/renderer:resvg_test_suite_available=true
 
-# Enable building with the latest llvm toolchain (downloaded on-demand, see MODULE.bazel)
-common:latest_llvm --extra_toolchains=@llvm_toolchain//:all
+# Enable the latest LLVM toolchain for Linux exec platforms. macOS exec falls
+# through to apple_support's Xcode clang so ObjC targets keep working.
+common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_aarch64//:all
+common:latest_llvm --extra_toolchains=@llvm_toolchain_linux_x86_64//:all
 common:latest_llvm --//build_defs:llvm_latest=1
 # Use rules_python's hermetic Python launcher rather than the default
 # `#!/usr/bin/env python3` shebang. Without this, py_binary targets still rely
@@ -148,6 +150,13 @@ build:linux --config=host_libstdc++ --copt=-fno-modules
 
 # Fixes symbols when debugging on mac.
 build:macos --features=oso_prefix_is_pwd
+
+# apple_support's clang wrapper expects these Xcode paths. The local Darwin
+# sandbox sets them implicitly; remote execution does not.
+build:re --action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+build:re --action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+build:re --host_action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size

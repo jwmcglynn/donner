@@ -398,6 +398,9 @@ jobs:
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
       # compile the same target instead of inheriting host defaults.
       BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3"
+      # gen_cmakelists_test invokes Homebrew LLVM from inside Bazel's test
+      # sandbox; Homebrew's tool wrappers require HOME.
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -442,7 +445,7 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk test --config=ci --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $TARGETS
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
@@ -460,6 +463,7 @@ jobs:
       # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS
       # and only picks up cache settings declared in this workflow.
       BAZEL_MACOS_BUILD_FLAGS: "--macos_minimum_os=13.3 --remote_cache=grpc://192.168.1.63:9092 --remote_upload_local_results=true"
+      BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -497,7 +501,7 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk --nohome_rc test --config=ci --test_output=errors \
-            $BAZEL_MACOS_BUILD_FLAGS $TARGETS
+            $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.

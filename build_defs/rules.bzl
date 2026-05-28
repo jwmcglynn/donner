@@ -52,23 +52,6 @@ def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
         size = "small",
     )
 
-def llvm21_macos_workaround_linkopts():
-    """
-    Returns linkopts needed for LLVM 21 __hash_memory symbol workaround on macOS.
-
-    See: https://github.com/llvm/llvm-project/issues/155606
-    The fuzzer runtime and other LLVM 21 compiled code needs symbols from libc++ 21,
-    but the linker finds the system libc++. We explicitly link against LLVM 21's static libraries.
-    """
-    return select({
-        "//build_defs:llvm_latest_macos": [
-            "-nostdlib++",
-            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++.a",
-            "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib/libc++abi.a",
-        ],
-        "//conditions:default": [],
-    })
-
 def llvm21_macos_runtime_rpath_linkopts():
     """
     Returns rpaths needed by LLVM 21 sanitizer runtime dylibs on macOS.
@@ -113,13 +96,35 @@ def fuzzer_compatible_with():
     """
     Returns a list of labels that the fuzzer rules are compatible with.
     """
-
-    # Only run on Linux, or if --config=toolchains_llvm is used.
-    # Since the macOS clang is missing libclang_rt.fuzzer_osx.a, we cannot use the built-in macOS toolchain
     return select({
         "@platforms//os:linux": [],
         "//build_defs:fuzzers_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
+    })
+
+def fuzzer_linkopts():
+    """
+    Returns linkopts for libFuzzer targets.
+    """
+    llvm_lib = "external/toolchains_llvm++llvm+llvm_toolchain_llvm/lib"
+    return select({
+        "//build_defs:llvm_latest_macos": [
+            "-fsanitize=fuzzer-no-link",
+            llvm_lib + "/clang/21/lib/darwin/libclang_rt.fuzzer_osx.a",
+            "-nostdlib++",
+            llvm_lib + "/libc++.a",
+            llvm_lib + "/libc++abi.a",
+        ],
+        "//conditions:default": ["-fsanitize=fuzzer"],
+    })
+
+def fuzzer_linker_inputs():
+    """
+    Returns additional linker inputs for libFuzzer targets.
+    """
+    return select({
+        "//build_defs:llvm_latest_macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
+        "//conditions:default": [],
     })
 
 def renderer_backend_compatible_with(backends):
@@ -345,7 +350,7 @@ def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **
 
 def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwargs):
     """
-    Create a cc_binary with donner-specific defaults including LLVM 21 workaround.
+    Create a cc_binary with donner-specific defaults.
 
     Args:
       name: Rule name.
@@ -357,7 +362,6 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
     """
     donner_linkopts = (
         linkopts +
-        llvm21_macos_workaround_linkopts() +
         llvm21_macos_runtime_rpath_linkopts()
     )
     cc_binary(
@@ -413,9 +417,17 @@ _VARIANT_FORWARDED_ATTRS = (
     "target_compatible_with",
 )
 
-def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variants = None, **kwargs):
+def donner_cc_test(
+        name,
+        srcs = [],
+        linkopts = [],
+        deps = [],
+        tags = [],
+        variants = None,
+        add_llvm_macos_runtime_rpaths = True,
+        **kwargs):
     """
-    Create a cc_test with donner-specific defaults including LLVM 21 workaround.
+    Create a cc_test with donner-specific defaults.
 
     Args:
       name: Rule name.
@@ -429,13 +441,13 @@ def donner_cc_test(name, srcs = [], linkopts = [], deps = [], tags = [], variant
         wrapper per entry via `donner_multi_transitioned_test`. This is the
         opt-in mechanism that lets `bazel test //...` cover variant lanes
         without per-test `--config=` flags. See doc 0031 M2.3.
+      add_llvm_macos_runtime_rpaths: Add LLVM 21 sanitizer runtime rpaths on macOS.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
-    donner_linkopts = (
-        linkopts +
-        llvm21_macos_workaround_linkopts() +
-        llvm21_macos_runtime_rpath_linkopts()
-    )
+    donner_linkopts = linkopts
+    if add_llvm_macos_runtime_rpaths:
+        donner_linkopts = donner_linkopts + llvm21_macos_runtime_rpath_linkopts()
+
     cc_test(
         name = name,
         srcs = srcs,
@@ -591,16 +603,13 @@ def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
     else:
         corpus_name = corpus
 
-    # Build linkopts for fuzzer, including LLVM 21 workaround and runtime paths
-    fuzzer_linkopts = (
-        ["-fsanitize=fuzzer"] +
-        llvm21_macos_workaround_linkopts() +
-        llvm21_macos_runtime_rpath_linkopts()
-    )
+    fuzzer_runtime_linkopts = fuzzer_linkopts()
+    fuzzer_additional_linker_inputs = fuzzer_linker_inputs()
 
     cc_binary(
         name = name + "_bin",
-        linkopts = fuzzer_linkopts,
+        additional_linker_inputs = fuzzer_additional_linker_inputs,
+        linkopts = fuzzer_runtime_linkopts,
         linkstatic = 1,
         deps = deps + libc_compat_deps(),
         target_compatible_with = fuzzer_compatible_with(),
@@ -610,7 +619,9 @@ def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
 
     donner_cc_test(
         name = name + "_10_seconds",
-        linkopts = fuzzer_linkopts,
+        add_llvm_macos_runtime_rpaths = False,
+        additional_linker_inputs = fuzzer_additional_linker_inputs,
+        linkopts = fuzzer_runtime_linkopts,
         args = [
             "-max_total_time=10",
             "-timeout=2",
@@ -629,7 +640,9 @@ def donner_cc_fuzzer(name, corpus, deps = [], **kwargs):
 
     donner_cc_test(
         name = name,
-        linkopts = fuzzer_linkopts,
+        add_llvm_macos_runtime_rpaths = False,
+        additional_linker_inputs = fuzzer_additional_linker_inputs,
+        linkopts = fuzzer_runtime_linkopts,
         args = ["$(locations %s)" % corpus_name],
         linkstatic = 1,
         deps = deps,

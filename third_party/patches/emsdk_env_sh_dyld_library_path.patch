@@ -1,0 +1,12 @@
+--- a/emscripten_toolchain/env.sh
++++ b/emscripten_toolchain/env.sh
+@@ -4,3 +4,9 @@ export ROOT_DIR=${EXT_BUILD_ROOT:-$(pwd -P)}
+ export EMSCRIPTEN=$ROOT_DIR/$EM_BIN_PATH/emscripten
+ export EM_CONFIG=$ROOT_DIR/$EM_CONFIG_PATH
+ export EMSDK_PYTHON=$ROOT_DIR/$BAZEL_PYTHON_RELPATH
++
++# macOS RE workers can expose inputs in a flat CAS layout, which breaks the
++# hermetic Python binary's `@executable_path/../lib` lookup. Point dyld at
++# the execroot-relative lib dir first.
++PYTHON_LIB_DIR=$ROOT_DIR/$(dirname $(dirname $BAZEL_PYTHON_RELPATH))/lib
++export DYLD_LIBRARY_PATH="$PYTHON_LIB_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
