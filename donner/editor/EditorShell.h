@@ -107,6 +107,8 @@ struct LayerInspectorStatusReadback {
   Vector2i overlayDimsPx = Vector2i::Zero();
   /// Backend overlay texture/view handle, represented as an integer for diagnostics.
   std::uint64_t overlayTextureHandle = 0;
+  /// Presentation-cache resource counters captured after the frame.
+  PresentationResourceStats presentationResources;
   /// Latest editor rendering cost counters.
   FrameCostBreakdown frameCost;
   /// Paint-order texture state currently visible to the presenter.
@@ -180,7 +182,6 @@ private:
   void renderFloatingLayerPanel();
   void renderLayerPanelContents();
   void maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost);
-  void maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost);
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
   [[nodiscard]] std::vector<svg::SVGElement> sourceHoverElements() const;
   [[nodiscard]] std::vector<SourceByteRange> sourceHoverRangesForElements(
@@ -281,11 +282,9 @@ private:
   std::optional<ImVec2> lastPostedScreenPoint_;
   bool treeviewPendingScroll_ = false;
   std::uint64_t resourceDiagnosticsFrame_ = 0;
-  std::uint64_t frameTelemetryFrame_ = 0;
   std::uint64_t lastLoggedPresentationPeakBytes_ = 0;
   std::uint64_t lastLoggedWgpuTextureCreates_ = 0;
   std::uint64_t lastLoggedWgpuBufferCreates_ = 0;
-  bool frameMissTelemetryWriteErrorLogged_ = false;
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
   bool sourceFocusOriginatedInStyle_ = false;

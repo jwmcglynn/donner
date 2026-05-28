@@ -78,22 +78,6 @@ struct PresentationResourceStats {
   std::uint64_t wgpuLifetimeBufferCreates = 0;
 };
 
-/// Presentation coverage state for composited tile fallback diagnostics.
-struct PresentationCoverageDiagnostics {
-  /// True when the active composited tile set only covers a viewport-bounded raster.
-  bool activeTilesViewportBounded = false;
-  /// True when a retained unbounded overview is available under the active bounded tiles.
-  bool overviewInfillAvailable = false;
-  /// Document-space rectangle covered by active composited tiles.
-  Box2d activeRasterDocumentRect;
-  /// Document-space rectangle covered by retained overview tiles.
-  Box2d overviewRasterDocumentRect;
-  /// Output raster size for active composited tiles.
-  Vector2i activeOutputSizePx = Vector2i::Zero();
-  /// Output raster size for retained overview tiles.
-  Vector2i overviewOutputSizePx = Vector2i::Zero();
-};
-
 /**
  * Return the presentation texture identity carried by `tile`.
  *
@@ -247,6 +231,8 @@ public:
   [[nodiscard]] const FrameCostBreakdown::Overlay& lastOverlayUploadCost() const {
     return lastOverlayUploadCost_;
   }
+  /// Resource counters for the textures currently retained by this cache.
+  [[nodiscard]] PresentationResourceStats presentationResourceStats() const;
 
 private:
 #ifdef DONNER_EDITOR_WGPU
@@ -335,6 +321,7 @@ private:
   int duplicateLiveTextureCount_ = 0;
   FrameCostBreakdown::CompositedUpload lastCompositedUploadCost_;
   FrameCostBreakdown::Overlay lastOverlayUploadCost_;
+  mutable std::uint64_t peakTrackedResourceBytes_ = 0;
 
 #ifdef DONNER_EDITOR_WGPU
   RetiredSnapshotBatch pendingRetiredSnapshots_;

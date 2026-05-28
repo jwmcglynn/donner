@@ -66,18 +66,14 @@ const char* RefusalReasonLabel(svg::compositor::CompositorController::PromoteRef
   return "?";
 }
 
-const char* TileRenderModeLabel(
+const char* TileStorageLabel(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
   using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
-  if ((tile.kind == Kind::Segment || tile.kind == Kind::Layer) && tile.immediate) {
-    return "direct";
+  if (tile.kind == Kind::Segment && tile.immediate) {
+    return "immediate";
   }
 
-  if (tile.kind == Kind::Background || tile.kind == Kind::Foreground) {
-    return "composed";
-  }
-
-  return "cached";
+  return "bitmap";
 }
 
 const char* ImmediateReasonLabel(
@@ -181,7 +177,7 @@ void LayerInspectorPanel::recordHeuristicTelemetrySamples(
     const CompositorHeuristicTelemetryContext& context) {
   using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
   for (const auto& tile : tiles) {
-    if (tile.kind != Kind::Segment && tile.kind != Kind::Layer) {
+    if (tile.kind != Kind::Segment) {
       continue;
     }
 
@@ -394,7 +390,6 @@ void LayerInspectorPanel::render(
     const svg::compositor::CompositorController::StateSnapshot& state,
     Entity workerCompositorEntity, double viewportZoom, double viewportDpr,
     const Vector2i& viewportDesiredCanvas, const Vector2i& documentCanvas,
-    const PresentationCoverageDiagnostics& coverageDiagnostics,
     const svg::compositor::CompositorController::FastPathCounters& fastPath,
     const svg::compositor::CompositorController::RenderFrameStats& renderStats) {
   ImGui::Text("Fast path: %" PRIu64 " fast / %" PRIu64 " slow / %" PRIu64 " no-dirty",
@@ -460,7 +455,7 @@ void LayerInspectorPanel::render(
       continue;
     }
 
-    if ((tile.kind == Kind::Segment || tile.kind == Kind::Layer) && tile.immediate) {
+    if (tile.kind == Kind::Segment && tile.immediate) {
       immediateRasterMs += tile.lastRasterizeMs;
       ++immediateRasterTiles;
     } else {
@@ -479,12 +474,6 @@ void LayerInspectorPanel::render(
       .viewportDpr = viewportDpr,
       .viewportDesiredCanvas = viewportDesiredCanvas,
       .documentCanvas = documentCanvas,
-      .activeTilesViewportBounded = coverageDiagnostics.activeTilesViewportBounded,
-      .overviewInfillAvailable = coverageDiagnostics.overviewInfillAvailable,
-      .activeRasterDocumentRect = coverageDiagnostics.activeRasterDocumentRect,
-      .overviewRasterDocumentRect = coverageDiagnostics.overviewRasterDocumentRect,
-      .activeOutputSizePx = coverageDiagnostics.activeOutputSizePx,
-      .overviewOutputSizePx = coverageDiagnostics.overviewOutputSizePx,
       .state = state,
       .fastPath = fastPath,
       .renderStats = renderStats,
@@ -532,7 +521,7 @@ void LayerInspectorPanel::render(
   ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
   ImGui::TableSetupColumn("Mode", ImGuiTableColumnFlags_WidthFixed, 86.0f);
   ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch, 1.5f);
-  ImGui::TableSetupColumn("Payload", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  ImGui::TableSetupColumn("Bitmap", ImGuiTableColumnFlags_WidthStretch, 1.0f);
   ImGui::TableSetupColumn("Raster", ImGuiTableColumnFlags_WidthStretch, 1.1f);
   ImGui::TableHeadersRow();
 
@@ -581,7 +570,7 @@ void LayerInspectorPanel::render(
     const ImVec4 modeColor = tile.immediate ? ImVec4(1.0f, 0.65f, 0.25f, 1.0f)
                                             : (demoted ? ImVec4(1.0f, 0.72f, 0.35f, 1.0f)
                                                        : ImGui::GetStyle().Colors[ImGuiCol_Text]);
-    ImGui::TextColored(modeColor, "%s", TileRenderModeLabel(tile));
+    ImGui::TextColored(modeColor, "%s", TileStorageLabel(tile));
     if (const char* reason = ImmediateReasonLabel(tile); reason[0] != '\0') {
       ImGui::TextDisabled("%s", reason);
     }

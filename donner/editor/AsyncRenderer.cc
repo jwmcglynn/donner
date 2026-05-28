@@ -817,7 +817,7 @@ void AsyncRenderer::workerLoop() {
                               : svg::compositor::CompositorController::SnapshotThumbnails::Include;
         lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
         lastCompositorRenderFrameStats_ = compositor_->lastRenderFrameStats();
-        lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows(thumbnailMode);
+        lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows();
         lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
         lastCompositeTiles_ = compositor_->snapshotCompositeTiles(thumbnailMode);
         lastStateSnapshot_ = compositor_->snapshotState();

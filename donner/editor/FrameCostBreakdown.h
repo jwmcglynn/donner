@@ -75,6 +75,18 @@ struct FrameCostBreakdown {
     int immediateTileCount = 0;
   };
 
+  /// Worker-side compositor raster costs for the render result that landed this UI frame.
+  struct CompositedRender {
+    /// Milliseconds spent rendering transient immediate-mode spans.
+    double immediateMs = 0.0;
+    /// Milliseconds spent rendering retained cached segment/layer tiles.
+    double cachedMs = 0.0;
+    /// Immediate-mode static spans rendered this frame.
+    int immediateTileCount = 0;
+    /// Cached segment/layer tiles rendered this frame.
+    int cachedTileCount = 0;
+  };
+
   /// Cost counters for source-focus reference rope layout, simulation, and drawing.
   struct SourceRopes {
     /// Milliseconds spent mapping source reference links to screen-space connector layout.
@@ -99,6 +111,7 @@ struct FrameCostBreakdown {
 
   Overlay overlay;
   CompositedUpload compositedUpload;
+  CompositedRender compositedRender;
   SourceRopes sourceRopes;
 
   /// Cumulative number of full-document canvas-size commits since document load.

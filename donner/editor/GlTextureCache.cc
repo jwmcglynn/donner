@@ -1,5 +1,6 @@
 #include "donner/editor/GlTextureCache.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <iterator>
@@ -642,6 +643,106 @@ void GlTextureCache::resetComposited() {
   metadataOnlyMissCount_ = 0;
   duplicateLiveTextureCount_ = 0;
   lastCompositedUploadCost_ = FrameCostBreakdown::CompositedUpload{};
+}
+
+PresentationResourceStats GlTextureCache::presentationResourceStats() const {
+  PresentationResourceStats stats;
+
+  const auto updateLargest = [&](const Vector2i& dimensions) {
+    if (PixelArea(dimensions) > PixelArea(stats.largestAllocationPx)) {
+      stats.largestAllocationPx = dimensions;
+    }
+  };
+
+  const auto allocationBytes = [&](const Vector2i& dimensions) {
+    updateLargest(dimensions);
+    return TexturePayloadBytes(dimensions);
+  };
+
+  const auto cachedEntryBytes = [&](const CachedTextureEntry& entry) {
+#ifdef DONNER_EDITOR_WGPU
+    if (entry.uploadedTexture != nullptr) {
+      return allocationBytes(entry.uploadedTexture->allocationDimensions);
+    }
+#endif
+    if (entry.allocatedWidth > 0 && entry.allocatedHeight > 0) {
+      return allocationBytes(Vector2i(entry.allocatedWidth, entry.allocatedHeight));
+    }
+    if (entry.textureSnapshot != nullptr) {
+      return allocationBytes(entry.textureSnapshot->dimensions());
+    }
+    return allocationBytes(Vector2i(entry.width, entry.height));
+  };
+
+  if (overlayTexture_ != 0) {
+#ifdef DONNER_EDITOR_WGPU
+    if (overlayUploadedTexture_ != nullptr) {
+      stats.overlayBytes = allocationBytes(overlayUploadedTexture_->allocationDimensions);
+    } else
+#endif
+        if (overlayTextureSnapshot_ != nullptr) {
+      stats.overlayBytes = allocationBytes(overlayTextureSnapshot_->dimensions());
+    } else if (overlayAllocatedWidth_ > 0 && overlayAllocatedHeight_ > 0) {
+      stats.overlayBytes =
+          allocationBytes(Vector2i(overlayAllocatedWidth_, overlayAllocatedHeight_));
+    } else {
+      stats.overlayBytes = allocationBytes(Vector2i(overlayWidth_, overlayHeight_));
+    }
+  }
+
+  stats.activeTileTextures = static_cast<int>(tileTextures_.size());
+  for (const auto& [_, entry] : tileTextures_) {
+    if (entry.texture != 0) {
+      stats.activeTileBytes += cachedEntryBytes(entry);
+    }
+  }
+
+  stats.overviewTileTextures = static_cast<int>(overviewTileTextures_.size());
+  for (const auto& [_, entry] : overviewTileTextures_) {
+    if (entry.texture != 0) {
+      stats.overviewTileBytes += cachedEntryBytes(entry);
+    }
+  }
+
+#ifdef DONNER_EDITOR_WGPU
+  const auto retiredBytes = [&](const RetiredSnapshot& retired) {
+    if (retired.uploadedTexture != nullptr) {
+      return allocationBytes(retired.uploadedTexture->allocationDimensions);
+    }
+    if (retired.snapshot != nullptr) {
+      return allocationBytes(retired.snapshot->dimensions());
+    }
+    return std::uint64_t{0};
+  };
+
+  stats.pendingRetiredTextures = static_cast<int>(pendingRetiredSnapshots_.size());
+  for (const RetiredSnapshot& retired : pendingRetiredSnapshots_) {
+    if (retired.texture != 0) {
+      stats.pendingRetiredBytes += retiredBytes(retired);
+    }
+  }
+
+  stats.retiredFrameCount = static_cast<int>(retiredSnapshotFrames_.size());
+  for (const RetiredSnapshotBatch& batch : retiredSnapshotFrames_) {
+    for (const RetiredSnapshot& retired : batch) {
+      if (retired.texture != 0) {
+        ++stats.agedRetiredTextures;
+        stats.agedRetiredBytes += retiredBytes(retired);
+      }
+    }
+  }
+
+  if (geodeDevice_ != nullptr) {
+    stats.wgpuLifetimeTextureCreates = geodeDevice_->lifetimeTextureCreates();
+    stats.wgpuLifetimeBufferCreates = geodeDevice_->lifetimeBufferCreates();
+  }
+#endif
+
+  stats.totalTrackedBytes = stats.overlayBytes + stats.activeTileBytes + stats.overviewTileBytes +
+                            stats.pendingRetiredBytes + stats.agedRetiredBytes;
+  peakTrackedResourceBytes_ = std::max(peakTrackedResourceBytes_, stats.totalTrackedBytes);
+  stats.peakTrackedBytes = peakTrackedResourceBytes_;
+  return stats;
 }
 
 ImTextureID GlTextureCache::overlayTexture() const {

@@ -164,6 +164,16 @@ void ApplyOverlayUploadCost(FrameCostBreakdown::Overlay* overlay,
   }
 }
 
+FrameCostBreakdown::CompositedRender CompositedRenderCostFromStats(
+    const svg::compositor::CompositorController::RenderFrameStats& stats) {
+  return FrameCostBreakdown::CompositedRender{
+      .immediateMs = stats.immediateRasterizeMs,
+      .cachedMs = stats.cachedRasterizeMs,
+      .immediateTileCount = stats.immediateTileCount,
+      .cachedTileCount = stats.cachedTileCount,
+  };
+}
+
 bool IsUnsetTimePoint(std::chrono::steady_clock::time_point timePoint) {
   return timePoint == std::chrono::steady_clock::time_point{};
 }

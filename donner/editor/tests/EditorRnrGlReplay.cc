@@ -18,6 +18,7 @@ namespace {
 using donner::Vector2d;
 using donner::Vector2i;
 using donner::editor::FrameCostBreakdown;
+using donner::editor::PresentationResourceStats;
 using donner::editor::RenderResult;
 using donner::editor::repro::GlRnrReplayCapture;
 using donner::editor::repro::GlRnrReplayCropMode;
@@ -311,6 +312,11 @@ void PrintFrameCost(const FrameCostBreakdown& cost) {
             << ",\"texture_payload_tiles\":" << cost.compositedUpload.texturePayloadTileCount
             << ",\"metadata_only_tiles\":" << cost.compositedUpload.metadataOnlyTileCount
             << ",\"immediate_tiles\":" << cost.compositedUpload.immediateTileCount
+            << "},\"composited_render\":{\"immediate_ms\":"
+            << cost.compositedRender.immediateMs
+            << ",\"cached_ms\":" << cost.compositedRender.cachedMs
+            << ",\"immediate_tiles\":" << cost.compositedRender.immediateTileCount
+            << ",\"cached_tiles\":" << cost.compositedRender.cachedTileCount
             << "},\"source_ropes\":{\"layout_ms\":" << cost.sourceRopes.layoutMs
             << ",\"update_ms\":" << cost.sourceRopes.updateMs
             << ",\"draw_ms\":" << cost.sourceRopes.drawMs
@@ -324,6 +330,25 @@ void PrintFrameCost(const FrameCostBreakdown& cost) {
             << ",\"last_committed_canvas_size\":";
   PrintVector2i(cost.lastCommittedCanvasSize);
   std::cout << "}";
+}
+
+void PrintPresentationResources(const PresentationResourceStats& resources) {
+  std::cout << "{\"overlay_bytes\":" << resources.overlayBytes
+            << ",\"active_tile_bytes\":" << resources.activeTileBytes
+            << ",\"overview_tile_bytes\":" << resources.overviewTileBytes
+            << ",\"pending_retired_bytes\":" << resources.pendingRetiredBytes
+            << ",\"aged_retired_bytes\":" << resources.agedRetiredBytes
+            << ",\"total_tracked_bytes\":" << resources.totalTrackedBytes
+            << ",\"peak_tracked_bytes\":" << resources.peakTrackedBytes
+            << ",\"active_tile_textures\":" << resources.activeTileTextures
+            << ",\"overview_tile_textures\":" << resources.overviewTileTextures
+            << ",\"pending_retired_textures\":" << resources.pendingRetiredTextures
+            << ",\"aged_retired_textures\":" << resources.agedRetiredTextures
+            << ",\"retired_frame_count\":" << resources.retiredFrameCount
+            << ",\"largest_allocation_px\":";
+  PrintVector2i(resources.largestAllocationPx);
+  std::cout << ",\"wgpu_lifetime_texture_creates\":" << resources.wgpuLifetimeTextureCreates
+            << ",\"wgpu_lifetime_buffer_creates\":" << resources.wgpuLifetimeBufferCreates << "}";
 }
 
 void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {

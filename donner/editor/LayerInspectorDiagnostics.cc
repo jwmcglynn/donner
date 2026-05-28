@@ -92,18 +92,9 @@ const char* TileKindName(svg::compositor::CompositorController::CompositeTileSna
   return "unknown";
 }
 
-bool TileHasCachedOrImmediateMode(
-    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
-  using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
-  return tile.kind == Kind::Segment || tile.kind == Kind::Layer;
-}
-
-bool TileIsImmediate(const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
-  return TileHasCachedOrImmediateMode(tile) && tile.immediate;
-}
-
 const char* TileModeName(const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
-  if (TileIsImmediate(tile)) {
+  using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+  if (tile.kind == Kind::Segment && tile.immediate) {
     return "immediate";
   }
   return "cached";
@@ -135,14 +126,15 @@ bool TileOverBudget(const svg::compositor::CompositorController::CompositeTileSn
 
 const char* TileTelemetrySignal(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
-  if (TileIsImmediate(tile) && TileOverBudget(tile)) {
+  using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+  if (tile.kind == Kind::Segment && tile.immediate && TileOverBudget(tile)) {
     return "over_budget_immediate";
   }
   if (tile.demotedDynamicImmediate) {
     return "demoted_dynamic";
   }
-  if (TileHasCachedOrImmediateMode(tile) && !tile.immediate && tile.visible &&
-      !tile.hasExpensiveEffect && tile.estimatedDrawOps > 0 && tile.immediateBudgetMs > 0.0 &&
+  if (tile.kind == Kind::Segment && !tile.immediate && tile.visible && !tile.hasExpensiveEffect &&
+      tile.estimatedDrawOps > 0 && tile.immediateBudgetMs > 0.0 &&
       tile.lastRasterizeMs <= tile.immediateBudgetMs) {
     return "cached_fast_candidate";
   }
@@ -174,10 +166,10 @@ TelemetrySummary SummarizeTelemetryTiles(
       ++summary.layerCount;
     }
 
-    const bool immediateTile = TileIsImmediate(tile);
-    if (immediateTile) {
+    const bool immediateSegment = tile.kind == Kind::Segment && tile.immediate;
+    if (immediateSegment) {
       ++summary.immediateCount;
-    } else if (TileHasCachedOrImmediateMode(tile)) {
+    } else if (tile.kind == Kind::Segment || tile.kind == Kind::Layer) {
       ++summary.cachedCount;
     }
 
@@ -191,9 +183,9 @@ TelemetrySummary SummarizeTelemetryTiles(
       ++summary.demotedDynamicCount;
     }
     if (TileOverBudget(tile)) {
-      if (immediateTile) {
+      if (immediateSegment) {
         ++summary.overBudgetImmediateCount;
-      } else if (TileHasCachedOrImmediateMode(tile)) {
+      } else if (tile.kind == Kind::Segment || tile.kind == Kind::Layer) {
         ++summary.overBudgetCachedCount;
       }
     }
@@ -253,16 +245,6 @@ void WriteTelemetryContextObject(std::ostream& os,
   WriteVector2i(os, context.documentCanvas);
   os << ",\"compositor_canvas\":";
   WriteVector2i(os, context.state.canvasSize);
-  os << ",\"active_viewport_bounded\":" << (context.activeTilesViewportBounded ? "true" : "false");
-  os << ",\"overview_infill\":" << (context.overviewInfillAvailable ? "true" : "false");
-  os << ",\"active_output_canvas\":";
-  WriteVector2i(os, context.activeOutputSizePx);
-  os << ",\"overview_output_canvas\":";
-  WriteVector2i(os, context.overviewOutputSizePx);
-  os << ",\"active_raster_rect\":";
-  WriteBox2d(os, context.activeRasterDocumentRect);
-  os << ",\"overview_raster_rect\":";
-  WriteBox2d(os, context.overviewRasterDocumentRect);
   os << ",\"freshness\":";
   WriteQuotedJsonString(os, CanvasFreshnessName(freshness));
   os << '}';

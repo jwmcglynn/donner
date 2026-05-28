@@ -100,20 +100,6 @@ bool ResourceDiagnosticsEnabled() {
   return std::getenv("DONNER_EDITOR_RESOURCE_LOG") != nullptr;
 }
 
-bool FrameMissTelemetryEnabled() {
-  const char* value = std::getenv("DONNER_EDITOR_FRAME_MISS_LOG");
-  if (value == nullptr) {
-    return ResourceDiagnosticsEnabled();
-  }
-
-  const std::string_view valueView(value);
-  return valueView != "0" && valueView != "false";
-}
-
-bool FrameMissTelemetryTargetIsStderr(std::string_view target) {
-  return target.empty() || target == "1" || target == "true" || target == "stderr";
-}
-
 std::uint64_t MegabytesRoundedUp(std::uint64_t bytes) {
   constexpr std::uint64_t kBytesPerMiB = 1024u * 1024u;
   return (bytes + kBytesPerMiB - 1u) / kBytesPerMiB;
@@ -122,20 +108,6 @@ std::uint64_t MegabytesRoundedUp(std::uint64_t bytes) {
 FrameMemorySample MemorySampleFromPresentationResources(
     const PresentationResourceStats& resources) {
   return FrameMemorySample{
-      .overlayBytes = resources.overlayBytes,
-      .activeTileBytes = resources.activeTileBytes,
-      .overviewTileBytes = resources.overviewTileBytes,
-      .retiredBytes = resources.pendingRetiredBytes + resources.agedRetiredBytes,
-      .totalTrackedBytes = resources.totalTrackedBytes,
-      .peakTrackedBytes = resources.peakTrackedBytes,
-      .wgpuLifetimeTextureCreates = resources.wgpuLifetimeTextureCreates,
-      .wgpuLifetimeBufferCreates = resources.wgpuLifetimeBufferCreates,
-  };
-}
-
-FrameMissResourceTelemetry FrameMissTelemetryFromPresentationResources(
-    const PresentationResourceStats& resources) {
-  return FrameMissResourceTelemetry{
       .overlayBytes = resources.overlayBytes,
       .activeTileBytes = resources.activeTileBytes,
       .overviewTileBytes = resources.overviewTileBytes,
@@ -880,6 +852,7 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
       .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
       .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
+      .presentationResources = textures_.presentationResourceStats(),
       .frameCost = frameCost,
   };
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
@@ -958,43 +931,6 @@ void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCos
             << " wgpu_buffer_creates_delta=" << bufferCreateDelta
             << " overlay_upload_bytes=" << frameCost.overlay.payloadBytes
             << " tile_upload_bytes=" << frameCost.compositedUpload.payloadBytes << "\n";
-}
-
-void EditorShell::maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost) {
-  if (!FrameMissTelemetryEnabled()) {
-    return;
-  }
-
-  const PresentationResourceStats resources = textures_.presentationResourceStats();
-  const FrameMissTelemetryInput input{
-      .frameIndex = frameTelemetryFrame_,
-      .frameMs = interactionController_.frameHistory().latest(),
-      .backendMs = interactionController_.frameHistory().latestBackend(),
-      .frameCost = frameCost,
-      .resources = FrameMissTelemetryFromPresentationResources(resources),
-  };
-  const std::string json = BuildFrameMissTelemetryJson(input);
-  if (json.empty()) {
-    return;
-  }
-
-  const char* targetValue = std::getenv("DONNER_EDITOR_FRAME_MISS_LOG");
-  const std::string_view target =
-      targetValue != nullptr ? std::string_view(targetValue) : std::string_view();
-  if (targetValue != nullptr && !FrameMissTelemetryTargetIsStderr(target)) {
-    std::ofstream output(std::string(target), std::ios::app);
-    if (output.good()) {
-      output << json;
-      return;
-    }
-
-    if (!frameMissTelemetryWriteErrorLogged_) {
-      std::cerr << "[DonnerFrameMiss] failed to open telemetry path: " << target << "\n";
-      frameMissTelemetryWriteErrorLogged_ = true;
-    }
-  }
-
-  std::cerr << "[DonnerFrameMiss] " << json;
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
@@ -1879,6 +1815,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                                        interactionController_.viewport(), textures_,
                                                        activeDragPreview, representedDragPreview);
   }
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .frameHistory = interactionController_.frameHistory(),
@@ -1985,10 +1923,9 @@ void EditorShell::renderLayerPanelContents() {
                                       : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
   const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
   const auto renderStats = renderCoordinator_.asyncRenderer().compositorRenderFrameStats();
-  const PresentationCoverageDiagnostics coverageDiagnostics = textures_.coverageDiagnostics();
   layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
                               viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
-                              documentCanvas, coverageDiagnostics, fastPath, renderStats);
+                              documentCanvas, fastPath, renderStats);
 }
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -3130,6 +3067,9 @@ void EditorShell::runFrame() {
     frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
   }
   interactionController_.frameHistory().setLatestFrameCost(frameCost);
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
+  maybeLogResourceDiagnostics(frameCost);
   requestRenderAtEndOfFrame_ = false;
   contentOnlyCaptureThisFrame_ = false;
 }

@@ -64,7 +64,11 @@ This design proposes a second responsiveness pass:
         source rope layout/update/draw, composited tile coverage, texture upload bytes, and
         full-document canvas commits.
   - [x] Render the known per-frame costs as a stacked color-bar profiler on the frame graph.
-  - [ ] Add worker-side content tile raster phase counters.
+  - [x] Track presentation-cache memory buckets and render them as a stacked memory graph beside
+        the frame-time profiler.
+  - [x] Add worker-side content tile raster phase counters.
+  - [x] Add a Layers-panel JSONL history export for per-segment immediate-vs-cached heuristic
+        telemetry across zooms and interactions.
   - [ ] Extend `async_renderer_wallclock_tests` with a large-selection/select-all real-splash case.
   - [ ] Add a replay/perf fixture for zooming to the 8192 px clamp and panning while selected.
 - [x] **M2: Immediate-mode editor chrome.**
@@ -80,8 +84,9 @@ This design proposes a second responsiveness pass:
 - [x] **M4: Immediate-mode cheap compositor spans.**
   - [x] Add a `StaticSpanPlan` for each paint-order gap: `CachedTile` or `Immediate`.
   - [x] Use a conservative cheapness heuristic: simple geometry, no filters/masks/patterns/text,
-        estimated redraw cost below cached-texture overhead, plus expansion-only measured timing
-        against a 120 Hz frame-budget slice.
+        estimated redraw cost below cached-texture overhead, plus measured timing against a 120 Hz
+        frame-budget slice. Static-cheap spans stay immediate; dynamically-expanded spans fall back
+        to cached presentation after an over-budget immediate render.
   - [x] Emit immediate spans as clipped draw commands or viewport-sized transient tiles instead of
         persistent offscreen textures.
 - [ ] **M5: Viewport-bounded high-zoom rendering.**
@@ -101,7 +106,16 @@ This design proposes a second responsiveness pass:
   - [ ] Add fixed-size content tiles keyed by `(paint span, tile coord, scale band, generation)`.
   - [ ] Prioritize visible tiles, selection tiles, one-tile margin, then predicted pan/zoom tiles.
   - [ ] Add memory caps, LRU eviction, and stale-but-coherent fallback rules.
-- [ ] **M7: Validation and rollout.**
+- [ ] **M7: Geode-rendered source-pane flair and UI chrome.**
+  - [ ] Move source-reference ropes from ImGui path commands to a clipped Geode screen-space chrome
+        layer. Keep the existing ImGui hit testing and tooltips as invisible interaction owners.
+  - [ ] Draw chip backgrounds, borders, glows, and connector flair through Geode. Keep chip text in
+        ImGui until Geode has UI-grade text rendering.
+  - [ ] Share the same clip/cull policy as M3 so ropes and chips cannot bleed outside the source
+        text area or canvas pane.
+  - [ ] Treat this as a migration path for non-text editor UI from ImGui to Geode, starting with
+        decorative/high-churn visuals before moving stateful controls.
+- [ ] **M8: Validation and rollout.**
   - [ ] Add CI counter gates for culling, tile reuse, and no full-document high-zoom commits.
   - [ ] Add manual perf gates for select-all, high-zoom pan, high-zoom drag, and source-focus ropes.
   - [ ] Remove obsolete full-overlay and full-document high-zoom paths after the new path is stable.
@@ -306,10 +320,12 @@ The baseline heuristic should choose immediate mode only when all are true:
 - estimated redraw cost is lower than the texture setup and retained-memory overhead;
 - no active animation or transform invalidation that would make command capture stale.
 
-Measured raster time is an expansion-only input: spans that miss the baseline heuristic may still
-switch to immediate mode when their most recent rasterize is below a 120 Hz frame-budget slice and
-the cumulative dynamic immediate work for the frame stays within that slice. Slow machines must not
-demote spans that the baseline heuristic already classified as cheap enough.
+Measured raster time is asymmetric. Spans that miss the baseline heuristic may still switch to
+immediate mode when their most recent rasterize is below a 120 Hz frame-budget slice and the
+cumulative dynamic immediate work for the frame stays within that slice. If one of those
+dynamically-expanded immediate spans later renders over budget, the freshly-rendered payload is
+retained and the span returns to cached presentation on the next frame. Slow-machine timing still
+does not demote spans that the baseline heuristic already classified as cheap enough.
 
 Immediate spans are drawn in paint order during presentation with a clip rect equal to the render
 pane or tile. Cached spans keep the current offscreen texture path.

@@ -68,12 +68,6 @@ TEST(LayerInspectorDiagnosticsTest, SerializesHeuristicTelemetryForOfflineRefine
   context.viewportDpr = 2.0;
   context.viewportDesiredCanvas = Vector2i(1024, 768);
   context.documentCanvas = Vector2i(1024, 768);
-  context.activeTilesViewportBounded = true;
-  context.overviewInfillAvailable = true;
-  context.activeRasterDocumentRect = Box2d::FromXYWH(10.0, 20.0, 50.0, 40.0);
-  context.overviewRasterDocumentRect = Box2d::FromXYWH(0.0, 0.0, 100.0, 80.0);
-  context.activeOutputSizePx = Vector2i(512, 384);
-  context.overviewOutputSizePx = Vector2i(1024, 768);
   context.state.canvasSize = Vector2i(1024, 768);
   context.fastPath.fastPathFrames = 5;
   context.fastPath.slowPathFramesWithDirty = 1;
@@ -92,10 +86,6 @@ TEST(LayerInspectorDiagnosticsTest, SerializesHeuristicTelemetryForOfflineRefine
   EXPECT_NE(json.find("\"reason\":\"dynamic_timing\""), std::string::npos);
   EXPECT_NE(json.find("\"signal\":\"over_budget_immediate\""), std::string::npos);
   EXPECT_NE(json.find("\"bounds\":{\"tl\":[10.000,20.000]"), std::string::npos);
-  EXPECT_NE(json.find("\"active_viewport_bounded\":true"), std::string::npos);
-  EXPECT_NE(json.find("\"overview_infill\":true"), std::string::npos);
-  EXPECT_NE(json.find("\"active_output_canvas\":[512,384]"), std::string::npos);
-  EXPECT_NE(json.find("\"overview_raster_rect\":{\"tl\":[0.000,0.000]"), std::string::npos);
 
   const std::string sampleJson =
       BuildCompositorHeuristicTelemetrySampleJson(immediateTile, context, 17);
@@ -103,33 +93,6 @@ TEST(LayerInspectorDiagnosticsTest, SerializesHeuristicTelemetryForOfflineRefine
             std::string::npos);
   EXPECT_NE(sampleJson.find("\"seq\":17"), std::string::npos);
   EXPECT_NE(sampleJson.find("\"tile\":{\"id\":\"seg:1\""), std::string::npos);
-}
-
-TEST(LayerInspectorDiagnosticsTest, SerializesImmediatePromotedLayersAsImmediate) {
-  CompositeTileSnapshot immediateLayer;
-  immediateLayer.kind = CompositeTileSnapshot::Kind::Layer;
-  immediateLayer.id = "layer:99";
-  immediateLayer.label = "promoted layer";
-  immediateLayer.lastRasterizeMs = 5.0;
-  immediateLayer.immediate = true;
-  immediateLayer.dynamicHeuristicImmediate = true;
-  immediateLayer.immediateBudgetMs = 2.083;
-  immediateLayer.immediateBudgetChargeMs = 5.0;
-  immediateLayer.estimatedDrawOps = 1;
-  immediateLayer.visible = true;
-
-  CompositorHeuristicTelemetryContext context;
-  context.state.canvasSize = Vector2i(256, 256);
-  context.renderStats.immediateRasterizeMs = 5.0;
-  context.renderStats.immediateTileCount = 1;
-
-  const std::vector<CompositeTileSnapshot> tiles = {immediateLayer};
-  const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
-
-  EXPECT_NE(json.find("\"layers\":1,\"immediate\":1,\"cached\":0"), std::string::npos);
-  EXPECT_NE(json.find("\"kind\":\"layer\""), std::string::npos);
-  EXPECT_NE(json.find("\"mode\":\"immediate\""), std::string::npos);
-  EXPECT_NE(json.find("\"signal\":\"over_budget_immediate\""), std::string::npos);
 }
 
 TEST(LayerInspectorDiagnosticsTest, AppendsHeuristicTelemetryJsonLine) {
