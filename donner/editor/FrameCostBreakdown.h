@@ -9,20 +9,17 @@ namespace donner::editor {
 
 /// Per-frame cost counters for editor rendering diagnostics.
 struct FrameCostBreakdown {
-  /// Cost counters for capturing and presenting selection/source-hover chrome.
+  /// Cost counters for rasterizing and uploading selection/source-hover chrome.
   struct Overlay {
     /// Milliseconds spent capturing live DOM selection chrome into a snapshot.
     double captureMs = 0.0;
-    /// Milliseconds spent drawing the captured chrome snapshot into a retained overlay payload.
-    /// Zero for the editor's immediate screen-space overlay path.
+    /// Milliseconds spent drawing the captured chrome snapshot.
     double drawMs = 0.0;
-    /// Milliseconds spent ending the renderer frame and acquiring a retained overlay payload. Zero
-    /// for the editor's immediate screen-space overlay path.
+    /// Milliseconds spent ending the renderer frame and acquiring the presentation payload.
     double snapshotMs = 0.0;
-    /// Milliseconds spent handing a retained overlay payload to the presentation texture cache.
-    /// Zero for the editor's immediate screen-space overlay path.
+    /// Milliseconds spent handing the overlay payload to the presentation texture cache.
     double uploadMs = 0.0;
-    /// Approximate retained overlay payload bytes. Zero for immediate screen-space presentation.
+    /// Approximate overlay payload bytes retained or uploaded for presentation.
     std::uint64_t payloadBytes = 0;
     /// Document elements selected when the overlay snapshot was captured.
     int selectedElementCount = 0;
@@ -50,7 +47,7 @@ struct FrameCostBreakdown {
     Vector2d liveDragTranslationDoc = Vector2d::Zero();
     /// Document-space drag translation represented by the overlay presented this frame.
     Vector2d representedDragTranslationDoc = Vector2d::Zero();
-    /// Viewport overlay size that would have been rasterized before immediate presentation.
+    /// Document canvas size used for the overlay raster.
     Vector2i canvasSize = Vector2i::Zero();
   };
 
@@ -78,18 +75,6 @@ struct FrameCostBreakdown {
     int immediateTileCount = 0;
   };
 
-  /// Worker-side compositor raster costs for the render result that landed this UI frame.
-  struct CompositedRender {
-    /// Milliseconds spent rendering transient immediate-mode spans.
-    double immediateMs = 0.0;
-    /// Milliseconds spent rendering retained cached segment/layer tiles.
-    double cachedMs = 0.0;
-    /// Immediate-mode static spans rendered this frame.
-    int immediateTileCount = 0;
-    /// Cached segment/layer tiles rendered this frame.
-    int cachedTileCount = 0;
-  };
-
   /// Cost counters for source-focus reference rope layout, simulation, and drawing.
   struct SourceRopes {
     /// Milliseconds spent mapping source reference links to screen-space connector layout.
@@ -114,7 +99,6 @@ struct FrameCostBreakdown {
 
   Overlay overlay;
   CompositedUpload compositedUpload;
-  CompositedRender compositedRender;
   SourceRopes sourceRopes;
 
   /// Cumulative number of full-document canvas-size commits since document load.

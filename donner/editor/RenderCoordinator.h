@@ -100,12 +100,6 @@ public:
   }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
-  /// Add immediate presenter-side overlay draw-list time to the current frame counters.
-  ///
-  /// @param drawMs Milliseconds spent issuing immediate overlay draw-list commands.
-  void addImmediateOverlayDrawCost(double drawMs) {
-    lastFrameCostBreakdown_.overlay.drawMs += drawMs;
-  }
   /// Replace transient source-hover chrome elements.
   ///
   /// @param elements Elements to highlight as source-hover preview chrome.
@@ -142,12 +136,7 @@ public:
   /// is allowed for callers that don't care about backend timing.
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
-  void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          GlTextureCache* textures = nullptr);
-  /// Record that a document mutation requires a current-version presentation handoff.
-  ///
-  /// @param flushResult Metadata from the just-flushed editor command batch.
-  void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult);
+  void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport);
   /**
    * Return the selected layer whose cached pixels should be hidden while editor chrome remains
    * visible. This is used when the live selected element is `display:none`: hit-testing and the
@@ -198,7 +187,6 @@ private:
   std::optional<Box2d> lastOverlayScreenRect_;
   std::optional<Transform2d> lastOverlayCanvasFromDocument_;
   SelectionChromeDetail lastOverlaySelectionDetail_ = SelectionChromeDetail::Full;
-  bool lastOverlayInteractionActive_ = false;
   std::chrono::steady_clock::time_point overlayStableSince_{};
   std::uint64_t lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   /// Last marquee rect captured into the immediate overlay snapshot, or nullopt if the last
@@ -219,14 +207,6 @@ private:
   /// `SVGDocument::setCanvasSize`.
   Vector2i pendingCanvasSize_ = Vector2i::Zero();
   std::chrono::steady_clock::time_point pendingCanvasSizeSince_{};
-  /// Most recent raster viewport requested by `maybeRequestRender`.
-  /// Used to debounce high-zoom viewport refreshes while the presenter
-  /// transforms already-cached composited textures during live zoom/pan.
-  std::optional<EditorRasterViewport> pendingRasterViewport_;
-  std::chrono::steady_clock::time_point pendingRasterViewportSince_{};
-  /// True after a structural mutation whose existing overview/full-document cache may contain
-  /// deleted pixels. The old presentation remains visible until the replacement render lands.
-  bool pendingDocumentMutationOverviewRefresh_ = false;
   FrameCostBreakdown lastFrameCostBreakdown_;
 };
 

@@ -169,7 +169,6 @@ private:
   void drawPreparedDocument(SVGDocument& document);
   void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                             const Transform2d& surfaceFromCanvas);
-  void drawPreparedEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity);
   void traverse(RenderingInstanceView& view, Registry& registry);
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);

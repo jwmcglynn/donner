@@ -180,9 +180,6 @@ public:
   /// textures whose tile is absent from the snapshot.
   void uploadComposited(const RenderResult::CompositedPreview& preview,
                         std::optional<EditorRasterViewport> rasterViewport = std::nullopt);
-  /// Upload a full-document overview preview without replacing active viewport-bounded tiles.
-  void uploadCompositedOverview(const RenderResult::CompositedPreview& preview,
-                                const EditorRasterViewport& rasterViewport);
 
   /// Advance one presentation frame, retiring WGPU texture snapshots whose
   /// handles have aged past the backend's frames-in-flight window.
@@ -250,10 +247,6 @@ public:
   [[nodiscard]] const FrameCostBreakdown::Overlay& lastOverlayUploadCost() const {
     return lastOverlayUploadCost_;
   }
-  /// Resource counters for the textures currently retained by this cache.
-  [[nodiscard]] PresentationResourceStats presentationResourceStats() const;
-  /// Coverage counters for active bounded tiles and retained overview infill.
-  [[nodiscard]] PresentationCoverageDiagnostics coverageDiagnostics() const;
 
 private:
 #ifdef DONNER_EDITOR_WGPU
@@ -338,15 +331,10 @@ private:
   /// Paint-order view of `overviewTileTextures_`.
   std::vector<TileView> overviewTiles_;
   bool activeTilesViewportBounded_ = false;
-  Box2d activeRasterDocumentRect_;
-  Box2d overviewRasterDocumentRect_;
-  Vector2i activeOutputSizePx_ = Vector2i::Zero();
-  Vector2i overviewOutputSizePx_ = Vector2i::Zero();
   int metadataOnlyMissCount_ = 0;
   int duplicateLiveTextureCount_ = 0;
   FrameCostBreakdown::CompositedUpload lastCompositedUploadCost_;
   FrameCostBreakdown::Overlay lastOverlayUploadCost_;
-  mutable std::uint64_t peakTrackedResourceBytes_ = 0;
 
 #ifdef DONNER_EDITOR_WGPU
   RetiredSnapshotBatch pendingRetiredSnapshots_;

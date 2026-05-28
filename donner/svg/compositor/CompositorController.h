@@ -113,7 +113,7 @@ struct CompositorTile {
   /// on the GPU side.
   bool isDragTarget = false;
 
-  /// True when this segment or promoted layer should be presented as a transient
+  /// True when this static segment should be presented as a transient
   /// immediate-mode tile instead of a persistent presentation texture.
   bool immediate = false;
 };
@@ -593,11 +593,6 @@ public:
     bool staticHeuristicImmediate = false;
     /// True when timing expanded the span into immediate presentation.
     bool dynamicHeuristicImmediate = false;
-    /// True when the span was dynamically immediate last frame but this render exceeded budget, so
-    /// the freshly-rendered payload is retained as a cached tile instead of staying immediate.
-    bool demotedDynamicImmediate = false;
-    /// Human-readable first/last element range covered by this span.
-    std::string spanRangeLabel;
   };
 
   /// Snapshot the most recent static span plans. Test-only diagnostics.

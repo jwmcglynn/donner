@@ -10,6 +10,7 @@
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -71,47 +72,9 @@ EditorRasterViewport EffectiveRasterViewportForRequest(svg::SVGDocument& documen
     fallback.documentRect = Box2d::FromXYWH(0.0, 0.0, static_cast<double>(fallback.outputSizePx.x),
                                             static_cast<double>(fallback.outputSizePx.y));
   }
-  fallback.outputFromDocument = document.canvasFromDocumentTransform();
+  fallback.outputFromDocument =
+      svg::components::LayoutSystem().getCanvasFromDocumentTransform(document.registry());
   return fallback;
-}
-
-bool ContainsEntity(const std::vector<Entity>& entities, Entity entity) {
-  return std::ranges::find(entities, entity) != entities.end();
-}
-
-void AppendUniqueEntity(std::vector<Entity>* entities, Entity entity) {
-  if (entity != entt::null && !ContainsEntity(*entities, entity)) {
-    entities->push_back(entity);
-  }
-}
-
-std::vector<Entity> DragPreviewEntities(const RenderRequest::DragPreview& preview) {
-  std::vector<Entity> entities;
-  entities.reserve(1u + preview.extraEntities.size());
-  AppendUniqueEntity(&entities, preview.entity);
-  for (Entity entity : preview.extraEntities) {
-    AppendUniqueEntity(&entities, entity);
-  }
-  return entities;
-}
-
-std::vector<Entity> DesiredCompositorEntities(const RenderRequest& request) {
-  if (request.dragPreview.has_value()) {
-    return DragPreviewEntities(*request.dragPreview);
-  }
-
-  std::vector<Entity> entities;
-  AppendUniqueEntity(&entities, request.selectedEntity);
-  return entities;
-}
-
-bool SameEntityList(const std::vector<Entity>& lhs, const std::vector<Entity>& rhs) {
-  return lhs == rhs;
-}
-
-bool ContainsAllEntities(const std::vector<Entity>& haystack, const std::vector<Entity>& needles) {
-  return std::ranges::all_of(needles,
-                             [&](Entity entity) { return ContainsEntity(haystack, entity); });
 }
 
 }  // namespace
@@ -558,7 +521,8 @@ void AsyncRenderer::workerLoop() {
     const Vector2i outputCanvasSize = rasterViewport.outputSizePx;
     viewport.size = Vector2d(outputCanvasSize.x, outputCanvasSize.y);
     viewport.devicePixelRatio = 1.0;
-    const Transform2d semanticCanvasFromDocument = requestDocument.canvasFromDocumentTransform();
+    const Transform2d semanticCanvasFromDocument =
+        svg::components::LayoutSystem().getCanvasFromDocumentTransform(requestDocument.registry());
     const Transform2d surfaceFromCanvas =
         semanticCanvasFromDocument.inverse() * rasterViewport.outputFromDocument;
     // Push the current UI-thread setting for tight-bounded segments
@@ -588,11 +552,6 @@ void AsyncRenderer::workerLoop() {
       if (request.overviewInfillOnly) {
         return std::nullopt;
       }
-      if (!splitPreviewSafe || !request.dragPreview.has_value() ||
-          compositorEntity_ == entt::null || compositor_->layerCount() == 0u) {
-        return std::nullopt;
-      }
-      const std::vector<Entity> dragPreviewEntities = DragPreviewEntities(*request.dragPreview);
       const Box2d viewBox = requestDocument.svgElement().viewBox().value_or(
           Box2d::FromXYWH(0, 0, static_cast<double>(semanticCanvasSize.x),
                           static_cast<double>(semanticCanvasSize.y)));
@@ -624,8 +583,7 @@ void AsyncRenderer::workerLoop() {
       auto compositorTiles =
           compositor_->snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
       bool canReuseNonDragTextures = !publishedCompositedTiles_.empty();
-      std::size_t activeDragTilesAvailable = 0u;
-      bool activeDragTileNeedsPayload = false;
+      bool activeDragTileWillHaveBitmap = !activeDragRequest;
       bool hasImmediateTile = false;
       for (const auto& ct : compositorTiles) {
         if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) {
@@ -635,12 +593,20 @@ void AsyncRenderer::workerLoop() {
         const OutKind kind =
             ct.immediate ? OutKind::Immediate
                          : (ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer);
-        const bool currentActiveDragLayer =
-            activeDragRequest && ContainsEntity(dragPreviewEntities, ct.layerEntity);
         if (ct.immediate) {
           hasImmediateTile = true;
-          if (currentActiveDragLayer) {
-            ++activeDragTilesAvailable;
+          continue;
+        }
+        const bool currentActiveDragLayer = activeDragRequest && request.dragPreview.has_value() &&
+                                            ct.layerEntity == request.dragPreview->entity;
+        if (currentActiveDragLayer) {
+          activeDragTileWillHaveBitmap =
+              ct.isDragTarget ||
+              publishedTextureMatches(std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims,
+                                      outputCanvasSize);
+          if (!activeDragTileWillHaveBitmap) {
+            canReuseNonDragTextures = false;
+            break;
           }
           continue;
         }
@@ -662,11 +628,11 @@ void AsyncRenderer::workerLoop() {
       }
       CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All;
       if (canReuseNonDragTextures) {
-        if (hasImmediateTile && activeDragTileNeedsPayload) {
+        if (hasImmediateTile && activeDragRequest) {
           payload = CompositorTileBitmapPayload::ImmediateAndDragTargetOnly;
         } else if (hasImmediateTile) {
           payload = CompositorTileBitmapPayload::ImmediateOnly;
-        } else if (activeDragTileNeedsPayload) {
+        } else if (activeDragRequest) {
           payload = CompositorTileBitmapPayload::DragTargetOnly;
         } else {
           payload = CompositorTileBitmapPayload::MetadataOnly;
@@ -688,7 +654,7 @@ void AsyncRenderer::workerLoop() {
             ct.immediate ? OutKind::Immediate
                          : (ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer);
         const bool metadataOnly =
-            !ct.immediate &&
+            !ct.immediate && (!ct.isDragTarget || !activeDragRequest) &&
             publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims, outputCanvasSize);
         if (!metadataOnly && ct.bitmap.empty() && ct.textureSnapshot == nullptr) continue;
         RenderResult::CompositedTile tile;
@@ -745,9 +711,7 @@ void AsyncRenderer::workerLoop() {
       // presentation-gating iteration, including any readback or tile
       // snapshot work after renderFrame. Keep this scoped timing in
       // Tracy only for drilling into the compositor itself.
-      const auto renderFrameStart = std::chrono::steady_clock::now();
       renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
-      workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
     }
 
     // §M4: a cancelled render leaves compositor dirty flags ready for the next
@@ -845,7 +809,6 @@ void AsyncRenderer::workerLoop() {
         done.result.bitmap = std::move(bitmap);
         done.result.compositedPreview = std::move(compositedPreview);
         done.result.rasterViewport = rasterViewport;
-        done.result.overviewInfillOnly = request.overviewInfillOnly;
         done.result.version = request.version;
         done.replayHoldPollsRemaining = replayResultHoldFramesForTesting_;
         const auto diagnosticsStart = std::chrono::steady_clock::now();

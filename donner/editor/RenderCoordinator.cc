@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdlib>
 #include <span>
 #include <utility>
 
@@ -119,30 +120,6 @@ bool SameRasterViewport(const EditorRasterViewport& lhs, const EditorRasterViewp
          SameTransform(lhs.outputFromDocument, rhs.outputFromDocument);
 }
 
-bool SameRasterScaleAndSemanticCanvas(const EditorRasterViewport& lhs,
-                                      const EditorRasterViewport& rhs) {
-  return lhs.semanticCanvasSizePx == rhs.semanticCanvasSizePx && lhs.viewportBounded &&
-         rhs.viewportBounded && lhs.outputFromDocument.data[0] == rhs.outputFromDocument.data[0] &&
-         lhs.outputFromDocument.data[1] == rhs.outputFromDocument.data[1] &&
-         lhs.outputFromDocument.data[2] == rhs.outputFromDocument.data[2] &&
-         lhs.outputFromDocument.data[3] == rhs.outputFromDocument.data[3];
-}
-
-bool DocumentRectContains(const Box2d& outer, const Box2d& inner) {
-  constexpr double kTolerance = 1e-6;
-  return outer.topLeft.x <= inner.topLeft.x + kTolerance &&
-         outer.topLeft.y <= inner.topLeft.y + kTolerance &&
-         outer.bottomRight.x + kTolerance >= inner.bottomRight.x &&
-         outer.bottomRight.y + kTolerance >= inner.bottomRight.y;
-}
-
-bool RasterViewportCanPresentCurrentViewport(const EditorRasterViewport& rendered,
-                                             const EditorRasterViewport& current) {
-  return SameRasterViewport(rendered, current) ||
-         (SameRasterScaleAndSemanticCanvas(rendered, current) &&
-          DocumentRectContains(rendered.documentRect, current.documentRect));
-}
-
 bool SameActiveBoundsPreview(const std::optional<SelectTool::ActiveTransformBoundsPreview>& lhs,
                              const std::optional<SelectTool::ActiveTransformBoundsPreview>& rhs) {
   if (lhs.has_value() != rhs.has_value()) {
@@ -173,40 +150,18 @@ bool IsDisplayNone(const svg::SVGElement& element) {
   return element.getComputedStyle().display.get().value() == svg::Display::None;
 }
 
-bool SubtreeContainsEntity(const svg::SVGElement& element, Entity entity) {
-  if (element.unsafeEntityHandle().entity() == entity) {
-    return true;
-  }
-
-  for (auto child = element.firstChild(); child.has_value(); child = child->nextSibling()) {
-    if (SubtreeContainsEntity(*child, entity)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-bool DocumentContainsEntity(const svg::SVGDocument& document, Entity entity) {
-  if (entity == entt::null) {
-    return false;
-  }
-  return SubtreeContainsEntity(document.svgElement(), entity);
-}
-
 double MillisecondsSince(std::chrono::steady_clock::time_point start) {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
       .count();
 }
 
-FrameCostBreakdown::CompositedRender CompositedRenderCostFromStats(
-    const svg::compositor::CompositorController::RenderFrameStats& stats) {
-  return FrameCostBreakdown::CompositedRender{
-      .immediateMs = stats.immediateRasterizeMs,
-      .cachedMs = stats.cachedRasterizeMs,
-      .immediateTileCount = stats.immediateTileCount,
-      .cachedTileCount = stats.cachedTileCount,
-  };
+void ApplyOverlayUploadCost(FrameCostBreakdown::Overlay* overlay,
+                            const FrameCostBreakdown::Overlay& uploadCost) {
+  overlay->uploadMs = uploadCost.uploadMs;
+  overlay->payloadBytes = uploadCost.payloadBytes;
+  if (uploadCost.canvasSize != Vector2i::Zero()) {
+    overlay->canvasSize = uploadCost.canvasSize;
+  }
 }
 
 bool IsUnsetTimePoint(std::chrono::steady_clock::time_point timePoint) {
@@ -328,12 +283,10 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlaySelectionVec_.clear();
   sourceHoverElements_.clear();
   lastOverlaySourceHoverVec_.clear();
-  immediateOverlaySnapshot_.reset();
   lastOverlayRasterSize_ = Vector2i::Zero();
   lastOverlayScreenRect_.reset();
   lastOverlayCanvasFromDocument_.reset();
   lastOverlaySelectionDetail_ = SelectionChromeDetail::Full;
-  lastOverlayInteractionActive_ = false;
   overlayStableSince_ = std::chrono::steady_clock::time_point{};
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   lastOverlayMarqueeRectDoc_.reset();
@@ -341,11 +294,6 @@ void RenderCoordinator::resetForLoadedDocument() {
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
   displayNoneSuppressedLayerEntity_ = entt::null;
-  pendingCanvasSize_ = Vector2i::Zero();
-  pendingCanvasSizeSince_ = std::chrono::steady_clock::time_point{};
-  pendingRasterViewport_.reset();
-  pendingRasterViewportSince_ = std::chrono::steady_clock::time_point{};
-  pendingDocumentMutationOverviewRefresh_ = false;
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
 }
 
@@ -394,45 +342,28 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const auto currentVersion = app.document().currentFrameVersion();
   const auto now = std::chrono::steady_clock::now();
   const auto& overlaySelection = app.selectedElements();
-  const std::optional<SelectTool::ActiveDragPreview> effectiveLiveDragPreview =
-      liveDragPreview.has_value() ? liveDragPreview : representedDragPreview;
-  const bool overlayInteractionActive =
-      effectiveLiveDragPreview.has_value() || representedDragPreview.has_value() ||
-      marqueeRectDoc.has_value() || activeBoundsPreview.has_value();
-  const bool overlayGeometryDiffers =
-      overlaySelection != lastOverlaySelectionVec_ ||
-      sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
-      marqueeRectDoc != lastOverlayMarqueeRectDoc_ ||
-      currentOverlayRasterSize != lastOverlayRasterSize_ || !lastOverlayScreenRect_.has_value() ||
-      currentOverlayScreenRect != *lastOverlayScreenRect_ ||
-      !lastOverlayCanvasFromDocument_.has_value() ||
-      !SameTransform(currentOverlayCanvasFromDocument, *lastOverlayCanvasFromDocument_) ||
-      !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_) ||
-      currentVersion != lastOverlayVersion_ ||
-      overlayInteractionActive != lastOverlayInteractionActive_;
   if (!selectionDetail.has_value()) {
+    const bool overlayGeometryDiffers =
+        overlaySelection != lastOverlaySelectionVec_ ||
+        sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
+        marqueeRectDoc != lastOverlayMarqueeRectDoc_ ||
+        currentOverlayRasterSize != lastOverlayRasterSize_ || !lastOverlayScreenRect_.has_value() ||
+        currentOverlayScreenRect != *lastOverlayScreenRect_ ||
+        !lastOverlayCanvasFromDocument_.has_value() ||
+        !SameTransform(currentOverlayCanvasFromDocument, *lastOverlayCanvasFromDocument_) ||
+        !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_) ||
+        currentVersion != lastOverlayVersion_;
     if (overlayGeometryDiffers || IsUnsetTimePoint(overlayStableSince_)) {
       overlayStableSince_ = now;
     }
 
+    const bool overlayInteractionActive = representedDragPreview.has_value() ||
+                                          marqueeRectDoc.has_value() ||
+                                          activeBoundsPreview.has_value();
     selectionDetail = ChooseSelectionChromeDetail(overlaySelection.size(), overlayInteractionActive,
                                                   now, overlayStableSince_);
   }
   const SelectionChromeDetail resolvedSelectionDetail = *selectionDetail;
-
-  if (!overlayInteractionActive && !overlayGeometryDiffers &&
-      resolvedSelectionDetail == lastOverlaySelectionDetail_ &&
-      (immediateOverlaySnapshot_.has_value() ||
-       (textures.overlayWidth() > 0 && textures.overlayHeight() > 0))) {
-    FrameCostBreakdown::Overlay overlayCost;
-    overlayCost.canvasSize = currentOverlayRasterSize;
-    overlayCost.selectedElementCount = static_cast<int>(overlaySelection.size());
-    overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
-    overlayCost.selectionBoundsOnly =
-        resolvedSelectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
-    lastFrameCostBreakdown_.overlay = overlayCost;
-    return false;
-  }
 
   FrameCostBreakdown::Overlay overlayCost;
   overlayCost.canvasSize = currentOverlayRasterSize;
@@ -440,6 +371,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
   overlayCost.selectionBoundsOnly =
       resolvedSelectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
+  const std::optional<SelectTool::ActiveDragPreview> effectiveLiveDragPreview =
+      liveDragPreview.has_value() ? liveDragPreview : representedDragPreview;
   overlayCost.hasLiveDragPreview = effectiveLiveDragPreview.has_value();
   overlayCost.hasRepresentedDragPreview = representedDragPreview.has_value();
   if (effectiveLiveDragPreview.has_value()) {
@@ -451,6 +384,10 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const Transform2d representedDocumentFromLiveDocument =
       OverlayRepresentedDocumentFromLiveDocument(effectiveLiveDragPreview, representedDragPreview);
 
+  svg::RenderViewport overlayViewport;
+  overlayViewport.size = viewport.paneSize;
+  overlayViewport.devicePixelRatio = viewport.devicePixelRatio;
+  overlayRenderer_.beginFrame(overlayViewport);
   std::optional<SelectionChromeBoundsPreview> chromeBoundsPreview;
   if (activeBoundsPreview.has_value()) {
     chromeBoundsPreview = SelectionChromeBoundsPreview{
@@ -474,8 +411,41 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.hoverAabbCount = static_cast<int>(chromeSnapshot.hoverAabbsDoc.size());
   overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleBoxesDoc.size());
   overlayCost.hasMarquee = chromeSnapshot.marqueeDoc.has_value();
-  immediateOverlaySnapshot_ = chromeSnapshot;
-  textures.clearOverlay();
+
+  const auto drawStart = std::chrono::steady_clock::now();
+  OverlayRenderer::drawChromeFromSnapshot(overlayRenderer_, chromeSnapshot);
+  overlayCost.drawMs = MillisecondsSince(drawStart);
+
+  const auto snapshotStart = std::chrono::steady_clock::now();
+  overlayRenderer_.endFrame();
+  std::shared_ptr<const svg::RendererTextureSnapshot> overlayTexture =
+      overlayRenderer_.takeTextureSnapshot();
+  std::optional<svg::RendererBitmap> overlayBitmap;
+  if (overlayTexture != nullptr) {
+    overlayCost.payloadBytes = TexturePayloadBytes(overlayTexture->dimensions());
+  } else if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
+    UTILS_RELEASE_ASSERT_MSG(
+        overlayTexture != nullptr,
+        "Geode overlay rasterization did not produce a GPU texture. Refusing CPU "
+        "readback/upload fallback in Geode presentation mode.");
+  } else {
+    overlayBitmap = overlayRenderer_.takeSnapshot();
+    overlayCost.payloadBytes = overlayBitmap.has_value() ? BitmapPayloadBytes(*overlayBitmap) : 0u;
+  }
+  overlayCost.snapshotMs = MillisecondsSince(snapshotStart);
+
+  if (overlayTexture != nullptr) {
+    textures.uploadOverlayTexture(std::move(overlayTexture));
+    textures.setOverlayScreenRect(currentOverlayScreenRect);
+    ApplyOverlayUploadCost(&overlayCost, textures.lastOverlayUploadCost());
+  } else if (overlayBitmap.has_value() && !overlayBitmap->empty()) {
+    textures.uploadOverlay(*overlayBitmap);
+    textures.setOverlayScreenRect(currentOverlayScreenRect);
+    ApplyOverlayUploadCost(&overlayCost, textures.lastOverlayUploadCost());
+  } else {
+    textures.clearOverlay();
+    ApplyOverlayUploadCost(&overlayCost, textures.lastOverlayUploadCost());
+  }
 
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlaySourceHoverVec_ = sourceHoverElements_;
@@ -483,7 +453,6 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayScreenRect_ = currentOverlayScreenRect;
   lastOverlayCanvasFromDocument_ = currentOverlayCanvasFromDocument;
   lastOverlaySelectionDetail_ = resolvedSelectionDetail;
-  lastOverlayInteractionActive_ = overlayInteractionActive;
   lastOverlayVersion_ = currentVersion;
   lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
   lastOverlayActiveBoundsPreview_ = activeBoundsPreview;
@@ -529,28 +498,10 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
-  const bool overviewInfillResult =
-      result.overviewInfillOnly && result.compositedPreview.has_value() &&
-      result.compositedPreview->valid() && !result.rasterViewport.viewportBounded;
-  if (overviewInfillResult && rasterViewport.viewportBounded) {
-    textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport);
-    lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
-    pendingDocumentMutationOverviewRefresh_ = false;
-    displayedDocVersion_ = result.version;
+  const Vector2i viewportDesiredCanvas = rasterViewport.outputSizePx;
+  if (!SameRasterViewport(result.rasterViewport, rasterViewport)) {
     return;
   }
-  if (!RasterViewportCanPresentCurrentViewport(result.rasterViewport, rasterViewport)) {
-    return;
-  }
-  if (result.rasterViewport.viewportBounded && rasterViewport.viewportBounded &&
-      !textures.coverageDiagnostics().overviewInfillAvailable) {
-    // A viewport-bounded result covers only the currently rasterized window. Never make it the
-    // sole presented content: zooming out would expose checkerboard for missing tile coverage
-    // instead of document transparency. Keep the previous presentation until an overview infill
-    // exists underneath the crisp bounded tiles.
-    return;
-  }
-  const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
   if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
     if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview, resultCanvasSize)) {
       return;
@@ -558,9 +509,6 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 
     textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
     lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
-    if (!result.rasterViewport.viewportBounded) {
-      pendingDocumentMutationOverviewRefresh_ = false;
-    }
     if (displayNoneSuppressedLayerEntity_ != entt::null) {
       const bool stillCarriesSuppressedLayer = std::ranges::any_of(
           result.compositedPreview->tiles, [&](const RenderResult::CompositedTile& tile) {
@@ -573,12 +521,13 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
       }
     }
     compositedPresentation_.noteCachedTextures(
-        result.compositedPreview->entity, result.version, resultCanvasSize,
+        result.compositedPreview->entity, result.version, viewportDesiredCanvas,
         DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
   }
 
   displayedDocVersion_ = result.version;
-  renderScheduler_.noteRenderCompleted(result.version, resultCanvasSize, result.rasterViewport);
+  renderScheduler_.noteRenderCompleted(result.version, viewportDesiredCanvas,
+                                       result.rasterViewport);
   if (result.compositedPreview.has_value() && result.compositedPreview->valid() &&
       compositedPresentation_.isWaitingForChromeRefresh() && app.hasDocument()) {
     refreshSelectionBoundsCache(app);
@@ -594,17 +543,15 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 }
 
 void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
-                                           const ViewportState& viewport,
-                                           GlTextureCache* textures) {
+                                           const ViewportState& viewport) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     return;
   }
 
-  invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult());
-
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
+  const Vector2i desiredOutputCanvasSize = rasterViewport.outputSizePx;
   const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
   const auto dragPreview = selectTool.activeDragPreview();
   // Compare desired size against the live document size. Document replacement
@@ -627,55 +574,17 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool closeEnough = std::abs(pendingCanvasSize_.x - actualDocumentCanvas.x) <= 1 &&
                            std::abs(pendingCanvasSize_.y - actualDocumentCanvas.y) <= 1;
   const bool wouldChange = !closeEnough;
-  // During active drag the presenter can transform the existing promoted tile in lockstep with
-  // the overlay. Committing a zoom-driven canvas size here invalidates the render tree and can
-  // rerasterize every cached span before the next pointer frame; defer that crisp refresh until
-  // mouse-up unless the document still needs its first canvas.
-  const bool deferCanvasCommitForActiveDrag = dragPreview.has_value() && !firstCommit;
-  const auto currentVersion = app.document().currentFrameVersion();
-  const Entity prewarmEntity = selectedCompositedEntity(app);
-  const PresentationCoverageDiagnostics coverageDiagnostics =
-      textures != nullptr ? textures->coverageDiagnostics() : PresentationCoverageDiagnostics{};
-  const bool needsOverviewInfill =
-      rasterViewport.viewportBounded && !dragPreview.has_value() && textures != nullptr &&
-      (!coverageDiagnostics.overviewInfillAvailable || pendingDocumentMutationOverviewRefresh_);
-  const bool canDeferSelectedViewportRefresh = prewarmEntity != entt::null &&
-                                               !dragPreview.has_value() &&
-                                               currentVersion == displayedDocVersion_;
-  const bool deferSelectedViewportRefresh =
-      canDeferSelectedViewportRefresh && !rasterViewportSettled;
-  if (deferSelectedViewportRefresh && !needsOverviewInfill) {
-    if (renderWorker_.asyncRenderer.isBusy()) {
-      renderWorker_.asyncRenderer.cancelInFlight();
-    }
-    return;
-  }
-  if (renderWorker_.asyncRenderer.isBusy()) {
-    return;
-  }
-
-  const bool requestOverviewInfill = needsOverviewInfill;
-  const std::vector<Entity> prewarmExtraEntities =
-      requestOverviewInfill ? std::vector<Entity>{}
-                            : selectedCompositedExtraEntities(app, prewarmEntity);
-  const bool useSelectedPrewarmRasterViewport =
-      !requestOverviewInfill && prewarmEntity != entt::null && !dragPreview.has_value() &&
-      rasterViewport.viewportBounded;
-  const EditorRasterViewport requestRasterViewport =
-      requestOverviewInfill
-          ? viewport.overviewInfillRasterViewport()
-          : (useSelectedPrewarmRasterViewport ? viewport.selectedPrewarmRasterViewport()
-                                              : rasterViewport);
-  const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
-
-  if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&
-      (firstCommit || throttleElapsed)) {
+  if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && (firstCommit || throttleElapsed)) {
     app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
     pendingCanvasSizeSince_ = now;
     ++lastFrameCostBreakdown_.documentCanvasCommitCount;
     lastFrameCostBreakdown_.lastCommittedCanvasSize = pendingCanvasSize_;
   }
 
+  const Vector2i currentCanvasSize = desiredOutputCanvasSize;
+  const auto currentVersion = app.document().currentFrameVersion();
+  const auto dragPreview = selectTool.activeDragPreview();
+  const Entity prewarmEntity = selectedCompositedEntity(app);
   const Entity suppressedLayerEntity = suppressedCompositedLayerEntity(app);
   if (suppressedLayerEntity != entt::null) {
     compositedPresentation_.discardCachedTexturesForEntity(suppressedLayerEntity);
@@ -689,15 +598,13 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   }
 
   const PresentationRenderScheduleDecision schedule = renderScheduler_.evaluate(
-      compositedPresentation_,
-      PresentationRenderScheduleInput{
-          .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
-          .selectedExtraEntities = prewarmExtraEntities,
-          .activeDragPreview = dragPreview,
-          .currentVersion = currentVersion,
-          .currentCanvasSize = currentCanvasSize,
-          .currentRasterViewport = requestRasterViewport,
-      });
+      compositedPresentation_, PresentationRenderScheduleInput{
+                                   .selectedEntity = prewarmEntity,
+                                   .activeDragPreview = dragPreview,
+                                   .currentVersion = currentVersion,
+                                   .currentCanvasSize = currentCanvasSize,
+                                   .currentRasterViewport = rasterViewport,
+                               });
   if (!schedule.shouldRequestRender()) {
     return;
   }
@@ -705,8 +612,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   RenderRequest req(renderWorker_.renderer, app.document().document());
   req.version = currentVersion;
   req.documentGeneration = app.document().documentGeneration();
-  req.rasterViewport = requestRasterViewport;
-  req.overviewInfillOnly = requestOverviewInfill;
+  req.rasterViewport = rasterViewport;
   // Drain any pending structural remap from a recent `setDocumentMaybe
   // Structural` call. Non-empty remap lets the worker preserve the
   // compositor's cached state across the document swap instead of

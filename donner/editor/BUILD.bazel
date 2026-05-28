@@ -282,15 +282,6 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "frame_miss_telemetry",
-    srcs = ["FrameMissTelemetry.cc"],
-    hdrs = ["FrameMissTelemetry.h"],
-    deps = [
-        ":frame_cost_breakdown",
-    ],
-)
-
-donner_cc_library(
     name = "gl_texture_cache",
     srcs = ["GlTextureCache.cc"],
     hdrs = ["GlTextureCache.h"],
@@ -600,7 +591,6 @@ donner_cc_library(
         ":editor_shell_layout",
         ":focus_view",
         ":frame_cost_breakdown",
-        ":frame_miss_telemetry",
         ":gl_texture_cache",
         ":imgui_headers",
         ":keyboard_shortcut_policy",

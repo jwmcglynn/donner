@@ -123,11 +123,8 @@ std::vector<svg::SVGElement> QueryNumberedRects(svg::SVGDocument& document, int 
   return elements;
 }
 
-std::optional<RenderResult> WaitForRenderResult(
-    AsyncRenderer& asyncRenderer,
-    std::chrono::milliseconds timeout = std::chrono::milliseconds(4000)) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
+std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
+  for (int i = 0; i < 400; ++i) {
     auto result = asyncRenderer.pollResult();
     if (result.has_value()) {
       return result;
@@ -135,38 +132,6 @@ std::optional<RenderResult> WaitForRenderResult(
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   return std::nullopt;
-}
-
-std::string DescribeCompositeSegments(
-    const std::vector<svg::compositor::CompositorController::CompositeTileSnapshot>& tiles) {
-  std::ostringstream out;
-  for (const auto& tile : tiles) {
-    using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
-    if (tile.kind != Kind::Segment && tile.kind != Kind::Layer) {
-      continue;
-    }
-    out << tile.id << " kind=" << (tile.kind == Kind::Layer ? "layer" : "segment")
-        << " immediate=" << tile.immediate << " visible=" << tile.visible
-        << " expensive=" << tile.hasExpensiveEffect << " ops=" << tile.estimatedDrawOps
-        << " verbs=" << tile.estimatedPathVerbs << " ms=" << tile.lastRasterizeMs
-        << " budget=" << tile.immediateBudgetMs << " static=" << tile.staticHeuristicImmediate
-        << " dynamic=" << tile.dynamicHeuristicImmediate
-        << " charge=" << tile.immediateBudgetChargeMs << " span=\"" << tile.spanRangeLabel
-        << "\"\n";
-  }
-  return out.str();
-}
-
-EditorRasterViewport SplashDonnerHighZoomRasterViewport(Vector2d panDocPoint = Vector2d(302.0,
-                                                                                        390.0)) {
-  ViewportState viewport;
-  viewport.paneSize = Vector2d(892.0, 512.0);
-  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0);
-  viewport.devicePixelRatio = 2.0;
-  viewport.zoom = 16.0;
-  viewport.panDocPoint = panDocPoint;
-  viewport.panScreenPoint = Vector2d(446.0, 256.0);
-  return viewport.rasterViewport();
 }
 
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotWhenTilesExist) {
@@ -199,117 +164,6 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTil
 
   EXPECT_TRUE(plan.captureCpuSnapshot);
   EXPECT_FALSE(plan.captureTextureSnapshot);
-}
-
-TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget) {
-  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
-    <rect id="r1" x="10" y="10" width="20" height="20" fill="red" />
-    <rect id="r2" x="50" y="10" width="20" height="20" fill="blue" />
-  )svg");
-  document.setCanvasSize(128, 128);
-
-  const auto r1 = document.querySelector("#r1");
-  const auto r2 = document.querySelector("#r2");
-  ASSERT_TRUE(r1.has_value());
-  ASSERT_TRUE(r2.has_value());
-  const Entity r1Entity = r1->unsafeEntityHandle().entity();
-  const Entity r2Entity = r2->unsafeEntityHandle().entity();
-
-  svg::Renderer renderer;
-  AsyncRenderer asyncRenderer;
-
-  RenderRequest request(renderer, document);
-  request.version = 1;
-  request.documentGeneration = 1;
-  request.selectedEntity = r1Entity;
-  request.dragPreview = RenderRequest::DragPreview{
-      .entity = r1Entity,
-      .extraEntities = {r2Entity},
-      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
-      .translation = Vector2d(16.0, 4.0),
-      .documentFromCachedDocument = Transform2d::Translate(Vector2d(16.0, 4.0)),
-      .dragGeneration = 17,
-  };
-  asyncRenderer.requestRender(request);
-
-  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result->compositedPreview.has_value());
-  ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
-  EXPECT_EQ(result->compositedPreview->representedDragPreview->extraEntities,
-            std::vector<Entity>{r2Entity});
-
-  const auto dragTileFor = [&](Entity entity) {
-    return std::ranges::find_if(result->compositedPreview->tiles,
-                                [entity](const RenderResult::CompositedTile& tile) {
-                                  return tile.isDragTarget && tile.layerEntity == entity;
-                                });
-  };
-  EXPECT_NE(dragTileFor(r1Entity), result->compositedPreview->tiles.end());
-  EXPECT_NE(dragTileFor(r2Entity), result->compositedPreview->tiles.end());
-}
-
-TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
-  auto donnerD = app.document().document().querySelector("#Donner_D");
-  ASSERT_TRUE(donnerD.has_value());
-  ASSERT_TRUE(app.unbundleCompoundPath(*donnerD));
-  ASSERT_TRUE(app.flushFrame());
-  ASSERT_EQ(app.selectedElements().size(), 2u);
-
-  const std::vector<svg::SVGElement> unbundled = app.selectedElements();
-  const Entity firstEntity = unbundled[0].unsafeEntityHandle().entity();
-  const Entity secondEntity = unbundled[1].unsafeEntityHandle().entity();
-
-  SelectTool selectTool;
-  selectTool.onMouseDown(app, Vector2d(320.0, 400.0), MouseModifiers{});
-  selectTool.onMouseMove(app, Vector2d(336.0, 404.0), /*buttonHeld=*/true);
-  ASSERT_TRUE(app.flushFrame());
-  const std::optional<SelectTool::ActiveDragPreview> activeDrag = selectTool.activeDragPreview();
-  ASSERT_TRUE(activeDrag.has_value());
-  EXPECT_EQ(activeDrag->entity, firstEntity);
-  EXPECT_EQ(activeDrag->extraEntities, std::vector<Entity>{secondEntity});
-
-  svg::Renderer renderer;
-  AsyncRenderer asyncRenderer;
-
-  RenderRequest request(renderer, app.document().document());
-  request.version = 1;
-  request.documentGeneration = app.document().documentGeneration();
-  request.selectedEntity = firstEntity;
-  request.dragPreview = RenderRequest::DragPreview{
-      .entity = activeDrag->entity,
-      .extraEntities = activeDrag->extraEntities,
-      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
-      .translation = activeDrag->translation,
-      .documentFromCachedDocument = activeDrag->documentFromCachedDocument,
-      .dragGeneration = activeDrag->dragGeneration,
-  };
-  asyncRenderer.requestRender(request);
-
-  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result->compositedPreview.has_value());
-  ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
-  EXPECT_EQ(result->compositedPreview->representedDragPreview->extraEntities,
-            std::vector<Entity>{secondEntity});
-
-  const auto dragTileFor = [&](Entity entity) {
-    return std::ranges::find_if(result->compositedPreview->tiles,
-                                [entity](const RenderResult::CompositedTile& tile) {
-                                  return tile.isDragTarget && tile.layerEntity == entity;
-                                });
-  };
-  EXPECT_NE(dragTileFor(firstEntity), result->compositedPreview->tiles.end());
-  EXPECT_NE(dragTileFor(secondEntity), result->compositedPreview->tiles.end());
 }
 
 TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) {
@@ -402,126 +256,6 @@ TEST(AsyncRendererTest, ImmediateStaticSpansCarryPayloadAcrossPublishedFrames) {
   const std::optional<RenderResult> second = postSelection(2);
   ASSERT_TRUE(second.has_value());
   expectImmediatePayload(*second);
-}
-
-TEST(AsyncRendererE2ETest, SplashDonnerSelectionPublishesImmediateTilesForLayerPanel) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
-  const EditorRasterViewport rasterViewport = SplashDonnerHighZoomRasterViewport();
-  app.document().document().setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
-                                          rasterViewport.semanticCanvasSizePx.y);
-  auto target = app.document().document().querySelector("#Donner_D");
-  ASSERT_TRUE(target.has_value());
-  const Entity targetEntity = target->unsafeEntityHandle().entity();
-
-  svg::Renderer renderer;
-  AsyncRenderer asyncRenderer;
-
-  RenderRequest request(renderer, app.document().document());
-  request.version = 1;
-  request.documentGeneration = 1;
-  request.rasterViewport = rasterViewport;
-  request.selectedEntity = targetEntity;
-  request.dragPreview = RenderRequest::DragPreview{
-      .entity = targetEntity,
-      .interactionKind = svg::compositor::InteractionHint::Selection,
-  };
-  asyncRenderer.requestRender(request);
-
-  const std::optional<RenderResult> result =
-      WaitForRenderResult(asyncRenderer, std::chrono::seconds(15));
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result->compositedPreview.has_value());
-
-  const auto compositeTiles = asyncRenderer.compositorCompositeTiles();
-  const auto isSegment = [](const auto& tile) {
-    return tile.kind == svg::compositor::CompositorController::CompositeTileSnapshot::Kind::Segment;
-  };
-  const auto isImmediateDiagnosticTile = [](const auto& tile) {
-    using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
-    return (tile.kind == Kind::Segment || tile.kind == Kind::Layer) && tile.immediate;
-  };
-  const int segmentCount =
-      static_cast<int>(std::count_if(compositeTiles.begin(), compositeTiles.end(), isSegment));
-  const int immediateDiagnosticTileCount = static_cast<int>(
-      std::count_if(compositeTiles.begin(), compositeTiles.end(),
-                    [&](const auto& tile) { return isImmediateDiagnosticTile(tile); }));
-  const int immediateEligibleSegmentCount = static_cast<int>(
-      std::count_if(compositeTiles.begin(), compositeTiles.end(), [&](const auto& tile) {
-        return isSegment(tile) && tile.visible && !tile.hasExpensiveEffect &&
-               tile.estimatedDrawOps > 0;
-      }));
-
-  EXPECT_GT(segmentCount, 0);
-  EXPECT_GT(immediateEligibleSegmentCount, 0)
-      << "The real splash should expose at least one cheap visible static span when a Donner "
-         "letter is selected.\n"
-      << DescribeCompositeSegments(compositeTiles);
-  EXPECT_GT(immediateDiagnosticTileCount, 0)
-      << "Layer-panel diagnostics are reporting every splash renderable tile as cached even "
-         "though at least one selected-letter static span is eligible for immediate rendering.\n"
-      << DescribeCompositeSegments(compositeTiles);
-}
-
-TEST(AsyncRendererE2ETest, SplashDonnerNDragPublishesImmediateLayerForLayerPanel) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
-  const EditorRasterViewport rasterViewport =
-      SplashDonnerHighZoomRasterViewport(Vector2d(435.0, 350.0));
-  app.document().document().setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
-                                          rasterViewport.semanticCanvasSizePx.y);
-  auto target = app.document().document().querySelector("#Donner_N_1");
-  ASSERT_TRUE(target.has_value());
-  const Entity targetEntity = target->unsafeEntityHandle().entity();
-
-  svg::Renderer renderer;
-  AsyncRenderer asyncRenderer;
-
-  RenderRequest request(renderer, app.document().document());
-  request.version = 1;
-  request.documentGeneration = 1;
-  request.rasterViewport = rasterViewport;
-  request.selectedEntity = targetEntity;
-  request.dragPreview = RenderRequest::DragPreview{
-      .entity = targetEntity,
-      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
-  };
-  asyncRenderer.requestRender(request);
-
-  const std::optional<RenderResult> result =
-      WaitForRenderResult(asyncRenderer, std::chrono::seconds(15));
-  ASSERT_TRUE(result.has_value());
-  ASSERT_TRUE(result->compositedPreview.has_value());
-
-  const auto compositeTiles = asyncRenderer.compositorCompositeTiles();
-  const std::string targetTileId = "layer:" + std::to_string(static_cast<unsigned>(targetEntity));
-  const auto dragTile =
-      std::find_if(compositeTiles.begin(), compositeTiles.end(), [&](const auto& tile) {
-        return tile.kind ==
-                   svg::compositor::CompositorController::CompositeTileSnapshot::Kind::Layer &&
-               tile.id == targetTileId && tile.isDragTarget;
-      });
-  ASSERT_NE(dragTile, compositeTiles.end()) << DescribeCompositeSegments(compositeTiles);
-  EXPECT_GT(dragTile->estimatedDrawOps, 0);
-  EXPECT_GT(dragTile->immediateBudgetMs, 0.0);
-  EXPECT_TRUE(dragTile->immediate)
-      << "A cheap actively-dragged Donner N should stay promoted for paint-order splitting but "
-         "render as a direct/immediate layer instead of a retained cached texture.\n"
-      << DescribeCompositeSegments(compositeTiles);
 }
 
 constexpr bool kAsyncRendererWallclockTestsEnabled =
@@ -1065,9 +799,6 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   for (const RenderResult::CompositedTile& tile : draggingNext->compositedPreview->tiles) {
     if (IsLayerOwnedTile(tile, nextEntity)) {
       sawNextLayer = true;
-      continue;
-    }
-    if (tile.layerEntity != entt::null) {
       continue;
     }
     if (tile.kind != RenderResult::CompositedTile::Kind::Segment &&
@@ -4672,7 +4403,13 @@ TEST(RenderCoordinatorTest, DisplayNoneSuppressionClearsWhenSameElementBecomesVi
          "cached layer to render again.";
 }
 
-TEST(RenderCoordinatorTest, ImmediateOverlayPublishesCurrentFrameWithoutVersionGate) {
+TEST(RenderCoordinatorTest, OverlayUploadPublishesCurrentFrameWithoutVersionGate) {
+  svg::Renderer rendererProbe;
+  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Tiny-skia overlay upload needs a live GL context; the Geode direct-texture "
+                    "path exercises this regression.";
+  }
+
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -4697,63 +4434,19 @@ TEST(RenderCoordinatorTest, ImmediateOverlayPublishesCurrentFrameWithoutVersionG
   RenderCoordinator coordinator;
   EXPECT_TRUE(
       coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
-  EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.canvasSize, Vector2i(64, 96));
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
-  EXPECT_FALSE(textures.overlayScreenRect().has_value());
-}
-
-TEST(RenderCoordinatorTest, IdleSelectionReusesImmediateOverlayForPresentation) {
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-      <rect x="8" y="8" width="16" height="16" fill="red"/>
-    </svg>
-  )svg"));
-  auto target = app.document().document().querySelector("rect");
-  ASSERT_TRUE(target.has_value());
-  app.setSelection(*target);
-  app.document().document().setCanvasSize(512, 512);
-
-  ViewportState viewport;
-  viewport.paneOrigin = Vector2d(12.0, 34.0);
-  viewport.paneSize = Vector2d(32.0, 48.0);
-  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
-  viewport.devicePixelRatio = 2.0;
-  viewport.panDocPoint = Vector2d::Zero();
-  viewport.panScreenPoint = viewport.paneOrigin;
-
-  GlTextureCache textures;
-  RenderCoordinator coordinator;
-  ASSERT_TRUE(
-      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  const SelectionChromeSnapshot firstSnapshot = *coordinator.immediateOverlaySnapshot();
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
-
-  SelectTool selectTool;
-  coordinator.beginFrameCostTracking();
-  EXPECT_FALSE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
-                                                           std::nullopt, std::nullopt))
-      << "Idle selected chrome should reuse the previous immediate overlay snapshot instead of "
-         "recapturing every frame.";
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), firstSnapshot.paths.size());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
-  const FrameCostBreakdown::Overlay overlayCost = coordinator.lastFrameCostBreakdown().overlay;
-  EXPECT_EQ(overlayCost.payloadBytes, 0u);
-  EXPECT_EQ(overlayCost.captureMs, 0.0);
-  EXPECT_EQ(overlayCost.drawMs, 0.0);
-  EXPECT_EQ(overlayCost.snapshotMs, 0.0);
-  EXPECT_EQ(overlayCost.uploadMs, 0.0);
-  EXPECT_EQ(overlayCost.selectedElementCount, 1);
+  EXPECT_EQ(textures.overlayWidth(), 64);
+  EXPECT_EQ(textures.overlayHeight(), 96);
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(12.0, 34.0, 32.0, 48.0));
 }
 
 TEST(RenderCoordinatorTest, LargeSelectionAutoDetailPromotesFromBoundsOnlyToFullAfterIdle) {
+  svg::Renderer rendererProbe;
+  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Immediate overlay upload needs a live GL context; the Geode direct-texture "
+                    "path exercises the coordinator auto-detail heuristic.";
+  }
+
   constexpr int kSelectedRectCount = 130;
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(MakeManyRectsSvg(kSelectedRectCount)));
@@ -4818,9 +4511,8 @@ TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
   RenderCoordinator coordinator;
   EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt,
                                                               selectTool.activeDragPreview()));
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
 
   selectTool.onMouseMove(app, Vector2d(20.0, 12.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.flushFrame());
@@ -4836,9 +4528,8 @@ TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
   EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.pathCount, 1)
       << "Pure translation drags should rerasterize overlay chrome for the current frame instead "
          "of carrying a cached overlay drag baseline.";
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
 }
 
 TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingTextureTransform) {
@@ -4866,9 +4557,8 @@ TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingT
   RenderCoordinator coordinator;
   EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt,
                                                               selectTool.activeDragPreview()));
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
 
   selectTool.onMouseMove(app, Vector2d(32.0, 32.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.flushFrame());
@@ -4883,10 +4573,9 @@ TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingT
   EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.selectedElementCount, 1);
   EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.pathCount, 1)
       << "Affine resize/rotate drags should rerasterize chrome instead of stretching the previous "
-         "immediate overlay snapshot at presentation time.";
-  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
+         "overlay texture at presentation time.";
+  ASSERT_TRUE(textures.overlayScreenRect().has_value());
+  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
 }
 
 TEST(RenderCoordinatorTest, OverlayGesturePreviewUsesRepresentedDragTransformForChip) {

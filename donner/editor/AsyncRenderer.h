@@ -154,12 +154,6 @@ struct RenderRequest {
   /// editor camera so the worker can render a bounded high-zoom output
   /// surface without reading live UI state.
   EditorRasterViewport rasterViewport;
-  /// True when this request should produce only a low-resolution full-document overview infill.
-  ///
-  /// The worker still keeps the selected entity promoted, but skips the composited split preview
-  /// and publishes a full-canvas tile. The UI uploads it into the retained overview cache without
-  /// replacing active viewport-bounded tiles.
-  bool overviewInfillOnly = false;
 };
 
 /// Final full-canvas snapshot work needed after compositor rendering.
@@ -274,8 +268,6 @@ struct RenderResult {
   std::optional<CompositedPreview> compositedPreview;
   /// Raster viewport used to produce this result.
   EditorRasterViewport rasterViewport;
-  /// True when this result should update only retained overview infill.
-  bool overviewInfillOnly = false;
   std::uint64_t version = 0;
   /// Wall-clock milliseconds spent in the worker iteration after a request is
   /// dequeued, including `CompositorController::renderFrame`, final

@@ -880,7 +880,6 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
       .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
       .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
-      .presentationResources = textures_.presentationResourceStats(),
       .frameCost = frameCost,
   };
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
@@ -1880,31 +1879,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                                        interactionController_.viewport(), textures_,
                                                        activeDragPreview, representedDragPreview);
   }
-  interactionController_.frameHistory().setLatestMemorySample(
-      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
-  bool directFramebufferOverlay = false;
-#ifdef DONNER_EDITOR_WGPU
-  window_.setWgpuDirectRenderCallback({});
-  const std::optional<Box2d> directOverlayClipRect =
-      PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
-  if (!contentOnlyCaptureThisFrame_ && directOverlayRenderer_ != nullptr &&
-      renderCoordinator_.immediateOverlaySnapshot().has_value() &&
-      directOverlayClipRect.has_value()) {
-    SelectionChromeSnapshot overlaySnapshot = *renderCoordinator_.immediateOverlaySnapshot();
-    ViewportState overlayViewport = interactionController_.viewport();
-    const Box2d overlayClipRect = *directOverlayClipRect;
-    window_.setWgpuDirectRenderCallback(
-        [this, overlaySnapshot = std::move(overlaySnapshot), overlayViewport,
-         overlayClipRect](const gui::EditorWindowWgpuRenderTarget& target) {
-          if (directOverlayRenderer_ == nullptr) {
-            return;
-          }
-          DrawImmediateOverlaySnapshotToFramebuffer(
-              *directOverlayRenderer_, target, overlayViewport, overlayClipRect, overlaySnapshot);
-        });
-    directFramebufferOverlay = true;
-  }
-#endif
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .frameHistory = interactionController_.frameHistory(),
@@ -2968,7 +2942,6 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
-  ++frameTelemetryFrame_;
   renderCoordinator_.beginFrameCostTracking();
   contentOnlyCaptureThisFrame_ = contentOnlyCaptureForNextFrame_;
   contentOnlyCaptureForNextFrame_ = false;
@@ -3150,19 +3123,13 @@ void EditorShell::runFrame() {
   renderFloatingLayerPanel();
   if (requestRenderAtEndOfFrame_ && !renderCoordinator_.asyncRenderer().isBusy() &&
       app_.hasDocument()) {
-    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                          &textures_);
+    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport());
   }
   FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
   if (sourcePaneVisible_) {
     frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
   }
   interactionController_.frameHistory().setLatestFrameCost(frameCost);
-  const PresentationResourceStats presentationResources = textures_.presentationResourceStats();
-  interactionController_.frameHistory().setLatestMemorySample(
-      MemorySampleFromPresentationResources(presentationResources));
-  maybeLogFrameMissTelemetry(frameCost);
-  maybeLogResourceDiagnostics(frameCost);
   requestRenderAtEndOfFrame_ = false;
   contentOnlyCaptureThisFrame_ = false;
 }

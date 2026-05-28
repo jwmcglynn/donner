@@ -22,7 +22,6 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
-#include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -252,7 +251,6 @@ struct StaticSpanCostEstimate {
   int drawOps = 0;
   int pathVerbs = 0;
   bool hasExpensiveEffect = false;
-  bool hasGradientPaint = false;
 };
 
 struct StaticSpanPresentationCost {
@@ -261,94 +259,8 @@ struct StaticSpanPresentationCost {
   double cacheOverheadCost = 0.0;
 };
 
-bool PaintUsesExpensiveResource(const components::ResolvedPaintServer& paint) {
-  const auto* ref = std::get_if<components::PaintResolvedReference>(&paint);
-  if (ref == nullptr) {
-    return false;
-  }
-  if (!ref->reference.valid()) {
-    return true;
-  }
-
-  // Gradients are still a direct path paint in both renderer backends. They may
-  // be slower than solids, but the immediate-span timing heuristic can measure
-  // and demote them. Pattern paints and unresolved/unknown references may
-  // instantiate subtrees or need broader context, so keep those cached.
-  return ref->subtreeInfo.has_value() ||
-         ref->reference.handle.try_get<components::ComputedGradientComponent>() == nullptr;
-}
-
-bool PaintUsesGradientResource(const components::ResolvedPaintServer& paint) {
-  const auto* ref = std::get_if<components::PaintResolvedReference>(&paint);
-  return ref != nullptr && ref->reference.valid() &&
-         ref->reference.handle.try_get<components::ComputedGradientComponent>() != nullptr;
-}
-
-bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
-  const auto* type = dataHandle.try_get<components::ElementTypeComponent>();
-  if (type == nullptr) {
-    return false;
-  }
-
-  switch (type->type()) {
-    case ElementType::Defs:
-    case ElementType::G:
-    case ElementType::SVG:
-    case ElementType::Symbol: return true;
-    default: return false;
-  }
-}
-
-void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostEstimate* estimate,
-                              bool ignoreIsolatedLayer) {
-  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
-  if (instance == nullptr) {
-    estimate->hasExpensiveEffect = true;
-    return;
-  }
-
-  const auto* style = instance->styleHandle(registry).try_get<components::ComputedStyleComponent>();
-  if (style == nullptr || !style->properties.has_value()) {
-    return;
-  }
-  if (!instance->visible || style->properties->display.get().value() == Display::None) {
-    return;
-  }
-
-  if ((!ignoreIsolatedLayer && instance->isolatedLayer) || instance->resolvedFilter.has_value() ||
-      instance->clipPath.has_value() || (instance->mask.has_value() && instance->mask->valid()) ||
-      instance->markerStart.has_value() || instance->markerMid.has_value() ||
-      instance->markerEnd.has_value() || PaintUsesExpensiveResource(instance->resolvedFill) ||
-      PaintUsesExpensiveResource(instance->resolvedStroke)) {
-    estimate->hasExpensiveEffect = true;
-  }
-  if (PaintUsesGradientResource(instance->resolvedFill) ||
-      PaintUsesGradientResource(instance->resolvedStroke)) {
-    estimate->hasGradientPaint = true;
-  }
-
-  EntityHandle dataHandle = instance->dataHandle(registry);
-  if (const auto* path = dataHandle.try_get<components::ComputedPathComponent>()) {
-    ++estimate->drawOps;
-    estimate->pathVerbs += static_cast<int>(path->spline.verbCount());
-    return;
-  }
-
-  if (dataHandle.try_get<components::ComputedTextComponent>() ||
-      dataHandle.try_get<components::LoadedImageComponent>() ||
-      dataHandle.try_get<components::LoadedSVGImageComponent>() ||
-      dataHandle.try_get<components::ExternalUseComponent>()) {
-    estimate->hasExpensiveEffect = true;
-    return;
-  }
-
-  if (IsNonDrawingContainer(dataHandle)) {
-    return;
-  }
-
-  if (!instance->subtreeInfo.has_value()) {
-    estimate->hasExpensiveEffect = true;
-  }
+bool PaintUsesResource(const components::ResolvedPaintServer& paint) {
+  return std::holds_alternative<components::PaintResolvedReference>(paint);
 }
 
 StaticSpanCostEstimate EstimateStaticSpanCost(Registry& registry,
@@ -356,26 +268,48 @@ StaticSpanCostEstimate EstimateStaticSpanCost(Registry& registry,
                                               size_t startIdx, size_t endIdx) {
   StaticSpanCostEstimate estimate;
   for (size_t i = startIdx; i <= endIdx && i < paintOrder.size(); ++i) {
-    AccumulateStaticSpanCost(registry, paintOrder[i], &estimate, /*ignoreIsolatedLayer=*/false);
-  }
-  return estimate;
-}
-
-StaticSpanCostEstimate EstimateEntityRangeCost(Registry& registry, Entity firstEntity,
-                                               Entity lastEntity) {
-  StaticSpanCostEstimate estimate;
-  RenderingInstanceView view(registry);
-  while (!view.done() && view.currentEntity() != firstEntity) {
-    view.advance();
-  }
-  while (!view.done()) {
-    const Entity currentEntity = view.currentEntity();
-    AccumulateStaticSpanCost(registry, currentEntity, &estimate,
-                             /*ignoreIsolatedLayer=*/currentEntity == firstEntity);
-    if (currentEntity == lastEntity) {
-      break;
+    const Entity entity = paintOrder[i];
+    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+    if (instance == nullptr) {
+      estimate.hasExpensiveEffect = true;
+      continue;
     }
-    view.advance();
+
+    const auto* style =
+        instance->styleHandle(registry).try_get<components::ComputedStyleComponent>();
+    if (style == nullptr || !style->properties.has_value()) {
+      continue;
+    }
+    if (!instance->visible || style->properties->display.getRequired() == Display::None) {
+      continue;
+    }
+
+    if (instance->isolatedLayer || instance->resolvedFilter.has_value() ||
+        instance->clipPath.has_value() || (instance->mask.has_value() && instance->mask->valid()) ||
+        instance->markerStart.has_value() || instance->markerMid.has_value() ||
+        instance->markerEnd.has_value() || PaintUsesResource(instance->resolvedFill) ||
+        PaintUsesResource(instance->resolvedStroke)) {
+      estimate.hasExpensiveEffect = true;
+    }
+
+    EntityHandle dataHandle = instance->dataHandle(registry);
+    if (const auto* path = dataHandle.try_get<components::ComputedPathComponent>()) {
+      ++estimate.drawOps;
+      estimate.pathVerbs += static_cast<int>(path->spline.verbCount());
+      continue;
+    }
+
+    if (dataHandle.try_get<components::ComputedTextComponent>() ||
+        dataHandle.try_get<components::LoadedImageComponent>() ||
+        dataHandle.try_get<components::LoadedSVGImageComponent>() ||
+        dataHandle.try_get<components::ExternalUseComponent>()) {
+      estimate.hasExpensiveEffect = true;
+      continue;
+    }
+
+    if (!instance->subtreeInfo.has_value()) {
+      estimate.hasExpensiveEffect = true;
+    }
   }
   return estimate;
 }
@@ -409,19 +343,8 @@ StaticSpanPresentationCost EstimateStaticSpanPresentationCost(
   };
 }
 
-bool IsImmediateSafe(bool visible, bool hasExpensiveEffect, int estimatedDrawOps) {
-  return visible && !hasExpensiveEffect && estimatedDrawOps > 0;
-}
-
-bool IsCheapDirectGeometry(const StaticSpanCostEstimate& cost) {
-  constexpr int kCheapDirectDrawOps = 2;
-  constexpr int kCheapDirectPathVerbs = 96;
-  return cost.drawOps > 0 && cost.drawOps <= kCheapDirectDrawOps &&
-         cost.pathVerbs <= kCheapDirectPathVerbs;
-}
-
 bool IsStaticSpanImmediateSafe(const CompositorController::StaticSpanPlan& spanPlan) {
-  return IsImmediateSafe(spanPlan.visible, spanPlan.hasExpensiveEffect, spanPlan.estimatedDrawOps);
+  return spanPlan.visible && !spanPlan.hasExpensiveEffect && spanPlan.estimatedDrawOps > 0;
 }
 
 double ImmediateStaticSpanBudgetMs() {
@@ -1434,7 +1357,6 @@ void CompositorController::renderFrame(const RenderViewport& viewport,
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
-  lastRenderFrameStats_ = RenderFrameStats{};
 
   const bool surfaceChanged =
       hasLastSurfaceFromCanvas_ && !SameTransformNear(lastSurfaceFromCanvas_, surfaceFromCanvas);
@@ -1652,21 +1574,61 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         break;
       }
 
-      if (matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e) {
-        for (auto& other : layers_) {
-          if (&other == matchedLayer || hasResolutionForEntity(other.entity())) {
-            continue;
-          }
-          if (!IsDomDescendantOf(registry, other.entity(), e)) {
-            continue;
-          }
-          // Mandatory descendants (opacity/filter/mask) may remain promoted
-          // inside an editor-promoted drag subtree. A pure translation applies
-          // to every cached layer in the subtree, so update each descendant
-          // compose transform in the same fast-path batch instead of falling
-          // back to an every-frame subtree re-rasterize.
-          if (!appendLayerResolution(other.entity(), &other)) {
-            eligible = false;
+      const auto& abs =
+          components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, e));
+      const Transform2d canvasFromDocument =
+          components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+      const Transform2d newWorldFromEntity =
+          abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
+      // `bitmapEntityFromEntity`: takes a point in the entity's CURRENT
+      // frame and returns it in the bitmap's stamp-time entity frame.
+      // The compositor uses this as `canvasFromBitmap` on the layer's
+      // bitmap-reuse fast path: rendering the cached bitmap (which was
+      // rasterized in stamp-frame coords) through this transform places
+      // its pixels at the entity's current world position.
+      //
+      // Under donner's post-multiply convention (`A * B` applied to v
+      // means "first B, then A"), `bitmapEntityFromWorld_at_stamp *
+      // newWorldFromEntity_now` walks v from current entity → world →
+      // stamp entity. The reverse order (`newWFE * oldEFW`) reads as a
+      // direct entity-local mapping and collapses to the right answer
+      // ONLY when the stamped transform's linear part is identity. For a
+      // previously-resized element the reverse misreports the canvas
+      // delta as `oldScale.inverse() * delta_doc`, so the cached bitmap
+      // moves at `delta_doc / scale` pixels per drag step while the
+      // overlay (driven by worldBounds) moves at `delta_doc`. See
+      // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` for
+      // the regression pin.
+      const Transform2d bitmapEntityFromEntity =
+          matchedLayer->bitmapEntityFromWorldTransform()->inverse() *
+          (newWorldFromEntity * surfaceFromCanvas);
+
+      const bool isSubtree = matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
+      // Subtree layers require a pure-translation delta: only then can we
+      // cheaply propagate the same offset to descendant RICs without
+      // walking the layout system. Non-translation subtree mutations
+      // (scale, rotate, transform-list change) stay on the slow path.
+      // Single-entity layers can tolerate non-translation deltas via a
+      // targeted re-rasterize later in `renderFrame`.
+      if (isSubtree && !bitmapEntityFromEntity.isTranslation()) {
+        eligible = false;
+        break;
+      }
+
+      // Defensive guard (see `IsDomDescendantOf`): if another promoted
+      // layer's entity is a descendant of our subtree root, translating
+      // only this layer's `canvasFromBitmap` while leaving the child
+      // layer's anchored to its rasterize-time transform would produce
+      // ghosting. The invariants in `promoteEntity` and `MandatoryHint
+      // Detector` should already prevent this, but bail to the slow path
+      // rather than trust the invariant — the slow path will re-rasterize
+      // correctly.
+      if (isSubtree) {
+        bool hasDescendantLayer = false;
+        for (const auto& other : layers_) {
+          if (&other == matchedLayer) continue;
+          if (IsDomDescendantOf(registry, other.entity(), e)) {
+            hasDescendantLayer = true;
             break;
           }
         }
@@ -1891,16 +1853,10 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           for (auto& layer : layers_) {
             if (!layer.hasRenderablePayload()) {
               rasterizeLayer(layer, viewport, surfaceFromCanvas);
-              if (layer.isImmediate()) {
-                lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
-                ++lastRenderFrameStats_.immediateTileCount;
-              } else {
-                lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
-                ++lastRenderFrameStats_.cachedTileCount;
-              }
             }
           }
         }
+        const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
         // Seed segment state via the preserving resync path so
         // `staticSegmentBoundaries_` is consistent with the new layer
         // set. Nothing to preserve yet (segments are empty), so every
@@ -2106,13 +2062,6 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           return;
         }
         rasterizeLayer(layer, viewport, surfaceFromCanvas);
-        if (layer.isImmediate()) {
-          lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
-          ++lastRenderFrameStats_.immediateTileCount;
-        } else {
-          lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
-          ++lastRenderFrameStats_.cachedTileCount;
-        }
       }
     }
   }
@@ -2123,6 +2072,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // Structural changes (layer count, canvas size, `rootDirty_` from a
   // full tree rebuild) flip every slot dirty; per-entity mutations only
   // flip the containing slot dirty via `consumeDirtyFlags`.
+  const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
   // Resync `staticSegments_` to the current layer set, preserving
   // cached bitmaps whose boundary identity survived. When the user
   // clicks-to-drag, the ONLY segment that structurally changes is the
@@ -2303,47 +2253,8 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                                    !previousImmediatePlan.staticHeuristicImmediate;
 
   Registry& registry = document().registry();
-  const StaticSpanCostEstimate cost =
-      EstimateEntityRangeCost(registry, layer.firstEntity(), layer.lastEntity());
-  LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
       renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport, surfaceFromCanvas);
-  if (!surfaceFromCanvas.isIdentity() &&
-      ((layer.fallbackReasons() & FallbackReason::Filter) != FallbackReason::None ||
-       cost.hasExpensiveEffect)) {
-    // TinySkia effect subregion clipping is defined in the output pixel frame. Cropping an
-    // effectful layer range and then applying a non-identity editor raster viewport transform can
-    // produce invalid subregion clears inside the backend. Keep identity-canvas renders tight, but
-    // use the full raster viewport for high-zoom/panned editor captures.
-    geometry = LayerRasterGeometry{
-        .viewport = viewport,
-        .surfaceFromCanvas = surfaceFromCanvas,
-    };
-  }
-  ImmediateLayerPlan immediatePlan;
-  immediatePlan.visible = geometry.boundsCanvas.has_value();
-  if (geometry.boundsCanvas.has_value()) {
-    immediatePlan.boundsCanvas = *geometry.boundsCanvas;
-  }
-  const FallbackReason immediateBlockingFallbacks =
-      layer.fallbackReasons() &
-      (FallbackReason::BlendMode | FallbackReason::Filter | FallbackReason::ClipPath |
-       FallbackReason::Mask | FallbackReason::Markers);
-  immediatePlan.estimatedDrawOps = cost.drawOps;
-  immediatePlan.estimatedPathVerbs = cost.pathVerbs;
-  immediatePlan.hasExpensiveEffect =
-      cost.hasExpensiveEffect || immediateBlockingFallbacks != FallbackReason::None;
-  if (immediatePlan.visible) {
-    const StaticSpanPresentationCost presentationCost =
-        EstimateStaticSpanPresentationCost(cost, immediatePlan.boundsCanvas);
-    immediatePlan.estimatedRetainedBytes = presentationCost.retainedBytes;
-    immediatePlan.estimatedRedrawCost = presentationCost.redrawCost;
-    immediatePlan.estimatedCacheOverheadCost = presentationCost.cacheOverheadCost;
-    immediatePlan.staticHeuristicImmediate =
-        IsImmediateSafe(immediatePlan.visible, immediatePlan.hasExpensiveEffect,
-                        immediatePlan.estimatedDrawOps) &&
-        (IsCheapDirectGeometry(cost) ||
-         presentationCost.redrawCost <= presentationCost.cacheOverheadCost);
-  }
 
   auto offscreen = renderer().createOffscreenInstance();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
@@ -2520,15 +2431,9 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
 
     StaticSpanPlan spanPlan;
     spanPlan.slotIndex = i;
-    const StaticSpanPlan previousSpanPlan =
-        i < staticSpanPlans_.size() ? staticSpanPlans_[i] : StaticSpanPlan{};
-    const bool wasImmediate = previousSpanPlan.mode == StaticSpanMode::Immediate;
-    const bool wasDynamicImmediate = wasImmediate && previousSpanPlan.dynamicHeuristicImmediate &&
-                                     !previousSpanPlan.staticHeuristicImmediate;
     if (!segmentIsEmpty) {
       spanPlan.firstEntity = paintOrder[startIdx];
       spanPlan.lastEntity = paintOrder[endIdx];
-      spanPlan.spanRangeLabel = SpanRangeLabel(registry, spanPlan.firstEntity, spanPlan.lastEntity);
     }
 
     if (segmentIsEmpty) {
@@ -2598,17 +2503,11 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
 
       const StaticSpanCostEstimate cost =
           EstimateStaticSpanCost(registry, paintOrder, startIdx, endIdx);
-      if (cost.hasGradientPaint) {
-        // Gradient paint can differ by a few channels when its paths are rasterized from a cropped
-        // offscreen origin. Keep gradients eligible for immediate timing, but use a full-canvas
-        // segment so the paint server samples in the same coordinate frame as the reference render.
-        useTight = false;
-      }
       spanPlan.estimatedDrawOps = cost.drawOps;
       spanPlan.estimatedPathVerbs = cost.pathVerbs;
       spanPlan.hasExpensiveEffect = cost.hasExpensiveEffect;
-      spanPlan.visible = visibleInViewport;
-      if (visibleInViewport) {
+      spanPlan.visible = useTight;
+      if (useTight) {
         spanPlan.boundsCanvas = tightBoundsSnapped;
         const StaticSpanPresentationCost presentationCost =
             EstimateStaticSpanPresentationCost(cost, tightBoundsSnapped);
@@ -2687,20 +2586,6 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
         spanPlan.mode = StaticSpanMode::Immediate;
         spanPlan.dynamicHeuristicImmediate = true;
         immediateBudgetUsedMs += budgetChargeMs;
-      }
-    }
-    if (wasDynamicImmediate && spanPlan.mode != StaticSpanMode::Immediate &&
-        elapsedMs > spanPlan.immediateBudgetMs) {
-      spanPlan.demotedDynamicImmediate = true;
-    }
-    if (!segmentIsEmpty) {
-      const bool chargeAsImmediate = wasImmediate || spanPlan.mode == StaticSpanMode::Immediate;
-      if (chargeAsImmediate) {
-        lastRenderFrameStats_.immediateRasterizeMs += elapsedMs;
-        ++lastRenderFrameStats_.immediateTileCount;
-      } else {
-        lastRenderFrameStats_.cachedRasterizeMs += elapsedMs;
-        ++lastRenderFrameStats_.cachedTileCount;
       }
     }
     staticSpanPlans_[i] = spanPlan;
@@ -2922,7 +2807,8 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
         layer.entity() == splitStaticLayersEntity_ || isActiveDragTarget(layer.entity());
     const bool immediate = layer.isImmediate();
     const bool includeLayerPayload =
-        includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget, immediate);
+        includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget,
+                       /*immediate=*/false);
     tiles.push_back(CompositorTile{
         .tileId = kLayerTileBit | static_cast<uint64_t>(entt::to_integral(layer.entity())),
         .generation = layer.generation(),
@@ -2936,7 +2822,7 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
         .canvasOffsetPx = layer.canvasOffset(),
         .canvasFromBitmap = layer.canvasFromBitmap(),
         .isDragTarget = isDragTarget,
-        .immediate = immediate,
+        .immediate = false,
     });
   }
   // Trailing segment after the last layer.

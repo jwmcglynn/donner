@@ -60,10 +60,14 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
                                                   (canvasSizeChanged || rasterViewportChanged);
   decision.needsCompositedPrewarm =
       needsSettledSelectionRefresh ||
-      presentation.shouldPrewarm(input.selectedEntity, input.selectedExtraEntities,
-                                 input.currentVersion, input.currentCanvasSize,
-                                 /*dragActive=*/input.activeDragPreview.has_value()) ||
-      selectedViewportRenderNeedsPrewarm;
+      presentation.shouldPrewarm(input.selectedEntity, input.currentVersion,
+                                 input.currentCanvasSize,
+                                 /*dragActive=*/input.activeDragPreview.has_value());
+  const bool versionChanged = input.currentVersion != lastRenderedVersion_;
+  const bool canvasSizeChanged = input.currentCanvasSize != lastRenderedCanvasSize_;
+  const bool rasterViewportChanged =
+      !lastRenderedRasterViewport_.has_value() ||
+      !SameRasterViewport(input.currentRasterViewport, *lastRenderedRasterViewport_);
   decision.needsRegularRender = versionChanged || canvasSizeChanged || rasterViewportChanged;
 
   if (input.activeDragPreview.has_value()) {
@@ -82,7 +86,8 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
         .interactionKind = svg::compositor::InteractionHint::Selection,
     };
   }
-  if (input.activeDragPreview.has_value()) {
+  if (input.activeDragPreview.has_value() && !decision.needsCompositedLayerCapture &&
+      !canvasSizeChanged && !rasterViewportChanged) {
     decision.needsRegularRender = false;
   }
 

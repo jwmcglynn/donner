@@ -22,15 +22,13 @@ EditorRasterViewport RasterViewport(const Vector2d& documentTopLeft = Vector2d::
 PresentationRenderScheduleInput Input(
     Entity selectedEntity, std::uint64_t version = 1,
     std::optional<SelectTool::ActiveDragPreview> activeDragPreview = std::nullopt,
-    EditorRasterViewport rasterViewport = RasterViewport(),
-    const Vector2i& currentCanvasSize = kCanvasSize,
-    std::vector<Entity> selectedExtraEntities = {}) {
+    EditorRasterViewport rasterViewport = RasterViewport()) {
   return PresentationRenderScheduleInput{
       .selectedEntity = selectedEntity,
       .selectedExtraEntities = std::move(selectedExtraEntities),
       .activeDragPreview = activeDragPreview,
       .currentVersion = version,
-      .currentCanvasSize = currentCanvasSize,
+      .currentCanvasSize = kCanvasSize,
       .currentRasterViewport = rasterViewport,
   };
 }
@@ -160,117 +158,7 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheDoesNotUploadAg
   EXPECT_FALSE(decision.needsRegularRender);
 }
 
-TEST(PresentationRenderSchedulerTest, AffineActiveDragWithMatchingCacheRequestsLayerCapture) {
-  PresentationRenderScheduler scheduler;
-  CompositedPresentation presentation;
-
-  const PresentationRenderScheduleDecision warm =
-      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
-  scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
-                                warm.currentRasterViewport);
-  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
-
-  const SelectTool::ActiveDragPreview activeDrag{
-      .entity = Entity(7),
-      .translation = Vector2d(9.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(9.0, 2.0)) * Transform2d::Scale(1.5),
-      .dragGeneration = 14,
-  };
-  const PresentationRenderScheduleDecision decision =
-      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/8, activeDrag));
-
-  EXPECT_TRUE(decision.shouldRequestRender());
-  EXPECT_TRUE(decision.needsCompositedLayerCapture);
-  EXPECT_FALSE(decision.needsRegularRender)
-      << "Affine drag refreshes should be drag-layer captures, not full regular canvas renders.";
-  ASSERT_TRUE(decision.dragPreview.has_value());
-  EXPECT_EQ(decision.dragPreview->entity, Entity(7));
-  EXPECT_FALSE(decision.dragPreview->documentFromCachedDocument.isTranslation());
-}
-
-TEST(PresentationRenderSchedulerTest, MatchingAffineDragCaptureDoesNotRequestAgain) {
-  PresentationRenderScheduler scheduler;
-  CompositedPresentation presentation;
-
-  const SelectTool::ActiveDragPreview representedDrag{
-      .entity = Entity(7),
-      .translation = Vector2d(9.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(9.0, 2.0)) * Transform2d::Scale(1.5),
-      .dragGeneration = 14,
-  };
-  scheduler.noteRenderCompleted(/*completedVersion=*/8, kCanvasSize, RasterViewport());
-  presentation.noteCachedTextures(Entity(7), /*version=*/8, kCanvasSize, representedDrag);
-
-  const PresentationRenderScheduleDecision decision =
-      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/8, representedDrag));
-
-  EXPECT_FALSE(decision.shouldRequestRender())
-      << "An opportunistic resize capture should be expansion-only: once the exact represented "
-         "affine transform has landed, idle frames must not post duplicate captures.";
-  EXPECT_FALSE(decision.needsCompositedLayerCapture);
-  EXPECT_FALSE(decision.needsRegularRender);
-}
-
-TEST(PresentationRenderSchedulerTest, ChangedAffineDragRequestsNextLayerCapture) {
-  PresentationRenderScheduler scheduler;
-  CompositedPresentation presentation;
-
-  const SelectTool::ActiveDragPreview representedDrag{
-      .entity = Entity(7),
-      .translation = Vector2d(9.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(9.0, 2.0)) * Transform2d::Scale(1.5),
-      .dragGeneration = 14,
-  };
-  const SelectTool::ActiveDragPreview activeDrag{
-      .entity = Entity(7),
-      .translation = Vector2d(11.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(11.0, 2.0)) * Transform2d::Scale(1.75),
-      .dragGeneration = 14,
-  };
-  scheduler.noteRenderCompleted(/*completedVersion=*/8, kCanvasSize, RasterViewport());
-  presentation.noteCachedTextures(Entity(7), /*version=*/8, kCanvasSize, representedDrag);
-
-  const PresentationRenderScheduleDecision decision =
-      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/9, activeDrag));
-
-  EXPECT_TRUE(decision.shouldRequestRender());
-  EXPECT_TRUE(decision.needsCompositedLayerCapture);
-  EXPECT_FALSE(decision.needsRegularRender);
-}
-
-TEST(PresentationRenderSchedulerTest, PureTranslationAfterAffineCaptureRequestsCrispLayerCapture) {
-  PresentationRenderScheduler scheduler;
-  CompositedPresentation presentation;
-
-  const SelectTool::ActiveDragPreview representedDrag{
-      .entity = Entity(7),
-      .translation = Vector2d(9.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(9.0, 2.0)) * Transform2d::Scale(1.5),
-      .dragGeneration = 14,
-  };
-  const SelectTool::ActiveDragPreview activeDrag{
-      .entity = Entity(7),
-      .translation = Vector2d(11.0, 2.0),
-      .documentFromCachedDocument = Transform2d::Translate(Vector2d(11.0, 2.0)),
-      .dragGeneration = 14,
-  };
-  scheduler.noteRenderCompleted(/*completedVersion=*/8, kCanvasSize, RasterViewport());
-  presentation.noteCachedTextures(Entity(7), /*version=*/8, kCanvasSize, representedDrag);
-
-  const PresentationRenderScheduleDecision decision =
-      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/9, activeDrag));
-
-  EXPECT_TRUE(decision.shouldRequestRender());
-  EXPECT_TRUE(decision.needsCompositedLayerCapture);
-  EXPECT_FALSE(decision.needsRegularRender);
-}
-
-TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesMovedRasterViewport) {
+TEST(PresentationRenderSchedulerTest, ActiveDragWithMovedRasterViewportRequestsRegularRender) {
   PresentationRenderScheduler scheduler;
   CompositedPresentation presentation;
 
@@ -289,37 +177,9 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesMoved
       presentation,
       Input(Entity(7), /*version=*/8, activeDrag, RasterViewport(Vector2d(10.0, 0.0))));
 
-  EXPECT_FALSE(decision.shouldRequestRender())
-      << "Zoom/pan during an active drag must keep using the presenter-transformed cached content; "
-         "requesting a regular render here re-rasterizes every cached span on zoom+drag frames.";
+  EXPECT_TRUE(decision.shouldRequestRender());
   EXPECT_FALSE(decision.needsCompositedLayerCapture);
-  EXPECT_FALSE(decision.needsRegularRender);
-}
-
-TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesCanvasSizeChange) {
-  PresentationRenderScheduler scheduler;
-  CompositedPresentation presentation;
-
-  const PresentationRenderScheduleDecision warm =
-      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
-  scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
-                                warm.currentRasterViewport);
-  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
-
-  const SelectTool::ActiveDragPreview activeDrag{
-      .entity = Entity(7),
-      .translation = Vector2d(9.0, 0.0),
-      .dragGeneration = 14,
-  };
-  const PresentationRenderScheduleDecision decision =
-      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/8, activeDrag, RasterViewport(),
-                                             Vector2i(kCanvasSize.x + 20, kCanvasSize.y + 20)));
-
-  EXPECT_FALSE(decision.shouldRequestRender())
-      << "Continuous zoom changes the desired canvas size. During active drag the presenter should "
-         "keep transforming the existing cached content and defer the crisp re-render until idle.";
-  EXPECT_FALSE(decision.needsCompositedLayerCapture);
-  EXPECT_FALSE(decision.needsRegularRender);
+  EXPECT_TRUE(decision.needsRegularRender);
 }
 
 TEST(PresentationRenderSchedulerTest, SettledSelectionRefreshRequestsSelectionHint) {
@@ -382,31 +242,6 @@ TEST(PresentationRenderSchedulerTest, SameCanvasMovedRasterViewportRequestsRegul
   EXPECT_TRUE(movedViewport.shouldRequestRender());
   EXPECT_TRUE(movedViewport.needsRegularRender)
       << "High-zoom panning keeps the same output size but changes the document window.";
-}
-
-TEST(PresentationRenderSchedulerTest, SelectedRasterViewportMoveKeepsSelectionPrewarmHint) {
-  PresentationRenderScheduler scheduler;
-  CompositedPresentation presentation;
-
-  const PresentationRenderScheduleDecision first =
-      scheduler.evaluate(presentation, Input(Entity(7)));
-  scheduler.noteRenderCompleted(first.currentVersion, first.currentCanvasSize,
-                                first.currentRasterViewport);
-  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
-
-  const PresentationRenderScheduleDecision movedViewport = scheduler.evaluate(
-      presentation,
-      Input(Entity(7), /*version=*/1, std::nullopt, RasterViewport(Vector2d(10.0, 0.0))));
-
-  EXPECT_TRUE(movedViewport.shouldRequestRender());
-  EXPECT_TRUE(movedViewport.needsRegularRender);
-  EXPECT_TRUE(movedViewport.needsCompositedPrewarm)
-      << "A selected regular render after zoom/pan must keep the selected layer promoted; "
-         "otherwise a full-canvas fallback replaces the drag-target tile before the next drag.";
-  ASSERT_TRUE(movedViewport.dragPreview.has_value());
-  EXPECT_EQ(movedViewport.dragPreview->entity, Entity(7));
-  EXPECT_EQ(movedViewport.dragPreview->interactionKind,
-            svg::compositor::InteractionHint::Selection);
 }
 
 }  // namespace

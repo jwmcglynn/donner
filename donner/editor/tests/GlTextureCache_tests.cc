@@ -150,14 +150,13 @@ std::shared_ptr<geode::GeodeDevice> SharedGeodeDevice() {
 }
 
 std::shared_ptr<const svg::RendererTextureSnapshot> CreateCountingGeodeTextureSnapshot(
-    const std::shared_ptr<geode::GeodeDevice>& device, int* destructionCount,
-    const Vector2i& dimensions = Vector2i(1, 1)) {
+    const std::shared_ptr<geode::GeodeDevice>& device, int* destructionCount) {
   if (device == nullptr || destructionCount == nullptr) {
     return nullptr;
   }
 
   wgpu::TextureDescriptor textureDesc = {};
-  textureDesc.size = {static_cast<uint32_t>(dimensions.x), static_cast<uint32_t>(dimensions.y), 1};
+  textureDesc.size = {1, 1, 1};
   textureDesc.mipLevelCount = 1;
   textureDesc.sampleCount = 1;
   textureDesc.dimension = wgpu::TextureDimension::_2D;
@@ -169,7 +168,7 @@ std::shared_ptr<const svg::RendererTextureSnapshot> CreateCountingGeodeTextureSn
   }
 
   return std::shared_ptr<const svg::RendererTextureSnapshot>(
-      new svg::RendererGeodeTextureSnapshot(device, texture, dimensions,
+      new svg::RendererGeodeTextureSnapshot(device, texture, Vector2i(1, 1),
                                             wgpu::TextureFormat::RGBA8Unorm),
       [destructionCount](const svg::RendererTextureSnapshot* snapshot) {
         delete snapshot;
@@ -227,7 +226,6 @@ TEST(GlTextureCacheTest, OverlayScreenRectTracksCurrentUploadOnly) {
 
   GlTextureCache cache(device);
   cache.uploadOverlayTexture(firstSnapshot);
-  firstSnapshot.reset();
   cache.setOverlayScreenRect(Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0));
 
   ASSERT_TRUE(cache.overlayScreenRect().has_value());
@@ -245,59 +243,6 @@ TEST(GlTextureCacheTest, OverlayScreenRectTracksCurrentUploadOnly) {
   cache.setOverlayScreenRect(Box2d::FromXYWH(1.0, 2.0, 3.0, 4.0));
   cache.clearOverlay();
   EXPECT_FALSE(cache.overlayScreenRect().has_value());
-}
-
-TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures) {
-  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
-  ASSERT_NE(device, nullptr);
-
-  int firstDestructionCount = 0;
-  std::shared_ptr<const svg::RendererTextureSnapshot> firstSnapshot =
-      CreateCountingGeodeTextureSnapshot(device, &firstDestructionCount, Vector2i(3, 5));
-  ASSERT_NE(firstSnapshot, nullptr);
-
-  GlTextureCache cache(device);
-  cache.uploadOverlayTexture(firstSnapshot);
-  firstSnapshot.reset();
-
-  PresentationResourceStats stats = cache.presentationResourceStats();
-  EXPECT_EQ(stats.overlayBytes, 3u * 5u * 4u);
-  EXPECT_EQ(stats.pendingRetiredBytes, 0u);
-  EXPECT_EQ(stats.totalTrackedBytes, 3u * 5u * 4u);
-  EXPECT_EQ(stats.peakTrackedBytes, stats.totalTrackedBytes);
-  EXPECT_EQ(stats.largestAllocationPx, Vector2i(3, 5));
-
-  int secondDestructionCount = 0;
-  std::shared_ptr<const svg::RendererTextureSnapshot> secondSnapshot =
-      CreateCountingGeodeTextureSnapshot(device, &secondDestructionCount, Vector2i(2, 2));
-  ASSERT_NE(secondSnapshot, nullptr);
-  cache.uploadOverlayTexture(secondSnapshot);
-  secondSnapshot.reset();
-
-  stats = cache.presentationResourceStats();
-  EXPECT_EQ(stats.overlayBytes, 2u * 2u * 4u);
-  EXPECT_EQ(stats.pendingRetiredBytes, 3u * 5u * 4u);
-  EXPECT_EQ(stats.pendingRetiredTextures, 1);
-  EXPECT_EQ(stats.totalTrackedBytes, 2u * 2u * 4u + 3u * 5u * 4u);
-  EXPECT_EQ(stats.peakTrackedBytes, stats.totalTrackedBytes);
-  EXPECT_EQ(stats.largestAllocationPx, Vector2i(3, 5));
-
-  cache.advancePresentationFrame();
-  stats = cache.presentationResourceStats();
-  EXPECT_EQ(stats.pendingRetiredBytes, 0u);
-  EXPECT_EQ(stats.agedRetiredBytes, 3u * 5u * 4u);
-  EXPECT_EQ(stats.agedRetiredTextures, 1);
-
-  cache.advancePresentationFrame();
-  cache.advancePresentationFrame();
-  cache.advancePresentationFrame();
-  stats = cache.presentationResourceStats();
-  EXPECT_EQ(stats.pendingRetiredBytes, 0u);
-  EXPECT_EQ(stats.agedRetiredBytes, 0u);
-  EXPECT_EQ(stats.totalTrackedBytes, 2u * 2u * 4u);
-  EXPECT_GE(stats.peakTrackedBytes, 2u * 2u * 4u + 3u * 5u * 4u);
-  EXPECT_EQ(firstDestructionCount, 1);
-  EXPECT_EQ(secondDestructionCount, 0);
 }
 
 TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUpload) {
@@ -339,62 +284,11 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
   ASSERT_EQ(cache.tiles().size(), 1u);
   ASSERT_EQ(cache.overviewTiles().size(), 1u);
   EXPECT_TRUE(cache.activeTilesViewportBounded());
-  const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
-  EXPECT_TRUE(coverage.activeTilesViewportBounded);
-  EXPECT_TRUE(coverage.overviewInfillAvailable);
-  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
-  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
-  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i(20, 20));
-  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i(100, 100));
   EXPECT_EQ(cache.tiles().front().rasterCanvasSize, Vector2i(20, 20));
   EXPECT_EQ(cache.overviewTiles().front().rasterCanvasSize, Vector2i(100, 100))
       << "Bounded uploads may reuse tile ids and must not overwrite the retained overview.";
   EXPECT_EQ(overviewDestructionCount, 0);
   EXPECT_EQ(boundedDestructionCount, 0);
-}
-
-TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
-  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
-  ASSERT_NE(device, nullptr);
-
-  int boundedDestructionCount = 0;
-  RenderResult::CompositedPreview boundedPreview;
-  RenderResult::CompositedTile boundedTile = MetadataTile(
-      RenderResult::CompositedTile::Kind::Segment, 2, Vector2i(1, 1), Vector2i(20, 20));
-  boundedTile.id = "seg:0";
-  boundedTile.canvasOffsetDoc = Vector2d(40.0, 40.0);
-  boundedTile.bitmapDimsDoc = Vector2d(10.0, 10.0);
-  boundedTile.textureSnapshot =
-      CreateCountingGeodeTextureSnapshot(device, &boundedDestructionCount);
-  ASSERT_NE(boundedTile.textureSnapshot, nullptr);
-  boundedPreview.tiles.push_back(std::move(boundedTile));
-
-  GlTextureCache cache(device);
-  cache.uploadComposited(boundedPreview, RasterViewportForTest(/*viewportBounded=*/true));
-  ASSERT_EQ(cache.tiles().size(), 1u);
-  EXPECT_TRUE(cache.overviewTiles().empty());
-
-  int overviewDestructionCount = 0;
-  RenderResult::CompositedPreview overviewPreview;
-  RenderResult::CompositedTile overviewTile = MetadataTile(
-      RenderResult::CompositedTile::Kind::Segment, 1, Vector2i(1, 1), Vector2i(100, 100));
-  overviewTile.id = "full-canvas";
-  overviewTile.bitmapDimsDoc = Vector2d(100.0, 100.0);
-  overviewTile.textureSnapshot =
-      CreateCountingGeodeTextureSnapshot(device, &overviewDestructionCount);
-  ASSERT_NE(overviewTile.textureSnapshot, nullptr);
-  overviewPreview.tiles.push_back(std::move(overviewTile));
-
-  cache.uploadCompositedOverview(overviewPreview, RasterViewportForTest(/*viewportBounded=*/false));
-
-  ASSERT_EQ(cache.tiles().size(), 1u);
-  ASSERT_EQ(cache.overviewTiles().size(), 1u);
-  EXPECT_TRUE(cache.activeTilesViewportBounded());
-  EXPECT_EQ(cache.tiles().front().id, "seg:0");
-  EXPECT_EQ(cache.overviewTiles().front().id, "full-canvas");
-  EXPECT_TRUE(cache.coverageDiagnostics().overviewInfillAvailable);
-  EXPECT_EQ(boundedDestructionCount, 0);
-  EXPECT_EQ(overviewDestructionCount, 0);
 }
 #endif
 
