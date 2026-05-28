@@ -206,6 +206,13 @@ repro::ReproViewport DonnerDViewport(double zoom) {
   return viewport;
 }
 
+repro::ReproViewport DonnerNViewport(double zoom) {
+  repro::ReproViewport viewport = DonnerDViewport(zoom);
+  viewport.panDocX = 505.0;
+  viewport.panDocY = 335.0;
+  return viewport;
+}
+
 Vector2d ScreenFromDoc(const repro::ReproViewport& viewport, const Vector2d& docPoint) {
   return Vector2d(viewport.panScreenX + (docPoint.x - viewport.panDocX) * viewport.zoom,
                   viewport.panScreenY + (docPoint.y - viewport.panDocY) * viewport.zoom);
@@ -376,6 +383,98 @@ std::optional<std::filesystem::path> WriteDonnerDZoomThenDragReplay(
   return replayPath;
 }
 
+std::optional<std::filesystem::path> WriteDonnerNFarZoomThenDragReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "donner_splash.svg";
+  file.metadata.svgBasename = "donner_splash.svg";
+  file.metadata.svgContentHash = "fnv1a64:donner-splash-runfile";
+  file.metadata.windowWidth = 1600;
+  file.metadata.windowHeight = 900;
+  file.metadata.displayScale = 2.0;
+  file.metadata.expect = repro::ReproExpectation{
+      .proofKind = repro::ReproExpectationProofKind::Selection,
+      .leftMouseDownOrdinal = 2,
+      .frameOffsetAfterLeftMouseDown = 2,
+      .minFrameIndex = 55,
+      .maxFrameIndex = 56,
+      .targetSelector = "#Donner_N_2",
+      .cropMode = "document-canvas",
+      .expectedSelectionLabel = std::string("<polygon> #Donner_N_2"),
+  };
+
+  const Vector2d kDonnerNDoc(505.0, 335.0);
+  for (std::uint64_t frame = 0; frame <= 4; ++frame) {
+    PushDonnerDReplayFrame(file, frame, DonnerNViewport(2.0), kDonnerNDoc, 0);
+  }
+
+  repro::ReproEvent selectMouseDown;
+  selectMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  selectMouseDown.mouseButton = 0;
+  selectMouseDown.hit = repro::ReproHit{
+      .id = "Donner_N_2",
+      .tag = "polygon",
+  };
+  PushDonnerDReplayFrame(file, 5, DonnerNViewport(2.0), kDonnerNDoc, 1, {selectMouseDown});
+
+  repro::ReproEvent selectMouseUp;
+  selectMouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  selectMouseUp.mouseButton = 0;
+  PushDonnerDReplayFrame(file, 6, DonnerNViewport(2.0), kDonnerNDoc, 0, {selectMouseUp});
+
+  for (std::uint64_t frame = 7; frame <= 12; ++frame) {
+    PushDonnerDReplayFrame(file, frame, DonnerNViewport(2.0), kDonnerNDoc, 0);
+  }
+
+  for (std::uint64_t frame = 13; frame <= 26; ++frame) {
+    const double t = static_cast<double>(frame - 13) / 13.0;
+    PushDonnerDReplayFrame(file, frame, DonnerNViewport(2.0 + t * 6.0), kDonnerNDoc, 0);
+  }
+  for (std::uint64_t frame = 27; frame <= 38; ++frame) {
+    const double t = static_cast<double>(frame - 27) / 11.0;
+    PushDonnerDReplayFrame(file, frame, DonnerNViewport(8.0 - t * 4.5), kDonnerNDoc, 0);
+  }
+  for (std::uint64_t frame = 39; frame <= 52; ++frame) {
+    const double t = static_cast<double>(frame - 39) / 13.0;
+    PushDonnerDReplayFrame(file, frame, DonnerNViewport(3.5 + t * 8.5), kDonnerNDoc, 0);
+  }
+
+  repro::ReproEvent dragMouseDown;
+  dragMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  dragMouseDown.mouseButton = 0;
+  dragMouseDown.hit = repro::ReproHit{
+      .id = "Donner_N_2",
+      .tag = "polygon",
+  };
+  PushDonnerDReplayFrame(file, 53, DonnerNViewport(12.0), kDonnerNDoc, 1, {dragMouseDown});
+
+  for (std::uint64_t frame = 54; frame <= 60; ++frame) {
+    const double t = static_cast<double>(frame - 53);
+    PushDonnerDReplayFrame(file, frame, DonnerNViewport(12.0),
+                           kDonnerNDoc + Vector2d(t * 1.4, t * -0.45), 1);
+  }
+
+  repro::ReproEvent dragMouseUp;
+  dragMouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  dragMouseUp.mouseButton = 0;
+  PushDonnerDReplayFrame(file, 61, DonnerNViewport(12.0),
+                         kDonnerNDoc + Vector2d(8.0 * 1.4, 8.0 * -0.45), 0, {dragMouseUp});
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
 Vector2d PresentedDragTargetTranslationOrZero(
     const repro::GlRnrReplayFrameDiagnostics& diagnostics) {
   for (const repro::GlRnrReplayTileDiagnostics& tile : diagnostics.tiles) {
@@ -386,7 +485,9 @@ Vector2d PresentedDragTargetTranslationOrZero(
   return Vector2d::Zero();
 }
 
-std::string CanonicalReplayDiagnostics(const repro::GlRnrReplayResult& result) {
+std::string CanonicalReplayDiagnostics(const repro::GlRnrReplayResult& result,
+                                       std::optional<std::uint64_t> firstFrame = std::nullopt,
+                                       std::optional<std::uint64_t> lastFrame = std::nullopt) {
   std::ostringstream out;
   const auto writeVec = [&out](const Vector2i& value) { out << value.x << ',' << value.y; };
   const auto writeVecD = [&out](const Vector2d& value) { out << value.x << ',' << value.y; };
@@ -1227,6 +1328,129 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedConte
         << frame;
   }
   EXPECT_GT(checkedDragFrames, 0) << "Repro did not enter the second Donner D drag window.";
+}
+
+TEST(GlRnrReplayTest, GeodeZoomThenDragDoesNotFreezeLiveDragPreviewWhileWorkerBusy) {
+  const std::filesystem::path outputDir =
+      DiagnosticOutputDir() / "gl_geode_zoom_then_drag_d_busy_live_preview";
+  const std::optional<std::filesystem::path> rnrPath =
+      WriteDonnerDZoomThenDragReplay(outputDir, "donner_d_zoom_then_drag_busy_live_preview.rnr");
+  ASSERT_TRUE(rnrPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *rnrPath;
+  options.svgPathOverride = RunfilePath("donner_splash.svg");
+  options.outputDir = outputDir;
+  options.captureFrames = {42};
+  options.maxFrame = 42;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
+  options.workerRenderDelayMsForTesting = 500;
+  options.visible = false;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  std::optional<Vector2d> previousTranslation;
+  for (std::uint64_t frame = 37; frame <= 42; ++frame) {
+    const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
+    ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
+    ASSERT_TRUE(diagnostics->frameCost.overlay.hasLiveDragPreview)
+        << "Drag preview disappeared on replay frame " << frame;
+
+    const Vector2d translation = diagnostics->frameCost.overlay.liveDragTranslationDoc;
+    EXPECT_GT(translation.x, 0.0) << "Live drag preview did not move on replay frame " << frame;
+    EXPECT_LT(translation.y, 0.0) << "Live drag preview did not move on replay frame " << frame;
+    if (previousTranslation.has_value()) {
+      EXPECT_GT(translation.x, previousTranslation->x + 2.0)
+          << "Live drag preview froze instead of following the mouse on replay frame " << frame;
+      EXPECT_LT(translation.y, previousTranslation->y - 0.4)
+          << "Live drag preview froze instead of following the mouse on replay frame " << frame;
+    }
+    previousTranslation = translation;
+  }
+}
+
+TEST(GlRnrReplayTest, GeodeFarZoomThenDragKeepsDonnerNOverlayLockedToPresentedContent) {
+  const std::filesystem::path outputDir =
+      DiagnosticOutputDir() / "gl_geode_far_zoom_then_drag_n_lockstep";
+  const std::optional<std::filesystem::path> rnrPath =
+      WriteDonnerNFarZoomThenDragReplay(outputDir, "donner_n_far_zoom_then_drag_overlay_repro.rnr");
+  ASSERT_TRUE(rnrPath.has_value());
+  std::optional<repro::ReproFile> reproFile = repro::ReadReproFile(*rnrPath);
+  ASSERT_TRUE(reproFile.has_value());
+  ASSERT_TRUE(reproFile->metadata.expect.has_value());
+  const repro::ReproExpectation& expect = *reproFile->metadata.expect;
+  ASSERT_EQ(expect.proofKind, repro::ReproExpectationProofKind::Selection);
+  ASSERT_EQ(expect.cropMode, "document-canvas");
+  ASSERT_EQ(expect.targetSelector, "#Donner_N_2");
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *rnrPath;
+  options.svgPathOverride = RunfilePath("donner_splash.svg");
+  options.outputDir = outputDir;
+  options.captureFrames = {54, 55, 56, 57, 58, 59, 60};
+  options.maxFrame = 61;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
+  options.workerRenderDelayMsForTesting = 500;
+  options.visible = false;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_EQ(result.finalSelectedElementLabel, expect.expectedSelectionLabel);
+
+  const std::string dragDiagnostics = CanonicalReplayDiagnostics(result, 50u, 61u);
+  int checkedDragFrames = 0;
+  for (std::uint64_t frame = 54; frame <= 60; ++frame) {
+    const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
+    ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
+    ASSERT_TRUE(diagnostics->frameCost.overlay.hasLiveDragPreview)
+        << "Drag preview disappeared on replay frame " << frame;
+    if (!(diagnostics->frameCost.overlay.liveDragTranslationDoc.x > 0.0)) {
+      continue;
+    }
+    ++checkedDragFrames;
+    ASSERT_TRUE(diagnostics->frameCost.overlay.hasRepresentedDragPreview)
+        << "Overlay presentation must record the drag transform it actually used.";
+
+    const Vector2d presentedContentTranslation = PresentedDragTargetTranslationOrZero(*diagnostics);
+    ASSERT_NEAR(diagnostics->frameCost.overlay.representedDragTranslationDoc.x,
+                diagnostics->frameCost.overlay.liveDragTranslationDoc.x, 1e-6)
+        << "Drag chrome froze instead of following the live Donner N drag in frame " << frame
+        << "\n"
+        << dragDiagnostics;
+    ASSERT_NEAR(diagnostics->frameCost.overlay.representedDragTranslationDoc.y,
+                diagnostics->frameCost.overlay.liveDragTranslationDoc.y, 1e-6)
+        << "Drag chrome froze instead of following the live Donner N drag in frame " << frame
+        << "\n"
+        << dragDiagnostics;
+    ASSERT_NEAR(presentedContentTranslation.x,
+                diagnostics->frameCost.overlay.liveDragTranslationDoc.x, 1e-6)
+        << "Presented Donner N pixels froze instead of following the live drag in frame " << frame
+        << "\n"
+        << dragDiagnostics;
+    ASSERT_NEAR(presentedContentTranslation.y,
+                diagnostics->frameCost.overlay.liveDragTranslationDoc.y, 1e-6)
+        << "Presented Donner N pixels froze instead of following the live drag in frame " << frame
+        << "\n"
+        << dragDiagnostics;
+    ASSERT_NEAR(diagnostics->frameCost.overlay.representedDragTranslationDoc.x,
+                presentedContentTranslation.x, 1e-6)
+        << "Path overlay must stay lockstep with the content tile presented in frame " << frame
+        << "\n"
+        << dragDiagnostics;
+    ASSERT_NEAR(diagnostics->frameCost.overlay.representedDragTranslationDoc.y,
+                presentedContentTranslation.y, 1e-6)
+        << "Path overlay must stay lockstep with the content tile presented in frame " << frame
+        << "\n"
+        << dragDiagnostics;
+  }
+  EXPECT_GT(checkedDragFrames, 0) << "Repro did not enter the Donner N drag window.";
 }
 
 // Regression coverage for #601: deterministic worker draining makes the filtered drag replay

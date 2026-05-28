@@ -62,12 +62,8 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
       needsSettledSelectionRefresh ||
       presentation.shouldPrewarm(input.selectedEntity, input.currentVersion,
                                  input.currentCanvasSize,
-                                 /*dragActive=*/input.activeDragPreview.has_value());
-  const bool versionChanged = input.currentVersion != lastRenderedVersion_;
-  const bool canvasSizeChanged = input.currentCanvasSize != lastRenderedCanvasSize_;
-  const bool rasterViewportChanged =
-      !lastRenderedRasterViewport_.has_value() ||
-      !SameRasterViewport(input.currentRasterViewport, *lastRenderedRasterViewport_);
+                                 /*dragActive=*/input.activeDragPreview.has_value()) ||
+      selectedViewportRenderNeedsPrewarm;
   decision.needsRegularRender = versionChanged || canvasSizeChanged || rasterViewportChanged;
 
   if (input.activeDragPreview.has_value()) {

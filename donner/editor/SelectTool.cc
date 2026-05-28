@@ -214,15 +214,11 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
   // `onMouseDown` passes a freshly-computed live snapshot (its caller has
   // already gated on `!isBusy()`).
-  const svg::SVGElement element = currentSelection.front();
-  const bool isGraphics =
-      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
-        return element.isa<svg::SVGGraphicsElement>();
-      });
   const double hitSlopDoc =
       modifiers.pixelsPerDocUnit > 0.0 ? kRedragHitSlopScreenPx / modifiers.pixelsPerDocUnit : 0.0;
   if (selectionBoundsDoc.empty() ||
-      !selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint) || !isGraphics) {
+      !selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint) ||
+      !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
     return false;
   }
   for (const Box2d& occludingBounds : occludingBoundsDoc) {

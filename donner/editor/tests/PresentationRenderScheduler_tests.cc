@@ -244,5 +244,30 @@ TEST(PresentationRenderSchedulerTest, SameCanvasMovedRasterViewportRequestsRegul
       << "High-zoom panning keeps the same output size but changes the document window.";
 }
 
+TEST(PresentationRenderSchedulerTest, SelectedRasterViewportMoveKeepsSelectionPrewarmHint) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision first =
+      scheduler.evaluate(presentation, Input(Entity(7)));
+  scheduler.noteRenderCompleted(first.currentVersion, first.currentCanvasSize,
+                                first.currentRasterViewport);
+  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
+
+  const PresentationRenderScheduleDecision movedViewport = scheduler.evaluate(
+      presentation,
+      Input(Entity(7), /*version=*/1, std::nullopt, RasterViewport(Vector2d(10.0, 0.0))));
+
+  EXPECT_TRUE(movedViewport.shouldRequestRender());
+  EXPECT_TRUE(movedViewport.needsRegularRender);
+  EXPECT_TRUE(movedViewport.needsCompositedPrewarm)
+      << "A selected regular render after zoom/pan must keep the selected layer promoted; "
+         "otherwise a full-canvas fallback replaces the drag-target tile before the next drag.";
+  ASSERT_TRUE(movedViewport.dragPreview.has_value());
+  EXPECT_EQ(movedViewport.dragPreview->entity, Entity(7));
+  EXPECT_EQ(movedViewport.dragPreview->interactionKind,
+            svg::compositor::InteractionHint::Selection);
+}
+
 }  // namespace
 }  // namespace donner::editor

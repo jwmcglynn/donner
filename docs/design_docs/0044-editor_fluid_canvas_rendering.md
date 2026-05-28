@@ -334,6 +334,11 @@ not retained behind the async document-content version gate and it is not reproj
 overlay texture during pan, zoom, drag, or transform handles. This keeps the chrome aligned with the
 content even when the document tiles are still refining.
 
+The path overlay has an iron lockstep rule: it must represent the same transform as the document
+tiles actually presented underneath it in that frame. If a high-zoom or worker-busy frame cannot
+present a fresh drag-target tile yet, the overlay must be projected back to the presented content
+transform instead of displaying a newer transform over stale pixels.
+
 Large selections use LOD:
 
 | Selection size               | First interactive frame                                     | Idle refinement                                     |
