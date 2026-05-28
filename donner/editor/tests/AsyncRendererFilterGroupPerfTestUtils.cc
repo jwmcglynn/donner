@@ -24,6 +24,12 @@
 namespace donner::editor {
 namespace {
 
+svg::SVGGraphicsElement AsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.cast<svg::SVGGraphicsElement>();
+  });
+}
+
 std::optional<RenderResult> WaitForResult(AsyncRenderer* asyncRenderer) {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
   while (std::chrono::steady_clock::now() < deadline) {
@@ -84,8 +90,8 @@ void RunFilterGroupSubtreeDragPerfScenario(FilterGroupSubtreeDragPerfResult* res
   double maxDragFrameMs = 0.0;
   double sumDragFrameMs = 0.0;
   for (int i = 0; i < kDragFrames; ++i) {
-    targetElement->cast<svg::SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(static_cast<double>(i + 1) * 3.0, 0.0)));
+    AsGraphicsElement(*targetElement)
+        .setTransform(Transform2d::Translate(Vector2d(static_cast<double>(i + 1) * 3.0, 0.0)));
     const auto start = std::chrono::steady_clock::now();
     postRequest(/*version=*/static_cast<uint64_t>(i + 2), /*activeDrag=*/true);
     auto renderResult = WaitForResult(&asyncRenderer);

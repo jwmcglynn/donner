@@ -139,7 +139,10 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // traversal, or querySelector) so we just cast to the graphics-
       // element interface and call the public transform setter — no
       // direct ECS access.
-      auto graphics = command.element->cast<svg::SVGGraphicsElement>();
+      svg::SVGGraphicsElement graphics =
+          command.element->withReadAccess([&command](svg::DocumentReadAccess&, EntityHandle) {
+            return command.element->cast<svg::SVGGraphicsElement>();
+          });
       graphics.setTransform(command.transform);
       break;
     }

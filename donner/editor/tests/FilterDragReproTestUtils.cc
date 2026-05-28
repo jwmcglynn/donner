@@ -55,6 +55,20 @@
 namespace donner::editor::filter_drag_repro {
 namespace {
 
+bool IsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.isa<svg::SVGGraphicsElement>();
+  });
+}
+
+Entity SelectedGraphicsEntity(EditorApp& app) {
+  if (!app.selectedElement().has_value() || !IsGraphicsElement(*app.selectedElement())) {
+    return entt::null;
+  }
+
+  return app.selectedElement()->unsafeEntityHandle().entity();
+}
+
 using ::donner::Entity;
 using ::donner::editor::AsyncRenderer;
 using ::donner::editor::EditorApp;
@@ -119,10 +133,7 @@ std::optional<double> DrainOneRender(AsyncRenderer& asyncRenderer, svg::Renderer
   request.version = version;
   request.documentGeneration = editorApp.document().documentGeneration();
   request.structuralRemap = editorApp.document().consumePendingStructuralRemap();
-  if (editorApp.selectedElement().has_value() &&
-      editorApp.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-    request.selectedEntity = editorApp.selectedElement()->unsafeEntityHandle().entity();
-  }
+  request.selectedEntity = SelectedGraphicsEntity(editorApp);
   if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
     request.dragPreview = RenderRequest::DragPreview{
         .entity = preview->entity,
@@ -229,20 +240,22 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
         std::string selId = "<none>";
         std::string filterAncestorId = "<none>";
         Entity postSelect = entt::null;
-        if (app.selectedElement().has_value() &&
-            app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
+        if (app.selectedElement().has_value() && IsGraphicsElement(*app.selectedElement())) {
           const svg::SVGElement sel = *app.selectedElement();
           postSelect = sel.unsafeEntityHandle().entity();
-          selId = std::string(sel.id());
-          svg::SVGElement cursor = sel;
-          while (auto parent = cursor.parentElement()) {
-            if (parent->hasAttribute(xml::XMLQualifiedNameRef("filter"))) {
-              filterAncestorId = std::string(parent->id());
-              if (filterAncestorId.empty()) filterAncestorId = "<filter-ancestor-no-id>";
-              break;
-            }
-            cursor = *parent;
-          }
+          sel.withReadAccess(
+              [&sel, &selId, &filterAncestorId](svg::DocumentReadAccess&, EntityHandle) {
+                selId = std::string(sel.id());
+                svg::SVGElement cursor = sel;
+                while (auto parent = cursor.parentElement()) {
+                  if (parent->hasAttribute(xml::XMLQualifiedNameRef("filter"))) {
+                    filterAncestorId = std::string(parent->id());
+                    if (filterAncestorId.empty()) filterAncestorId = "<filter-ancestor-no-id>";
+                    break;
+                  }
+                  cursor = *parent;
+                }
+              });
         }
         results.selectionAfterMouseUp.push_back(postSelect);
         results.selectionSizesAfterMouseUp.push_back(
@@ -281,10 +294,7 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - frameStart)
             .count();
 
-    const Entity sel =
-        app.selectedElement().has_value() && app.selectedElement()->isa<svg::SVGGraphicsElement>()
-            ? app.selectedElement()->unsafeEntityHandle().entity()
-            : entt::null;
+    const Entity sel = SelectedGraphicsEntity(app);
     results.selectedEntityAtFrame.push_back(sel);
 
     results.frames.push_back(timing);

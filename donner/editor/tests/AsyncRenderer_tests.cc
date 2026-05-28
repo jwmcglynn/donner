@@ -36,6 +36,31 @@
 namespace donner::editor {
 namespace {
 
+bool IsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.isa<svg::SVGGraphicsElement>();
+  });
+}
+
+svg::SVGGraphicsElement AsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.cast<svg::SVGGraphicsElement>();
+  });
+}
+
+Entity SelectedGraphicsEntity(EditorApp& app) {
+  if (!app.selectedElement().has_value() || !IsGraphicsElement(*app.selectedElement())) {
+    return entt::null;
+  }
+
+  return app.selectedElement()->unsafeEntityHandle().entity();
+}
+
+std::string ElementId(const svg::SVGElement& element) {
+  return element.withReadAccess(
+      [&element](svg::DocumentReadAccess&, EntityHandle) { return std::string(element.id()); });
+}
+
 bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
   return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
 }
@@ -362,7 +387,9 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   // 2. Drag A by (7, 11) document units. Fast path stamps
   //    `canvasFromBitmap = Translate(7, 11)` on A's pre-warmed layer
   //    without re-rasterizing.
-  elemA->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(7.0, 11.0)));
+  svg::SVGGraphicsElement graphicsA = elemA->withReadAccess(
+      [&elemA](svg::DocumentReadAccess&, EntityHandle) { return AsGraphicsElement(*elemA); });
+  graphicsA.setTransform(Transform2d::Translate(Vector2d(7.0, 11.0)));
   {
     RenderRequest request(renderer, document);
     request.version = 2;
@@ -375,7 +402,9 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
 
   // 3. Now drag B — A is demoted (queued by M9) and B is promoted.
   //    A's bitmap is still cached with its post-drag canvasFromBitmap.
-  elemB->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(2.0, 3.0)));
+  svg::SVGGraphicsElement graphicsB = elemB->withReadAccess(
+      [&elemB](svg::DocumentReadAccess&, EntityHandle) { return AsGraphicsElement(*elemB); });
+  graphicsB.setTransform(Transform2d::Translate(Vector2d(2.0, 3.0)));
   {
     RenderRequest request(renderer, document);
     request.version = 3;
@@ -472,7 +501,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDropsStaleCompositedLayerImmediately
   ASSERT_TRUE(sawSelectedLayerAtTarget)
       << "The repro must start with the selected rect isolated into a composited layer.";
 
-  target->cast<svg::SVGGraphicsElement>().setStyle("display:none");
+  AsGraphicsElement(*target).setStyle("display:none");
 
   {
     RenderRequest request(renderer, document);
@@ -573,7 +602,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   ASSERT_TRUE(selected.has_value());
   ASSERT_TRUE(selected->compositedPreview.has_value());
 
-  hiddenSoon->cast<svg::SVGGraphicsElement>().setStyle("display:none");
+  AsGraphicsElement(*hiddenSoon).setStyle("display:none");
   {
     RenderRequest request(renderer, document);
     request.version = 2;
@@ -665,14 +694,16 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
     RenderRequest request(renderer, document);
     request.version = 1;
     request.selectedEntity = elemA->unsafeEntityHandle().entity();
-    request.dragPreview = RenderRequest::DragPreview{.entity = elemA->unsafeEntityHandle().entity()};
+    request.dragPreview =
+        RenderRequest::DragPreview{.entity = elemA->unsafeEntityHandle().entity()};
     asyncRenderer.requestRender(request);
   }
   {
     RenderRequest request(renderer, document);
     request.version = 2;
     request.selectedEntity = elemB->unsafeEntityHandle().entity();
-    request.dragPreview = RenderRequest::DragPreview{.entity = elemB->unsafeEntityHandle().entity()};
+    request.dragPreview =
+        RenderRequest::DragPreview{.entity = elemB->unsafeEntityHandle().entity()};
     asyncRenderer.requestRender(request);
   }
 
@@ -813,7 +844,7 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   RenderRequest request(renderer, document);
   request.version = 1;
   // Apply a transform to the DOM to simulate the drag having moved the target.
-  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(8.0, 4.0)));
+  AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(8.0, 4.0)));
   request.dragPreview = RenderRequest::DragPreview{
       .entity = target->unsafeEntityHandle().entity(),
   };
@@ -1166,7 +1197,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   };
 
   // Drag frame 1: DOM transform (4, 0).
-  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
+  AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   {
     RenderRequest request(renderer, document);
     request.version = 1;
@@ -1292,7 +1323,7 @@ TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
   document.setCanvasSize(96, 60);
   const Vector2i resizedCanvasSize = document.canvasSize();
   ASSERT_NE(resizedCanvasSize, initialCanvasSize);
-  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
+  AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
 
   {
     RenderRequest request(renderer, document);
@@ -1410,7 +1441,7 @@ TEST(AsyncRendererTest, SplashShapeDragFramesDoNotCrash) {
   // trips cleanly.
   constexpr int kDragFrames = 30;
   for (int i = 0; i < kDragFrames; ++i) {
-    target->cast<svg::SVGGraphicsElement>().setTransform(
+    AsGraphicsElement(*target).setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 1) * 2.0, 0.0)));
     RenderRequest request(renderer, document);
     request.version = static_cast<std::uint64_t>(i + 2);
@@ -1495,7 +1526,7 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
       tileGenerations(*selection->compositedPreview);
   ASSERT_FALSE(selectionGenerations.empty());
 
-  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
+  AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
   auto activeDrag = postRequest(2, svg::compositor::InteractionHint::ActiveDrag);
   ASSERT_TRUE(activeDrag.has_value());
   ASSERT_TRUE(activeDrag->compositedPreview.has_value());
@@ -1542,7 +1573,7 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
   EXPECT_TRUE(changedTiles.empty()) << "reselection advanced already-elevated tile generations: "
                                     << testing::PrintToString(changedTiles);
 
-  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(18.0, 0.0)));
+  AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(18.0, 0.0)));
   auto secondDrag = postRequest(4, svg::compositor::InteractionHint::ActiveDrag);
   ASSERT_TRUE(secondDrag.has_value());
   ASSERT_TRUE(secondDrag->compositedPreview.has_value());
@@ -1613,10 +1644,7 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
     request.version = ++renderVersion;
     request.documentGeneration = app.document().documentGeneration();
     request.structuralRemap = app.document().consumePendingStructuralRemap();
-    if (app.selectedElement().has_value() &&
-        app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-      request.selectedEntity = app.selectedElement()->unsafeEntityHandle().entity();
-    }
+    request.selectedEntity = SelectedGraphicsEntity(app);
     if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
       request.dragPreview = RenderRequest::DragPreview{
           .entity = preview->entity,
@@ -1910,7 +1938,7 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
   // `documentGeneration` stays at 1 — no document replacement occurred.
   constexpr int kDragFrames = 10;
   for (int i = 0; i < kDragFrames; ++i) {
-    target->cast<svg::SVGGraphicsElement>().setTransform(
+    AsGraphicsElement(*target).setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 1), 0.0)));
     RenderRequest request(renderer, document);
     request.version = static_cast<std::uint64_t>(i + 2);
@@ -2350,7 +2378,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   // Approach: drive one more drag frame via the compositor, capture
   // the main renderer's snapshot, then run a full (non-composited)
   // render of the same DOM into a fresh renderer and diff.
-  target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(50.0, 0.0)));
+  AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(50.0, 0.0)));
   // Toggle skipMainCompose off for this frame via a fresh AsyncRenderer
   // cycle that populates a non-skipped compositor, OR render directly
   // with a fresh non-composited renderer for the reference side. We
@@ -2646,14 +2674,13 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
 
   // Phase 1: click on "D" — first promote. `SelectTool` sets both
   // `selectedEntity` and `dragPreview(ActiveDrag)` on mouse-down.
-  donnerPath->cast<svg::SVGGraphicsElement>().setTransform(
-      Transform2d::Translate(Vector2d(4.0, 0.0)));
+  AsGraphicsElement(*donnerPath).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   runPhase("click-D (first promote)", donnerEntity, donnerEntity, 2);
 
   // Phase 2: steady drag on "D" — a few mouse-move frames.
   for (int i = 0; i < 3; ++i) {
-    donnerPath->cast<svg::SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 8.0, 0.0)));
+    AsGraphicsElement(*donnerPath)
+        .setTransform(Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 8.0, 0.0)));
     runPhase("drag-D", donnerEntity, donnerEntity, static_cast<uint64_t>(3 + i));
   }
 
@@ -2672,14 +2699,13 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
   }
   ASSERT_TRUE(alternatePath.has_value()) << "no alternate path to click on";
   const Entity alternateEntity = alternatePath->unsafeEntityHandle().entity();
-  alternatePath->cast<svg::SVGGraphicsElement>().setTransform(
-      Transform2d::Translate(Vector2d(4.0, 0.0)));
+  AsGraphicsElement(*alternatePath).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   runPhase("click-O (second promote)", alternateEntity, alternateEntity, 7);
 
   // Phase 5: drag on O — matches the user's second drag gesture.
   for (int i = 0; i < 3; ++i) {
-    alternatePath->cast<svg::SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 8.0, 0.0)));
+    AsGraphicsElement(*alternatePath)
+        .setTransform(Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 8.0, 0.0)));
     runPhase("drag-O", alternateEntity, alternateEntity, static_cast<uint64_t>(8 + i));
   }
 
@@ -2833,16 +2859,15 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
 
   // Phase 1 — click-drag on D. Even though the editor displays composited
   // tiles for this frame, the CPU snapshot must retain the cold render's pixels.
-  donnerPath->cast<svg::SVGGraphicsElement>().setTransform(
-      Transform2d::Translate(Vector2d(4.0, 0.0)));
+  AsGraphicsElement(*donnerPath).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   post(2, donnerEntity, donnerEntity);
   checkResult("click-D");
 
   // Phase 2 — drag frames. The CPU snapshot must still hold cold pixels
   // (skip-main-compose is active, main renderer's pixmap preserved).
   for (int i = 0; i < 3; ++i) {
-    donnerPath->cast<svg::SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 4.0, 0.0)));
+    AsGraphicsElement(*donnerPath)
+        .setTransform(Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 4.0, 0.0)));
     post(static_cast<uint64_t>(3 + i), donnerEntity, donnerEntity);
     checkResult("drag-D");
   }
@@ -2861,8 +2886,7 @@ TEST(AsyncRendererE2ETest, CpuSnapshotStaysNonTransparentAcrossDragTargetSwap) {
   }
   ASSERT_TRUE(alternate.has_value());
   const Entity alternateEntity = alternate->unsafeEntityHandle().entity();
-  alternate->cast<svg::SVGGraphicsElement>().setTransform(
-      Transform2d::Translate(Vector2d(4.0, 0.0)));
+  AsGraphicsElement(*alternate).setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
   post(7, alternateEntity, alternateEntity);
   checkResult("click-O (drag-target swap)");
 }
@@ -2929,7 +2953,7 @@ TEST(AsyncRendererE2ETest, DragEndWritebackTakesStructuralRemapPath) {
   postRequest(1, false);
   ASSERT_TRUE(waitForResult().has_value());
   for (int i = 0; i < 3; ++i) {
-    target->cast<svg::SVGGraphicsElement>().setTransform(
+    AsGraphicsElement(*target).setTransform(
         Transform2d::Translate(Vector2d(static_cast<double>(i + 1) * 4.0, 0.0)));
     postRequest(static_cast<uint64_t>(2 + i), true);
     ASSERT_TRUE(waitForResult().has_value());
@@ -3183,7 +3207,8 @@ TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilt
   ASSERT_TRUE(waitForResult().has_value());
 
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
-  const auto glowGenerationAfter = layerGeneration(glowAfterWriteback->unsafeEntityHandle().entity());
+  const auto glowGenerationAfter =
+      layerGeneration(glowAfterWriteback->unsafeEntityHandle().entity());
   ASSERT_TRUE(glowGenerationAfter.has_value());
   EXPECT_EQ(*glowGenerationAfter, *glowGenerationBefore)
       << "Unchanged mandatory filter layer rerasterized across structural writeback; "

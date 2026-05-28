@@ -214,8 +214,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
   // `onMouseDown` passes a freshly-computed live snapshot (its caller has
   // already gated on `!isBusy()`).
-  if (selectionBoundsDoc.empty() || !selectionBoundsDoc.front().contains(documentPoint) ||
-      !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
+  if (selectionBoundsDoc.empty() || !selectionBoundsDoc.front().contains(documentPoint)) {
     return false;
   }
   for (const Box2d& occludingBounds : occludingBoundsDoc) {
@@ -224,6 +223,26 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
     }
   }
 
+  // Reuse the currently-selected element as the drag target.
+  const svg::SVGElement element = currentSelection.front();
+  const bool isGraphics =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.isa<svg::SVGGraphicsElement>();
+      });
+  if (!isGraphics) {
+    return false;
+  }
+  const svg::SVGGraphicsElement graphicsElement =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.cast<svg::SVGGraphicsElement>();
+      });
+  const Transform2d primaryStartTransform = graphicsElement.transform();
+  const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
+  const std::optional<RcString> sourceTransformAttributeValue =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.getAttribute("transform");
+      });
+
   // Reset any in-progress drag/marquee state before starting the new one
   // — mirrors `onMouseDown`'s prologue. A previous mouse-down without
   // a matching mouse-up means the user dragged off the window or a
@@ -231,10 +250,6 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   dragState_.reset();
   marqueeState_.reset();
 
-  // Reuse the currently-selected element as the drag target.
-  const svg::SVGElement element = currentSelection.front();
-  const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
-  const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
   dragState_ = DragState{
       .primary =
           PerElementDrag{
@@ -242,7 +257,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
               .startTransform = primaryStartTransform,
               .currentTransform = primaryStartTransform,
               .writebackTarget = primaryWritebackTarget,
-              .sourceTransformAttributeValue = element.getAttribute("transform"),
+              .sourceTransformAttributeValue = sourceTransformAttributeValue,
           },
       .extras = {},
       .startDocumentPoint = documentPoint,
@@ -261,6 +276,30 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   dragState_.reset();
   marqueeState_.reset();
 
+  const auto isGraphicsElement = [](const svg::SVGElement& element) {
+    return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+      return element.isa<svg::SVGGraphicsElement>();
+    });
+  };
+  const auto makeDragParticipant = [](const svg::SVGElement& element) {
+    const svg::SVGGraphicsElement graphicsElement =
+        element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+          return element.cast<svg::SVGGraphicsElement>();
+        });
+    const Transform2d startTransform = graphicsElement.transform();
+    const std::optional<RcString> sourceTransformAttributeValue =
+        element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+          return element.getAttribute("transform");
+        });
+    return PerElementDrag{
+        .element = element,
+        .startTransform = startTransform,
+        .currentTransform = startTransform,
+        .writebackTarget = captureAttributeWritebackTarget(element),
+        .sourceTransformAttributeValue = sourceTransformAttributeValue,
+    };
+  };
+
   const auto selectedBoundsDoc =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(editor.selectedElements()));
   if (!selectedBoundsDoc.empty() && !editor.selectedElements().empty()) {
@@ -268,21 +307,8 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         selectedBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit);
     if (handleIntent.kind != SelectionTransformHandleKind::None) {
       const auto& selection = editor.selectedElements();
-      const bool allGraphics = std::all_of(
-          selection.begin(), selection.end(),
-          [](const svg::SVGElement& element) { return element.isa<svg::SVGGraphicsElement>(); });
+      const bool allGraphics = std::all_of(selection.begin(), selection.end(), isGraphicsElement);
       if (allGraphics) {
-        const auto makeDragParticipant = [](const svg::SVGElement& element) {
-          const Transform2d startTransform = element.cast<svg::SVGGraphicsElement>().transform();
-          return PerElementDrag{
-              .element = element,
-              .startTransform = startTransform,
-              .currentTransform = startTransform,
-              .writebackTarget = captureAttributeWritebackTarget(element),
-              .sourceTransformAttributeValue = element.getAttribute("transform"),
-          };
-        };
-
         std::vector<PerElementDrag> extras;
         extras.reserve(selection.size() - 1);
         for (std::size_t i = 1; i < selection.size(); ++i) {
@@ -387,9 +413,11 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // filter-group — select the clicked path instead of the whole group.
   // Requires double-click detection in the pointer-event protocol.
   svg::SVGDocument& doc = editor.document().document();
-  const svg::SVGElement container = DeepestWrappingContainer(doc.svgElement());
-  const svg::SVGElement topLevel = TopLevelAncestor(*hit, container);
-  svg::SVGElement element = HasCompositingAttribute(topLevel) ? topLevel : *hit;
+  const svg::SVGElement element = doc.withReadAccess([&](svg::DocumentReadAccess&) {
+    const svg::SVGElement container = DeepestWrappingContainer(doc.svgElement());
+    const svg::SVGElement topLevel = TopLevelAncestor(*hit, container);
+    return HasCompositingAttribute(topLevel) ? topLevel : *hit;
+  });
 
   // If the element is already in the current multi-selection, preserve
   // the selection and drag ALL selected elements in lockstep — classic
@@ -402,45 +430,25 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                   [&element](const svg::SVGElement& selected) { return selected == element; });
   const bool isMultiDrag = elementAlreadySelected && currentSelection.size() > 1;
 
-  const Transform2d primaryStartTransform = element.cast<svg::SVGGraphicsElement>().transform();
-  const auto primaryWritebackTarget = captureAttributeWritebackTarget(element);
   std::vector<Box2d> dragStartBoundsDoc;
-  if (isMultiDrag) {
-    dragStartBoundsDoc = selectedBoundsDoc;
-  } else {
-    const std::array<svg::SVGElement, 1> startSelection{element};
-    dragStartBoundsDoc = SnapshotSelectionWorldBounds(startSelection);
-  }
-
   std::vector<PerElementDrag> extras;
   if (isMultiDrag) {
+    dragStartBoundsDoc.assign(selectedBoundsDoc.begin(), selectedBoundsDoc.end());
     extras.reserve(currentSelection.size() - 1);
     for (const svg::SVGElement& selected : currentSelection) {
       if (selected == element) {
         continue;  // primary handled separately
       }
-      const Transform2d extraStart = selected.cast<svg::SVGGraphicsElement>().transform();
-      extras.push_back(PerElementDrag{
-          .element = selected,
-          .startTransform = extraStart,
-          .currentTransform = extraStart,
-          .writebackTarget = captureAttributeWritebackTarget(selected),
-          .sourceTransformAttributeValue = selected.getAttribute("transform"),
-      });
+      extras.push_back(makeDragParticipant(selected));
     }
   } else {
+    const std::array<svg::SVGElement, 1> startSelection{element};
+    dragStartBoundsDoc = SnapshotSelectionWorldBounds(startSelection);
     editor.setSelection(element);
   }
 
   dragState_ = DragState{
-      .primary =
-          PerElementDrag{
-              .element = element,
-              .startTransform = primaryStartTransform,
-              .currentTransform = primaryStartTransform,
-              .writebackTarget = primaryWritebackTarget,
-              .sourceTransformAttributeValue = element.getAttribute("transform"),
-          },
+      .primary = makeDragParticipant(element),
       .extras = std::move(extras),
       .startDocumentPoint = documentPoint,
       .startBoundsDoc = CombinedSelectionBounds(dragStartBoundsDoc),

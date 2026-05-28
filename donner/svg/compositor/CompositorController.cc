@@ -844,7 +844,10 @@ std::unordered_map<Entity, Entity> BuildStructuralEntityRemap(const SVGDocument&
   };
 
   Walker walker{remap};
-  walker.step(oldDoc.svgElement(), newDoc.svgElement());
+  oldDoc.withReadAccess([&](DocumentReadAccess&) {
+    newDoc.withReadAccess(
+        [&](DocumentReadAccess&) { walker.step(oldDoc.svgElement(), newDoc.svgElement()); });
+  });
   if (walker.fail) {
     remap.clear();
   }
