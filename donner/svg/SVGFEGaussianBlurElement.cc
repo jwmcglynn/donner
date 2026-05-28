@@ -12,13 +12,11 @@ SVGFEGaussianBlurElement SVGFEGaussianBlurElement::CreateOn(EntityHandle handle)
 }
 
 double SVGFEGaussianBlurElement::stdDeviationX() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FEGaussianBlurComponent>();
   return component ? component->stdDeviationX : components::FEGaussianBlurComponent().stdDeviationX;
 }
 
 double SVGFEGaussianBlurElement::stdDeviationY() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FEGaussianBlurComponent>();
   return component ? component->stdDeviationY : components::FEGaussianBlurComponent().stdDeviationY;
 }

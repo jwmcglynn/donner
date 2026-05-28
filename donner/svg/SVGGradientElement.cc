@@ -12,7 +12,6 @@ SVGGradientElement::SVGGradientElement(EntityHandle handle) : SVGElement(handle)
 }
 
 std::optional<RcString> SVGGradientElement::href() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::GradientComponent>();
   const std::optional<Reference> maybeHref = component ? component->href : std::nullopt;
   if (maybeHref) {
@@ -23,7 +22,6 @@ std::optional<RcString> SVGGradientElement::href() const {
 }
 
 GradientUnits SVGGradientElement::gradientUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::GradientComponent>();
   return component ? component->gradientUnits.value_or(GradientUnits::Default)
                    : GradientUnits::Default;
@@ -35,39 +33,34 @@ Transform2d SVGGradientElement::gradientTransform() const {
 }
 
 GradientSpreadMethod SVGGradientElement::spreadMethod() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::GradientComponent>();
   return component ? component->spreadMethod.value_or(GradientSpreadMethod::Default)
                    : GradientSpreadMethod::Default;
 }
 
 void SVGGradientElement::setHref(const std::optional<RcString>& value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::GradientComponent>(access).href = value;
   // Force the shadow tree to be regenerated.
   handle_.remove<components::ComputedShadowTreeComponent>(access);
-  invalidate();
 }
 
 void SVGGradientElement::setGradientUnits(GradientUnits value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::GradientComponent>(access).gradientUnits = value;
-  invalidate();
 }
 
 void SVGGradientElement::setGradientTransform(const Transform2d& value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   components::LayoutSystem().setRawEntityFromParentTransform(handle_, value);
-  invalidate();
 }
 
 void SVGGradientElement::setSpreadMethod(GradientSpreadMethod value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::GradientComponent>(access).spreadMethod = value;
-  invalidate();
 }
 
 void SVGGradientElement::invalidate() const {

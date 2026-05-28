@@ -129,8 +129,10 @@ TEST_F(SVGElementTests, ScopedAccessExposesResolvedHandle) {
 
   EXPECT_EQ(document_.handle()->revision(), initialRevision + 1);
   EXPECT_EQ(rect.unsafeEntityHandle().entity(), rectEntity);
-  EXPECT_EQ(rect.x(), Lengthd(10));
-  EXPECT_EQ(rect.y(), Lengthd(20));
+  rect.withReadAccess([rect](DocumentReadAccess&, EntityHandle) mutable {
+    EXPECT_EQ(rect.x(), Lengthd(10));
+    EXPECT_EQ(rect.y(), Lengthd(20));
+  });
 }
 
 TEST_F(SVGElementTests, UnsafeEntityHandleNamesRawEscapeHatch) {

@@ -17,7 +17,6 @@ SVGClipPathElement SVGClipPathElement::CreateOn(EntityHandle handle) {
 }
 
 ClipPathUnits SVGClipPathElement::clipPathUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::ClipPathComponent>();
   return component ? component->clipPathUnits.value_or(ClipPathUnits::Default)
                    : ClipPathUnits::Default;

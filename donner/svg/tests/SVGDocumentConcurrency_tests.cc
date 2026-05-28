@@ -39,6 +39,12 @@
 namespace donner::svg {
 namespace {
 
+template <typename Element, typename Callback>
+auto ReadElement(Element element, Callback callback) {
+  return element.withReadAccess(
+      [&](DocumentReadAccess&, EntityHandle) { return callback(element); });
+}
+
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesDocumentLevelWrites) {
   SVGDocument document;
   document.setThreadingMode(ThreadingMode::ConcurrentDom);
@@ -171,7 +177,7 @@ TEST(SVGDocumentConcurrencyTests, WithAccessHelpersScopeRegistryAccessAndBatchRe
 
   EXPECT_EQ(document.handle()->revision(), initialRevision + 1);
   EXPECT_EQ(document.canvasSize(), Vector2i(32, 32));
-  EXPECT_EQ(rect.x(), Lengthd(10));
+  EXPECT_EQ(ReadElement(rect, [](auto rect) { return rect.x(); }), Lengthd(10));
 
   const std::uint64_t typedMutationRevision = document.handle()->revision();
   document.withWriteAccess([&document, rect](SVGDocumentMutation& mutation) mutable {
@@ -184,8 +190,9 @@ TEST(SVGDocumentConcurrencyTests, WithAccessHelpersScopeRegistryAccessAndBatchRe
 
   EXPECT_EQ(document.handle()->revision(), typedMutationRevision + 1);
   EXPECT_EQ(document.canvasSize(), Vector2i(64, 64));
-  EXPECT_EQ(rect.getAttribute("data-x"), RcString("30"));
-  EXPECT_FALSE(rect.hasAttribute("data-y"));
+  EXPECT_EQ(ReadElement(rect, [](auto rect) { return rect.getAttribute("data-x"); }),
+            RcString("30"));
+  EXPECT_FALSE(ReadElement(rect, [](auto rect) { return rect.hasAttribute("data-y"); }));
 }
 
 TEST(SVGDocumentConcurrencyTests, MutationLogRecordsCommittedRevisions) {
@@ -302,10 +309,13 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesBaseTreeMutations) {
     thread.join();
   }
 
-  int observedChildren = 0;
-  for (std::optional<SVGElement> child = root.firstChild(); child; child = child->nextSibling()) {
-    ++observedChildren;
-  }
+  const int observedChildren = ReadElement(root, [](auto root) {
+    int result = 0;
+    for (std::optional<SVGElement> child = root.firstChild(); child; child = child->nextSibling()) {
+      ++result;
+    }
+    return result;
+  });
 
   EXPECT_EQ(observedChildren, kChildCount);
 }
@@ -325,7 +335,7 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesDerivedGeometrySetters)
     threads.emplace_back([rect, threadIndex]() mutable {
       for (int iteration = 0; iteration < kIterations; ++iteration) {
         rect.setX(Lengthd(threadIndex * kIterations + iteration));
-        (void)rect.x();
+        (void)ReadElement(rect, [](auto rect) { return rect.x(); });
       }
     });
   }
@@ -353,14 +363,14 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesPathLineAndTransformSet
   std::thread pathThread([path]() mutable {
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       path.setD(RcString("M 0 0 L 1 1"));
-      (void)path.d();
+      (void)ReadElement(path, [](auto path) { return path.d(); });
     }
   });
 
   std::thread lineThread([line]() mutable {
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       line.setX1(Lengthd(iteration));
-      (void)line.x1();
+      (void)ReadElement(line, [](auto line) { return line.x1(); });
     }
   });
 
@@ -393,7 +403,7 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesStyleLineAndPolySetters
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       style.setType("text/css");
       style.setContents("rect { fill: red; }");
-      (void)style.isCssType();
+      (void)ReadElement(style, [](auto style) { return style.isCssType(); });
     }
   });
 
@@ -401,8 +411,10 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesStyleLineAndPolySetters
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       line.setX1(Lengthd(iteration));
       line.setY2(Lengthd(iteration + 1));
-      (void)line.x1();
-      (void)line.y2();
+      ReadElement(line, [](auto line) {
+        (void)line.x1();
+        (void)line.y2();
+      });
     }
   });
 
@@ -410,8 +422,8 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesStyleLineAndPolySetters
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       polygon.setPoints({Vector2d(iteration, 0.0), Vector2d(1.0, iteration), Vector2d(2.0, 2.0)});
       polyline.setPoints({Vector2d(0.0, iteration), Vector2d(iteration, 1.0)});
-      (void)polygon.points().size();
-      (void)polyline.points().size();
+      (void)ReadElement(polygon, [](auto polygon) { return polygon.points().size(); });
+      (void)ReadElement(polyline, [](auto polyline) { return polyline.points().size(); });
     }
   });
 
@@ -420,9 +432,9 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesStyleLineAndPolySetters
   polyThread.join();
 
   EXPECT_GE(document.handle()->revision(), initialRevision + 6u * kIterations);
-  EXPECT_TRUE(style.isCssType());
-  EXPECT_EQ(polygon.points().size(), 3u);
-  EXPECT_EQ(polyline.points().size(), 2u);
+  EXPECT_TRUE(ReadElement(style, [](auto style) { return style.isCssType(); }));
+  EXPECT_EQ(ReadElement(polygon, [](auto polygon) { return polygon.points().size(); }), 3u);
+  EXPECT_EQ(ReadElement(polyline, [](auto polyline) { return polyline.points().size(); }), 2u);
 }
 
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesGradientAndStopSetters) {
@@ -439,7 +451,7 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesGradientAndStopSetters)
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       linear.setX1(Lengthd(iteration));
       linear.setGradientTransform(Transform2d::Translate(Vector2d(iteration, iteration)));
-      (void)linear.x1();
+      (void)ReadElement(linear, [](auto linear) { return linear.x1(); });
       (void)linear.gradientTransform();
     }
   });
@@ -448,8 +460,10 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesGradientAndStopSetters)
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       radial.setR(Lengthd(iteration + 1));
       radial.setFr(Lengthd(iteration));
-      (void)radial.r();
-      (void)radial.fr();
+      ReadElement(radial, [](auto radial) {
+        (void)radial.r();
+        (void)radial.fr();
+      });
     }
   });
 
@@ -467,9 +481,9 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesGradientAndStopSetters)
   stopThread.join();
 
   EXPECT_GE(document.handle()->revision(), initialRevision + 7u * kIterations);
-  EXPECT_TRUE(linear.x1().has_value());
-  EXPECT_TRUE(radial.r().has_value());
-  EXPECT_GE(stop.stopOpacity(), 0.0);
+  EXPECT_TRUE(ReadElement(linear, [](auto linear) { return linear.x1().has_value(); }));
+  EXPECT_TRUE(ReadElement(radial, [](auto radial) { return radial.r().has_value(); }));
+  EXPECT_GE(ReadElement(stop, [](auto stop) { return stop.stopOpacity(); }), 0.0);
 }
 
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesFilterAndPrimitiveSetters) {
@@ -491,9 +505,11 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesFilterAndPrimitiveSette
                                                : FilterUnits::ObjectBoundingBox);
       filter.setPrimitiveUnits(iteration % 2 == 0 ? PrimitiveUnits::UserSpaceOnUse
                                                   : PrimitiveUnits::ObjectBoundingBox);
-      (void)filter.x();
-      (void)filter.filterUnits();
-      (void)filter.primitiveUnits();
+      ReadElement(filter, [](auto filter) {
+        (void)filter.x();
+        (void)filter.filterUnits();
+        (void)filter.primitiveUnits();
+      });
     }
   });
 
@@ -501,24 +517,30 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesFilterAndPrimitiveSette
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       offset.setX(Lengthd(iteration));
       offset.setResult(RcStringOrRef("offsetOut"));
-      (void)offset.x();
-      (void)offset.result();
+      ReadElement(offset, [](auto offset) {
+        (void)offset.x();
+        (void)offset.result();
+      });
     }
   });
 
   std::thread blurThread([blur]() mutable {
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       blur.setStdDeviation(iteration, iteration + 1);
-      (void)blur.stdDeviationX();
-      (void)blur.stdDeviationY();
+      ReadElement(blur, [](auto blur) {
+        (void)blur.stdDeviationX();
+        (void)blur.stdDeviationY();
+      });
     }
   });
 
   std::thread offsetThread([offset]() mutable {
     for (int iteration = 0; iteration < kIterations; ++iteration) {
       offset.setOffset(iteration, -iteration);
-      (void)offset.dx();
-      (void)offset.dy();
+      ReadElement(offset, [](auto offset) {
+        (void)offset.dx();
+        (void)offset.dy();
+      });
     }
   });
 
@@ -528,8 +550,8 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesFilterAndPrimitiveSette
   offsetThread.join();
 
   EXPECT_GE(document.handle()->revision(), initialRevision + 7u * kIterations);
-  EXPECT_TRUE(offset.result().has_value());
-  EXPECT_GE(blur.stdDeviationY(), 0.0);
+  EXPECT_TRUE(ReadElement(offset, [](auto offset) { return offset.result().has_value(); }));
+  EXPECT_GE(ReadElement(blur, [](auto blur) { return blur.stdDeviationY(); }), 0.0);
 }
 
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesResourceElementSetters) {
@@ -553,8 +575,10 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesResourceElementSetters)
                                                  : PatternUnits::ObjectBoundingBox);
       pattern.setPatternTransform(Transform2d::Translate(Vector2d(iteration, iteration)));
       pattern.setHref(RcStringOrRef("#basePattern"));
-      (void)pattern.x();
-      (void)pattern.patternUnits();
+      ReadElement(pattern, [](auto pattern) {
+        (void)pattern.x();
+        (void)pattern.patternUnits();
+      });
       (void)pattern.patternTransform();
     }
   });
@@ -569,9 +593,9 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesResourceElementSetters)
                                            : MaskUnits::ObjectBoundingBox);
       clipPath.setClipPathUnits(iteration % 2 == 0 ? ClipPathUnits::UserSpaceOnUse
                                                    : ClipPathUnits::ObjectBoundingBox);
-      (void)marker.markerWidth();
-      (void)mask.x();
-      (void)clipPath.clipPathUnits();
+      (void)ReadElement(marker, [](auto marker) { return marker.markerWidth(); });
+      (void)ReadElement(mask, [](auto mask) { return mask.x(); });
+      (void)ReadElement(clipPath, [](auto clipPath) { return clipPath.clipPathUnits(); });
     }
   });
 
@@ -583,9 +607,9 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesResourceElementSetters)
       use.setX(Lengthd(iteration));
       symbol.setX(Lengthd(iteration));
       symbol.setRefX(iteration);
-      (void)image.href();
-      (void)use.href();
-      (void)symbol.refX();
+      (void)ReadElement(image, [](auto image) { return image.href(); });
+      (void)ReadElement(use, [](auto use) { return use.href(); });
+      (void)ReadElement(symbol, [](auto symbol) { return symbol.refX(); });
     }
   });
 
@@ -594,11 +618,12 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesResourceElementSetters)
   imageUseSymbolThread.join();
 
   EXPECT_GE(document.handle()->revision(), initialRevision + 16u * kIterations);
-  std::optional<RcString> patternHref = pattern.href();
+  std::optional<RcString> patternHref =
+      ReadElement(pattern, [](auto pattern) { return pattern.href(); });
   ASSERT_TRUE(patternHref.has_value());
   EXPECT_EQ(patternHref.value(), "#basePattern");
-  EXPECT_EQ(image.href(), "texture.png");
-  EXPECT_EQ(use.href(), "#symbol");
+  EXPECT_EQ(ReadElement(image, [](auto image) { return image.href(); }), "texture.png");
+  EXPECT_EQ(ReadElement(use, [](auto use) { return use.href(); }), "#symbol");
 }
 
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesTextSetters) {
@@ -620,9 +645,11 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesTextSetters) {
       text.setLengthAdjust(iteration % 2 == 0 ? LengthAdjust::Spacing
                                               : LengthAdjust::SpacingAndGlyphs);
       text.appendText("x");
-      (void)text.x();
-      (void)text.textLength();
-      (void)text.textContent();
+      ReadElement(text, [](auto text) {
+        (void)text.x();
+        (void)text.textLength();
+        (void)text.textContent();
+      });
     }
   });
 
@@ -631,9 +658,11 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesTextSetters) {
       tspan.setDx(Lengthd(iteration));
       tspan.setDy(Lengthd(iteration + 1));
       tspan.setRotate(iteration);
-      (void)tspan.dx();
-      (void)tspan.dy();
-      (void)tspan.rotateList();
+      ReadElement(tspan, [](auto tspan) {
+        (void)tspan.dx();
+        (void)tspan.dy();
+        (void)tspan.rotateList();
+      });
     }
   });
 
@@ -642,9 +671,11 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesTextSetters) {
       textPath.setHref(RcStringOrRef("#path"));
       textPath.setStartOffset(Lengthd(iteration));
       textPath.appendText("p");
-      (void)textPath.href();
-      (void)textPath.startOffset();
-      (void)textPath.textContent();
+      ReadElement(textPath, [](auto textPath) {
+        (void)textPath.href();
+        (void)textPath.startOffset();
+        (void)textPath.textContent();
+      });
     }
   });
 
@@ -653,8 +684,8 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesTextSetters) {
   textPathThread.join();
 
   EXPECT_GE(document.handle()->revision(), initialRevision + 10u * kIterations);
-  EXPECT_FALSE(text.textContent().empty());
-  EXPECT_FALSE(textPath.textContent().empty());
+  EXPECT_FALSE(ReadElement(text, [](auto text) { return text.textContent().empty(); }));
+  EXPECT_FALSE(ReadElement(textPath, [](auto textPath) { return textPath.textContent().empty(); }));
 }
 
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomStressHasDeterministicFinalState) {
@@ -688,8 +719,10 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomStressHasDeterministicFinalState)
       for (int iteration = 0; iteration < kIterations; ++iteration) {
         rect.setX(Lengthd(index * 1000 + iteration));
         rect.setY(Lengthd(iteration));
-        (void)rect.x();
-        (void)rect.y();
+        ReadElement(rect, [](auto rect) {
+          (void)rect.x();
+          (void)rect.y();
+        });
       }
 
       completedWriters.fetch_add(1, std::memory_order_release);
@@ -708,8 +741,10 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomStressHasDeterministicFinalState)
         if (!valid) {
           sawInvalidRead.store(true, std::memory_order_relaxed);
         }
-        (void)rect.x();
-        (void)rect.y();
+        ReadElement(rect, [](auto rect) {
+          (void)rect.x();
+          (void)rect.y();
+        });
       }
     }
   });
@@ -726,8 +761,10 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomStressHasDeterministicFinalState)
             initialRevision + static_cast<std::uint64_t>(kThreadCount * kIterations * 2));
 
   for (int index = 0; index < kThreadCount; ++index) {
-    EXPECT_EQ(rects[index].x(), Lengthd(index * 1000 + kIterations - 1));
-    EXPECT_EQ(rects[index].y(), Lengthd(kIterations - 1));
+    EXPECT_EQ(ReadElement(rects[index], [](auto rect) { return rect.x(); }),
+              Lengthd(index * 1000 + kIterations - 1));
+    EXPECT_EQ(ReadElement(rects[index], [](auto rect) { return rect.y(); }),
+              Lengthd(kIterations - 1));
   }
 }
 

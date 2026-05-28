@@ -667,6 +667,47 @@ public:
 
 protected:
   /**
+   * Scoped mutation helper that runs cleanup before committing the mutation revision.
+   *
+   * This is intended for element setters that need to invalidate cached computed state after the
+   * raw SVG attribute component is changed. The callback runs while the write access from the
+   * mutation batch is still active, and before the coalesced mutation revision is committed.
+   */
+  template <typename InvalidateCallback>
+  class ScopedMutation {
+  public:
+    ScopedMutation(const ElementAnchor& handle, InvalidateCallback invalidateOnScopeExit)
+        : mutation_(handle.mutationBatch()),
+          invalidateOnScopeExit_(std::move(invalidateOnScopeExit)) {}
+
+    ScopedMutation(const ScopedMutation& other) = delete;
+    ScopedMutation(ScopedMutation&& other) = delete;
+    ScopedMutation& operator=(const ScopedMutation& other) = delete;
+    ScopedMutation& operator=(ScopedMutation&& other) = delete;
+
+    ~ScopedMutation() { invalidateOnScopeExit_(); }
+
+    /// Get the active write access for this mutation.
+    DocumentWriteAccess& access() { return mutation_.access(); }
+
+  private:
+    DocumentMutationBatch mutation_;
+    InvalidateCallback invalidateOnScopeExit_;
+  };
+
+  /**
+   * Create a scoped mutation that runs \p invalidateOnScopeExit before the revision commit.
+   *
+   * @param invalidateOnScopeExit Callable invoked while write access is still held.
+   */
+  template <typename InvalidateCallback>
+  ScopedMutation<std::decay_t<InvalidateCallback>> mutationScope(
+      InvalidateCallback&& invalidateOnScopeExit) const {
+    return ScopedMutation<std::decay_t<InvalidateCallback>>(
+        handle_, std::forward<InvalidateCallback>(invalidateOnScopeExit));
+  }
+
+  /**
    * Set an attribute from an XML mutation and return any SVG semantic parse diagnostic.
    *
    * Invalid presentation-attribute values are still stored in the XML attribute projection, but

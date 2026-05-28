@@ -33,7 +33,6 @@ void SVGStyleElement::setContents(std::string_view style) {
 }
 
 bool SVGStyleElement::isCssType() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* stylesheetComponent = handle_.try_get<components::StylesheetComponent>();
   if (stylesheetComponent) {
     return stylesheetComponent->isCssType();

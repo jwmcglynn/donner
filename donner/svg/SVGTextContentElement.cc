@@ -71,7 +71,6 @@ Box2d SVGTextContentElement::computedObjectBoundingBox() const {
 }
 
 std::optional<Lengthd> SVGTextContentElement::textLength() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextComponent>();
   return component ? component->textLength : std::nullopt;
 }
@@ -84,7 +83,6 @@ void SVGTextContentElement::setTextLength(std::optional<Lengthd> value) {
 }
 
 LengthAdjust SVGTextContentElement::lengthAdjust() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextComponent>();
   return component ? component->lengthAdjust : components::TextComponent().lengthAdjust;
 }
@@ -137,7 +135,6 @@ long SVGTextContentElement::getCharNumAtPosition(const Vector2d& point) const {
 }
 
 void SVGTextContentElement::selectSubString(std::size_t /*charnum*/, std::size_t /*nchars*/) {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   // TODO: implement selection highlighting
 }
 
@@ -175,7 +172,6 @@ void SVGTextContentElement::advanceTextChunk() {
 }
 
 RcString SVGTextContentElement::textContent() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextComponent>();
   return component ? component->text : "";
 }

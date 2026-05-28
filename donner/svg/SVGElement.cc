@@ -302,7 +302,6 @@ SVGElement& SVGElement::operator=(const SVGElement& other) = default;
 SVGElement& SVGElement::operator=(SVGElement&& other) noexcept = default;
 
 ElementType SVGElement::type() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::ElementTypeComponent>().type();
 }
 
@@ -315,7 +314,6 @@ std::optional<ElementType> SVGElement::tryType() const {
 }
 
 xml::XMLQualifiedNameRef SVGElement::tagName() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<donner::components::TreeComponent>().tagName();
 }
 
@@ -332,7 +330,6 @@ bool SVGElement::isKnownType() const {
 }
 
 RcString SVGElement::id() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* component = handle_.try_get<components::IdComponent>()) {
     return component->id();
   } else {
@@ -356,7 +353,6 @@ void SVGElement::setId(std::string_view id) {
 }
 
 RcString SVGElement::className() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* component = handle_.try_get<components::ClassComponent>()) {
     return component->className;
   } else {
@@ -479,20 +475,17 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 }
 
 bool SVGElement::hasAttribute(const xml::XMLQualifiedNameRef& name) const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
   return attributes != nullptr && attributes->hasAttribute(name);
 }
 
 std::optional<RcString> SVGElement::getAttribute(const xml::XMLQualifiedNameRef& name) const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
   return attributes != nullptr ? attributes->getAttribute(name) : std::nullopt;
 }
 
 SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
     const xml::XMLQualifiedNameRef& matcher) const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
   return attributes != nullptr ? attributes->findMatchingAttributes(matcher)
                                : SmallVector<xml::XMLQualifiedNameRef, 1>();
@@ -602,7 +595,6 @@ std::optional<SVGElement> SVGElement::parentElement() const {
 }
 
 std::optional<SVGElement> SVGElement::firstChild() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = FirstElementChild(handle_)) {
     return SVGElement(*handle);
   }
@@ -611,7 +603,6 @@ std::optional<SVGElement> SVGElement::firstChild() const {
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = LastElementChild(handle_)) {
     return SVGElement(*handle);
   }
@@ -620,7 +611,6 @@ std::optional<SVGElement> SVGElement::lastChild() const {
 }
 
 std::optional<SVGElement> SVGElement::previousSibling() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = PreviousElementSibling(handle_)) {
     return SVGElement(*handle);
   }
@@ -629,7 +619,6 @@ std::optional<SVGElement> SVGElement::previousSibling() const {
 }
 
 std::optional<SVGElement> SVGElement::nextSibling() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = NextElementSibling(handle_)) {
     return SVGElement(*handle);
   }

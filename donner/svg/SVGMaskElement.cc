@@ -27,7 +27,6 @@ SVGMaskElement SVGMaskElement::CreateOn(EntityHandle handle) {
 }
 
 MaskUnits SVGMaskElement::maskUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MaskComponent>();
   return component ? component->maskUnits : components::MaskComponent().maskUnits;
 }
@@ -40,7 +39,6 @@ void SVGMaskElement::setMaskUnits(MaskUnits value) {
 }
 
 MaskContentUnits SVGMaskElement::maskContentUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MaskComponent>();
   return component ? component->maskContentUnits : components::MaskComponent().maskContentUnits;
 }
@@ -81,25 +79,21 @@ void SVGMaskElement::setHeight(std::optional<Lengthd> value) {
 }
 
 std::optional<Lengthd> SVGMaskElement::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MaskComponent>();
   return component ? component->x : std::nullopt;
 }
 
 std::optional<Lengthd> SVGMaskElement::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MaskComponent>();
   return component ? component->y : std::nullopt;
 }
 
 std::optional<Lengthd> SVGMaskElement::width() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MaskComponent>();
   return component ? component->width : std::nullopt;
 }
 
 std::optional<Lengthd> SVGMaskElement::height() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MaskComponent>();
   return component ? component->height : std::nullopt;
 }

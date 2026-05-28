@@ -19,16 +19,14 @@ SVGStopElement SVGStopElement::CreateOn(EntityHandle handle) {
 void SVGStopElement::setOffset(float value) {
   assert(value >= 0.0f && value <= 1.0f);
 
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
-  invalidate();
   handle_.get_or_emplace<components::StopComponent>(access).properties.offset = value;
 }
 
 void SVGStopElement::setStopColor(css::Color value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
-  invalidate();
   handle_.get_or_emplace<components::StopComponent>(access).properties.stopColor.set(
       value, css::Specificity::Override());
 }
@@ -36,28 +34,24 @@ void SVGStopElement::setStopColor(css::Color value) {
 void SVGStopElement::setStopOpacity(double value) {
   assert(value >= 0.0 && value <= 1.0);
 
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
-  invalidate();
   handle_.get_or_emplace<components::StopComponent>(access).properties.stopOpacity.set(
       value, css::Specificity::Override());
 }
 
 float SVGStopElement::offset() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::StopComponent>();
   return component ? component->properties.offset : components::StopProperties().offset;
 }
 
 css::Color SVGStopElement::stopColor() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::StopComponent>();
   return component ? component->properties.stopColor.getRequired()
                    : components::StopProperties().stopColor.getRequired();
 }
 
 double SVGStopElement::stopOpacity() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::StopComponent>();
   return component ? component->properties.stopOpacity.getRequired()
                    : components::StopProperties().stopOpacity.getRequired();

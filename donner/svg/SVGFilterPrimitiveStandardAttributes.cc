@@ -41,26 +41,22 @@ void SVGFilterPrimitiveStandardAttributes::invalidateFilter() const {
 }
 
 Lengthd SVGFilterPrimitiveStandardAttributes::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
   return component ? component->x.value_or(DefaultFilterPrimitiveX()) : DefaultFilterPrimitiveX();
 }
 
 Lengthd SVGFilterPrimitiveStandardAttributes::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
   return component ? component->y.value_or(DefaultFilterPrimitiveY()) : DefaultFilterPrimitiveY();
 }
 
 Lengthd SVGFilterPrimitiveStandardAttributes::width() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
   return component ? component->width.value_or(DefaultFilterPrimitiveWidth())
                    : DefaultFilterPrimitiveWidth();
 }
 
 Lengthd SVGFilterPrimitiveStandardAttributes::height() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
   return component ? component->height.value_or(DefaultFilterPrimitiveHeight())
                    : DefaultFilterPrimitiveHeight();
@@ -95,7 +91,6 @@ void SVGFilterPrimitiveStandardAttributes::setHeight(const Lengthd& value) {
 }
 
 std::optional<RcString> SVGFilterPrimitiveStandardAttributes::result() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterPrimitiveComponent>();
   return component ? component->result : std::nullopt;
 }

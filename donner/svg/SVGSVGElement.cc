@@ -24,32 +24,26 @@ SVGSVGElement SVGSVGElement::CreateOn(EntityHandle handle) {
 }
 
 std::optional<Box2d> SVGSVGElement::viewBox() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::ViewBoxComponent>().viewBox;
 }
 
 PreserveAspectRatio SVGSVGElement::preserveAspectRatio() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
 }
 
 Lengthd SVGSVGElement::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::SizedElementComponent>().properties.x.getRequired();
 }
 
 Lengthd SVGSVGElement::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::SizedElementComponent>().properties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGSVGElement::width() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::SizedElementComponent>().properties.width.getRequired();
 }
 
 std::optional<Lengthd> SVGSVGElement::height() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::SizedElementComponent>().properties.height.getRequired();
 }
 

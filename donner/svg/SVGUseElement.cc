@@ -36,7 +36,6 @@ void SVGUseElement::setHref(const RcString& value) {
 }
 
 RcString SVGUseElement::href() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* component = handle_.try_get<components::ShadowTreeComponent>()) {
     if (auto maybeMainHref = component->mainHref()) {
       return maybeMainHref.value();
@@ -79,27 +78,23 @@ void SVGUseElement::setHeight(std::optional<Lengthd> value) {
 }
 
 Lengthd SVGUseElement::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.x.getRequired()
                    : components::SizedElementComponent().properties.x.getRequired();
 }
 
 Lengthd SVGUseElement::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.y.getRequired()
                    : components::SizedElementComponent().properties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGUseElement::width() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.width.get() : std::nullopt;
 }
 
 std::optional<Lengthd> SVGUseElement::height() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.height.get() : std::nullopt;
 }

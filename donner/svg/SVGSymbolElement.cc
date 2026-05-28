@@ -39,7 +39,6 @@ void SVGSymbolElement::setViewBox(OptionalRef<Box2d> viewBox) {
 }
 
 std::optional<Box2d> SVGSymbolElement::viewBox() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::ViewBoxComponent>();
   return component ? component->viewBox : std::nullopt;
 }
@@ -53,7 +52,6 @@ void SVGSymbolElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspect
 }
 
 PreserveAspectRatio SVGSymbolElement::preserveAspectRatio() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PreserveAspectRatioComponent>();
   return component ? component->preserveAspectRatio : PreserveAspectRatio();
 }
@@ -67,7 +65,6 @@ void SVGSymbolElement::setX(Lengthd value) {
 }
 
 Lengthd SVGSymbolElement::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.x.getRequired()
                    : components::SizedElementComponent().properties.x.getRequired();
@@ -82,7 +79,6 @@ void SVGSymbolElement::setY(Lengthd value) {
 }
 
 Lengthd SVGSymbolElement::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.y.getRequired()
                    : components::SizedElementComponent().properties.y.getRequired();
@@ -97,7 +93,6 @@ void SVGSymbolElement::setWidth(std::optional<Lengthd> value) {
 }
 
 std::optional<Lengthd> SVGSymbolElement::width() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.width.get() : std::nullopt;
 }
@@ -111,7 +106,6 @@ void SVGSymbolElement::setHeight(std::optional<Lengthd> value) {
 }
 
 std::optional<Lengthd> SVGSymbolElement::height() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.height.get() : std::nullopt;
 }
@@ -124,7 +118,6 @@ void SVGSymbolElement::setRefX(double value) {
 }
 
 double SVGSymbolElement::refX() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SymbolComponent>();
   return component ? component->refX : components::SymbolComponent().refX;
 }
@@ -137,7 +130,6 @@ void SVGSymbolElement::setRefY(double value) {
 }
 
 double SVGSymbolElement::refY() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SymbolComponent>();
   return component ? component->refY : components::SymbolComponent().refY;
 }
