@@ -29,6 +29,11 @@ function file_mtime() {
 }
 
 TARGETS=()
+BAZEL_COVERAGE_FLAGS=()
+
+if [[ -n "${DONNER_COVERAGE_BAZEL_FLAGS:-}" ]]; then
+  read -r -a BAZEL_COVERAGE_FLAGS <<< "$DONNER_COVERAGE_BAZEL_FLAGS"
+fi
 
 # Check for --quiet option
 QUIET=false
@@ -117,10 +122,12 @@ fi
 
   if [ "$QUIET" = true ]; then
     bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress \
+      "${BAZEL_COVERAGE_FLAGS[@]}" \
       --action_env=BAZEL_LLVM_COV=$LLVM_COV_PATH --action_env=GCOV=$LLVM_PROFDATA_PATH \
       $BAZEL_TEST_ENV "${TARGETS[@]}" || true
   else
-    bazel coverage --config=latest_llvm --action_env=BAZEL_LLVM_COV=$LLVM_COV_PATH \
+    bazel coverage --config=latest_llvm "${BAZEL_COVERAGE_FLAGS[@]}" \
+      --action_env=BAZEL_LLVM_COV=$LLVM_COV_PATH \
       --action_env=GCOV=$LLVM_PROFDATA_PATH $BAZEL_TEST_ENV "${TARGETS[@]}" || true
   fi
 
