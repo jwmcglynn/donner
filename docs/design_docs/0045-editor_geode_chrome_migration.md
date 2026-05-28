@@ -3,7 +3,7 @@
 **Status:** Draft
 **Author:** Codex
 **Created:** 2026-05-28
-**Related:** [0044-2-editor_fluid_canvas_rendering](0044-2-editor_fluid_canvas_rendering.md)
+**Related:** [0044-editor_fluid_canvas_rendering](0044-editor_fluid_canvas_rendering.md)
 
 ## Summary
 
@@ -51,7 +51,7 @@ payloads are already Geode-backed.
 - Do not replace ImGui state ownership in this step. This migration is visual-first: Geode draws the
   high-churn decorative pixels, while ImGui keeps input semantics stable.
 - Reuse the source-pane culling and clipping rules from
-  [0044-2](0044-2-editor_fluid_canvas_rendering.md) so chrome cost remains bounded by visible UI.
+  [0044](0044-editor_fluid_canvas_rendering.md) so chrome cost remains bounded by visible UI.
 
 ## Acceptance Criteria
 

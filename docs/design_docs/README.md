@@ -100,6 +100,7 @@ conventions automated agents should follow when editing design docs.
 | 0043 | [deterministic_replay_testing](0043-deterministic_replay_testing.md) | Design | Deterministic multi-thread replay framework and premortem for re-enabling #601-related tests. |
 | 0044 | [coverage_improvement_2026q2](0044-coverage_improvement_2026q2.md) | Implemented | Raised line coverage 81.5%→85.6% (phases 0–4); also fixed 3 bugs the push surfaced (2 TextEditor crashes + EncodeColor CurrentColor). |
 | 0044 | [editor_fluid_canvas_rendering](0044-editor_fluid_canvas_rendering.md) | Implementation in progress | Viewport-bounded high-zoom rendering, immediate-mode editor chrome/spans, and large-selection LOD for fluid editor UX. |
+| 0045 | [editor_geode_chrome_migration](0045-editor_geode_chrome_migration.md) | Draft | Next steps for moving source ropes and chip decorative chrome from ImGui draw lists to Geode-backed screen-space rendering. |
 
 ## Cross-reference: developer docs
 
