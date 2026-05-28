@@ -115,12 +115,11 @@ TEST(ShouldPostDragMove, FastCursorAgainstSlowBackend) {
                                  /*pendingFrameInFlight=*/false));
 }
 
-// `EditorShell` uses `ImVec2` screen points and the async renderer's
-// `isBusy()` flag as the in-flight signal. Model a synthetic 1000 Hz
-// mouse stream here: while one move is "in flight", every subsequent
-// sample must be dropped; when the renderer round-trip finishes, only
-// the latest sample should be posted.
-TEST(ShouldPostDragMove, HighRateImGuiStreamPostsAtMostOneMovePerRoundTrip) {
+// Session-backed remoting uses `ImVec2` screen points and a pointer-event
+// round-trip as the in-flight signal. Model a synthetic 1000 Hz mouse stream
+// here: while one move is "in flight", every subsequent sample must be dropped;
+// when the round-trip finishes, only the latest sample should be posted.
+TEST(ShouldPostDragMove, HighRateRemoteStreamPostsAtMostOneMovePerRoundTrip) {
   std::optional<ImVec2> lastPosted = ImVec2(100.0f, 100.0f);
   std::vector<ImVec2> postedPoints;
 

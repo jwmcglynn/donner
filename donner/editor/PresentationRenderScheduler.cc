@@ -44,19 +44,26 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
   decision.currentRasterViewport = input.currentRasterViewport;
   decision.needsCompositedLayerCapture = presentation.needsCompositedLayerCapture(
       input.activeDragPreview, input.currentVersion, input.currentCanvasSize);
-  const bool needsSettledSelectionRefresh =
-      !input.activeDragPreview.has_value() &&
-      presentation.needsSettledSelectionRefresh(input.selectedEntity, input.currentVersion);
-  decision.needsCompositedPrewarm =
-      needsSettledSelectionRefresh ||
-      presentation.shouldPrewarm(input.selectedEntity, input.currentVersion,
-                                 input.currentCanvasSize,
-                                 /*dragActive=*/input.activeDragPreview.has_value());
   const bool versionChanged = input.currentVersion != lastRenderedVersion_;
   const bool canvasSizeChanged = input.currentCanvasSize != lastRenderedCanvasSize_;
   const bool rasterViewportChanged =
       !lastRenderedRasterViewport_.has_value() ||
       !SameRasterViewport(input.currentRasterViewport, *lastRenderedRasterViewport_);
+  const bool needsSettledSelectionRefresh =
+      !input.activeDragPreview.has_value() &&
+      presentation.needsSettledSelectionRefresh(input.selectedEntity, input.currentVersion);
+  // A selected element needs a selection-hint render whenever the raster window changes. Otherwise
+  // a high-zoom pan/zoom regular render can publish a full-canvas fallback and evict the promoted
+  // drag-target tile just before the next drag starts.
+  const bool selectedViewportRenderNeedsPrewarm = input.selectedEntity != entt::null &&
+                                                  !input.activeDragPreview.has_value() &&
+                                                  (canvasSizeChanged || rasterViewportChanged);
+  decision.needsCompositedPrewarm =
+      needsSettledSelectionRefresh ||
+      presentation.shouldPrewarm(input.selectedEntity, input.currentVersion,
+                                 input.currentCanvasSize,
+                                 /*dragActive=*/input.activeDragPreview.has_value()) ||
+      selectedViewportRenderNeedsPrewarm;
   decision.needsRegularRender = versionChanged || canvasSizeChanged || rasterViewportChanged;
 
   if (input.activeDragPreview.has_value()) {

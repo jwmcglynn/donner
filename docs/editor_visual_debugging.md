@@ -10,6 +10,11 @@ the wrong scale.
 The rule of thumb is: get a live repro first, then narrow the failure to the
 lowest layer that can still explain the pixels.
 
+The hard invariant for editor chrome is that the path overlay must match the
+shapes rendered below it in the same presented frame. During pan, zoom, drag, or
+async worker stalls, it is better for both content and chrome to show the same
+older transform than for fresh chrome to drift away from stale document pixels.
+
 ## Stack Layers
 
 Visual editor bugs usually cross several layers. Treat each layer as a separate

@@ -1416,7 +1416,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     if (boundsCache.lastSelection != app_.selectedElements()) {
       return SelectionTransformHandleIntent{};
     }
-    return HitTestSelectionTransformHandles(boundsCache.displayedBoundsDoc, documentPoint,
+    const std::vector<Box2d>& boundsDoc = !boundsCache.displayedBoundsDoc.empty()
+                                              ? boundsCache.displayedBoundsDoc
+                                              : boundsCache.pendingBoundsDoc;
+    return HitTestSelectionTransformHandles(boundsDoc, documentPoint,
                                             interactionController_.viewport().pixelsPerDocUnit());
   };
   SelectionTransformHandleIntent hoverTransformIntent;
@@ -1479,15 +1482,29 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     const auto& pendingClick = *interactionController_.pendingClick();
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
+    const std::vector<Box2d>& redragBoundsDoc = !boundsCache.displayedBoundsDoc.empty()
+                                                    ? boundsCache.displayedBoundsDoc
+                                                    : boundsCache.pendingBoundsDoc;
+    const std::vector<Box2d>& redragOccludingBoundsDoc =
+        !boundsCache.displayedOccludingBoundsDoc.empty() ? boundsCache.displayedOccludingBoundsDoc
+                                                         : boundsCache.pendingOccludingBoundsDoc;
     const SelectionTransformHandleIntent pendingHandleIntent =
         cacheMatchesSelection ? cachedHandleIntentAt(pendingClick.documentPoint)
                               : SelectionTransformHandleIntent{};
-    const bool tookFastRedrag =
-        selectToolActive && cacheMatchesSelection &&
-        pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
-                                             pendingClick.modifiers, boundsCache.displayedBoundsDoc,
-                                             boundsCache.displayedOccludingBoundsDoc);
+    bool tookFastRedrag = selectToolActive && cacheMatchesSelection &&
+                          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+                          selectTool_.tryStartRedragOnSelected(
+                              app_, pendingClick.documentPoint, pendingClick.modifiers,
+                              redragBoundsDoc, redragOccludingBoundsDoc);
+    if (!tookFastRedrag && renderCoordinator_.asyncRenderer().isBusy() && selectToolActive &&
+        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
+      // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
+      // prefer an optimistic re-drag of the current selection over freezing behind a conservative
+      // false-positive overlap; the idle path above still uses full hit-testing for retargets.
+      tookFastRedrag = selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
+                                                            pendingClick.modifiers, redragBoundsDoc,
+                                                            std::span<const Box2d>());
+    }
     if (tookFastRedrag) {
       lastPostedScreenPoint_.reset();
       interactionController_.clearPendingClick();
@@ -1541,8 +1558,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       const ImVec2 currentScreen = ImGui::GetMousePos();
+      // Local drag state is UI-thread owned and feeds composited presentation directly, so keep it
+      // moving while the async renderer is busy. DOM writes are queued and coalesced until the
+      // worker releases the document.
       if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
-                                     renderCoordinator_.asyncRenderer().isBusy())) {
+                                     /*pendingFrameInFlight=*/false)) {
         MouseModifiers modifiers;
         modifiers.shift = ImGui::GetIO().KeyShift;
         modifiers.option = ImGui::GetIO().KeyAlt;

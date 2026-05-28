@@ -869,6 +869,19 @@ TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBou
   EXPECT_TRUE(selectionIs("#r1"));
 }
 
+TEST_F(SelectToolTest, TryRedragOnSelectedAllowsScreenPixelRoundingSlop) {
+  app.setSelection(elementById("#r1"));
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+
+  MouseModifiers modifiers;
+  modifiers.pixelsPerDocUnit = 10.0;
+
+  EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 9.9), modifiers, bounds))
+      << "high-zoom screen-to-document rounding should not defer a selected-object re-drag";
+  EXPECT_TRUE(tool.isDragging());
+}
+
 TEST_F(SelectToolTest, DragPreviewGenerationChangesForRedragOnSameSelection) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   ASSERT_TRUE(selectionIs("#r1"));

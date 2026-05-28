@@ -25,6 +25,7 @@ namespace {
 constexpr double kDragThresholdDocUnits = 1.0;
 constexpr double kDragThresholdSq = kDragThresholdDocUnits * kDragThresholdDocUnits;
 constexpr double kMinScaleDenominator = 1e-9;
+constexpr double kRedragHitSlopScreenPx = 2.0;
 
 bool IsFinite(double value) {
   return std::isfinite(value);
@@ -214,7 +215,11 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
   // `onMouseDown` passes a freshly-computed live snapshot (its caller has
   // already gated on `!isBusy()`).
-  if (selectionBoundsDoc.empty() || !selectionBoundsDoc.front().contains(documentPoint)) {
+  const double hitSlopDoc =
+      modifiers.pixelsPerDocUnit > 0.0 ? kRedragHitSlopScreenPx / modifiers.pixelsPerDocUnit : 0.0;
+  if (selectionBoundsDoc.empty() ||
+      !selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint) ||
+      !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
     return false;
   }
   for (const Box2d& occludingBounds : occludingBoundsDoc) {
