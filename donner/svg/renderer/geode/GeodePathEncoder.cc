@@ -288,7 +288,8 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     result.vBandCount = vBandCount;
   }
 
-  // Bounding quad vertices for each horizontal band (2 triangles = 6 vertices).
+  // Legacy per-band bounding quads (2 triangles = 6 vertices each) for the 4-sample
+  // alpha-coverage gradient/mask shaders.
   result.vertices.reserve(result.bands.size() * 6);
   for (size_t i = 0; i < result.bands.size(); ++i) {
     const auto& band = result.bands[i];
@@ -300,6 +301,22 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     result.vertices.push_back({band.xMin, band.yMin, -1.0f, -1.0f, bandIdx});
     result.vertices.push_back({band.xMax, band.yMax, 1.0f, 1.0f, bandIdx});
     result.vertices.push_back({band.xMin, band.yMax, -1.0f, 1.0f, bandIdx});
+  }
+
+  // Single bounding quad over the whole path for the analytic dual-ray fill shader.
+  // One quad → each pixel shaded once → folded coverage composes (no seam double-count).
+  {
+    const auto qxMin = static_cast<float>(bounds.topLeft.x);
+    const auto qyMin = static_cast<float>(bounds.topLeft.y);
+    const auto qxMax = static_cast<float>(bounds.bottomRight.x);
+    const auto qyMax = static_cast<float>(bounds.bottomRight.y);
+    result.quadVertices.reserve(6);
+    result.quadVertices.push_back({qxMin, qyMin, -1.0f, -1.0f, 0u});
+    result.quadVertices.push_back({qxMax, qyMin, 1.0f, -1.0f, 0u});
+    result.quadVertices.push_back({qxMax, qyMax, 1.0f, 1.0f, 0u});
+    result.quadVertices.push_back({qxMin, qyMin, -1.0f, -1.0f, 0u});
+    result.quadVertices.push_back({qxMax, qyMax, 1.0f, 1.0f, 0u});
+    result.quadVertices.push_back({qxMin, qyMax, -1.0f, 1.0f, 0u});
   }
 
   return result;
