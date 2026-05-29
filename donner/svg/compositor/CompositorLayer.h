@@ -7,6 +7,7 @@
 #include <string>
 #include <utility>
 
+#include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
@@ -66,6 +67,40 @@ inline constexpr FallbackReason& operator|=(FallbackReason& a, FallbackReason b)
 /// `"Filter | IsolatedLayer"`. Returns `"None"` when no flags are set.
 /// Used by the editor's layer-inspector panel to render the "Kind" column.
 [[nodiscard]] std::string FallbackReasonToString(FallbackReason reasons);
+
+/// Immediate-mode eligibility and timing diagnostics for a promoted layer.
+struct ImmediateLayerPlan {
+  /// True when the layer should be presented as transient direct/immediate content.
+  bool immediate = false;
+  /// True when the static cost heuristic chose immediate presentation.
+  bool staticHeuristicImmediate = false;
+  /// True when measured raster time expanded this layer into immediate presentation.
+  bool dynamicHeuristicImmediate = false;
+  /// True when this layer left dynamic immediate mode because the latest render was over budget.
+  bool demotedDynamicImmediate = false;
+  /// Snapped canvas-space bounds used by the immediate/cached heuristic.
+  Box2d boundsCanvas;
+  /// Estimated number of direct geometry draws in the layer.
+  int estimatedDrawOps = 0;
+  /// Estimated number of path verbs across direct geometry draws.
+  int estimatedPathVerbs = 0;
+  /// True when the layer uses effects or resources that force cached presentation.
+  bool hasExpensiveEffect = false;
+  /// True when the layer has a visible, bounded contribution to the canvas.
+  bool visible = false;
+  /// Estimated presentation texture bytes retained by a cached tile.
+  uint64_t estimatedRetainedBytes = 0;
+  /// Relative redraw cost from tight area and geometry complexity.
+  double estimatedRedrawCost = 0.0;
+  /// Relative fixed/cache memory cost avoided by immediate presentation.
+  double estimatedCacheOverheadCost = 0.0;
+  /// Raster time from the most recent layer render.
+  double measuredRasterizeMs = 0.0;
+  /// Total dynamic immediate-layer frame budget for 120 Hz interaction.
+  double immediateBudgetMs = 0.0;
+  /// Budget charged by this layer when it is immediate.
+  double immediateBudgetChargeMs = 0.0;
+};
 
 /**
  * Represents a single compositor layer with its cached bitmap and dirty state.
@@ -257,6 +292,15 @@ public:
   /// `setBitmap`.
   void setLastRasterizeMs(double ms) { lastRasterizeMs_ = ms; }
 
+  /// Returns immediate-mode eligibility and timing diagnostics for this layer.
+  [[nodiscard]] const ImmediateLayerPlan& immediatePlan() const { return immediatePlan_; }
+
+  /// Set immediate-mode eligibility and timing diagnostics for this layer.
+  void setImmediatePlan(ImmediateLayerPlan plan) { immediatePlan_ = plan; }
+
+  /// Returns true when this layer should be rendered as transient direct/immediate content.
+  [[nodiscard]] bool isImmediate() const { return immediatePlan_.immediate; }
+
   /// Set the `canvasFromBitmap` transform used during blitting.
   void setCanvasFromBitmap(const Transform2d& transform) { canvasFromBitmap_ = transform; }
 
@@ -307,6 +351,7 @@ private:
   uint32_t rasterizeCount_ = 0;
   double lastRasterizeMs_ = 0.0;
   Vector2d canvasOffset_ = Vector2d::Zero();
+  ImmediateLayerPlan immediatePlan_;
 };
 
 }  // namespace donner::svg::compositor

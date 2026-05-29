@@ -17,6 +17,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/AttachedIdLookup.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/PathLengthComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
@@ -108,6 +109,21 @@ std::optional<Box2d> LocalDrawableBoundsWithStroke(
   const double halfStroke = strokeWidth * 0.5;
   return Box2d(box.topLeft - Vector2d(halfStroke, halfStroke),
                box.bottomRight + Vector2d(halfStroke, halfStroke));
+}
+
+bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
+  const auto* type = dataHandle.try_get<components::ElementTypeComponent>();
+  if (type == nullptr) {
+    return false;
+  }
+
+  switch (type->type()) {
+    case ElementType::Defs:
+    case ElementType::G:
+    case ElementType::SVG:
+    case ElementType::Symbol: return true;
+    default: return false;
+  }
 }
 
 /// Returns true if the transformed AABB should be skipped because it falls
@@ -1362,6 +1378,10 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
     // container group (no direct draw — its children contribute
     // bounds as they're iterated) or a sub-document boundary (not
     // modeled yet; bail).
+    if (IsNonDrawingContainer(instance.dataHandle(registry))) {
+      continue;
+    }
+
     if (instance.subtreeInfo.has_value()) {
       // Plain container — children will be iterated next. Continue.
       continue;

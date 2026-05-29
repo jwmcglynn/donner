@@ -25,6 +25,7 @@
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/compositor/CompositorController.h"
@@ -108,6 +109,38 @@ std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
   return std::nullopt;
+}
+
+std::string DescribeCompositeSegments(
+    const std::vector<svg::compositor::CompositorController::CompositeTileSnapshot>& tiles) {
+  std::ostringstream out;
+  for (const auto& tile : tiles) {
+    using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+    if (tile.kind != Kind::Segment && tile.kind != Kind::Layer) {
+      continue;
+    }
+    out << tile.id << " kind=" << (tile.kind == Kind::Layer ? "layer" : "segment")
+        << " immediate=" << tile.immediate << " visible=" << tile.visible
+        << " expensive=" << tile.hasExpensiveEffect << " ops=" << tile.estimatedDrawOps
+        << " verbs=" << tile.estimatedPathVerbs << " ms=" << tile.lastRasterizeMs
+        << " budget=" << tile.immediateBudgetMs << " static=" << tile.staticHeuristicImmediate
+        << " dynamic=" << tile.dynamicHeuristicImmediate
+        << " charge=" << tile.immediateBudgetChargeMs << " span=\"" << tile.spanRangeLabel
+        << "\"\n";
+  }
+  return out.str();
+}
+
+EditorRasterViewport SplashDonnerHighZoomRasterViewport(Vector2d panDocPoint = Vector2d(302.0,
+                                                                                        390.0)) {
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(892.0, 512.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 892.0, 512.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.zoom = 16.0;
+  viewport.panDocPoint = panDocPoint;
+  viewport.panScreenPoint = Vector2d(446.0, 256.0);
+  return viewport.rasterViewport();
 }
 
 TEST(AsyncRendererPresentationPolicyTest, TexturePresentationSkipsFinalSnapshotWhenTilesExist) {
@@ -232,6 +265,120 @@ TEST(AsyncRendererTest, ImmediateStaticSpansCarryPayloadAcrossPublishedFrames) {
   const std::optional<RenderResult> second = postSelection(2);
   ASSERT_TRUE(second.has_value());
   expectImmediatePayload(*second);
+}
+
+TEST(AsyncRendererE2ETest, SplashDonnerSelectionPublishesImmediateSpansForLayerPanel) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
+  const EditorRasterViewport rasterViewport = SplashDonnerHighZoomRasterViewport();
+  app.document().document().setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
+                                          rasterViewport.semanticCanvasSizePx.y);
+  auto target = app.document().document().querySelector("#Donner_D");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, app.document().document());
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.rasterViewport = rasterViewport;
+  request.selectedEntity = targetEntity;
+  request.dragPreview = RenderRequest::DragPreview{
+      .entity = targetEntity,
+      .interactionKind = svg::compositor::InteractionHint::Selection,
+  };
+  asyncRenderer.requestRender(request);
+
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+
+  const auto compositeTiles = asyncRenderer.compositorCompositeTiles();
+  const auto isSegment = [](const auto& tile) {
+    return tile.kind == svg::compositor::CompositorController::CompositeTileSnapshot::Kind::Segment;
+  };
+  const int segmentCount =
+      static_cast<int>(std::count_if(compositeTiles.begin(), compositeTiles.end(), isSegment));
+  const int immediateSegmentCount = static_cast<int>(
+      std::count_if(compositeTiles.begin(), compositeTiles.end(),
+                    [&](const auto& tile) { return isSegment(tile) && tile.immediate; }));
+  const int immediateEligibleSegmentCount = static_cast<int>(
+      std::count_if(compositeTiles.begin(), compositeTiles.end(), [&](const auto& tile) {
+        return isSegment(tile) && tile.visible && !tile.hasExpensiveEffect &&
+               tile.estimatedDrawOps > 0;
+      }));
+
+  EXPECT_GT(segmentCount, 0);
+  EXPECT_GT(immediateEligibleSegmentCount, 0)
+      << "The real splash should expose at least one cheap visible static span when a Donner "
+         "letter is selected.\n"
+      << DescribeCompositeSegments(compositeTiles);
+  EXPECT_GT(immediateSegmentCount, 0)
+      << "Layer-panel diagnostics are reporting every splash span as cached even though at least "
+         "one selected-letter static span is eligible for immediate rendering.\n"
+      << DescribeCompositeSegments(compositeTiles);
+}
+
+TEST(AsyncRendererE2ETest, SplashDonnerNDragPublishesImmediateLayerForLayerPanel) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
+  const EditorRasterViewport rasterViewport =
+      SplashDonnerHighZoomRasterViewport(Vector2d(435.0, 350.0));
+  app.document().document().setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
+                                          rasterViewport.semanticCanvasSizePx.y);
+  auto target = app.document().document().querySelector("#Donner_N_1");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, app.document().document());
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.rasterViewport = rasterViewport;
+  request.selectedEntity = targetEntity;
+  request.dragPreview = RenderRequest::DragPreview{
+      .entity = targetEntity,
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+  };
+  asyncRenderer.requestRender(request);
+
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+
+  const auto compositeTiles = asyncRenderer.compositorCompositeTiles();
+  const std::string targetTileId = "layer:" + std::to_string(static_cast<unsigned>(targetEntity));
+  const auto dragTile =
+      std::find_if(compositeTiles.begin(), compositeTiles.end(), [&](const auto& tile) {
+        return tile.kind ==
+                   svg::compositor::CompositorController::CompositeTileSnapshot::Kind::Layer &&
+               tile.id == targetTileId && tile.isDragTarget;
+      });
+  ASSERT_NE(dragTile, compositeTiles.end()) << DescribeCompositeSegments(compositeTiles);
+  EXPECT_GT(dragTile->estimatedDrawOps, 0);
+  EXPECT_GT(dragTile->immediateBudgetMs, 0.0);
+  EXPECT_TRUE(dragTile->immediate)
+      << "A cheap actively-dragged Donner N should stay promoted for paint-order splitting but "
+         "render as a direct/immediate layer instead of a retained cached texture.\n"
+      << DescribeCompositeSegments(compositeTiles);
 }
 
 constexpr bool kAsyncRendererWallclockTestsEnabled =
