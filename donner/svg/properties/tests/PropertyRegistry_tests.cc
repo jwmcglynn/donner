@@ -118,24 +118,24 @@ TEST(PropertyRegistry, BuiltinKeywords) {
     PropertyRegistry registry;
     registry.parseStyle("color: initial");
     EXPECT_EQ(registry.color.state, PropertyState::ExplicitInitial);
-    EXPECT_TRUE(registry.color.hasValue());
+    EXPECT_TRUE(registry.color.isSpecified());
     EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
 
     registry.parseStyle("color: inherit");
     EXPECT_EQ(registry.color.state, PropertyState::Inherit);
-    EXPECT_TRUE(registry.color.hasValue());
+    EXPECT_TRUE(registry.color.isSpecified());
     EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
 
     registry.parseStyle("color: unset");
     EXPECT_EQ(registry.color.state, PropertyState::ExplicitUnset);
-    EXPECT_TRUE(registry.color.hasValue());
+    EXPECT_TRUE(registry.color.isSpecified());
     EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("color: inherit invalid");
-    EXPECT_FALSE(registry.color.hasValue());
+    EXPECT_FALSE(registry.color.isSpecified());
     EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 }
@@ -143,7 +143,7 @@ TEST(PropertyRegistry, BuiltinKeywords) {
 TEST(PropertyRegistry, ParseColor) {
   PropertyRegistry registry;
   registry.parseStyle("color: red");
-  EXPECT_TRUE(registry.color.hasValue());
+  EXPECT_TRUE(registry.color.isSpecified());
   EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
 }
 
@@ -171,7 +171,7 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
   {
     PropertyRegistry registry;
     EXPECT_THAT(registry.parsePresentationAttribute("color", ""), ParseErrorIs("No color found"));
-    EXPECT_FALSE(registry.color.hasValue());
+    EXPECT_FALSE(registry.color.isSpecified());
     EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 
@@ -179,7 +179,7 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
     PropertyRegistry registry;
     EXPECT_THAT(registry.parsePresentationAttribute("color", "invalid"),
                 ParseErrorIs("Invalid color 'invalid'"));
-    EXPECT_FALSE(registry.color.hasValue());
+    EXPECT_FALSE(registry.color.isSpecified());
     EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 
@@ -187,7 +187,7 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
     PropertyRegistry registry;
     EXPECT_THAT(registry.parsePresentationAttribute("color", "red !important"),
                 ParseErrorIs("Expected a single color"));
-    EXPECT_FALSE(registry.color.hasValue()) << "!important is not supported";
+    EXPECT_FALSE(registry.color.isSpecified()) << "!important is not supported";
     EXPECT_THAT(registry.color.get(), Eq(Color(RGBA(0, 0, 0, 0xFF))));
   }
 
@@ -195,7 +195,7 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
     PropertyRegistry registry;
     EXPECT_THAT(registry.parsePresentationAttribute("color", " /*comment*/ red "),
                 ParseResultIs(true));
-    EXPECT_TRUE(registry.color.hasValue()) << "Comments and whitespace should be ignored";
+    EXPECT_TRUE(registry.color.isSpecified()) << "Comments and whitespace should be ignored";
     EXPECT_THAT(registry.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
   }
 }
@@ -206,11 +206,11 @@ TEST(PropertyRegistry, Fill) {
 
   {
     PropertyRegistry registry;
-    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_FALSE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
 
     registry.parseStyle("fill: none");
-    EXPECT_TRUE(registry.fill.hasValue());
+    EXPECT_TRUE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::None())));
 
     registry.parseStyle("fill: red  ");
@@ -222,18 +222,18 @@ TEST(PropertyRegistry, Fill) {
     PropertyRegistry registry;
     EXPECT_THAT(registry.parsePresentationAttribute("fill", ""),
                 ParseErrorIs("Invalid paint server value"));
-    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_FALSE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: red asdf");
-    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_FALSE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
 
     registry.parseStyle("fill: asdf");
-    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_FALSE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
   }
 
@@ -248,7 +248,7 @@ TEST(PropertyRegistry, Fill) {
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: context-stroke invalid");
-    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_FALSE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
   }
 
@@ -272,7 +272,7 @@ TEST(PropertyRegistry, Fill) {
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: url(#test) invalid");
-    EXPECT_FALSE(registry.fill.hasValue());
+    EXPECT_FALSE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(), Optional(kInitialFill));
   }
 }
@@ -283,11 +283,11 @@ TEST(PropertyRegistry, Stroke) {
 
   {
     PropertyRegistry registry;
-    EXPECT_FALSE(registry.stroke.hasValue());
+    EXPECT_FALSE(registry.stroke.isSpecified());
     EXPECT_THAT(registry.stroke.get(), Optional(kInitialFill));
 
     registry.parseStyle("stroke: none");
-    EXPECT_TRUE(registry.stroke.hasValue());
+    EXPECT_TRUE(registry.stroke.isSpecified());
     EXPECT_THAT(registry.stroke.get(), Optional(PaintServer(PaintServer::None())));
 
     registry.parseStyle("stroke: red  ");
@@ -298,11 +298,11 @@ TEST(PropertyRegistry, Stroke) {
   {
     PropertyRegistry registry;
     registry.parseStyle("stroke: red asdf");
-    EXPECT_FALSE(registry.stroke.hasValue());
+    EXPECT_FALSE(registry.stroke.isSpecified());
     EXPECT_THAT(registry.stroke.get(), Optional(kInitialFill));
 
     registry.parseStyle("stroke: asdf");
-    EXPECT_FALSE(registry.stroke.hasValue());
+    EXPECT_FALSE(registry.stroke.isSpecified());
     EXPECT_THAT(registry.stroke.get(), Optional(kInitialFill));
   }
 
@@ -317,7 +317,7 @@ TEST(PropertyRegistry, Stroke) {
   {
     PropertyRegistry registry;
     registry.parseStyle("stroke: context-stroke invalid");
-    EXPECT_FALSE(registry.stroke.hasValue());
+    EXPECT_FALSE(registry.stroke.isSpecified());
     EXPECT_THAT(registry.stroke.get(), Optional(kInitialFill));
   }
 
@@ -344,7 +344,7 @@ TEST(PropertyRegistry, Stroke) {
 TEST(PropertyRegistry, FontStyle) {
   {
     PropertyRegistry registry;
-    EXPECT_FALSE(registry.fontStyle.hasValue());
+    EXPECT_FALSE(registry.fontStyle.isSpecified());
     EXPECT_THAT(registry.fontStyle.get(), Optional(FontStyle::Normal));
   }
 
@@ -369,7 +369,7 @@ TEST(PropertyRegistry, FontStyle) {
   {
     PropertyRegistry registry;
     registry.parseStyle("font-style: invalid");
-    EXPECT_FALSE(registry.fontStyle.hasValue());
+    EXPECT_FALSE(registry.fontStyle.isSpecified());
   }
 
   // Presentation attribute.
@@ -383,7 +383,7 @@ TEST(PropertyRegistry, FontStyle) {
 TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;
-    EXPECT_FALSE(registry.fontStretch.hasValue());
+    EXPECT_FALSE(registry.fontStretch.isSpecified());
     EXPECT_THAT(registry.fontStretch.get(), Optional(static_cast<int>(FontStretch::Normal)));
   }
 
@@ -459,7 +459,7 @@ TEST(PropertyRegistry, FontStretch) {
   {
     PropertyRegistry registry;
     registry.parseStyle("font-stretch: invalid");
-    EXPECT_FALSE(registry.fontStretch.hasValue());
+    EXPECT_FALSE(registry.fontStretch.isSpecified());
   }
 
   // Presentation attribute.
@@ -474,7 +474,7 @@ TEST(PropertyRegistry, FontStretch) {
 TEST(PropertyRegistry, FontVariant) {
   {
     PropertyRegistry registry;
-    EXPECT_FALSE(registry.fontVariant.hasValue());
+    EXPECT_FALSE(registry.fontVariant.isSpecified());
     EXPECT_THAT(registry.fontVariant.get(), Optional(FontVariant::Normal));
   }
 
@@ -493,7 +493,7 @@ TEST(PropertyRegistry, FontVariant) {
   {
     PropertyRegistry registry;
     registry.parseStyle("font-variant: invalid");
-    EXPECT_FALSE(registry.fontVariant.hasValue());
+    EXPECT_FALSE(registry.fontVariant.isSpecified());
   }
 
   // Presentation attribute.
@@ -651,7 +651,7 @@ TEST(PropertyRegistry, FontWeight) {
   {
     PropertyRegistry registry;
     registry.parseStyle("font-weight: invalid");
-    EXPECT_FALSE(registry.fontWeight.hasValue());
+    EXPECT_FALSE(registry.fontWeight.isSpecified());
   }
 
   {
@@ -669,7 +669,7 @@ TEST(PropertyRegistry, InheritFromNoPaintSkipsPaintServers) {
   const PropertyRegistry inherited = child.inheritFrom(parent, PropertyInheritOptions::NoPaint);
 
   EXPECT_THAT(inherited.color.get(), Optional(Color(RGBA(0xFF, 0, 0, 0xFF))));
-  EXPECT_FALSE(inherited.fill.hasValue());
+  EXPECT_FALSE(inherited.fill.isSpecified());
   EXPECT_THAT(inherited.fill.get(),
               Optional(PaintServer(PaintServer::Solid(Color(RGBA(0, 0, 0, 0xFF))))));
 }
@@ -1033,7 +1033,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: url(#paint)");
-    ASSERT_TRUE(registry.fill.hasValue());
+    ASSERT_TRUE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(),
                 Optional(PaintServer(PaintServer::ElementReference("#paint"))));
   }
@@ -1041,7 +1041,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: url(#paint) none");
-    ASSERT_TRUE(registry.fill.hasValue());
+    ASSERT_TRUE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(),
                 Optional(PaintServer(PaintServer::ElementReference("#paint"))));
   }
@@ -1049,7 +1049,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("fill: url(#paint) red");
-    ASSERT_TRUE(registry.fill.hasValue());
+    ASSERT_TRUE(registry.fill.isSpecified());
     EXPECT_THAT(registry.fill.get(), Optional(PaintServer(PaintServer::ElementReference(
                                          "#paint", Color(RGBA(0xFF, 0x00, 0x00, 0xFF))))));
   }
@@ -1071,7 +1071,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("clip-path: url(#clip)");
-    ASSERT_TRUE(registry.clipPath.hasValue());
+    ASSERT_TRUE(registry.clipPath.isSpecified());
     EXPECT_THAT(registry.clipPath.get(), Optional(Reference("#clip")));
   }
 
@@ -1102,7 +1102,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     // and "top" is a separate (ignored) token. This is correct per CSS spec.
     PropertyRegistry registry;
     registry.parseStyle("transform-origin: left,top");
-    ASSERT_TRUE(registry.transformOrigin.hasValue());
+    ASSERT_TRUE(registry.transformOrigin.isSpecified());
   }
 
   {
@@ -1124,21 +1124,21 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: blur()");
-    const auto& blur = registry.filter.getRequiredRef().front().get<FilterEffect::Blur>();
+    const auto& blur = (*registry.filter.getStoredValue()).front().get<FilterEffect::Blur>();
     EXPECT_EQ(blur.stdDeviationX, Lengthd(0, Lengthd::Unit::Px));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: blur( )");
-    const auto& blur = registry.filter.getRequiredRef().front().get<FilterEffect::Blur>();
+    const auto& blur = (*registry.filter.getStoredValue()).front().get<FilterEffect::Blur>();
     EXPECT_EQ(blur.stdDeviationX, Lengthd(0, Lengthd::Unit::Px));
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: blur(0)");
-    const auto& blur = registry.filter.getRequiredRef().front().get<FilterEffect::Blur>();
+    const auto& blur = (*registry.filter.getStoredValue()).front().get<FilterEffect::Blur>();
     EXPECT_EQ(blur.stdDeviationX, Lengthd(0, Lengthd::Unit::Px));
   }
 
@@ -1146,21 +1146,24 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     PropertyRegistry registry;
     registry.parseStyle("filter: hue-rotate()");
     EXPECT_DOUBLE_EQ(
-        registry.filter.getRequiredRef().front().get<FilterEffect::HueRotate>().angleDegrees, 0.0);
+        (*registry.filter.getStoredValue()).front().get<FilterEffect::HueRotate>().angleDegrees,
+        0.0);
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: hue-rotate( )");
     EXPECT_DOUBLE_EQ(
-        registry.filter.getRequiredRef().front().get<FilterEffect::HueRotate>().angleDegrees, 0.0);
+        (*registry.filter.getStoredValue()).front().get<FilterEffect::HueRotate>().angleDegrees,
+        0.0);
   }
 
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: hue-rotate(45deg)");
     EXPECT_DOUBLE_EQ(
-        registry.filter.getRequiredRef().front().get<FilterEffect::HueRotate>().angleDegrees, 45.0);
+        (*registry.filter.getStoredValue()).front().get<FilterEffect::HueRotate>().angleDegrees,
+        45.0);
   }
 
   {
@@ -1182,7 +1185,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
     PropertyRegistry registry;
     registry.parseStyle("filter: brightness( )");
     EXPECT_DOUBLE_EQ(
-        registry.filter.getRequiredRef().front().get<FilterEffect::Brightness>().amount, 1.0);
+        (*registry.filter.getStoredValue()).front().get<FilterEffect::Brightness>().amount, 1.0);
   }
 
   {
@@ -1201,7 +1204,8 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: drop-shadow(1 2)");
-    const auto& shadow = registry.filter.getRequiredRef().front().get<FilterEffect::DropShadow>();
+    const auto& shadow =
+        (*registry.filter.getStoredValue()).front().get<FilterEffect::DropShadow>();
     EXPECT_EQ(shadow.offsetX, Lengthd(1, Lengthd::Unit::None));
     EXPECT_EQ(shadow.offsetY, Lengthd(2, Lengthd::Unit::None));
   }
@@ -1251,7 +1255,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: url(#a), url(#b)");
-    const auto& effects = registry.filter.getRequiredRef();
+    const auto& effects = (*registry.filter.getStoredValue());
     ASSERT_EQ(effects.size(), 2u);
     EXPECT_EQ(effects[0].get<FilterEffect::ElementReference>().reference, Reference("#a"));
     EXPECT_EQ(effects[1].get<FilterEffect::ElementReference>().reference, Reference("#b"));
@@ -1260,7 +1264,7 @@ TEST(PropertyRegistry, PaintReferenceTransformOriginAndFilterFunctionEdges) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: url(#a) ");
-    ASSERT_EQ(registry.filter.getRequiredRef().size(), 1u);
+    ASSERT_EQ((*registry.filter.getStoredValue()).size(), 1u);
   }
 }
 
@@ -1299,8 +1303,8 @@ TEST(PropertyRegistry, BaselineShiftSpacingAndDasharray) {
   {
     PropertyRegistry registry;
     registry.parseStyle("stroke-dasharray: 1 2, 3%");
-    ASSERT_TRUE(registry.strokeDasharray.hasValue());
-    const auto& dasharray = registry.strokeDasharray.getRequiredRef();
+    ASSERT_TRUE(registry.strokeDasharray.isSpecified());
+    const auto& dasharray = (*registry.strokeDasharray.getStoredValue());
     EXPECT_EQ(dasharray.size(), 3u);
     EXPECT_EQ(dasharray[0], Lengthd(1, Lengthd::Unit::None));
     EXPECT_EQ(dasharray[1], Lengthd(2, Lengthd::Unit::None));
@@ -1319,8 +1323,8 @@ TEST(PropertyRegistry, FilterParsing) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: none");
-    ASSERT_TRUE(registry.filter.hasValue());
-    EXPECT_TRUE(registry.filter.getRequiredRef().empty());
+    ASSERT_TRUE(registry.filter.isSpecified());
+    EXPECT_TRUE((*registry.filter.getStoredValue()).empty());
   }
 
   {
@@ -1328,8 +1332,8 @@ TEST(PropertyRegistry, FilterParsing) {
     registry.parseStyle(
         "filter: blur(2px) hue-rotate(0.5turn) brightness(50%) contrast(2) grayscale() "
         "invert(25%) opacity(0.4) saturate(3) sepia() url(#f)");
-    ASSERT_TRUE(registry.filter.hasValue());
-    const auto& effects = registry.filter.getRequiredRef();
+    ASSERT_TRUE(registry.filter.isSpecified());
+    const auto& effects = (*registry.filter.getStoredValue());
     ASSERT_EQ(effects.size(), 10u);
     EXPECT_TRUE(effects[0].is<FilterEffect::Blur>());
     EXPECT_EQ(effects[0].get<FilterEffect::Blur>().stdDeviationX, Lengthd(2, Lengthd::Unit::Px));
@@ -1355,8 +1359,8 @@ TEST(PropertyRegistry, FilterParsing) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: drop-shadow(red 1px 2px 3px)");
-    ASSERT_TRUE(registry.filter.hasValue());
-    const auto& effects = registry.filter.getRequiredRef();
+    ASSERT_TRUE(registry.filter.isSpecified());
+    const auto& effects = (*registry.filter.getStoredValue());
     ASSERT_EQ(effects.size(), 1u);
     const auto& shadow = effects.front().get<FilterEffect::DropShadow>();
     EXPECT_EQ(shadow.offsetX, Lengthd(1, Lengthd::Unit::Px));
@@ -1396,14 +1400,14 @@ TEST(PropertyRegistry, TransformPresentationAttribute) {
       registry.parsePresentationAttribute("transform", "translate(10 20)", rect.entityHandle()),
       ParseResultIs(true));
   ASSERT_TRUE(rect.entityHandle().all_of<components::TransformComponent>());
-  EXPECT_TRUE(rect.entityHandle().get<components::TransformComponent>().transform.hasValue());
+  EXPECT_TRUE(rect.entityHandle().get<components::TransformComponent>().transform.isSpecified());
 }
 
 TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   {
     PropertyRegistry registry;
     registry.parseStyle("transform-origin: left top");
-    const TransformOrigin origin = registry.transformOrigin.getRequired();
+    const TransformOrigin origin = registry.transformOrigin.get().value();
     EXPECT_EQ(origin.x, Lengthd(0, Lengthd::Unit::Percent));
     EXPECT_EQ(origin.y, Lengthd(0, Lengthd::Unit::Percent));
   }
@@ -1411,7 +1415,7 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   {
     PropertyRegistry registry;
     registry.parseStyle("transform-origin: right bottom");
-    const TransformOrigin origin = registry.transformOrigin.getRequired();
+    const TransformOrigin origin = registry.transformOrigin.get().value();
     EXPECT_EQ(origin.x, Lengthd(100, Lengthd::Unit::Percent));
     EXPECT_EQ(origin.y, Lengthd(100, Lengthd::Unit::Percent));
   }
@@ -1419,7 +1423,7 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   {
     PropertyRegistry registry;
     registry.parseStyle("transform-origin: center center");
-    const TransformOrigin origin = registry.transformOrigin.getRequired();
+    const TransformOrigin origin = registry.transformOrigin.get().value();
     EXPECT_EQ(origin.x, Lengthd(50, Lengthd::Unit::Percent));
     EXPECT_EQ(origin.y, Lengthd(50, Lengthd::Unit::Percent));
   }
@@ -1440,7 +1444,7 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: hue-rotate(200grad) hue-rotate(3.141592653589793rad)");
-    const auto& effects = registry.filter.getRequiredRef();
+    const auto& effects = (*registry.filter.getStoredValue());
     ASSERT_EQ(effects.size(), 2u);
     EXPECT_DOUBLE_EQ(effects[0].get<FilterEffect::HueRotate>().angleDegrees, 180.0);
     EXPECT_NEAR(effects[1].get<FilterEffect::HueRotate>().angleDegrees, 180.0, 1e-9);
@@ -1449,7 +1453,7 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: hue-rotate(0)");
-    const auto& effects = registry.filter.getRequiredRef();
+    const auto& effects = (*registry.filter.getStoredValue());
     ASSERT_EQ(effects.size(), 1u);
     EXPECT_DOUBLE_EQ(effects[0].get<FilterEffect::HueRotate>().angleDegrees, 0.0);
   }
@@ -1457,7 +1461,7 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: url(\"#quoted\")");
-    const auto& effects = registry.filter.getRequiredRef();
+    const auto& effects = (*registry.filter.getStoredValue());
     ASSERT_EQ(effects.size(), 1u);
     EXPECT_TRUE(effects[0].is<FilterEffect::ElementReference>());
     EXPECT_EQ(effects[0].get<FilterEffect::ElementReference>().reference, Reference("#quoted"));
@@ -1466,7 +1470,8 @@ TEST(PropertyRegistry, TransformOriginStrokeMiterlimitAndFilterEdgeCases) {
   {
     PropertyRegistry registry;
     registry.parseStyle("filter: drop-shadow(1px 2px red)");
-    const auto& shadow = registry.filter.getRequiredRef().front().get<FilterEffect::DropShadow>();
+    const auto& shadow =
+        (*registry.filter.getStoredValue()).front().get<FilterEffect::DropShadow>();
     EXPECT_EQ(shadow.color, Color(RGBA(0xFF, 0, 0, 0xFF)));
   }
 

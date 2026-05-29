@@ -86,25 +86,32 @@ struct Property {
   std::optional<T> get() const { return state == PropertyState::Set ? value : getInitialFn(); }
 
   /**
-   * Gets the value of the property, requiring that the value is not std::nullopt.
+   * Gets the resolved value, or \p fallback if the property does not resolve to a concrete value
+   * (e.g. it is unset with no initial, or its keyword is `inherit`/`initial`/`unset` with no
+   * resolved value). Never aborts.
    *
-   * @return The value.
+   * This is the footgun-free replacement for the former `getRequired()`: prefer it, or `get()`
+   * and handle `std::nullopt`, rather than asserting a value is present. For the rare case where an
+   * invariant genuinely guarantees presence, `get().value()` makes the abort explicit and local.
+   *
+   * @param fallback Value to return when the property does not resolve to a value.
+   * @return The resolved value, or \p fallback.
    */
-  T getRequired() const {
-    auto result = get();
-    UTILS_RELEASE_ASSERT_MSG(result.has_value(), "Required property not set");
-    return std::move(result.value());
-  }
+  T getOr(const T& fallback) const { return get().value_or(fallback); }
 
   /**
-   * Gets a const-ref to the value, for accessing complex types without copying. Requires that \ref
-   * hasValue() is true.
+   * Returns a non-owning pointer to the *stored* value when the property is explicitly \ref
+   * PropertyState::Set, for no-copy access to complex values; returns `nullptr` otherwise
+   * (including the `inherit`/`initial`/`unset` states, which carry no stored value).
    *
-   * @return const T& Reference to the value.
+   * Footgun-free replacement for the former `getRequiredRef()`: callers null-check the result
+   * instead of relying on an assert. Note this never returns the *initial* value — use \ref get()
+   * if you need initial-value resolution.
+   *
+   * @return Pointer to the stored value, or `nullptr`.
    */
-  const T& getRequiredRef() const {
-    UTILS_RELEASE_ASSERT_MSG(hasValue(), "Required property not set");
-    return value.value();
+  const T* getStoredValue() const {
+    return (state == PropertyState::Set && value.has_value()) ? &*value : nullptr;
   }
 
   /**
@@ -177,7 +184,7 @@ struct Property {
       const bool canInherit = options == PropertyInheritOptions::All ||
                               (options == PropertyInheritOptions::NoPaint && !isPaint);
 
-      if (parent.hasValue() && canInherit) {
+      if (parent.isSpecified() && canInherit) {
         if (state == PropertyState::NotSet || state == PropertyState::Inherit ||
             state == PropertyState::ExplicitUnset) {
           // Inherit from parent.
@@ -204,9 +211,17 @@ struct Property {
   }
 
   /**
-   * @return true if the property has any value set, including CSS built-in values.
+   * Whether the cascade assigned this property any state other than \ref PropertyState::NotSet —
+   * i.e. a concrete value OR a CSS-wide keyword (`inherit`/`initial`/`unset`) was specified.
+   *
+   * This is a *cascade* predicate, NOT a guarantee that \ref get() returns a value: for
+   * `inherit`/`initial`/`unset` (and `Set` to `none`) this is true while `get()` may be
+   * `std::nullopt`. Do not use it as a guard before reading the value — use \ref get(), \ref
+   * getOr(), or \ref getStoredValue() for that.
+   *
+   * @return true if any cascade state other than NotSet was specified.
    */
-  bool hasValue() const { return state != PropertyState::NotSet; }
+  bool isSpecified() const { return state != PropertyState::NotSet; }
 
   std::string_view name;                        ///< Property name, such as "color".
   std::optional<T> value;                       ///< Property value, or `std::nullopt` if not set.

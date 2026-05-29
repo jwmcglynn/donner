@@ -160,8 +160,8 @@ void PaintSystem::initializeComputedGradient(EntityHandle handle,
        cur = registry.get<donner::components::TreeComponent>(cur).nextSibling()) {
     if (const auto* stop = registry.try_get<ComputedStopComponent>(cur)) {
       computedGradient.stops.emplace_back(
-          GradientStop{stop->properties.offset, stop->properties.stopColor.getRequired(),
-                       NarrowToFloat(stop->properties.stopOpacity.getRequired())});
+          GradientStop{stop->properties.offset, stop->properties.stopColor.get().value(),
+                       NarrowToFloat(stop->properties.stopOpacity.get().value())});
     }
   }
 }

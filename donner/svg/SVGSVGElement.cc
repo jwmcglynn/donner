@@ -32,19 +32,19 @@ PreserveAspectRatio SVGSVGElement::preserveAspectRatio() const {
 }
 
 Lengthd SVGSVGElement::x() const {
-  return handle_.get<components::SizedElementComponent>().properties.x.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.x.get().value();
 }
 
 Lengthd SVGSVGElement::y() const {
-  return handle_.get<components::SizedElementComponent>().properties.y.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.y.get().value();
 }
 
 std::optional<Lengthd> SVGSVGElement::width() const {
-  return handle_.get<components::SizedElementComponent>().properties.width.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.width.get().value();
 }
 
 std::optional<Lengthd> SVGSVGElement::height() const {
-  return handle_.get<components::SizedElementComponent>().properties.height.getRequired();
+  return handle_.get<components::SizedElementComponent>().properties.height.get().value();
 }
 
 void SVGSVGElement::setViewBox(std::optional<Box2d> viewBox) {

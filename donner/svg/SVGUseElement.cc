@@ -79,14 +79,14 @@ void SVGUseElement::setHeight(std::optional<Lengthd> value) {
 
 Lengthd SVGUseElement::x() const {
   const auto* component = handle_.try_get<components::SizedElementComponent>();
-  return component ? component->properties.x.getRequired()
-                   : components::SizedElementComponent().properties.x.getRequired();
+  return component ? component->properties.x.get().value()
+                   : components::SizedElementComponent().properties.x.get().value();
 }
 
 Lengthd SVGUseElement::y() const {
   const auto* component = handle_.try_get<components::SizedElementComponent>();
-  return component ? component->properties.y.getRequired()
-                   : components::SizedElementComponent().properties.y.getRequired();
+  return component ? component->properties.y.get().value()
+                   : components::SizedElementComponent().properties.y.get().value();
 }
 
 std::optional<Lengthd> SVGUseElement::width() const {

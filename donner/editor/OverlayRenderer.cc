@@ -185,7 +185,7 @@ Path TransformPathToDocument(const Path& path, const Transform2d& documentFromEl
 }
 
 bool ElementDisplayNone(const svg::SVGElement& element) {
-  return element.getComputedStyle().display.getRequired() == svg::Display::None;
+  return element.getComputedStyle().display.get().value() == svg::Display::None;
 }
 
 bool HasDisplayNoneInAncestorChain(const svg::SVGElement& element) {

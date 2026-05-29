@@ -61,22 +61,22 @@ void SVGRectElement::setRy(std::optional<Lengthd> value) {
 
 Lengthd SVGRectElement::x() const {
   const auto* component = handle_.try_get<components::RectComponent>();
-  return component ? component->properties.x.getRequired() : Lengthd();
+  return component ? component->properties.x.get().value() : Lengthd();
 }
 
 Lengthd SVGRectElement::y() const {
   const auto* component = handle_.try_get<components::RectComponent>();
-  return component ? component->properties.y.getRequired() : Lengthd();
+  return component ? component->properties.y.get().value() : Lengthd();
 }
 
 Lengthd SVGRectElement::width() const {
   const auto* component = handle_.try_get<components::RectComponent>();
-  return component ? component->properties.width.getRequired() : Lengthd();
+  return component ? component->properties.width.get().value() : Lengthd();
 }
 
 Lengthd SVGRectElement::height() const {
   const auto* component = handle_.try_get<components::RectComponent>();
-  return component ? component->properties.height.getRequired() : Lengthd();
+  return component ? component->properties.height.get().value() : Lengthd();
 }
 
 std::optional<Lengthd> SVGRectElement::rx() const {
@@ -91,22 +91,22 @@ std::optional<Lengthd> SVGRectElement::ry() const {
 
 Lengthd SVGRectElement::computedX() const {
   compute();
-  return handle_.get<components::ComputedRectComponent>().properties.x.getRequired();
+  return handle_.get<components::ComputedRectComponent>().properties.x.get().value();
 }
 
 Lengthd SVGRectElement::computedY() const {
   compute();
-  return handle_.get<components::ComputedRectComponent>().properties.y.getRequired();
+  return handle_.get<components::ComputedRectComponent>().properties.y.get().value();
 }
 
 Lengthd SVGRectElement::computedWidth() const {
   compute();
-  return handle_.get<components::ComputedRectComponent>().properties.width.getRequired();
+  return handle_.get<components::ComputedRectComponent>().properties.width.get().value();
 }
 
 Lengthd SVGRectElement::computedHeight() const {
   compute();
-  return handle_.get<components::ComputedRectComponent>().properties.height.getRequired();
+  return handle_.get<components::ComputedRectComponent>().properties.height.get().value();
 }
 
 Lengthd SVGRectElement::computedRx() const {

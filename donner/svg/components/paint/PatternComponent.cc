@@ -25,16 +25,16 @@ void ComputedPatternComponent::inheritAttributesFrom(EntityHandle handle, Entity
   if (pattern.patternContentUnits) {
     patternContentUnits = pattern.patternContentUnits.value();
   }
-  if (pattern.sizeProperties.x.hasValue()) {
+  if (pattern.sizeProperties.x.isSpecified()) {
     sizeProperties.x = pattern.sizeProperties.x;
   }
-  if (pattern.sizeProperties.y.hasValue()) {
+  if (pattern.sizeProperties.y.isSpecified()) {
     sizeProperties.y = pattern.sizeProperties.y;
   }
-  if (pattern.sizeProperties.width.hasValue()) {
+  if (pattern.sizeProperties.width.isSpecified()) {
     sizeProperties.width = pattern.sizeProperties.width;
   }
-  if (pattern.sizeProperties.height.hasValue()) {
+  if (pattern.sizeProperties.height.isSpecified()) {
     sizeProperties.height = pattern.sizeProperties.height;
   }
 }

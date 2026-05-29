@@ -109,7 +109,7 @@ std::optional<svg::SVGElement> SelectedGraphicsElement(EditorApp& app) {
 }
 
 bool IsDisplayNone(const svg::SVGElement& element) {
-  return element.getComputedStyle().display.getRequired() == svg::Display::None;
+  return element.getComputedStyle().display.get().value() == svg::Display::None;
 }
 
 }  // namespace

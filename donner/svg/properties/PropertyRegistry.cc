@@ -1347,7 +1347,8 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                    // From https://www.w3.org/TR/css-color-3/#currentcolor:
                    // If the 'currentColor' keyword is set on the 'color' property itself, it is
                    // treated as `color: inherit`.
-                   if (registry.color.hasValue() && registry.color.getRequired().isCurrentColor()) {
+                   if (registry.color.isSpecified() &&
+                       registry.color.get().value().isCurrentColor()) {
                      registry.color.set(PropertyState::Inherit, registry.color.specificity);
                    }
 
@@ -1989,7 +1990,7 @@ size_t PropertyRegistry::numPropertiesSet() const {
 
   size_t result = 0;
   forEachProperty<0, numProperties()>([&selfProperties, &result](auto i) {
-    if (std::get<i.value>(selfProperties).hasValue()) {
+    if (std::get<i.value>(selfProperties).isSpecified()) {
       ++result;
     }
   });
@@ -2142,7 +2143,7 @@ bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {
 }
 
 void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
-  const Lengthd fs = fontSize.getRequired();
+  const Lengthd fs = fontSize.get().value();
   double resolvedPx;
   switch (fs.unit) {
     case Lengthd::Unit::Percent:
@@ -2167,7 +2168,7 @@ void PropertyRegistry::resolveFontSize(double parentFontSizePx) {
 }
 
 void PropertyRegistry::resolveFontWeight(int parentFontWeight) {
-  const int fw = fontWeight.getRequired();
+  const int fw = fontWeight.get().value();
   if (fw == kFontWeightBolder) {
     // CSS Fonts Level 4 §2.5: bolder relative to inherited weight.
     int resolved;
@@ -2194,7 +2195,7 @@ void PropertyRegistry::resolveFontWeight(int parentFontWeight) {
 }
 
 void PropertyRegistry::resolveFontStretch(int parentFontStretch) {
-  const int fs = fontStretch.getRequired();
+  const int fs = fontStretch.get().value();
   if (fs == kFontStretchNarrower) {
     // Move one step narrower, clamped to UltraCondensed.
     int resolved = parentFontStretch - 1;
@@ -2221,7 +2222,7 @@ std::ostream& operator<<(std::ostream& os, const PropertyRegistry& registry) {
   PropertyRegistry::forEachProperty<0, PropertyRegistry::numProperties()>(
       [&os, &resultProperties](auto i) {
         const auto& property = std::get<i.value>(resultProperties);
-        if (property.hasValue()) {
+        if (property.isSpecified()) {
           os << "  " << property << std::endl;
         }
       });

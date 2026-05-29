@@ -103,17 +103,17 @@ filter_primitive::Flood resolveFloodProperties(const Registry& registry, entt::e
     }
 
     // Resolve currentColor.
-    if (props.floodColor.hasValue() && props.floodColor.getRequired().isCurrentColor()) {
+    if (props.floodColor.isSpecified() && props.floodColor.get().value().isCurrentColor()) {
       const auto& currentColor = style->properties->color;
-      props.floodColor.set(currentColor.getRequired(), currentColor.specificity);
+      props.floodColor.set(currentColor.get().value(), currentColor.specificity);
     }
   }
 
-  if (props.floodColor.hasValue()) {
-    flood.floodColor = props.floodColor.getRequired();
+  if (props.floodColor.isSpecified()) {
+    flood.floodColor = props.floodColor.get().value();
   }
-  if (props.floodOpacity.hasValue()) {
-    flood.floodOpacity = props.floodOpacity.getRequired();
+  if (props.floodOpacity.isSpecified()) {
+    flood.floodOpacity = props.floodOpacity.get().value();
   }
 
   return flood;
@@ -154,13 +154,13 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
     }
 
     // Resolve currentColor.
-    if (lightingColor.hasValue() && lightingColor.getRequired().isCurrentColor()) {
+    if (lightingColor.isSpecified() && lightingColor.get().value().isCurrentColor()) {
       const auto& currentColor = style->properties->color;
-      lightingColor.set(currentColor.getRequired(), currentColor.specificity);
+      lightingColor.set(currentColor.get().value(), currentColor.specificity);
     }
   }
 
-  return lightingColor.getRequired();
+  return lightingColor.get().value();
 }
 
 /// Resolve color-interpolation-filters on an individual filter primitive entity.
@@ -169,8 +169,9 @@ css::Color resolveLightingColor(const Registry& registry, entt::entity cur,
 std::optional<ColorInterpolationFilters> resolveColorInterpolationFilters(const Registry& registry,
                                                                           entt::entity cur) {
   if (const auto* style = registry.try_get<ComputedStyleComponent>(cur)) {
-    if (style->properties.has_value() && style->properties->colorInterpolationFilters.hasValue()) {
-      return style->properties->colorInterpolationFilters.getRequired();
+    if (style->properties.has_value() &&
+        style->properties->colorInterpolationFilters.isSpecified()) {
+      return style->properties->colorInterpolationFilters.get().value();
     }
   }
   return std::nullopt;
@@ -448,17 +449,17 @@ void FilterSystem::createComputedFilter(EntityHandle handle, const FilterCompone
         }
 
         // Resolve currentColor.
-        if (props.floodColor.hasValue() && props.floodColor.getRequired().isCurrentColor()) {
+        if (props.floodColor.isSpecified() && props.floodColor.get().value().isCurrentColor()) {
           const auto& currentColor = style->properties->color;
-          props.floodColor.set(currentColor.getRequired(), currentColor.specificity);
+          props.floodColor.set(currentColor.get().value(), currentColor.specificity);
         }
       }
 
-      if (props.floodColor.hasValue()) {
-        prim.floodColor = props.floodColor.getRequired();
+      if (props.floodColor.isSpecified()) {
+        prim.floodColor = props.floodColor.get().value();
       }
-      if (props.floodOpacity.hasValue()) {
-        prim.floodOpacity = props.floodOpacity.getRequired();
+      if (props.floodOpacity.isSpecified()) {
+        prim.floodOpacity = props.floodOpacity.get().value();
       }
 
       filterGraph.nodes.push_back(makeFilterNode(prim, *primitive, primitiveCIF));

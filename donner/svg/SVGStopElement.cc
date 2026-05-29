@@ -47,14 +47,14 @@ float SVGStopElement::offset() const {
 
 css::Color SVGStopElement::stopColor() const {
   const auto* component = handle_.try_get<components::StopComponent>();
-  return component ? component->properties.stopColor.getRequired()
-                   : components::StopProperties().stopColor.getRequired();
+  return component ? component->properties.stopColor.get().value()
+                   : components::StopProperties().stopColor.get().value();
 }
 
 double SVGStopElement::stopOpacity() const {
   const auto* component = handle_.try_get<components::StopComponent>();
-  return component ? component->properties.stopOpacity.getRequired()
-                   : components::StopProperties().stopOpacity.getRequired();
+  return component ? component->properties.stopOpacity.get().value()
+                   : components::StopProperties().stopOpacity.get().value();
 }
 
 css::Color SVGStopElement::computedStopColor() const {
@@ -62,7 +62,7 @@ css::Color SVGStopElement::computedStopColor() const {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
       handle_, handle_.get_or_emplace<components::StopComponent>(access), disabledSink);
-  return computed.properties.stopColor.getRequired();
+  return computed.properties.stopColor.get().value();
 }
 
 double SVGStopElement::computedStopOpacity() const {
@@ -70,7 +70,7 @@ double SVGStopElement::computedStopOpacity() const {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const components::ComputedStopComponent& computed = components::PaintSystem().createComputedStop(
       handle_, handle_.get_or_emplace<components::StopComponent>(access), disabledSink);
-  return computed.properties.stopOpacity.getRequired();
+  return computed.properties.stopOpacity.get().value();
 }
 
 void SVGStopElement::invalidate() const {

@@ -38,7 +38,7 @@ TEST(RectComponent, ComputedRectComponentAppliesUnparsedProperties) {
 
   EXPECT_FALSE(warningSink.hasWarnings());
   EXPECT_THAT(computed.properties.x.get(), Optional(Lengthd(15, Lengthd::Unit::None)));
-  EXPECT_TRUE(computed.properties.ry.hasValue());
+  EXPECT_TRUE(computed.properties.ry.isSpecified());
   EXPECT_THAT(computed.properties.ry.get(), Eq(std::nullopt));
 }
 
@@ -77,7 +77,7 @@ TEST(RectComponent, ParseRectPresentationAttributeReturnsErrorForInvalidAttribut
       ParseErrorIs("Invalid length or percentage"));
 
   const RectProperties& properties = rect.entityHandle().get<RectComponent>().properties;
-  EXPECT_FALSE(properties.rx.hasValue());
+  EXPECT_FALSE(properties.rx.isSpecified());
 }
 
 TEST(RectComponent, ParseRectPresentationAttributeReturnsFalseForUnknownAttribute) {

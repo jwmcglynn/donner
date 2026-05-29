@@ -46,12 +46,12 @@ void SVGEllipseElement::setRy(std::optional<Lengthd> value) {
 
 Lengthd SVGEllipseElement::cx() const {
   const auto* component = handle_.try_get<components::EllipseComponent>();
-  return component ? component->properties.cx.getRequired() : Lengthd();
+  return component ? component->properties.cx.get().value() : Lengthd();
 }
 
 Lengthd SVGEllipseElement::cy() const {
   const auto* component = handle_.try_get<components::EllipseComponent>();
-  return component ? component->properties.cy.getRequired() : Lengthd();
+  return component ? component->properties.cy.get().value() : Lengthd();
 }
 
 std::optional<Lengthd> SVGEllipseElement::rx() const {
@@ -66,12 +66,12 @@ std::optional<Lengthd> SVGEllipseElement::ry() const {
 
 Lengthd SVGEllipseElement::computedCx() const {
   compute();
-  return handle_.get<components::ComputedEllipseComponent>().properties.cx.getRequired();
+  return handle_.get<components::ComputedEllipseComponent>().properties.cx.get().value();
 }
 
 Lengthd SVGEllipseElement::computedCy() const {
   compute();
-  return handle_.get<components::ComputedEllipseComponent>().properties.cy.getRequired();
+  return handle_.get<components::ComputedEllipseComponent>().properties.cy.get().value();
 }
 
 Lengthd SVGEllipseElement::computedRx() const {

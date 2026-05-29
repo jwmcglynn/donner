@@ -365,7 +365,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     bool isHidden = parentHidden;
     if (!isHidden) {
       auto* style = handle.try_get<ComputedStyleComponent>();
-      if (style && style->properties && style->properties->display.getRequired() == Display::None) {
+      if (style && style->properties && style->properties->display.get().value() == Display::None) {
         isHidden = true;
       }
     }

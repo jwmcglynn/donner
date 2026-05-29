@@ -8,8 +8,8 @@ std::tuple<Lengthd, double> CalculateRadiusMaybeAuto(const Property<Lengthd>& pr
                                                      const FontMetrics& fontMetrics,
                                                      Lengthd::Extent propertyExtent,
                                                      Lengthd::Extent fallbackExtent) {
-  if (property.hasValue()) {
-    const Lengthd value = property.getRequired();
+  if (property.isSpecified()) {
+    const Lengthd value = property.get().value();
     const double pixels = value.toPixels(viewBox, fontMetrics, propertyExtent);
 
     if (pixels >= 0.0) {
@@ -19,8 +19,8 @@ std::tuple<Lengthd, double> CalculateRadiusMaybeAuto(const Property<Lengthd>& pr
 
   // If there's no property, the field is set to "auto", so try using the other dimension
   // (fallbackProperty).
-  if (fallbackProperty.hasValue()) {
-    const Lengthd fallbackValue = fallbackProperty.getRequired();
+  if (fallbackProperty.isSpecified()) {
+    const Lengthd fallbackValue = fallbackProperty.get().value();
     const double fallbackPixels = fallbackValue.toPixels(viewBox, fontMetrics, fallbackExtent);
     if (fallbackPixels >= 0.0) {
       return std::make_tuple(fallbackValue, fallbackPixels);

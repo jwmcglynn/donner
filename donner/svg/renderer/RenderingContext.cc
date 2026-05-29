@@ -176,7 +176,7 @@ public:
     const auto& styleComponent = registry_.get<ComputedStyleComponent>(styleEntity);
     const auto& properties = styleComponent.properties.value();
 
-    if (properties.display.getRequired() == Display::None) {
+    if (properties.display.get().value() == Display::None) {
       return;
     }
 
@@ -197,7 +197,7 @@ public:
     }
 
     if (auto maybeClipRect = LayoutSystem().clipRect(EntityHandle(registry_, treeEntity))) {
-      const Overflow overflow = styleComponent.properties->overflow.getRequired();
+      const Overflow overflow = styleComponent.properties->overflow.get().value();
 
       if (overflow != Overflow::Visible && overflow != Overflow::Auto) {
         ++layerDepth;
@@ -233,10 +233,16 @@ public:
       std::cout << "\n";
     }
 
-    const std::vector<FilterEffect>& filterEffects = properties.filter.getRequired();
+    // No-copy access to the stored effect list (avoids copying the vector on
+    // every recompute). An unset/initial `filter` has no stored value and means
+    // "no effects", so fall back to an empty list.
+    static const std::vector<FilterEffect> kNoFilterEffects;
+    const std::vector<FilterEffect>* storedFilter = properties.filter.getStoredValue();
+    const std::vector<FilterEffect>& filterEffects =
+        storedFilter != nullptr ? *storedFilter : kNoFilterEffects;
     const bool hasFilterEffect = !filterEffects.empty();
 
-    if (properties.visibility.getRequired() != Visibility::Visible) {
+    if (properties.visibility.get().value() != Visibility::Visible) {
       instance.visible = false;
     }
 
@@ -246,7 +252,7 @@ public:
 
     if (!isShadowOnlyInLightTree) {
       if (properties.clipPath.get()) {
-        if (auto resolved = resolveClipPath(dataHandle, properties.clipPath.getRequired());
+        if (auto resolved = resolveClipPath(dataHandle, properties.clipPath.get().value());
             resolved.valid()) {
           instance.clipPath = resolved;
 
@@ -261,7 +267,7 @@ public:
 
       if (properties.mask.get()) {
         if (auto resolved =
-                resolveMask(EntityHandle(registry_, styleEntity), properties.mask.getRequired());
+                resolveMask(EntityHandle(registry_, styleEntity), properties.mask.get().value());
             resolved.valid()) {
           instance.mask = std::move(resolved);
         }
@@ -271,7 +277,7 @@ public:
     if (isShape) {
       if (properties.markerStart.get()) {
         if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
-                                          properties.markerStart.getRequired(),
+                                          properties.markerStart.get().value(),
                                           ShadowBranchType::OffscreenMarkerStart);
             resolved.valid()) {
           instance.markerStart = resolved;
@@ -280,7 +286,7 @@ public:
 
       if (properties.markerMid.get()) {
         if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
-                                          properties.markerMid.getRequired(),
+                                          properties.markerMid.get().value(),
                                           ShadowBranchType::OffscreenMarkerMid);
             resolved.valid()) {
           instance.markerMid = resolved;
@@ -289,7 +295,7 @@ public:
 
       if (properties.markerEnd.get()) {
         if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
-                                          properties.markerEnd.getRequired(),
+                                          properties.markerEnd.get().value(),
                                           ShadowBranchType::OffscreenMarkerEnd);
             resolved.valid()) {
           instance.markerEnd = resolved;
@@ -299,7 +305,7 @@ public:
 
     // Create a new layer if opacity is less than 1 or if there is an effect that requires an
     // isolated group.
-    if (properties.opacity.getRequired() < 1.0) {
+    if (properties.opacity.get().value() < 1.0) {
       instance.isolatedLayer = true;
       ++layerDepth;
     }
@@ -319,8 +325,8 @@ public:
       layerDepth += 2;
     }
 
-    if (properties.mixBlendMode.getRequired() != MixBlendMode::Normal ||
-        properties.isolation.getRequired() == Isolation::Isolate) {
+    if (properties.mixBlendMode.get().value() != MixBlendMode::Normal ||
+        properties.isolation.get().value() == Isolation::Isolate) {
       instance.isolatedLayer = true;
       ++layerDepth;
     }
@@ -393,14 +399,14 @@ public:
       }
 
       const auto& style = computedStyle->properties.value();
-      if (enforceVisibility && (style.visibility.getRequired() != Visibility::Visible ||
-                                style.display.getRequired() == Display::None)) {
+      if (enforceVisibility && (style.visibility.get().value() != Visibility::Visible ||
+                                style.display.get().value() == Display::None)) {
         return;
       }
 
       // Check to see if this element has its own clip paths set.
       if (style.clipPath.get()) {
-        if (auto resolved = resolveClipPath(entity, style.clipPath.getRequired());
+        if (auto resolved = resolveClipPath(entity, style.clipPath.get().value());
             resolved.valid()) {
           if (!guard.hasRecursion(resolved.reference.handle)) {
             if (!collectClipPaths(resolved.reference.handle, clipPaths,
@@ -423,7 +429,7 @@ public:
     if (const auto* computedStyle = clipPathHandle.try_get<components::ComputedStyleComponent>()) {
       const auto& style = computedStyle->properties.value();
       if (style.clipPath.get()) {
-        if (auto resolved = resolveClipPath(clipPathHandle, style.clipPath.getRequired());
+        if (auto resolved = resolveClipPath(clipPathHandle, style.clipPath.get().value());
             resolved.valid()) {
           if (!guard.hasRecursion(resolved.reference.handle)) {
             if (!collectClipPaths(resolved.reference.handle, clipPaths,
@@ -449,8 +455,8 @@ public:
       }
 
       const auto& useProperties = useStyle->properties.value();
-      if (useProperties.visibility.getRequired() != Visibility::Visible ||
-          useProperties.display.getRequired() == Display::None) {
+      if (useProperties.visibility.get().value() != Visibility::Visible ||
+          useProperties.display.get().value() == Display::None) {
         return;
       }
 
@@ -813,7 +819,7 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
   ParseWarningSink disabledSink = ParseWarningSink::Disabled();
   const ComputedStyleComponent& style =
       StyleSystem().computeStyle(EntityHandle(registry_, entity), disabledSink);
-  const PointerEvents pointerEvents = style.properties->pointerEvents.getRequired();
+  const PointerEvents pointerEvents = style.properties->pointerEvents.get().value();
 
   if (pointerEvents == PointerEvents::None) {
     return false;
@@ -826,10 +832,10 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
     return false;
   }
 
-  const bool hasFillPaint = style.properties->fill.getRequired() != PaintServer::None();
-  const bool hasStrokePaint = style.properties->stroke.getRequired() != PaintServer::None();
+  const bool hasFillPaint = style.properties->fill.get().value() != PaintServer::None();
+  const bool hasStrokePaint = style.properties->stroke.get().value() != PaintServer::None();
   const double strokeWidth =
-      hasStrokePaint ? style.properties->strokeWidth.getRequired().value : 0.0;
+      hasStrokePaint ? style.properties->strokeWidth.get().value().value : 0.0;
 
   if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
       bounds && bounds->inflatedBy(strokeWidth).contains(point)) {
@@ -847,7 +853,7 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
       const bool skipBecauseNotPainted = config.requirePaintedFill && !hasFillPaint;
       if (!skipBecauseNotPainted &&
           ShapeSystem().pathFillIntersects(EntityHandle(registry_, entity), pointInLocal,
-                                           style.properties->fillRule.getRequired())) {
+                                           style.properties->fillRule.get().value())) {
         return true;
       }
     }

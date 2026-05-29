@@ -37,7 +37,7 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
       if (const auto* rootStyle = registry.try_get<ComputedStyleComponent>(ctx->rootEntity)) {
         if (rootStyle->properties) {
           // Use default FontMetrics for resolving root font-size (avoids circular dependency).
-          metrics.rootFontSize = rootStyle->properties->fontSize.getRequired().toPixels(
+          metrics.rootFontSize = rootStyle->properties->fontSize.get().value().toPixels(
               Box2d(), FontMetrics(), Lengthd::Extent::Mixed);
         }
       }
@@ -47,7 +47,7 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
   // Element's computed font-size for em/ex/ch units.
   if (style.properties) {
     // Resolve font-size using default metrics (font-size itself can't be em-relative to itself).
-    metrics.fontSize = style.properties->fontSize.getRequired().toPixels(Box2d(), FontMetrics(),
+    metrics.fontSize = style.properties->fontSize.get().value().toPixels(Box2d(), FontMetrics(),
                                                                          Lengthd::Extent::Mixed);
   }
 
@@ -55,7 +55,7 @@ FontMetrics fontMetricsForElement(Registry& registry, const ComputedStyleCompone
   if (auto* textEngine = registry.ctx().find<TextEngine>()) {
     if (style.properties) {
       if (const auto chUnit =
-              textEngine->measureChUnitInEm(style.properties->fontFamily.getRequired())) {
+              textEngine->measureChUnitInEm(style.properties->fontFamily.get().value())) {
         metrics.chUnitInEm = *chUnit;
       }
     }
@@ -183,7 +183,7 @@ constexpr bool ForEachShape(const F& f) {
 
 bool IsDisplayNone(EntityHandle handle, ParseWarningSink& warningSink) {
   const ComputedStyleComponent& style = StyleSystem().computeStyle(handle, warningSink);
-  return style.properties && style.properties->display.getRequired() == Display::None;
+  return style.properties && style.properties->display.get().value() == Display::None;
 }
 
 }  // namespace
@@ -303,11 +303,11 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
-  const Vector2d center(computedCircle.properties.cx.getRequired().toPixels(viewport, fontMetrics,
+  const Vector2d center(computedCircle.properties.cx.get().value().toPixels(viewport, fontMetrics,
                                                                             Lengthd::Extent::X),
-                        computedCircle.properties.cy.getRequired().toPixels(viewport, fontMetrics,
+                        computedCircle.properties.cy.get().value().toPixels(viewport, fontMetrics,
                                                                             Lengthd::Extent::Y));
-  const double radius = computedCircle.properties.r.getRequired().toPixels(viewport, fontMetrics);
+  const double radius = computedCircle.properties.r.get().value().toPixels(viewport, fontMetrics);
 
   if (radius > 0.0) {
     Path path = PathBuilder().addCircle(center, radius).build();
@@ -326,9 +326,9 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
-  const Vector2d center(computedEllipse.properties.cx.getRequired().toPixels(viewport, fontMetrics,
+  const Vector2d center(computedEllipse.properties.cx.get().value().toPixels(viewport, fontMetrics,
                                                                              Lengthd::Extent::X),
-                        computedEllipse.properties.cy.getRequired().toPixels(viewport, fontMetrics,
+                        computedEllipse.properties.cy.get().value().toPixels(viewport, fontMetrics,
                                                                              Lengthd::Extent::Y));
   const Vector2d radius(std::get<1>(computedEllipse.properties.calculateRx(viewport, fontMetrics)),
                         std::get<1>(computedEllipse.properties.calculateRy(viewport, fontMetrics)));
@@ -375,7 +375,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
 
   if (path.splineOverride) {
     return &emplaceComputedPathIfChanged(handle, path.splineOverride.value());
-  } else if (actualD.hasValue()) {
+  } else if (actualD.isSpecified()) {
     auto maybePath = parser::PathParser::Parse(actualD.get().value());
     if (maybePath.hasError()) {
       // Propagate warnings, which may be set on success too.
@@ -422,15 +422,15 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   const Box2d viewport = LayoutSystem().getViewBox(handle);
 
   const Vector2d pos(
-      computedRect.properties.x.getRequired().toPixels(viewport, fontMetrics, Lengthd::Extent::X),
-      computedRect.properties.y.getRequired().toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
-  const Vector2d size(computedRect.properties.width.getRequired().toPixels(viewport, fontMetrics,
+      computedRect.properties.x.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::X),
+      computedRect.properties.y.get().value().toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
+  const Vector2d size(computedRect.properties.width.get().value().toPixels(viewport, fontMetrics,
                                                                            Lengthd::Extent::X),
-                      computedRect.properties.height.getRequired().toPixels(viewport, fontMetrics,
+                      computedRect.properties.height.get().value().toPixels(viewport, fontMetrics,
                                                                             Lengthd::Extent::Y));
 
   if (size.x > 0.0 && size.y > 0.0) {
-    if (computedRect.properties.rx.hasValue() || computedRect.properties.ry.hasValue()) {
+    if (computedRect.properties.rx.isSpecified() || computedRect.properties.ry.isSpecified()) {
       const Vector2d radius(
           Clamp(std::get<1>(computedRect.properties.calculateRx(viewport, fontMetrics)), 0.0,
                 size.x * 0.5),
