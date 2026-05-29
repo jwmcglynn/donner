@@ -145,7 +145,11 @@ enum class BandAxis { Y, X };
 /// boundaries and `yMin`/`yMax` are the curves' Y-extent.
 void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bounds, BandAxis axis,
                 std::vector<EncodedPath::Band>& outBands,
-                std::vector<EncodedPath::Curve>& outCurves, uint16_t bandCount) {
+                std::vector<EncodedPath::Curve>& outCurves, uint16_t bandCount,
+                std::vector<uint32_t>& outGrid) {
+  // Dense cell → band-slot map (kNoBand for empty cells). Sized to the full grid even when
+  // some cells are empty, so the fragment shader can index it directly by position.
+  outGrid.assign(bandCount, EncodedPath::kNoBand);
   if (bandCount == 0 || allCurves.empty()) {
     return;
   }
@@ -178,6 +182,9 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
     if (indices.empty()) {
       continue;  // Skip empty bands entirely.
     }
+
+    // Record the dense-grid cell → packed-band-slot mapping for O(1) shader lookup.
+    outGrid[b] = static_cast<uint32_t>(outBands.size());
 
     EncodedPath::Band band = {};
     band.curveStart = static_cast<uint32_t>(outCurves.size());
@@ -258,10 +265,14 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     return result;
   }
   const uint16_t hBandCount = computeBandCount(pathHeight);
-  bandCurves(hCurves, bounds, BandAxis::Y, result.bands, result.curves, hBandCount);
+  bandCurves(hCurves, bounds, BandAxis::Y, result.bands, result.curves, hBandCount,
+             result.hBandGrid);
   if (result.bands.empty()) {
     return result;
   }
+  result.yBase = static_cast<float>(bounds.topLeft.y);
+  result.hStride = pathHeight / static_cast<float>(hBandCount);
+  result.hBandCount = hBandCount;
 
   // Vertical bands (X-monotonic curves) for the Slug vertical ray (dual-ray coverage).
   // Degenerate-width paths (e.g. a vertical hairline) skip vertical banding; the
@@ -270,7 +281,11 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     const Path monoPathX = quadPath.toMonotonic(Path::MonotonicAxis::X);
     const std::vector<CurveWithRange> vAll = extractCurves(monoPathX);
     const uint16_t vBandCount = computeBandCount(pathWidth);
-    bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, vBandCount);
+    bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, vBandCount,
+               result.vBandGrid);
+    result.xBase = static_cast<float>(bounds.topLeft.x);
+    result.vStride = pathWidth / static_cast<float>(vBandCount);
+    result.vBandCount = vBandCount;
   }
 
   // Bounding quad vertices for each horizontal band (2 triangles = 6 vertices).

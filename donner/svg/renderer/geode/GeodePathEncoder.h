@@ -75,6 +75,25 @@ struct EncodedPath {
   std::vector<Curve> vCurves;  ///< X-monotonic curves, sorted by vertical band.
   std::vector<Band> vBands;    ///< Vertical band metadata (X-strips), for the vertical ray.
 
+  /// Sentinel for a grid cell with no band (no curves overlap that strip).
+  static constexpr uint32_t kNoBand = 0xFFFFFFFFu;
+
+  /// Dense band-grid lookup, for the analytic dual-ray fragment shader (0041 §8.1). The
+  /// shader finds its band in O(1) from the sample position:
+  ///   slot = hBandGrid[clamp(floor((y - yBase) / hStride), 0, hBandCount-1)]
+  ///   if (slot != kNoBand) iterate bands[slot]'s curves for the horizontal ray.
+  /// `vBandGrid` indexes `vBands` by `(x - xBase) / vStride` for the vertical ray. The
+  /// grids map dense grid cells onto the empty-skipped `bands`/`vBands` arrays, so no
+  /// curve data is duplicated. Empty for a degenerate axis (count 0).
+  std::vector<uint32_t> hBandGrid;  ///< size == hBandCount; cell → index into `bands`.
+  std::vector<uint32_t> vBandGrid;  ///< size == vBandCount; cell → index into `vBands`.
+  float yBase = 0.0f;               ///< Top edge of the horizontal band grid (path space).
+  float hStride = 0.0f;             ///< Height of each horizontal band cell (path space).
+  uint32_t hBandCount = 0;          ///< Number of horizontal band cells.
+  float xBase = 0.0f;               ///< Left edge of the vertical band grid (path space).
+  float vStride = 0.0f;             ///< Width of each vertical band cell (path space).
+  uint32_t vBandCount = 0;          ///< Number of vertical band cells.
+
   /// Returns true if the encoded path has no bands (empty or degenerate path).
   bool empty() const { return bands.empty(); }
 };

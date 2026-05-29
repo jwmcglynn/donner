@@ -251,6 +251,46 @@ TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
   }
 }
 
+// M3c: the dense band-grid maps cells onto the packed band arrays so the analytic
+// shader can look up its band in O(1) from a sample position. Verify the grid is the
+// right size and each non-empty cell points at a band whose strip matches the cell.
+TEST(GeodePathEncoder, BandGridResolvesToCoveringBand) {
+  Path path = PathBuilder()
+                  .moveTo(Vector2d(0, 0))
+                  .lineTo(Vector2d(200, 0))
+                  .lineTo(Vector2d(100, 200))
+                  .closePath()
+                  .build();
+
+  EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+
+  ASSERT_EQ(encoded.hBandGrid.size(), encoded.hBandCount);
+  ASSERT_EQ(encoded.vBandGrid.size(), encoded.vBandCount);
+  EXPECT_GT(encoded.hBandCount, 0u);
+  EXPECT_GT(encoded.hStride, 0.0f);
+
+  for (uint32_t cell = 0; cell < encoded.hBandCount; ++cell) {
+    const uint32_t slot = encoded.hBandGrid[cell];
+    if (slot == EncodedPath::kNoBand) {
+      continue;
+    }
+    ASSERT_LT(slot, encoded.bands.size());
+    const float expectedYMin = encoded.yBase + static_cast<float>(cell) * encoded.hStride;
+    EXPECT_NEAR(encoded.bands[slot].yMin, expectedYMin, 0.01f)
+        << "Grid cell " << cell << " should map to the band covering its Y-strip";
+  }
+  for (uint32_t cell = 0; cell < encoded.vBandCount; ++cell) {
+    const uint32_t slot = encoded.vBandGrid[cell];
+    if (slot == EncodedPath::kNoBand) {
+      continue;
+    }
+    ASSERT_LT(slot, encoded.vBands.size());
+    const float expectedXMin = encoded.xBase + static_cast<float>(cell) * encoded.vStride;
+    EXPECT_NEAR(encoded.vBands[slot].xMin, expectedXMin, 0.01f);
+  }
+}
+
 // Regression: filling an OPEN subpath (e.g., an SVG `<line>` that expands to
 // MoveTo+LineTo with no explicit close) must not spill fill across the
 // half-plane. The encoder emits an implicit closing segment back to the
