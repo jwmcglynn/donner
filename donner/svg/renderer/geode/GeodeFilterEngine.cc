@@ -1629,22 +1629,51 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       const Vector2d pixelOffset = toPixelOffset(drop->dx, drop->dy);
       outputTex = applyDropShadow(arena, inputTex, *drop, sx, sy, pixelOffset.x, pixelOffset.y);
     } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
+      // Resolve the feImage placement rect in user space, honoring percent/OBB
+      // units (via the same helpers used for subregion clipping) and defaulting
+      // each absent edge to the filter region. The image is then meet/slice-fit
+      // into this rect per preserveAspectRatio. Passing the resolved rect keeps
+      // unit logic in one place instead of re-deriving it inside applyImage.
+      const double ix = node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
+                                                                      isOBB ? bboxX : 0.0, bboxW)
+                                           : filterRegionSubregion.topLeft.x;
+      const double iy = node.y.has_value() ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
+                                                                      isOBB ? bboxY : 0.0, bboxH)
+                                           : filterRegionSubregion.topLeft.y;
+      const double iw = node.width.has_value()
+                            ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
+                            : filterRegionSubregion.width();
+      const double ih = node.height.has_value()
+                            ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
+                            : filterRegionSubregion.height();
+      const Box2d imagePlacementRegion = Box2d::FromXYWH(ix, iy, iw, ih);
       outputTex = applyImage(arena, *image, inputTex.getWidth(), inputTex.getHeight(), graph, node,
-                             deviceFromFilter);
+                             deviceFromFilter, imagePlacementRegion);
     } else if (std::holds_alternative<filter_primitive::Tile>(node.primitive)) {
       // FE1 §9.20: feTile repeats the INPUT primitive's subregion to fill
       // feTile's own subregion. Default to the filter region only when there
       // is no explicit input.
       const Box2d tileSourceSubregion =
           node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
-      const Box2d sourcePixels = deviceFromFilter.transformBox(tileSourceSubregion);
-      int32_t srcX = static_cast<int32_t>(std::floor(sourcePixels.topLeft.x));
-      int32_t srcY = static_cast<int32_t>(std::floor(sourcePixels.topLeft.y));
-      int32_t srcW =
-          static_cast<int32_t>(std::ceil(sourcePixels.bottomRight.x - sourcePixels.topLeft.x));
-      int32_t srcH =
-          static_cast<int32_t>(std::ceil(sourcePixels.bottomRight.y - sourcePixels.topLeft.y));
-      outputTex = applyTile(arena, inputTex, srcX, srcY, srcW, srcH);
+      // An empty/inverted input subregion (topLeft > bottomRight, e.g. a flood
+      // whose explicit x/y/w/h lies entirely outside the filter region) must
+      // produce transparent output. transformBox() normalizes (min/max) the
+      // corners and would erase the inversion, so test emptiness on the
+      // user-space box first — matching the CPU path's `tileW > 0 && tileH > 0`
+      // gate in tiny-skia FilterGraph.cpp. A degenerate (0,0,0,0) source hits
+      // the tile shader's degenerate guard and writes transparent everywhere.
+      if (tileSourceSubregion.width() <= 0.0 || tileSourceSubregion.height() <= 0.0) {
+        outputTex = applyTile(arena, inputTex, 0, 0, 0, 0);
+      } else {
+        const Box2d sourcePixels = deviceFromFilter.transformBox(tileSourceSubregion);
+        int32_t srcX = static_cast<int32_t>(std::floor(sourcePixels.topLeft.x));
+        int32_t srcY = static_cast<int32_t>(std::floor(sourcePixels.topLeft.y));
+        int32_t srcW =
+            static_cast<int32_t>(std::ceil(sourcePixels.bottomRight.x - sourcePixels.topLeft.x));
+        int32_t srcH =
+            static_cast<int32_t>(std::ceil(sourcePixels.bottomRight.y - sourcePixels.topLeft.y));
+        outputTex = applyTile(arena, inputTex, srcX, srcY, srcW, srcH);
+      }
     } else {
       // Unsupported primitive — pass through unchanged.
       if (verbose_ && !warnedUnsupported_) {
@@ -2764,6 +2793,16 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterDiffuseLightingOutput");
 
+  // Per Filter Effects §15.9, a lighting primitive with no child light source has
+  // no defined light and produces transparent-black output. The CPU path matches
+  // this (FilterGraphExecutor substitutes a default-constructed graph Image, which
+  // tiny-skia renders as transparent). The fresh intermediate texture is already
+  // transparent, so skip the lighting dispatch entirely rather than fabricating a
+  // head-on distant light (which would render a lit surface).
+  if (!primitive.light.has_value()) {
+    return output;
+  }
+
   DiffuseLightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);
   params.diffuseConstant = static_cast<float>(primitive.diffuseConstant);
@@ -2783,21 +2822,14 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
     params.lightB = srgbToLinearChannel(params.lightB);
   }
 
-  if (primitive.light.has_value()) {
-    fillLightParams(primitive.light.value(), graph, deviceFromFilter, &params.lightType,
-                    &params.azimuthRad, &params.elevationRad, &params.lightX, &params.lightY,
-                    &params.lightZ, &params.userLightX, &params.userLightY, &params.userLightZ,
-                    &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.userPointsAtX,
-                    &params.userPointsAtY, &params.userPointsAtZ, &params.spotExponent,
-                    &params.coneAngleRad, &params.hasConeAngle, &params.pixelToUser0,
-                    &params.pixelToUser1, &params.pixelToUser2, &params.pixelToUser3,
-                    &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
-  } else {
-    // Default: distant light with azimuth=0, elevation=0.
-    params.lightType = 0;
-    params.azimuthRad = 0.0f;
-    params.elevationRad = 0.0f;
-  }
+  fillLightParams(primitive.light.value(), graph, deviceFromFilter, &params.lightType,
+                  &params.azimuthRad, &params.elevationRad, &params.lightX, &params.lightY,
+                  &params.lightZ, &params.userLightX, &params.userLightY, &params.userLightZ,
+                  &params.pointsAtX, &params.pointsAtY, &params.pointsAtZ, &params.userPointsAtX,
+                  &params.userPointsAtY, &params.userPointsAtZ, &params.spotExponent,
+                  &params.coneAngleRad, &params.hasConeAngle, &params.pixelToUser0,
+                  &params.pixelToUser1, &params.pixelToUser2, &params.pixelToUser3,
+                  &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
 
   const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
   params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)),
@@ -3026,7 +3058,8 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
 wgpu::Texture GeodeFilterEngine::applyImage(
     FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive,
     uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
-    const svg::components::FilterNode& node, const Transform2d& deviceFromFilter) {
+    const svg::components::FilterNode& node, const Transform2d& deviceFromFilter,
+    const Box2d& placementRegionUser) {
   const wgpu::Device& dev = device_.device();
 
   wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
@@ -3167,33 +3200,18 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   // region so the image covers the full primitive area.
   const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
   const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
-  const bool isOBB = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
-  const double bboxW =
-      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->width() : 1.0;
-  const double bboxH =
-      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->height() : 1.0;
 
-  double regionX = 0.0;
-  double regionY = 0.0;
-  double regionW = static_cast<double>(width);
-  double regionH = static_cast<double>(height);
-  if (node.x.has_value() && node.y.has_value() && node.width.has_value() &&
-      node.height.has_value()) {
-    const double rx = isOBB ? node.x->value * bboxW : node.x->value;
-    const double ry = isOBB ? node.y->value * bboxH : node.y->value;
-    const double rw = isOBB ? node.width->value * bboxW : node.width->value;
-    const double rh = isOBB ? node.height->value * bboxH : node.height->value;
-    regionX = rx * scaleX;
-    regionY = ry * scaleY;
-    regionW = rw * scaleX;
-    regionH = rh * scaleY;
-  } else if (graph.filterRegion.has_value()) {
-    const auto& fr = graph.filterRegion.value();
-    regionX = fr.topLeft.x * scaleX;
-    regionY = fr.topLeft.y * scaleY;
-    regionW = (fr.bottomRight.x - fr.topLeft.x) * scaleX;
-    regionH = (fr.bottomRight.y - fr.topLeft.y) * scaleY;
-  }
+  // The placement rectangle arrives already resolved in user space (percent/OBB
+  // units handled, absent x/y/width/height defaulted to the filter region by the
+  // caller). Project it into output-pixel coordinates. The previous in-function
+  // logic only honored the subregion when all four attributes were present and
+  // otherwise meet-fit the image to the whole filter region and cropped it,
+  // which broke partial subregions (e.g. `feImage x=.. width=..`) and percent
+  // units (resvg `with-subregion-{1,2,3}`).
+  double regionX = placementRegionUser.topLeft.x * scaleX;
+  double regionY = placementRegionUser.topLeft.y * scaleY;
+  double regionW = placementRegionUser.width() * scaleX;
+  double regionH = placementRegionUser.height() * scaleY;
 
   if (regionW <= 0.0 || regionH <= 0.0) {
     regionW = static_cast<double>(imgW);

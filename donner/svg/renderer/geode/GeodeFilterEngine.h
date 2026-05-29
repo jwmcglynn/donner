@@ -74,7 +74,7 @@ struct FilterResourceArena;
  * - `feDiffuseLighting` (Lambertian shading with distant/point/spot lights)
  * - `feSpecularLighting` (Phong shading with distant/point/spot lights)
  * - `feDropShadow` (blur alpha + offset + flood-tint + source-over)
- * - `feImage` (bilinear placement of external raster / in-document fragment)
+ * - `feImage` (Mitchell-Netravali bicubic placement of external raster / in-document fragment)
  * - `feTile` (wraparound tiling of input subregion across filter region)
  *
  * Unsupported primitives pass the current buffer through unchanged.
@@ -308,13 +308,17 @@ private:
   /// @param node The enclosing filter node (for primitive subregion overrides).
   /// @param deviceFromFilter The combined CTM from filter/user-space to device pixels.
   ///   Used by fragment references to project through rotation/skew.
+  /// @param placementRegionUser The feImage placement rectangle in user space,
+  ///   already resolved for percent/OBB units and with absent x/y/width/height
+  ///   defaulted to the filter region. The image is fit into this rect per
+  ///   preserveAspectRatio.
   /// @return The placed-image texture.
   wgpu::Texture applyImage(FilterResourceArena& arena,
                            const svg::components::filter_primitive::Image& primitive,
                            uint32_t width, uint32_t height,
                            const svg::components::FilterGraph& graph,
                            const svg::components::FilterNode& node,
-                           const Transform2d& deviceFromFilter);
+                           const Transform2d& deviceFromFilter, const Box2d& placementRegionUser);
 
   /// Wraparound tile of an input subregion across the full output (feTile).
   /// @param input The input texture.
