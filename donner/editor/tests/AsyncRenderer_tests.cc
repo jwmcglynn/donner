@@ -4072,6 +4072,73 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
   EXPECT_TRUE(waitForCoordinator());
 }
 
+TEST(RenderCoordinatorTest,
+     ContinuousSelectedZoomCancelsInFlightSelectionPrewarmAfterInitialCache) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="target" x="40" y="40" width="20" height="20" fill="red"/>
+    </svg>
+  )svg"));
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context "
+                    "for composited texture upload.";
+  }
+
+  const auto waitForCoordinator = [&]() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      coordinator.pollRenderResult(app, viewport, textures);
+      if (!coordinator.asyncRenderer().isBusy()) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  };
+
+  coordinator.maybeRequestRender(app, selectTool, viewport);
+  ASSERT_TRUE(waitForCoordinator());
+  ASSERT_TRUE(coordinator.compositedPresentation().diagnostics().hasCachedTextures);
+  ASSERT_NE(coordinator.compositedPresentation().diagnostics().cachedEntity,
+            target->unsafeEntityHandle().entity());
+  const std::uint64_t displayedVersion = coordinator.displayedDocVersion();
+  ASSERT_EQ(displayedVersion, app.document().currentFrameVersion());
+
+  app.setSelection(*target);
+  coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(200));
+  coordinator.maybeRequestRender(app, selectTool, viewport);
+  ASSERT_TRUE(coordinator.asyncRenderer().isBusy())
+      << "Selection should start a selected-layer prewarm after the initial cache exists.";
+
+  viewport.zoomAround(6.0, viewport.paneCenter());
+  coordinator.maybeRequestRender(app, selectTool, viewport);
+
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_FALSE(coordinator.asyncRenderer().isBusy())
+      << "The first zoom step must cancel a stale in-flight selected prewarm instead of letting it "
+         "finish over the next few frames.";
+  EXPECT_FALSE(coordinator.asyncRenderer().pollResult().has_value())
+      << "Cancelled selected prewarm should not publish stale selected-viewport tiles.";
+  EXPECT_EQ(coordinator.displayedDocVersion(), displayedVersion)
+      << "Zoom cancellation should keep presenting the previously displayed full-frame content.";
+}
+
 TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPreReparseCachedLayer) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
