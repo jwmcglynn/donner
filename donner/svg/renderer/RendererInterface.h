@@ -136,6 +136,13 @@ struct PaintParams {
   /// View box used for unit resolution and gradient coordinate conversion.
   Box2d viewBox;
   StrokeParams strokeParams;
+  /// When `paint-order` reorders fill and stroke around markers, the driver issues a
+  /// shape draw per paint component, restricting which of fill/stroke a single
+  /// `drawPath`/`drawRect`/`drawEllipse` call emits. Defaults to drawing both in the
+  /// usual fill-then-stroke order.
+  bool drawFillComponent = true;
+  /// @see drawFillComponent
+  bool drawStrokeComponent = true;
 };
 
 /**

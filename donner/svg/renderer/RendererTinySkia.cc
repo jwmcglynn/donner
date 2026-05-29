@@ -1124,7 +1124,9 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
           : nullptr;
 
   const bool usedPatternFill = patternFillPaint_.has_value();
-  if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(path.path.bounds())) {
+  std::optional<tiny_skia::Paint> fillPaint =
+      paint_.drawFillComponent ? makeFillPaint(path.path.bounds()) : std::nullopt;
+  if (fillPaint) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, tinyPath, *fillPaint, toTinyFillRule(path.fillRule),
                                  toTinyTransform(deviceFromLocalTransform_), mask);
@@ -1151,8 +1153,10 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
   }
 
   const bool usedPatternStroke = patternStrokePaint_.has_value();
-  if (std::optional<tiny_skia::Paint> strokePaint =
-          makeStrokePaint(path.path.bounds(), adjustedStroke)) {
+  std::optional<tiny_skia::Paint> strokePaint =
+      paint_.drawStrokeComponent ? makeStrokePaint(path.path.bounds(), adjustedStroke)
+                                 : std::nullopt;
+  if (strokePaint) {
     tiny_skia::Stroke tinyStroke;
     tinyStroke.width = NarrowToFloat(adjustedStroke.strokeWidth);
     tinyStroke.miterLimit = NarrowToFloat(adjustedStroke.miterLimit);
@@ -1208,7 +1212,9 @@ void RendererTinySkia::drawRect(const Box2d& rect, const StrokeParams& stroke) {
           : nullptr;
 
   const bool usedPatternFill = patternFillPaint_.has_value();
-  if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(rect)) {
+  std::optional<tiny_skia::Paint> fillPaint =
+      paint_.drawFillComponent ? makeFillPaint(rect) : std::nullopt;
+  if (fillPaint) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillRect(pixmapView, *tinyRect, *fillPaint,
                                  toTinyTransform(deviceFromLocalTransform_), mask);
@@ -1223,7 +1229,9 @@ void RendererTinySkia::drawRect(const Box2d& rect, const StrokeParams& stroke) {
   }
 
   const bool usedPatternStroke = patternStrokePaint_.has_value();
-  if (std::optional<tiny_skia::Paint> strokePaint = makeStrokePaint(rect, stroke)) {
+  std::optional<tiny_skia::Paint> strokePaint =
+      paint_.drawStrokeComponent ? makeStrokePaint(rect, stroke) : std::nullopt;
+  if (strokePaint) {
     const tiny_skia::Path path = tiny_skia::Path::fromRect(*tinyRect);
     tiny_skia::Stroke tinyStroke;
     tinyStroke.width = NarrowToFloat(stroke.strokeWidth);
@@ -1269,7 +1277,9 @@ void RendererTinySkia::drawEllipse(const Box2d& bounds, const StrokeParams& stro
           : nullptr;
 
   const bool usedPatternFill = patternFillPaint_.has_value();
-  if (std::optional<tiny_skia::Paint> fillPaint = makeFillPaint(bounds)) {
+  std::optional<tiny_skia::Paint> fillPaint =
+      paint_.drawFillComponent ? makeFillPaint(bounds) : std::nullopt;
+  if (fillPaint) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, path, *fillPaint, tiny_skia::FillRule::Winding,
                                  toTinyTransform(deviceFromLocalTransform_), mask);
@@ -1284,7 +1294,9 @@ void RendererTinySkia::drawEllipse(const Box2d& bounds, const StrokeParams& stro
   }
 
   const bool usedPatternStroke = patternStrokePaint_.has_value();
-  if (std::optional<tiny_skia::Paint> strokePaint = makeStrokePaint(bounds, stroke)) {
+  std::optional<tiny_skia::Paint> strokePaint =
+      paint_.drawStrokeComponent ? makeStrokePaint(bounds, stroke) : std::nullopt;
+  if (strokePaint) {
     tiny_skia::Stroke tinyStroke;
     tinyStroke.width = NarrowToFloat(stroke.strokeWidth);
     tinyStroke.miterLimit = NarrowToFloat(stroke.miterLimit);

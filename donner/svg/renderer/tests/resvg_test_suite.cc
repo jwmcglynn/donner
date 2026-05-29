@@ -816,28 +816,15 @@ INSTANTIATE_TEST_SUITE_P(PaintingOverflow, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingPaintOrder, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "painting/paint-order",
-            {
-                {"fill-markers-stroke.svg",
-                 Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
-                {"markers-stroke.svg",
-                 Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
-                {"markers.svg",
-                 Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
-                {"on-text.svg",
-                 Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
-                {"on-tspan.svg",
-                 Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
-                {"stroke-markers-fill.svg",
-                 Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
-                {"stroke-markers.svg",
-                 Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
-                {"stroke.svg",
-                 Params::Skip("Not impl: paint-order property (parsed name only, no rendering)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "painting/paint-order",
+                {
+                    {"on-text.svg",
+                     Params::Skip("Not impl: paint-order on text fill/stroke ordering")},
+                    {"on-tspan.svg",
+                     Params::Skip("Not impl: paint-order on tspan fill/stroke ordering")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingShapeRendering, ImageComparisonTestFixture,
