@@ -62,15 +62,16 @@ To run a test with only one test:
 bazel run -c dbg //donner/svg/renderer/tests:resvg_test_suite -- --gtest_filter="*a_transform_001"
 ```
 
-If a test is skipped, it's still useful to manually run it without code changes. With gtest, the
-quickest way to enable that is to automatically prefix the test names with `DISABLED_`. Prefixing
-this has special meaning in gtest, where the test is automatically marked disabled, but it can
-still be run manually from the command line.
+If a test is skipped, it is still useful to manually run it without editing
+`resvg_test_suite.cc`. `Params::Skip(...)` prefixes the generated gtest name with `DISABLED_`.
+Run those tests with gtest's disabled-test flag and a narrow filter; text-full-only tests still
+require a `text-full` build.
 
-To run a test that has been disabled, invoke it the same way:
+To run a skipped test:
 
 ```sh
-bazel run -c dbg //donner/svg/renderer/tests:resvg_test_suite -- --gtest_filter="*a_transform_008" --gtest_also_run_disabled_tests
+bazel run -c dbg //donner/svg/renderer/tests:resvg_test_suite -- \
+  --gtest_filter="*a_transform_008" --gtest_also_run_disabled_tests
 ```
 
 With suffix-matching, the same test identifier can be used.

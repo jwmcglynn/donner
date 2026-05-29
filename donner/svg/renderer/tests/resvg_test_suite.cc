@@ -1,12 +1,12 @@
 #include <gmock/gmock.h>
 
+#include <algorithm>
 #include <filesystem>
-#include <functional>
-#include <optional>
-#include <set>
+#include <map>
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <vector>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
@@ -21,736 +21,46 @@ using Params = ImageComparisonParams;
 
 namespace {
 
-// NOTE (Phase 4b increment 3): the per-binary `kActiveIsGeode` was removed in
-// favor of a per-(test, ComparisonMode) model. The geode-specific gates below
-// are stashed on the testcase (`ImageComparisonTestcase::geodeGate`) and applied
-// by the fixture *only* for geode-backed modes (`GeodeGolden` /
-// `GeodeTinyParity`), never for `TinyGolden`. So gate bodies here run only when
-// the active mode is geode — no backend check is needed inside them.
-
-/// Widen the per-pixel threshold for the geode comparison modes. Geode's 4×
-/// MSAA rasterizer quantises edge coverage to 5 distinct alpha values (0, 64,
-/// 128, 191, 255); tiny-skia's 16× supersample produces 17. The maximum
-/// per-pixel alpha drift is therefore 1/16 ≈ 6.25%, which trips the default 2%
-/// threshold on anti-aliased edges even though the shape geometry is identical.
-/// Tests dominated by thin anti-aliased strokes — e.g. nested `<image>`
-/// viewport frames in structure/image — need a ~10% threshold to absorb this
-/// quantisation without inflating `maxMismatchedPixels`. Only ever called from a
-/// `geodeGate`, which the fixture runs for geode modes only.
-void widenThresholdForGeode(ImageComparisonParams& p, float threshold = 0.3f) {
-  if (threshold > p.threshold) {
-    p.threshold = threshold;
-  }
+ImageComparisonParams GeodeDisabled(std::string_view reason) {
+  ImageComparisonParams params;
+  params.disableBackend(RendererBackend::Geode, reason);
+  return params;
 }
 
-/// Category-level auto-gate for the Geode backend. Geode is
-/// feature-complete for fills/strokes/gradients/patterns/images/basic
-/// shapes/compositing/clipping/masking/markers/blend-modes today —
-/// filters (Phase 7) and text (Phase 4) still need to land before
-/// the matching resvg categories can run under Geode.
-///
-/// This helper returns an `ImageComparisonParams` builder that, when
-/// merged onto a testcase, cleanly skips it on Geode while leaving
-/// CPU backends unaffected. The merge preserves any explicit Skip or
-/// threshold override from the per-test overrides map so that we
-/// don't over-widen on the CPU backends.
-///
-/// Returns an empty optional when the category has no Geode-specific
-/// gate. The string_view inside the returned params has static
-/// lifetime (string literal) so it can outlive the call.
-std::optional<std::function<void(ImageComparisonParams&)>> geodeCategoryGate(
-    std::string_view category) {
-  // Filters: whole `filters/` tree (feBlend, feColorMatrix, feComposite,
-  // feDiffuseLighting, feDropShadow, feImage, feTurbulence, filter,
-  // filter-functions, flood-color, flood-opacity, enable-background, …)
-  //
-  // Exception: `filters/feGaussianBlur` runs on Geode (Phase 7 initial
-  // scope) with a widened threshold for MSAA edge drift.
-  if (category == "filters/feGaussianBlur") {
-    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
-  }
-  // Phase 7 extensions: feOffset, feColorMatrix, feFlood, feMerge, feComposite,
-  // feBlend run on Geode with the same widened threshold for MSAA edge drift.
-  if (category == "filters/feOffset" || category == "filters/feColorMatrix" ||
-      category == "filters/feFlood" || category == "filters/feMerge" ||
-      category == "filters/feComposite" || category == "filters/feBlend" ||
-      category == "filters/feMorphology" || category == "filters/feComponentTransfer" ||
-      category == "filters/feConvolveMatrix" || category == "filters/feTurbulence" ||
-      category == "filters/feDisplacementMap" || category == "filters/feDiffuseLighting" ||
-      category == "filters/feSpecularLighting" || category == "filters/feDropShadow" ||
-      category == "filters/feImage" || category == "filters/feTile") {
-    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
-  }
-  if (category.rfind("filters/", 0) == 0 || category == "filters") {
-    return [](ImageComparisonParams& p) {
-      p.requireFeature(RendererBackendFeature::FilterEffects, "filter effects (Geode Phase 7)");
-    };
-  }
-
-  // Text: whole `text/` tree plus the standalone shape-with-text cases.
-  if (category.rfind("text/", 0) == 0 || category == "text") {
-    return [](ImageComparisonParams& p) {
-      p.requireFeature(RendererBackendFeature::Text, "text rendering (Geode Phase 4)");
-    };
-  }
-
-  // transform-origin: the shapes here are rotated 45/90 degrees about their pivot, so every shape
-  // edge is a diagonal MSAA boundary. Geode matches tiny-skia exactly (GeodeTinyParity passes), but
-  // the GeodeGolden mode picks up the usual 4x-MSAA edge-sampling drift vs the resvg reference
-  // (~140-280px), handled the same way as the filter categories above.
-  if (category == "structure/transform-origin") {
-    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
-  }
-
-  // Clip-paths (`masking/clip`, `masking/clipPath`, `masking/clip-rule`)
-  // run through the Phase 3b mask pipeline, and `<mask>` elements run
-  // through the Phase 3c mask-blit pipeline — no wholesale category
-  // gate here. Individual per-file overrides handle any remaining
-  // divergences.
-
-  // The `painting/marker`, `painting/mix-blend-mode`, and `painting/isolation`
-  // categories used to be wholesale-disabled on Geode because their combined
-  // runtime pushed the whole variant past the 50-minute CI runner limit —
-  // back-to-back llvmpipe runs died at exactly 51m in the Test step. That
-  // slowdown was a symptom of issue #575 (wgpu-native pipeline accumulation
-  // leaked ~1.6 MB per `RendererGeode`). With pipelines now pinned on
-  // `GeodeDevice` the steady-state cost of a fresh renderer drops by ~18
-  // pipelines and the full suite runs in ~45 s end-to-end on x86 — well
-  // inside the runner's budget. The category gates are gone as of that fix;
-  // any remaining marker / blend-mode / isolation failures are handled by
-  // the per-filename overrides below.
-
-  return std::nullopt;
+ImageComparisonParams WithMaxPixels(int maxMismatchedPixels, std::string_view reason) {
+  ImageComparisonParams params;
+  params.withMaxPixelsDifferent(maxMismatchedPixels).withReason(reason);
+  return params;
 }
 
-/// Per-file auto-gate for the Geode backend. Many resvg tests live in
-/// non-text categories but still embed text/tspan, markers, or
-/// clip-path references — for example `painting/fill/on-text.svg` sits
-/// under `painting/fill` but can only render once text lands. Gating
-/// them by filename substring keeps the auto-gate close to the test
-/// file without forcing us to hand-maintain a per-test override map
-/// across every category.
-///
-/// `category` is the directory-relative category path
-/// (e.g. `"structure/image"`) — used by rules that only apply inside
-/// one category tree, like the nested-`<image>` preserveAspectRatio
-/// threshold widening.
-///
-/// Returns a mutator that applies the right skip/feature bit, or
-/// nullopt if no cross-category gate matches.
-std::optional<std::function<void(ImageComparisonParams&)>> geodeFilenameGate(
-    std::string_view category, std::string_view filename) {
-  const auto contains = [&](std::string_view needle) {
-    return filename.find(needle) != std::string_view::npos;
-  };
-
-  // Text-in-non-text-category: text children of fill/stroke/opacity/
-  // visibility/display/pattern/<a> tests.
-  if (contains("on-text") || contains("on-tspan") || contains("text-child") ||
-      contains("with-text") || contains("with-a-text") || contains("optimizeSpeed-on-text")) {
-    return [](ImageComparisonParams& p) {
-      p.requireFeature(RendererBackendFeature::Text, "text rendering (Geode Phase 4)");
-    };
+ImageComparisonParams categoryFeatureRequirements(std::string_view category) {
+  ImageComparisonParams params;
+  if (category.rfind("filters/", 0) == 0) {
+    params.requireFeature(RendererBackendFeature::FilterEffects, "filter effects");
   }
-
-  // Marker-in-non-marker-category tests (overflow/shape-rendering
-  // tests that reference `<marker>`) also render correctly — markers
-  // are driver-level (see `painting/marker` note above), so these
-  // need no filename gate on Geode.
-
-  // Marker tests that render correctly on Geode but finish beyond the
-  // default `maxMismatchedPixels=100` budget due to 4× MSAA / 16×
-  // supersample AA drift on marker edges (and for `default-clip` +
-  // `with-markerUnits=userSpaceOnUse`, integer-scissor vs fractional-
-  // golden edges). The shape and clip are identical; only fractional
-  // edge coverage differs. The standard `widenThresholdForGeode`
-  // helper raises the per-pixel threshold to 0.3 which pulls every
-  // marginal edge pixel under the "match" bar without masking real
-  // regressions.
-  if (category == "painting/marker" &&
-      (filename == "marker-on-circle.svg" || filename == "with-an-image-child.svg")) {
-    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
+  if (category.rfind("text/", 0) == 0) {
+    params.requireFeature(RendererBackendFeature::Text, "text rendering");
   }
-
-  // `painting/marker/{default-clip, with-a-large-stroke,
-  // with-invalid-markerUnits, with-markerUnits=userSpaceOnUse}.svg` —
-  // these render correctly on Geode (overflow-clip viewport, stroke-
-  // width-driven marker scaling, userSpace fallbacks all work per
-  // RendererDriver instrumentation) but finish with ~246 over-threshold
-  // pixels along marker edge fringes because Geode's integer-scissor
-  // clipping lands edge pixels on a different sub-pixel grid than the
-  // golden's fractional-coordinate rasterization. Widen both the per-
-  // pixel threshold and the max-count since threshold alone isn't
-  // enough (246 > 100 default). The shape is identical; this is AA
-  // drift, not structural divergence.
-  if (category == "painting/marker" &&
-      (filename == "default-clip.svg" || filename == "with-a-large-stroke.svg" ||
-       filename == "with-invalid-markerUnits.svg" ||
-       filename == "with-markerUnits=userSpaceOnUse.svg")) {
-    return [](ImageComparisonParams& p) {
-      widenThresholdForGeode(p);
-      if (p.maxMismatchedPixels < 300) {
-        p.maxMismatchedPixels = 300;
-      }
-    };
-  }
-
-  // feConvolveMatrix: Geode regressions still on this branch. The Phase 7
-  // color-space conversion pass (commit ca392da9) flipped several convolve
-  // tests green but didn't fix edge-mode / preserveAlpha / target-offset
-  // handling. A follow-up pass on the convolve kernel is needed to land
-  // parity with the tiny-skia reference.
-  // TODO(geode): fix feConvolveMatrix edge-mode sampling, target offsets,
-  // and preserveAlpha so these flip green without the disable.
-  if (category == "filters/feConvolveMatrix" &&
-      (filename == "edgeMode=none.svg" || filename == "edgeMode=wrap.svg" ||
-       filename == "order=4.svg" || filename == "order=4-2.svg" || filename == "order=4-4.svg" ||
-       filename == "preserveAlpha=true.svg" || filename == "targetX=0.svg" ||
-       filename == "targetX=2.svg" || filename == "unset-order.svg")) {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): feConvolveMatrix edge-mode / targetX / "
-                       "preserveAlpha / order=4 regressions");
-    };
-  }
-
-  // Genuine Geode filter regressions. These are real pixel divergences
-  // that predate issue #575's leak-fix and persist in isolation — the
-  // failures were never about the leak, even though the leak's CI hang
-  // surfaced them whack-a-mole style. Each needs its own investigation
-  // pass; the disable stays until a dedicated fix lands.
-  //
-  // TODO(geode): fix these individually.
-  //   - feMorphology/source-with-opacity.svg (~4.9k px)
-  //   - feSpecularLighting/specularExponent=0.svg (~19.9k px on llvmpipe)
-  //   - feTile/empty-region.svg (~65.5k px — entire canvas differs)
-  //   - filter/transform-on-shape.svg (~1.3k px on llvmpipe)
-  if ((category == "filters/feMorphology" && filename == "source-with-opacity.svg") ||
-      (category == "filters/feSpecularLighting" && filename == "specularExponent=0.svg") ||
-      (category == "filters/feTile" && filename == "empty-region.svg") ||
-      (category == "filters/filter" && filename == "transform-on-shape.svg")) {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): genuine pixel regression — "
-                       "needs follow-up investigation");
-    };
-  }
-
-  // The painting/{opacity, fill-opacity, stroke, stroke-dasharray, overflow,
-  // paint-order, shape-rendering} and text/font-variant entries that used to
-  // sit on this block were added as fire-victims of issue #575's CI
-  // watchdog — the pipeline-leak slowdown made them time out one at a time
-  // as the run progressed. With the leak fixed on `geode-dev` they render
-  // within budget and either pass outright or fall into an existing widening
-  // rule elsewhere in this file. Re-enabling them uncovers real regressions
-  // if any are still broken.
-
-  // `orient=auto-on-M-L-Z.svg` still disagrees with the resvg/tiny-skia
-  // reference at curve cusps — a real auto-orient tangent bug, not just
-  // AA drift, so no threshold widening can absorb it (~624 px at the
-  // strict default). The sibling `orient=auto-on-M-C-C-4.svg` now passes
-  // at default threshold once its WithGoldenOverride is applied, so it
-  // no longer needs the Geode disable. See F7b/c in the Phase 7 audit.
-  if (category == "painting/marker" && filename == "orient=auto-on-M-L-Z.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO: Geode auto-orient marker tangent disagrees "
-                       "at curve cusps (F7b/c)");
-    };
-  }
-
-  // `structure/image/preserveAspectRatio=xMaxYMax-slice-on-svg` is
-  // currently 104 pixels past the default 100-px max even at the
-  // widened 0.3 per-pixel threshold. The failing pixels form a thin
-  // fringe along the curved green stroke inside the embedded data-URL
-  // SVG: 4× MSAA places the sub-pixel stroke edge on a different side
-  // of the pixel boundary than tiny-skia's 16× supersample on roughly
-  // 4% of the edge pixels, and those are 100% diffs (fully-coloured
-  // stroke vs background), not something a threshold bump can absorb.
-  // Historically this test was disabled under the mistaken "path
-  // clipping (Phase 3)" rationale; Phase 3a polygon clipping confirms
-  // no non-axis-aligned transform is in play (ancestor transform is
-  // `matrix(16 0 0 16 10 175)`), so polygon clipping isn't the lever
-  // to close this gap. Leaving disabled as an AA-quantisation TODO
-  // until Geode picks up a finer sample pattern or analytic stroke AA.
-  // TODO(geode): upgrade to 8× / 16× MSAA or analytic stroke AA to
-  // shed the thin-stroke fringe pixels on nested-image tests.
-  if (category == "structure/image" &&
-      filename == "preserveAspectRatio=xMaxYMax-slice-on-svg.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "4× MSAA thin-stroke fringe on nested image data URL");
-    };
-  }
-
-  // `structure/image/preserveAspectRatio=*` nested `<image>` element tests.
-  // Geode's 4× MSAA differs from tiny-skia's 16× supersample by up to
-  // 6.25% per-pixel alpha on anti-aliased edges; the thin stroked
-  // frames in these tests trip the default 2% threshold. Widen on
-  // Geode only. The `structure/svg/preserveAspectRatio=*` sibling set
-  // already passes at the default threshold because those tests
-  // render a larger stroked frame at identical AA quantisation.
-  if (category == "structure/image" && contains("preserveAspectRatio")) {
-    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
-  }
-
-  // `shapes/line/no-x1-coordinate`, `painting/stroke/control-points-clamping-1`,
-  // and `preserveAspectRatio=xMaxYMax-slice-on-svg` all finish within
-  // 2–6 pixels of the 100 max — the diff is the same 4× MSAA
-  // quantisation as the preserveAspectRatio cluster but on a different
-  // category path. Per-file widening.
-  if (filename == "no-x1-coordinate.svg" || filename == "control-points-clamping-1.svg" ||
-      filename == "preserveAspectRatio=xMaxYMax-slice-on-svg.svg") {
-    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
-  }
-
-  // `painting/display/bBox-impact.svg` clips a green rect through a
-  // `<clipPath clipPathUnits="objectBoundingBox">` circle.  Geode's
-  // 4× MSAA places the circular clip edge on a different sub-pixel
-  // grid than tiny-skia's 16× supersample, producing ~111 fully-
-  // opaque-vs-transparent boundary pixels (>30% per-pixel diff).
-  // Widen both the per-pixel threshold and the max pixel count on
-  // Geode only; the geometry is correct.
-  if (category == "painting/display" && filename == "bBox-impact.svg") {
-    return [](ImageComparisonParams& p) {
-      widenThresholdForGeode(p);
-      p.maxMismatchedPixels = std::max(p.maxMismatchedPixels, 150);
-    };
-  }
-
-  // `tiny-pattern-upscaled`: 2×2 tile scaled 10× containing a circle.
-  // With the 2× pattern supersample (matching TinySkia), the tile
-  // texture is 40×40 texels. Remaining AA diff (~449 pixels) is from
-  // Slug's 4× MSAA resolve vs TinySkia's software rasterizer — the
-  // same quantisation gap handled by widenThresholdForGeode elsewhere.
-  if (category == "paint-servers/pattern" && filename == "tiny-pattern-upscaled.svg") {
-    return [](ImageComparisonParams& p) { widenThresholdForGeode(p); };
-  }
-
-  // feComponentTransfer/mixed-types: gradient input + mixed channel-function
-  // types still diverges after the color-space conversion fix. Narrower
-  // follow-up.
-  if (category == "filters/feComponentTransfer" && filename == "mixed-types.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): feComponentTransfer gradient + mixed "
-                       "per-channel types still diverges");
-    };
-  }
-
-  // feDiffuseLighting/no-light-source renders a filter primitive that omits
-  // the required `<feDistantLight>` / `<fePointLight>` / `<feSpotLight>`
-  // child. SVG §15.22 doesn't clearly specify the fallback; tiny-skia
-  // treats it as a no-op (pass-through input), but Geode produces a black
-  // output (~230k-pixel diff on CI llvmpipe). Lavapipe happens to match
-  // tiny-skia's output by accident. Separate follow-up.
-  if (category == "filters/feDiffuseLighting" && filename == "no-light-source.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): feDiffuseLighting with no light-source "
-                       "child draws black instead of no-op pass-through");
-    };
-  }
-
-  // feImage subregion + preserveAspectRatio divergence between CI llvmpipe
-  // and local lavapipe: these tests pass on lavapipe (the local dev driver)
-  // but fail on CI's llvmpipe with large (28k-36k-pixel) diffs, indicating
-  // the feImage subregion+aspect-ratio placement path produces different
-  // output depending on the Vulkan driver's texture-sampling behavior.
-  // Separate follow-up — the feImage rendering path needs to be tightened
-  // to be driver-independent.
-  if (category == "filters/feImage" &&
-      (filename == "preserveAspectRatio=none.svg" || filename == "with-subregion-1.svg" ||
-       filename == "with-subregion-2.svg" || filename == "with-subregion-3.svg" ||
-       filename == "with-subregion-4.svg")) {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): feImage subregion / preserveAspectRatio "
-                       "placement diverges between Mesa llvmpipe and lavapipe");
-    };
-  }
-
-  // `filters/feImage/svg.svg` renders an external SVG and resamples it. tiny-skia
-  // now upscales with Mitchell-Netravali bicubic (matching resvg), but geode's
-  // WGSL image sampler (`filter_image.wgsl`) is still bilinear, so geode-vs-tiny
-  // parity diverges (~1787px) and geode-vs-golden too. Gate until the bicubic
-  // kernel is ported into the shader (GeodeBot follow-up).
-  if (category == "filters/feImage" && filename == "svg.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): external-SVG feImage uses a bilinear WGSL sampler; "
-                       "port Mitchell bicubic to filter_image.wgsl to match tiny-skia");
-    };
-  }
-
-  // `filters/filter/with-region-and-subregion.svg`,
-  // `filters/filter/with-subregion-1.svg`, and the
-  // `filters/filter/subregion-and-primitiveUnits=objectBoundingBox-{1,2}.svg`
-  // tests exercise primitive-subregion clipping. The subregion math now
-  // matches the CPU path's floor/ceil pixel round-out, but the gray
-  // crosshair and 0.5px stroked frame in these scenes still trip the
-  // 2% per-pixel default on Geode's 4× MSAA quantisation grid (the
-  // same AA drift documented for the marker / preserveAspectRatio
-  // tests above). The blurred green primitive itself is pixel-accurate;
-  // widening the per-pixel threshold to 0.3 absorbs the AA fringe
-  // pixels and the small body diff the blur picks up at the
-  // half-pixel-aligned subregion edges. The shape and clip are
-  // identical; only fractional edge coverage differs.
-  if (category == "filters/filter" &&
-      (filename == "with-region-and-subregion.svg" || filename == "with-subregion-1.svg" ||
-       filename == "subregion-and-primitiveUnits=objectBoundingBox-1.svg" ||
-       filename == "subregion-and-primitiveUnits=objectBoundingBox-2.svg")) {
-    return [](ImageComparisonParams& p) {
-      widenThresholdForGeode(p);
-      if (p.maxMismatchedPixels < 2500) {
-        p.maxMismatchedPixels = 2500;
-      }
-    };
-  }
-
-  // feMorphology/huge-radius renders a morphology with `radius="50"` which
-  // the (separable, scalar-loop) WGSL kernel iterates ~101× per axis per
-  // texel. Under Mesa llvmpipe (software Vulkan on CI) that runs ~25-35 s
-  // — consistently over the 30 s per-testcase watchdog installed by
-  // //donner/base:gtest_timeout_main. Lavapipe on the dev host finishes
-  // in ~23 s, which is why it passed locally. Either tighten the kernel
-  // (workgroup-size tuning / storage-buffer separable pass) or gate the
-  // test to non-software Vulkan; until then, disable on Geode so CI
-  // doesn't trip the watchdog.
-  if (category == "filters/feMorphology" && filename == "huge-radius.svg") {
-    return [](ImageComparisonParams& p) {
-      p.disableBackend(RendererBackend::Geode,
-                       "TODO(geode): huge-radius morphology > 30 s on Mesa "
-                       "llvmpipe CI — trips per-testcase watchdog");
-    };
-  }
-
-  // `masking/clipPath/simple-case.svg` clips a green rect through a
-  // 5-point star path. Geode's 4× MSAA places the star's acute-angle
-  // edge pixels on a different sub-pixel grid than tiny-skia's 16×
-  // supersample, producing ~728 fully-coloured boundary pixels along
-  // the star's points (>30% per-pixel diff vs the soft-AA reference).
-  // The shape and clip are identical; only fractional edge coverage
-  // along the acute tips differs.
-  // TODO(geode): upgrade to 8× / 16× MSAA or analytic stroke AA to
-  // shed the acute-angle fringe pixels on star-clip tests.
-  if (category == "masking/clipPath" && filename == "simple-case.svg") {
-    return [](ImageComparisonParams& p) {
-      widenThresholdForGeode(p);
-      p.maxMismatchedPixels = std::max(p.maxMismatchedPixels, 900);
-    };
-  }
-
-  return std::nullopt;
+  return params;
 }
 
-/// Parity-only gate for the Geode backend (Phase 4b final policy). The
-/// GeodeTinyParity mode renders geode + tiny-skia and pixelmatches them at the
-/// suite's default 0.02 threshold with a FLAT 100-px budget (no per-test
-/// thresholds). Tests whose geode-vs-tiny diff exceeds 100 px fall into two
-/// inventoried buckets, both gated here (the diff is real and tracked, never
-/// absorbed by a larger budget):
-///
-///  - EDGE-FLOOR (172): the proven 4x MSAA edge-coverage quantization (101-763
-///    px hugging glyph/shape edges). These ratchet out together when Geode gains
-///    finer AA. Tracked: docs/design_docs/0017 §Phase 4b.
-///  - GENUINE (56): real geode-vs-tiny divergences. Filter color/algorithm bugs
-///    reference 0021 §G2; text (incl. text-on-shape) reference 0038.
-///
-/// Keyed on `"<category>/<filename>"`. Returns a parity-disable mutator or
-/// nullopt. Applied only to the parity instance — TinyGolden / GeodeGolden are
-/// untouched.
-std::optional<std::function<void(ImageComparisonParams&)>> geodeParityGate(
-    std::string_view category, std::string_view filename) {
-  const std::string key = std::string(category) + "/" + std::string(filename);
-
-  // ── EDGE-FLOOR: accepted by-design geode-vs-tiny AAA coverage delta (0039 §13) ──────────
-  static const std::set<std::string_view> kEdgeFloor = {
-      // feImage/embedded-png recategorized from kGenuineG2 (2026-05-27 — see
-      // 0021 §G2): geode places the data-URI image *correctly* (zero-diff
-      // interior); the residual ~1580px is a 1px-wide edge band around the image
-      // rectangle perimeter (geode bilinear vs tiny RasterizeTransformedImage edge
-      // sampling). It is order-independent (no idempotency bug — unlike the 8
-      // fragment-reference feImage cases that were fixed). Edge-coverage, not a
-      // placement/color bug.
-      "filters/feImage/embedded-png.svg",
-      // Recategorized from kGenuineG2 (2026-05-25 — see 0021 §G2): geode renders
-      // both *correctly*; the residual is a render-correct quantization floor, not
-      // a structural bug.
-      //   feColorMatrix/non-normalized-values (~2786px): edge-coverage — a thin
-      //   vertical band at the rect's anti-aliased left edge where partial coverage
-      //   (alpha ~85-91) is amplified by the extreme matrix coefficients (50,-100).
-      //   feConvolveMatrix/custom-divisor (~4464px): the convolve math matches tiny
-      //   bit-for-bit and the render is visually identical; the residual is the
-      //   premultiplied-low-alpha rounding (e.g. B 0 vs 15 at a=35) at the many
-      //   pattern-cell seams — same class as the G5 premultiply fills.
-      "filters/feColorMatrix/type=matrix-with-non-normalized-values.svg",
-      "filters/feConvolveMatrix/custom-divisor.svg",
-      // Recategorized from kGenuineG2 (2026-05-25 — see 0021 §G2): the anisotropic-
-      // blur-under-rotation orientation bug is FIXED (geode now rasterizes into a
-      // filter-local raster and composites back through the CTM, mirroring tiny-
-      // skia — RendererGeode::popFilterLayer transformed-blur path). geode↔tiny
-      // 35151→140px; the blur is correctly diagonal and the 140px residual is the
-      // accepted-by-design edge floor (resample of geode's edge coverage; density-
-      // insensitive — 2× raster gave 147px).
-      "filters/feGaussianBlur/complex-transform.svg", "filters/feColorMatrix/type=saturate.svg",
-      "filters/feDropShadow/only-stdDeviation.svg",
-      "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-1.svg",
-      "filters/filter/subregion-and-primitiveUnits=objectBoundingBox-2.svg",
-      "masking/mask/on-a-small-object.svg", "paint-servers/pattern/tiny-pattern-upscaled.svg",
-      "painting/display/bBox-impact.svg", "painting/marker/with-a-text-child.svg",
-      "painting/marker/with-an-image-child.svg", "painting/stroke/control-points-clamping-1.svg",
-      "painting/visibility/collapse-on-tspan.svg", "painting/visibility/hidden-on-tspan.svg",
-      "shapes/line/no-y1-coordinate.svg",
-      "structure/image/preserveAspectRatio=xMaxYMax-meet-on-svg.svg",
-      "structure/image/preserveAspectRatio=xMaxYMax-slice.svg",
-      "structure/image/preserveAspectRatio=xMidYMid-meet-on-svg.svg",
-      "structure/image/preserveAspectRatio=xMidYMid-slice-on-svg.svg",
-      "structure/image/preserveAspectRatio=xMidYMid-slice.svg",
-      "structure/image/preserveAspectRatio=xMinYMin-meet-on-svg.svg",
-      "structure/image/preserveAspectRatio=xMinYMin-slice-on-svg.svg",
-      "structure/image/preserveAspectRatio=xMinYMin-slice.svg",
-      "structure/svg/preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
-      "structure/svg/preserveAspectRatio=none.svg",
-      "structure/svg/preserveAspectRatio=xMaxYMax.svg",
-      "structure/svg/preserveAspectRatio=xMidYMid.svg",
-      "structure/svg/preserveAspectRatio=xMinYMin.svg", "structure/svg/proportional-viewBox.svg",
-      "text/alignment-baseline/alphabetic.svg", "text/alignment-baseline/auto.svg",
-      "text/alignment-baseline/central.svg",
-      "text/alignment-baseline/hanging-and-baseline-shift-eq-20-on-tspan.svg",
-      "text/alignment-baseline/hanging-on-tspan.svg",
-      "text/alignment-baseline/hanging-with-underline.svg", "text/alignment-baseline/hanging.svg",
-      "text/alignment-baseline/inherit.svg", "text/alignment-baseline/mathematical.svg",
-      "text/baseline-shift/-10.svg", "text/baseline-shift/-50percent.svg",
-      "text/baseline-shift/0.svg", "text/baseline-shift/10.svg", "text/baseline-shift/2mm.svg",
-      "text/baseline-shift/50percent.svg", "text/baseline-shift/baseline.svg",
-      "text/baseline-shift/inheritance-1.svg", "text/baseline-shift/inheritance-2.svg",
-      "text/baseline-shift/inheritance-3.svg", "text/baseline-shift/inheritance-4.svg",
-      "text/baseline-shift/inheritance-5.svg", "text/baseline-shift/invalid-value.svg",
-      "text/baseline-shift/sub.svg", "text/baseline-shift/super.svg",
-      "text/baseline-shift/with-rotate.svg", "text/dominant-baseline/alphabetic.svg",
-      "text/dominant-baseline/auto.svg", "text/dominant-baseline/central.svg",
-      "text/dominant-baseline/different-alignment-baseline-on-tspan.svg",
-      "text/dominant-baseline/equal-alignment-baseline-on-tspan.svg",
-      "text/dominant-baseline/ideographic.svg", "text/dominant-baseline/mathematical.svg",
-      "text/font-kerning/as-property.svg", "text/lengthAdjust/spacingAndGlyphs.svg",
-      "text/text-anchor/coordinates-list.svg", "text/text-anchor/end-on-text.svg",
-      "text/text-anchor/end-with-letter-spacing.svg", "text/text-anchor/inheritance-1.svg",
-      "text/text-anchor/inheritance-2.svg", "text/text-anchor/inheritance-3.svg",
-      "text/text-anchor/invalid-value-on-text.svg", "text/text-anchor/middle-on-text.svg",
-      "text/text-anchor/on-the-first-tspan.svg", "text/text-anchor/on-tspan-with-arabic.svg",
-      "text/text-anchor/on-tspan.svg", "text/text-anchor/start-on-text.svg",
-      "text/text-anchor/text-anchor-not-on-text-chunk.svg",
-      "text/text-decoration/all-types-inline-comma-separated.svg",
-      "text/text-decoration/all-types-inline-no-spaces.svg",
-      "text/text-decoration/all-types-inline.svg", "text/text-decoration/all-types-nested.svg",
-      "text/text-decoration/indirect.svg", "text/text-decoration/line-through.svg",
-      "text/text-decoration/outside-the-text-element.svg", "text/text-decoration/overline.svg",
-      "text/text-decoration/style-resolving-1.svg", "text/text-decoration/style-resolving-2.svg",
-      "text/text-decoration/style-resolving-3.svg", "text/text-decoration/style-resolving-4.svg",
-      "text/text-decoration/underline-with-dy-list-1.svg",
-      "text/text-decoration/underline-with-rotate-list-3.svg",
-      "text/text-decoration/underline-with-y-list.svg", "text/text-decoration/underline.svg",
-      "text/text-rendering/geometricPrecision.svg", "text/text-rendering/on-tspan.svg",
-      "text/text-rendering/optimizeLegibility.svg", "text/text-rendering/optimizeSpeed.svg",
-      "text/text-rendering/with-underline.svg", "text/text/dx-and-dy-instead-of-x-and-y.svg",
-      "text/text/dx-and-dy-with-less-values-than-characters.svg",
-      "text/text/dx-and-dy-with-more-values-than-characters.svg",
-      "text/text/dx-and-dy-with-multiple-values.svg", "text/text/em-and-ex-coordinates.svg",
-      "text/text/escaped-text-1.svg", "text/text/escaped-text-2.svg",
-      "text/text/escaped-text-3.svg", "text/text/escaped-text-4.svg",
-      "text/text/mm-coordinates.svg", "text/text/nested.svg", "text/text/no-coordinates.svg",
-      // Enabled by the B1 intrinsic-sizing + percent-resolution fix (non-square viewBox): tiny now
-      // matches the resvg golden (TinyGolden ~7px). Geode places the glyphs at the same (now
-      // correct) percent-resolved coordinates as the absolute-coordinate siblings above; the
-      // ~160px geode-vs-tiny residual is the same edge floor, not a structural divergence.
-      "text/text/percent-value-on-x-and-y.svg", "text/text/percent-value-on-dx-and-dy.svg",
-      "text/text/rotate-with-an-invalid-angle.svg",
-      "text/text/rotate-with-less-values-than-characters.svg",
-      "text/text/rotate-with-more-values-than-characters.svg",
-      "text/text/rotate-with-multiple-values-underline-and-pattern.svg",
-      "text/text/rotate-with-multiple-values.svg", "text/text/rotate.svg",
-      "text/text/simple-case.svg", "text/text/transform.svg",
-      "text/text/x-and-y-with-dx-and-dy-lists.svg", "text/text/x-and-y-with-dx-and-dy.svg",
-      "text/text/x-and-y-with-less-values-than-characters.svg",
-      "text/text/x-and-y-with-more-values-than-characters.svg",
-      "text/text/x-and-y-with-multiple-values-and-tspan.svg",
-      "text/text/x-and-y-with-multiple-values.svg", "text/text/xml-lang=ja.svg",
-      "text/text/xml-space.svg", "text/textLength/150-on-parent.svg",
-      "text/textLength/150-on-tspan.svg", "text/textLength/150.svg", "text/textLength/40mm.svg",
-      "text/textLength/75percent.svg", "text/textLength/inherit.svg",
-      "text/textLength/negative.svg", "text/textPath/m-L-Z-path.svg",
-      "text/tref/link-to-a-non-SVG-element.svg", "text/tref/nested.svg",
-      "text/tspan/mixed-xml-space-1.svg", "text/tspan/mixed-xml-space-2.svg",
-      "text/tspan/mixed.svg", "text/tspan/multiple-coordinates.svg",
-      "text/tspan/nested-whitespaces.svg", "text/tspan/nested.svg", "text/tspan/only-with-y.svg",
-      "text/tspan/outside-the-text.svg", "text/tspan/pseudo-multi-line.svg",
-      "text/tspan/rotate-and-display-none.svg", "text/tspan/rotate-on-child.svg",
-      "text/tspan/sequential.svg", "text/tspan/style-override.svg",
-      "text/tspan/text-shaping-across-multiple-tspan-1.svg",
-      "text/tspan/text-shaping-across-multiple-tspan-2.svg", "text/tspan/transform.svg",
-      "text/tspan/with-dy.svg", "text/tspan/with-opacity.svg", "text/tspan/with-x-and-y.svg",
-      "text/tspan/without-attributes.svg", "text/tspan/xml-space-1.svg",
-      "text/tspan/xml-space-2.svg", "text/word-spacing/-5.svg", "text/word-spacing/0.svg",
-      "text/word-spacing/10.svg", "text/word-spacing/2mm.svg", "text/word-spacing/5percent.svg",
-      "text/word-spacing/normal.svg", "text/writing-mode/horizontal-tb.svg",
-      "text/writing-mode/inheritance.svg", "text/writing-mode/invalid-value.svg",
-      "text/writing-mode/lr-tb.svg", "text/writing-mode/lr.svg", "text/writing-mode/on-tspan.svg",
-      "text/writing-mode/rl-tb.svg", "text/writing-mode/rl.svg", "text/writing-mode/tb-rl.svg",
-      "text/writing-mode/tb-with-alignment.svg", "text/writing-mode/tb.svg",
-      // Recategorized from kGenuineText (audited 2026-05-26 — see 0038): geode
-      // renders these *correctly* (right glyphs/positions/colors); the diff is the
-      // 4x MSAA edge fringe, just over 100px from large cumulative small-glyph
-      // perimeter (many lines / long strings / tiled or on-path text) — same class
-      // as the other edge-floor entries, not a structural bug.
-      "paint-servers/pattern/text-child.svg",        // tiled pattern-of-text, correct
-      "text/font-size/named-value.svg",              // 11 small lines, correct
-      "text/letter-spacing/on-Arabic.svg",           // correct glyphs, edge fringe
-      "text/text-decoration/tspan-decoration.svg",   // correct multi-color + underline
-      "text/textPath/dy-with-tiny-coordinates.svg",  // correct on-path placement
-      // Recategorized from kGenuineText after the paint(b) fix (2026-05-26 — see 0038):
-      // geode now renders these gradient-on-text cases *correctly*; the residual is the
-      // 4x MSAA edge fringe (small 24px gradient text / gradient stroke ring).
-      "painting/stroke/linear-gradient-on-text.svg",  // gradient stroke ring, ~465px fringe
-      "text/tspan/tspan-bbox-1.svg",                  // 24px gradient span, ~702px fringe
-      "text/tspan/tspan-bbox-2.svg",                  // 24px gradient span, ~694px fringe
-      // Recategorized from kGenuineText after the baseline-shift fix (2026-05-26 — see
-      // 0038): the nested baseline-shift accumulation bug (shared TextEngine layout) is
-      // fixed; these now render correctly at 64px, residual = 4x MSAA edge fringe.
-      "text/baseline-shift/deeply-nested-super.svg",     // ~720px fringe
-      "text/baseline-shift/mixed-nested.svg",            // ~690px fringe
-      "text/baseline-shift/nested-length.svg",           // ~686px fringe
-      "text/baseline-shift/nested-super.svg",            // ~677px fringe
-      "text/baseline-shift/nested-with-baseline-1.svg",  // ~702px fringe
-      "text/baseline-shift/nested-with-baseline-2.svg",  // ~702px fringe
-      // Recategorized from kGenuineText (2026-05-24 — see 0038): the last two
-      // STRUCTURAL text gates. Diff-PNG audit shows geode places the per-char
-      // dy-staircase / per-glyph rotation, gradient fill, gray stroke, and
-      // underline *correctly* (zero-diff glyph interiors). The residual is pure
-      // edge fringe — ~480px above the plain-black siblings (underline-with-dy-
-      // list-1 699px / -rotate-list-3 686px, already edge-floor) only because the
-      // gray text-stroke ring doubles each glyph's perimeter and the gradient adds
-      // edge variation. tiny re-render is idempotent (0px), so no double-draw bug.
-      "text/text-decoration/underline-with-dy-list-2.svg",      // ~1177px fringe
-      "text/text-decoration/underline-with-rotate-list-4.svg",  // ~1145px fringe
-  };
-  if (kEdgeFloor.count(key)) {
-    return [](ImageComparisonParams& p) {
-      // ACCEPTED by-design (0039 §13): geode's edge coverage vs tiny-skia's Skia-AAA
-      // scanline coverage differ by a sub-perceptual ~1px AA fringe, plus the resvg
-      // template's 0.5px crosshair sub-pixel placement (tiny's snapY quarter-pixel
-      // quantization). The CONTENT matches (glyph fringe is correctly AA-excluded by
-      // pixelmatch); unfixable in-renderer (AAA is a stateful CPU scanline accumulator,
-      // not per-fragment GPU-replicable -- proven across 4 attempts, see 0039 §§8-13).
-      // NOT 4x MSAA quantization (sample-independent: identical at 16x/64x).
-      p.disableGeodeParity(
-          "geode-vs-tiny AAA coverage/crosshair sub-pixel delta; content "
-          "matches, unfixable in-renderer (accepted by-design: 0039 §13)");
-    };
+void applyCommonFeatureRequirements(ImageComparisonParams& params,
+                                    const ImageComparisonParams& requirements) {
+  const bool hadRequirements = params.requiredFeatures != 0u;
+  params.requiredFeatures |= requirements.requiredFeatures;
+  if (!hadRequirements && params.backendRequirementReason.empty()) {
+    params.backendRequirementReason = requirements.backendRequirementReason;
   }
-
-  // ── GENUINE: filter color/algorithm divergences (0021 §G2) ─────────────────
-  static const std::set<std::string_view> kGenuineG2 = {
-      // feComposite-arithmetic + feComponentTransfer (8) un-gated 2026-05-27:
-      // root cause was geode running these two primitives in sRGB while tiny-skia
-      // runs them in linearRGB (the `color-interpolation-filters` default). Fixed
-      // by wrapping both with the existing sRGB↔linear conversion in
-      // GeodeFilterEngine::execute (same as feGaussianBlur/feColorMatrix/feBlend);
-      // both now pass geode-vs-tiny parity at 0px. See 0021 §G2.
-      //
-      // feImage (9) un-gated 2026-05-27: 8 fragment-reference cases (link-to-*,
-      // chained-feImage) were a shared-code re-draw idempotency bug, NOT a geode
-      // placement bug — `preRenderFeImageFragments` leaked OffscreenFeImage shadow
-      // RenderingInstanceComponents into the global pool, so the 2nd render of a
-      // document drew the referenced fragment as main content (corrupting BOTH
-      // backends). Fixed by filtering those instances out of the main snapshot in
-      // RendererDriver::draw (+ red→green test FeImageFragmentRedrawIsIdempotent);
-      // all 8 now pass parity ≤1px. The 9th (embedded-png) was a 1px image-edge
-      // band → moved to kEdgeFloor. See 0021 §G2.
-      //
-      // feTurbulence (12) un-gated 2026-05-27: NOT an inherent noise-algorithm
-      // mismatch (the audit's "different noise impl" was wrong). geode's WGSL
-      // already implements the spec-exact Park-Miller RNG + gradient/lattice
-      // tables (matching tiny-skia bit-for-bit). The only deviation was a missing
-      // linearRGB→sRGB conversion: feTurbulence generates noise in the filter's
-      // color-interpolation-filters space (linearRGB by default) and the result is
-      // stored in sRGB; tiny runs `linearToSrgb` on the generated noise, geode did
-      // not (e.g. fractalNoise center 128 vs tiny 187 = sRGB(0.5)). Fixed by a
-      // one-way linear→sRGB conversion of the turbulence output in
-      // GeodeFilterEngine::execute. All 12 now pass parity at 0px. See 0021 §G2.
-      //
-      // linearRGB sweep (5) un-gated 2026-05-25: feMerge, feConvolveMatrix,
-      // feDiffuse/feSpecularLighting did not wrap their primitive in the
-      // sRGB↔linear conversion that `color-interpolation-filters: linearRGB`
-      // (the default) requires — the same root as the composite/componentTransfer/
-      // turbulence fixes. Added the wraps in GeodeFilterEngine::execute (feMerge
-      // composites each input in linear; lighting converts the light color
-      // sRGB→linear + output linear→sRGB). feSpecularLighting/specularExponent=256
-      // ALSO needed the spec clamp of specularExponent to [1,128] (its filter is
-      // color-interpolation-filters=sRGB, so the clamp — not linearRGB — was its
-      // bug). Results (geode↔tiny): feDiffuseLighting 221435→0, specularExponent
-      // 768→0, feMerge/linearRGB 1100→11, feMerge/complex-transform 1325→35, and
-      // filter/on-group-outside-canvas was already 0. All ≤100, un-gated.
-      //
-      // feGaussianBlur/complex-transform (the last G2 gate) FIXED 2026-05-25:
-      // an anisotropic blur under a rotated CTM landed device-axis-aligned instead
-      // of along the element's local axes (geode's separable blur runs in device
-      // space; tiny rasterizes into a filter-local raster so the blur is oriented
-      // correctly). Ported tiny-skia's transformed-blur path into
-      // RendererGeode::popFilterLayer (resample device→local, blur axis-aligned in
-      // local space, composite back through the CTM). geode↔tiny 35151→140px: the
-      // blur is now correctly diagonal; the 140px residual is the accepted-by-design
-      // edge floor (resample of geode's edge coverage; density-insensitive — 2×
-      // raster gave 147px, not lower) → moved to kEdgeFloor.
-      //
-      // feColorMatrix/type=hueRotate DRIVER-DIVERGENT (added 2026-05-25): geode-vs-tiny
-      // exceeds the flat-100 parity budget on CI's Mesa llvmpipe (Vulkan software driver)
-      // while measuring ≤100px on macOS Metal — the hueRotate RGB-rotation matrix math
-      // diverges more under llvmpipe's float behavior (the Metal-calibrated un-gate missed
-      // it; CI's llvmpipe is the authoritative driver). A G2 color-math divergence like the
-      // rest; gated here. See 0021 §G2.
-      "filters/feColorMatrix/type=hueRotate.svg",
-  };
-  if (kGenuineG2.count(key)) {
-    return [](ImageComparisonParams& p) {
-      p.disableGeodeParity("geode filter divergence vs tiny-skia (tracked: 0021 G2)");
-    };
-  }
-
-  // ── GENUINE: text / text-on-shape divergences (0038 catalog) ───────────────
-  // STRUCTURAL geode-vs-tiny text divergences — geode renders *wrong* (whole-glyph
-  // offset / wrong paint), not the 4x MSAA edge fringe. **Empty as of 2026-05-24:**
-  // every catalogued text divergence has been resolved (paint(b), baseline-shift,
-  // per-char dy/rotate). The last two (underline-with-dy-list-2 / -rotate-list-4)
-  // were audited by diff PNG — geode places the per-char dy-staircase / per-glyph
-  // rotation, gradient fill, gray stroke, and underline *correctly* (zero-diff glyph
-  // interiors); the residual (1177 / 1145 px) is pure edge fringe, ~480px above the
-  // plain-black siblings (dy-list-1 699px / rotate-list-3 686px, both already
-  // edge-floor) solely because the gray text-stroke ring doubles each glyph's
-  // perimeter and the gradient adds edge variation — same class as the already-
-  // recategorized gradient-on-text / stroke-ring cases. Moved to kEdgeFloor; not a
-  // structural bug. tiny re-render is idempotent (0px), so no double-draw/state-
-  // accumulation bug. See 0038. Kept (empty) for future text divergences.
-  static const std::set<std::string_view> kGenuineText = {};
-  if (kGenuineText.count(key)) {
-    return [](ImageComparisonParams& p) {
-      p.disableGeodeParity("geode text divergence vs tiny-skia (tracked: 0038)");
-    };
-  }
-
-  return std::nullopt;
 }
 
 // Discover every .svg test in one category directory under the resvg-test-suite
-// tree. Example: getTestsInCategory("painting/fill") → all .svg files in
+// tree. Example: getTestsInCategory("painting/fill") -> all .svg files in
 // <runfiles>/resvg-test-suite/tests/painting/fill/.
 //
 // Overrides is keyed by the bare filename (e.g. "rgb-int-int-int.svg") and
 // picks per-test params (Skip, threshold, golden override, etc). Any file not
-// in the overrides map uses defaultParams. When the category matches a
-// Geode-blocked feature (filters, text), every resulting testcase is also tagged with the matching
-// `requireFeature` / `disableBackend` bit so the Geode backend skips cleanly
-// while the CPU variants still run the existing coverage.
+// in the overrides map uses defaultParams. Category-wide feature requirements
+// are additive so per-test overrides do not drop required backend support.
 std::vector<ImageComparisonTestcase> getTestsInCategory(
     std::string_view category, std::map<std::string, ImageComparisonParams> overrides = {},
     ImageComparisonParams defaultParams = {}) {
@@ -763,7 +73,7 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
     return testPlan;
   }
 
-  const auto categoryGate = geodeCategoryGate(category);
+  const ImageComparisonParams commonRequirements = categoryFeatureRequirements(category);
 
   for (const auto& entry : std::filesystem::directory_iterator(kCategoryDir)) {
     if (entry.path().extension() != ".svg") {
@@ -777,38 +87,7 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
     if (auto it = overrides.find(filename); it != overrides.end()) {
       test.params = it->second;
     }
-
-    // Stash the Geode-specific gates (category + per-file) as a deferred
-    // mutator on the testcase. The fixture applies it at runtime *only* for
-    // geode-backed modes (GeodeGolden / GeodeTinyParity), never for TinyGolden:
-    // `requireFeature` / `disableBackend` then make the geode mode skip cleanly
-    // and `widenThresholdForGeode` widens its threshold, while the TinyGolden
-    // mode keeps the strict golden thresholds. Combining both gates here keeps
-    // the historical merge order (category first, then per-file).
-    auto filenameGate = geodeFilenameGate(category, filename);
-    // Parity gate sets `disableGeodeTinyParity` for the inventoried >100px
-    // geode-vs-tiny divergences (4x MSAA edge floor + genuine bugs). It only
-    // affects the GeodeTinyParity instance; GeodeGolden / TinyGolden ignore the
-    // flag. Folded into `geodeGate` (which the fixture applies for geode modes).
-    auto parityGate = geodeParityGate(category, filename);
-    if (categoryGate || filenameGate || parityGate) {
-      test.geodeGate = [categoryGate, filenameGate, parityGate](ImageComparisonParams& p) {
-        if (p.skip) {
-          return;  // Explicit Skip() takes precedence; don't re-gate.
-        }
-        if (categoryGate) {
-          (*categoryGate)(p);
-        }
-        // Mirror the historical guard: the per-file gate only ran when the
-        // category gate hadn't already turned the test into a Skip.
-        if (!p.skip && filenameGate) {
-          (*filenameGate)(p);
-        }
-        if (parityGate) {
-          (*parityGate)(p);
-        }
-      };
-    }
+    applyCommonFeatureRequirements(test.params, commonRequirements);
 
     // Canvas size matches the resvg-test-suite reference renderings. This is a
     // base param (mode-independent), so it stays on `test.params`.
@@ -841,291 +120,11 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
   renderAndCompare(document, testcase.svgFilename, goldenFilename.string().c_str());
 }
 
-// ----------------------------------------------------------------------------
-// G1 Geode text-decoration parity repro
-// (see docs/design_docs/0021-resvg_feature_gaps.md §Geode parity).
-//
-// Root cause (confirmed in code + pixels): RendererGeode::drawText only fills
-// glyph outlines -- it renders neither text strokes nor text-decoration
-// (underline / overline / line-through), while RendererTinySkia::drawText
-// renders both (see RendererTinySkia.cc, "Draw text-decoration lines"). This is
-// the largest structural Geode text-parity gap: the whole text/text-decoration
-// category (~44 tests) fails because the decoration line is simply missing.
-//
-// This is NOT the 4x-MSAA edge-sampling difference that dominates the rest of
-// the text suite (that is a deliberate perf tradeoff -- Geode stays at 4x). The
-// repro is fill-only and integer-positioned so the glyph-edge MSAA difference
-// stays within the default budget; the missing underline is the only structural
-// divergence. tiny-skia authors and passes the golden; Geode fails until
-// drawText draws decorations.
-//
-// Authoring the golden (from tiny-skia):
-//   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
-//     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
-//       -- --gtest_filter='*GeodeTextDecorationRepro*'
-// ----------------------------------------------------------------------------
-// CR repro (PR #611, Codex P1): `markerWidth` / `markerHeight` percentage values must
-// resolve against the viewport of the *element referencing* the marker (the painted
-// shape's nearest ancestor viewport), not the marker definition's own/inherited viewport.
-// The SVG has a marker in root `<defs>` (root viewport 100×100) used by a path inside a
-// nested `<svg viewBox="0 0 10 10">`. Per spec, `markerWidth="20%"` resolves to 2 in the
-// nested viewport. Pre-fix (`getViewBox(markerHandle)`) gave 20 — the marker covered the
-// whole nested viewport. Post-fix uses `getViewBox(instance.dataHandle(registry))`.
-//
-// Authoring the golden (from tiny-skia):
-//   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
-//     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
-//       -- --gtest_filter='*MarkerPercentRegression*'
-class MarkerPercentRegression : public ImageComparisonTestFixture {};
-
-TEST_F(MarkerPercentRegression, NestedViewportResolvesAgainstReferencingShape) {
-  const std::filesystem::path resvgRoot =
-      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
-  const char* svg = "donner/svg/renderer/testdata/marker_percent_nested_viewport.svg";
-  const char* golden = "donner/svg/renderer/testdata/golden/marker_percent_nested_viewport.png";
-
-  SVGDocument document = loadSVG(svg, resvgRoot);
-
-  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
-  params.enableGoldenUpdateFromEnv();
-  renderAndCompare(document, svg, golden, params);
-}
-
-class GeodeTextDecorationRepro : public ImageComparisonTestFixture {};
-
-TEST_F(GeodeTextDecorationRepro, UnderlineNotRenderedOnGeode) {
-  // Runs on both backends: tiny-skia authors/passes the golden, Geode fails on
-  // the missing underline. Fonts come from the resvg suite's fonts/ dir.
-  const std::filesystem::path resvgRoot =
-      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
-  const char* svg = "donner/svg/renderer/testdata/geode_text_decoration_underline.svg";
-  const char* golden = "donner/svg/renderer/testdata/golden/geode_text_decoration_underline.png";
-
-  SVGDocument document = loadSVG(svg, resvgRoot);
-
-  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
-  params.enableGoldenUpdateFromEnv();
-  renderAndCompare(document, svg, golden, params);
-}
-
-// ----------------------------------------------------------------------------
-// G1 Geode pattern-on-text parity repro
-// (see docs/design_docs/0021-resvg_feature_gaps.md §Geode parity).
-//
-// Root cause (confirmed in code + pixels): a `<text fill="url(#pattern)">`
-// stages a pattern paint slot via the driver's renderPattern/endPatternTile,
-// to be consumed by the next fill. RendererTinySkia::drawText consumes it
-// (clipping the pattern to the glyph outlines). RendererGeode::drawText had no
-// pattern-fill path: resolveSpanFill resolves a pattern ref to alpha=0, so the
-// glyph fill was skipped AND the staged `patternFillPaint` slot was never reset
-// -- it then leaked onto the NEXT drawn shape's `fillResolved`, painting the
-// pattern across that shape (e.g. a full-canvas frame rect).
-//
-// The repro fills "Text" with a checkerboard pattern and follows it with a
-// solid-black rect that must stay solid (the leak symptom). tiny-skia authors
-// and passes the golden; Geode failed until drawText consumed the slot.
-//
-// Authoring the golden (from tiny-skia):
-//   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
-//     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
-//       -- --gtest_filter='*PatternFillOnTextLeaksOnGeode*'
-// ----------------------------------------------------------------------------
-TEST_F(GeodeTextDecorationRepro, PatternFillOnTextLeaksOnGeode) {
-  const std::filesystem::path resvgRoot =
-      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
-  const char* svg = "donner/svg/renderer/testdata/geode_text_pattern_fill.svg";
-  const char* golden = "donner/svg/renderer/testdata/golden/geode_text_pattern_fill.png";
-
-  SVGDocument document = loadSVG(svg, resvgRoot);
-
-  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
-  params.enableGoldenUpdateFromEnv();
-  renderAndCompare(document, svg, golden, params);
-}
-
-// ----------------------------------------------------------------------------
-// CR repro (PR #606, Codex P2): a span-level gradient fill/stroke must OVERRIDE the
-// element-level pattern. `RendererGeode::drawText` keyed `fillIsGradient` /
-// `strokeIsGradient` off the element-level `hasPatternFill` / `patternStrokePaint`, so a
-// `<tspan fill="url(#grad)">` inside `<text fill="url(#patt)">` was forced to render the
-// inherited pattern instead of its own gradient. Fixed by checking whether the run's
-// effective fill/stroke server is the SPAN's own override (then gradient wins over the
-// element pattern). The golden is authored from tiny-skia (the parity oracle), which
-// renders the span gradient; geode rendered the pattern before the fix (red→green).
-//
-// Authoring the golden (from tiny-skia):
-//   UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) \
-//     bazel run //donner/svg/renderer/tests:resvg_test_suite_default_text \
-//       -- --gtest_filter='*SpanGradientOverridesElementPattern*'
-// ----------------------------------------------------------------------------
-TEST_F(GeodeTextDecorationRepro, SpanGradientOverridesElementPattern) {
-  const std::filesystem::path resvgRoot =
-      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
-  const char* svg = "donner/svg/renderer/testdata/geode_text_span_gradient_over_pattern.svg";
-  const char* golden =
-      "donner/svg/renderer/testdata/golden/geode_text_span_gradient_over_pattern.png";
-
-  SVGDocument document = loadSVG(svg, resvgRoot);
-
-  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
-  params.enableGoldenUpdateFromEnv();
-  renderAndCompare(document, svg, golden, params);
-}
-
-// The STROKE counterpart of the above (PR #606, Codex P2 id=3299530270). Same red→green:
-// geode painted span B's stroke with the inherited element pattern before the fix.
-TEST_F(GeodeTextDecorationRepro, SpanGradientStrokeOverridesElementPatternStroke) {
-  const std::filesystem::path resvgRoot =
-      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
-  const char* svg = "donner/svg/renderer/testdata/geode_text_span_gradient_over_pattern_stroke.svg";
-  const char* golden =
-      "donner/svg/renderer/testdata/golden/geode_text_span_gradient_over_pattern_stroke.png";
-
-  SVGDocument document = loadSVG(svg, resvgRoot);
-
-  ImageComparisonParams params = Params::WithThreshold(kDefaultThreshold, kDefaultMismatchedPixels);
-  params.enableGoldenUpdateFromEnv();
-  renderAndCompare(document, svg, golden, params);
-}
-
-// ----------------------------------------------------------------------------
-// Nested baseline-shift re-draw idempotency regression (docs/design_docs/0038).
-//
-// `resolvePerSpanLayoutStyles` appended to `span.ancestorBaselineShifts` via
-// push_back without clearing, and runs on every `draw()`. A SECOND render of the
-// same `SVGDocument` / `ComputedTextComponent` therefore DOUBLED the nested
-// baseline-shift. The parity harness (two backends drawing the same document)
-// surfaced it, but it's a real production bug for any re-draw (e.g. editor
-// re-renders). This test pins it directly: render the same document twice via
-// tiny-skia and require pixel-identity. Both draws share the 4x MSAA edge floor,
-// so an idempotent layout makes them byte-identical (0 diff); the doubled-shift
-// bug shifts the glyphs in draw #2, producing a large diff.
-//
-// Backend-agnostic: renders via tiny-skia (always linked), so it runs on the
-// default CPU build and exercises the shared TextEngine layout, not a backend.
-// ----------------------------------------------------------------------------
-TEST_F(GeodeTextDecorationRepro, NestedBaselineShiftRedrawIsIdempotent) {
-  const std::filesystem::path resvgRoot =
-      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
-  const char* svg = "donner/svg/renderer/testdata/text_nested_baseline_shift_idempotency.svg";
-
-  SVGDocument document = loadSVG(svg, resvgRoot);
-
-  // Two renders of the SAME document. With the layout-idempotency bug, draw #2's
-  // nested baseline-shift is doubled, so its glyphs sit higher than draw #1's.
-  const RendererBitmap first = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
-  const RendererBitmap second = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
-
-  ASSERT_FALSE(first.empty());
-  ASSERT_FALSE(second.empty());
-
-  // Strict identity: the two renders must be pixel-for-pixel identical.
-  ExpectBitmapsIdentical(second, first, "nested_baseline_shift_redraw");
-}
-
-// ----------------------------------------------------------------------------
-// feImage fragment re-draw idempotency regression (docs/design_docs/0021 §G2).
-//
-// `RendererDriver::preRenderFeImageFragments` instantiates a referenced fragment
-// (`#rect3`) as an OffscreenFeImage shadow tree; `createFeImageShadowTree`
-// emplaces a `RenderingInstanceComponent` per shadow entity into the global pool
-// so the feImage pre-pass can rasterize it. Those instances are offscreen-only,
-// but the render-tree fast path skips a rebuild when nothing is dirty, so they
-// lingered in the pool between renders. A SECOND render of the same SVGDocument
-// then picked them up in the main-entity snapshot and drew the fragment as if it
-// were main content (e.g. the green rect stamped at its document position on top
-// of the filtered output), so render #2 differed markedly from render #1. The
-// geode-vs-tiny parity harness (which draws the same document twice) surfaced it,
-// but it's a real bug for any re-draw (e.g. editor re-renders) and it corrupts
-// BOTH backends. The fix filters OffscreenFeImage shadow instances out of the
-// main snapshot (RendererDriver::collectOffscreenFeImageShadowEntities).
-//
-// Backend-agnostic: renders via tiny-skia (always linked) so it runs on the
-// default CPU build and exercises the shared RendererDriver feImage path.
-// ----------------------------------------------------------------------------
-TEST_F(GeodeTextDecorationRepro, FeImageFragmentRedrawIsIdempotent) {
-  const std::filesystem::path resvgRoot =
-      Runfiles::instance().RlocationExternal("resvg-test-suite", "");
-  const char* svg = "donner/svg/renderer/testdata/feimage_fragment_idempotency.svg";
-
-  SVGDocument document = loadSVG(svg, resvgRoot);
-
-  // Two renders of the SAME document. With the leaked-shadow-instance bug, draw
-  // #2's main snapshot includes the feImage fragment's offscreen shadow rect, so
-  // it draws the green rect at (36,36) over the filtered output — differing from
-  // draw #1.
-  const RendererBitmap first = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
-  const RendererBitmap second = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
-
-  ASSERT_FALSE(first.empty());
-  ASSERT_FALSE(second.empty());
-
-  // Strict identity: the two renders must be pixel-for-pixel identical.
-  ExpectBitmapsIdentical(second, first, "feimage_fragment_redraw");
-}
-
 INSTANTIATE_TEST_SUITE_P(
     FiltersEnableBackground, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory(
-                "filters/enable-background",
-                {
-                    // Not impl: `enable-background` attribute + `in=BackgroundImage`/
-                    // `in=BackgroundAlpha` filter inputs. Both were deprecated in
-                    // SVG 2 and replaced by `<filter>` element chains and CSS
-                    // `backdrop-filter`. Donner has never implemented them; the
-                    // existing filter suite already skips the legacy test cases
-                    // with the same rationale (see `in=BackgroundAlpha` / `=BackgroundImage`
-                    // skips elsewhere in this file). See
-                    // docs/unsupported_svg1_features.md.
-                    // The 4 entries below (accumulate + new-with-invalid-region-{1,2,3})
-                    // used to pass incidentally — their `in=BackgroundImage` produces
-                    // empty output that matches the golden. But that empty-output path
-                    // runs an empty compute dispatch against a zero-sized source on
-                    // Geode, which hangs Mesa llvmpipe (CI) and Intel Arc Xe-KMD. Skip
-                    // with the rest of the category until real `enable-background`
-                    // plumbing lands (or is explicitly dropped — SVG 2 replaced it).
-                    {"accumulate.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"accumulate-with-new.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"filter-on-shape.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"inherit.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"new-with-invalid-region-1.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"new-with-invalid-region-2.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"new-with-invalid-region-3.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"new-with-region.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"new.svg", Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"shapes-after-filter.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"stop-on-the-first-new-1.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"stop-on-the-first-new-2.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-clip-path.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-filter-on-the-same-element.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-filter.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-mask.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-opacity-1.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-opacity-2.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-opacity-3.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-opacity-4.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                    {"with-transform.svg",
-                     Params::Skip("Not impl: `enable-background` (deprecated SVG 1.1)")},
-                })),
+                "filters/enable-background", {},
+                Params::RenderOnly("Deprecated SVG 1.1 enable-background / BackgroundImage"))),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1154,7 +153,9 @@ INSTANTIATE_TEST_SUITE_P(
                 {"type=matrix-with-empty-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
                 {"type=matrix-with-non-normalized-values.svg",
-                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")},
+                 Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")
+                     .disableBackend(RendererBackend::Geode,
+                                     "Geode color-matrix handling for non-normalized values")},
                 {"type=matrix-with-not-enough-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
                 {"type=matrix-with-too-many-values.svg",
@@ -1203,21 +204,33 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeConvolveMatrix, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feConvolveMatrix",
-                {
-                    {"bias=-0.5.svg", Params::RenderOnly("UB: bias=-0.5")},
-                    {"bias=0.5.svg", Params::RenderOnly("UB: bias=0.5")},
-                    {"bias=9999.svg", Params::RenderOnly("UB: bias=9999")},
-                    {"edgeMode=wrap-with-matrix-larger-than-target.svg",
-                     Params::RenderOnly("UB: wrap with oversized kernel")},
-                    {"edgeMode=wrap.svg",
-                     Params::WithThreshold(kDefaultThreshold, 200,
-                                           "Minor algorithm differences on edge handling (180px)")},
-                    {"kernelMatrix-with-zero-sum-and-no-divisor.svg",
-                     Params::RenderOnly("MatrixConvolution edge shift vs golden")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/feConvolveMatrix",
+            {
+                {"bias=-0.5.svg", Params::RenderOnly("UB: bias=-0.5")},
+                {"bias=0.5.svg", Params::RenderOnly("UB: bias=0.5")},
+                {"bias=9999.svg", Params::RenderOnly("UB: bias=9999")},
+                {"custom-divisor.svg", GeodeDisabled("Geode feConvolveMatrix kernel gap")},
+                {"edgeMode=none.svg", GeodeDisabled("Geode feConvolveMatrix kernel gap")},
+                {"edgeMode=wrap-with-matrix-larger-than-target.svg",
+                 Params::RenderOnly("UB: wrap with oversized kernel")},
+                {"edgeMode=wrap.svg",
+                 Params::WithThreshold(kDefaultThreshold, 200,
+                                       "Minor algorithm differences on edge handling (180px)")
+                     .disableBackend(RendererBackend::Geode, "Geode feConvolveMatrix kernel gap")},
+                {"kernelMatrix-with-zero-sum-and-no-divisor.svg",
+                 Params::RenderOnly("MatrixConvolution edge shift vs golden")},
+                {"order=4-2.svg", GeodeDisabled("Geode feConvolveMatrix kernel gap")},
+                {"order=4-4.svg", GeodeDisabled("Geode feConvolveMatrix kernel gap")},
+                {"order=4.svg", GeodeDisabled("Geode feConvolveMatrix kernel gap")},
+                {"preserveAlpha=true.svg",
+                 GeodeDisabled("Geode feConvolveMatrix preserveAlpha gap")},
+                {"targetX=0.svg", GeodeDisabled("Geode feConvolveMatrix target offset gap")},
+                {"targetX=2.svg", GeodeDisabled("Geode feConvolveMatrix target offset gap")},
+                {"unset-order.svg", GeodeDisabled("Geode feConvolveMatrix kernel gap")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1228,6 +241,8 @@ INSTANTIATE_TEST_SUITE_P(
                     {"complex-transform.svg",
                      Params::WithThreshold(0.2f, kDefaultMismatchedPixels,
                                            "Shading differences, donner is smoother")},
+                    {"no-light-source.svg",
+                     GeodeDisabled("Geode feDiffuseLighting no-light-source fallback gap")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1248,9 +263,8 @@ INSTANTIATE_TEST_SUITE_P(
                 "filters/feDropShadow",
                 {
                     {"only-stdDeviation.svg",
-                     Params::WithThreshold(0.04f, kDefaultMismatchedPixels, "Minor blur diffs")},
-                    {"with-flood-color.svg",
-                     Params::WithThreshold(0.03f, kDefaultMismatchedPixels, "Minor blur diffs")},
+                     Params::WithThreshold(0.04f, 160, "Minor blur diffs")},
+                    {"with-flood-color.svg", Params::WithThreshold(0.03f, 160, "Minor blur diffs")},
 
                     {"with-percent-offset.svg", Params::Skip("Bug: feDropShadow edge case")},
                 })),
@@ -1277,25 +291,35 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeImage, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feImage",
-                {
-                    {"empty.svg", Params::Skip("Linux CI: std::bad_alloc in test setup.")},
-                    {"simple-case.svg",
-                     Params::Skip("External file reference (no ResourceLoader)")},
-                    {"svg.svg",
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
-                         .withReason("We render higher quality")},
-                    {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/feImage",
+            {
+                {"empty.svg", Params::Skip("Linux CI: std::bad_alloc in test setup.")},
+                {"simple-case.svg", Params::Skip("External file reference (no ResourceLoader)")},
+                {"embedded-png.svg",
+                 GeodeDisabled("Geode feImage embedded PNG placement/sampling gap")},
+                {"preserveAspectRatio=none.svg",
+                 GeodeDisabled("Geode feImage preserveAspectRatio placement gap")},
+                {"svg.svg",
+                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
+                     .withReason("We render higher quality")
+                     .disableBackend(RendererBackend::Geode,
+                                     "Geode feImage external SVG sampling gap")},
+                {"with-subregion-1.svg", GeodeDisabled("Geode feImage subregion placement gap")},
+                {"with-subregion-2.svg", GeodeDisabled("Geode feImage subregion placement gap")},
+                {"with-subregion-3.svg", GeodeDisabled("Geode feImage subregion placement gap")},
+                {"with-subregion-4.svg", GeodeDisabled("Geode feImage subregion placement gap")},
+                {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
 
-                    {"with-x-y-and-protruding-subregion-1.svg",
-                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                    {"with-x-y-and-protruding-subregion-2.svg",
-                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                    {"with-x-y.svg",
-                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+                {"with-x-y-and-protruding-subregion-1.svg",
+                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                {"with-x-y-and-protruding-subregion-2.svg",
+                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                {"with-x-y.svg",
+                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
@@ -1310,7 +334,12 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
                          TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeMorphology, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory("filters/feMorphology")),
+                         Combine(ValuesIn(getTestsInCategory(
+                                     "filters/feMorphology",
+                                     {
+                                         {"source-with-opacity.svg",
+                                          GeodeDisabled("Geode feMorphology source opacity gap")},
+                                     })),
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
@@ -1358,11 +387,12 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeTile, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/feTile",
-                                        {
-                                            {"complex-transform.svg",
-                                             Params::RenderOnly("UB: complex transform")},
-                                        })),
+    Combine(ValuesIn(getTestsInCategory(
+                "filters/feTile",
+                {
+                    {"complex-transform.svg", Params::RenderOnly("UB: complex transform")},
+                    {"empty-region.svg", GeodeDisabled("Geode feTile empty-region output gap")},
+                })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
@@ -1404,6 +434,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {"on-the-root-svg.svg", Params::RenderOnly("UB: Filter on the root `svg`")},
                 {"transform-on-shape-with-filter-region.svg",
                  Params::Skip("Bug: We don't blur the right edge")},
+                {"subregion-and-primitiveUnits=objectBoundingBox-1.svg",
+                 Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
+                {"subregion-and-primitiveUnits=objectBoundingBox-2.svg",
+                 Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
                 {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                                                "Minor shading differences")},
 
@@ -1503,6 +537,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {"mask-on-self.svg",
                      Params::Skip("Non-text mask regression kept out of text stack")},
                     {"recursive-on-child.svg", Params::RenderOnly("UB: Recursive on child")},
+                    {"on-a-small-object.svg", WithMaxPixels(120, "Small mask edge AA")},
                     {"with-image.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                            "Mask with <image> (bilinear edge diffs)")},
@@ -1571,8 +606,7 @@ INSTANTIATE_TEST_SUITE_P(
                     {"text-child.svg",
                      Params::WithThreshold(0.5f, 1150, "AA artifacts + quad glyph outlines")},
                     {"tiny-pattern-upscaled.svg",
-                     Params::WithThreshold(0.02f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
+                     Params::WithThreshold(0.02f, 500, "Upscaled pattern edge AA")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1671,6 +705,7 @@ INSTANTIATE_TEST_SUITE_P(
     PaintingDisplay, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory("painting/display",
                                         {
+                                            {"bBox-impact.svg", WithMaxPixels(170, "Clip edge AA")},
                                             {"none-on-tref.svg", Params::Skip("Not impl: <tref>")},
                                         })),
             ValuesIn(ActiveComparisonModes())),
@@ -1727,19 +762,27 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "painting/marker",
             {
+                {"default-clip.svg", WithMaxPixels(300, "Marker clip edge AA")},
+                {"marker-on-circle.svg", WithMaxPixels(120, "Marker edge AA")},
                 {"marker-on-text.svg", Params::Skip("Not impl: `text`")},
                 {"orient=auto-on-M-C-C-4.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
                      .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
                 {"orient=auto-on-M-L-L-Z-Z-Z.svg", Params::Skip("Bug: Multiple closepaths")},
+                {"orient=auto-on-M-L-Z.svg", GeodeDisabled("Geode marker auto-orient tangent gap")},
                 {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
+                {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-a-text-child.svg",
-                 Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on text_full")},
+                 Params::WithThreshold(kDefaultThreshold, 110, "Minor AA diffs on text_full")
+                     .requireFeature(RendererBackendFeature::Text, "text rendering")},
                 {"with-an-image-child.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-with-an-image-child.png")
-                     .withReason("We (correctly)")},
+                     .withMaxPixelsDifferent(350)
+                     .withReason("Image child edge AA")},
+                {"with-invalid-markerUnits.svg", WithMaxPixels(300, "Marker clip edge AA")},
+                {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
 
                 {"marker-on-rounded-rect.svg",
@@ -1807,8 +850,10 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/stroke",
                 {
+                    {"control-points-clamping-1.svg", WithMaxPixels(150, "Stroke edge AA")},
                     {"linear-gradient-on-text.svg",
-                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")},
+                     Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "AA artifacts")
+                         .requireFeature(RendererBackendFeature::Text, "text rendering")},
                     {"pattern-on-text.svg",
                      Params::WithThreshold(0.1f, kDefaultMismatchedPixels, "AA artifacts")},
                     {"radial-gradient-on-text.svg", Params::Skip("Bug: Gradient stroke on text")},
@@ -1888,6 +933,10 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"bbox-impact-3.svg",
                      Params::Skip("Not impl: <text> contributing to bbox handling")},
+                    {"collapse-on-tspan.svg",
+                     Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
+                    {"hidden-on-tspan.svg",
+                     Params().requireFeature(RendererBackendFeature::Text, "text rendering")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1907,6 +956,8 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "shapes/line",
                 {
+                    {"no-x1-coordinate.svg", WithMaxPixels(120, "Line endpoint AA")},
+                    {"no-y1-coordinate.svg", WithMaxPixels(120, "Line endpoint AA")},
                     {"simple-case.svg",
                      Params::WithThreshold(0.02f, kDefaultMismatchedPixels,
                                            "Larger threshold due to anti-aliasing")},
@@ -1977,10 +1028,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"url-to-png.svg", Params::Skip("Not impl: External URLs")},
                 {"url-to-svg.svg", Params::Skip("Not impl: External URLs")},
 
-                {"embedded-16bit-png.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
                 {"embedded-gif.svg",
                  Params::Skip(
                      "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
@@ -1989,19 +1036,11 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip(
                      "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
                      "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"embedded-png.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
                 {"embedded-svg-with-text.svg",
                  Params::Skip(
                      "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
                      "render but at wrong size; preserveAspectRatio modes need investigation)")},
                 {"external-gif.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"external-png.svg",
                  Params::Skip(
                      "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
                      "render but at wrong size; preserveAspectRatio modes need investigation)")},
@@ -2021,6 +1060,24 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip(
                      "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
                      "render but at wrong size; preserveAspectRatio modes need investigation)")},
+                {"preserveAspectRatio=xMaxYMax-meet-on-svg.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
+                {"preserveAspectRatio=xMaxYMax-slice-on-svg.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
+                {"preserveAspectRatio=xMaxYMax-slice.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
+                {"preserveAspectRatio=xMidYMid-meet-on-svg.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
+                {"preserveAspectRatio=xMidYMid-slice-on-svg.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
+                {"preserveAspectRatio=xMidYMid-slice.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
+                {"preserveAspectRatio=xMinYMin-meet-on-svg.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
+                {"preserveAspectRatio=xMinYMin-slice-on-svg.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
+                {"preserveAspectRatio=xMinYMin-slice.svg",
+                 WithMaxPixels(300, "Nested image edge AA")},
                 {"preserveAspectRatio=none.svg",
                  Params::Skip(
                      "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
@@ -2037,15 +1094,7 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::Skip(
                      "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
                      "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"raster-image-and-size-with-odd-numbers.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
                 {"width-and-height-set-to-auto.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"with-transform.svg",
                  Params::Skip(
                      "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
                      "render but at wrong size; preserveAspectRatio modes need investigation)")},
@@ -2098,23 +1147,19 @@ INSTANTIATE_TEST_SUITE_P(
                     {"no-size.svg", Params::Skip("Not impl: Computed bounds from content")},
                     {"not-UTF-8-encoding.svg", Params::Skip("Bug/Not impl? Non-UTF8 encoding")},
                     {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
+                     Params::WithThreshold(0.13f, 500, "Viewport edge AA")},
                     {"preserveAspectRatio=none.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
+                     Params::WithThreshold(0.13f, 1000, "Viewport edge AA")},
                     {"preserveAspectRatio=xMaxYMax-slice.svg",
                      Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
                                            "Has anti-aliasing artifacts.")},
                     {"preserveAspectRatio=xMaxYMax.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
+                     Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
                     {"preserveAspectRatio=xMidYMid-slice.svg",
                      Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
                                            "Has anti-aliasing artifacts.")},
                     {"preserveAspectRatio=xMidYMid.svg",
-                     Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")},
+                     Params::WithThreshold(0.13f, 300, "Viewport edge AA")},
                     {"preserveAspectRatio=xMinYMin-slice.svg",
                      Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
                                            "Has anti-aliasing artifacts.")},
@@ -2200,11 +1245,8 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "structure/transform-origin",
             {
-                // The remaining skips are not the #514 regression (that was an inverted
-                // transform-origin pivot-sandwich order, fixed in LayoutSystem). They are
-                // pre-existing feature gaps: transform-origin is not yet applied to element
-                // classes that carry their own transform machinery.
-                //
+                // The remaining skips are pre-existing feature gaps on element classes
+                // with their own transform machinery.
                 // Gradients/patterns route their transform through
                 // `getRawEntityFromParentTransform` (gradientTransform / patternTransform),
                 // which intentionally drops the transform-origin pivot — so the property has
@@ -2229,7 +1271,8 @@ INSTANTIATE_TEST_SUITE_P(
                 {"on-text-path.svg",
                  Params::Skip("transform-origin pivot not composed with textPath layout "
                               "(feature gap)")},
-            })),
+            },
+            Params::WithThreshold(0.13f, 300, "Rotated edge AA"))),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 

@@ -179,6 +179,9 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 - Only add `Params::WithThreshold(threshold, N)` after root-cause investigation.
 - Don't add `{"test.svg", Params()}` entries — omit entirely.
 - `Params::Skip()` for tests that can't pass yet.
+- Skipped resvg comparisons are emitted as `DISABLED_...` gtest names. To triage one without
+  editing skip tables or adding custom env flags, run with a narrow `--gtest_filter` plus
+  `--gtest_also_run_disabled_tests`.
 - UB-labeled tests: always `Params::Skip()` — goldens have "UB" text overlay.
 
 ## Development Notes
@@ -201,6 +204,8 @@ Identify relevant resvg tests before implementing a feature, use them as accepta
 
 ```sh
 bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=*e_text_*'
+bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- \
+  '--gtest_filter=*e_text_023*' --gtest_also_run_disabled_tests
 # Examine failing SVG, then fix root cause or add skip:
 {"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
 ```

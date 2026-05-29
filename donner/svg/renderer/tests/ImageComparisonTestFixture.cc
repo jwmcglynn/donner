@@ -140,6 +140,15 @@ bool suppressVerboseFailureOutputForLlm() {
   return isEnabledFromEnv("LLM", false) && !isEnabledFromEnv("DONNER_RENDERER_TEST_VERBOSE", false);
 }
 
+bool shouldSkipForUnsupportedTextConfig(const ImageComparisonParams& params) {
+#ifndef DONNER_TEXT_FULL
+  if (params.skipSimpleText) {
+    return true;
+  }
+#endif
+  return false;
+}
+
 void printVerboseFailureOutputOverrideHint() {
   if (!suppressVerboseFailureOutputForLlm()) {
     return;
@@ -389,13 +398,11 @@ std::string escapeFilename(std::string filename) {
   return filename;
 }
 
-/// Runs the GeodeTinyParity comparison: geode `actual` vs tiny-skia `reference`
-/// at a strict per-pixel threshold (AA excluded), failing on a max-pixel-count
-/// budget. Always logs `PARITY|<file>|<px>` for the characterization sweep, and
-/// dumps actual/expected/diff PNGs to `$TEST_UNDECLARED_OUTPUTS_DIR` when the
-/// diff exceeds the dump floor.
+/// Runs the GeodeTinyParity comparison using the same threshold budget as the
+/// test's normal golden comparison.
 void runGeodeTinyParityComparison(const RendererBitmap& actual, const RendererBitmap& reference,
-                                  const std::filesystem::path& svgFilename) {
+                                  const std::filesystem::path& svgFilename,
+                                  const ImageComparisonParams& params) {
   // Both backends rendered the same document at the same canvas size, so the
   // dimensions/stride should match. If they don't, that's itself a divergence.
   if (actual.dimensions != reference.dimensions || actual.rowBytes != reference.rowBytes ||
@@ -413,25 +420,14 @@ void runGeodeTinyParityComparison(const RendererBitmap& actual, const RendererBi
 
   std::vector<uint8_t> diffImage(strideInPixels * static_cast<size_t>(height) * 4u);
   pixelmatch::Options options;
-  // Use the suite's default per-pixel threshold (0.02), matching every golden
-  // comparison. NOT strict-0 (over-strict vs the suite — floods the diff count
-  // with sub-visual premultiply/color-space offsets on solid fills), and NOT a
-  // 0.3 bump (which masks solid-region bugs). 0.02 separates the 4× MSAA edge
-  // floor + genuine bugs from cosmetic uniform offsets. See 0017 §Phase 4b.
-  options.threshold = kDefaultThreshold;
-  options.includeAA = false;  // pixelmatch already excludes AA edges
+  options.threshold = params.threshold;
+  options.includeAA = params.includeAntiAliasing;
   const int mismatchedPixels = pixelmatch::pixelmatch(reference.pixels, actual.pixels, diffImage,
                                                       width, height, strideInPixels, options);
 
-  // Always emit the raw count so the characterization sweep can bucket every
-  // test, not just the failures.
   std::cout << "PARITY|" << svgFilename.string() << "|" << mismatchedPixels << "\n";
 
-  // Flat budget — no per-test thresholds (Phase 4b final policy). A diff above
-  // this is either the 4× MSAA edge floor or a genuine bug; both are handled by
-  // gating the test's parity instance via `disableGeodeParity()`, never by a
-  // larger budget here (that would be masking).
-  const int budget = kDefaultMismatchedPixels;
+  const int budget = params.effectiveMaxMismatchedPixels();
 
   if (mismatchedPixels > budget) {
     std::cout << "FAIL (" << mismatchedPixels << " geode-vs-tiny pixels differ, with " << budget
@@ -484,7 +480,7 @@ std::optional<RendererBackendFeature> missingRequiredFeature(RendererBackend bac
 
 std::optional<std::string> skipReasonIfUnsupported(RendererBackend backend,
                                                    const ImageComparisonParams& params) {
-  if (params.shouldSkip()) {
+  if (shouldSkipForUnsupportedTextConfig(params)) {
     return params.reason.empty() ? std::string("Test case disabled") : std::string(params.reason);
   }
 
@@ -562,9 +558,8 @@ std::string_view ComparisonModeName(ComparisonMode mode) {
 const std::vector<ComparisonMode>& ActiveComparisonModes() {
   static const std::vector<ComparisonMode> modes = [] {
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
-    // Geode build (Phase 4b increment 4): three comparisons per test —
-    // TinyGolden (ground truth), GeodeGolden (today's geode-vs-golden), and
-    // GeodeTinyParity (the geode-vs-tiny-skia metric that un-gates text/filters).
+    // Geode builds run the same test params against the golden and the
+    // in-process tiny-skia parity reference.
     return std::vector<ComparisonMode>{ComparisonMode::TinyGolden, ComparisonMode::GeodeGolden,
                                        ComparisonMode::GeodeTinyParity};
 #else
@@ -764,15 +759,7 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   const ImageComparisonTestcase& testcase = std::get<0>(GetParam());
   const ComparisonMode mode = std::get<1>(GetParam());
 
-  // The test case carries the *base* (tiny-skia / strict) params. Geode-backed
-  // modes additionally apply the deferred geode gate (feature gates + threshold
-  // widening) so the `TinyGolden` mode keeps strict golden thresholds.
-  ImageComparisonParams effectiveParams = testcase.params;
-  if (ModeUsesGeode(mode) && testcase.geodeGate && !effectiveParams.skip) {
-    testcase.geodeGate(effectiveParams);
-  }
-
-  renderAndCompare(document, svgFilename, goldenImageFilename, effectiveParams, mode);
+  renderAndCompare(document, svgFilename, goldenImageFilename, testcase.params, mode);
 }
 
 void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
@@ -782,47 +769,26 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
                                                   ComparisonMode mode) {
   const RendererBackend backend = BackendForMode(mode);
 
-  if (mode == ComparisonMode::GeodeTinyParity) {
-    // Parity mode bypasses the `requireFeature(Text/FilterEffects)` skips so
-    // geode actually renders text/filters and the geode-vs-tiny diff is
-    // surfaced (the whole point of the mode). Honest skips are still respected:
-    // explicit `Skip()` / `onlyTextFull` (`shouldSkip()`) and per-test
-    // `disableBackend(Geode)` (`!allowGeode`), which mark a hard geode
-    // limitation rather than a pixel diff.
-    if (params.shouldSkip()) {
-      GTEST_SKIP() << (params.reason.empty() ? "Test case disabled" : std::string(params.reason));
-    }
-    if (!params.allowGeode) {
-      GTEST_SKIP() << "Geode backend disabled for this test"
-                   << (params.backendRequirementReason.empty()
-                           ? ""
-                           : (": " + std::string(params.backendRequirementReason)));
-    }
-    if (params.disableGeodeTinyParity) {
-      // Genuine geode-vs-tiny divergence tracked elsewhere (0021 §G2 filters /
-      // 0038 text). Gated rather than absorbed with a giant budget.
-      GTEST_SKIP() << "GeodeTinyParity gated"
-                   << (params.reason.empty() ? "" : (": " + std::string(params.reason)));
-    }
-  } else if (const std::optional<std::string> skipReason = skipReasonIfUnsupported(backend, params);
-             skipReason.has_value()) {
+  if (const std::optional<std::string> skipReason = skipReasonIfUnsupported(backend, params);
+      skipReason.has_value()) {
     GTEST_SKIP() << *skipReason;
   }
 
-  // Goldens are shared across backends. Tests that need per-backend
-  // thresholds or (rarely) per-backend golden files should do so via
-  // `ImageComparisonParams` — e.g., a wider threshold under Geode via a
-  // per-test override table, or `WithGoldenOverride(...)` as a last resort.
-  // A custom per-backend golden is explicitly treated as a "bug smell" —
-  // it means the backend's output diverges from ground truth in a way that
-  // should eventually be fixed.
+  if (mode == ComparisonMode::GeodeTinyParity) {
+    if (params.disableGeodeTinyParity) {
+      GTEST_SKIP() << "GeodeTinyParity disabled"
+                   << (params.reason.empty() ? "" : (": " + std::string(params.reason)));
+    }
+  }
+
+  // Goldens are shared across backends. Per-test exceptions belong in
+  // ImageComparisonParams so every comparison mode sees the same policy.
   const char* const effectiveGoldenFilename = goldenImageFilename;
 
   std::cout << "[  COMPARE ] " << svgFilename.string() << " [" << RendererBackendName(backend)
             << "]: ";  // No endl yet, the line will be continued
 
-  // The canvas size to draw into, as a recommendation instead of a strict guideline, since some
-  // SVGs may override.
+  // Most resvg goldens are 500x500; individual SVGs may override this.
   if (params.canvasSize) {
     document.setCanvasSize(params.canvasSize->x, params.canvasSize->y);
   }
@@ -874,18 +840,12 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     return;
   }
 
-  // GeodeTinyParity: compare the geode render (the `snapshot` above) against an
-  // in-process tiny-skia render of the same document, ignoring the golden. This
-  // is the Phase 4b parity metric — it removes the tiny↔golden baseline offset,
-  // leaving the geode↔tiny diff (the proven 4× MSAA edge floor + any genuine
-  // geode bug). pixelmatch runs at the suite's default per-pixel threshold
-  // (0.02, AA excluded — not strict-0, not a 0.3 bump); the pass/fail bar is a
-  // max-pixel-*count* budget, never a per-pixel bump (a 0.3 bump masks
-  // solid-region bugs — proven on text). Golden is not read.
+  // GeodeTinyParity compares the geode render against an in-process tiny-skia
+  // render and uses the same Params threshold/max-pixel budget as golden tests.
   if (mode == ComparisonMode::GeodeTinyParity) {
     const RendererBitmap reference =
         NormalizeSnapshot(RenderDocumentWithBackend(document, RendererBackend::TinySkia));
-    runGeodeTinyParityComparison(snapshot, reference, svgFilename);
+    runGeodeTinyParityComparison(snapshot, reference, svgFilename, params);
     return;
   }
 
