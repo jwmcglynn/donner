@@ -145,7 +145,7 @@ can use the same operation engine.
 - Canvas and source-pane element selection share one ordered selection model. There must not be
   separate canvas-only and source-only selection sets.
 - Path authoring should not require a full async raster before chrome updates. Overlay chrome uses
-  the same snapshot/chrome priority lane described in `0033-editor_design_tool_responsiveness.md`.
+  the same snapshot/chrome priority lane described in `0033-2-editor_design_tool_responsiveness.md`.
 - Boolean operations must be deterministic for the same input paths, transforms, fill rules, and
   tolerance options. `//donner/base:path_boolean_tests` should fail if operation output changes
   unexpectedly.

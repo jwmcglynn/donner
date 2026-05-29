@@ -269,7 +269,7 @@ Use this sequence for new bugs:
 
 ## Related Docs
 
-- [Editor responsiveness design](design_docs/0033-editor_design_tool_responsiveness.md)
+- [Editor responsiveness design](design_docs/0033-2-editor_design_tool_responsiveness.md)
 - [Composited presentation retrospective](design_docs/0036-composited_presentation_retrospective.md)
 - [Geode presentation glitch investigation](design_docs/0037-geode_presentation_glitch_investigation.md)
 - [Geode renderer design](design_docs/0017-geode_renderer.md)

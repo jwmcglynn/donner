@@ -27,10 +27,14 @@ _what_ ships today.
    Goals, non-goals, open questions, a first pass at the implementation plan.
 2. **In Progress** — Mark TODOs in the implementation plan. Check them off as
    milestones land. The doc is the single source of truth for "where is this?"
-3. **Shipped / Implemented** — Convert the doc to a developer-facing explainer
-   using [`developer_template.md`](developer_template.md), or fold the
-   still-relevant content into `../developer_docs.md` and leave a brief
-   pointer behind.
+3. **Shipped / Implemented** — Write the developer-facing documentation the
+   design earned (a new explainer via [`developer_template.md`](developer_template.md),
+   or content folded into `../developer_docs.md`). **Never delete the design doc
+   or recycle its number.** Instead, rewrite it in place into a short summary:
+   set Status to `Implemented`, briefly describe what the design was, and link
+   the developer docs it spawned (plus a git-history pointer to the original full
+   doc). The developer docs are "what ships today"; this stub keeps the number
+   and every inbound link valid forever.
 4. **Retrospective** — Use [`retrospective_template.md`](retrospective_template.md)
    after a difficult bug, incident, or workstream. Retrospectives may include
    history, but their output should be concrete decisions, review findings, and
@@ -81,7 +85,8 @@ conventions automated agents should follow when editing design docs.
 | 0030 | [geode_performance](0030-geode_performance.md)                                             | In Progress                                                       | Geode GPU-backend performance milestones (counters, arenas, shared command encoder, target reuse).                           |
 | 0031 | [ci_hardening_2026q2](0031-ci_hardening_2026q2.md)                                         | Design                                                            | Consolidated CI work for 2026-Q2: escape prevention (issue #552 class) + runtime reduction (subsumes 0029).                  |
 | 0032 | [sandbox_branch_split](0032-sandbox_branch_split.md)                                       | Design                                                            | Plan for extracting general-purpose improvements off the `sandbox` branch into `main`-targeted PRs (tiered by porting cost). |
-| 0033 | [editor_design_tool_responsiveness](0033-editor_design_tool_responsiveness.md)             | Implementing                                                      | Editor responsiveness plan for high-zoom dragging, async rendering, and composited presentation.                             |
+| 0033 | [multithreading_and_dom_lifetime](0033-multithreading_and_dom_lifetime.md)                 | Implemented                                                       | DOM lifetime ownership model, ConcurrentDom access guards, and immutable render snapshots. Shipped in #596; see linked dev docs. |
+| 0033-2 | [editor_design_tool_responsiveness](0033-2-editor_design_tool_responsiveness.md)         | Implementing                                                      | Editor responsiveness plan for high-zoom dragging, async rendering, and composited presentation.                             |
 | 0034 | [progressive_rendering](0034-progressive_rendering.md)                                     | Removed                                                           | Historical design for progressive intermediate frames; removed after stale-canvas tile bugs.                                 |
 | 0035 | [filter_layer_compose_offset_bug](0035-filter_layer_compose_offset_bug.md)                 | Fixed                                                             | Root cause and coverage for the filtered-layer compose-offset/source-sync bug class.                                         |
 | 0036 | [composited_presentation_retrospective](0036-composited_presentation_retrospective.md)     | Retrospective                                                     | Review of the filtered drag repro, flat-mode removal, fragile code paths, testing gaps, and cleanup actions.                 |
