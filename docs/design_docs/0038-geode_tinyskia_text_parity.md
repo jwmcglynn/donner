@@ -3,14 +3,16 @@
 **Status:** Developer reference. Text parity between the Geode and tiny-skia
 backends is **complete** — 0 structural divergences remain; the only residual
 geode↔tiny diff is the accepted sub-pixel coverage floor ([0041](0041-geode_analytical_aa.md)).
-This doc describes the shared text layer both backends consume, how the per-test
-parity gate works, and the resolved divergence catalog (kept as implementation
-notes). The blow-by-blow investigation is condensed into the appendix.
+This doc describes the shared text layer both backends consume and how per-test
+parity is expressed in `ImageComparisonParams`. Geode runs the same params as the CPU
+variants; a parity-only exception is a per-test `disableGeodeParity(reason)` (see
+[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)).
+The §4 catalog records the resolved divergences as implementation notes.
 
 **Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
 [0041 anti-aliasing](0041-geode_analytical_aa.md),
 [0042 Slug implementation](0042-geode_slug_conformance.md),
-[0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)
+[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)
 
 ---
 
@@ -73,39 +75,35 @@ shared layer must keep tiny-skia byte-identical (verified against
 
 ## 2. Parity status
 
-**0 structural text divergences.** Every originally-structural text divergence is
-resolved (catalog in §4). The remaining geode↔tiny text diff is the
-accepted-by-design sub-pixel coverage floor — geode renders the correct
-glyphs/positions/colors; the residual is the thin edge band + the resvg harness
-0.5px crosshair overlay. See [0041 §2](0041-geode_analytical_aa.md) for why that
-floor is accepted and proven sample-independent.
-
-The text portion of the parity gate ledger is empty (`kGenuineText == {}`); text
-edge-floor entries live in `kEdgeFloor` with a reason pointing at 0039.
+**0 structural text divergences** (catalog in §4). The remaining geode↔tiny text diff is
+the accepted-by-design sub-pixel coverage floor — geode renders the correct
+glyphs/positions/colors; the residual is the thin edge band + the resvg harness 0.5px
+crosshair overlay (see [0041 §2](0041-geode_analytical_aa.md), proven sample-independent).
+No text test needs a parity exception: the residual stays within each test's normal
+`ImageComparisonParams` budget.
 
 ---
 
-## 3. How the parity gate works (for text)
+## 3. How parity is expressed (for text)
 
 Parity runs in the **geode-enabled build** of `//donner/svg/renderer/tests:resvg_test_suite`
 (it rides the `*_geode` wrapper under `bazel test //...`). Each test runs up to three
-comparison modes; text un-gates on the `GeodeTinyParity` mode. See
+comparison modes; text is validated on the `GeodeTinyParity` mode. See
 [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
 for the full mode matrix.
 
-**Policy (text and non-text alike):** pixelmatch `includeAA=false`, per-pixel
-`kDefaultThreshold` (0.02), **flat max-pixel-count = 100, no per-test thresholds.**
-A diff >100 px is gated, never absorbed by a larger budget (that would be masking).
+**Policy (text and non-text alike):** `GeodeTinyParity` compares geode↔tiny-skia at
+each test's **own** `ImageComparisonParams` threshold and max-pixel budget — the same
+budget its golden comparison uses — with pixelmatch `includeAA=false`. There is no
+separate geode threshold table; a parity diff over the test's budget fails, never
+absorbed by a larger budget (that would be masking). See
+[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 
-**To un-gate a text test:** confirm its `GeodeTinyParity` diff measures ≤100 px,
-then remove its entry from the gate inventory (`geodeParityGate` in
-`resvg_test_suite.cc`). Un-gate only on a *measured* ≤100 px pass — never by bumping
-a threshold or sample count.
-
-**To add a text test:** add it to the suite as usual; if its geode↔tiny diff exceeds
-100 px and it renders correctly (edge floor), add a `kEdgeFloor` entry with the 0039
-reason; if it renders *wrong*, that's a real bug — fix the shared layer or the
-backend consumer, don't gate it.
+**To add a text test:** add it to the suite as usual. If it renders correctly but its
+geode↔tiny diff exceeds the test's budget (the accepted edge floor), attach a
+`disableGeodeParity("<reason, e.g. 0039 edge floor>")` to that test's `Params`. If it
+renders *wrong*, that's a real bug — fix the shared layer or the backend consumer,
+don't add an exception. The standing goal (per 0021) is *fewer* exceptions over time.
 
 > The parity oracle is tiny-skia, so a tiny-skia text regression could mask a geode
 > one. This is mitigated because the `TinyGolden` mode gates tiny-skia against the
@@ -174,7 +172,7 @@ verified byte-identical across 96 text tests).
 | B5 | `text/baseline-shift/nested-super` | 2870 → 677 |
 | B6 | `text/baseline-shift/nested-length` | 2438 → 686 |
 
-All six now render correctly at the ~677–720 px edge floor → `kEdgeFloor`. This same
+All six now render correctly at the ~677–720 px edge floor. This same
 double-draw idempotency class also surfaced a production feImage-fragment bug
 (unrelated to text; see [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
 and the appendix).
@@ -190,7 +188,7 @@ The baseline-shift fix cleared the structural part of B7/B8. The residual is the
 fringe on the gray stroke-ring + gradient: the plain-black siblings `dy-list-1`
 (699 px) and `rotate-list-3` (686 px) are already accepted edge-floor, proving `dy`
 and `rotate` are consumed correctly; glyph interiors are zero-diff and double-draw was
-ruled out (tiny-twice = 0 px). Both moved to `kEdgeFloor`.
+ruled out (tiny-twice = 0 px). Both are accepted edge-floor.
 
 ### 4.5 Already-correct, reclassified to edge-floor
 
@@ -211,20 +209,20 @@ fringe (many lines / long strings / on-path small text / tiled fields):
 
 ---
 
-## 5. Related parity ledgers (not text)
+## 5. Related parity findings (not text)
 
-For completeness of the parity gate ledger — these are tracked elsewhere:
+For the record — these were surfaced by the same parity run and are tracked elsewhere:
 
 - **Filter divergences (G2):** the parity run also surfaced 37 pure-filter geode↔tiny
   divergences. **All resolved** — the common root was geode inconsistently applying
   `color-interpolation-filters` (linearRGB default) plus a handful of genuine
   conformance/CTM bugs; details and the close-out are in the appendix and
-  [0021 §G2](0021-resvg_feature_gaps.md#g2-filter-primitive-correctness-16-of-23-disabled-tests).
+  [0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 - **Sub-visual premultiply fills (~137):** at strict-0, ~137 non-text tests show a
   whole-fill diff that collapses to <100 px at 0.02 (a uniform sub-perceptual
-  premultiplied-alpha / color-space rounding offset). They PASS parity and are not
-  gated; tracked as one root-cause item in
-  [0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds).
+  premultiplied-alpha / color-space rounding offset). They PASS parity within their
+  normal budgets; tracked as one root-cause item in
+  [0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 
 ---
 

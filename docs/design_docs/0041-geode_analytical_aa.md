@@ -10,7 +10,7 @@ analytical/supersampling alternatives were evaluated and **rejected** (appendix)
 **Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
 [0038 text parity](0038-geode_tinyskia_text_parity.md),
 [0042 Slug implementation](0042-geode_slug_conformance.md),
-[0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds)
+[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)
 
 ---
 
