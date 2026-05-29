@@ -406,6 +406,26 @@ TEST_F(TextEditorCoreTests, EnterNewlineAutoIndentsFollowingLine) {
   EXPECT_EQ(editor_.getCursorPosition(), Coordinates(1, 2));
 }
 
+TEST_F(TextEditorCoreTests, EnterWithSmartIndentDoesNotReadFreedLineStorage) {
+  // Regression: handleNewLine() held a `Line&` into `lines_` (a std::vector<Line>) across
+  // insertLine(), whose `lines_.insert()` can reallocate the vector — dangling the reference the
+  // auto-indent loop then reads. Under ASan this is a heap-use-after-free; in release it can
+  // segfault on Enter with the default smartIndent=true. The bug only fires when the insert
+  // actually reallocates, so press Enter many times: each auto-indented line keeps the cursor at
+  // line-end, so every Enter re-runs the auto-indent read, and `lines_` reallocates at each power
+  // of two — guaranteeing the dangling read is exercised within the loop.
+  editor_.setText("    x");
+  editor_.setCompleteBraces(false);
+  editor_.setSmartIndent(true);
+  editor_.setCursorPosition(Coordinates(0, 5));  // end of "    x"
+  for (int i = 0; i < 256; ++i) {
+    editor_.enterCharacter('\n', false);
+  }
+  // Every inserted line inherited the 4-space indent, and the run did not read freed storage.
+  EXPECT_THAT(editor_.getText(Coordinates(256, 0), Coordinates(256, 4)), Eq("    "));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(256, 4));
+}
+
 TEST_F(TextEditorCoreTests, EnterBraceCompletesClosingBrace) {
   editor_.setText("");
   editor_.setCompleteBraces(true);

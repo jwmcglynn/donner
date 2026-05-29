@@ -91,6 +91,14 @@ widgets, ~2,000 lines) plus the Phase 1 filter-primitive remainder.
 
 ### Follow-ups surfaced
 
+- **Fixed:** `TextEditorCore::handleNewLine` held a `Line&` across `insertLine()`
+  (which reallocates `lines_`), a use-after-realloc that crashed on Enter with
+  the default `smartIndent=true`. Repro `EnterWithSmartIndentDoesNotReadFreedLineStorage`
+  (ASan heap-use-after-free → green).
+- **Fixed:** `TextEditor::processFind(findNext=false)` called
+  `ImGui::SetKeyboardFocusHere(-1)` unconditionally, segfaulting when invoked
+  outside an active frame. Now frame-scope-guarded. Repro
+  `ProcessFindInitialOutsideFrameDoesNotCrash` (segfault → green).
 - `EncodeColor`'s CurrentColor path writes a default `css::RGBA()` (opaque white),
   not the "transparent" its comment at `SandboxCodecs.cc:135` claims. Behavior
   change out of scope here; documented by test `ColorCurrentColorEncodesAsDefaultRgba`.

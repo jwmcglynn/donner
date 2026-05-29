@@ -975,8 +975,13 @@ void TextEditorCore::deleteSelection() {
 }
 
 void TextEditorCore::handleNewLine(UndoState& state, const Coordinates& coord, bool smartIndent) {
-  Line& line = text_.getLineGlyphsMutable(coord.line);
   Line& newLine = insertLine(coord.line, coord.column);
+  // `insertLine()` calls `lines_.insert()`, which can reallocate the line storage
+  // (`lines_` is a `std::vector<Line>`). Fetch the source line *after* it — holding a `Line&`
+  // across `insertLine()` was a use-after-realloc that crashed on Enter with smartIndent. The
+  // line at `coord.line` is the (now-truncated) head of the split, which is what the auto-indent
+  // copy reads.
+  Line& line = text_.getLineGlyphsMutable(coord.line);
 
   // Auto indentation
   size_t whitespaceSize = 0;

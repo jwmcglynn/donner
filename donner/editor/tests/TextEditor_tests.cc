@@ -2137,19 +2137,17 @@ TEST_F(TextEditorTests, ShiftDownArrowSelectsThroughRenderPath) {
 }
 
 TEST_F(TextEditorTests, EnterKeyInsertsNewlineThroughRenderPath) {
-  // Smart indent is disabled here to avoid a separate latent use-after-realloc
-  // in `TextEditorCore::handleNewLine` (it holds a `Line&` across
-  // `insertLine`, which can reallocate the line storage; the auto-indent loop
-  // then dereferences the dangling reference). That bug is orthogonal to the
-  // keyboard NewLine path under test and is called out in the change notes.
-  editor.setSmartIndent(false);
-  editor.setText("AB");
-  editor.setCursorPosition(Coordinates(0, 1));
+  // Drives the keyboard NewLine path through the full render loop with the default
+  // smartIndent enabled. This previously crashed via a use-after-realloc in
+  // TextEditorCore::handleNewLine (a Line& held across insertLine) — now fixed.
+  editor.setText("  AB");                       // leading indent so smart indent runs
+  editor.setCursorPosition(Coordinates(0, 4));  // end of "  AB"
 
   ResetKeyboardState({ImGuiKey_Enter});
   RenderEditorFrameWithKeyboard({ImGuiKey_Enter});
 
-  EXPECT_EQ(editor.getText(), "A\nB") << "Enter should split the line at the cursor";
+  EXPECT_EQ(editor.getText(), "  AB\n  ")
+      << "Enter should split the line at the cursor and auto-indent the new line";
 }
 
 TEST_F(TextEditorTests, BackspaceKeyDeletesThroughRenderPath) {
@@ -2395,6 +2393,21 @@ TEST_F(TextEditorTests, ProcessFindSelectsMatchAndMovesCursor) {
   EXPECT_EQ(editor.getSelectedText(), "beta") << "processFind should select the first match";
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 10))
       << "processFind should move the cursor to the end of the match";
+}
+
+TEST_F(TextEditorTests, ProcessFindInitialOutsideFrameDoesNotCrash) {
+  editor.setText("alpha beta gamma beta");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  // Regression: the initial-find path (findNext=false) called
+  // `ImGui::SetKeyboardFocusHere(-1)` unconditionally. Outside an active ImGui
+  // frame (the fixture has a context but has not called NewFrame) that
+  // dereferences a null current window and segfaults. The find/select logic
+  // must still run; only the focus side-effect is frame-scoped.
+  editor.processFind("beta", /*findNext=*/false);
+
+  EXPECT_EQ(editor.getSelectedText(), "beta");
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 10));
 }
 
 TEST_F(TextEditorTests, ProcessFindNextAdvancesPastCurrentMatch) {
