@@ -37,8 +37,10 @@
 #include "donner/editor/sandbox/SerializingRenderer.h"
 #include "donner/editor/sandbox/Wire.h"
 #include "donner/svg/SVG.h"
-#include "donner/svg/components/filter/FilterGraph.h"
-#include "donner/svg/components/text/ComputedTextComponent.h"
+// SandboxCodecs serializes these ECS-internal types over the sandbox wire protocol; its round-trip
+// test must construct them directly. The codec is the sanctioned bridge, not a public consumer.
+#include "donner/svg/components/filter/FilterGraph.h"          // NOLINT(banned_patterns)
+#include "donner/svg/components/text/ComputedTextComponent.h"  // NOLINT(banned_patterns)
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -1817,6 +1819,550 @@ TEST(CodecTest, FilterGraphTruncatedFails) {
   WireReader r(w.data());
   svg::components::FilterGraph out;
   EXPECT_FALSE(DecodeFilterGraph(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// FilterGraph: exhaustive per-primitive round-trip.
+//
+// The wire format supports 17 distinct primitive node types (tags 0..16, see
+// `FilterPrimitiveTag` in SandboxCodecs.cc). The representative-3 test above
+// (`FilterGraphWithPrimitivesRoundTrip`) only exercised GaussianBlur,
+// ColorMatrix, and Flood, leaving every other per-primitive encode/decode
+// helper uncovered. The test below builds one node of *every* primitive type
+// with non-default fields populated and asserts field-by-field equality after
+// an encode→decode round-trip. The node order matches the variant ordering in
+// `FilterGraph.h` so a failure index maps directly to a primitive name.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+namespace fp = svg::components::filter_primitive;
+
+// A LightSource with every field set to a distinctive non-default value, so a
+// dropped field surfaces as a concrete mismatch rather than a coincidental
+// default match.
+fp::LightSource MakeSpotLight() {
+  fp::LightSource ls;
+  ls.type = fp::LightSource::Type::Spot;
+  ls.azimuth = 11.0;
+  ls.elevation = 22.0;
+  ls.x = 33.0;
+  ls.y = 44.0;
+  ls.z = 55.0;
+  ls.pointsAtX = 66.0;
+  ls.pointsAtY = 77.0;
+  ls.pointsAtZ = 88.0;
+  ls.spotExponent = 9.5;
+  ls.limitingConeAngle = 42.5;
+  return ls;
+}
+
+// Named matcher reporting all 11 LightSource scalar fields on mismatch, so a
+// single failure pinpoints which field the codec dropped without a rerun.
+MATCHER_P(LightSourceEq, expected, "") {
+  *result_listener << "actual {type=" << static_cast<int>(arg.type) << " az=" << arg.azimuth
+                   << " el=" << arg.elevation << " x=" << arg.x << " y=" << arg.y << " z=" << arg.z
+                   << " patX=" << arg.pointsAtX << " patY=" << arg.pointsAtY
+                   << " patZ=" << arg.pointsAtZ << " spotExp=" << arg.spotExponent << " cone="
+                   << (arg.limitingConeAngle ? std::to_string(*arg.limitingConeAngle) : "none")
+                   << "}";
+  return arg.type == expected.type && arg.azimuth == expected.azimuth &&
+         arg.elevation == expected.elevation && arg.x == expected.x && arg.y == expected.y &&
+         arg.z == expected.z && arg.pointsAtX == expected.pointsAtX &&
+         arg.pointsAtY == expected.pointsAtY && arg.pointsAtZ == expected.pointsAtZ &&
+         arg.spotExponent == expected.spotExponent &&
+         arg.limitingConeAngle == expected.limitingConeAngle;
+}
+
+// Named matcher for an RGBA-valued css::Color, printing the channels on
+// mismatch. Filter colors flatten to RGBA on the wire, so a CurrentColor or
+// HSLA input would surface here as a wrong-channel diagnostic.
+MATCHER_P(ColorRgbaEq, expected, "") {
+  if (!std::holds_alternative<css::RGBA>(arg.value)) {
+    *result_listener << "color is not an RGBA variant";
+    return false;
+  }
+  const auto rgba = std::get<css::RGBA>(arg.value);
+  *result_listener << "actual rgba(" << int{rgba.r} << "," << int{rgba.g} << "," << int{rgba.b}
+                   << "," << int{rgba.a} << ")";
+  return rgba == expected;
+}
+
+}  // namespace
+
+TEST(CodecTest, FilterGraphEveryPrimitiveTypeRoundTrip) {
+  svg::components::FilterGraph g;
+
+  // Tag 0 — GaussianBlur (with non-default edgeMode).
+  {
+    fp::GaussianBlur p;
+    p.stdDeviationX = 3.5;
+    p.stdDeviationY = 4.25;
+    p.edgeMode = fp::GaussianBlur::EdgeMode::Wrap;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 1 — Flood.
+  {
+    fp::Flood p;
+    p.floodColor = css::Color(css::RGBA(10, 20, 30, 40));
+    p.floodOpacity = 0.6;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 2 — Offset.
+  {
+    fp::Offset p;
+    p.dx = -12.5;
+    p.dy = 7.0;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 3 — Merge (no fields beyond inputs; give it two inputs).
+  {
+    svg::components::FilterNode node;
+    node.primitive = fp::Merge{};
+    node.inputs.push_back(svg::components::FilterInput(svg::components::FilterInput::Previous{}));
+    node.inputs.push_back(
+        svg::components::FilterInput(svg::components::FilterInput::Named{RcString("a")}));
+    node.inputs.push_back(
+        svg::components::FilterInput(svg::components::FilterInput::Named{RcString("b")}));
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 4 — Blend (non-default mode).
+  {
+    fp::Blend p;
+    p.mode = fp::Blend::Mode::ColorDodge;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 5 — Composite (Arithmetic with all four coefficients).
+  {
+    fp::Composite p;
+    p.op = fp::Composite::Operator::Arithmetic;
+    p.k1 = 0.1;
+    p.k2 = 0.2;
+    p.k3 = 0.3;
+    p.k4 = 0.4;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 6 — ColorMatrix (full 20-value matrix).
+  {
+    fp::ColorMatrix p;
+    p.type = fp::ColorMatrix::Type::Matrix;
+    p.values = {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9,
+                1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9};
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 7 — DropShadow.
+  {
+    fp::DropShadow p;
+    p.dx = 5.0;
+    p.dy = -6.0;
+    p.stdDeviationX = 1.5;
+    p.stdDeviationY = 2.5;
+    p.floodColor = css::Color(css::RGBA(200, 100, 50, 255));
+    p.floodOpacity = 0.8;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 8 — ComponentTransfer (one func of each interesting type).
+  {
+    fp::ComponentTransfer p;
+    p.funcR.type = fp::ComponentTransfer::FuncType::Table;
+    p.funcR.tableValues = {0.0, 0.5, 1.0};
+    p.funcG.type = fp::ComponentTransfer::FuncType::Discrete;
+    p.funcG.tableValues = {0.25, 0.75};
+    p.funcB.type = fp::ComponentTransfer::FuncType::Linear;
+    p.funcB.slope = 2.0;
+    p.funcB.intercept = 0.1;
+    p.funcA.type = fp::ComponentTransfer::FuncType::Gamma;
+    p.funcA.amplitude = 1.5;
+    p.funcA.exponent = 2.2;
+    p.funcA.offset = 0.05;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 9 — ConvolveMatrix (all optionals present).
+  {
+    fp::ConvolveMatrix p;
+    p.orderX = 3;
+    p.orderY = 2;
+    p.kernelMatrix = {1.0, 0.0, -1.0, 2.0, 0.0, -2.0};
+    p.divisor = 4.0;
+    p.bias = 0.5;
+    p.targetX = 1;
+    p.targetY = 0;
+    p.edgeMode = fp::ConvolveMatrix::EdgeMode::None;
+    p.preserveAlpha = true;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 10 — Morphology.
+  {
+    fp::Morphology p;
+    p.op = fp::Morphology::Operator::Dilate;
+    p.radiusX = 3.0;
+    p.radiusY = 4.0;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 11 — Tile (no fields).
+  {
+    svg::components::FilterNode node;
+    node.primitive = fp::Tile{};
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 12 — Turbulence.
+  {
+    fp::Turbulence p;
+    p.type = fp::Turbulence::Type::FractalNoise;
+    p.baseFrequencyX = 0.05;
+    p.baseFrequencyY = 0.07;
+    p.numOctaves = 4;
+    p.seed = 12.0;
+    p.stitchTiles = true;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 13 — Image. NOTE: `svgSubDocument` (an SVGDocumentHandle) is
+  // deliberately not serialized — it is a process-local handle meaningless on
+  // the replay side, mirroring the entity-handle handling in DecodeTextSpan —
+  // so it is left default and not asserted on.
+  {
+    fp::Image p;
+    p.href = RcString("https://example.com/a.png");
+    p.preserveAspectRatio.align = svg::PreserveAspectRatio::Align::XMidYMid;
+    p.preserveAspectRatio.meetOrSlice = svg::PreserveAspectRatio::MeetOrSlice::Slice;
+    p.imageData = {0x01, 0x02, 0x03, 0x04};
+    p.imageWidth = 2;
+    p.imageHeight = 2;
+    p.fragmentId = RcString("rect1");
+    p.isFragmentReference = true;
+    p.fragmentRegionTopLeft = Vector2d(9.0, 10.0);
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 14 — DisplacementMap.
+  {
+    fp::DisplacementMap p;
+    p.scale = 15.0;
+    p.xChannelSelector = fp::DisplacementMap::Channel::R;
+    p.yChannelSelector = fp::DisplacementMap::Channel::G;
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 15 — DiffuseLighting (with a spot LightSource).
+  {
+    fp::DiffuseLighting p;
+    p.surfaceScale = 2.5;
+    p.diffuseConstant = 1.75;
+    p.lightingColor = css::Color(css::RGBA(255, 200, 100, 255));
+    p.light = MakeSpotLight();
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+  // Tag 16 — SpecularLighting (with a spot LightSource).
+  {
+    fp::SpecularLighting p;
+    p.surfaceScale = 3.0;
+    p.specularConstant = 0.9;
+    p.specularExponent = 24.0;
+    p.lightingColor = css::Color(css::RGBA(50, 60, 70, 255));
+    p.light = MakeSpotLight();
+    svg::components::FilterNode node;
+    node.primitive = p;
+    g.nodes.push_back(std::move(node));
+  }
+
+  // Populate graph-level metadata too.
+  g.colorInterpolationFilters = svg::ColorInterpolationFilters::LinearRGB;
+  g.primitiveUnits = svg::PrimitiveUnits::ObjectBoundingBox;
+  g.elementBoundingBox = Box2d(Vector2d(0, 0), Vector2d(100, 100));
+  g.filterRegion = Box2d(Vector2d(-10, -10), Vector2d(110, 110));
+  g.userToPixelScale = Vector2d(2.0, 3.0);
+
+  // Sanity: we built exactly one node per supported primitive type.
+  ASSERT_EQ(g.nodes.size(), std::variant_size_v<svg::components::FilterPrimitive>)
+      << "test must cover every FilterPrimitive variant alternative";
+  ASSERT_EQ(g.nodes.size(), 17u);
+
+  WireWriter w;
+  EncodeFilterGraph(w, g);
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  ASSERT_TRUE(DecodeFilterGraph(r, out));
+  ASSERT_EQ(out.nodes.size(), 17u);
+  EXPECT_EQ(r.remaining(), 0u) << "decoder must consume the entire buffer";
+
+  // Tag 0 — GaussianBlur.
+  ASSERT_TRUE(std::holds_alternative<fp::GaussianBlur>(out.nodes[0].primitive));
+  {
+    const auto& p = std::get<fp::GaussianBlur>(out.nodes[0].primitive);
+    EXPECT_DOUBLE_EQ(p.stdDeviationX, 3.5);
+    EXPECT_DOUBLE_EQ(p.stdDeviationY, 4.25);
+    EXPECT_EQ(p.edgeMode, fp::GaussianBlur::EdgeMode::Wrap);
+  }
+  // Tag 1 — Flood.
+  ASSERT_TRUE(std::holds_alternative<fp::Flood>(out.nodes[1].primitive));
+  {
+    const auto& p = std::get<fp::Flood>(out.nodes[1].primitive);
+    EXPECT_THAT(p.floodColor, ColorRgbaEq(css::RGBA(10, 20, 30, 40)));
+    EXPECT_DOUBLE_EQ(p.floodOpacity, 0.6);
+  }
+  // Tag 2 — Offset.
+  ASSERT_TRUE(std::holds_alternative<fp::Offset>(out.nodes[2].primitive));
+  {
+    const auto& p = std::get<fp::Offset>(out.nodes[2].primitive);
+    EXPECT_DOUBLE_EQ(p.dx, -12.5);
+    EXPECT_DOUBLE_EQ(p.dy, 7.0);
+  }
+  // Tag 3 — Merge (the three inputs survive on the node).
+  ASSERT_TRUE(std::holds_alternative<fp::Merge>(out.nodes[3].primitive));
+  ASSERT_EQ(out.nodes[3].inputs.size(), 3u);
+  EXPECT_TRUE(
+      std::holds_alternative<svg::components::FilterInput::Previous>(out.nodes[3].inputs[0].value));
+  ASSERT_TRUE(
+      std::holds_alternative<svg::components::FilterInput::Named>(out.nodes[3].inputs[1].value));
+  EXPECT_EQ(std::string_view(
+                std::get<svg::components::FilterInput::Named>(out.nodes[3].inputs[1].value).name),
+            "a");
+  ASSERT_TRUE(
+      std::holds_alternative<svg::components::FilterInput::Named>(out.nodes[3].inputs[2].value));
+  EXPECT_EQ(std::string_view(
+                std::get<svg::components::FilterInput::Named>(out.nodes[3].inputs[2].value).name),
+            "b");
+  // Tag 4 — Blend.
+  ASSERT_TRUE(std::holds_alternative<fp::Blend>(out.nodes[4].primitive));
+  EXPECT_EQ(std::get<fp::Blend>(out.nodes[4].primitive).mode, fp::Blend::Mode::ColorDodge);
+  // Tag 5 — Composite.
+  ASSERT_TRUE(std::holds_alternative<fp::Composite>(out.nodes[5].primitive));
+  {
+    const auto& p = std::get<fp::Composite>(out.nodes[5].primitive);
+    EXPECT_EQ(p.op, fp::Composite::Operator::Arithmetic);
+    EXPECT_DOUBLE_EQ(p.k1, 0.1);
+    EXPECT_DOUBLE_EQ(p.k2, 0.2);
+    EXPECT_DOUBLE_EQ(p.k3, 0.3);
+    EXPECT_DOUBLE_EQ(p.k4, 0.4);
+  }
+  // Tag 6 — ColorMatrix.
+  ASSERT_TRUE(std::holds_alternative<fp::ColorMatrix>(out.nodes[6].primitive));
+  {
+    const auto& p = std::get<fp::ColorMatrix>(out.nodes[6].primitive);
+    EXPECT_EQ(p.type, fp::ColorMatrix::Type::Matrix);
+    EXPECT_THAT(p.values, ElementsAre(DoubleEq(0.0), DoubleEq(0.1), DoubleEq(0.2), DoubleEq(0.3),
+                                      DoubleEq(0.4), DoubleEq(0.5), DoubleEq(0.6), DoubleEq(0.7),
+                                      DoubleEq(0.8), DoubleEq(0.9), DoubleEq(1.0), DoubleEq(1.1),
+                                      DoubleEq(1.2), DoubleEq(1.3), DoubleEq(1.4), DoubleEq(1.5),
+                                      DoubleEq(1.6), DoubleEq(1.7), DoubleEq(1.8), DoubleEq(1.9)));
+  }
+  // Tag 7 — DropShadow.
+  ASSERT_TRUE(std::holds_alternative<fp::DropShadow>(out.nodes[7].primitive));
+  {
+    const auto& p = std::get<fp::DropShadow>(out.nodes[7].primitive);
+    EXPECT_DOUBLE_EQ(p.dx, 5.0);
+    EXPECT_DOUBLE_EQ(p.dy, -6.0);
+    EXPECT_DOUBLE_EQ(p.stdDeviationX, 1.5);
+    EXPECT_DOUBLE_EQ(p.stdDeviationY, 2.5);
+    EXPECT_THAT(p.floodColor, ColorRgbaEq(css::RGBA(200, 100, 50, 255)));
+    EXPECT_DOUBLE_EQ(p.floodOpacity, 0.8);
+  }
+  // Tag 8 — ComponentTransfer.
+  ASSERT_TRUE(std::holds_alternative<fp::ComponentTransfer>(out.nodes[8].primitive));
+  {
+    const auto& p = std::get<fp::ComponentTransfer>(out.nodes[8].primitive);
+    EXPECT_EQ(p.funcR.type, fp::ComponentTransfer::FuncType::Table);
+    EXPECT_THAT(p.funcR.tableValues, ElementsAre(DoubleEq(0.0), DoubleEq(0.5), DoubleEq(1.0)));
+    EXPECT_EQ(p.funcG.type, fp::ComponentTransfer::FuncType::Discrete);
+    EXPECT_THAT(p.funcG.tableValues, ElementsAre(DoubleEq(0.25), DoubleEq(0.75)));
+    EXPECT_EQ(p.funcB.type, fp::ComponentTransfer::FuncType::Linear);
+    EXPECT_DOUBLE_EQ(p.funcB.slope, 2.0);
+    EXPECT_DOUBLE_EQ(p.funcB.intercept, 0.1);
+    EXPECT_EQ(p.funcA.type, fp::ComponentTransfer::FuncType::Gamma);
+    EXPECT_DOUBLE_EQ(p.funcA.amplitude, 1.5);
+    EXPECT_DOUBLE_EQ(p.funcA.exponent, 2.2);
+    EXPECT_DOUBLE_EQ(p.funcA.offset, 0.05);
+  }
+  // Tag 9 — ConvolveMatrix.
+  ASSERT_TRUE(std::holds_alternative<fp::ConvolveMatrix>(out.nodes[9].primitive));
+  {
+    const auto& p = std::get<fp::ConvolveMatrix>(out.nodes[9].primitive);
+    EXPECT_EQ(p.orderX, 3);
+    EXPECT_EQ(p.orderY, 2);
+    EXPECT_THAT(p.kernelMatrix, ElementsAre(DoubleEq(1.0), DoubleEq(0.0), DoubleEq(-1.0),
+                                            DoubleEq(2.0), DoubleEq(0.0), DoubleEq(-2.0)));
+    ASSERT_TRUE(p.divisor.has_value());
+    EXPECT_DOUBLE_EQ(*p.divisor, 4.0);
+    EXPECT_DOUBLE_EQ(p.bias, 0.5);
+    ASSERT_TRUE(p.targetX.has_value());
+    EXPECT_EQ(*p.targetX, 1);
+    ASSERT_TRUE(p.targetY.has_value());
+    EXPECT_EQ(*p.targetY, 0);
+    EXPECT_EQ(p.edgeMode, fp::ConvolveMatrix::EdgeMode::None);
+    EXPECT_TRUE(p.preserveAlpha);
+  }
+  // Tag 10 — Morphology.
+  ASSERT_TRUE(std::holds_alternative<fp::Morphology>(out.nodes[10].primitive));
+  {
+    const auto& p = std::get<fp::Morphology>(out.nodes[10].primitive);
+    EXPECT_EQ(p.op, fp::Morphology::Operator::Dilate);
+    EXPECT_DOUBLE_EQ(p.radiusX, 3.0);
+    EXPECT_DOUBLE_EQ(p.radiusY, 4.0);
+  }
+  // Tag 11 — Tile.
+  EXPECT_TRUE(std::holds_alternative<fp::Tile>(out.nodes[11].primitive));
+  // Tag 12 — Turbulence.
+  ASSERT_TRUE(std::holds_alternative<fp::Turbulence>(out.nodes[12].primitive));
+  {
+    const auto& p = std::get<fp::Turbulence>(out.nodes[12].primitive);
+    EXPECT_EQ(p.type, fp::Turbulence::Type::FractalNoise);
+    EXPECT_DOUBLE_EQ(p.baseFrequencyX, 0.05);
+    EXPECT_DOUBLE_EQ(p.baseFrequencyY, 0.07);
+    EXPECT_EQ(p.numOctaves, 4);
+    EXPECT_DOUBLE_EQ(p.seed, 12.0);
+    EXPECT_TRUE(p.stitchTiles);
+  }
+  // Tag 13 — Image (svgSubDocument intentionally not asserted).
+  ASSERT_TRUE(std::holds_alternative<fp::Image>(out.nodes[13].primitive));
+  {
+    const auto& p = std::get<fp::Image>(out.nodes[13].primitive);
+    EXPECT_EQ(std::string_view(p.href), "https://example.com/a.png");
+    EXPECT_EQ(p.preserveAspectRatio.align, svg::PreserveAspectRatio::Align::XMidYMid);
+    EXPECT_EQ(p.preserveAspectRatio.meetOrSlice, svg::PreserveAspectRatio::MeetOrSlice::Slice);
+    EXPECT_THAT(p.imageData, ElementsAre(0x01, 0x02, 0x03, 0x04));
+    EXPECT_EQ(p.imageWidth, 2);
+    EXPECT_EQ(p.imageHeight, 2);
+    EXPECT_EQ(std::string_view(p.fragmentId), "rect1");
+    EXPECT_TRUE(p.isFragmentReference);
+    EXPECT_DOUBLE_EQ(p.fragmentRegionTopLeft.x, 9.0);
+    EXPECT_DOUBLE_EQ(p.fragmentRegionTopLeft.y, 10.0);
+  }
+  // Tag 14 — DisplacementMap.
+  ASSERT_TRUE(std::holds_alternative<fp::DisplacementMap>(out.nodes[14].primitive));
+  {
+    const auto& p = std::get<fp::DisplacementMap>(out.nodes[14].primitive);
+    EXPECT_DOUBLE_EQ(p.scale, 15.0);
+    EXPECT_EQ(p.xChannelSelector, fp::DisplacementMap::Channel::R);
+    EXPECT_EQ(p.yChannelSelector, fp::DisplacementMap::Channel::G);
+  }
+  // Tag 15 — DiffuseLighting.
+  ASSERT_TRUE(std::holds_alternative<fp::DiffuseLighting>(out.nodes[15].primitive));
+  {
+    const auto& p = std::get<fp::DiffuseLighting>(out.nodes[15].primitive);
+    EXPECT_DOUBLE_EQ(p.surfaceScale, 2.5);
+    EXPECT_DOUBLE_EQ(p.diffuseConstant, 1.75);
+    EXPECT_THAT(p.lightingColor, ColorRgbaEq(css::RGBA(255, 200, 100, 255)));
+    ASSERT_TRUE(p.light.has_value());
+    EXPECT_THAT(*p.light, LightSourceEq(MakeSpotLight()));
+  }
+  // Tag 16 — SpecularLighting.
+  ASSERT_TRUE(std::holds_alternative<fp::SpecularLighting>(out.nodes[16].primitive));
+  {
+    const auto& p = std::get<fp::SpecularLighting>(out.nodes[16].primitive);
+    EXPECT_DOUBLE_EQ(p.surfaceScale, 3.0);
+    EXPECT_DOUBLE_EQ(p.specularConstant, 0.9);
+    EXPECT_DOUBLE_EQ(p.specularExponent, 24.0);
+    EXPECT_THAT(p.lightingColor, ColorRgbaEq(css::RGBA(50, 60, 70, 255)));
+    ASSERT_TRUE(p.light.has_value());
+    EXPECT_THAT(*p.light, LightSourceEq(MakeSpotLight()));
+  }
+
+  // Graph-level metadata.
+  EXPECT_EQ(out.colorInterpolationFilters, svg::ColorInterpolationFilters::LinearRGB);
+  EXPECT_EQ(out.primitiveUnits, svg::PrimitiveUnits::ObjectBoundingBox);
+  ASSERT_TRUE(out.elementBoundingBox.has_value());
+  EXPECT_THAT(*out.elementBoundingBox, Box2dCorners(0.0, 0.0, 100.0, 100.0));
+  ASSERT_TRUE(out.filterRegion.has_value());
+  EXPECT_THAT(*out.filterRegion, Box2dCorners(-10.0, -10.0, 110.0, 110.0));
+  EXPECT_DOUBLE_EQ(out.userToPixelScale.x, 2.0);
+  EXPECT_DOUBLE_EQ(out.userToPixelScale.y, 3.0);
+}
+
+// ---------------------------------------------------------------------------
+// FilterGraph / FilterNode: malformed-input fail-safe cases for the primitive
+// decoder. The wire boundary is a trust boundary, so the per-primitive decoders
+// must return false (and mark the reader failed) rather than over-read or
+// fabricate a value when fed a truncated or out-of-range payload.
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, FilterGraphRejectsUnknownPrimitiveTagBeyondMax) {
+  // Tag 17 is one past the highest valid tag (16 = SpecularLighting). The
+  // switch's default arm must fail rather than fall through.
+  WireWriter w;
+  w.writeU32(1);   // one node
+  w.writeU8(17u);  // unknown primitive tag
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  EXPECT_FALSE(DecodeFilterGraph(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, FilterNodeTruncatedAfterTagFails) {
+  // A valid GaussianBlur tag (0) followed by no field bytes. The primitive
+  // decoder must fail on the first missing readF64 rather than read garbage.
+  WireWriter w;
+  w.writeU32(1);                       // one node
+  w.writeU8(static_cast<uint8_t>(0));  // kGaussianBlur
+  // ... no stdDeviationX/Y/edgeMode payload.
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  EXPECT_FALSE(DecodeFilterGraph(r, out));
+}
+
+TEST(CodecTest, FilterNodeRejectsOutOfRangeBlendMode) {
+  // Blend tag (4) followed by an out-of-range mode byte (0xFF > Luminosity).
+  WireWriter w;
+  w.writeU32(1);                       // one node
+  w.writeU8(static_cast<uint8_t>(4));  // kBlend
+  w.writeU8(0xFF);                     // invalid blend mode
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  EXPECT_FALSE(DecodeFilterGraph(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, FilterNodeRejectsOutOfRangeFilterInputStandard) {
+  // A no-field primitive (Tile, tag 11) decodes fine, but then a standard-input
+  // FilterInput with an out-of-range keyword byte must fail the node decode.
+  WireWriter w;
+  w.writeU32(1);                        // one node
+  w.writeU8(static_cast<uint8_t>(11));  // kTile (no primitive fields)
+  w.writeU32(1);                        // one input
+  w.writeU8(1);                         // kFilterInputStandard
+  w.writeU8(0xFF);                      // out-of-range standard input keyword
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  EXPECT_FALSE(DecodeFilterGraph(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, FilterNodeRejectsUnknownFilterInputTag) {
+  // Tile primitive + an input whose variant tag (0x09) is unknown.
+  WireWriter w;
+  w.writeU32(1);                        // one node
+  w.writeU8(static_cast<uint8_t>(11));  // kTile
+  w.writeU32(1);                        // one input
+  w.writeU8(0x09);                      // unknown FilterInput tag
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  EXPECT_FALSE(DecodeFilterGraph(r, out));
+  EXPECT_TRUE(r.failed());
 }
 
 }  // namespace
