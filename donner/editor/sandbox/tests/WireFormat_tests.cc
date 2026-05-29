@@ -1037,16 +1037,17 @@ TEST(CodecTest, ColorHslaFlattenedToRgba) {
   EXPECT_EQ(std::get<css::RGBA>(out.value), css::RGBA(255, 0, 0, 255));
 }
 
-TEST(CodecTest, ColorCurrentColorEncodesAsDefaultRgba) {
-  // CurrentColor is not resolvable at encode time, so the encoder writes a
-  // default-constructed css::RGBA() (opaque white) under the RGBA tag.
+TEST(CodecTest, ColorCurrentColorEncodesAsTransparent) {
+  // CurrentColor is not resolvable at encode time, so the encoder writes fully-transparent
+  // black under the RGBA tag (the "currentColor with no context" fallback) — not the opaque
+  // white of a default-constructed css::RGBA().
   WireWriter w;
   EncodeColor(w, css::Color(css::Color::CurrentColor()));
   WireReader r(w.data());
   css::Color out(css::RGBA(1, 2, 3, 4));
   ASSERT_TRUE(DecodeColor(r, out));
   ASSERT_TRUE(std::holds_alternative<css::RGBA>(out.value));
-  EXPECT_EQ(std::get<css::RGBA>(out.value), css::RGBA());
+  EXPECT_EQ(std::get<css::RGBA>(out.value), css::RGBA(0, 0, 0, 0));
 }
 
 TEST(CodecTest, ColorRejectsUnknownTag) {
