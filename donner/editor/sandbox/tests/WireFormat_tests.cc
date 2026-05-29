@@ -17,12 +17,14 @@
 /// intentionally out of scope for this test file; that lives in the renderer
 /// test suite once S3 wires the child process up.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "donner/base/FillRule.h"
@@ -35,14 +37,20 @@
 #include "donner/editor/sandbox/SerializingRenderer.h"
 #include "donner/editor/sandbox/Wire.h"
 #include "donner/svg/SVG.h"
+#include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/ResolvedGradient.h"
 #include "donner/svg/renderer/StrokeParams.h"
 
 namespace donner::editor::sandbox {
 namespace {
+
+using ::testing::DoubleEq;
+using ::testing::ElementsAre;
 
 using ::donner::svg::MixBlendMode;
 using ::donner::svg::PaintParams;
@@ -942,6 +950,873 @@ TEST(CodecTest, TextParamsWithFontFacesRoundTrip) {
   // Verify the span was set.
   EXPECT_EQ(decoded.fontFaces.size(), 1u);
   EXPECT_DOUBLE_EQ(decoded.opacity, 0.8);
+}
+
+// =============================================================================
+// Coverage expansion: a round-trip for every Encode/Decode pair, plus
+// truncated-buffer fail-safe checks for each decoder. The wire boundary is a
+// trust boundary (data arrives from a sandboxed child), so a decoder fed a
+// short buffer must return false rather than over-read.
+// =============================================================================
+
+namespace {
+
+using ::donner::svg::GradientSpreadMethod;
+using ::donner::svg::GradientStop;
+using ::donner::svg::GradientUnits;
+using ::donner::svg::ImageParams;
+using ::donner::svg::ImageResource;
+
+// Named matcher: a Lengthd whose value and unit both match. Prints both sides
+// of the mismatch so a failure localizes the offending field without a rerun.
+MATCHER_P2(LengthdEq, expectedValue, expectedUnit,
+           "Lengthd{value=" + ::testing::PrintToString(expectedValue) +
+               ", unit=" + ::testing::PrintToString(static_cast<int>(expectedUnit)) + "}") {
+  if (arg.value != expectedValue) {
+    *result_listener << "value is " << arg.value << " (expected " << expectedValue << ")";
+    return false;
+  }
+  if (arg.unit != expectedUnit) {
+    *result_listener << "unit is " << static_cast<int>(arg.unit) << " (expected "
+                     << static_cast<int>(expectedUnit) << ")";
+    return false;
+  }
+  return true;
+}
+
+// Named matcher: a Box2d whose four corners match. Reports all four channels.
+MATCHER_P4(Box2dCorners, tlx, tly, brx, bry,
+           "Box2d{(" + ::testing::PrintToString(tlx) + "," + ::testing::PrintToString(tly) + ")-(" +
+               ::testing::PrintToString(brx) + "," + ::testing::PrintToString(bry) + ")}") {
+  *result_listener << "actual {(" << arg.topLeft.x << "," << arg.topLeft.y << ")-("
+                   << arg.bottomRight.x << "," << arg.bottomRight.y << ")}";
+  return arg.topLeft.x == tlx && arg.topLeft.y == tly && arg.bottomRight.x == brx &&
+         arg.bottomRight.y == bry;
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Vector2i
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, Vector2iRoundTrip) {
+  WireWriter w;
+  EncodeVector2i(w, Vector2i(-2147483648, 2147483647));
+  WireReader r(w.data());
+  Vector2i out;
+  ASSERT_TRUE(DecodeVector2i(r, out));
+  EXPECT_EQ(out.x, -2147483648);
+  EXPECT_EQ(out.y, 2147483647);
+  EXPECT_EQ(r.remaining(), 0u);
+}
+
+TEST(CodecTest, Vector2iTruncatedFails) {
+  WireWriter w;
+  w.writeI32(5);  // x present, y missing.
+  WireReader r(w.data());
+  Vector2i out;
+  EXPECT_FALSE(DecodeVector2i(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// Color: HSLA flattening and CurrentColor fallback
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, ColorHslaFlattenedToRgba) {
+  // HSLA is flattened to RGBA on the wire. Round-tripping a fully-saturated red
+  // HSLA must come back as RGBA red.
+  WireWriter w;
+  EncodeColor(w, css::Color(css::HSLA(0, 1.0f, 0.5f, 0xFF)));
+  WireReader r(w.data());
+  css::Color out(css::RGBA{});
+  ASSERT_TRUE(DecodeColor(r, out));
+  ASSERT_TRUE(std::holds_alternative<css::RGBA>(out.value));
+  EXPECT_EQ(std::get<css::RGBA>(out.value), css::RGBA(255, 0, 0, 255));
+}
+
+TEST(CodecTest, ColorCurrentColorEncodesAsDefaultRgba) {
+  // CurrentColor is not resolvable at encode time, so the encoder writes a
+  // default-constructed css::RGBA() (opaque white) under the RGBA tag.
+  WireWriter w;
+  EncodeColor(w, css::Color(css::Color::CurrentColor()));
+  WireReader r(w.data());
+  css::Color out(css::RGBA(1, 2, 3, 4));
+  ASSERT_TRUE(DecodeColor(r, out));
+  ASSERT_TRUE(std::holds_alternative<css::RGBA>(out.value));
+  EXPECT_EQ(std::get<css::RGBA>(out.value), css::RGBA());
+}
+
+TEST(CodecTest, ColorRejectsUnknownTag) {
+  WireWriter w;
+  w.writeU8(99);  // not the RGBA tag (1).
+  WireReader r(w.data());
+  css::Color out(css::RGBA{});
+  EXPECT_FALSE(DecodeColor(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, ColorTruncatedFails) {
+  WireWriter w;  // empty: not even the tag byte.
+  WireReader r(w.data());
+  css::Color out(css::RGBA{});
+  EXPECT_FALSE(DecodeColor(r, out));
+}
+
+TEST(CodecTest, RgbaTruncatedFails) {
+  WireWriter w;
+  w.writeU8(0x10);
+  w.writeU8(0x20);  // only 2 of 4 channels.
+  WireReader r(w.data());
+  css::RGBA out;
+  EXPECT_FALSE(DecodeRgba(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// Enums: round-trip every value + out-of-range rejection
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, FillRuleRoundTripAllValues) {
+  for (FillRule v : {FillRule::NonZero, FillRule::EvenOdd}) {
+    WireWriter w;
+    EncodeFillRule(w, v);
+    WireReader r(w.data());
+    FillRule out = FillRule::NonZero;
+    ASSERT_TRUE(DecodeFillRule(r, out));
+    EXPECT_EQ(out, v);
+  }
+}
+
+TEST(CodecTest, FillRuleRejectsOutOfRange) {
+  WireWriter w;
+  w.writeU8(0xFF);
+  WireReader r(w.data());
+  FillRule out = FillRule::NonZero;
+  EXPECT_FALSE(DecodeFillRule(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, FillRuleTruncatedFails) {
+  WireWriter w;
+  WireReader r(w.data());
+  FillRule out = FillRule::NonZero;
+  EXPECT_FALSE(DecodeFillRule(r, out));
+}
+
+TEST(CodecTest, MixBlendModeRoundTrip) {
+  for (MixBlendMode v : {MixBlendMode::Normal, MixBlendMode::Multiply, MixBlendMode::Luminosity}) {
+    WireWriter w;
+    EncodeMixBlendMode(w, v);
+    WireReader r(w.data());
+    MixBlendMode out = MixBlendMode::Normal;
+    ASSERT_TRUE(DecodeMixBlendMode(r, out));
+    EXPECT_EQ(out, v);
+  }
+}
+
+TEST(CodecTest, MixBlendModeRejectsOutOfRange) {
+  WireWriter w;
+  w.writeU8(0xFF);
+  WireReader r(w.data());
+  MixBlendMode out = MixBlendMode::Normal;
+  EXPECT_FALSE(DecodeMixBlendMode(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, StrokeLinecapRoundTrip) {
+  for (StrokeLinecap v : {StrokeLinecap::Butt, StrokeLinecap::Round, StrokeLinecap::Square}) {
+    WireWriter w;
+    EncodeStrokeLinecap(w, v);
+    WireReader r(w.data());
+    StrokeLinecap out = StrokeLinecap::Butt;
+    ASSERT_TRUE(DecodeStrokeLinecap(r, out));
+    EXPECT_EQ(out, v);
+  }
+}
+
+TEST(CodecTest, StrokeLinecapRejectsOutOfRange) {
+  WireWriter w;
+  w.writeU8(0xFF);
+  WireReader r(w.data());
+  StrokeLinecap out = StrokeLinecap::Butt;
+  EXPECT_FALSE(DecodeStrokeLinecap(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, StrokeLinejoinRoundTrip) {
+  for (StrokeLinejoin v : {StrokeLinejoin::Miter, StrokeLinejoin::Round, StrokeLinejoin::Bevel,
+                           StrokeLinejoin::Arcs}) {
+    WireWriter w;
+    EncodeStrokeLinejoin(w, v);
+    WireReader r(w.data());
+    StrokeLinejoin out = StrokeLinejoin::Miter;
+    ASSERT_TRUE(DecodeStrokeLinejoin(r, out));
+    EXPECT_EQ(out, v);
+  }
+}
+
+TEST(CodecTest, StrokeLinejoinRejectsOutOfRange) {
+  WireWriter w;
+  w.writeU8(0xFF);
+  WireReader r(w.data());
+  StrokeLinejoin out = StrokeLinejoin::Miter;
+  EXPECT_FALSE(DecodeStrokeLinejoin(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+// ---------------------------------------------------------------------------
+// Lengthd
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, LengthdRoundTrip) {
+  WireWriter w;
+  EncodeLengthd(w, Lengthd(42.5, LengthUnit::Px));
+  EncodeLengthd(w, Lengthd(-3.0, LengthUnit::Vmax));
+  WireReader r(w.data());
+  Lengthd a, b;
+  ASSERT_TRUE(DecodeLengthd(r, a));
+  ASSERT_TRUE(DecodeLengthd(r, b));
+  EXPECT_THAT(a, LengthdEq(42.5, LengthUnit::Px));
+  EXPECT_THAT(b, LengthdEq(-3.0, LengthUnit::Vmax));
+}
+
+TEST(CodecTest, LengthdRejectsOutOfRangeUnit) {
+  WireWriter w;
+  w.writeF64(1.0);
+  w.writeU8(0xFF);  // invalid unit.
+  WireReader r(w.data());
+  Lengthd out;
+  EXPECT_FALSE(DecodeLengthd(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, LengthdTruncatedFails) {
+  WireWriter w;
+  w.writeF64(1.0);  // value present, unit byte missing.
+  WireReader r(w.data());
+  Lengthd out;
+  EXPECT_FALSE(DecodeLengthd(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// PathShape
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, PathShapeRoundTrip) {
+  PathShape shape;
+  PathBuilder pb;
+  pb.moveTo(Vector2d(0, 0)).lineTo(Vector2d(10, 0)).lineTo(Vector2d(10, 10)).closePath();
+  shape.path = pb.build();
+  shape.fillRule = FillRule::EvenOdd;
+  shape.parentFromEntity = Transform2d::Translate(Vector2d(3, 7));
+  shape.layer = 4;
+
+  WireWriter w;
+  EncodePathShape(w, shape);
+  WireReader r(w.data());
+  PathShape out;
+  ASSERT_TRUE(DecodePathShape(r, out));
+  EXPECT_EQ(out.fillRule, FillRule::EvenOdd);
+  EXPECT_EQ(out.layer, 4);
+  EXPECT_EQ(out.path.commands().size(), shape.path.commands().size());
+  EXPECT_DOUBLE_EQ(out.parentFromEntity.data[4], 3);
+  EXPECT_DOUBLE_EQ(out.parentFromEntity.data[5], 7);
+}
+
+TEST(CodecTest, PathShapeTruncatedFails) {
+  WireWriter w;  // empty buffer can't even read the path command count.
+  WireReader r(w.data());
+  PathShape out;
+  EXPECT_FALSE(DecodePathShape(r, out));
+}
+
+TEST(CodecTest, PathRejectsMismatchedPointCount) {
+  // One MoveTo verb (expects 1 point) but a declared point count of 0.
+  WireWriter w;
+  w.writeU32(1);  // command count
+  w.writeU8(static_cast<uint8_t>(Path::Verb::MoveTo));
+  w.writeU32(0);  // point count — should be 1
+  WireReader r(w.data());
+  Path out;
+  EXPECT_FALSE(DecodePath(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, PathRejectsInvalidVerb) {
+  WireWriter w;
+  w.writeU32(1);
+  w.writeU8(0xFF);  // not a valid verb.
+  WireReader r(w.data());
+  Path out;
+  EXPECT_FALSE(DecodePath(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+// ---------------------------------------------------------------------------
+// StrokeParams truncation
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, StrokeParamsTruncatedFails) {
+  WireWriter w;
+  w.writeF64(2.0);  // strokeWidth only.
+  WireReader r(w.data());
+  StrokeParams out;
+  EXPECT_FALSE(DecodeStrokeParams(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// WireGradient (linear + radial)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+WireGradient MakeLinearGradient() {
+  WireGradient g;
+  g.kind = WireGradient::Kind::kLinear;
+  g.units = GradientUnits::UserSpaceOnUse;
+  g.spreadMethod = GradientSpreadMethod::Repeat;
+  GradientStop s0;
+  s0.offset = 0.0f;
+  s0.color = css::Color(css::RGBA(255, 0, 0, 255));
+  s0.opacity = 1.0f;
+  GradientStop s1;
+  s1.offset = 1.0f;
+  s1.color = css::Color(css::RGBA(0, 0, 255, 255));
+  s1.opacity = 0.5f;
+  g.stops = {s0, s1};
+  g.x1 = Lengthd(0, LengthUnit::Px);
+  g.y1 = Lengthd(0, LengthUnit::Px);
+  g.x2 = Lengthd(100, LengthUnit::Px);
+  g.y2 = Lengthd(0, LengthUnit::Px);
+  g.cx = Lengthd(50, LengthUnit::Px);
+  g.cy = Lengthd(50, LengthUnit::Px);
+  g.r = Lengthd(50, LengthUnit::Px);
+  g.fr = Lengthd(0, LengthUnit::Px);
+  g.fallback = css::Color(css::RGBA(1, 2, 3, 4));
+  return g;
+}
+
+}  // namespace
+
+TEST(CodecTest, WireGradientLinearRoundTrip) {
+  const WireGradient g = MakeLinearGradient();
+  WireWriter w;
+  EncodeWireGradient(w, g);
+  WireReader r(w.data());
+  WireGradient out;
+  ASSERT_TRUE(DecodeWireGradient(r, out));
+  EXPECT_EQ(out.kind, WireGradient::Kind::kLinear);
+  EXPECT_EQ(out.units, GradientUnits::UserSpaceOnUse);
+  EXPECT_EQ(out.spreadMethod, GradientSpreadMethod::Repeat);
+  ASSERT_EQ(out.stops.size(), 2u);
+  EXPECT_FLOAT_EQ(out.stops[0].offset, 0.0f);
+  EXPECT_FLOAT_EQ(out.stops[1].opacity, 0.5f);
+  EXPECT_THAT(out.x2, LengthdEq(100.0, LengthUnit::Px));
+  EXPECT_FALSE(out.fx.has_value());
+  EXPECT_FALSE(out.fy.has_value());
+  ASSERT_TRUE(out.fallback.has_value());
+  ASSERT_TRUE(std::holds_alternative<css::RGBA>(out.fallback->value));
+  EXPECT_EQ(std::get<css::RGBA>(out.fallback->value), css::RGBA(1, 2, 3, 4));
+  EXPECT_EQ(r.remaining(), 0u);
+}
+
+TEST(CodecTest, WireGradientRadialWithFociRoundTrip) {
+  WireGradient g = MakeLinearGradient();
+  g.kind = WireGradient::Kind::kRadial;
+  g.units = GradientUnits::ObjectBoundingBox;
+  g.fx = Lengthd(10, LengthUnit::Px);
+  g.fy = Lengthd(20, LengthUnit::Px);
+  g.fr = Lengthd(5, LengthUnit::Px);
+  g.fallback.reset();
+
+  WireWriter w;
+  EncodeWireGradient(w, g);
+  WireReader r(w.data());
+  WireGradient out;
+  ASSERT_TRUE(DecodeWireGradient(r, out));
+  EXPECT_EQ(out.kind, WireGradient::Kind::kRadial);
+  ASSERT_TRUE(out.fx.has_value());
+  EXPECT_THAT(*out.fx, LengthdEq(10.0, LengthUnit::Px));
+  ASSERT_TRUE(out.fy.has_value());
+  EXPECT_THAT(*out.fy, LengthdEq(20.0, LengthUnit::Px));
+  EXPECT_THAT(out.fr, LengthdEq(5.0, LengthUnit::Px));
+  EXPECT_FALSE(out.fallback.has_value());
+}
+
+TEST(CodecTest, WireGradientRejectsInvalidKind) {
+  WireWriter w;
+  w.writeU8(0xFF);  // invalid kind.
+  WireReader r(w.data());
+  WireGradient out;
+  EXPECT_FALSE(DecodeWireGradient(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, WireGradientTruncatedFails) {
+  WireWriter w;  // empty.
+  WireReader r(w.data());
+  WireGradient out;
+  EXPECT_FALSE(DecodeWireGradient(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// ResolvedPaintServer: every variant tag
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, ResolvedPaintServerNoneRoundTrip) {
+  svg::components::ResolvedPaintServer p = PaintServer::None{};
+  WireWriter w;
+  EncodeResolvedPaintServer(w, p);
+  WireReader r(w.data());
+  svg::components::ResolvedPaintServer out = PaintServer::Solid(css::Color(css::RGBA{}));
+  ASSERT_TRUE(DecodeResolvedPaintServer(r, out));
+  EXPECT_TRUE(std::holds_alternative<PaintServer::None>(out));
+}
+
+TEST(CodecTest, ResolvedPaintServerSolidRoundTrip) {
+  svg::components::ResolvedPaintServer p =
+      PaintServer::Solid(css::Color(css::RGBA(10, 20, 30, 40)));
+  WireWriter w;
+  EncodeResolvedPaintServer(w, p);
+  WireReader r(w.data());
+  svg::components::ResolvedPaintServer out = PaintServer::None{};
+  ASSERT_TRUE(DecodeResolvedPaintServer(r, out));
+  ASSERT_TRUE(std::holds_alternative<PaintServer::Solid>(out));
+  EXPECT_EQ(std::get<PaintServer::Solid>(out).color.value,
+            css::Color::Type(css::RGBA(10, 20, 30, 40)));
+}
+
+TEST(CodecTest, ResolvedPaintServerStubDecodesToTransparentSolid) {
+  // A hand-built stub tag (2) must decode to a transparent solid, per the
+  // pattern side-channel contract.
+  WireWriter w;
+  w.writeU8(2);  // kPaintTagStub
+  WireReader r(w.data());
+  svg::components::ResolvedPaintServer out = PaintServer::None{};
+  ASSERT_TRUE(DecodeResolvedPaintServer(r, out));
+  ASSERT_TRUE(std::holds_alternative<PaintServer::Solid>(out));
+  EXPECT_EQ(std::get<PaintServer::Solid>(out).color.value, css::Color::Type(css::RGBA(0, 0, 0, 0)));
+}
+
+TEST(CodecTest, ResolvedPaintServerGradientStashedInPending) {
+  // Build a gradient-tagged paint server by hand (tag 3 + WireGradient).
+  WireWriter w;
+  w.writeU8(3);  // kPaintTagGradient
+  EncodeWireGradient(w, MakeLinearGradient());
+  WireReader r(w.data());
+  svg::components::ResolvedPaintServer out = PaintServer::Solid(css::Color(css::RGBA{}));
+  std::optional<WireGradient> pending;
+  ASSERT_TRUE(DecodeResolvedPaintServer(r, out, &pending));
+  // The variant becomes None; the gradient is stashed for the replayer.
+  EXPECT_TRUE(std::holds_alternative<PaintServer::None>(out));
+  ASSERT_TRUE(pending.has_value());
+  EXPECT_EQ(pending->kind, WireGradient::Kind::kLinear);
+}
+
+TEST(CodecTest, ResolvedPaintServerRejectsUnknownTag) {
+  WireWriter w;
+  w.writeU8(0xFF);
+  WireReader r(w.data());
+  svg::components::ResolvedPaintServer out = PaintServer::None{};
+  EXPECT_FALSE(DecodeResolvedPaintServer(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, ResolvedPaintServerTruncatedFails) {
+  WireWriter w;  // no tag byte.
+  WireReader r(w.data());
+  svg::components::ResolvedPaintServer out = PaintServer::None{};
+  EXPECT_FALSE(DecodeResolvedPaintServer(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// PaintParams with gradient stashing
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, PaintParamsGradientFillStashed) {
+  PaintParams p;
+  p.opacity = 0.6;
+  // Encode a gradient fill by hand so the decode path stashes it.
+  WireWriter w;
+  w.writeF64(p.opacity);
+  w.writeU8(3);  // fill: gradient
+  EncodeWireGradient(w, MakeLinearGradient());
+  w.writeU8(0);                                         // stroke: none
+  w.writeF64(0.9);                                      // fillOpacity
+  w.writeF64(1.0);                                      // strokeOpacity
+  EncodeColor(w, css::Color(css::RGBA(7, 7, 7, 255)));  // currentColor
+  EncodeBox2d(w, Box2d(Vector2d(0, 0), Vector2d(50, 50)));
+  EncodeStrokeParams(w, StrokeParams{});
+
+  WireReader r(w.data());
+  PaintParams out;
+  std::optional<WireGradient> fillG, strokeG;
+  ASSERT_TRUE(DecodePaintParams(r, out, &fillG, &strokeG));
+  EXPECT_DOUBLE_EQ(out.opacity, 0.6);
+  EXPECT_DOUBLE_EQ(out.fillOpacity, 0.9);
+  ASSERT_TRUE(fillG.has_value());
+  EXPECT_FALSE(strokeG.has_value());
+}
+
+TEST(CodecTest, PaintParamsTruncatedFails) {
+  WireWriter w;  // empty.
+  WireReader r(w.data());
+  PaintParams out;
+  EXPECT_FALSE(DecodePaintParams(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// ResolvedClip with paths
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, ResolvedClipWithPathsRoundTrip) {
+  ResolvedClip c;
+  c.clipRect = Box2d(Vector2d(1, 2), Vector2d(3, 4));
+  PathShape shape;
+  PathBuilder pb;
+  pb.moveTo(Vector2d(0, 0)).lineTo(Vector2d(5, 5)).closePath();
+  shape.path = pb.build();
+  shape.layer = 2;
+  c.clipPaths.push_back(shape);
+  c.clipPathUnitsTransform = Transform2d::Scale(Vector2d(2, 2));
+
+  WireWriter w;
+  EncodeResolvedClip(w, c);
+  WireReader r(w.data());
+  ResolvedClip out;
+  ASSERT_TRUE(DecodeResolvedClip(r, out));
+  ASSERT_TRUE(out.clipRect.has_value());
+  EXPECT_THAT(*out.clipRect, Box2dCorners(1.0, 2.0, 3.0, 4.0));
+  ASSERT_EQ(out.clipPaths.size(), 1u);
+  EXPECT_EQ(out.clipPaths[0].layer, 2);
+  EXPECT_FALSE(out.mask.has_value());
+}
+
+TEST(CodecTest, ResolvedClipRejectsPresentMask) {
+  // Hand-build a clip stream whose trailing mask-present flag is true, which
+  // the encoder never emits — the decoder must treat it as corruption.
+  WireWriter w;
+  w.writeBool(false);  // no clipRect
+  w.writeU32(0);       // no clipPaths
+  EncodeTransform2d(w, Transform2d());
+  w.writeBool(true);  // mask present — illegal.
+  WireReader r(w.data());
+  ResolvedClip out;
+  EXPECT_FALSE(DecodeResolvedClip(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, ResolvedClipTruncatedFails) {
+  WireWriter w;  // empty.
+  WireReader r(w.data());
+  ResolvedClip out;
+  EXPECT_FALSE(DecodeResolvedClip(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// RenderViewport
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, RenderViewportRoundTrip) {
+  RenderViewport vp;
+  vp.size = Vector2d(640, 480);
+  vp.devicePixelRatio = 2.0;
+  WireWriter w;
+  EncodeRenderViewport(w, vp);
+  WireReader r(w.data());
+  RenderViewport out;
+  ASSERT_TRUE(DecodeRenderViewport(r, out));
+  EXPECT_DOUBLE_EQ(out.size.x, 640);
+  EXPECT_DOUBLE_EQ(out.size.y, 480);
+  EXPECT_DOUBLE_EQ(out.devicePixelRatio, 2.0);
+}
+
+TEST(CodecTest, RenderViewportTruncatedFails) {
+  WireWriter w;
+  EncodeVector2d(w, Vector2d(1, 1));  // size present, devicePixelRatio missing.
+  WireReader r(w.data());
+  RenderViewport out;
+  EXPECT_FALSE(DecodeRenderViewport(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// ImageParams
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, ImageParamsRoundTrip) {
+  ImageParams p;
+  p.targetRect = Box2d(Vector2d(5, 6), Vector2d(105, 106));
+  p.opacity = 0.42;
+  p.imageRenderingPixelated = true;
+  WireWriter w;
+  EncodeImageParams(w, p);
+  WireReader r(w.data());
+  ImageParams out;
+  ASSERT_TRUE(DecodeImageParams(r, out));
+  EXPECT_THAT(out.targetRect, Box2dCorners(5.0, 6.0, 105.0, 106.0));
+  EXPECT_DOUBLE_EQ(out.opacity, 0.42);
+  EXPECT_TRUE(out.imageRenderingPixelated);
+}
+
+TEST(CodecTest, ImageParamsTruncatedFails) {
+  WireWriter w;  // empty.
+  WireReader r(w.data());
+  ImageParams out;
+  EXPECT_FALSE(DecodeImageParams(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// ImageResource
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, ImageResourceRoundTrip) {
+  ImageResource img;
+  img.width = 2;
+  img.height = 1;
+  img.data = {0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04};
+  WireWriter w;
+  EncodeImageResource(w, img);
+  WireReader r(w.data());
+  ImageResource out;
+  ASSERT_TRUE(DecodeImageResource(r, out));
+  EXPECT_EQ(out.width, 2);
+  EXPECT_EQ(out.height, 1);
+  EXPECT_THAT(out.data, ElementsAre(0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04));
+}
+
+TEST(CodecTest, ImageResourceEmptyDataRoundTrip) {
+  ImageResource img;
+  img.width = 0;
+  img.height = 0;
+  WireWriter w;
+  EncodeImageResource(w, img);
+  WireReader r(w.data());
+  ImageResource out;
+  ASSERT_TRUE(DecodeImageResource(r, out));
+  EXPECT_TRUE(out.data.empty());
+}
+
+TEST(CodecTest, ImageResourceRejectsNegativeDimensions) {
+  WireWriter w;
+  w.writeI32(-1);  // negative width.
+  w.writeI32(4);
+  w.writeU32(0);
+  WireReader r(w.data());
+  ImageResource out;
+  EXPECT_FALSE(DecodeImageResource(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, ImageResourceTruncatedDataFails) {
+  WireWriter w;
+  w.writeI32(2);
+  w.writeI32(2);
+  w.writeU32(16);  // claims 16 bytes of pixel data but provides none.
+  WireReader r(w.data());
+  ImageResource out;
+  EXPECT_FALSE(DecodeImageResource(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// ComputedTextComponent
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, ComputedTextComponentRoundTrip) {
+  svg::components::ComputedTextComponent text;
+  svg::components::ComputedTextComponent::TextSpan span;
+  span.text = RcString("Hello");
+  span.start = 0;
+  span.end = 5;
+  span.xList = {Lengthd(1, LengthUnit::Px), std::nullopt};
+  span.rotateList = {15.0, 30.0};
+  span.fontSize = Lengthd(16, LengthUnit::Px);
+  span.fontWeight = 700;
+  span.opacity = 0.9;
+  text.spans.push_back(span);
+
+  WireWriter w;
+  EncodeComputedTextComponent(w, text);
+  WireReader r(w.data());
+  svg::components::ComputedTextComponent out;
+  ASSERT_TRUE(DecodeComputedTextComponent(r, out));
+  ASSERT_EQ(out.spans.size(), 1u);
+  EXPECT_EQ(std::string_view(out.spans[0].text), "Hello");
+  EXPECT_EQ(out.spans[0].start, 0u);
+  EXPECT_EQ(out.spans[0].end, 5u);
+  EXPECT_EQ(out.spans[0].fontWeight, 700);
+  ASSERT_EQ(out.spans[0].xList.size(), 2u);
+  EXPECT_TRUE(out.spans[0].xList[0].has_value());
+  EXPECT_FALSE(out.spans[0].xList[1].has_value());
+  ASSERT_EQ(out.spans[0].rotateList.size(), 2u);
+  EXPECT_THAT(out.spans[0].rotateList[1], DoubleEq(30.0));
+  EXPECT_EQ(r.remaining(), 0u);
+}
+
+TEST(CodecTest, ComputedTextComponentEmptyRoundTrip) {
+  svg::components::ComputedTextComponent text;
+  WireWriter w;
+  EncodeComputedTextComponent(w, text);
+  WireReader r(w.data());
+  svg::components::ComputedTextComponent out;
+  ASSERT_TRUE(DecodeComputedTextComponent(r, out));
+  EXPECT_TRUE(out.spans.empty());
+}
+
+TEST(CodecTest, ComputedTextComponentTruncatedFails) {
+  WireWriter w;  // empty: can't read span count.
+  WireReader r(w.data());
+  svg::components::ComputedTextComponent out;
+  EXPECT_FALSE(DecodeComputedTextComponent(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// TextParams without font faces
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, TextParamsNoFontFacesRoundTrip) {
+  svg::TextParams params;
+  params.opacity = 0.7;
+  params.fillColor = css::Color(css::RGBA(11, 22, 33, 255));
+  params.fontFamilies.push_back(RcString("Serif"));
+  params.fontSize = Lengthd(14, LengthUnit::Px);
+  params.textLength = Lengthd(200, LengthUnit::Px);
+
+  WireWriter w;
+  EncodeTextParams(w, params);
+  WireReader r(w.data());
+  svg::TextParams out;
+  // No outFontFaces pointer — decoder must still consume the (empty) face list.
+  ASSERT_TRUE(DecodeTextParams(r, out));
+  EXPECT_DOUBLE_EQ(out.opacity, 0.7);
+  ASSERT_EQ(out.fontFamilies.size(), 1u);
+  EXPECT_EQ(std::string_view(out.fontFamilies[0]), "Serif");
+  EXPECT_THAT(out.fontSize, LengthdEq(14.0, LengthUnit::Px));
+  ASSERT_TRUE(out.textLength.has_value());
+  EXPECT_THAT(*out.textLength, LengthdEq(200.0, LengthUnit::Px));
+  EXPECT_EQ(r.remaining(), 0u);
+}
+
+TEST(CodecTest, TextParamsTruncatedFails) {
+  WireWriter w;  // empty.
+  WireReader r(w.data());
+  svg::TextParams out;
+  EXPECT_FALSE(DecodeTextParams(r, out));
+}
+
+TEST(CodecTest, FontFaceTruncatedFails) {
+  WireWriter w;  // empty: can't read family name length.
+  WireReader r(w.data());
+  css::FontFace out;
+  EXPECT_FALSE(DecodeFontFace(r, out));
+}
+
+// ---------------------------------------------------------------------------
+// FilterGraph: empty + populated with representative primitives
+// ---------------------------------------------------------------------------
+
+TEST(CodecTest, FilterGraphEmptyRoundTrip) {
+  svg::components::FilterGraph g;
+  g.userToPixelScale = Vector2d(1.5, 2.5);
+  WireWriter w;
+  EncodeFilterGraph(w, g);
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  ASSERT_TRUE(DecodeFilterGraph(r, out));
+  EXPECT_TRUE(out.nodes.empty());
+  EXPECT_DOUBLE_EQ(out.userToPixelScale.x, 1.5);
+  EXPECT_DOUBLE_EQ(out.userToPixelScale.y, 2.5);
+  EXPECT_EQ(r.remaining(), 0u);
+}
+
+TEST(CodecTest, FilterGraphWithPrimitivesRoundTrip) {
+  namespace fp = svg::components::filter_primitive;
+  svg::components::FilterGraph g;
+
+  // Node 0: GaussianBlur with a named result + standard input + subregion.
+  {
+    svg::components::FilterNode node;
+    fp::GaussianBlur blur;
+    blur.stdDeviationX = 3.0;
+    blur.stdDeviationY = 4.0;
+    node.primitive = blur;
+    node.inputs.push_back(
+        svg::components::FilterInput(svg::components::FilterStandardInput::SourceGraphic));
+    node.result = RcString("blurred");
+    node.x = Lengthd(1, LengthUnit::Px);
+    node.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+    g.nodes.push_back(std::move(node));
+  }
+  // Node 1: ColorMatrix carrying a values vector + a named input.
+  {
+    svg::components::FilterNode node;
+    fp::ColorMatrix cm;
+    cm.type = fp::ColorMatrix::Type::Matrix;
+    cm.values = {0.1, 0.2, 0.3, 0.4, 0.5};
+    node.primitive = cm;
+    node.inputs.push_back(
+        svg::components::FilterInput(svg::components::FilterInput::Named{RcString("blurred")}));
+    g.nodes.push_back(std::move(node));
+  }
+  // Node 2: Flood with a color + Previous (implicit) input.
+  {
+    svg::components::FilterNode node;
+    fp::Flood flood;
+    flood.floodColor = css::Color(css::RGBA(255, 128, 0, 255));
+    flood.floodOpacity = 0.75;
+    node.primitive = flood;
+    node.inputs.push_back(svg::components::FilterInput(svg::components::FilterInput::Previous{}));
+    g.nodes.push_back(std::move(node));
+  }
+
+  g.colorInterpolationFilters = svg::ColorInterpolationFilters::LinearRGB;
+  g.elementBoundingBox = Box2d(Vector2d(0, 0), Vector2d(80, 80));
+  g.filterRegion = Box2d(Vector2d(-8, -8), Vector2d(88, 88));
+  g.userToPixelScale = Vector2d(2, 2);
+
+  WireWriter w;
+  EncodeFilterGraph(w, g);
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  ASSERT_TRUE(DecodeFilterGraph(r, out));
+  ASSERT_EQ(out.nodes.size(), 3u);
+
+  ASSERT_TRUE(std::holds_alternative<fp::GaussianBlur>(out.nodes[0].primitive));
+  EXPECT_DOUBLE_EQ(std::get<fp::GaussianBlur>(out.nodes[0].primitive).stdDeviationX, 3.0);
+  ASSERT_TRUE(out.nodes[0].result.has_value());
+  EXPECT_EQ(std::string_view(*out.nodes[0].result), "blurred");
+  ASSERT_EQ(out.nodes[0].inputs.size(), 1u);
+  ASSERT_TRUE(out.nodes[0].x.has_value());
+
+  ASSERT_TRUE(std::holds_alternative<fp::ColorMatrix>(out.nodes[1].primitive));
+  EXPECT_THAT(
+      std::get<fp::ColorMatrix>(out.nodes[1].primitive).values,
+      ElementsAre(DoubleEq(0.1), DoubleEq(0.2), DoubleEq(0.3), DoubleEq(0.4), DoubleEq(0.5)));
+
+  ASSERT_TRUE(std::holds_alternative<fp::Flood>(out.nodes[2].primitive));
+  EXPECT_DOUBLE_EQ(std::get<fp::Flood>(out.nodes[2].primitive).floodOpacity, 0.75);
+
+  ASSERT_TRUE(out.elementBoundingBox.has_value());
+  EXPECT_THAT(*out.elementBoundingBox, Box2dCorners(0.0, 0.0, 80.0, 80.0));
+  ASSERT_TRUE(out.filterRegion.has_value());
+  EXPECT_THAT(*out.filterRegion, Box2dCorners(-8.0, -8.0, 88.0, 88.0));
+  EXPECT_EQ(r.remaining(), 0u);
+}
+
+TEST(CodecTest, FilterGraphRejectsInvalidPrimitiveTag) {
+  WireWriter w;
+  w.writeU32(1);    // one node
+  w.writeU8(0xFF);  // invalid primitive tag.
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  EXPECT_FALSE(DecodeFilterGraph(r, out));
+  EXPECT_TRUE(r.failed());
+}
+
+TEST(CodecTest, FilterGraphTruncatedFails) {
+  WireWriter w;  // empty: can't read node count.
+  WireReader r(w.data());
+  svg::components::FilterGraph out;
+  EXPECT_FALSE(DecodeFilterGraph(r, out));
 }
 
 }  // namespace

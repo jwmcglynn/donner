@@ -70,6 +70,18 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "xml_document_tests",
+    srcs = [
+        "tests/XMLDocument_tests.cc",
+    ],
+    deps = [
+        ":xml",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "xml_source_store_tests",
     srcs = [
         "tests/XMLSourceStore_tests.cc",
