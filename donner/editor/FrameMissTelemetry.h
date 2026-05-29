@@ -17,7 +17,7 @@ enum class FrameBudgetMiss {
 
 /// Presentation memory counters included in frame-miss telemetry.
 struct FrameMissResourceTelemetry {
-  /// Bytes retained by the current overlay texture, if the retained overlay fallback is active.
+  /// Bytes retained by the current overlay texture.
   std::uint64_t overlayBytes = 0;
   /// Bytes retained by active composited tile textures.
   std::uint64_t activeTileBytes = 0;
