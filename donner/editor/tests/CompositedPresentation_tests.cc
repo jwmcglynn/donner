@@ -90,7 +90,7 @@ TEST(CompositedPresentationTest, WaitingPhasesAreMutuallyExclusive) {
   EXPECT_FALSE(snapshot.waitingForChromeRefresh);
 }
 
-TEST(CompositedPresentationTest, NeedsCompositedLayerCaptureChecksCacheEntityAndCanvas) {
+TEST(CompositedPresentationTest, NeedsCompositedLayerCaptureChecksCacheEntityOnlyDuringDrag) {
   CompositedPresentation state;
   const SelectTool::ActiveDragPreview active{
       .entity = Entity(7),
@@ -103,7 +103,9 @@ TEST(CompositedPresentationTest, NeedsCompositedLayerCaptureChecksCacheEntityAnd
   EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(100, 100)));
   EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100)))
       << "DOM version changes during drag are presented as affine texture placement.";
-  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(120, 100)));
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(120, 100)))
+      << "Canvas-size changes during active drag are presented from the existing cache; the crisp "
+         "canvas refresh happens after drag settles.";
 }
 
 TEST(CompositedPresentationTest, SelectionTriggersPrewarmWhenCacheMissing) {

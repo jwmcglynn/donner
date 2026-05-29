@@ -135,7 +135,7 @@ public:
   /// Returns true when an active drag needs a fresh composited capture.
   [[nodiscard]] bool needsCompositedLayerCapture(
       const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-      std::uint64_t /*currentVersion*/, const Vector2i& currentCanvasSize) const {
+      std::uint64_t /*currentVersion*/, const Vector2i& /*currentCanvasSize*/) const {
     if (!activePreview.has_value()) {
       return false;
     }
@@ -143,10 +143,11 @@ public:
     const std::optional<CachedTextures> cache = currentCache();
     // Drag transform writes bump the document version every mouse move, but
     // the active preview already carries that affine delta for presenter-side
-    // texture placement. Recapture only when the cache cannot represent the
-    // selected entity in the current canvas epoch.
-    return !cache.has_value() || cache->entity != activePreview->entity ||
-           cache->canvasSize != currentCanvasSize;
+    // texture placement. Zoom can also change the desired raster canvas while
+    // the drag is live; keep presenting the existing cache and refresh the
+    // sharper canvas after the drag settles so shape and overlay remain in
+    // lockstep instead of blocking on a full cached-span reraster.
+    return !cache.has_value() || cache->entity != activePreview->entity;
   }
 
   /// Returns true when a released drag should request a settled composited refresh.

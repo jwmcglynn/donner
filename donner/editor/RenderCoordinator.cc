@@ -562,6 +562,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
   const Vector2i desiredOutputCanvasSize = rasterViewport.outputSizePx;
   const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
+  const auto dragPreview = selectTool.activeDragPreview();
   // Compare desired size against the live document size. Document replacement
   // can reset the stored canvas size, and LayoutSystem readback can round by a
   // pixel, so a separate last-set tracker is not authoritative here.
@@ -572,7 +573,13 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool closeEnough = std::abs(pendingCanvasSize_.x - actualDocumentCanvas.x) <= 1 &&
                            std::abs(pendingCanvasSize_.y - actualDocumentCanvas.y) <= 1;
   const bool wouldChange = !closeEnough;
-  if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && (firstCommit || throttleElapsed)) {
+  // During active drag the presenter can transform the existing promoted tile in lockstep with
+  // the overlay. Committing a zoom-driven canvas size here invalidates the render tree and can
+  // rerasterize every cached span before the next pointer frame; defer that crisp refresh until
+  // mouse-up unless the document still needs its first canvas.
+  const bool deferCanvasCommitForActiveDrag = dragPreview.has_value() && !firstCommit;
+  if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&
+      (firstCommit || throttleElapsed)) {
     app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
     pendingCanvasSizeSince_ = now;
     ++lastFrameCostBreakdown_.documentCanvasCommitCount;
@@ -581,7 +588,6 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 
   const Vector2i currentCanvasSize = desiredOutputCanvasSize;
   const auto currentVersion = app.document().currentFrameVersion();
-  const auto dragPreview = selectTool.activeDragPreview();
   const Entity prewarmEntity = selectedCompositedEntity(app);
   const Entity suppressedLayerEntity = suppressedCompositedLayerEntity(app);
   if (suppressedLayerEntity != entt::null) {

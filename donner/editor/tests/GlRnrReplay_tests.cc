@@ -972,6 +972,24 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
     EXPECT_GT(capture->dimensions.x, 0);
     EXPECT_GT(capture->dimensions.y, 0);
   }
+
+  for (std::uint64_t frame = 39; frame <= kLastCaptureFrame; ++frame) {
+    const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
+    ASSERT_NE(diagnostics, nullptr) << "missing diagnostics for replay frame " << frame;
+    if (!diagnostics->frameCost.overlay.hasLiveDragPreview) {
+      continue;
+    }
+    EXPECT_EQ(diagnostics->frameCost.documentCanvasCommitCount, 0u)
+        << "Zoom-driven canvas commits during active drag force full cached-span rerasterization "
+           "on replay frame "
+        << frame;
+    EXPECT_EQ(diagnostics->frameCost.compositedRender.cachedTileCount, 0)
+        << "Active zoom+drag should keep using presenter-transformed cache instead of "
+           "rerasterizing cached compositor tiles on replay frame "
+        << frame;
+    EXPECT_DOUBLE_EQ(diagnostics->frameCost.compositedRender.cachedMs, 0.0)
+        << "Unexpected cached compositor raster cost on active zoom+drag replay frame " << frame;
+  }
 }
 
 TEST(GlRnrReplayTest, GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame) {
