@@ -203,6 +203,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       span.strokeLinecap = style->properties->strokeLinecap.getRequired();
       span.strokeLinejoin = style->properties->strokeLinejoin.getRequired();
       span.strokeMiterLimit = style->properties->strokeMiterlimit.getRequired();
+      span.paintOrder = style->properties->paintOrder.getRequired();
     }
 
     // Resolve decoration from ancestors. Per CSS Text Decoration §3, text-decoration is NOT

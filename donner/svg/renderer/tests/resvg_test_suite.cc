@@ -819,10 +819,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/paint-order",
                 {
-                    {"on-text.svg",
-                     Params::Skip("Not impl: paint-order on text fill/stroke ordering")},
-                    {"on-tspan.svg",
-                     Params::Skip("Not impl: paint-order on tspan fill/stroke ordering")},
+                    // paint-order itself is honored (stroke-under-fill renders correctly); the
+                    // residual diff is tspan-split glyph positioning drift, present even in the
+                    // default-order "Te" run. Tracked under the text/tspan interaction gap.
+                    {"on-tspan.svg", Params::Skip("tspan-split glyph positioning drift, not "
+                                                  "paint-order")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

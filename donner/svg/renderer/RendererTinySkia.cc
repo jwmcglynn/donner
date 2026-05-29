@@ -1443,8 +1443,14 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     std::optional<tiny_skia::Paint> spanFillPaint = fillPaint;
     std::optional<tiny_skia::Paint> spanStrokePaint = strokePaint;
     tiny_skia::Stroke spanTinyStroke = tinyStroke;
+    PaintOrder spanPaintOrder;
+    // Outline glyph paths for this run, collected so fill and stroke can be painted as
+    // two whole-run passes in `paint-order` (matching resvg, which paints the text's
+    // fill then the text's stroke as units rather than per-glyph).
+    std::vector<tiny_skia::Path> runGlyphPaths;
     if (runIndex < text.spans.size()) {
       const auto& span = text.spans[runIndex];
+      spanPaintOrder = span.paintOrder;
       const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
       const float spanFillOpacity = NarrowToFloat(span.fillOpacity);
       const float spanStrokeOpacity = NarrowToFloat(span.strokeOpacity);
@@ -1591,21 +1597,40 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
       // `glyphPath` is already placed in document space (translate/rotate baked
       // in by placedGlyphOutline); the renderer's current transform maps it to
-      // device space below.
-      const tiny_skia::Path tinyPath = toTinyPath(glyphPath);
-      auto pixmapView = currentPixmapView();
+      // device space below. Collected for the ordered fill/stroke passes after the loop.
+      runGlyphPaths.push_back(toTinyPath(glyphPath));
+    }
 
-      // Fill.
-      if (spanFillPaint) {
+    // Honor `paint-order`: paint the whole run's fill and stroke in the resolved order
+    // (markers do not apply to text glyphs, so they are skipped). The fill and stroke
+    // are each painted across all glyphs as a unit so overlapping glyphs composite the
+    // same way resvg renders them.
+    auto pixmapView = currentPixmapView();
+    const auto drawRunFill = [&]() {
+      if (!spanFillPaint) return;
+      for (const auto& tinyPath : runGlyphPaths) {
         tiny_skia::Painter::fillPath(pixmapView, tinyPath, *spanFillPaint,
                                      tiny_skia::FillRule::Winding,
                                      toTinyTransform(deviceFromLocalTransform_), mask);
       }
-
-      // Stroke.
-      if (spanStrokePaint) {
+    };
+    const auto drawRunStroke = [&]() {
+      if (!spanStrokePaint) return;
+      for (const auto& tinyPath : runGlyphPaths) {
         tiny_skia::Painter::strokePath(pixmapView, tinyPath, *spanStrokePaint, spanTinyStroke,
                                        toTinyTransform(deviceFromLocalTransform_), mask);
+      }
+    };
+
+    bool fillDrawn = false;
+    bool strokeDrawn = false;
+    for (const PaintComponent component : spanPaintOrder.order) {
+      if (component == PaintComponent::Fill && !fillDrawn) {
+        drawRunFill();
+        fillDrawn = true;
+      } else if (component == PaintComponent::Stroke && !strokeDrawn) {
+        drawRunStroke();
+        strokeDrawn = true;
       }
     }
 

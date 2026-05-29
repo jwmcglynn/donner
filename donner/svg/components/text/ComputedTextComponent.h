@@ -14,6 +14,7 @@
 #include "donner/svg/core/FontStyle.h"
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/LengthAdjust.h"
+#include "donner/svg/core/PaintOrder.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
@@ -159,6 +160,10 @@ struct ComputedTextComponent {
 
     /// Per-span text-decoration bitmask, inherited from the declaring ancestor.
     TextDecoration textDecoration = TextDecoration::None;
+
+    /// CSS `paint-order` for this span. Controls whether fill or stroke is painted first
+    /// (markers do not apply to text). Populated by RendererDriver from sourceEntity.
+    PaintOrder paintOrder;
 
     /// Fill paint resolved from the element that declared text-decoration (not this span).
     /// Per CSS Text Decoration §3, decoration uses the declaring element's paint.
