@@ -43,6 +43,20 @@
 namespace donner::editor::mcp {
 namespace {
 
+bool IsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.isa<svg::SVGGraphicsElement>();
+  });
+}
+
+Entity SelectedGraphicsEntity(EditorApp& app) {
+  if (!app.selectedElement().has_value() || !IsGraphicsElement(*app.selectedElement())) {
+    return entt::null;
+  }
+
+  return app.selectedElement()->unsafeEntityHandle().entity();
+}
+
 using nlohmann::json;
 
 constexpr int kDefaultCanvasWidth = 892;
@@ -227,6 +241,12 @@ bool ReadOptionalDouble(const json& arguments, std::string_view key, double fall
   }
   *out = it->get<double>();
   return true;
+}
+
+Box2d DocumentViewBoxOr(const svg::SVGDocument& document, const Box2d& fallback) {
+  return document.withReadAccess([&document, &fallback](svg::DocumentReadAccess&) {
+    return document.svgElement().viewBox().value_or(fallback);
+  });
 }
 
 bool ReadCaptureOptions(const json& arguments, bool includeFinalFrameDefault,
@@ -695,12 +715,15 @@ int AttachPngFile(ToolCallResult* out, const std::string& label, const std::file
 }
 
 json ElementJson(const svg::SVGElement& element) {
-  return json{
-      {"entity", EntityToJsonValue(element.unsafeEntityHandle().entity())},
-      {"tag", element.tagName().toString()},
-      {"id", std::string(element.id())},
-      {"class", std::string(element.className())},
-  };
+  const Entity entity = element.unsafeEntityHandle().entity();
+  return element.withReadAccess([&element, entity](svg::DocumentReadAccess&, EntityHandle) {
+    return json{
+        {"entity", EntityToJsonValue(entity)},
+        {"tag", element.tagName().toString()},
+        {"id", std::string(element.id())},
+        {"class", std::string(element.className())},
+    };
+  });
 }
 
 bool DrainWritebackAndReparseSource(EditorApp* app, SelectTool* selectTool, std::string* source) {
@@ -1380,8 +1403,8 @@ bool EditorControlSession::loadCurrentSourceText(const LoadOptions& options,
   displayTextures_.reset();
   rnrRecording_ = RnrRecordingState{};
 
-  const Box2d viewBox = app_.document().document().svgElement().viewBox().value_or(
-      Box2d::FromXYWH(0, 0, kDefaultCanvasWidth, kDefaultCanvasHeight));
+  const Box2d viewBox = DocumentViewBoxOr(
+      app_.document().document(), Box2d::FromXYWH(0, 0, kDefaultCanvasWidth, kDefaultCanvasHeight));
   canvasWidth_ = options.canvasWidth > 0
                      ? options.canvasWidth
                      : std::max(1, static_cast<int>(std::ceil(viewBox.width())));
@@ -1726,9 +1749,13 @@ ToolCallResult EditorControlSession::dragSelector(const json& arguments) {
     repro::ReproEvent event;
     event.kind = repro::ReproEvent::Kind::MouseDown;
     event.mouseButton = 0;
-    repro::ReproHit hit;
-    hit.id = std::string(element->id());
-    hit.tag = element->tagName().toString();
+    repro::ReproHit hit =
+        element->withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+          return repro::ReproHit{
+              .id = std::string(element->id()),
+              .tag = element->tagName().toString(),
+          };
+        });
     event.hit = std::move(hit);
     std::vector<repro::ReproEvent> events;
     events.push_back(std::move(event));
@@ -2164,7 +2191,8 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
   viewport.paneOrigin = Vector2d::Zero();
   viewport.paneSize = Vector2d(static_cast<double>(loadOptions.canvasWidth),
                                static_cast<double>(loadOptions.canvasHeight));
-  viewport.documentViewBox = app_.document().document().svgElement().viewBox().value_or(
+  viewport.documentViewBox = DocumentViewBoxOr(
+      app_.document().document(),
       Box2d::FromXYWH(0.0, 0.0, loadOptions.canvasWidth, loadOptions.canvasHeight));
   viewport.resetTo100Percent();
   for (const repro::ReproFrame& frame : replay->frames) {
@@ -2252,11 +2280,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       const std::uint64_t currentVersion = app_.document().currentFrameVersion();
       const std::optional<SelectTool::ActiveDragPreview> dragPreview =
           selectTool_->activeDragPreview();
-      Entity selectedEntity = entt::null;
-      if (app_.selectedElement().has_value() &&
-          app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-        selectedEntity = app_.selectedElement()->unsafeEntityHandle().entity();
-      }
+      const Entity selectedEntity = SelectedGraphicsEntity(app_);
       const PresentationRenderScheduleDecision schedule =
           renderScheduler.evaluate(displayPresentation_, PresentationRenderScheduleInput{
                                                              .selectedEntity = selectedEntity,
@@ -2364,8 +2388,8 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       leftButtonHeld = nowHeld;
       const bool postInputRenderRequested = maybeRequestGuiRender();
       const DisplayFrameSnapshot presentedFrame = currentDisplayFrame();
-      const Box2d viewBox = app_.document().document().svgElement().viewBox().value_or(
-          Box2d::FromXYWH(0.0, 0.0, canvasWidth_, canvasHeight_));
+      const Box2d viewBox = DocumentViewBoxOr(
+          app_.document().document(), Box2d::FromXYWH(0.0, 0.0, canvasWidth_, canvasHeight_));
       const std::optional<svg::RendererBitmap> presentedBitmap =
           displayTextures_.composeDisplayFrame(presentedFrame, viewBox,
                                                app_.document().document().canvasSize());
@@ -2518,8 +2542,8 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
 
     if (renderEachFrame && frameNeedsRender) {
       const DisplayFrameSnapshot displayBeforeRender = currentDisplayFrame();
-      const Box2d viewBox = app_.document().document().svgElement().viewBox().value_or(
-          Box2d::FromXYWH(0.0, 0.0, canvasWidth_, canvasHeight_));
+      const Box2d viewBox = DocumentViewBoxOr(
+          app_.document().document(), Box2d::FromXYWH(0.0, 0.0, canvasWidth_, canvasHeight_));
       const std::optional<svg::RendererBitmap> displayBeforeRenderBitmap =
           includeDisplayDiff
               ? displayTextures_.composeDisplayFrame(displayBeforeRender, viewBox,
@@ -2667,11 +2691,7 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
 
   const std::optional<SelectTool::ActiveDragPreview> activePreview =
       selectTool_->activeDragPreview();
-  Entity selectedEntity = entt::null;
-  if (app_.selectedElement().has_value() &&
-      app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-    selectedEntity = app_.selectedElement()->unsafeEntityHandle().entity();
-  }
+  const Entity selectedEntity = SelectedGraphicsEntity(app_);
   displayPresentation_.clearSettlingIfSelectionChanged(selectedEntity, activePreview.has_value());
 
   RenderRequest request(renderer_, app_.document().document());
@@ -2775,10 +2795,9 @@ void EditorControlSession::appendRnrFrame(const Vector2d& documentPoint, int mou
 }
 
 repro::ReproViewport EditorControlSession::currentReproViewport() const {
-  const Box2d viewBox = app_.hasDocument()
-                            ? app_.document().document().svgElement().viewBox().value_or(
-                                  Box2d::FromXYWH(0.0, 0.0, canvasWidth_, canvasHeight_))
-                            : Box2d::FromXYWH(0.0, 0.0, canvasWidth_, canvasHeight_);
+  const Box2d fallback = Box2d::FromXYWH(0.0, 0.0, canvasWidth_, canvasHeight_);
+  const Box2d viewBox =
+      app_.hasDocument() ? DocumentViewBoxOr(app_.document().document(), fallback) : fallback;
   const Vector2d viewBoxSize = viewBox.size();
   const double deviceScaleX =
       viewBoxSize.x > 0.0 ? static_cast<double>(canvasWidth_) / viewBoxSize.x : 1.0;
@@ -2860,12 +2879,22 @@ std::optional<svg::SVGElement> EditorControlSession::querySelector(std::string_v
 std::optional<Box2d> EditorControlSession::elementWorldBounds(
     const svg::SVGElement& element) const {
   std::optional<Box2d> result;
-  if (element.isa<svg::SVGGeometryElement>()) {
-    result = element.cast<svg::SVGGeometryElement>().worldBounds();
+  const std::optional<svg::SVGGeometryElement> geometry =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        if (!element.isa<svg::SVGGeometryElement>()) {
+          return std::optional<svg::SVGGeometryElement>();
+        }
+
+        return std::optional(element.cast<svg::SVGGeometryElement>());
+      });
+  if (geometry.has_value()) {
+    result = geometry->worldBounds();
   }
 
-  for (std::optional<svg::SVGElement> child = element.firstChild(); child.has_value();
-       child = child->nextSibling()) {
+  std::optional<svg::SVGElement> child = element.withReadAccess(
+      [&element](svg::DocumentReadAccess&, EntityHandle) { return element.firstChild(); });
+  while (child.has_value()) {
+    const svg::SVGElement currentChild = *child;
     if (auto childBounds = elementWorldBounds(*child); childBounds.has_value()) {
       if (result.has_value()) {
         result->addBox(*childBounds);
@@ -2873,6 +2902,10 @@ std::optional<Box2d> EditorControlSession::elementWorldBounds(
         result = *childBounds;
       }
     }
+
+    child = currentChild.withReadAccess([&currentChild](svg::DocumentReadAccess&, EntityHandle) {
+      return currentChild.nextSibling();
+    });
   }
 
   return result;

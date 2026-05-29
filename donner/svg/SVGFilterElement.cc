@@ -41,31 +41,26 @@ SVGFilterElement SVGFilterElement::CreateOn(EntityHandle handle) {
 }
 
 Lengthd SVGFilterElement::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterComponent>();
   return component ? component->x.value_or(DefaultFilterX()) : DefaultFilterX();
 }
 
 Lengthd SVGFilterElement::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterComponent>();
   return component ? component->y.value_or(DefaultFilterY()) : DefaultFilterY();
 }
 
 Lengthd SVGFilterElement::width() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterComponent>();
   return component ? component->width.value_or(DefaultFilterWidth()) : DefaultFilterWidth();
 }
 
 Lengthd SVGFilterElement::height() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterComponent>();
   return component ? component->height.value_or(DefaultFilterHeight()) : DefaultFilterHeight();
 }
 
 std::optional<RcString> SVGFilterElement::href() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterComponent>();
   const std::optional<Reference> maybeHref = component ? component->href : std::nullopt;
   if (maybeHref.has_value()) {
@@ -117,7 +112,6 @@ void SVGFilterElement::setHref(OptionalRef<RcStringOrRef> value) {
 }
 
 FilterUnits SVGFilterElement::filterUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterComponent>();
   return component ? component->filterUnits.value_or(FilterUnits::Default) : FilterUnits::Default;
 }
@@ -130,7 +124,6 @@ void SVGFilterElement::setFilterUnits(FilterUnits value) {
 }
 
 PrimitiveUnits SVGFilterElement::primitiveUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FilterComponent>();
   return component ? component->primitiveUnits.value_or(PrimitiveUnits::Default)
                    : PrimitiveUnits::Default;

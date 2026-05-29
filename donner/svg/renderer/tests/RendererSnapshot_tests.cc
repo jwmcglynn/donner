@@ -153,7 +153,9 @@ TEST(RendererSnapshotTests, ConcurrentDomMutationsCanCompleteWhileSnapshotReplay
   releaseReplay.set_value();
   EXPECT_EQ(renderFinished.wait_for(std::chrono::seconds(2)), std::future_status::ready);
   EXPECT_FALSE(replayCallbackHadWriteAccess.load(std::memory_order_relaxed));
-  EXPECT_EQ(rect.x(), Lengthd(42, Lengthd::Unit::None));
+  rect.withReadAccess([rect](DocumentReadAccess&, EntityHandle) mutable {
+    EXPECT_EQ(rect.x(), Lengthd(42, Lengthd::Unit::None));
+  });
 }
 
 TEST(RendererSnapshotTests, GradientPaintReferencesAreSnapshotOwned) {

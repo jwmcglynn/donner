@@ -12,13 +12,11 @@ SVGFEOffsetElement SVGFEOffsetElement::CreateOn(EntityHandle handle) {
 }
 
 double SVGFEOffsetElement::dx() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FEOffsetComponent>();
   return component ? component->dx : components::FEOffsetComponent().dx;
 }
 
 double SVGFEOffsetElement::dy() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::FEOffsetComponent>();
   return component ? component->dy : components::FEOffsetComponent().dy;
 }

@@ -21,7 +21,6 @@ double SVGGeometryElement::computedPathLength() const {
 }
 
 std::optional<double> SVGGeometryElement::pathLength() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* component = handle_.try_get<components::PathLengthComponent>()) {
     return component->value;
   } else {

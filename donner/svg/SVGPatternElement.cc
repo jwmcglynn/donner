@@ -39,52 +39,44 @@ SVGPatternElement SVGPatternElement::CreateOn(EntityHandle handle) {
 }
 
 std::optional<Box2d> SVGPatternElement::viewBox() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::ViewBoxComponent>();
   return component ? component->viewBox : std::nullopt;
 }
 
 PreserveAspectRatio SVGPatternElement::preserveAspectRatio() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PreserveAspectRatioComponent>();
   return component ? component->preserveAspectRatio : PreserveAspectRatio();
 }
 
 Lengthd SVGPatternElement::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PatternComponent>();
   return component ? component->sizeProperties.x.getRequired()
                    : components::PatternComponent().sizeProperties.x.getRequired();
 }
 
 Lengthd SVGPatternElement::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PatternComponent>();
   return component ? component->sizeProperties.y.getRequired()
                    : components::PatternComponent().sizeProperties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGPatternElement::width() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PatternComponent>();
   return component ? component->sizeProperties.width.get() : std::nullopt;
 }
 
 std::optional<Lengthd> SVGPatternElement::height() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PatternComponent>();
   return component ? component->sizeProperties.height.get() : std::nullopt;
 }
 
 PatternUnits SVGPatternElement::patternUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PatternComponent>();
   return component ? component->patternUnits.value_or(PatternUnits::Default)
                    : PatternUnits::Default;
 }
 
 PatternContentUnits SVGPatternElement::patternContentUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PatternComponent>();
   return component ? component->patternContentUnits.value_or(PatternContentUnits::Default)
                    : PatternContentUnits::Default;
@@ -96,7 +88,6 @@ Transform2d SVGPatternElement::patternTransform() const {
 }
 
 std::optional<RcString> SVGPatternElement::href() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PatternComponent>();
   const std::optional<Reference> maybeHref = component ? component->href : std::nullopt;
   if (maybeHref) {

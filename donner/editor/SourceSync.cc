@@ -47,47 +47,52 @@ std::vector<SelectionRemapTarget> CaptureSelectionRemapTargets(const EditorApp& 
 }
 
 bool DocumentContainsElement(svg::SVGDocument& document, const svg::SVGElement& target) {
-  std::vector<svg::SVGElement> stack;
-  stack.push_back(document.svgElement());
-  while (!stack.empty()) {
-    svg::SVGElement current = stack.back();
-    stack.pop_back();
-    if (current == target) {
-      return true;
+  return document.withReadAccess([&document, &target](svg::DocumentReadAccess&) {
+    std::vector<svg::SVGElement> stack;
+    stack.push_back(document.svgElement());
+    while (!stack.empty()) {
+      svg::SVGElement current = stack.back();
+      stack.pop_back();
+      if (current == target) {
+        return true;
+      }
+
+      for (std::optional<svg::SVGElement> child = current.firstChild(); child.has_value();
+           child = child->nextSibling()) {
+        stack.push_back(*child);
+      }
     }
 
-    for (std::optional<svg::SVGElement> child = current.firstChild(); child.has_value();
-         child = child->nextSibling()) {
-      stack.push_back(*child);
-    }
-  }
-
-  return false;
+    return false;
+  });
 }
 
 std::optional<svg::SVGElement> ResolveSelectionTargetById(svg::SVGDocument& document,
                                                           const AttributeWritebackTarget& target) {
-  if (!target.elementId.has_value() || target.elementPath.empty()) {
-    return std::nullopt;
-  }
+  return document.withReadAccess(
+      [&document, &target](svg::DocumentReadAccess&) -> std::optional<svg::SVGElement> {
+        if (!target.elementId.has_value() || target.elementPath.empty()) {
+          return std::nullopt;
+        }
 
-  const auto targetTagName = target.elementPath.back().qualifiedName;
-  std::vector<svg::SVGElement> stack;
-  stack.push_back(document.svgElement());
-  while (!stack.empty()) {
-    svg::SVGElement current = stack.back();
-    stack.pop_back();
-    if (current.tagName() == targetTagName && current.id() == *target.elementId) {
-      return current;
-    }
+        const auto targetTagName = target.elementPath.back().qualifiedName;
+        std::vector<svg::SVGElement> stack;
+        stack.push_back(document.svgElement());
+        while (!stack.empty()) {
+          svg::SVGElement current = stack.back();
+          stack.pop_back();
+          if (current.tagName() == targetTagName && current.id() == *target.elementId) {
+            return current;
+          }
 
-    for (std::optional<svg::SVGElement> child = current.firstChild(); child.has_value();
-         child = child->nextSibling()) {
-      stack.push_back(*child);
-    }
-  }
+          for (std::optional<svg::SVGElement> child = current.firstChild(); child.has_value();
+               child = child->nextSibling()) {
+            stack.push_back(*child);
+          }
+        }
 
-  return std::nullopt;
+        return std::nullopt;
+      });
 }
 
 void RemapSelectionAfterStructuredSourceEdit(EditorApp& app,

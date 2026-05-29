@@ -28,9 +28,8 @@ SVGPolygonElement SVGPolygonElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGPolygonElement::setPoints(std::vector<Vector2d> points) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
-  invalidate();
   handle_
       .emplace_or_replace<components::PolyComponent>(access,
                                                      components::PolyComponent::Type::Polygon)
@@ -38,7 +37,6 @@ void SVGPolygonElement::setPoints(std::vector<Vector2d> points) {
 }
 
 const std::vector<Vector2d>& SVGPolygonElement::points() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PolyComponent>();
   return SnapshotPoints(component && component->type == components::PolyComponent::Type::Polygon
                             ? &component->points

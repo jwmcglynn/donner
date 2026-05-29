@@ -14,6 +14,12 @@ namespace donner::editor {
 
 namespace {
 
+bool IsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.isa<svg::SVGGraphicsElement>();
+  });
+}
+
 /// During continuous pinch-zoom, the viewport's `desiredCanvasSize` changes
 /// every wheel event (~60 Hz). Each commit through
 /// `SVGDocument::setCanvasSize` calls `invalidateRenderTree`, which forces
@@ -57,7 +63,7 @@ std::optional<SelectTool::ActiveDragPreview> OverlayDragPreviewForSelection(
   }
 
   if (app.selectedElements().size() != 1u || !app.selectedElement().has_value() ||
-      !app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
+      !IsGraphicsElement(*app.selectedElement())) {
     return std::nullopt;
   }
 
@@ -95,7 +101,7 @@ std::optional<svg::SVGElement> SelectedGraphicsElement(EditorApp& app) {
   }
 
   const auto& selected = *app.selectedElement();
-  if (!selected.isa<svg::SVGGraphicsElement>()) {
+  if (!IsGraphicsElement(selected)) {
     return std::nullopt;
   }
 

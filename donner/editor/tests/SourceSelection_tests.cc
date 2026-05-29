@@ -18,6 +18,11 @@
 namespace donner::editor {
 namespace {
 
+RcString ElementId(const svg::SVGElement& element) {
+  return element.withReadAccess(
+      [&element](svg::DocumentReadAccess&, EntityHandle) { return element.id(); });
+}
+
 constexpr std::string_view kSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
   <g id="layer">
@@ -90,12 +95,12 @@ TEST(SourceSelectionTest, FindsElementAtSourceOffsetAllowsConcurrentDom) {
   std::optional<svg::SVGElement> rect =
       FindElementAtSourceOffset(app.document().document(), source, rectOffset);
   ASSERT_TRUE(rect.has_value());
-  EXPECT_EQ(rect->id(), "target");
+  EXPECT_EQ(ElementId(*rect), "target");
 
   std::optional<svg::SVGElement> near =
       FindElementNearSourceOffset(app.document().document(), source, rectOffset);
   ASSERT_TRUE(near.has_value());
-  EXPECT_EQ(near->id(), "target");
+  EXPECT_EQ(ElementId(*near), "target");
 }
 
 TEST(SourceSelectionTest, ReturnsElementSourceByteRange) {

@@ -40,6 +40,25 @@
 namespace donner::editor {
 namespace {
 
+bool IsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.isa<svg::SVGGraphicsElement>();
+  });
+}
+
+Entity SelectedGraphicsEntity(EditorApp& app) {
+  if (!app.selectedElement().has_value() || !IsGraphicsElement(*app.selectedElement())) {
+    return entt::null;
+  }
+
+  return app.selectedElement()->unsafeEntityHandle().entity();
+}
+
+std::string ElementId(const svg::SVGElement& element) {
+  return element.withReadAccess(
+      [&element](svg::DocumentReadAccess&, EntityHandle) { return std::string(element.id()); });
+}
+
 constexpr std::size_t kTargetMouseUpCount = 2;
 constexpr char kReplayPath[] = "donner/editor/tests/filter_elm_disappear-3.rnr";
 constexpr char kGoldenPath[] = "donner/editor/tests/testdata/filter_disappear_rnr3_after_mup2.png";
@@ -235,9 +254,7 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
   request.version = app.document().currentFrameVersion();
   request.documentGeneration = app.document().documentGeneration();
   request.structuralRemap = app.document().consumePendingStructuralRemap();
-  if (app.selectedElement().has_value() && app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-    request.selectedEntity = app.selectedElement()->unsafeEntityHandle().entity();
-  }
+  request.selectedEntity = SelectedGraphicsEntity(app);
   if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
     request.dragPreview = RenderRequest::DragPreview{
         .entity = preview->entity,
@@ -599,10 +616,7 @@ protected:
       const Vector2i currentCanvasSize = app.document().document().canvasSize();
       const std::uint64_t currentVersion = app.document().currentFrameVersion();
       const auto dragPreview = selectTool.activeDragPreview();
-      const Entity prewarmEntity =
-          app.selectedElement().has_value() && app.selectedElement()->isa<svg::SVGGraphicsElement>()
-              ? app.selectedElement()->unsafeEntityHandle().entity()
-              : entt::null;
+      const Entity prewarmEntity = SelectedGraphicsEntity(app);
 
       // Drop stale settling state on selection change. (Lighter than
       // production's full handling — sufficient for the bug.)

@@ -362,8 +362,11 @@ ToolbarPaintSlotState ToolbarPaintSlotStateForElement(const svg::SVGElement& ele
     return state;
   }
 
-  if (std::optional<RcString> attribute = element.getAttribute(attrName);
-      attribute.has_value() && std::string_view(*attribute) != "none") {
+  const std::optional<RcString> attribute =
+      element.withReadAccess([&element, attrName](svg::DocumentReadAccess&, EntityHandle) {
+        return element.getAttribute(xml::XMLQualifiedNameRef(attrName));
+      });
+  if (attribute.has_value() && std::string_view(*attribute) != "none") {
     state = ToolbarPaintSlotStateForActiveAttribute(std::string_view(*attribute));
   }
   return state;
@@ -528,20 +531,22 @@ bool ContainsElement(std::span<const svg::SVGElement> elements, const svg::SVGEl
 }
 
 std::string ElementContextMenuLabel(const svg::SVGElement& element) {
-  const std::string_view tagName = element.tagName().name;
-  std::string label = "<";
-  label.append(tagName.data(), tagName.size());
-  label.push_back('>');
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    const std::string_view tagName = element.tagName().name;
+    std::string label = "<";
+    label.append(tagName.data(), tagName.size());
+    label.push_back('>');
 
-  const RcString id = element.id();
-  const std::string_view idSv = id;
-  if (!idSv.empty()) {
-    label.push_back(' ');
-    label.push_back('#');
-    label.append(idSv.data(), idSv.size());
-  }
+    const RcString id = element.id();
+    const std::string_view idSv = id;
+    if (!idSv.empty()) {
+      label.push_back(' ');
+      label.push_back('#');
+      label.append(idSv.data(), idSv.size());
+    }
 
-  return label;
+    return label;
+  });
 }
 
 std::optional<std::string> LoadFile(const std::string& filename) {
@@ -570,7 +575,9 @@ std::string CanonicalizeForTextEditor(std::string_view source) {
 }
 
 Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
-  if (auto viewBox = document.svgElement().viewBox(); viewBox.has_value()) {
+  const std::optional<Box2d> viewBox = document.withReadAccess(
+      [&document](svg::DocumentReadAccess&) { return document.svgElement().viewBox(); });
+  if (viewBox.has_value()) {
     return *viewBox;
   }
   const Vector2i intrinsic = document.canvasSize();
@@ -731,19 +738,7 @@ std::optional<std::string> EditorShell::selectedElementLabelForReadback() const 
     return std::nullopt;
   }
 
-  const std::string_view tagName = selected->tagName().name;
-  std::string label = "<";
-  label.append(tagName.data(), tagName.size());
-  label.push_back('>');
-
-  const RcString id = selected->id();
-  const std::string_view idSv = id;
-  if (!idSv.empty()) {
-    label.push_back(' ');
-    label.push_back('#');
-    label.append(idSv.data(), idSv.size());
-  }
-  return label;
+  return ElementContextMenuLabel(*selected);
 }
 
 LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() const {

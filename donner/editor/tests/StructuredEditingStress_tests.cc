@@ -34,6 +34,37 @@
 namespace donner::editor {
 namespace {
 
+bool IsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.isa<svg::SVGGraphicsElement>();
+  });
+}
+
+svg::SVGGraphicsElement AsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.cast<svg::SVGGraphicsElement>();
+  });
+}
+
+Entity SelectedGraphicsEntity(EditorApp& app) {
+  if (!app.selectedElement().has_value() || !IsGraphicsElement(*app.selectedElement())) {
+    return entt::null;
+  }
+
+  return app.selectedElement()->unsafeEntityHandle().entity();
+}
+
+std::string ElementId(const svg::SVGElement& element) {
+  return element.withReadAccess(
+      [&element](svg::DocumentReadAccess&, EntityHandle) { return std::string(element.id()); });
+}
+
+bool HasAttribute(const svg::SVGElement& element, std::string_view attrName) {
+  return element.withReadAccess([&element, attrName](svg::DocumentReadAccess&, EntityHandle) {
+    return element.hasAttribute(xml::XMLQualifiedNameRef(attrName));
+  });
+}
+
 constexpr std::string_view kStructuredStressSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="180" height="80" viewBox="0 0 180 80">
   <defs>
@@ -525,7 +556,7 @@ protected:
     ASSERT_FALSE(asyncRenderer_.isBusy()) << phase << ": click while async renderer is busy";
     selectTool_.onMouseDown(app_, documentPoint, ViewportMouseModifiers());
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
-    EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase;
+    EXPECT_EQ(ElementId(*app_.selectedElement()), expectedId) << phase;
     selectTool_.onMouseUp(app_, documentPoint);
     ExpectInSync(phase);
   }
@@ -537,7 +568,7 @@ protected:
     const MouseModifiers modifiers = ViewportMouseModifiers();
     selectTool_.onMouseDown(app_, startDocumentPoint, modifiers);
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase;
-    EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase;
+    EXPECT_EQ(ElementId(*app_.selectedElement()), expectedId) << phase;
 
     selectTool_.onMouseMove(app_, endDocumentPoint, /*buttonHeld=*/true, modifiers);
     ASSERT_TRUE(app_.flushFrame()) << phase;
@@ -676,10 +707,7 @@ protected:
     }
 
     request.selection = app_.selectedElement();
-    if (app_.selectedElement().has_value() &&
-        app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-      request.selectedEntity = app_.selectedElement()->unsafeEntityHandle().entity();
-    }
+    request.selectedEntity = SelectedGraphicsEntity(app_);
     if (std::optional<SelectTool::ActiveDragPreview> preview = selectTool_.activeDragPreview();
         preview.has_value()) {
       request.dragPreview = RenderRequest::DragPreview{
@@ -748,7 +776,7 @@ TEST_F(StructuredEditingStressTest, MixedGuiTextZoomDeleteAndFilteredMoveStayInS
 
   std::optional<svg::SVGElement> filtered = app_.document().document().querySelector("#filtered");
   ASSERT_TRUE(filtered.has_value());
-  const Transform2d sourceEditedTransform = filtered->cast<svg::SVGGraphicsElement>().transform();
+  const Transform2d sourceEditedTransform = AsGraphicsElement(*filtered).transform();
   EXPECT_DOUBLE_EQ(sourceEditedTransform.data[4], 14.0);
 
   DragScreenPoints("filtered drag after source move", viewport_.documentToScreen({104.0, 32.0}),
@@ -768,8 +796,9 @@ TEST_F(StructuredEditingStressTest, CanvasToSourceScenariosStayInSync) {
   DragScreenPoints("canvas drag plain", viewport_.documentToScreen({20.0, 20.0}),
                    viewport_.documentToScreen({34.0, 27.0}), "plain");
   EXPECT_NE(textEditor_.getText(), beforePlainDrag);
-  ASSERT_TRUE(app_.document().document().querySelector("#plain").has_value());
-  EXPECT_TRUE(app_.document().document().querySelector("#plain")->hasAttribute("transform"));
+  std::optional<svg::SVGElement> plain = app_.document().document().querySelector("#plain");
+  ASSERT_TRUE(plain.has_value());
+  EXPECT_TRUE(HasAttribute(*plain, "transform"));
 
   ZoomAndPanAroundDocumentPoint("canvas repeated zoom one", Vector2d(92.0, 32.0));
   DragScreenPoints("canvas drag filtered after zoom", viewport_.documentToScreen({94.0, 32.0}),

@@ -36,7 +36,6 @@ void SVGImageElement::setHref(RcStringOrRef value) {
 }
 
 RcString SVGImageElement::href() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::ImageComponent>();
   return component ? component->href : "";
 }
@@ -50,7 +49,6 @@ void SVGImageElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspectR
 }
 
 PreserveAspectRatio SVGImageElement::preserveAspectRatio() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PreserveAspectRatioComponent>();
   return component ? component->preserveAspectRatio : PreserveAspectRatio();
 }
@@ -88,27 +86,23 @@ void SVGImageElement::setHeight(std::optional<Lengthd> value) {
 }
 
 Lengthd SVGImageElement::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.x.getRequired()
                    : components::SizedElementComponent().properties.x.getRequired();
 }
 
 Lengthd SVGImageElement::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.y.getRequired()
                    : components::SizedElementComponent().properties.y.getRequired();
 }
 
 std::optional<Lengthd> SVGImageElement::width() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.width.get() : std::nullopt;
 }
 
 std::optional<Lengthd> SVGImageElement::height() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::SizedElementComponent>();
   return component ? component->properties.height.get() : std::nullopt;
 }

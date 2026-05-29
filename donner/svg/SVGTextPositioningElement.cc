@@ -44,7 +44,6 @@ void SVGTextPositioningElement::setXList(SmallVector<Lengthd, 1>&& value) {
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::x() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   const SmallVector<Lengthd, 1>& x =
       component ? component->x : SnapshotTextPositionList<Lengthd>(nullptr);
@@ -56,7 +55,6 @@ std::optional<Lengthd> SVGTextPositioningElement::x() const {
 }
 
 const SmallVector<Lengthd, 1>& SVGTextPositioningElement::xList() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   return SnapshotTextPositionList(component ? &component->x : nullptr);
 }
@@ -82,7 +80,6 @@ void SVGTextPositioningElement::setYList(SmallVector<Lengthd, 1>&& value) {
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::y() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   const SmallVector<Lengthd, 1>& y =
       component ? component->y : SnapshotTextPositionList<Lengthd>(nullptr);
@@ -94,7 +91,6 @@ std::optional<Lengthd> SVGTextPositioningElement::y() const {
 }
 
 const SmallVector<Lengthd, 1>& SVGTextPositioningElement::yList() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   return SnapshotTextPositionList(component ? &component->y : nullptr);
 }
@@ -120,7 +116,6 @@ void SVGTextPositioningElement::setDxList(SmallVector<Lengthd, 1>&& value) {
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::dx() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   const SmallVector<Lengthd, 1>& dx =
       component ? component->dx : SnapshotTextPositionList<Lengthd>(nullptr);
@@ -132,7 +127,6 @@ std::optional<Lengthd> SVGTextPositioningElement::dx() const {
 }
 
 const SmallVector<Lengthd, 1>& SVGTextPositioningElement::dxList() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   return SnapshotTextPositionList(component ? &component->dx : nullptr);
 }
@@ -158,7 +152,6 @@ void SVGTextPositioningElement::setDyList(SmallVector<Lengthd, 1>&& value) {
 }
 
 std::optional<Lengthd> SVGTextPositioningElement::dy() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   const SmallVector<Lengthd, 1>& dy =
       component ? component->dy : SnapshotTextPositionList<Lengthd>(nullptr);
@@ -170,7 +163,6 @@ std::optional<Lengthd> SVGTextPositioningElement::dy() const {
 }
 
 const SmallVector<Lengthd, 1>& SVGTextPositioningElement::dyList() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   return SnapshotTextPositionList(component ? &component->dy : nullptr);
 }
@@ -197,7 +189,6 @@ void SVGTextPositioningElement::setRotateList(SmallVector<double, 1>&& value) {
 }
 
 std::optional<double> SVGTextPositioningElement::rotate() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   const SmallVector<double, 1>& rotateDegrees =
       component ? component->rotateDegrees : SnapshotTextPositionList<double>(nullptr);
@@ -209,7 +200,6 @@ std::optional<double> SVGTextPositioningElement::rotate() const {
 }
 
 const SmallVector<double, 1>& SVGTextPositioningElement::rotateList() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::TextPositioningComponent>();
   return SnapshotTextPositionList(component ? &component->rotateDegrees : nullptr);
 }

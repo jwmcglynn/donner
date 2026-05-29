@@ -16,65 +16,53 @@ SVGCircleElement SVGCircleElement::CreateOn(EntityHandle handle) {
 }
 
 void SVGCircleElement::setCx(Lengthd value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
-  invalidate();
-
   auto& properties = handle_.get_or_emplace<components::CircleComponent>(access).properties;
   properties.cx.set(value, css::Specificity::Override());
 }
 
 void SVGCircleElement::setCy(Lengthd value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
-  invalidate();
-
   auto& properties = handle_.get_or_emplace<components::CircleComponent>(access).properties;
   properties.cy.set(value, css::Specificity::Override());
 }
 
 void SVGCircleElement::setR(Lengthd value) {
-  DocumentMutationBatch mutation = handle_.mutationBatch();
+  auto mutation = mutationScope([this]() { invalidate(); });
   DocumentWriteAccess& access = mutation.access();
-  invalidate();
-
   auto& properties = handle_.get_or_emplace<components::CircleComponent>(access).properties;
   properties.r.set(value, css::Specificity::Override());
 }
 
 Lengthd SVGCircleElement::cx() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::CircleComponent>();
   return component ? component->properties.cx.getRequired() : Lengthd();
 }
 
 Lengthd SVGCircleElement::cy() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::CircleComponent>();
   return component ? component->properties.cy.getRequired() : Lengthd();
 }
 
 Lengthd SVGCircleElement::r() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::CircleComponent>();
   return component ? component->properties.r.getRequired() : Lengthd();
 }
 
 Lengthd SVGCircleElement::computedCx() const {
   compute();
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::ComputedCircleComponent>().properties.cx.getRequired();
 }
 
 Lengthd SVGCircleElement::computedCy() const {
   compute();
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::ComputedCircleComponent>().properties.cy.getRequired();
 }
 
 Lengthd SVGCircleElement::computedR() const {
   compute();
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::ComputedCircleComponent>().properties.r.getRequired();
 }
 

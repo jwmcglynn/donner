@@ -27,6 +27,25 @@
 namespace donner::editor {
 namespace {
 
+bool IsGraphicsElement(const svg::SVGElement& element) {
+  return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+    return element.isa<svg::SVGGraphicsElement>();
+  });
+}
+
+Entity SelectedGraphicsEntity(EditorApp& app) {
+  if (!app.selectedElement().has_value() || !IsGraphicsElement(*app.selectedElement())) {
+    return entt::null;
+  }
+
+  return app.selectedElement()->unsafeEntityHandle().entity();
+}
+
+std::string ElementId(const svg::SVGElement& element) {
+  return element.withReadAccess(
+      [&element](svg::DocumentReadAccess&, EntityHandle) { return std::string(element.id()); });
+}
+
 constexpr std::string_view kLayerStressSvg = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="264" height="132" viewBox="-24 -12 264 132">
   <defs>
@@ -143,10 +162,7 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
     request.version = version;
     request.documentGeneration = app.document().documentGeneration();
     request.structuralRemap = app.document().consumePendingStructuralRemap();
-    if (app.selectedElement().has_value() &&
-        app.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-      request.selectedEntity = app.selectedElement()->unsafeEntityHandle().entity();
-    }
+    request.selectedEntity = SelectedGraphicsEntity(app);
     if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
       request.dragPreview = RenderRequest::DragPreview{
           .entity = preview->entity,
@@ -260,7 +276,11 @@ protected:
   }
 
   [[nodiscard]] Box2d CurrentViewBox() const {
-    if (auto viewBox = app_.document().document().svgElement().viewBox()) {
+    const std::optional<Box2d> viewBox =
+        app_.document().document().withReadAccess([this](svg::DocumentReadAccess&) {
+          return app_.document().document().svgElement().viewBox();
+        });
+    if (viewBox.has_value()) {
       return *viewBox;
     }
     return Box2d::FromXYWH(0.0, 0.0, static_cast<double>(canvasSize_.x),
@@ -282,10 +302,7 @@ protected:
     request.version = version;
     request.documentGeneration = app_.document().documentGeneration();
     request.structuralRemap = app_.document().consumePendingStructuralRemap();
-    if (app_.selectedElement().has_value() &&
-        app_.selectedElement()->isa<svg::SVGGraphicsElement>()) {
-      request.selectedEntity = app_.selectedElement()->unsafeEntityHandle().entity();
-    }
+    request.selectedEntity = SelectedGraphicsEntity(app_);
     if (auto preview = selectTool_.activeDragPreview(); preview.has_value()) {
       request.dragPreview = RenderRequest::DragPreview{
           .entity = preview->entity,
@@ -327,7 +344,8 @@ protected:
 
     selectTool_.onMouseDown(app_, documentPoint, MouseModifiers{});
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase << ": click did not select anything";
-    EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase << ": wrong element selected";
+    EXPECT_EQ(ElementId(*app_.selectedElement()), expectedId)
+        << phase << ": wrong element selected";
     selectTool_.onMouseUp(app_, documentPoint);
     EXPECT_FALSE(selectTool_.isDragging()) << phase << ": click left a drag latched";
 
@@ -398,7 +416,8 @@ protected:
                               std::string_view expectedId) {
     selectTool_.onMouseDown(app_, viewport_.screenToDocument(screenPoint), MouseModifiers{});
     ASSERT_TRUE(app_.selectedElement().has_value()) << phase << ": drag start selected nothing";
-    EXPECT_EQ(app_.selectedElement()->id(), expectedId) << phase << ": wrong drag target selected";
+    EXPECT_EQ(ElementId(*app_.selectedElement()), expectedId)
+        << phase << ": wrong drag target selected";
     ASSERT_TRUE(selectTool_.isDragging()) << phase << ": drag did not start";
 
     RenderResult result = RenderPhase(std::string(phase) + " prewarm", /*repostWhileBusy=*/true);

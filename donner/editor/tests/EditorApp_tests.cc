@@ -1,6 +1,7 @@
 #include "donner/editor/EditorApp.h"
 
 #include "donner/editor/ViewportGeometry.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "gtest/gtest.h"
 
@@ -77,6 +78,27 @@ TEST(EditorAppTest, HitTestReturnsTopElementAtPoint) {
 TEST(EditorAppTest, HitTestReturnsNulloptWhenNoDocument) {
   EditorApp app;
   EXPECT_FALSE(app.hitTest(Vector2d(0.0, 0.0)).has_value());
+}
+
+TEST(EditorAppTest, MarqueeHitTestRectUnderConcurrentDomHoldsAccess) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  // After the first async render the editor leaves the live document in
+  // ConcurrentDom for its lifetime (#615). Marquee selection runs on the UI
+  // thread through `hitTestRect`, whose DOM walk (isa / worldBounds /
+  // firstChild / nextSibling) hits guarded `ElementAnchor` accessors. Without a
+  // scoped access guard around the walk those reads trip the ConcurrentDom
+  // release assertion — the marquee path flagged in #619 review.
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  // Marquee covering r1 (10,10 → 30,30) but not r2 (50,50 → 70,70).
+  const std::vector<svg::SVGGeometryElement> hits =
+      app.hitTestRect(Box2d(Vector2d(0.0, 0.0), Vector2d(40.0, 40.0)));
+
+  ASSERT_EQ(hits.size(), 1u);
+  app.document().document().withReadAccess(
+      [&](svg::DocumentReadAccess&) { EXPECT_EQ(hits.front().id(), "r1"); });
 }
 
 TEST(EditorAppTest, ApplyMutationFlowsThroughDocument) {

@@ -38,7 +38,6 @@ void SVGMarkerElement::setViewBox(OptionalRef<Box2d> viewBox) {
 }
 
 std::optional<Box2d> SVGMarkerElement::viewBox() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::ViewBoxComponent>();
   return component ? component->viewBox : std::nullopt;
 }
@@ -52,7 +51,6 @@ void SVGMarkerElement::setPreserveAspectRatio(PreserveAspectRatio preserveAspect
 }
 
 PreserveAspectRatio SVGMarkerElement::preserveAspectRatio() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::PreserveAspectRatioComponent>();
   return component ? component->preserveAspectRatio : PreserveAspectRatio();
 }
@@ -65,7 +63,6 @@ void SVGMarkerElement::setMarkerWidth(Lengthd value) {
 }
 
 Lengthd SVGMarkerElement::markerWidth() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->markerWidth : components::MarkerComponent().markerWidth;
 }
@@ -78,7 +75,6 @@ void SVGMarkerElement::setMarkerHeight(Lengthd value) {
 }
 
 Lengthd SVGMarkerElement::markerHeight() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->markerHeight : components::MarkerComponent().markerHeight;
 }
@@ -91,7 +87,6 @@ void SVGMarkerElement::setRefX(Lengthd value) {
 }
 
 Lengthd SVGMarkerElement::refX() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->refX : components::MarkerComponent().refX;
 }
@@ -104,13 +99,11 @@ void SVGMarkerElement::setRefY(Lengthd value) {
 }
 
 Lengthd SVGMarkerElement::refY() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->refY : components::MarkerComponent().refY;
 }
 
 MarkerUnits SVGMarkerElement::markerUnits() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->markerUnits : components::MarkerComponent().markerUnits;
 }
@@ -130,7 +123,6 @@ void SVGMarkerElement::setOrient(MarkerOrient value) {
 }
 
 MarkerOrient SVGMarkerElement::orient() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* component = handle_.try_get<components::MarkerComponent>();
   return component ? component->orient : components::MarkerComponent().orient;
 }
