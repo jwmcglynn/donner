@@ -17,6 +17,7 @@
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -276,53 +277,94 @@ bool PaintUsesExpensiveResource(const components::ResolvedPaintServer& paint) {
          ref->reference.handle.try_get<components::ComputedGradientComponent>() == nullptr;
 }
 
+bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
+  const auto* type = dataHandle.try_get<components::ElementTypeComponent>();
+  if (type == nullptr) {
+    return false;
+  }
+
+  switch (type->type()) {
+    case ElementType::Defs:
+    case ElementType::G:
+    case ElementType::SVG:
+    case ElementType::Symbol: return true;
+    default: return false;
+  }
+}
+
+void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostEstimate* estimate,
+                              bool ignoreIsolatedLayer) {
+  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+  if (instance == nullptr) {
+    estimate->hasExpensiveEffect = true;
+    return;
+  }
+
+  const auto* style = instance->styleHandle(registry).try_get<components::ComputedStyleComponent>();
+  if (style == nullptr || !style->properties.has_value()) {
+    return;
+  }
+  if (!instance->visible || style->properties->display.getRequired() == Display::None) {
+    return;
+  }
+
+  if ((!ignoreIsolatedLayer && instance->isolatedLayer) || instance->resolvedFilter.has_value() ||
+      instance->clipPath.has_value() || (instance->mask.has_value() && instance->mask->valid()) ||
+      instance->markerStart.has_value() || instance->markerMid.has_value() ||
+      instance->markerEnd.has_value() || PaintUsesExpensiveResource(instance->resolvedFill) ||
+      PaintUsesExpensiveResource(instance->resolvedStroke)) {
+    estimate->hasExpensiveEffect = true;
+  }
+
+  EntityHandle dataHandle = instance->dataHandle(registry);
+  if (const auto* path = dataHandle.try_get<components::ComputedPathComponent>()) {
+    ++estimate->drawOps;
+    estimate->pathVerbs += static_cast<int>(path->spline.verbCount());
+    return;
+  }
+
+  if (dataHandle.try_get<components::ComputedTextComponent>() ||
+      dataHandle.try_get<components::LoadedImageComponent>() ||
+      dataHandle.try_get<components::LoadedSVGImageComponent>() ||
+      dataHandle.try_get<components::ExternalUseComponent>()) {
+    estimate->hasExpensiveEffect = true;
+    return;
+  }
+
+  if (IsNonDrawingContainer(dataHandle)) {
+    return;
+  }
+
+  if (!instance->subtreeInfo.has_value()) {
+    estimate->hasExpensiveEffect = true;
+  }
+}
+
 StaticSpanCostEstimate EstimateStaticSpanCost(Registry& registry,
                                               const std::vector<Entity>& paintOrder,
                                               size_t startIdx, size_t endIdx) {
   StaticSpanCostEstimate estimate;
   for (size_t i = startIdx; i <= endIdx && i < paintOrder.size(); ++i) {
-    const Entity entity = paintOrder[i];
-    const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
-    if (instance == nullptr) {
-      estimate.hasExpensiveEffect = true;
-      continue;
-    }
+    AccumulateStaticSpanCost(registry, paintOrder[i], &estimate, /*ignoreIsolatedLayer=*/false);
+  }
+  return estimate;
+}
 
-    const auto* style =
-        instance->styleHandle(registry).try_get<components::ComputedStyleComponent>();
-    if (style == nullptr || !style->properties.has_value()) {
-      continue;
+StaticSpanCostEstimate EstimateEntityRangeCost(Registry& registry, Entity firstEntity,
+                                               Entity lastEntity) {
+  StaticSpanCostEstimate estimate;
+  RenderingInstanceView view(registry);
+  while (!view.done() && view.currentEntity() != firstEntity) {
+    view.advance();
+  }
+  while (!view.done()) {
+    const Entity currentEntity = view.currentEntity();
+    AccumulateStaticSpanCost(registry, currentEntity, &estimate,
+                             /*ignoreIsolatedLayer=*/currentEntity == firstEntity);
+    if (currentEntity == lastEntity) {
+      break;
     }
-    if (!instance->visible || style->properties->display.getRequired() == Display::None) {
-      continue;
-    }
-
-    if (instance->isolatedLayer || instance->resolvedFilter.has_value() ||
-        instance->clipPath.has_value() || (instance->mask.has_value() && instance->mask->valid()) ||
-        instance->markerStart.has_value() || instance->markerMid.has_value() ||
-        instance->markerEnd.has_value() || PaintUsesExpensiveResource(instance->resolvedFill) ||
-        PaintUsesExpensiveResource(instance->resolvedStroke)) {
-      estimate.hasExpensiveEffect = true;
-    }
-
-    EntityHandle dataHandle = instance->dataHandle(registry);
-    if (const auto* path = dataHandle.try_get<components::ComputedPathComponent>()) {
-      ++estimate.drawOps;
-      estimate.pathVerbs += static_cast<int>(path->spline.verbCount());
-      continue;
-    }
-
-    if (dataHandle.try_get<components::ComputedTextComponent>() ||
-        dataHandle.try_get<components::LoadedImageComponent>() ||
-        dataHandle.try_get<components::LoadedSVGImageComponent>() ||
-        dataHandle.try_get<components::ExternalUseComponent>()) {
-      estimate.hasExpensiveEffect = true;
-      continue;
-    }
-
-    if (!instance->subtreeInfo.has_value()) {
-      estimate.hasExpensiveEffect = true;
-    }
+    view.advance();
   }
   return estimate;
 }
@@ -356,8 +398,19 @@ StaticSpanPresentationCost EstimateStaticSpanPresentationCost(
   };
 }
 
+bool IsImmediateSafe(bool visible, bool hasExpensiveEffect, int estimatedDrawOps) {
+  return visible && !hasExpensiveEffect && estimatedDrawOps > 0;
+}
+
+bool IsCheapDirectGeometry(const StaticSpanCostEstimate& cost) {
+  constexpr int kCheapDirectDrawOps = 2;
+  constexpr int kCheapDirectPathVerbs = 96;
+  return cost.drawOps > 0 && cost.drawOps <= kCheapDirectDrawOps &&
+         cost.pathVerbs <= kCheapDirectPathVerbs;
+}
+
 bool IsStaticSpanImmediateSafe(const CompositorController::StaticSpanPlan& spanPlan) {
-  return spanPlan.visible && !spanPlan.hasExpensiveEffect && spanPlan.estimatedDrawOps > 0;
+  return IsImmediateSafe(spanPlan.visible, spanPlan.hasExpensiveEffect, spanPlan.estimatedDrawOps);
 }
 
 double ImmediateStaticSpanBudgetMs() {
@@ -818,7 +871,8 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
                                    std::string label, const RendererBitmap* bitmap,
                                    const std::shared_ptr<const RendererTextureSnapshot>& texture,
                                    uint64_t generation, double lastRasterizeMs, bool isDragTarget,
-                                   const StaticSpanPlan* spanPlan) {
+                                   const StaticSpanPlan* spanPlan,
+                                   const ImmediateLayerPlan* layerPlan) {
     CompositeTileSnapshot tile;
     tile.kind = kind;
     tile.id = std::move(id);
@@ -842,6 +896,21 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
       tile.estimatedRedrawCost = spanPlan->estimatedRedrawCost;
       tile.estimatedCacheOverheadCost = spanPlan->estimatedCacheOverheadCost;
       tile.spanRangeLabel = spanPlan->spanRangeLabel;
+    } else if (layerPlan != nullptr) {
+      tile.immediate = layerPlan->immediate;
+      tile.staticHeuristicImmediate = layerPlan->staticHeuristicImmediate;
+      tile.dynamicHeuristicImmediate = layerPlan->dynamicHeuristicImmediate;
+      tile.demotedDynamicImmediate = layerPlan->demotedDynamicImmediate;
+      tile.immediateBudgetChargeMs = layerPlan->immediateBudgetChargeMs;
+      tile.immediateBudgetMs = layerPlan->immediateBudgetMs;
+      tile.estimatedDrawOps = layerPlan->estimatedDrawOps;
+      tile.estimatedPathVerbs = layerPlan->estimatedPathVerbs;
+      tile.hasExpensiveEffect = layerPlan->hasExpensiveEffect;
+      tile.visible = layerPlan->visible;
+      tile.boundsCanvas = layerPlan->boundsCanvas;
+      tile.estimatedRetainedBytes = layerPlan->estimatedRetainedBytes;
+      tile.estimatedRedrawCost = layerPlan->estimatedRedrawCost;
+      tile.estimatedCacheOverheadCost = layerPlan->estimatedCacheOverheadCost;
     }
     tile.hasValidBitmap = (bitmap != nullptr && !bitmap->empty()) || texture != nullptr;
     if (tile.hasValidBitmap) {
@@ -881,7 +950,8 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
           i < staticSegmentLastRasterizeMs_.size() ? staticSegmentLastRasterizeMs_[i] : 0.0;
       const StaticSpanPlan* spanPlan = i < staticSpanPlans_.size() ? &staticSpanPlans_[i] : nullptr;
       pushPayloadTile(CompositeTileSnapshot::Kind::Segment, id, label, segmentBitmap,
-                      segmentTexture, segGen, segMs, /*isDragTarget=*/false, spanPlan);
+                      segmentTexture, segGen, segMs, /*isDragTarget=*/false, spanPlan,
+                      /*layerPlan=*/nullptr);
     }
     if (i < layerCount) {
       const CompositorLayer& layer = layers_[i];
@@ -899,7 +969,7 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
       const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
       pushPayloadTile(CompositeTileSnapshot::Kind::Layer, id, label, layerBitmap,
                       layer.textureSnapshot(), layer.generation(), layer.lastRasterizeMs(),
-                      isDragTarget, nullptr);
+                      isDragTarget, /*spanPlan=*/nullptr, &layer.immediatePlan());
     }
   }
 
@@ -1810,12 +1880,16 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           for (auto& layer : layers_) {
             if (!layer.hasRenderablePayload()) {
               rasterizeLayer(layer, viewport, surfaceFromCanvas);
-              lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
-              ++lastRenderFrameStats_.cachedTileCount;
+              if (layer.isImmediate()) {
+                lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
+                ++lastRenderFrameStats_.immediateTileCount;
+              } else {
+                lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
+                ++lastRenderFrameStats_.cachedTileCount;
+              }
             }
           }
         }
-        const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
         // Seed segment state via the preserving resync path so
         // `staticSegmentBoundaries_` is consistent with the new layer
         // set. Nothing to preserve yet (segments are empty), so every
@@ -2005,10 +2079,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   {
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
     for (auto& layer : layers_) {
-      // Immediate promoted layers still keep an internal payload so transform-only drags can reuse
-      // it through `canvasFromBitmap`; the editor-facing snapshot decides whether to retain or
-      // transiently upload that payload.
-      if (layer.isDirty() || !layer.hasRenderablePayload() || rootDirty_) {
+      if (layer.isDirty() || layer.isImmediate() || !layer.hasRenderablePayload() || rootDirty_) {
         // §M4: bail between layer rasterizes. The remaining dirty
         // layers keep their `isDirty()` flag set, so the next
         // `renderFrame` finishes them. Returns directly out of
@@ -2021,8 +2092,13 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           return;
         }
         rasterizeLayer(layer, viewport, surfaceFromCanvas);
-        lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
-        ++lastRenderFrameStats_.cachedTileCount;
+        if (layer.isImmediate()) {
+          lastRenderFrameStats_.immediateRasterizeMs += layer.lastRasterizeMs();
+          ++lastRenderFrameStats_.immediateTileCount;
+        } else {
+          lastRenderFrameStats_.cachedRasterizeMs += layer.lastRasterizeMs();
+          ++lastRenderFrameStats_.cachedTileCount;
+        }
       }
     }
   }
@@ -2033,7 +2109,6 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // Structural changes (layer count, canvas size, `rootDirty_` from a
   // full tree rebuild) flip every slot dirty; per-entity mutations only
   // flip the containing slot dirty via `consumeDirtyFlags`.
-  const Vector2i currentCanvasSize = BitmapDimensionsForViewport(viewport);
   // Resync `staticSegments_` to the current layer set, preserving
   // cached bitmaps whose boundary identity survived. When the user
   // clicks-to-drag, the ONLY segment that structurally changes is the
@@ -2216,6 +2291,33 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   Registry& registry = document().registry();
   const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
       renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport, surfaceFromCanvas);
+  ImmediateLayerPlan immediatePlan;
+  immediatePlan.visible = geometry.boundsCanvas.has_value();
+  if (geometry.boundsCanvas.has_value()) {
+    immediatePlan.boundsCanvas = *geometry.boundsCanvas;
+  }
+  const StaticSpanCostEstimate cost =
+      EstimateEntityRangeCost(registry, layer.firstEntity(), layer.lastEntity());
+  const FallbackReason immediateBlockingFallbacks =
+      layer.fallbackReasons() &
+      (FallbackReason::BlendMode | FallbackReason::Filter | FallbackReason::ClipPath |
+       FallbackReason::Mask | FallbackReason::Markers);
+  immediatePlan.estimatedDrawOps = cost.drawOps;
+  immediatePlan.estimatedPathVerbs = cost.pathVerbs;
+  immediatePlan.hasExpensiveEffect =
+      cost.hasExpensiveEffect || immediateBlockingFallbacks != FallbackReason::None;
+  if (immediatePlan.visible) {
+    const StaticSpanPresentationCost presentationCost =
+        EstimateStaticSpanPresentationCost(cost, immediatePlan.boundsCanvas);
+    immediatePlan.estimatedRetainedBytes = presentationCost.retainedBytes;
+    immediatePlan.estimatedRedrawCost = presentationCost.redrawCost;
+    immediatePlan.estimatedCacheOverheadCost = presentationCost.cacheOverheadCost;
+    immediatePlan.staticHeuristicImmediate =
+        IsImmediateSafe(immediatePlan.visible, immediatePlan.hasExpensiveEffect,
+                        immediatePlan.estimatedDrawOps) &&
+        (IsCheapDirectGeometry(cost) ||
+         presentationCost.redrawCost <= presentationCost.cacheOverheadCost);
+  }
 
   auto offscreen = renderer().createOffscreenInstance();
   UTILS_RELEASE_ASSERT(offscreen != nullptr);
@@ -2473,8 +2575,8 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       spanPlan.estimatedDrawOps = cost.drawOps;
       spanPlan.estimatedPathVerbs = cost.pathVerbs;
       spanPlan.hasExpensiveEffect = cost.hasExpensiveEffect;
-      spanPlan.visible = useTight;
-      if (useTight) {
+      spanPlan.visible = visibleInViewport;
+      if (visibleInViewport) {
         spanPlan.boundsCanvas = tightBoundsSnapped;
         const StaticSpanPresentationCost presentationCost =
             EstimateStaticSpanPresentationCost(cost, tightBoundsSnapped);
@@ -2784,12 +2886,10 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
     const auto& layer = layers_[i];
     const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
     const std::shared_ptr<const RendererTextureSnapshot> layerTexture = layer.textureSnapshot();
-    const bool isDragTarget =
-        layer.entity() == splitStaticLayersEntity_ || isActiveDragTarget(layer.entity());
+    const bool isDragTarget = layer.entity() == splitStaticLayersEntity_;
     const bool immediate = layer.isImmediate();
     const bool includeLayerPayload =
-        includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget,
-                       /*immediate=*/false);
+        includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget, immediate);
     tiles.push_back(CompositorTile{
         .tileId = kLayerTileBit | static_cast<uint64_t>(entt::to_integral(layer.entity())),
         .generation = layer.generation(),
@@ -2803,7 +2903,7 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
         .canvasOffsetPx = layer.canvasOffset(),
         .canvasFromBitmap = layer.canvasFromBitmap(),
         .isDragTarget = isDragTarget,
-        .immediate = false,
+        .immediate = immediate,
     });
   }
   // Trailing segment after the last layer.
@@ -2984,6 +3084,17 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   };
 
   const auto drawLayer = [&](const CompositorLayer& layer) {
+    if (layer.isImmediate()) {
+      const auto directStart = std::chrono::steady_clock::now();
+      RendererDriver driver(renderer());
+      driver.drawEntityRangeIntoCurrentFrame(document().registry(), layer.firstEntity(),
+                                             layer.lastEntity(), viewport, surfaceFromCanvas);
+      const auto directEnd = std::chrono::steady_clock::now();
+      const auto elapsedUs =
+          std::chrono::duration_cast<std::chrono::microseconds>(directEnd - directStart).count();
+      lastRenderFrameStats_.immediateRasterizeMs += static_cast<double>(elapsedUs) / 1000.0;
+      return;
+    }
     if (!layer.hasRenderablePayload()) {
       return;
     }

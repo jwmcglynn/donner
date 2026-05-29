@@ -113,7 +113,7 @@ struct CompositorTile {
   /// on the GPU side.
   bool isDragTarget = false;
 
-  /// True when this static segment should be presented as a transient
+  /// True when this segment or promoted layer should be presented as a transient
   /// immediate-mode tile instead of a persistent presentation texture.
   bool immediate = false;
 };
@@ -641,8 +641,8 @@ public:
     /// `Background` / `Foreground` (those are *composed*, not
     /// rasterized, by `recomposeSplitBitmaps`).
     double lastRasterizeMs = 0.0;
-    /// True when this static segment is presented as a transient immediate tile instead of a
-    /// retained bitmap/texture cache entry. Always false for Layer tiles.
+    /// True when this segment or promoted layer is presented as a transient immediate tile instead
+    /// of a retained bitmap/texture cache entry.
     bool immediate = false;
     /// True when the static geometry-cost heuristic selected immediate presentation.
     bool staticHeuristicImmediate = false;

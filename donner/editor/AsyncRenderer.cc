@@ -593,12 +593,15 @@ void AsyncRenderer::workerLoop() {
         const OutKind kind =
             ct.immediate ? OutKind::Immediate
                          : (ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer);
-        if (ct.immediate) {
-          hasImmediateTile = true;
-          continue;
-        }
         const bool currentActiveDragLayer = activeDragRequest && request.dragPreview.has_value() &&
                                             ct.layerEntity == request.dragPreview->entity;
+        if (ct.immediate) {
+          hasImmediateTile = true;
+          if (currentActiveDragLayer) {
+            activeDragTileAvailable = true;
+          }
+          continue;
+        }
         if (currentActiveDragLayer) {
           activeDragTileAvailable = true;
           activeDragTileNeedsPayload = !publishedTextureMatches(

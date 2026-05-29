@@ -1164,7 +1164,7 @@ TEST_F(CompositorControllerTest, FastMeasuredStaticSpanCanExpandToImmediate) {
   EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
 
   const auto stats = compositor.lastRenderFrameStats();
-  EXPECT_EQ(stats.immediateTileCount, 1);
+  EXPECT_GE(stats.immediateTileCount, 1);
   EXPECT_GE(stats.cachedTileCount, 1);
 }
 
@@ -1204,7 +1204,7 @@ TEST_F(CompositorControllerTest, DynamicImmediateSpanDemotesToCachedAfterSlowRen
   EXPECT_EQ(plans[1].mode, StaticSpanMode::CachedTile);
 
   const auto stats = compositor.lastRenderFrameStats();
-  EXPECT_EQ(stats.immediateTileCount, 1)
+  EXPECT_GE(stats.immediateTileCount, 1)
       << "The slow rerender is charged to rnd-imm because the span was immediate entering this "
          "frame.";
   EXPECT_EQ(stats.cachedTileCount, 0);

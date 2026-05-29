@@ -70,7 +70,7 @@ inline constexpr FallbackReason& operator|=(FallbackReason& a, FallbackReason b)
 
 /// Immediate-mode eligibility and timing diagnostics for a promoted layer.
 struct ImmediateLayerPlan {
-  /// True when editor-facing presentation treats the layer as a transient immediate tile.
+  /// True when the layer should be presented as transient direct/immediate content.
   bool immediate = false;
   /// True when the static cost heuristic chose immediate presentation.
   bool staticHeuristicImmediate = false;
@@ -298,7 +298,7 @@ public:
   /// Set immediate-mode eligibility and timing diagnostics for this layer.
   void setImmediatePlan(ImmediateLayerPlan plan) { immediatePlan_ = plan; }
 
-  /// Returns true when editor-facing presentation treats this layer as a transient immediate tile.
+  /// Returns true when this layer should be rendered as transient direct/immediate content.
   [[nodiscard]] bool isImmediate() const { return immediatePlan_.immediate; }
 
   /// Set the `canvasFromBitmap` transform used during blitting.

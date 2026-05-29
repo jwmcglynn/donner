@@ -69,7 +69,7 @@ const char* RefusalReasonLabel(svg::compositor::CompositorController::PromoteRef
 const char* TileRenderModeLabel(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
   using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
-  if (tile.kind == Kind::Segment && tile.immediate) {
+  if ((tile.kind == Kind::Segment || tile.kind == Kind::Layer) && tile.immediate) {
     return "direct";
   }
 
@@ -181,7 +181,7 @@ void LayerInspectorPanel::recordHeuristicTelemetrySamples(
     const CompositorHeuristicTelemetryContext& context) {
   using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
   for (const auto& tile : tiles) {
-    if (tile.kind != Kind::Segment) {
+    if (tile.kind != Kind::Segment && tile.kind != Kind::Layer) {
       continue;
     }
 
@@ -459,7 +459,7 @@ void LayerInspectorPanel::render(
       continue;
     }
 
-    if (tile.kind == Kind::Segment && tile.immediate) {
+    if ((tile.kind == Kind::Segment || tile.kind == Kind::Layer) && tile.immediate) {
       immediateRasterMs += tile.lastRasterizeMs;
       ++immediateRasterTiles;
     } else {
