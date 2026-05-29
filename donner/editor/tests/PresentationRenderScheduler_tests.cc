@@ -19,12 +19,13 @@ EditorRasterViewport RasterViewport(const Vector2d& documentTopLeft = Vector2d::
 PresentationRenderScheduleInput Input(
     Entity selectedEntity, std::uint64_t version = 1,
     std::optional<SelectTool::ActiveDragPreview> activeDragPreview = std::nullopt,
-    EditorRasterViewport rasterViewport = RasterViewport()) {
+    EditorRasterViewport rasterViewport = RasterViewport(),
+    const Vector2i& currentCanvasSize = kCanvasSize) {
   return PresentationRenderScheduleInput{
       .selectedEntity = selectedEntity,
       .activeDragPreview = activeDragPreview,
       .currentVersion = version,
-      .currentCanvasSize = kCanvasSize,
+      .currentCanvasSize = currentCanvasSize,
       .currentRasterViewport = rasterViewport,
   };
 }
@@ -115,7 +116,7 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheDoesNotUploadAg
   EXPECT_FALSE(decision.needsRegularRender);
 }
 
-TEST(PresentationRenderSchedulerTest, ActiveDragWithMovedRasterViewportRequestsRegularRender) {
+TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesMovedRasterViewport) {
   PresentationRenderScheduler scheduler;
   CompositedPresentation presentation;
 
@@ -134,9 +135,38 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMovedRasterViewportRequestsR
       presentation,
       Input(Entity(7), /*version=*/8, activeDrag, RasterViewport(Vector2d(10.0, 0.0))));
 
-  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_FALSE(decision.shouldRequestRender())
+      << "Zoom/pan during an active drag must keep using the presenter-transformed cached content; "
+         "requesting a regular render here re-rasterizes every cached span on zoom+drag frames.";
   EXPECT_FALSE(decision.needsCompositedLayerCapture);
-  EXPECT_TRUE(decision.needsRegularRender);
+  EXPECT_FALSE(decision.needsRegularRender);
+}
+
+TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesCanvasSizeChange) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision warm =
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1));
+  scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
+                                warm.currentRasterViewport);
+  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize);
+
+  const SelectTool::ActiveDragPreview activeDrag{
+      .entity = Entity(7),
+      .translation = Vector2d(9.0, 0.0),
+      .dragGeneration = 14,
+  };
+  const PresentationRenderScheduleDecision decision =
+      scheduler.evaluate(presentation,
+                         Input(Entity(7), /*version=*/8, activeDrag, RasterViewport(),
+                               Vector2i(kCanvasSize.x + 20, kCanvasSize.y + 20)));
+
+  EXPECT_FALSE(decision.shouldRequestRender())
+      << "Continuous zoom changes the desired canvas size. During active drag the presenter should "
+         "keep transforming the existing cached content and defer the crisp re-render until idle.";
+  EXPECT_FALSE(decision.needsCompositedLayerCapture);
+  EXPECT_FALSE(decision.needsRegularRender);
 }
 
 TEST(PresentationRenderSchedulerTest, SettledSelectionRefreshRequestsSelectionHint) {
