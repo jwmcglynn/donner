@@ -121,6 +121,42 @@ std::optional<std::size_t> MapOffsetByFollowingContext(std::string_view oldSourc
   return std::nullopt;
 }
 
+std::optional<std::size_t> FindSvgRootCloseTag(std::string_view source) {
+  const std::size_t closeOffset = source.rfind("</svg>");
+  if (closeOffset == std::string_view::npos) {
+    return std::nullopt;
+  }
+  return closeOffset;
+}
+
+bool LooksLikeElementInsertion(std::string_view replacement) {
+  const std::size_t firstNonWhitespace = replacement.find_first_not_of(" \t\r\n");
+  if (firstNonWhitespace == std::string_view::npos ||
+      firstNonWhitespace + 1u >= replacement.size()) {
+    return false;
+  }
+
+  return replacement[firstNonWhitespace] == '<' && replacement[firstNonWhitespace + 1u] != '/' &&
+         replacement[firstNonWhitespace + 1u] != '!' && replacement[firstNonWhitespace + 1u] != '?';
+}
+
+std::optional<std::size_t> RemapRootChildInsertionToCurrentCloseTag(
+    std::string_view baselineSource, std::string_view workingText, const xml::XMLSourceDelta& delta,
+    std::string_view replacement, std::size_t mappedOffset) {
+  if (delta.removedLength != 0 || !LooksLikeElementInsertion(replacement)) {
+    return std::nullopt;
+  }
+
+  const std::optional<std::size_t> baselineCloseOffset = FindSvgRootCloseTag(baselineSource);
+  const std::optional<std::size_t> workingCloseOffset = FindSvgRootCloseTag(workingText);
+  if (!baselineCloseOffset.has_value() || !workingCloseOffset.has_value() ||
+      delta.offset != *baselineCloseOffset || mappedOffset <= *workingCloseOffset) {
+    return std::nullopt;
+  }
+
+  return *workingCloseOffset;
+}
+
 std::string CanonicalizeForTextEditor(std::string_view source) {
   std::string result(source);
   if (!result.empty() && result.back() == '\n') {
@@ -179,6 +215,8 @@ bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
                                                 lastWritebackSourceText);
     }
 
+    const std::string_view replacement =
+        std::string_view(source).substr(delta.offset, delta.insertedLength);
     std::size_t mappedOffset = delta.offset;
     std::size_t mappedRemovedLength = delta.removedLength;
     if (std::optional<SourceMirrorEdit> edit =
@@ -198,6 +236,11 @@ bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
         }
 
         mappedOffset = *contextOffset;
+        if (std::optional<std::size_t> rootCloseOffset = RemapRootChildInsertionToCurrentCloseTag(
+                baselineSource, workingText, delta, replacement, mappedOffset);
+            rootCloseOffset.has_value()) {
+          mappedOffset = *rootCloseOffset;
+        }
         mappedRemovedLength = 0;
       } else {
         std::optional<std::size_t> mappedStart = MapOffsetThroughSourceMirrorEdit(
@@ -211,6 +254,11 @@ bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
 
         mappedOffset = *mappedStart;
         mappedRemovedLength = *mappedEnd - *mappedStart;
+        if (std::optional<std::size_t> rootCloseOffset = RemapRootChildInsertionToCurrentCloseTag(
+                baselineSource, workingText, delta, replacement, mappedOffset);
+            rootCloseOffset.has_value()) {
+          mappedOffset = *rootCloseOffset;
+        }
       }
     }
 
@@ -220,8 +268,6 @@ bool ApplyXMLSourceDeltasIntoTextEditor(EditorApp& app, TextEditor& textEditor,
                                                 lastWritebackSourceText);
     }
 
-    const std::string_view replacement =
-        std::string_view(source).substr(delta.offset, delta.insertedLength);
     textEditor.applyExternalSourceEdit(mappedOffset, mappedRemovedLength, replacement);
     workingText.replace(mappedOffset, mappedRemovedLength, replacement.data(), replacement.size());
     baselineSource.replace(delta.offset, delta.removedLength, replacement.data(),

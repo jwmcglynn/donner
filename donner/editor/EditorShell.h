@@ -207,6 +207,7 @@ private:
       const SelectionTransformHandleIntent& hoverTransformIntent,
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
   void renderReferenceHighlightChip();
+  bool flushQueuedMutationAndRefreshOverlay();
   void renderPenToolPreview();
   void openRenderPaneContextMenu(const Vector2d& documentPoint);
   void renderRenderPaneContextMenu();

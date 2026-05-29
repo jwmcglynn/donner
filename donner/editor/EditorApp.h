@@ -149,6 +149,9 @@ public:
     isDirty_ = true;
   }
 
+  /// Restore these selection targets after the next source-backed document replacement.
+  void restoreSelectionAfterNextDocumentReplace(std::vector<AttributeWritebackTarget> targets);
+
   /// Drain and apply any pending mutations. Called once per frame at the
   /// start of the main loop. Returns true if any commands were applied.
   bool flushFrame();
@@ -266,10 +269,11 @@ public:
   /**
    * Queue a destructive path operation over the current selection.
    *
-   * The current prototype supports Union and Intersect by replacing the
-   * selected geometry with a source-backed rectangle path derived from the
-   * selected elements' document-space bounds. Full curve/path boolean math is
-   * scoped in `0041-path_authoring_and_boolean_operations.md`.
+   * Inputs are sorted by SVG paint order before dispatching to \ref PathOps so
+   * selection click order cannot change Subtract Front / Subtract Back
+   * semantics. The result is rejected if the operation is over the editor's
+   * complexity limits or produces geometry outside the selected inputs' union
+   * bounds.
    *
    * @param operation Operation to apply.
    * @return true if commands were queued.
@@ -404,6 +408,11 @@ private:
   /// mutation path.
   void refreshFirstSelectionCache();
 
+  struct PendingDocumentSourceUndo {
+    std::string label;
+    UndoSnapshot before;
+  };
+
   AsyncSVGDocument document_;
   std::vector<svg::SVGElement> selection_;
   /// Mirrors `selection_.front()` (or `std::nullopt`) so the
@@ -420,6 +429,8 @@ private:
 
   std::vector<CompletedTransformWriteback> pendingTransformWritebacks_;
   std::vector<CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
+  std::optional<PendingDocumentSourceUndo> pendingDocumentSourceUndo_;
+  std::optional<std::vector<AttributeWritebackTarget>> pendingSelectionRestoreTargets_;
 
   std::optional<std::string> currentFilePath_;
   std::string cleanSourceText_;

@@ -1,7 +1,12 @@
 #include "donner/editor/EditorApp.h"
 
+#include <fstream>
+#include <sstream>
+
+#include "donner/base/Path.h"
 #include "donner/editor/ViewportGeometry.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "gtest/gtest.h"
 
@@ -13,6 +18,84 @@ constexpr std::string_view kTrivialSvg =
          <rect id="r1" x="10" y="10" width="20" height="20" fill="red"/>
          <rect id="r2" x="50" y="50" width="20" height="20" fill="blue"/>
        </svg>)";
+
+bool HasCommand(const Path& path, Path::Verb verb) {
+  for (const Path::Command& command : path.commands()) {
+    if (command.verb == verb) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void ExpectBoxInside(const Box2d& inner, const Box2d& outer, double tolerance) {
+  EXPECT_GE(inner.topLeft.x, outer.topLeft.x - tolerance) << inner << " not inside " << outer;
+  EXPECT_GE(inner.topLeft.y, outer.topLeft.y - tolerance) << inner << " not inside " << outer;
+  EXPECT_LE(inner.bottomRight.x, outer.bottomRight.x + tolerance)
+      << inner << " not inside " << outer;
+  EXPECT_LE(inner.bottomRight.y, outer.bottomRight.y + tolerance)
+      << inner << " not inside " << outer;
+}
+
+std::optional<std::string> ReadDonnerSplash() {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    return std::nullopt;
+  }
+
+  std::ostringstream buffer;
+  buffer << splashStream.rdbuf();
+  return buffer.str();
+}
+
+bool GeometryContainsDocumentPoint(const svg::SVGElement& element, const Vector2d& point) {
+  if (!element.isa<svg::SVGGeometryElement>()) {
+    return false;
+  }
+
+  const svg::SVGGeometryElement geometry = element.cast<svg::SVGGeometryElement>();
+  const std::optional<Path> spline = geometry.computedSpline();
+  if (!spline.has_value()) {
+    return false;
+  }
+
+  const Transform2d documentFromElement = geometry.elementFromWorld();
+  const Transform2d elementFromDocument = documentFromElement.inverse();
+  const Vector2d elementPoint = elementFromDocument.transformPosition(point);
+  return spline->isInside(elementPoint, geometry.getComputedStyle().fillRule.getRequired());
+}
+
+std::optional<Vector2d> FindMembershipSample(const svg::SVGElement& first,
+                                             const svg::SVGElement& second,
+                                             const Box2d& searchBounds, bool expectedFirstInside,
+                                             bool expectedSecondInside) {
+  const auto matches = [&](const Vector2d& point) {
+    return GeometryContainsDocumentPoint(first, point) == expectedFirstInside &&
+           GeometryContainsDocumentPoint(second, point) == expectedSecondInside;
+  };
+
+  constexpr double kSampleStep = 2.0;
+  constexpr std::array<Vector2d, 5> kInteriorProbeOffsets = {
+      Vector2d(0.0, 0.0),  Vector2d(0.75, 0.0),  Vector2d(-0.75, 0.0),
+      Vector2d(0.0, 0.75), Vector2d(0.0, -0.75),
+  };
+  for (double y = searchBounds.topLeft.y; y <= searchBounds.bottomRight.y; y += kSampleStep) {
+    for (double x = searchBounds.topLeft.x; x <= searchBounds.bottomRight.x; x += kSampleStep) {
+      const Vector2d point(x, y);
+      bool stable = true;
+      for (const Vector2d& offset : kInteriorProbeOffsets) {
+        if (!matches(point + offset)) {
+          stable = false;
+          break;
+        }
+      }
+      if (stable) {
+        return point;
+      }
+    }
+  }
+  return std::nullopt;
+}
 
 TEST(EditorAppTest, EmptyByDefault) {
   EditorApp app;
@@ -341,10 +424,28 @@ TEST(EditorAppTest, PathOperationAvailabilityRequiresMultipleGeometryElements) {
 
   app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
   EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::Union).canApply);
-  EXPECT_FALSE(app.pathOperationAvailability(PathOperationKind::SubtractFront).canApply);
+  EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::SubtractFront).canApply);
 }
 
-TEST(EditorAppTest, PathUnionReplacesSelectionWithBoundsPath) {
+TEST(EditorAppTest, PathOperationUnavailableWhileDocumentMutationIsPending) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  app.applyMutation(EditorCommand::SetAttributeCommand(*r1, "fill", "green"));
+
+  const PathOperationAvailability availability =
+      app.pathOperationAvailability(PathOperationKind::Union);
+  EXPECT_FALSE(availability.canApply);
+  EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Union));
+}
+
+TEST(EditorAppTest, PathUnionReplacesSelectionWithBooleanPath) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
 
@@ -358,7 +459,7 @@ TEST(EditorAppTest, PathUnionReplacesSelectionWithBoundsPath) {
   ASSERT_EQ(app.selectedElements().size(), 1u);
   ASSERT_TRUE(app.selectedElements().front().isa<svg::SVGPathElement>());
   EXPECT_EQ(std::string_view(app.selectedElements().front().cast<svg::SVGPathElement>().d()),
-            "M 10 10 L 70 10 L 70 70 L 10 70 Z");
+            "M 10 10 L 30 10 L 30 30 L 10 30 Z M 50 50 L 70 50 L 70 70 L 50 70 Z");
 
   ASSERT_TRUE(app.flushFrame());
   EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
@@ -367,9 +468,46 @@ TEST(EditorAppTest, PathUnionReplacesSelectionWithBoundsPath) {
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->isa<svg::SVGPathElement>());
   EXPECT_EQ(std::string_view(result->cast<svg::SVGPathElement>().d()),
-            "M 10 10 L 70 10 L 70 70 L 10 70 Z");
-  EXPECT_NE(app.document().document().source().find(R"(<path d="M 10 10 L 70 10)"),
+            "M 10 10 L 30 10 L 30 30 L 10 30 Z M 50 50 L 70 50 L 70 70 L 50 70 Z");
+  EXPECT_NE(app.document().document().source().find(R"(<path d="M 10 10 L 30 10)"),
             std::string_view::npos);
+}
+
+TEST(EditorAppTest, PathOperationRecordsStructuralUndo) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Union));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(app.undoTimeline().entryCount(), 1u);
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Path operation");
+  EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_TRUE(app.document().document().querySelector("path").has_value());
+
+  app.undo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_TRUE(app.document().document().querySelector("#r2").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("path").has_value());
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "r1");
+  EXPECT_EQ(app.selectedElements()[1].id(), "r2");
+  EXPECT_TRUE(app.canRedo());
+
+  app.redo();
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
+  EXPECT_TRUE(app.document().document().querySelector("path").has_value());
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_TRUE(app.selectedElements()[0].isa<svg::SVGPathElement>());
 }
 
 TEST(EditorAppTest, PathIntersectReplacesSelectionWithOverlapPath) {
@@ -397,7 +535,7 @@ TEST(EditorAppTest, PathIntersectReplacesSelectionWithOverlapPath) {
             "M 30 25 L 50 25 L 50 45 L 30 45 Z");
 }
 
-TEST(EditorAppTest, PathIntersectDisabledWhenBoundsDoNotOverlap) {
+TEST(EditorAppTest, PathIntersectUnavailableWhenBoundsDoNotOverlap) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
 
@@ -407,9 +545,418 @@ TEST(EditorAppTest, PathIntersectDisabledWhenBoundsDoNotOverlap) {
   ASSERT_TRUE(r2.has_value());
   app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
 
+  const std::string sourceBefore(app.document().document().source());
   EXPECT_FALSE(app.pathOperationAvailability(PathOperationKind::Intersect).canApply);
   EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Intersect));
+  EXPECT_EQ(app.document().document().source(), sourceBefore);
   EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+}
+
+TEST(EditorAppTest, EmptyPathIntersectLeavesDocumentUnchanged) {
+  constexpr std::string_view kHoleSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <path id="donut" fill-rule="evenodd"
+               d="M 0 0 L 100 0 L 100 100 L 0 100 Z
+                  M 25 25 L 75 25 L 75 75 L 25 75 Z"/>
+         <rect id="inside-hole" x="40" y="40" width="10" height="10" fill="blue"/>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kHoleSvg));
+
+  auto donut = app.document().document().querySelector("#donut");
+  auto insideHole = app.document().document().querySelector("#inside-hole");
+  ASSERT_TRUE(donut.has_value());
+  ASSERT_TRUE(insideHole.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*donut, *insideHole});
+
+  const std::string sourceBefore(app.document().document().source());
+  EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::Intersect).canApply);
+  EXPECT_FALSE(app.applyPathOperation(PathOperationKind::Intersect));
+  EXPECT_EQ(app.document().document().source(), sourceBefore);
+  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_EQ(app.undoTimeline().entryCount(), 0u);
+}
+
+TEST(EditorAppTest, PathSubtractFrontReplacesSelectionWithDifferencePath) {
+  constexpr std::string_view kOverlappingSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="10" y="10" width="40" height="40" fill="red"/>
+         <rect id="r2" x="30" y="25" width="40" height="20" fill="blue"/>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kOverlappingSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::SubtractFront));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+  const svg::SVGPathElement resultPath = result->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = resultPath.computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_TRUE(spline->isInside({20, 20}));
+  EXPECT_FALSE(spline->isInside({35, 30}));
+}
+
+TEST(EditorAppTest, PathSubtractFrontUsesSvgPaintOrderWhenSelectionIsReversed) {
+  constexpr std::string_view kOverlappingSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="back" x="10" y="10" width="40" height="40" fill="red"/>
+         <rect id="front" x="30" y="25" width="40" height="20" fill="blue"/>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kOverlappingSvg));
+
+  auto back = app.document().document().querySelector("#back");
+  auto front = app.document().document().querySelector("#front");
+  ASSERT_TRUE(back.has_value());
+  ASSERT_TRUE(front.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*front, *back});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::SubtractFront));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->getAttribute("fill"), "red");
+  const std::optional<Path> spline = result->cast<svg::SVGPathElement>().computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_TRUE(spline->isInside({20, 20}));
+  EXPECT_FALSE(spline->isInside({35, 30}));
+  EXPECT_FALSE(spline->isInside({60, 30}));
+}
+
+TEST(EditorAppTest, PathSubtractBackUsesFrontmostElementAsBase) {
+  constexpr std::string_view kOverlappingSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="back" x="10" y="10" width="40" height="40" fill="red"/>
+         <rect id="front" x="30" y="25" width="40" height="20" fill="blue"/>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kOverlappingSvg));
+
+  auto back = app.document().document().querySelector("#back");
+  auto front = app.document().document().querySelector("#front");
+  ASSERT_TRUE(back.has_value());
+  ASSERT_TRUE(front.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*back, *front});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::SubtractBack));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+  EXPECT_EQ(result->getAttribute("fill"), "blue");
+  const svg::SVGPathElement resultPath = result->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = resultPath.computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_FALSE(spline->isInside({35, 30}));
+  EXPECT_TRUE(spline->isInside({60, 30}));
+}
+
+TEST(EditorAppTest, PathSubtractBackUsesSvgPaintOrderWhenSelectionIsReversed) {
+  constexpr std::string_view kOverlappingSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="back" x="10" y="10" width="40" height="40" fill="red"/>
+         <rect id="front" x="30" y="25" width="40" height="20" fill="blue"/>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kOverlappingSvg));
+
+  auto back = app.document().document().querySelector("#back");
+  auto front = app.document().document().querySelector("#front");
+  ASSERT_TRUE(back.has_value());
+  ASSERT_TRUE(front.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*front, *back});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::SubtractBack));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->getAttribute("fill"), "blue");
+  const std::optional<Path> spline = result->cast<svg::SVGPathElement>().computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_FALSE(spline->isInside({20, 20}));
+  EXPECT_FALSE(spline->isInside({35, 30}));
+  EXPECT_TRUE(spline->isInside({60, 30}));
+}
+
+TEST(EditorAppTest, PathExcludeReplacesSelectionWithXorPath) {
+  constexpr std::string_view kOverlappingSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="10" y="10" width="40" height="40" fill="red"/>
+         <rect id="r2" x="30" y="25" width="40" height="20" fill="blue"/>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kOverlappingSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Exclude));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+  const svg::SVGPathElement resultPath = result->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = resultPath.computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_TRUE(spline->isInside({20, 20}));
+  EXPECT_FALSE(spline->isInside({35, 30}));
+  EXPECT_TRUE(spline->isInside({60, 30}));
+}
+
+TEST(EditorAppTest, PathOperationAppliesElementTransformsInDocumentSpace) {
+  constexpr std::string_view kTransformedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="moved" x="0" y="0" width="30" height="30" fill="red"
+               transform="translate(20 10)"/>
+         <rect id="fixed" x="30" y="20" width="30" height="30" fill="blue"/>
+       </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTransformedSvg));
+
+  auto moved = app.document().document().querySelector("#moved");
+  auto fixed = app.document().document().querySelector("#fixed");
+  ASSERT_TRUE(moved.has_value());
+  ASSERT_TRUE(fixed.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*moved, *fixed});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Intersect));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+  const svg::SVGPathElement resultPath = result->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = resultPath.computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_TRUE(spline->isInside({35, 25}));
+  EXPECT_FALSE(spline->isInside({15, 15}));
+  EXPECT_FALSE(spline->isInside({55, 45}));
+}
+
+TEST(EditorAppTest, PathIntersectUsesBezierGeometryNotAabb) {
+  constexpr std::string_view kCurvedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <circle id="left" cx="40" cy="50" r="25" fill="red"/>
+         <circle id="right" cx="60" cy="50" r="25" fill="blue"/>
+       </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kCurvedSvg));
+
+  auto left = app.document().document().querySelector("#left");
+  auto right = app.document().document().querySelector("#right");
+  ASSERT_TRUE(left.has_value());
+  ASSERT_TRUE(right.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*left, *right});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Intersect));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+  const svg::SVGPathElement resultPath = result->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = resultPath.computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_TRUE(HasCommand(*spline, Path::Verb::CurveTo));
+  EXPECT_TRUE(spline->isInside({50, 50}));
+  EXPECT_FALSE(spline->isInside({25, 50}));
+  EXPECT_FALSE(spline->isInside({75, 50}));
+  ExpectBoxInside(spline->bounds(), Box2d::FromXYWH(15.0, 25.0, 70.0, 50.0), 0.01);
+  EXPECT_LE(spline->commands().size(), 12u);
+}
+
+TEST(EditorAppTest, PathOperationConvertsDocumentResultToTransformedParentSpace) {
+  constexpr std::string_view kGroupedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <g id="layer" transform="translate(20 10)">
+           <rect id="back" x="0" y="0" width="30" height="30" fill="red"/>
+           <rect id="front" x="10" y="10" width="30" height="30" fill="blue"/>
+         </g>
+       </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kGroupedSvg));
+
+  auto back = app.document().document().querySelector("#back");
+  auto front = app.document().document().querySelector("#front");
+  ASSERT_TRUE(back.has_value());
+  ASSERT_TRUE(front.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*back, *front});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Intersect));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+  ASSERT_TRUE(result->parentElement().has_value());
+  EXPECT_EQ(result->parentElement()->id(), "layer");
+
+  const svg::SVGPathElement resultPath = result->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = resultPath.computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_TRUE(spline->isInside({15, 15}));
+  EXPECT_FALSE(spline->isInside({35, 25}));
+
+  const std::string source(app.document().document().source());
+  const std::size_t groupOpen = source.find(R"(<g id="layer")");
+  const std::size_t pathOffset = source.find("<path");
+  const std::size_t groupClose = source.find("</g>");
+  ASSERT_NE(groupOpen, std::string::npos) << source;
+  ASSERT_NE(pathOffset, std::string::npos) << source;
+  ASSERT_NE(groupClose, std::string::npos) << source;
+  EXPECT_LT(groupOpen, pathOffset) << source;
+  EXPECT_LT(pathOffset, groupClose) << source;
+  EXPECT_EQ(source.find("<rect"), std::string::npos) << source;
+}
+
+TEST(EditorAppTest, PathOperationConvertsDocumentResultThroughRootViewBox) {
+  constexpr std::string_view kViewBoxSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"
+                 viewBox="0 0 50 50">
+         <rect id="back" x="0" y="0" width="30" height="30" fill="red"/>
+         <rect id="front" x="10" y="10" width="30" height="30" fill="blue"/>
+       </svg>)svg";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kViewBoxSvg));
+
+  auto back = app.document().document().querySelector("#back");
+  auto front = app.document().document().querySelector("#front");
+  ASSERT_TRUE(back.has_value());
+  ASSERT_TRUE(front.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*back, *front});
+
+  ASSERT_TRUE(app.applyPathOperation(PathOperationKind::Intersect));
+  ASSERT_TRUE(app.flushFrame());
+
+  auto result = app.document().document().querySelector("path");
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->isa<svg::SVGPathElement>());
+
+  const svg::SVGPathElement resultPath = result->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = resultPath.computedSpline();
+  ASSERT_TRUE(spline.has_value());
+  EXPECT_TRUE(spline->isInside({15, 15}));
+  EXPECT_FALSE(spline->isInside({35, 25}));
+}
+
+TEST(EditorAppTest, PathOperationsHandleOverlappingDonnerLetters) {
+  const std::optional<std::string> splashSource = ReadDonnerSplash();
+  if (!splashSource.has_value()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+
+  const auto applyOperation = [&](PathOperationKind operation) {
+    EditorApp app;
+    EXPECT_TRUE(app.loadFromString(*splashSource));
+
+    auto donnerD = app.document().document().querySelector("#Donner_D");
+    auto donnerO = app.document().document().querySelector("#Donner_O");
+    EXPECT_TRUE(donnerD.has_value());
+    EXPECT_TRUE(donnerO.has_value());
+    if (!donnerD.has_value() || !donnerO.has_value()) {
+      return std::optional<Path>();
+    }
+
+    app.applyMutation(
+        EditorCommand::SetTransformCommand(*donnerO, Transform2d::Translate(Vector2d(-45.0, 0.0))));
+    EXPECT_TRUE(app.flushFrame());
+
+    donnerD = app.document().document().querySelector("#Donner_D");
+    donnerO = app.document().document().querySelector("#Donner_O");
+    EXPECT_TRUE(donnerD.has_value());
+    EXPECT_TRUE(donnerO.has_value());
+    if (!donnerD.has_value() || !donnerO.has_value()) {
+      return std::optional<Path>();
+    }
+
+    const Box2d searchBounds =
+        Box2d::Union(*donnerD->cast<svg::SVGGeometryElement>().worldBounds(),
+                     *donnerO->cast<svg::SVGGeometryElement>().worldBounds());
+    const std::optional<Vector2d> dOnly =
+        FindMembershipSample(*donnerD, *donnerO, searchBounds, true, false);
+    const std::optional<Vector2d> oOnly =
+        FindMembershipSample(*donnerD, *donnerO, searchBounds, false, true);
+    const std::optional<Vector2d> overlap =
+        FindMembershipSample(*donnerD, *donnerO, searchBounds, true, true);
+    EXPECT_TRUE(dOnly.has_value());
+    EXPECT_TRUE(oOnly.has_value());
+    EXPECT_TRUE(overlap.has_value());
+    if (!dOnly.has_value() || !oOnly.has_value() || !overlap.has_value()) {
+      return std::optional<Path>();
+    }
+
+    app.setSelection(std::vector<svg::SVGElement>{*donnerD, *donnerO});
+    EXPECT_TRUE(app.applyPathOperation(operation));
+    EXPECT_TRUE(app.flushFrame());
+
+    EXPECT_EQ(app.selectedElements().size(), 1u);
+    if (app.selectedElements().empty() ||
+        !app.selectedElements().front().isa<svg::SVGPathElement>()) {
+      return std::optional<Path>();
+    }
+
+    const std::optional<Path> spline =
+        app.selectedElements().front().cast<svg::SVGPathElement>().computedSpline();
+    EXPECT_TRUE(spline.has_value());
+    if (!spline.has_value()) {
+      return std::optional<Path>();
+    }
+
+    switch (operation) {
+      case PathOperationKind::Union:
+        EXPECT_TRUE(spline->isInside(*dOnly)) << spline->bounds() << " dOnly=" << *dOnly;
+        EXPECT_TRUE(spline->isInside(*overlap)) << spline->bounds() << " overlap=" << *overlap;
+        EXPECT_TRUE(spline->isInside(*oOnly)) << spline->bounds() << " oOnly=" << *oOnly;
+        break;
+      case PathOperationKind::Intersect:
+        EXPECT_FALSE(spline->isInside(*dOnly));
+        EXPECT_TRUE(spline->isInside(*overlap)) << spline->bounds() << " overlap=" << *overlap;
+        EXPECT_FALSE(spline->isInside(*oOnly));
+        break;
+      case PathOperationKind::SubtractFront:
+        EXPECT_TRUE(spline->isInside(*dOnly)) << spline->bounds() << " dOnly=" << *dOnly;
+        EXPECT_FALSE(spline->isInside(*overlap));
+        EXPECT_FALSE(spline->isInside(*oOnly));
+        break;
+      case PathOperationKind::SubtractBack:
+        EXPECT_FALSE(spline->isInside(*dOnly));
+        EXPECT_FALSE(spline->isInside(*overlap));
+        EXPECT_TRUE(spline->isInside(*oOnly)) << spline->bounds() << " oOnly=" << *oOnly;
+        break;
+      case PathOperationKind::Exclude:
+        EXPECT_TRUE(spline->isInside(*dOnly)) << spline->bounds() << " dOnly=" << *dOnly;
+        EXPECT_FALSE(spline->isInside(*overlap));
+        EXPECT_TRUE(spline->isInside(*oOnly)) << spline->bounds() << " oOnly=" << *oOnly;
+        break;
+    }
+
+    return spline;
+  };
+
+  EXPECT_TRUE(applyOperation(PathOperationKind::Union).has_value());
+  EXPECT_TRUE(applyOperation(PathOperationKind::Intersect).has_value());
+  EXPECT_TRUE(applyOperation(PathOperationKind::SubtractFront).has_value());
+  EXPECT_TRUE(applyOperation(PathOperationKind::SubtractBack).has_value());
+  EXPECT_TRUE(applyOperation(PathOperationKind::Exclude).has_value());
 }
 
 TEST(EditorAppTest, HitTestRectFindsAllIntersectingElements) {

@@ -8,11 +8,13 @@
 #include <vector>
 
 #include "donner/base/FormatNumber.h"
+#include "donner/base/PathOps.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
 
 namespace donner::editor {
@@ -41,6 +43,15 @@ void ForEachGeometryElement(const svg::SVGElement& node, Visitor& visit) {
   }
 }
 
+/// Depth-first SVG tree walk in paint order, including non-geometry containers.
+template <typename Visitor>
+void ForEachElement(const svg::SVGElement& node, Visitor& visit) {
+  visit(node);
+  for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
+    ForEachElement(*child, visit);
+  }
+}
+
 std::optional<std::string> MergeStyleProperty(std::string_view existingStyle,
                                               std::string_view propertyName,
                                               std::string_view propertyValue) {
@@ -56,65 +67,26 @@ std::optional<std::string> MergeStyleProperty(std::string_view existingStyle,
 }
 
 struct PathOperationSelection {
-  std::vector<Box2d> bounds;
+  std::vector<PathBooleanInput> inputs;
 };
 
-bool PathOperationPrototypeSupports(PathOperationKind operation) {
-  return operation == PathOperationKind::Union || operation == PathOperationKind::Intersect;
-}
+std::vector<svg::SVGElement> SortSelectionByPaintOrder(const svg::SVGDocument& document,
+                                                       std::span<const svg::SVGElement> selection) {
+  std::vector<svg::SVGElement> result;
+  result.reserve(selection.size());
 
-std::optional<Box2d> IntersectBoxes(const std::vector<Box2d>& bounds) {
-  if (bounds.empty()) {
-    return std::nullopt;
-  }
-
-  Box2d result = bounds.front();
-  for (std::size_t i = 1; i < bounds.size(); ++i) {
-    result.topLeft.x = std::max(result.topLeft.x, bounds[i].topLeft.x);
-    result.topLeft.y = std::max(result.topLeft.y, bounds[i].topLeft.y);
-    result.bottomRight.x = std::min(result.bottomRight.x, bounds[i].bottomRight.x);
-    result.bottomRight.y = std::min(result.bottomRight.y, bounds[i].bottomRight.y);
-  }
-
-  if (result.width() <= 0.0 || result.height() <= 0.0) {
-    return std::nullopt;
-  }
-
-  return result;
-}
-
-Box2d UnionBoxes(const std::vector<Box2d>& bounds) {
-  Box2d result = bounds.front();
-  for (std::size_t i = 1; i < bounds.size(); ++i) {
-    result.addBox(bounds[i]);
-  }
-  return result;
-}
-
-std::string FormatPathPoint(const Vector2d& point) {
-  return donner::detail::FormatNumberForSVG(point.x) + " " +
-         donner::detail::FormatNumberForSVG(point.y);
-}
-
-std::string RectanglePathData(const Box2d& box) {
-  const Vector2d topRight(box.bottomRight.x, box.topLeft.y);
-  const Vector2d bottomLeft(box.topLeft.x, box.bottomRight.y);
-
-  std::string result = "M ";
-  result += FormatPathPoint(box.topLeft);
-  result += " L ";
-  result += FormatPathPoint(topRight);
-  result += " L ";
-  result += FormatPathPoint(box.bottomRight);
-  result += " L ";
-  result += FormatPathPoint(bottomLeft);
-  result += " Z";
+  auto visit = [&](const svg::SVGElement& element) {
+    if (std::find(selection.begin(), selection.end(), element) != selection.end()) {
+      result.push_back(element);
+    }
+  };
+  ForEachElement(document.svgElement(), visit);
   return result;
 }
 
 PathOperationSelection CollectPathOperationSelection(std::span<const svg::SVGElement> selection) {
   PathOperationSelection result;
-  result.bounds.reserve(selection.size());
+  result.inputs.reserve(selection.size());
 
   for (const svg::SVGElement& element : selection) {
     if (!element.isa<svg::SVGGeometryElement>()) {
@@ -122,15 +94,149 @@ PathOperationSelection CollectPathOperationSelection(std::span<const svg::SVGEle
     }
 
     const svg::SVGGeometryElement geometry = element.cast<svg::SVGGeometryElement>();
-    std::optional<Box2d> bounds = geometry.worldBounds();
-    if (!bounds.has_value() || bounds->isEmpty()) {
+    std::optional<Path> spline = geometry.computedSpline();
+    if (!spline.has_value() || spline->empty()) {
       continue;
     }
 
-    result.bounds.push_back(*bounds);
+    const Transform2d documentFromElement = geometry.elementFromWorld();
+    result.inputs.push_back(PathBooleanInput{
+        .path = std::move(*spline),
+        .fillRule = geometry.getComputedStyle().fillRule.getRequired(),
+        .outputFromPath = documentFromElement,
+    });
   }
 
   return result;
+}
+
+PathBooleanOp BooleanOpForEditorOperation(PathOperationKind operation) {
+  switch (operation) {
+    case PathOperationKind::Union: return PathBooleanOp::Union;
+    case PathOperationKind::Intersect: return PathBooleanOp::Intersect;
+    case PathOperationKind::SubtractFront: return PathBooleanOp::Difference;
+    case PathOperationKind::SubtractBack: return PathBooleanOp::Difference;
+    case PathOperationKind::Exclude: return PathBooleanOp::Xor;
+  }
+  return PathBooleanOp::Union;
+}
+
+PathBooleanOptions EditorPathBooleanOptions() {
+  return PathBooleanOptions{
+      .geometricTolerance = 1e-3,
+      .maxCurveCount = 20000,
+      .maxIntersections = 20000,
+      .maxOutputCommands = 8192,
+  };
+}
+
+std::vector<PathBooleanInput> InputsForEditorOperation(PathOperationKind operation,
+                                                       const PathOperationSelection& selection) {
+  if (operation != PathOperationKind::SubtractBack || selection.inputs.empty()) {
+    return selection.inputs;
+  }
+
+  std::vector<PathBooleanInput> inputs;
+  inputs.reserve(selection.inputs.size());
+  inputs.push_back(selection.inputs.back());
+  inputs.insert(inputs.end(), selection.inputs.begin(), selection.inputs.end() - 1);
+  return inputs;
+}
+
+Path CombineBooleanPaths(std::span<const Path> paths) {
+  PathBuilder builder;
+  for (const Path& path : paths) {
+    builder.addPath(path);
+  }
+  return builder.build();
+}
+
+Path TransformPath(const Path& path, const Transform2d& outputFromPath) {
+  PathBuilder builder;
+  const std::span<const Vector2d> points = path.points();
+  for (const Path::Command& command : path.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(outputFromPath.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::LineTo:
+        builder.lineTo(outputFromPath.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::QuadTo:
+        builder.quadTo(outputFromPath.transformPosition(points[command.pointIndex]),
+                       outputFromPath.transformPosition(points[command.pointIndex + 1]));
+        break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(outputFromPath.transformPosition(points[command.pointIndex]),
+                        outputFromPath.transformPosition(points[command.pointIndex + 1]),
+                        outputFromPath.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
+    }
+  }
+  return builder.build();
+}
+
+svg::SVGElement BaseElementForPathOperation(PathOperationKind operation,
+                                            std::span<const svg::SVGElement> selection) {
+  switch (operation) {
+    case PathOperationKind::SubtractFront: return selection.front();
+    case PathOperationKind::Union:
+    case PathOperationKind::Intersect:
+    case PathOperationKind::SubtractBack:
+    case PathOperationKind::Exclude: return selection.back();
+  }
+  return selection.front();
+}
+
+std::optional<Box2d> InputUnionBounds(const PathOperationSelection& selection) {
+  std::optional<Box2d> bounds;
+  for (const PathBooleanInput& input : selection.inputs) {
+    const Box2d inputBounds = input.path.transformedBounds(input.outputFromPath);
+    if (bounds.has_value()) {
+      bounds->addBox(inputBounds);
+    } else {
+      bounds = inputBounds;
+    }
+  }
+  return bounds;
+}
+
+std::optional<Box2d> InputIntersectionBounds(const PathOperationSelection& selection) {
+  std::optional<Box2d> bounds;
+  for (const PathBooleanInput& input : selection.inputs) {
+    const Box2d inputBounds = input.path.transformedBounds(input.outputFromPath);
+    if (!bounds.has_value()) {
+      bounds = inputBounds;
+      continue;
+    }
+
+    bounds->topLeft.x = std::max(bounds->topLeft.x, inputBounds.topLeft.x);
+    bounds->topLeft.y = std::max(bounds->topLeft.y, inputBounds.topLeft.y);
+    bounds->bottomRight.x = std::min(bounds->bottomRight.x, inputBounds.bottomRight.x);
+    bounds->bottomRight.y = std::min(bounds->bottomRight.y, inputBounds.bottomRight.y);
+    if (bounds->width() <= 0.0 || bounds->height() <= 0.0) {
+      return std::nullopt;
+    }
+  }
+  return bounds;
+}
+
+bool BoxContainsBox(const Box2d& outer, const Box2d& inner, double tolerance) {
+  return inner.topLeft.x >= outer.topLeft.x - tolerance &&
+         inner.topLeft.y >= outer.topLeft.y - tolerance &&
+         inner.bottomRight.x <= outer.bottomRight.x + tolerance &&
+         inner.bottomRight.y <= outer.bottomRight.y + tolerance;
+}
+
+bool PathOperationResultFitsInputBounds(const Path& result,
+                                        const PathOperationSelection& selection) {
+  const std::optional<Box2d> inputBounds = InputUnionBounds(selection);
+  if (!inputBounds.has_value()) {
+    return false;
+  }
+  constexpr double kResultBoundsTolerance = 0.5;
+  return BoxContainsBox(*inputBounds, result.bounds(), kResultBoundsTolerance);
 }
 
 void CopyPathOperationStyle(const svg::SVGElement& source, svg::SVGPathElement& target) {
@@ -144,6 +250,19 @@ void CopyPathOperationStyle(const svg::SVGElement& source, svg::SVGPathElement& 
       target.setAttribute(name, std::string_view(*value));
     }
   }
+}
+
+std::vector<AttributeWritebackTarget> CaptureSelectionTargets(
+    std::span<const svg::SVGElement> selection) {
+  std::vector<AttributeWritebackTarget> targets;
+  targets.reserve(selection.size());
+  for (const svg::SVGElement& element : selection) {
+    if (std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(element);
+        target.has_value()) {
+      targets.push_back(std::move(*target));
+    }
+  }
+  return targets;
 }
 
 svg::SVGElement ResolveSnapshotElement(AsyncSVGDocument& document, const UndoSnapshot& snapshot) {
@@ -161,6 +280,7 @@ svg::SVGElement ResolveSnapshotElement(AsyncSVGDocument& document, const UndoSna
 void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
                            const UndoSnapshot& snapshot) {
   if (snapshot.kind == UndoSnapshot::Kind::DocumentSource) {
+    app.restoreSelectionAfterNextDocumentReplace(snapshot.selectionTargets);
     app.applyMutation(EditorCommand::ReplaceDocumentCommand(snapshot.documentSource,
                                                             /*preserveUndoOnReparse=*/true));
     return;
@@ -212,6 +332,8 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   undoTimeline_.clear();
   pendingTransformWritebacks_.clear();
   pendingElementRemoveWritebacks_.clear();
+  pendingDocumentSourceUndo_.reset();
+  pendingSelectionRestoreTargets_.reset();
   const bool result = document_.loadFromString(svgBytes);
   // A successful load resets the dirty state — the in-memory document
   // now matches the last-loaded bytes. `setCurrentFilePath` should be
@@ -220,6 +342,11 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
     isDirty_ = false;
   }
   return result;
+}
+
+void EditorApp::restoreSelectionAfterNextDocumentReplace(
+    std::vector<AttributeWritebackTarget> targets) {
+  pendingSelectionRestoreTargets_ = std::move(targets);
 }
 
 bool EditorApp::revertToCleanSource() {
@@ -272,6 +399,37 @@ bool EditorApp::flushFrame() {
     if (!(documentFlush.replacedDocument && documentFlush.preserveUndoOnReparse)) {
       undoTimeline_.clear();
     }
+  }
+
+  if (pendingSelectionRestoreTargets_.has_value() && document_.hasDocument()) {
+    std::vector<svg::SVGElement> restoredSelection;
+    restoredSelection.reserve(pendingSelectionRestoreTargets_->size());
+    for (const AttributeWritebackTarget& target : *pendingSelectionRestoreTargets_) {
+      if (auto element = resolveAttributeWritebackTarget(document_.document(), target);
+          element.has_value()) {
+        restoredSelection.push_back(*element);
+      }
+    }
+
+    selection_ = std::move(restoredSelection);
+    refreshFirstSelectionCache();
+    controller_.reset();
+    controllerVersion_ = 0;
+    pendingSelectionRestoreTargets_.reset();
+  }
+
+  if (pendingDocumentSourceUndo_.has_value()) {
+    if (document_.hasDocument() && document_.document().hasSourceStore()) {
+      std::string sourceAfter(document_.document().source());
+      if (sourceAfter != pendingDocumentSourceUndo_->before.documentSource) {
+        UndoSnapshot after =
+            captureDocumentSourceSnapshot(pendingDocumentSourceUndo_->before.element, sourceAfter);
+        after.selectionTargets = CaptureSelectionTargets(selection_);
+        undoTimeline_.record(pendingDocumentSourceUndo_->label,
+                             std::move(pendingDocumentSourceUndo_->before), std::move(after));
+      }
+    }
+    pendingDocumentSourceUndo_.reset();
   }
 
   return true;
@@ -408,22 +566,28 @@ PathOperationAvailability EditorApp::pathOperationAvailability(PathOperationKind
     return {.canApply = false, .reason = "No SVG document is loaded"};
   }
 
-  if (!PathOperationPrototypeSupports(operation)) {
-    return {.canApply = false, .reason = "Prototype supports Union and Intersect first"};
+  if (document_.hasPendingMutations()) {
+    return {.canApply = false, .reason = "Document edits are still applying"};
   }
 
   if (selection_.size() < 2u) {
-    return {.canApply = false, .reason = "Select at least two bounded geometry elements"};
+    return {.canApply = false, .reason = "Select at least two path-convertible elements"};
   }
 
-  const PathOperationSelection pathSelection = CollectPathOperationSelection(selection_);
-  if (pathSelection.bounds.size() != selection_.size()) {
+  const std::vector<svg::SVGElement> selected =
+      SortSelectionByPaintOrder(document_.document(), selection_);
+  if (selected.size() != selection_.size()) {
+    return {.canApply = false, .reason = "Selection includes detached geometry"};
+  }
+
+  const PathOperationSelection pathSelection = CollectPathOperationSelection(selected);
+  if (pathSelection.inputs.size() != selection_.size()) {
     return {.canApply = false, .reason = "Selection includes unsupported or empty geometry"};
   }
 
   if (operation == PathOperationKind::Intersect &&
-      !IntersectBoxes(pathSelection.bounds).has_value()) {
-    return {.canApply = false, .reason = "Selected bounds do not overlap"};
+      !InputIntersectionBounds(pathSelection).has_value()) {
+    return {.canApply = false, .reason = "Selected path bounds do not overlap"};
   }
 
   return {.canApply = true};
@@ -435,31 +599,57 @@ bool EditorApp::applyPathOperation(PathOperationKind operation) {
     return false;
   }
 
-  const std::vector<svg::SVGElement> selected = selection_;
-  const PathOperationSelection pathSelection = CollectPathOperationSelection(selected);
-  std::optional<Box2d> resultBox;
-  switch (operation) {
-    case PathOperationKind::Union: resultBox = UnionBoxes(pathSelection.bounds); break;
-    case PathOperationKind::Intersect: resultBox = IntersectBoxes(pathSelection.bounds); break;
-    case PathOperationKind::SubtractFront:
-    case PathOperationKind::SubtractBack:
-    case PathOperationKind::Exclude: return false;
-  }
-
-  if (!resultBox.has_value()) {
+  svg::SVGDocument& document = document_.document();
+  const std::vector<svg::SVGElement> selected = SortSelectionByPaintOrder(document, selection_);
+  if (selected.size() != selection_.size()) {
     return false;
   }
 
-  svg::SVGDocument& document = document_.document();
-  svg::SVGPathElement resultPath = svg::SVGPathElement::Create(document);
-  resultPath.setAttribute("d", RectanglePathData(*resultBox));
-  CopyPathOperationStyle(selected.front(), resultPath);
+  const PathOperationSelection pathSelection = CollectPathOperationSelection(selected);
+  const std::vector<PathBooleanInput> booleanInputs =
+      InputsForEditorOperation(operation, pathSelection);
+  const PathBooleanResult booleanResult = ApplyPathBoolean(
+      BooleanOpForEditorOperation(operation), booleanInputs, EditorPathBooleanOptions());
+  if (booleanResult.status != PathBooleanStatus::Ok || booleanResult.paths.empty()) {
+    return false;
+  }
 
-  svg::SVGElement parent = selected.front().parentElement().value_or(document.svgElement());
+  const Path resultDocumentSpline = CombineBooleanPaths(booleanResult.paths);
+  if (resultDocumentSpline.empty()) {
+    return false;
+  }
+  if (!PathOperationResultFitsInputBounds(resultDocumentSpline, pathSelection)) {
+    return false;
+  }
+
+  const svg::SVGElement baseElement = BaseElementForPathOperation(operation, selected);
+  svg::SVGElement parent = baseElement.parentElement().value_or(document.svgElement());
+  Transform2d parentFromDocument;
+  if (parent.isa<svg::SVGGraphicsElement>()) {
+    const Transform2d documentFromParent =
+        parent.cast<svg::SVGGraphicsElement>().elementFromWorld();
+    parentFromDocument = documentFromParent.inverse();
+  }
+
+  const Path resultSpline = TransformPath(resultDocumentSpline, parentFromDocument);
+  const RcString resultPathData = resultSpline.toSVGPathData();
+  svg::SVGPathElement resultPath = svg::SVGPathElement::Create(document);
+  resultPath.setAttribute("d", std::string_view(resultPathData));
+  CopyPathOperationStyle(baseElement, resultPath);
+
+  if (document.hasSourceStore()) {
+    UndoSnapshot before = captureDocumentSourceSnapshot(baseElement, document.source());
+    before.selectionTargets = CaptureSelectionTargets(selected);
+    pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+        .label = "Path operation",
+        .before = std::move(before),
+    };
+  }
+
   std::optional<svg::SVGElement> referenceElement;
-  if (const std::optional<svg::SVGElement> selectedParent = selected.front().parentElement();
+  if (const std::optional<svg::SVGElement> selectedParent = baseElement.parentElement();
       selectedParent.has_value() && *selectedParent == parent) {
-    referenceElement = selected.front();
+    referenceElement = baseElement;
   }
 
   applyMutation(EditorCommand::InsertElementCommand(parent, resultPath, referenceElement));

@@ -1723,7 +1723,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         queuedMutationForNextFrame = true;
       }
       if (queuedMutationForNextFrame) {
-        window_.wakeEventLoop();
+        flushQueuedMutationAndRefreshOverlay();
       } else {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         requestRenderAtEndOfFrame_ = true;
@@ -1812,7 +1812,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       penTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
-      window_.wakeEventLoop();
+      flushQueuedMutationAndRefreshOverlay();
     }
   }
 
@@ -1939,7 +1939,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
       sidebarPresenter_.renderInspector(liveAppForClicks, interactionController_.viewport());
   ImGui::End();
   if (inspectorQueuedMutation) {
-    window_.wakeEventLoop();
+    flushQueuedMutationAndRefreshOverlay();
   }
 
   if (layerPanelDetached_) {
@@ -2528,6 +2528,27 @@ void EditorShell::renderReferenceHighlightChip() {
                     ImVec2(static_cast<float>(rect->topLeft.x) + kReferenceChipPaddingX,
                            static_cast<float>(rect->topLeft.y) + kReferenceChipPaddingY),
                     IM_COL32(255, 255, 255, 255), label.c_str(), label.c_str() + label.size());
+}
+
+bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    window_.wakeEventLoop();
+    return false;
+  }
+
+  if (!app_.flushFrame()) {
+    window_.wakeEventLoop();
+    return false;
+  }
+
+  documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
+  renderCoordinator_.refreshSelectionBoundsCache(app_);
+  renderCoordinator_.rasterizeOverlayForCurrentSelection(
+      app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+      selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+  requestRenderAtEndOfFrame_ = true;
+  window_.wakeEventLoop();
+  return true;
 }
 
 void EditorShell::renderPenToolPreview() {
