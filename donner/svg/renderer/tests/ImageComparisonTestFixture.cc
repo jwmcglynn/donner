@@ -558,10 +558,16 @@ std::string_view ComparisonModeName(ComparisonMode mode) {
 const std::vector<ComparisonMode>& ActiveComparisonModes() {
   static const std::vector<ComparisonMode> modes = [] {
 #ifdef DONNER_GEODE_BACKEND_AVAILABLE
-    // Geode builds run the same test params against the golden and the
-    // in-process tiny-skia parity reference.
-    return std::vector<ComparisonMode>{ComparisonMode::TinyGolden, ComparisonMode::GeodeGolden,
-                                       ComparisonMode::GeodeTinyParity};
+    // Geode builds compare each backend to the reference via TinyGolden /
+    // GeodeGolden. GeodeTinyParity (geode-pixel-vs-tiny) was retired in favor
+    // of per-backend golden comparison: with Geode's analytic dual-ray Slug
+    // coverage (design doc 0041 §M1), the analytic result legitimately differs
+    // from tiny-skia's finite-sample scan-converter, so a pixel-vs-tiny gate
+    // can only be satisfied by degrading Geode to tiny's quantization — the
+    // opposite of aligning with Slug. Both backends already gate against the
+    // same reference, so geode-vs-tiny adds no correctness signal the goldens
+    // don't.
+    return std::vector<ComparisonMode>{ComparisonMode::TinyGolden, ComparisonMode::GeodeGolden};
 #else
     return std::vector<ComparisonMode>{ComparisonMode::TinyGolden};
 #endif

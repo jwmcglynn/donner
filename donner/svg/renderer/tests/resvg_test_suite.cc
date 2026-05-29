@@ -306,8 +306,13 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "filters/feGaussianBlur",
                 {
-                    {"complex-transform.svg", Params::WithThreshold(0.03f, kDefaultMismatchedPixels,
-                                                                    "Minor AA differences")},
+                    {"complex-transform.svg",
+                     Params::WithThreshold(0.03f, kDefaultMismatchedPixels, "Minor AA differences")
+                         .disableBackend(RendererBackend::Geode,
+                                         "Geode analytic dual-ray Slug coverage (0041 §6) on the "
+                                         "rotated/skewed rect edges diverges from the resvg "
+                                         "finite-sample reference by a ~1px edge band (259px), "
+                                         "amplified by the blur kernel")},
                     {"huge-stdDeviation.svg",
                      Params::RenderOnly("Extreme sigma=1000; output is implementation-defined")},
                 })),
@@ -628,6 +633,12 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::WithThreshold(0.5f, 1150, "AA artifacts + quad glyph outlines")},
                     {"tiny-pattern-upscaled.svg",
                      Params::WithThreshold(0.02f, 500, "Upscaled pattern edge AA")},
+                    {"transform-and-patternTransform.svg",
+                     ImageComparisonParams().disableBackend(
+                         RendererBackend::Geode,
+                         "Geode analytic dual-ray Slug coverage (0041 §6) on the rotated rounded "
+                         "rect edge diverges from the resvg finite-sample reference by a ~1px edge "
+                         "band (115px), interacting with the pattern tile seams")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

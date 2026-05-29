@@ -1,50 +1,36 @@
-// Slug mask pipeline: renders filled paths as coverage into an R8Unorm
-// mask texture, for use as a clip source by the main fill / gradient
-// pipelines (Phase 3b path clipping).
+// Slug mask pipeline: analytic dual-ray coverage at 1 sample/pixel, written
+// into an RGBA8Unorm mask texture for use as a clip source by the main fill /
+// gradient pipelines (Phase 3b path clipping).
 //
-// This is a stripped-down copy of `slug_fill.wgsl`:
-//   * Same vertex shader + same band/curve encoding, so the CPU-side
-//     `GeodePathEncoder::encode` output can be fed directly in.
-//   * Fragment stage does the same 4-sample `sample_mask` coverage test
-//     as `slug_fill.wgsl`, but writes `vec4f(1.0, 0, 0, 0)` to an
-//     R8Unorm color attachment instead of a full RGBA fill colour.
-//   * 4× MSAA resolve averages the surviving samples into a single
-//     fractional-alpha coverage per mask pixel, so downstream shaders
-//     can do a straight `textureSample` to read clip coverage.
-//   * No paint mode, no pattern, no clip polygon — the mask is a pure
-//     CPU-uploaded path filled into empty space. If multiple clip paths
-//     share a single layer they are unioned via `BlendOperation::Max` on
-//     the host pipeline, not via shader logic.
+// Analytic version of the mask (0041 §8). Single bounding quad + dense H/V band
+// grids → no band-seam double-count. Each fragment writes its scalar coverage
+// into ALL FOUR channels; the pipeline blends with BlendOperation::Max, so
+// overlapping clip-path draws union as max(c1, c2) per channel (correct union,
+// no double-count). The mask reader (`clip_mask_coverage`) averages the four
+// channels → returns the coverage, so the Max-union invariant is preserved with
+// no reader change.
 
 // ============================================================================
 // Uniforms
 // ============================================================================
 
 struct Uniforms {
-  // Model-view-projection matrix. Same mvp as the fill pipeline — the
-  // mask is rendered in path space and projected to mask-texture pixel
-  // space exactly the way `slug_fill.wgsl` does.
   mvp: mat4x4f,
-  // Viewport dimensions in pixels (mask texture size).
   viewport: vec2f,
-  // Fill rule: 0 = non-zero, 1 = even-odd.
   fillRule: u32,
-  // Nonzero when a nested clip mask is bound at binding 3 and should
-  // be sampled during this draw. Used to support nested clip-path
-  // references (`<clipPath>` whose children carry their own
-  // `clip-path`). When the outer layer samples the inner layer's
-  // already-rendered mask, each outer-layer shape ends up intersected
-  // with the inner union — and Max blend unions the outer shapes on
-  // top. When zero, a 1x1 dummy with value 1.0 is bound and the
-  // shader effectively treats every pixel as fully unclipped.
   hasClipMask: u32,
+  // Band-grid parameters (0041 §8.1). Two vec4-aligned rows.
+  yBase: f32,
+  hStride: f32,
+  hBandCount: u32,
+  xBase: f32,
+  vStride: f32,
+  vBandCount: u32,
+  _gridPad0: u32,
+  _gridPad1: u32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-
-// ============================================================================
-// Storage buffers
-// ============================================================================
 
 struct Band {
   curveStart: u32,
@@ -58,13 +44,15 @@ struct Band {
 };
 
 @group(0) @binding(1) var<storage, read> bands: array<Band>;
-
-// Flat float array of quadratic Bézier control points (6 floats per curve).
 @group(0) @binding(2) var<storage, read> curveData: array<f32>;
-
-// Nested clip-mask input — see `uniforms.hasClipMask` above.
 @group(0) @binding(3) var clipMaskTexture: texture_2d<f32>;
 @group(0) @binding(4) var clipMaskSampler: sampler;
+@group(0) @binding(5) var<storage, read> vBands: array<Band>;
+@group(0) @binding(6) var<storage, read> vCurveData: array<f32>;
+@group(0) @binding(7) var<storage, read> hBandGrid: array<u32>;
+@group(0) @binding(8) var<storage, read> vBandGrid: array<u32>;
+
+const kNoBand: u32 = 0xFFFFFFFFu;
 
 fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
   let dims = vec2i(textureDimensions(clipMaskTexture));
@@ -86,12 +74,10 @@ struct VertexInput {
 struct VertexOutput {
   @builtin(position) clip_pos: vec4f,
   @location(0) sample_pos: vec2f,
-  @location(1) @interpolate(flat) bandIndex: u32,
 };
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
-  // Dynamic half-pixel dilation — identical to slug_fill.wgsl.
   let world_normal = (uniforms.mvp * vec4f(in.normal, 0.0, 0.0)).xy;
   let viewport_normal = world_normal * uniforms.viewport * 0.5;
   let viewport_len = length(viewport_normal);
@@ -102,12 +88,11 @@ fn vs_main(in: VertexInput) -> VertexOutput {
   var out: VertexOutput;
   out.clip_pos = uniforms.mvp * vec4f(dilated, 0.0, 1.0);
   out.sample_pos = dilated;
-  out.bandIndex = in.bandIndex;
   return out;
 }
 
 // ============================================================================
-// Quadratic Bézier ray intersection (shared with slug_fill.wgsl)
+// Quadratic root solving + analytic per-ray coverage (mirrors slug_fill.wgsl)
 // ============================================================================
 
 struct Quadratic {
@@ -116,7 +101,7 @@ struct Quadratic {
   p2: vec2f,
 };
 
-fn load_curve(index: u32) -> Quadratic {
+fn load_h_curve(index: u32) -> Quadratic {
   let base = index * 6u;
   var q: Quadratic;
   q.p0 = vec2f(curveData[base + 0u], curveData[base + 1u]);
@@ -125,13 +110,17 @@ fn load_curve(index: u32) -> Quadratic {
   return q;
 }
 
+fn load_v_curve(index: u32) -> Quadratic {
+  let base = index * 6u;
+  var q: Quadratic;
+  q.p0 = vec2f(vCurveData[base + 0u], vCurveData[base + 1u]);
+  q.p1 = vec2f(vCurveData[base + 2u], vCurveData[base + 3u]);
+  q.p2 = vec2f(vCurveData[base + 4u], vCurveData[base + 5u]);
+  return q;
+}
+
 fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
   var roots = vec2f(-1.0, -1.0);
-
-  // Same `1e-4` degenerate-quadratic threshold as slug_fill.wgsl —
-  // LineTo-derived quadratics have theoretical `a = 0` but float32
-  // rounding leaves a tiny residual that, without the widened gate,
-  // trips the quadratic branch and amplifies into spurious roots.
   if (abs(a) < 1e-4) {
     if (abs(b) > 1e-6) {
       let t = -c / b;
@@ -141,21 +130,14 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
     }
     return roots;
   }
-
   let disc = b * b - 4.0 * a * c;
   if (disc < 0.0) {
     return roots;
   }
-
-  // Numerically-stable root extraction (Citardauq, matching the Slug
-  // reference): the naive `(-b ± √disc) / 2a` cancels when `b` and the root
-  // share a sign; compute the larger root via `q = -(b + sign(b)·√disc)/2` and
-  // the second via Vieta's `c / q`. See slug_fill.wgsl for the rationale.
   let sqrt_disc = sqrt(disc);
   let q = -0.5 * (b + select(-sqrt_disc, sqrt_disc, b >= 0.0));
   let t0 = q / a;
   let t1 = select(c / q, (-b + sqrt_disc) * (0.5 / a), abs(q) < 1e-30);
-
   if (t0 >= 0.0 && t0 <= 1.0) {
     roots.x = t0;
   }
@@ -165,111 +147,129 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
   return roots;
 }
 
-fn curve_winding(curve: Quadratic, sample: vec2f) -> i32 {
-  let a = curve.p0.y - 2.0 * curve.p1.y + curve.p2.y;
-  let b = 2.0 * (curve.p1.y - curve.p0.y);
-  let c = curve.p0.y - sample.y;
+struct RayCoverage {
+  cov: f32,
+  wgt: f32,
+};
 
-  let roots = solve_quadratic(a, b, c);
-
-  var winding: i32 = 0;
-  for (var i = 0; i < 2; i = i + 1) {
-    let t = select(roots.y, roots.x, i == 0);
-    if (t < 0.0) {
-      continue;
-    }
-    let omt = 1.0 - t;
-    let x = omt * omt * curve.p0.x + 2.0 * omt * t * curve.p1.x + t * t * curve.p2.x;
-    if (x < sample.x) {
-      continue;
-    }
-    let dy_dt = 2.0 * omt * (curve.p1.y - curve.p0.y) + 2.0 * t * (curve.p2.y - curve.p1.y);
-    if (dy_dt > 0.0) {
-      winding = winding + 1;
-    } else if (dy_dt < 0.0) {
-      winding = winding - 1;
+fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
+  var result: RayCoverage;
+  result.cov = 0.0;
+  result.wgt = 0.0;
+  if (slot == kNoBand) {
+    return result;
+  }
+  let band = bands[slot];
+  for (var i = 0u; i < band.curveCount; i = i + 1u) {
+    let curve = load_h_curve(band.curveStart + i);
+    let a = curve.p0.y - 2.0 * curve.p1.y + curve.p2.y;
+    let b = 2.0 * (curve.p1.y - curve.p0.y);
+    let c = curve.p0.y - sample.y;
+    let roots = solve_quadratic(a, b, c);
+    for (var k = 0; k < 2; k = k + 1) {
+      let t = select(roots.y, roots.x, k == 0);
+      if (t < 0.0) {
+        continue;
+      }
+      let omt = 1.0 - t;
+      let x = omt * omt * curve.p0.x + 2.0 * omt * t * curve.p1.x + t * t * curve.p2.x;
+      let r = (x - sample.x) * ppemX;
+      let dy_dt = 2.0 * omt * (curve.p1.y - curve.p0.y) + 2.0 * t * (curve.p2.y - curve.p1.y);
+      let s = select(-1.0, 1.0, dy_dt >= 0.0);
+      result.cov = result.cov + s * saturate(r + 0.5);
+      result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
     }
   }
-  return winding;
+  return result;
 }
 
-fn sample_is_inside(band: Band, sample_pos: vec2f) -> bool {
-  var winding: i32 = 0;
+fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
+  var result: RayCoverage;
+  result.cov = 0.0;
+  result.wgt = 0.0;
+  if (slot == kNoBand) {
+    return result;
+  }
+  let band = vBands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_curve(band.curveStart + i);
-    winding = winding + curve_winding(curve, sample_pos);
+    let curve = load_v_curve(band.curveStart + i);
+    let a = curve.p0.x - 2.0 * curve.p1.x + curve.p2.x;
+    let b = 2.0 * (curve.p1.x - curve.p0.x);
+    let c = curve.p0.x - sample.x;
+    let roots = solve_quadratic(a, b, c);
+    for (var k = 0; k < 2; k = k + 1) {
+      let t = select(roots.y, roots.x, k == 0);
+      if (t < 0.0) {
+        continue;
+      }
+      let omt = 1.0 - t;
+      let y = omt * omt * curve.p0.y + 2.0 * omt * t * curve.p1.y + t * t * curve.p2.y;
+      let r = (y - sample.y) * ppemY;
+      let dx_dt = 2.0 * omt * (curve.p1.x - curve.p0.x) + 2.0 * t * (curve.p2.x - curve.p1.x);
+      let s = select(1.0, -1.0, dx_dt >= 0.0);
+      result.cov = result.cov + s * saturate(r + 0.5);
+      result.wgt = max(result.wgt, saturate(1.0 - abs(r) * 2.0));
+    }
   }
-  if (uniforms.fillRule == 0u) {
-    return winding != 0;
-  }
-  return (winding & 1) != 0;
+  return result;
+}
+
+fn calc_coverage(h: RayCoverage, v: RayCoverage) -> f32 {
+  let blended = abs(h.cov * h.wgt + v.cov * v.wgt) / max(h.wgt + v.wgt, 1.0 / 65536.0);
+  let floor_cov = min(abs(h.cov), abs(v.cov));
+  return max(blended, floor_cov);
 }
 
 // ============================================================================
 // Fragment stage
 // ============================================================================
 
-/// One color attachment + one sample mask. Same scheme as `slug_fill.wgsl`:
-/// the fragment runs once per pixel, the per-sample coverage test populates
-/// `mask` bits, and the hardware resolves the MSAA color attachment into
-/// a fractional-alpha single-sample R8 texture — directly usable as a
-/// clip coverage source.
 struct FragOutput {
   @location(0) color: vec4f,
-  @builtin(sample_mask) mask: u32,
 };
 
 @fragment
 fn fs_main(in: VertexOutput) -> FragOutput {
-  let band = bands[in.bandIndex];
-
   let pixel_center = in.clip_pos.xy;
+  let ppem = 1.0 / fwidth(in.sample_pos);
 
-  let dx = dpdx(in.sample_pos);
-  let dy = dpdy(in.sample_pos);
-
-  // Same rotated 4-sample pattern as `slug_fill.wgsl` so the mask's
-  // edge AA lands on the same sub-pixel offsets as the colour pass.
-  var offsets = array<vec2f, 4>(
-    vec2f(-0.125, -0.375),
-    vec2f( 0.375, -0.125),
-    vec2f(-0.375,  0.125),
-    vec2f( 0.125,  0.375),
-  );
-
-  var mask: u32 = 0u;
-  for (var s: u32 = 0u; s < 4u; s = s + 1u) {
-    let sp = in.sample_pos + offsets[s].x * dx + offsets[s].y * dy;
-    if (sp.y < band.yMin || sp.y >= band.yMax) {
-      continue;
-    }
-    if (sample_is_inside(band, sp)) {
-      mask = mask | (1u << s);
-    }
+  var hCov: RayCoverage;
+  hCov.cov = 0.0;
+  hCov.wgt = 0.0;
+  if (uniforms.hBandCount > 0u) {
+    let hi = clamp(i32((in.sample_pos.y - uniforms.yBase) / uniforms.hStride),
+                   0, i32(uniforms.hBandCount) - 1);
+    hCov = accumulateHoriz(hBandGrid[hi], in.sample_pos, ppem.x);
   }
 
-  if (mask == 0u) {
+  var vCov: RayCoverage;
+  vCov.cov = 0.0;
+  vCov.wgt = 0.0;
+  if (uniforms.vBandCount > 0u) {
+    let vj = clamp(i32((in.sample_pos.x - uniforms.xBase) / uniforms.vStride),
+                   0, i32(uniforms.vBandCount) - 1);
+    vCov = accumulateVert(vBandGrid[vj], in.sample_pos, ppem.y);
+  }
+
+  var coverage = calc_coverage(hCov, vCov);
+  if (uniforms.fillRule == 0u) {
+    coverage = saturate(coverage);
+  } else {
+    coverage = 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);
+  }
+
+  // Intersect with a nested clip mask (nested <clipPath> references).
+  if (uniforms.hasClipMask != 0u) {
+    coverage = coverage * clip_mask_coverage(pixel_center);
+  }
+
+  if (coverage <= 0.0) {
     discard;
   }
 
-  // Nested clip-mask input: when a deeper layer's mask is bound, each
-  // outer-layer shape we render must be INTERSECTED with the deeper
-  // union. Sampling it as a multiplier on the coverage value turns the
-  // Max-blended layer into `max(shape_i ∩ nested)` = `(union of
-  // shape_i) ∩ nested`, which matches `RendererTinySkia`'s recursive
-  // intersection rule.
-  var clipCoverage: f32 = 1.0;
-  if (uniforms.hasClipMask != 0u) {
-    clipCoverage = clip_mask_coverage(pixel_center);
-    if (clipCoverage <= 0.0) {
-      discard;
-    }
-  }
-
+  // Write the scalar coverage to all four channels; BlendOperation::Max unions
+  // overlapping clip-path draws (0041 §8.3).
   var out: FragOutput;
-  // Replicate scalar coverage into all four channels so downstream
-  // shaders can always average RGBA to recover clip coverage.
-  out.color = vec4f(clipCoverage, clipCoverage, clipCoverage, clipCoverage);
-  out.mask = mask;
+  out.color = vec4f(coverage, coverage, coverage, coverage);
   return out;
 }
