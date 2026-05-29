@@ -1,13 +1,25 @@
 # 0041 — Geode anti-aliasing & coverage: analytic Slug alignment
 
-**Status:** Active implementation plan + developer reference. Geode is moving from its
-current **4× MSAA `sample_mask`** edge coverage to the **official Slug analytic
-dual-ray coverage** computed at **1 sample/pixel on every adapter** — aligning with the
-Slug algorithm instead of diverging from it, and removing the Mac (Metal MSAA) vs Linux
-(Intel-Arc alpha-coverage) path split. This requires an **encoder change to emit
-vertical (X-monotonic) bands** so the vertical ray has data, plus a **rework of the
-geode↔tiny parity gate** (tiny-skia is a finite-sample scan-converter; the correct
-analytic result cannot and should not be forced to bit-match it).
+**Status:** **Implemented (as-built).** Geode now computes **official Slug analytic
+dual-ray coverage at 1 sample/pixel on every adapter** — the 4× MSAA `sample_mask` path
+and the Intel-Arc alpha-coverage fallback are deleted, the Mac/Linux path split is gone,
+and `GeodeTinyParity` is retired (tiny-skia is a finite-sample scan-converter; the
+correct analytic result is not forced to bit-match it — each backend gates against the
+shared reference via `GeodeGolden`/`TinyGolden`). Landed across `c7dae609` (dual-ray
+fill/gradient/mask + sampleCount=1 + parity retirement + golden regen), `7a95b98f`
+(perf ceilings), `4346dd43` (alpha-coverage deletion), and `6a925e93` (the follow-on
+bug fixes that the analytic rewrite *revealed* were never coverage issues — see note).
+
+> **Important correction (post-implementation):** the 16 resvg tests that were gated as
+> "slug_fill edge-coverage" were **misdiagnosed** — the analytic rewrite left them
+> byte-identical, proving coverage was never the cause. They were three real bugs (a
+> pattern-tile filter-region-scissor leak, a missing feMorphology linearRGB round-trip,
+> and a degenerate zero-area closed-stroke decomposition) plus two cases where Geode is
+> verified-correct but differs from resvg's finite-sample reference (per-backend Geode
+> goldens, the legitimate "Donner renders higher quality" pattern). All 16 are now
+> un-skipped and green. The single remaining Geode resvg gate is
+> `feGaussianBlur/complex-transform` (genuine analytic-vs-finite-sample 1px blur edge,
+> §6) — tracked in [#625](https://github.com/jwmcglynn/donner/issues/625).
 
 > **History:** earlier this doc concluded analytic AA was *rejected* and the 4× MSAA
 > edge-floor was *accepted by-design*. That conclusion is **reversed**. The technical

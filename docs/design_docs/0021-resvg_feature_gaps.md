@@ -34,7 +34,7 @@ be expressed through the normal `Params` path close to the affected tests:
 | `Params::RenderOnly("reason")` | 72 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful. |
 | Commented-out `INSTANTIATE_TEST_SUITE_P` | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci). |
 | `Params::WithThreshold(…, maxPx)` / local max-pixel budget | 96 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
-| Geode-disabled local `Params` entries | 14 + 2 parity-only | CPU modes still compare; Geode is skipped for a current backend gap. **~all remaining are one shared root cause** — see [Geode slug_fill edge-coverage](#geode-slug_fill-edge-coverage-the-dominant-remaining-parity-gap). |
+| Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature | The analytic-coverage work closed the former ~16-gate cluster; remaining = 1 `feGaussianBlur/complex-transform` ([#625](https://github.com/jwmcglynn/donner/issues/625)) + paint-order/0-N-dash tests Geode doesn't implement yet. See [Geode coverage (resolved)](#geode-coverage-analytic-slug-dual-ray-resolved--the-misdiagnosis-correction). |
 
 ## Current totals
 
@@ -43,7 +43,7 @@ be expressed through the normal `Params` path close to the affected tests:
 | `Params::Skip(...)` | 234 |
 | `Params::RenderOnly(...)` | 72 (render-must-not-crash, no pixel compare) |
 | `WithThreshold` / max-pixel overrides | 96 (~15 still over 1000 px -> masked-bug candidates) |
-| Geode-disabled local `Params` entries | 14 full + 2 parity-only (down from 22; see slug_fill section) |
+| Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature (down from 22; analytic dual-ray landed, see 0041) |
 | Commented-out category blocks | 1 (`filters/filter-functions`) |
 
 ---
@@ -94,12 +94,12 @@ bottom for completeness.
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
 | B3 | `<image>` embedded/data-URL sizing | 13 | Bug — one investigation |
 | B4 | `<use>` → inline `<svg>` sizing | 5 | Bug (shares machinery with B3) |
-| F12 | `transform-origin` on paint-servers / `<image>` / text | 7 | Feature (split out of the F2 regression) |
+| F12 | `transform-origin` on paint-servers / `<image>` / text | 2 left | **on-text/on-image DONE**; paint-servers (gradient/pattern) + on-text-path remain → [#621](https://github.com/jwmcglynn/donner/issues/621), [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
 | F4 | `<switch>` conditional processing | 12 (+systemLanguage 3) | Feature |
 | F6 | full `alignment-baseline` keyword set | 10 | Feature |
-| F7 | `paint-order` rendering | 8 | Feature (parsed, not rendered) |
+| F7 | `paint-order` rendering | **DONE** (7/8) | Rendered on shapes + text; `on-tspan` residual → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
 | F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`) | 8 | Feature |
 | F11 | BiDi / RTL text shaping | ~8 | Feature (needs `text-full`) |
@@ -371,41 +371,35 @@ The practical goal is fewer overrides over time. A large override map is a signa
 to either fix the feature, classify it as a clear unsupported/deprecated case, or
 write a focused non-resvg regression that exercises the root cause directly.
 
-### Geode slug_fill edge-coverage: the dominant remaining parity gap
+### Geode coverage: analytic Slug dual-ray (resolved) + the misdiagnosis correction
 
-After the feImage / feTile / feDiffuseLighting closures, **essentially all of the
-remaining Geode-vs-tiny parity gates trace to one root cause**: `slug_fill.wgsl`
-estimates edge coverage from **4 sub-pixel samples** (5 quantization levels:
-{0, 64, 128, 191, 255}), while `RendererTinySkia` uses an analytic 256-level
-scan-converter (`antiAlias=true`). Wherever a shape edge's true fractional
-coverage lands between the quarter-steps, Geode rounds and the per-pixel value
-diverges by up to ~32/255. pixelmatch's AA filter does *not* hide this (it is a
-coverage-*resolution* mismatch, not an AA fringe — and the diffs are well above
-the AA-fringe magnitude floor; per [CLAUDE.md](../../CLAUDE.md) the symptom is
-named with measurement, not waved away as "AA").
+**RESOLVED.** Geode now uses official Slug analytic dual-ray coverage at 1 sample/pixel
+on every adapter (4× MSAA and the Intel-Arc alpha-coverage fallback deleted; Mac/Linux
+unified; `GeodeTinyParity` retired). See [0041](0041-geode_analytical_aa.md) (as-built).
 
-This single mechanism, amplified by downstream filters/matrices, accounts for the
-currently-gated:
+The earlier theory in this section — that ~16 Geode gates shared one "slug_fill
+edge-coverage quantization" root cause — was **wrong**, and is preserved here only as a
+caution: the analytic rewrite left those tests **byte-identical**, *proving* coverage was
+never the cause. They were three real, separate bugs plus two legitimate per-backend
+goldens, all now fixed/closed:
 
-- `structure/svg/preserveAspectRatio=xMinYMin` + `proportional-viewBox` (parity-only,
-  244 px each — letterbox frame stroke at a non-integer 1.25× device scale)
-- `filters/feConvolveMatrix/*` (10 — the kernel spreads the opacity-0.75 pattern's
-  quantized edges; the convolve math itself is byte-equivalent to tiny-skia)
-- `filters/feColorMatrix/type=matrix-with-non-normalized-values` (1 — a 1px left-edge
-  column blown past threshold by the `R'=50·r` matrix)
-- `filters/feMorphology/source-with-opacity` (1 — erode of the pattern edges)
-- `filters/feImage/svg` (1 — the rasterized nested SVG's glyph/outline edges)
-- `painting/marker/orient=auto-on-M-L-Z` (1 — the horizontal path stroke straddling
-  the y=100 pixel row; the "tangent gap" label was a misdiagnosis — tiny-skia is 0 px)
+- `filters/feConvolveMatrix/*` (10) + `filters/feMorphology/source-with-opacity` —
+  a **pattern-tile filter-region-scissor leak** (`beginPatternTile` didn't clear the
+  outer clip stack, shifting tiled cells ~1px) + a missing feMorphology linearRGB
+  round-trip. Both fixed → 0 px.
+- `structure/svg/preserveAspectRatio=xMinYMin` + `proportional-viewBox` — were
+  parity-only; pass once `GeodeTinyParity` is retired.
+- `painting/marker/orient=auto-on-M-L-Z` — degenerate zero-area closed stroke
+  decomposed into overlapping triangles; fixed by de-closing collinear closed subpaths
+  before `strokeToFill` → 0 px.
+- `filters/feColorMatrix/type=matrix-with-non-normalized-values` + `filters/feImage/svg`
+  — Geode verified-correct, differs from resvg's finite-sample reference; **per-backend
+  Geode goldens** (`withGeodeGoldenOverride`).
 
-**Fixing slug_fill coverage fidelity closes all of these at once.** It is the single
-highest-leverage Geode parity work item. Caveats that make it a deliberate,
-reviewed change rather than a quick bump: it shifts every anti-aliased Geode edge,
-so **all `testdata/golden/geode/` images must be regenerated** and inspected to
-confirm they move *toward* tiny-skia; and a naive sample-count increase carries a
-perf cost on the llvmpipe CI path. The principled direction is analytic coverage
-matching tiny-skia, not "more samples". Un-skip these entries in the **same PR** as
-the slug_fill fix.
+**Lesson:** a large diff amplified by a filter/matrix is not evidence of a coverage
+problem — inspect whether a coverage change actually moves it before attributing it.
+The only remaining Geode resvg gate is `feGaussianBlur/complex-transform` (genuine
+analytic-vs-finite-sample 1px blur edge) — [#625](https://github.com/jwmcglynn/donner/issues/625).
 
 ---
 
