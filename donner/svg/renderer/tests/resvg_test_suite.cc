@@ -1192,15 +1192,10 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureSymbol, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("structure/symbol",
-                                        {
-                                            {"with-transform.svg",
-                                             Params::Skip("New SVG2 feature, transform on symbol")},
-                                        })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureSymbol, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/symbol")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureSystemLanguage, ImageComparisonTestFixture,
