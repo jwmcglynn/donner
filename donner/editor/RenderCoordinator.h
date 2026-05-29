@@ -209,6 +209,11 @@ private:
   /// `SVGDocument::setCanvasSize`.
   Vector2i pendingCanvasSize_ = Vector2i::Zero();
   std::chrono::steady_clock::time_point pendingCanvasSizeSince_{};
+  /// Most recent raster viewport requested by `maybeRequestRender`.
+  /// Used to debounce high-zoom viewport refreshes while the presenter
+  /// transforms already-cached composited textures during live zoom/pan.
+  std::optional<EditorRasterViewport> pendingRasterViewport_;
+  std::chrono::steady_clock::time_point pendingRasterViewportSince_{};
   FrameCostBreakdown lastFrameCostBreakdown_;
 };
 

@@ -294,6 +294,10 @@ void RenderCoordinator::resetForLoadedDocument() {
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
   displayNoneSuppressedLayerEntity_ = entt::null;
+  pendingCanvasSize_ = Vector2i::Zero();
+  pendingCanvasSizeSince_ = std::chrono::steady_clock::time_point{};
+  pendingRasterViewport_.reset();
+  pendingRasterViewportSince_ = std::chrono::steady_clock::time_point{};
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
 }
 
@@ -525,8 +529,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
                                            const ViewportState& viewport) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
-  if (renderWorker_.asyncRenderer.isBusy() || !app.hasDocument() || viewport.paneSize.x <= 0.0 ||
-      viewport.paneSize.y <= 0.0) {
+  if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     return;
   }
 
@@ -538,9 +541,19 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // Compare desired size against the live document size. Document replacement
   // can reset the stored canvas size, and LayoutSystem readback can round by a
   // pixel, so a separate last-set tracker is not authoritative here.
-  pendingCanvasSize_ = desiredCanvasSize;
   const auto now = std::chrono::steady_clock::now();
+  if (pendingCanvasSize_ != desiredCanvasSize) {
+    pendingCanvasSize_ = desiredCanvasSize;
+    pendingCanvasSizeSince_ = now;
+  }
+  if (!pendingRasterViewport_.has_value() ||
+      !SameRasterViewport(*pendingRasterViewport_, rasterViewport)) {
+    pendingRasterViewport_ = rasterViewport;
+    pendingRasterViewportSince_ = now;
+  }
   const bool throttleElapsed = (now - pendingCanvasSizeSince_) >= kCanvasSizeCommitDelay;
+  const bool rasterViewportSettled = !IsUnsetTimePoint(pendingRasterViewportSince_) &&
+                                     now - pendingRasterViewportSince_ >= kCanvasSizeCommitDelay;
   const bool firstCommit = actualDocumentCanvas == Vector2i::Zero();
   const bool closeEnough = std::abs(pendingCanvasSize_.x - actualDocumentCanvas.x) <= 1 &&
                            std::abs(pendingCanvasSize_.y - actualDocumentCanvas.y) <= 1;
@@ -550,6 +563,28 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // rerasterize every cached span before the next pointer frame; defer that crisp refresh until
   // mouse-up unless the document still needs its first canvas.
   const bool deferCanvasCommitForActiveDrag = dragPreview.has_value() && !firstCommit;
+  const Vector2i currentCanvasSize = desiredOutputCanvasSize;
+  const auto currentVersion = app.document().currentFrameVersion();
+  const Entity prewarmEntity = selectedCompositedEntity(app);
+  const CompositedPresentation::DiagnosticsSnapshot presentationDiagnostics =
+      compositedPresentation_.diagnostics();
+  const bool canDeferSelectedViewportRefresh =
+      prewarmEntity != entt::null && !dragPreview.has_value() &&
+      currentVersion == displayedDocVersion_ && presentationDiagnostics.hasCachedTextures &&
+      presentationDiagnostics.cachedEntity == prewarmEntity &&
+      presentationDiagnostics.cachedVersion == currentVersion;
+  const bool deferSelectedViewportRefresh =
+      canDeferSelectedViewportRefresh && !rasterViewportSettled;
+  if (deferSelectedViewportRefresh) {
+    if (renderWorker_.asyncRenderer.isBusy()) {
+      renderWorker_.asyncRenderer.cancelInFlight();
+    }
+    return;
+  }
+  if (renderWorker_.asyncRenderer.isBusy()) {
+    return;
+  }
+
   if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&
       (firstCommit || throttleElapsed)) {
     app.document().document().setCanvasSize(pendingCanvasSize_.x, pendingCanvasSize_.y);
@@ -558,9 +593,6 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
     lastFrameCostBreakdown_.lastCommittedCanvasSize = pendingCanvasSize_;
   }
 
-  const Vector2i currentCanvasSize = desiredOutputCanvasSize;
-  const auto currentVersion = app.document().currentFrameVersion();
-  const Entity prewarmEntity = selectedCompositedEntity(app);
   const Entity suppressedLayerEntity = suppressedCompositedLayerEntity(app);
   if (suppressedLayerEntity != entt::null) {
     compositedPresentation_.discardCachedTexturesForEntity(suppressedLayerEntity);
