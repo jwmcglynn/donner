@@ -1229,39 +1229,33 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "structure/transform-origin",
-            {
-                // The remaining skips are pre-existing feature gaps on element classes
-                // with their own transform machinery.
-                // Gradients/patterns route their transform through
-                // `getRawEntityFromParentTransform` (gradientTransform / patternTransform),
-                // which intentionally drops the transform-origin pivot — so the property has
-                // never been honored on these paint servers.
-                {"on-gradient-object-bounding-box.svg",
-                 Params::Skip("transform-origin not applied to gradientTransform (feature gap)")},
-                {"on-gradient-user-space-on-use.svg",
-                 Params::Skip("transform-origin not applied to gradientTransform (feature gap)")},
-                {"on-pattern-object-bounding-box.svg",
-                 Params::Skip("transform-origin not applied to patternTransform (feature gap)")},
-                {"on-pattern-user-space-on-use.svg",
-                 Params::Skip("transform-origin not applied to patternTransform (feature gap)")},
-                // <image>/<text>/<textPath> compute the correct origin in LayoutSystem, but the
-                // pivot does not yet compose correctly with their content-placement transforms,
-                // so the element renders off-screen. Pre-existing gap, separate from #514.
-                {"on-image.svg",
-                 Params::Skip("transform-origin pivot not composed with image content placement "
-                              "(feature gap)")},
-                {"on-text.svg",
-                 Params::Skip("transform-origin pivot not composed with text layout (feature "
-                              "gap)")},
-                {"on-text-path.svg",
-                 Params::Skip("transform-origin pivot not composed with textPath layout "
-                              "(feature gap)")},
-            },
-            Params::WithThreshold(0.13f, 300, "Rotated edge AA"))),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "structure/transform-origin",
+                {
+                    // gradient/pattern transform-origin needs the paint-server coordinate
+                    // transform to compose the pivot; the radial gradient does not even render
+                    // with a scaled gradientTransform here, so this is a deeper paint-server
+                    // transform gap than the shape pivot fix (#609).
+                    {"on-gradient-object-bounding-box.svg",
+                     Params::Skip("transform-origin on gradientTransform: paint-server transform "
+                                  "gap")},
+                    {"on-gradient-user-space-on-use.svg",
+                     Params::Skip("transform-origin on gradientTransform: paint-server transform "
+                                  "gap")},
+                    {"on-pattern-object-bounding-box.svg",
+                     Params::Skip("transform-origin on patternTransform: paint-server transform "
+                                  "gap")},
+                    {"on-pattern-user-space-on-use.svg",
+                     Params::Skip("transform-origin on patternTransform: paint-server transform "
+                                  "gap")},
+                    // transform-origin pivot composes for plain text/image now; textPath layout
+                    // still drifts (entangled with the textPath SVG2 attribute gap, F10).
+                    {"on-text-path.svg",
+                     Params::Skip("transform-origin on textPath: entangled with textPath layout "
+                                  "(F10)")},
+                },
+                Params::WithThreshold(0.13f, 300, "Rotated edge AA"))),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
