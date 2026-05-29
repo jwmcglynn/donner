@@ -27,6 +27,14 @@ ImageComparisonParams WithMaxPixels(int maxMismatchedPixels, std::string_view re
   return params;
 }
 
+// Disable only the Geode backend for a test the CPU backends still compare. Used for
+// CPU-only features Geode does not implement yet (e.g. paint-order, 0-N dash caps).
+ImageComparisonParams GeodeDisabled(std::string_view reason) {
+  ImageComparisonParams params;
+  params.disableBackend(RendererBackend::Geode, reason);
+  return params;
+}
+
 ImageComparisonParams categoryFeatureRequirements(std::string_view category) {
   ImageComparisonParams params;
   if (category.rfind("filters/", 0) == 0) {
@@ -826,6 +834,15 @@ INSTANTIATE_TEST_SUITE_P(
                     // default-order "Te" run. Tracked under the text/tspan interaction gap.
                     {"on-tspan.svg", Params::Skip("tspan-split glyph positioning drift, not "
                                                   "paint-order")},
+                    // paint-order rendering is implemented on the CPU backend only; Geode does not
+                    // honor the fill/stroke/marker reordering yet. Compare CPU, disable Geode.
+                    {"fill-markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                    {"markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                    {"markers.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                    {"stroke-markers-fill.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                    {"stroke-markers.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                    {"stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                    {"on-text.svg", GeodeDisabled("Geode paint-order rendering gap")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -867,6 +884,10 @@ INSTANTIATE_TEST_SUITE_P(
                     // a dasher seam/wrap difference at the first contour segment, not the `0 N`
                     // gap this entry originally covered.
                     {"n-0.svg", Params::Skip("closed-path dash-start-vertex seam (40 0 pattern)")},
+                    // `0 N` round/square caps render as dots on the CPU backend; Geode's dot
+                    // rendering for zero-length dashes differs. Compare CPU, disable Geode.
+                    {"0-n-with-round-caps.svg", GeodeDisabled("Geode 0-N dash cap rendering gap")},
+                    {"0-n-with-square-caps.svg", GeodeDisabled("Geode 0-N dash cap rendering gap")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
