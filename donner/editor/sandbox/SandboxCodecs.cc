@@ -126,14 +126,16 @@ void EncodeColor(WireWriter& w, const css::Color& color) {
   // S2: everything gets flattened to an RGBA variant on the wire. A `u8` tag
   // precedes the RGBA so future versions can reintroduce HSLA/CurrentColor
   // without breaking older readers.
-  css::RGBA rgba = css::RGBA();
+  // CurrentColor (and any unhandled variant) is not resolvable here — fall back to
+  // fully-transparent black, matching Donner's CSS-side "currentColor with no context"
+  // semantic. Note a default-constructed css::RGBA() is opaque *white* (r=g=b=a=0xFF), so the
+  // transparent fallback must be spelled out explicitly.
+  css::RGBA rgba = css::RGBA(0, 0, 0, 0);
   if (std::holds_alternative<css::RGBA>(color.value)) {
     rgba = std::get<css::RGBA>(color.value);
   } else if (std::holds_alternative<css::HSLA>(color.value)) {
     rgba = std::get<css::HSLA>(color.value).toRGBA();
   }
-  // CurrentColor is not resolvable here — fallback to fully-transparent, which
-  // matches Donner's CSS-side semantic of "currentColor with no context".
 
   w.writeU8(1);  // tag: RGBA
   EncodeRgba(w, rgba);
