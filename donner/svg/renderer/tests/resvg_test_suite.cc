@@ -769,7 +769,6 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
                      .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
-                {"orient=auto-on-M-L-L-Z-Z-Z.svg", Params::Skip("Bug: Multiple closepaths")},
                 {"orient=auto-on-M-L-Z.svg", Params{}},
                 {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
                 {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
@@ -785,10 +784,13 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
 
+                // Marker vertex placement on a rounded rect emits an extra start-vertex
+                // marker vs resvg (~666px = one 20x20 marker). Rounded-rect path
+                // decomposition vertex set, distinct from the multiple-closepath case.
                 {"marker-on-rounded-rect.svg",
-                 Params::Skip("Bug: marker edge cases (rounded-rect path corners, recursive-5)")},
-                {"recursive-5.svg",
-                 Params::Skip("Bug: marker edge cases (rounded-rect path corners, recursive-5)")},
+                 Params::Skip("Marker vertex set on rounded-rect path differs (extra start "
+                              "marker)")},
+                {"recursive-5.svg", Params::Skip("Recursive marker rendering edge case (~787px)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
