@@ -146,6 +146,111 @@ TEST(GeodePathEncoder, VertexNormalsPointOutward) {
   }
 }
 
+namespace {
+
+// Winding number of a horizontal +x ray from (px,py) across all Y-monotonic curves.
+int HorizontalWinding(const std::vector<EncodedPath::Curve>& curves, double px, double py) {
+  int winding = 0;
+  for (const auto& c : curves) {
+    const double a = c.p0y - 2.0 * c.p1y + c.p2y;
+    const double b = 2.0 * (c.p1y - c.p0y);
+    const double cc = c.p0y - py;
+    double ts[2];
+    int n = 0;
+    if (std::abs(a) < 1e-9) {
+      if (std::abs(b) > 1e-12) ts[n++] = -cc / b;
+    } else {
+      const double disc = b * b - 4 * a * cc;
+      if (disc >= 0) {
+        const double s = std::sqrt(disc);
+        ts[n++] = (-b + s) / (2 * a);
+        ts[n++] = (-b - s) / (2 * a);
+      }
+    }
+    for (int i = 0; i < n; ++i) {
+      const double t = ts[i];
+      if (t < 0.0 || t > 1.0) continue;
+      const double omt = 1.0 - t;
+      const double x = omt * omt * c.p0x + 2 * omt * t * c.p1x + t * t * c.p2x;
+      if (x < px) continue;
+      const double dydt = 2 * omt * (c.p1y - c.p0y) + 2 * t * (c.p2y - c.p1y);
+      winding += (dydt > 0) ? 1 : (dydt < 0 ? -1 : 0);
+    }
+  }
+  return winding;
+}
+
+// Winding number of a vertical +y ray from (px,py) across all X-monotonic curves.
+int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, double py) {
+  int winding = 0;
+  for (const auto& c : curves) {
+    const double a = c.p0x - 2.0 * c.p1x + c.p2x;
+    const double b = 2.0 * (c.p1x - c.p0x);
+    const double cc = c.p0x - px;
+    double ts[2];
+    int n = 0;
+    if (std::abs(a) < 1e-9) {
+      if (std::abs(b) > 1e-12) ts[n++] = -cc / b;
+    } else {
+      const double disc = b * b - 4 * a * cc;
+      if (disc >= 0) {
+        const double s = std::sqrt(disc);
+        ts[n++] = (-b + s) / (2 * a);
+        ts[n++] = (-b - s) / (2 * a);
+      }
+    }
+    for (int i = 0; i < n; ++i) {
+      const double t = ts[i];
+      if (t < 0.0 || t > 1.0) continue;
+      const double omt = 1.0 - t;
+      const double y = omt * omt * c.p0y + 2 * omt * t * c.p1y + t * t * c.p2y;
+      if (y < py) continue;
+      const double dxdt = 2 * omt * (c.p1x - c.p0x) + 2 * t * (c.p2x - c.p1x);
+      winding += (dxdt > 0) ? 1 : (dxdt < 0 ? -1 : 0);
+    }
+  }
+  return winding;
+}
+
+}  // namespace
+
+// M3: the vertical (X-monotonic) band set must be populated and produce winding
+// numbers consistent with the horizontal set — winding is ray-direction-independent,
+// so a point is inside per the horizontal ray iff it is inside per the vertical ray.
+TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
+  // A triangle plus an interior hole exercises non-trivial winding both ways.
+  Path path = PathBuilder()
+                  .moveTo(Vector2d(0, 0))
+                  .lineTo(Vector2d(200, 0))
+                  .lineTo(Vector2d(100, 200))
+                  .closePath()
+                  .build();
+
+  EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_FALSE(encoded.vBands.empty()) << "Vertical bands must be populated for the vertical ray";
+  EXPECT_FALSE(encoded.vCurves.empty());
+
+  // Vertical bands partition the bounds width.
+  EXPECT_LE(encoded.vBands.front().xMin, encoded.pathBounds.topLeft.x + 0.01);
+  EXPECT_GE(encoded.vBands.back().xMax, encoded.pathBounds.bottomRight.x - 0.01);
+
+  // Sample a grid over the bounding box; the two rays must agree on inside/outside.
+  const auto& b = encoded.pathBounds;
+  // Offset to cell centers (+0.5) so no sample lands exactly on an edge/vertex, where
+  // winding is ill-defined and the two ray directions can legitimately disagree.
+  for (int iy = 0; iy < 20; ++iy) {
+    for (int ix = 0; ix < 20; ++ix) {
+      const double px = b.topLeft.x + (b.width() * (ix + 0.5)) / 20.0;
+      const double py = b.topLeft.y + (b.height() * (iy + 0.5)) / 20.0;
+      const bool hInside = HorizontalWinding(encoded.curves, px, py) != 0;
+      const bool vInside = VerticalWinding(encoded.vCurves, px, py) != 0;
+      EXPECT_EQ(hInside, vInside) << "Horizontal vs vertical winding disagree at (" << px << ", "
+                                  << py << ")";
+    }
+  }
+}
+
 // Regression: filling an OPEN subpath (e.g., an SVG `<line>` that expands to
 // MoveTo+LineTo with no explicit close) must not spill fill across the
 // half-plane. The encoder emits an implicit closing segment back to the

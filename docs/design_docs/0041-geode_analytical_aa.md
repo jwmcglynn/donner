@@ -1,212 +1,214 @@
-# 0041 — Geode anti-aliasing & coverage: developer reference
+# 0041 — Geode anti-aliasing & coverage: analytic Slug alignment
 
-**Status:** Developer reference. Geode's edge coverage is **4× MSAA via
-`@builtin(sample_mask)`** on the Slug winding-number fill path. The geode↔tiny-skia
-sub-pixel coverage floor is **accepted by-design** — geode renders correct content;
-the residual diff is the rasterizer-level coverage delta vs tiny-skia's Skia-AAA
-scan-converter plus the resvg harness crosshair, proven sample-independent. Several
-analytical/supersampling alternatives were evaluated and **rejected** (appendix).
+**Status:** Active implementation plan + developer reference. Geode is moving from its
+current **4× MSAA `sample_mask`** edge coverage to the **official Slug analytic
+dual-ray coverage** computed at **1 sample/pixel on every adapter** — aligning with the
+Slug algorithm instead of diverging from it, and removing the Mac (Metal MSAA) vs Linux
+(Intel-Arc alpha-coverage) path split. This requires an **encoder change to emit
+vertical (X-monotonic) bands** so the vertical ray has data, plus a **rework of the
+geode↔tiny parity gate** (tiny-skia is a finite-sample scan-converter; the correct
+analytic result cannot and should not be forced to bit-match it).
 
-**Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
-[0038 text parity](0038-geode_tinyskia_text_parity.md),
-[0042 Slug implementation](0042-geode_slug_conformance.md),
-[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)
+> **History:** earlier this doc concluded analytic AA was *rejected* and the 4× MSAA
+> edge-floor was *accepted by-design*. That conclusion is **reversed**. The technical
+> findings behind it are correct and preserved below (§5–§6) — they are the blockers
+> this plan must clear, not reasons to stop. The decision now is: **Slug is the
+> reference we align to; tiny-skia's finite-sample output is the thing that differs**,
+> so the parity *comparison* changes, not the (more-correct) coverage math.
+
+**Related:** [0042 Slug pipeline](0042-geode_slug_conformance.md) (encoder/band
+internals — extended by this plan), [0038 text parity](0038-geode_tinyskia_text_parity.md),
+[0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
+[0021 §Geode policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 
 ---
 
-## 1. How Geode coverage actually works
+## 1. The official Slug coverage method (what we align to)
 
-Geode rasterizes vector coverage with the Slug winding-number test evaluated at **4
-fixed sub-pixel samples per pixel**, packed into `@builtin(sample_mask)` on a 4× MSAA
-target. The hardware resolve averages the surviving samples to produce edge alpha.
+Lengyel's Slug (JCGT 6(2), 2017; **official public-domain reference**
+`EricLengyel/Slug` `SlugPixelShader.hlsl`, patent dedicated to public domain
+2026-03-17) computes per-pixel fractional coverage at **1 sample/pixel**, analytically.
+Verified against the reference shader (`SlugRender` / `CalcCoverage`):
 
-All coverage lives in `donner/svg/renderer/geode/shaders/`. The four Slug shaders
-share the identical 4-sample machinery:
+1. **Horizontal ray** through the pixel's **horizontal band** (Y-monotonic curves):
+   accumulate an X-coverage `xcov` and a weight `xwgt`. Each root contributes
+   `saturate(r + 0.5)` where `r` is the signed root distance from the pixel center
+   scaled by `pixelsPerEm` (the screen-space derivative factor, Geode's `dpdx`/`dpdy`).
+2. **Vertical ray** through the pixel's **vertical band** (X-monotonic curves): the same,
+   producing `ycov`, `ywgt`. The reference fetches a **separate band list** for this,
+   offset past the horizontal bands (`bandMax.y + 1`) — i.e. official Slug **does
+   maintain X-monotonic vertical bands**; this is not optional, and confirms the
+   encoder change (M3) is the correct, on-algorithm path.
+3. **Combine** (reference `CalcCoverage`, verbatim):
+   ```
+   coverage = max( abs(xcov*xwgt + ycov*ywgt) / max(xwgt + ywgt, 1.0/65536.0),
+                   min(abs(xcov), abs(ycov)) );
+   ```
+   The weighted blend handles the general case; the `min(|xcov|,|ycov|)` floor resolves
+   the near-axis-aligned / thin-feature / crosshair cases a single ray conflates (§6).
+
+It is exact, resolution-independent, **1-sample, no MSAA, no supersampling** (modern Slug
+3.5+ *removed* adaptive supersampling — "A Decade of Slug" — relying on the analytic
+coverage plus **dynamic glyph dilation** in the vertex shader, em-space `0.5/fontSize`,
+to keep boundary pixels touched at small sizes). Geode already performs the half-pixel
+dilation; it implements only step 1's *data* and approximates step 1's coverage with 4
+point samples — steps 2–3 (the vertical band + the analytic combine) are missing. Closing
+that gap **is** this plan, and the reference gives the exact formula for M4.
+
+> **Does the reference change the plan?** No — it confirms and de-risks it: dual-ray with
+> a *separate vertical (X-monotonic) band list* is the real algorithm (so M3's encoder
+> change is required, not avoidable); 1-sample/no-MSAA is the real design (so M5's MSAA
+> deletion is on-algorithm); and `CalcCoverage` is the exact M4 formula. The optional
+> `SLUG_WEIGHT` `sqrt(coverage)` optical-weight boost is gamma, not geometry — skip it.
+
+## 2. Current state (being replaced)
+
+Geode today rasterizes coverage with the Slug winding test at **4 fixed sub-pixel
+samples per pixel**, packed into `@builtin(sample_mask)` on a 4× MSAA target; the
+hardware resolve averages surviving samples to edge alpha ∈ {0,¼,½,¾,1}.
 
 | Shader | Shapes it covers |
 |---|---|
 | `slug_fill.wgsl` | solid `drawPath`/`drawRect`/`drawEllipse`, **text glyphs**, decorations, strokes (`strokeToFill`), patterns |
-| `slug_gradient.wgsl` | gradient fills/strokes incl. **gradient-on-text** |
+| `slug_gradient.wgsl` | gradient fills/strokes incl. gradient-on-text |
 | `slug_mask.wgsl` | clip-path coverage masks, `<mask>` luminance |
-| `*_alpha_coverage.wgsl` | Intel-Arc + Vulkan fallback mirror of the above |
+| `*_alpha_coverage.wgsl` | Intel-Arc + Vulkan fallback mirror (sampleCount=1, `countOneBits(mask)/4.0`) — same 5-level output, different mechanism |
 
-### 1.1 The 4-sample winding test (`slug_fill.wgsl`)
+`fs_main` reads `dpdx`/`dpdy` of path-space position (constant across an affine
+primitive), evaluates the integer winding test at 4 offsets (D3D rotated grid), and sets
+`sample_mask` bits; `sample_is_inside` applies fill rule (non-zero / even-odd). The
+Intel-Arc + Vulkan path (`useAlphaCoverageAA_`, gated on `vendorID==0x8086 &&
+Vulkan` in `GeodeDevice.cc`) folds `popcount/4` into color to dodge a Mesa ANV
+`sample_mask` hang. Both paths produce identical 5-level coverage. The shared Slug core
+(banding, ray/root-find, `solve_quadratic` Citardauq form, classification, fixed-point
+encoding) is documented in [0042](0042-geode_slug_conformance.md).
 
-`fs_main` reads `dpdx`/`dpdy` of the path-space position (constant across the affine
-primitive), then for each of 4 fixed sub-pixel offsets (a D3D rotated grid) evaluates
-the integer winding test and sets that sample's bit in `sample_mask`:
+**This entire dual-path, MSAA-based scheme is replaced** by one sampleCount=1 analytic
+path (§4). Both the MSAA plumbing and the alpha-coverage variants are deleted (§4 M5).
 
-```wgsl
-for (var s: u32 = 0u; s < 4u; s = s + 1u) {
-  let sp = in.sample_pos + offsets[s].x*dx + offsets[s].y*dy;
-  if (sample_is_inside(band, sp)) { mask = mask | (1u << s); }
-}
-```
+## 3. Why this aligns the divergence two ways
 
-`sample_is_inside` accumulates `curve_winding` over the band's curves and applies the
-fill rule: **non-zero** = `winding != 0`, **even-odd** = `(winding & 1) != 0`. The
-resolved alpha is `popcount(mask)/4 ∈ {0, ¼, ½, ¾, 1}`. This is the active path on CI's
-Mesa llvmpipe and on most adapters (Metal, etc.).
+- **Slug divergence (the important one):** we stop approximating Slug's analytic
+  coverage with a 4-sample winding hack and implement the real dual-ray method. Geode
+  becomes a faithful Slug renderer.
+- **Mac/Linux divergence:** the MSAA vs alpha-coverage split exists *only* to manage 4×
+  MSAA across drivers. An analytic sampleCount=1 path needs no MSAA at all, so both
+  collapse to one shader on every adapter and the `useAlphaCoverageAA_` Mesa-hang
+  workaround is deleted.
 
-### 1.2 Why `sample_mask` (and the alpha-coverage fallback)
+## 4. Milestones (mandatory order; each lands on `resvg-test-suite` independently)
 
-Writing coverage as per-sample `sample_mask` bits is correct **by construction**: each
-MSAA sample is written exactly once and the resolve is hardware-additive per sample, so
-coverage composes correctly even where multiple fragments (e.g. adjacent encoder bands)
-touch the same pixel.
+Ordering is load-bearing: the seam fix (M2) must precede the analytic shader (M4), and
+the gate rework (M1) precedes everything, because otherwise correct analytic output
+still "fails" against tiny. The prior autonomous attempt skipped M1+M2 and regressed
+every multi-band path (`StructureTransform` rotate/skew, shapes, nested-svg) — that was
+Blocker B (§5), not bad luck.
 
-The Intel-Arc + Vulkan path (`*_alpha_coverage.wgsl`, gated in `GeodeDevice.cc` on
-`vendorID==0x8086 && backendType==Vulkan`, `useAlphaCoverageAA_`) avoids the
-`sample_mask` write (which hangs Mesa ANV). It runs the identical 4-sample loop and
-folds `coverage = countOneBits(mask)/4.0` into the fragment color — byte-identical
-5-level output to the MSAA path, just moved out of the hardware resolve. (0017 wants
-these variants deleted once Mesa 25.3 lands and the hang is gone.)
+### M1 — Parity-gate rework (enabler, no shader change)
+- Keep **`GeodeGolden`** (geode vs the resvg reference PNG) as the strict **correctness**
+  gate — analytic Slug must pass it; it is the real "did we render the right thing" test.
+- Change **`GeodeTinyParity`** (geode vs tiny-skia) so two valid-but-different
+  rasterizers are not failed on sub-perceptual edge deltas: either **(a)** drop
+  geode-vs-tiny for the resvg corpus and rely on `GeodeGolden` + tiny's `TinyGolden`
+  (both already compare to the same reference), or **(b)** keep it as an
+  edge-band-tolerant comparison. **Decision (a) vs (b) needs explicit sign-off** — it
+  decides whether "parity" remains a concept for the corpus.
+- No relaxation of the **correctness** gate (0021/0017 no-masking policy holds for
+  `GeodeGolden`).
+- Self-verifiable: after M1 the current edge-floor gates come off and the suite stays
+  green **with today's 4× MSAA shader**, because `GeodeGolden` already passes content.
+  Any of the 16 that *also* fail `GeodeGolden` (e.g. feImage/svg was 1787px) are genuine
+  and stay gated until M4 — that residual list is M4's acceptance set.
 
-### 1.3 The per-pixel scale and Slug root-finding
+### M2 — Non-overlapping band ownership (clears Blocker B, §5)
+Make each output pixel's coverage written by **exactly one** fragment so folded
+(sampleCount=1) coverage is additive. Candidate mechanisms: full-height band quads with
+a per-fragment owning-band test; single-band encoding for small paths; or scissor/
+stencil clipping each band quad to its `[yMin,yMax)` with no dilation overlap. Acceptance:
+route the **existing 4-sample alpha-coverage shader** to **all** adapters and reproduce
+the MSAA path output with **zero** new regressions — isolating the seam fix from the
+coverage-math change.
 
-The same Bézier root-finding that the coverage test uses is the Slug pipeline core —
-banding, ray/root-find, `solve_quadratic` (numerically-stable Citardauq form), curve
-classification, fill rule, fixed-point encoding. That is documented as a unit in
-[0042 — Geode Slug implementation](0042-geode_slug_conformance.md); this doc covers
-only the **coverage / AA** aspect.
+### M3 — Vertical (X-monotonic) bands in the encoder  ← the encoder change
+Extend `GeodePathEncoder` to also emit **X-monotonic** quadratics binned into **vertical
+bands** (mirror of the existing ~32px Y-banding: split the X range, duplicate each
+X-monotonic curve into the vertical bands its X-extent overlaps, cap band count). The
+GPU side gets a second band/curve SSBO set (or an interleaved layout) and the fragment
+shader gains the vertical-ray winding/coverage. Reuse the Y-band machinery
+(`computeBandCount`, the dup-into-overlapping-bands loop, the f32 SSBO encoding) on the X
+axis. Acceptance: a debug mode rendering vertical-ray winding alone matches horizontal-ray
+winding on closed paths (winding is ray-direction independent), proving the X-band data
+is correct before coverage depends on it.
 
----
+### M4 — Dual-ray analytic coverage shader
+Replace the 4-sample loop in `slug_fill`/`slug_gradient`/`slug_mask` with Slug's
+analytic coverage (horizontal + vertical ray accumulation + combine, §1) folded into
+premultiplied output. Acceptance: M1's acceptance set passes `GeodeGolden` at the strict
+budget; diff PNGs show edges moved toward the reference; the crosshair case (§6) is
+verified specifically; no full-suite regressions.
 
-## 2. The accepted sub-pixel coverage floor
+### M5 — Unify + delete (explicit deletion gates, no dead code)
+In the same PR that makes each unused: delete `slug_fill_alpha_coverage.wgsl`,
+`slug_gradient_alpha_coverage.wgsl`, `slug_mask_alpha_coverage.wgsl`; the
+`useAlphaCoverageAA_` branch (`GeodeDevice.cc`); the `sampleCount>1` MSAA
+target/resolve plumbing (`GeoEncoder.cc`) and the `useAlphaCoverageShader`/`sampleCount`
+ctor params (`GeodePipeline.cc`, `GeodeShaders.cc`).
 
-Geode renders the **correct** shapes/glyphs/colors on every "edge-floor" parity test;
-the geode↔tiny diff sits at **101–763 px** — just over the flat-100 parity bar. The
-difference is a thin band hugging shape edges, and it is **accepted by-design**:
+### M6 — Golden regen + un-skip + full verification
+Regenerate `testdata/golden/geode/` **only after** diffs confirm movement toward the
+reference. Un-skip the 16 in `resvg_test_suite.cc`. `bazel test //...` green on all
+variants (geode/default_text/max). Update §2 here to "as-built", and 0042 §1.2 + 0021
+totals.
 
-- It is **not 4× MSAA quantization.** Proven sample-independent: 16 and 64 effective
-  samples give **identical** text px (~290), and 16× crushes the 5-level quantization
-  entirely (filled shape regions go to 0–8 px). The residual is *algorithm-level* — the
-  delta between geode's coverage and tiny-skia's Skia-AAA scan-converter — not a sample
-  count.
-- It is **not "just AA"** in the hand-wave sense. pixelmatch runs with
-  `includeAA=false`; on the diff PNGs the glyph edges are **yellow** (correctly
-  excluded as AA), and the only **red (counted)** pixels are the resvg template's
-  **0.5px crosshair + 1px frame** overlay, whose sub-pixel placement comes from
-  tiny-skia's `snapY` quarter-pixel quantization (`TinyCoverage`) — not reproducible
-  per-fragment on the GPU.
-- It is **sub-perceptual content.** Per edge pixel the raw alpha delta is ~7/255
-  (~2.7%), symmetric (mean signed bias ≈ −1, i.e. no positional shift). The gates trip
-  only because that delta accumulates over long glyph/shape perimeters plus the
-  crosshair overlay.
+## 5. Blocker B — band-seam additivity (the thing that kills naive attempts)
 
-**What this means for a developer:** an edge-floor gate is a *non-bug*. The content
-matches; do not try to "fix" it with finer AA, and do not relax the parity threshold to
-absorb it. If a parity diff lands as a **solid region** (not an edge band / crosshair),
-that is a real bug — fix it, don't classify it as edge-floor.
+A pixel straddling two ~32px horizontal bands is shaded once per band. With continuous
+folded-alpha coverage, band A writes `a` and band B writes `b`; premultiplied
+source-over composes them as `1-(1-a)(1-b)` (e.g. 0.75) instead of the correct `a+b`
+(1.0). The 4× MSAA path is immune because per-sample `sample_mask` bits are
+hardware-additive and per-sample band-Y ownership routes each *discrete* sample to
+exactly one band; continuous coverage has no discrete sample to route. **This is why M2
+precedes M4.** Measured previously as ~168–182 identical regressions at every sample
+count, and reproduced by the last autonomous attempt's transform/shape regressions.
 
-### 2.1 The floor vs tiny-skia's Skia-AAA — what differs
+## 6. Blocker A + the crosshair — why the parity *gate* must change, not the math
 
-tiny-skia uses a scan-converter (Skia-AAA-style, ~16-sample finite coverage with
-`snapY` quarter-pixel quantization). Geode uses 4× MSAA `sample_mask`. The two produce
-the same content but distribute partial-edge coverage differently:
+- **tiny-skia is finite-sample, not analytic.** Non-monotonic evidence (N=4→15px,
+  N=8/16→411px — a converging average cannot get *worse*) proves tiny is a ~16-sample
+  scan-converter with `snapY` quarter-pixel quantization. The correct analytic
+  ∞-sample result differs from it by >0.02 *by construction* (1/16 = 0.0625). Forcing
+  geode to bit-match tiny means deliberately *degrading* to tiny's quantization — the
+  opposite of aligning with Slug. Hence M1: compare each backend to the **reference**,
+  not to each other.
+- **The resvg crosshair.** The harness overlays a 0.5px axis-aligned crosshair. A single
+  ray cast *along* a sub-pixel line never exits it and reports full coverage (255 vs
+  tiny's ~160). Slug's **dual-ray combine** is the published fix — the perpendicular ray
+  resolves what the parallel ray conflates. M4 must verify the crosshair specifically.
 
-- **Vertical/near-vertical edges:** both resolve well; the horizontal coverage
-  distribution differs sub-perceptually.
-- **Near-horizontal edges + the 0.5px horizontal crosshair:** tiny distributes the
-  thin line asymmetrically across rows (e.g. 128/192); geode's symmetric resolve gives
-  160/160 — a geometric line-placement difference, not a coverage-quality one.
+## 7. Risks / open questions
+- **Perf (hot path):** dual-ray ~doubles per-pixel root solves but removes the MSAA
+  resolve and the 4-sample loop. Measure with `donner_perf_cc_test`; net is plausibly
+  neutral-to-positive but unproven.
+- **Vertical-band memory:** X-banding ~doubles encoded curve data; reuse the existing
+  256-band cap.
+- **M1 (a) vs (b)** is the highest-leverage decision and needs explicit sign-off.
 
-This is a deliberate rasterizer difference, recorded so it isn't repeatedly
-re-diagnosed as a bug.
+## Appendix — approaches measured and set aside (now recontextualized)
 
----
+These were rejected under the *old* constraint "must bit-match tiny-skia." This plan
+removes that constraint (M1), so they are reframed as inputs, not dead ends:
 
-## 3. How the floor is gated (not masked)
-
-The edge-floor tests stay **binary-gated** in the `GeodeTinyParity` parity mode
-(`resvg_test_suite.cc`), with no per-test thresholds and no sample-count bump — per the
-firm no-masking policy ([0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)).
-Their reason points at this doc: *"geode-vs-tiny AAA coverage / crosshair sub-pixel
-delta; content matches, unfixable in-renderer."*
-
-The parity metric stays at **0.02** (pixelmatch perceptual YIQ, `includeAA=false`); the
-threshold sweep (appendix) showed no clean threshold absorbs the floor without masking
-genuine diffs, so it was not relaxed.
-
-> If reference-grade edge AA is ever required (e.g. a print/export path), the only
-> viable approach is a GPU compute-shader port of Skia-AAA writing a coverage texture
-> (appendix option C) — a new rasterizer, scoped separately. It is not worth it for the
-> resvg parity corpus.
-
----
-
-## Appendix — rejected approaches (do not re-attempt)
-
-Four coverage rewrites and a threshold sweep were built, measured, and rejected during
-the parity push. Each is recorded with its killer reason so the work isn't repeated.
-
-### Rejected: dual-ray analytical coverage (Slug Eq. 3, two axis-aligned rays)
-
-Slug's published AA computes fractional coverage from each Bézier/ray crossing's signed
-distance to the pixel center (Eq. 3, `f = sat(m·Cx + ½)`), one horizontal + one
-vertical ray averaged for isotropy. A single-horizontal-ray POC roughly halved the text
-edge floor (`simple-case` 708→~290) and was correct for non-text geometry (0–18 px), but
-**cannot reach ≤100 px** vs tiny: the resvg harness's 0.5px axis-aligned crosshair is the
-killer — a ray cast *along* a sub-pixel line never exits it and reports full coverage
-(255 vs tiny's 160), while a perpendicular glyph fringe needs the opposite combine. No
-single combine (average / min / min-max hybrid) satisfies both; the best hybrid was net
-**+10 / −16** gates. A second perpendicular ray also requires **vertical bands** from the
-encoder, and faking it by swizzling the horizontal band's curves blew up to ~45 000 px
-(wrong curve list). Implemented and reverted twice.
-
-### Rejected: single-axis analytical supersampling (Slug paper §6 "quality mode")
-
-One ray + N sub-samples shifted perpendicular to it, averaged — meant to sidestep the
-thin-line conflation. NO-GO for two reasons. **(A)** It proved tiny-skia is
-*finite-sample*, not analytically smooth: `simple-case` gave N=4 → 15 px but N=8/N=16 →
-411 px (a converging average cannot get *worse* with more samples). So matching tiny
-means matching its specific ~16-sample pattern, not computing the analytical ∞-sample
-limit (which differs by >0.02 by construction: 1/16 = 0.0625). **(B)** Folded-alpha
-coverage doesn't compose across encoder band seams: a pixel straddling a band boundary
-is shaded once per band, each writing ~0.5 into alpha, which premultiplied source-over
-composes as 0.75 instead of 1.0 — ~168–182 tests regressed identically at every N. This
-band-seam additivity loss is the same root that killed dual-ray.
-
-### Rejected: 16× MSAA `sample_mask`
-
-Raising the `sample_mask` path to 16 samples would keep hardware-additive composition
-(no seam bug) and target tiny's ~16-sample count. NO-GO: WebGPU only guarantees
-`sampleCount ∈ {1, 4}`; wgpu-native on Metal (M4 Pro) and llvmpipe both cap at 4, and
-16× MSAA resolve already showed driver hangs on Intel Arc (the reason the alpha-coverage
-fallback exists). Unreachable as true MSAA.
-
-### Rejected: render-supersample (N×-larger target + box-downsample)
-
-The only adapter-portable way to reach 16/64 effective samples. NO-GO: text parity is
-**sample-independent** (16 eff and 64 eff both ~290 px — Blocker A above held for text
-even though filled shapes reached 0–8 px), so it fails the parity gate for the right
-reason. It is also a pervasive rewrite — offscreen targets (filter/layer/mask/pattern/
-image) and every blit/scissor/clip-rect coordinate would need the N× factor; a kSS=4
-sweep gave 0 flips / 200 regressions (offscreen content composites at 1× into the kSS×
-target). Perf: kSS=2 ≈ 4× fill cost, kSS=4 ≈ 16× — moot given the parity failure.
-
-### Rejected: threshold relaxation
-
-Sweeping the parity threshold to absorb the floor: 0.022–0.030 flips only 1/191; the
-cliff is at **0.10** (flips 165) but that is masking-adjacent (absorbs real ~10%
-solid-region diffs) and 0.30 masks the genuine feGaussianBlur bug. There is no clean
-minimal threshold; relaxing was not authorized (firm no-masking policy). Kept at 0.02.
-
-### If reference-grade AA is ever needed (recorded, not pursued)
-
-- **Option C — GPU compute-shader Skia-AAA port:** write a coverage texture from a
-  from-scratch scan-converter match. The only approach that could bit-match tiny, but a
-  new rasterizer; scoped separately, not worth it for the resvg corpus.
-- **Non-overlapping band ownership** (full-height band quads / single-band encoding for
-  small paths) would let folded-alpha analytical coverage compose correctly and re-enable
-  the 1-sample perf dream — but still wouldn't match tiny's finite quantization (Blocker
-  A), so it trades parity for perf, not for parity.
-
-### Why the original "analytical AA is a perf win" framing didn't pan out
-
-The investigation initially argued analytical 1-sample coverage would be both smoother
-*and* cheaper than 4× MSAA (no MSAA color attachment / resolve, fewer root solves per
-pixel). The perf argument is sound in isolation, but it was **moot** — every folded-alpha
-scheme that would have realized it loses cross-band composition additivity (Blocker B),
-and tiny being finite-sample (Blocker A) means analytical coverage can't reach parity
-regardless. The `sample_mask` MSAA path stays because it is correct by construction.
+- **Dual-ray analytic (Slug Eq. 3):** the *correct* target of this plan. Previously
+  blocked because (i) it needs vertical bands the encoder lacked → **now M3**, and
+  (ii) it can't bit-match tiny → **now resolved by M1**, not a blocker.
+- **Single-axis analytical supersampling:** showed tiny is finite-sample (Blocker A) and
+  hit band-seam additivity (Blocker B) → seam handled by **M2**; "match tiny exactly"
+  abandoned by **M1**.
+- **16× MSAA `sample_mask`:** unreachable — WebGPU caps `sampleCount ∈ {1,4}`. Moot:
+  the analytic path is sampleCount=1, no MSAA.
+- **Render-supersample (N× target + downsample):** pervasive rewrite, sample-dependent,
+  rejected on perf and parity; not revisited.
+- **Threshold relaxation of the correctness gate:** still rejected — M1 changes *which
+  images are compared*, not the strict budget of the `GeodeGolden` correctness gate.
+- **Option C — GPU compute-shader Skia-AAA port:** the only way to *bit-match* tiny; moot
+  once M1 stops requiring bit-match. Not pursued.

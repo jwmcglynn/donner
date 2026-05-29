@@ -1152,8 +1152,19 @@ Path Path::cubicToQuadratic(double tolerance) const {
   return builder.build();
 }
 
-Path Path::toMonotonic() const {
+Path Path::toMonotonic(MonotonicAxis axis) const {
   PathBuilder builder;
+
+  // Select the per-axis extrema solvers. SplitQuadratic / SplitCubic operate on a
+  // parameter `t` and are axis-agnostic, so only the extrema computation differs.
+  const bool splitX = (axis == MonotonicAxis::X);
+  const auto quadExtrema = [&](const Vector2d& p0, const Vector2d& p1, const Vector2d& p2) {
+    return splitX ? QuadraticXExtrema(p0, p1, p2) : QuadraticYExtrema(p0, p1, p2);
+  };
+  const auto cubicExtrema = [&](const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+                                const Vector2d& p3) {
+    return splitX ? CubicXExtrema(p0, p1, p2, p3) : CubicYExtrema(p0, p1, p2, p3);
+  };
 
   for (size_t i = 0; i < commands_.size(); ++i) {
     const auto& cmd = commands_[i];
@@ -1170,7 +1181,7 @@ Path Path::toMonotonic() const {
         const Vector2d& control = points_[cmd.pointIndex];
         const Vector2d& end = points_[cmd.pointIndex + 1];
 
-        auto extrema = QuadraticYExtrema(start, control, end);
+        auto extrema = quadExtrema(start, control, end);
         if (extrema.empty()) {
           // Already monotonic.
           builder.quadTo(control, end);

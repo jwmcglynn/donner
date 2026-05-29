@@ -115,6 +115,20 @@ SmallVector<double, 1> QuadraticYExtrema(const Vector2d& p0, const Vector2d& p1,
                                          const Vector2d& p2);
 
 /**
+ * Find parameter values where the X-derivative is zero for a quadratic Bezier curve.
+ *
+ * These are the X-monotonic split points (used by the Slug vertical-ray banding). Returns 0
+ * or 1 parameter values in the open interval (0, 1).
+ *
+ * @param p0 Start point.
+ * @param p1 Control point.
+ * @param p2 End point.
+ * @return A SmallVector containing 0 or 1 parameter values.
+ */
+SmallVector<double, 1> QuadraticXExtrema(const Vector2d& p0, const Vector2d& p1,
+                                         const Vector2d& p2);
+
+/**
  * Find parameter values where the Y-derivative is zero for a cubic Bezier curve.
  *
  * These are the Y-monotonic split points. Returns 0, 1, or 2 parameter values in the open
@@ -127,6 +141,21 @@ SmallVector<double, 1> QuadraticYExtrema(const Vector2d& p0, const Vector2d& p1,
  * @return A SmallVector containing 0 to 2 parameter values.
  */
 SmallVector<double, 2> CubicYExtrema(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+                                     const Vector2d& p3);
+
+/**
+ * Find parameter values where the X-derivative is zero for a cubic Bezier curve.
+ *
+ * These are the X-monotonic split points (used by the Slug vertical-ray banding). Returns 0,
+ * 1, or 2 parameter values in the open interval (0, 1), sorted in ascending order.
+ *
+ * @param p0 Start point.
+ * @param p1 First control point.
+ * @param p2 Second control point.
+ * @param p3 End point.
+ * @return A SmallVector containing 0 to 2 parameter values.
+ */
+SmallVector<double, 2> CubicXExtrema(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
                                      const Vector2d& p3);
 
 /**

@@ -62,10 +62,18 @@ struct EncodedPath {
     uint32_t bandIndex;      ///< Which band this vertex belongs to.
   };
 
-  std::vector<Curve> curves;     ///< All quadratic curves, sorted by band.
-  std::vector<Band> bands;       ///< Band metadata.
+  std::vector<Curve> curves;     ///< Horizontal (Y-monotonic) curves, sorted by band.
+  std::vector<Band> bands;       ///< Horizontal band metadata (Y-strips), for the horizontal ray.
   std::vector<Vertex> vertices;  ///< Bounding quad vertices (6 per band).
   Box2d pathBounds;              ///< Axis-aligned bounding box of the path.
+
+  /// Vertical (X-monotonic) curve + band data, for the Slug **vertical ray** used by the
+  /// dual-ray analytic coverage (see docs/design_docs/0041). These mirror `curves`/`bands`
+  /// but are split at X-extrema and binned into vertical (X-strip) bands. For a vertical
+  /// `Band` the field semantics are transposed: `xMin`/`xMax` are the band's X-strip
+  /// boundaries and `yMin`/`yMax` are the Y-extent of the curves in the band.
+  std::vector<Curve> vCurves;  ///< X-monotonic curves, sorted by vertical band.
+  std::vector<Band> vBands;    ///< Vertical band metadata (X-strips), for the vertical ray.
 
   /// Returns true if the encoded path has no bands (empty or degenerate path).
   bool empty() const { return bands.empty(); }
