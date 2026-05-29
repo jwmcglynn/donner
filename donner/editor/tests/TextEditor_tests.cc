@@ -29,6 +29,10 @@ protected:
     // that query glyph metrics don't crash.
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(800, 600);
+    // ImGui defaults ConfigMacOSXBehaviors to true on Apple, which remaps shortcut chords from
+    // Ctrl to Cmd (Super). Force it off so the Ctrl-based shortcut tests below exercise the same
+    // modifier on every host OS instead of failing on macOS runners.
+    io.ConfigMacOSXBehaviors = false;
     io.Fonts->Build();
   }
 
