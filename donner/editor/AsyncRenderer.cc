@@ -325,6 +325,11 @@ void AsyncRenderer::workerLoop() {
     // `isBusy()` / `pollResult()` while we work.
     ZoneScopedN("AsyncRenderer::workerIteration");
     const auto workerStart = std::chrono::steady_clock::now();
+    const auto elapsedSince = [](std::chrono::steady_clock::time_point start) {
+      return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+          .count();
+    };
+    RenderResult::WorkerTimingBreakdown workerTiming;
     std::optional<RenderResult::CompositedPreview> compositedPreview;
 
     // §concurrent-dom: serialize this worker render against UI-thread DOM reads. The lease shares
@@ -509,6 +514,7 @@ void AsyncRenderer::workerLoop() {
         request.dragPreview.has_value() &&
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
     compositor_->setSkipMainComposeDuringSplit(activeDragRequest);
+    workerTiming.setupMs = elapsedSince(workerStart);
 
     // Build a CompositedPreview from the compositor's current tile state.
     // Tiles whose id/generation/dimensions were already published carry
@@ -550,7 +556,8 @@ void AsyncRenderer::workerLoop() {
       auto compositorTiles =
           compositor_->snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
       bool canReuseNonDragTextures = !publishedCompositedTiles_.empty();
-      bool activeDragTileWillHaveBitmap = !activeDragRequest;
+      bool activeDragTileAvailable = !activeDragRequest;
+      bool activeDragTileNeedsPayload = false;
       bool hasImmediateTile = false;
       for (const auto& ct : compositorTiles) {
         if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) {
@@ -567,14 +574,9 @@ void AsyncRenderer::workerLoop() {
         const bool currentActiveDragLayer = activeDragRequest && request.dragPreview.has_value() &&
                                             ct.layerEntity == request.dragPreview->entity;
         if (currentActiveDragLayer) {
-          activeDragTileWillHaveBitmap =
-              ct.isDragTarget ||
-              publishedTextureMatches(std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims,
-                                      outputCanvasSize);
-          if (!activeDragTileWillHaveBitmap) {
-            canReuseNonDragTextures = false;
-            break;
-          }
+          activeDragTileAvailable = true;
+          activeDragTileNeedsPayload = !publishedTextureMatches(
+              std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims, outputCanvasSize);
           continue;
         }
         if (ct.isDragTarget && activeDragRequest) continue;
@@ -584,16 +586,16 @@ void AsyncRenderer::workerLoop() {
           break;
         }
       }
-      if (!activeDragTileWillHaveBitmap) {
+      if (!activeDragTileAvailable) {
         canReuseNonDragTextures = false;
       }
       CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All;
       if (canReuseNonDragTextures) {
-        if (hasImmediateTile && activeDragRequest) {
+        if (hasImmediateTile && activeDragTileNeedsPayload) {
           payload = CompositorTileBitmapPayload::ImmediateAndDragTargetOnly;
         } else if (hasImmediateTile) {
           payload = CompositorTileBitmapPayload::ImmediateOnly;
-        } else if (activeDragRequest) {
+        } else if (activeDragTileNeedsPayload) {
           payload = CompositorTileBitmapPayload::DragTargetOnly;
         } else {
           payload = CompositorTileBitmapPayload::MetadataOnly;
@@ -615,7 +617,7 @@ void AsyncRenderer::workerLoop() {
             ct.immediate ? OutKind::Immediate
                          : (ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer);
         const bool metadataOnly =
-            !ct.immediate && (!ct.isDragTarget || !activeDragRequest) &&
+            !ct.immediate &&
             publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims, outputCanvasSize);
         if (!metadataOnly && ct.bitmap.empty() && ct.textureSnapshot == nullptr) continue;
         RenderResult::CompositedTile tile;
@@ -672,7 +674,9 @@ void AsyncRenderer::workerLoop() {
       // presentation-gating iteration, including any readback or tile
       // snapshot work after renderFrame. Keep this scoped timing in
       // Tracy only for drilling into the compositor itself.
+      const auto renderFrameStart = std::chrono::steady_clock::now();
       renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+      workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
     }
 
     // §M4: a cancelled render leaves compositor dirty flags ready for the next
@@ -705,7 +709,11 @@ void AsyncRenderer::workerLoop() {
     // If the splitter cannot provide tiles for this frame, the final snapshot
     // below is wrapped as a single full-canvas tile so presentation still goes
     // through the compositor path.
-    compositedPreview = buildCompositedPreview();
+    {
+      const auto buildPreviewStart = std::chrono::steady_clock::now();
+      compositedPreview = buildCompositedPreview();
+      workerTiming.buildPreviewMs = elapsedSince(buildPreviewStart);
+    }
 
     // Selection chrome is no longer baked into the bitmap — main.cc
     // draws it via the ImGui draw list every frame so clicks don't
@@ -716,17 +724,21 @@ void AsyncRenderer::workerLoop() {
     std::shared_ptr<const svg::RendererTextureSnapshot> fullCanvasTexture;
     const PresentationSnapshotPlan snapshotPlan = ChoosePresentationSnapshotPlan(
         compositedPreview.has_value(), requestRenderer.requiresTextureSnapshotPresentation());
-    if (snapshotPlan.captureTextureSnapshot) {
-      ZoneScopedN("Renderer::takeTextureSnapshot");
-      fullCanvasTexture = requestRenderer.takeTextureSnapshot();
-      UTILS_RELEASE_ASSERT_MSG(
-          fullCanvasTexture != nullptr,
-          "Geode full-canvas presentation did not produce a GPU texture. Refusing CPU "
-          "readback/upload fallback in Geode presentation mode.");
-    }
-    if (snapshotPlan.captureCpuSnapshot) {
-      ZoneScopedN("Renderer::takeSnapshot");
-      bitmap = requestRenderer.takeSnapshot();
+    {
+      const auto finalSnapshotStart = std::chrono::steady_clock::now();
+      if (snapshotPlan.captureTextureSnapshot) {
+        ZoneScopedN("Renderer::takeTextureSnapshot");
+        fullCanvasTexture = requestRenderer.takeTextureSnapshot();
+        UTILS_RELEASE_ASSERT_MSG(
+            fullCanvasTexture != nullptr,
+            "Geode full-canvas presentation did not produce a GPU texture. Refusing CPU "
+            "readback/upload fallback in Geode presentation mode.");
+      }
+      if (snapshotPlan.captureCpuSnapshot) {
+        ZoneScopedN("Renderer::takeSnapshot");
+        bitmap = requestRenderer.takeSnapshot();
+      }
+      workerTiming.finalSnapshotMs = elapsedSince(finalSnapshotStart);
     }
     if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
       const Entity previewEntity =
@@ -762,18 +774,24 @@ void AsyncRenderer::workerLoop() {
         done.result.rasterViewport = rasterViewport;
         done.result.version = request.version;
         done.replayHoldPollsRemaining = replayResultHoldFramesForTesting_;
+        const auto diagnosticsStart = std::chrono::steady_clock::now();
+        const auto thumbnailMode =
+            activeDragRequest ? svg::compositor::CompositorController::SnapshotThumbnails::Omit
+                              : svg::compositor::CompositorController::SnapshotThumbnails::Include;
         lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
         lastCompositorRenderFrameStats_ = compositor_->lastRenderFrameStats();
-        lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows();
+        lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows(thumbnailMode);
         lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
-        lastCompositeTiles_ = compositor_->snapshotCompositeTiles();
+        lastCompositeTiles_ = compositor_->snapshotCompositeTiles(thumbnailMode);
         lastStateSnapshot_ = compositor_->snapshotState();
+        workerTiming.diagnosticsMs = elapsedSince(diagnosticsStart);
         lastWorkerCompositorEntity_ = compositorEntity_;
         lastDocumentCanvasSize_ = outputCanvasSize;
         const auto workerEnd = std::chrono::steady_clock::now();
         const double workerMs =
             std::chrono::duration<double, std::milli>(workerEnd - workerStart).count();
         done.result.workerMs = workerMs;
+        done.result.workerTiming = workerTiming;
         workerState_ = std::move(done);
         notifyStateChange = true;
         // Snapshot the callback under the lock so a concurrent

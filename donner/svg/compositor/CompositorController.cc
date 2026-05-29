@@ -797,48 +797,50 @@ std::string SpanRangeLabel(const Registry& registry, Entity firstEntity, Entity 
 }  // namespace
 
 std::vector<CompositorController::CompositeTileSnapshot>
-CompositorController::snapshotCompositeTiles() const {
+CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) const {
   std::vector<CompositeTileSnapshot> tiles;
+  const bool includeThumbnails = thumbnails == SnapshotThumbnails::Include;
 
-  const auto pushPayloadTile =
-      [&tiles](CompositeTileSnapshot::Kind kind, std::string id, std::string label,
-               const RendererBitmap& bitmap,
-               const std::shared_ptr<const RendererTextureSnapshot>& texture, uint64_t generation,
-               double lastRasterizeMs, bool isDragTarget, const StaticSpanPlan* spanPlan) {
-        CompositeTileSnapshot tile;
-        tile.kind = kind;
-        tile.id = std::move(id);
-        tile.label = std::move(label);
-        tile.generation = generation;
-        tile.lastRasterizeMs = lastRasterizeMs;
-        tile.isDragTarget = isDragTarget;
-        if (spanPlan != nullptr) {
-          tile.immediate = spanPlan->mode == StaticSpanMode::Immediate;
-          tile.staticHeuristicImmediate = spanPlan->staticHeuristicImmediate;
-          tile.dynamicHeuristicImmediate = spanPlan->dynamicHeuristicImmediate;
-          tile.demotedDynamicImmediate = spanPlan->demotedDynamicImmediate;
-          tile.immediateBudgetChargeMs = spanPlan->immediateBudgetChargeMs;
-          tile.immediateBudgetMs = spanPlan->immediateBudgetMs;
-          tile.estimatedDrawOps = spanPlan->estimatedDrawOps;
-          tile.estimatedPathVerbs = spanPlan->estimatedPathVerbs;
-          tile.hasExpensiveEffect = spanPlan->hasExpensiveEffect;
-          tile.visible = spanPlan->visible;
-          tile.boundsCanvas = spanPlan->boundsCanvas;
-          tile.estimatedRetainedBytes = spanPlan->estimatedRetainedBytes;
-          tile.estimatedRedrawCost = spanPlan->estimatedRedrawCost;
-          tile.estimatedCacheOverheadCost = spanPlan->estimatedCacheOverheadCost;
-          tile.spanRangeLabel = spanPlan->spanRangeLabel;
-        }
-        tile.hasValidBitmap = !bitmap.empty() || texture != nullptr;
-        if (tile.hasValidBitmap) {
-          tile.bitmapDims = !bitmap.empty() ? bitmap.dimensions : texture->dimensions();
-          if (!bitmap.empty()) {
-            BuildThumbnail(bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
-          }
-          tile.textureSnapshot = texture;
-        }
-        tiles.push_back(std::move(tile));
-      };
+  const auto pushPayloadTile = [&tiles, includeThumbnails](
+                                   CompositeTileSnapshot::Kind kind, std::string id,
+                                   std::string label, const RendererBitmap* bitmap,
+                                   const std::shared_ptr<const RendererTextureSnapshot>& texture,
+                                   uint64_t generation, double lastRasterizeMs, bool isDragTarget,
+                                   const StaticSpanPlan* spanPlan) {
+    CompositeTileSnapshot tile;
+    tile.kind = kind;
+    tile.id = std::move(id);
+    tile.label = std::move(label);
+    tile.generation = generation;
+    tile.lastRasterizeMs = lastRasterizeMs;
+    tile.isDragTarget = isDragTarget;
+    if (spanPlan != nullptr) {
+      tile.immediate = spanPlan->mode == StaticSpanMode::Immediate;
+      tile.staticHeuristicImmediate = spanPlan->staticHeuristicImmediate;
+      tile.dynamicHeuristicImmediate = spanPlan->dynamicHeuristicImmediate;
+      tile.demotedDynamicImmediate = spanPlan->demotedDynamicImmediate;
+      tile.immediateBudgetChargeMs = spanPlan->immediateBudgetChargeMs;
+      tile.immediateBudgetMs = spanPlan->immediateBudgetMs;
+      tile.estimatedDrawOps = spanPlan->estimatedDrawOps;
+      tile.estimatedPathVerbs = spanPlan->estimatedPathVerbs;
+      tile.hasExpensiveEffect = spanPlan->hasExpensiveEffect;
+      tile.visible = spanPlan->visible;
+      tile.boundsCanvas = spanPlan->boundsCanvas;
+      tile.estimatedRetainedBytes = spanPlan->estimatedRetainedBytes;
+      tile.estimatedRedrawCost = spanPlan->estimatedRedrawCost;
+      tile.estimatedCacheOverheadCost = spanPlan->estimatedCacheOverheadCost;
+      tile.spanRangeLabel = spanPlan->spanRangeLabel;
+    }
+    tile.hasValidBitmap = (bitmap != nullptr && !bitmap->empty()) || texture != nullptr;
+    if (tile.hasValidBitmap) {
+      tile.bitmapDims = bitmap != nullptr ? bitmap->dimensions : texture->dimensions();
+      if (includeThumbnails && bitmap != nullptr) {
+        BuildThumbnail(*bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
+      }
+      tile.textureSnapshot = texture;
+    }
+    tiles.push_back(std::move(tile));
+  };
 
   // Always emit the full segments+layers paint-order breakdown — even
   // when the editor's split-bitmap optimization is active. User
@@ -866,9 +868,8 @@ CompositorController::snapshotCompositeTiles() const {
       const double segMs =
           i < staticSegmentLastRasterizeMs_.size() ? staticSegmentLastRasterizeMs_[i] : 0.0;
       const StaticSpanPlan* spanPlan = i < staticSpanPlans_.size() ? &staticSpanPlans_[i] : nullptr;
-      pushPayloadTile(CompositeTileSnapshot::Kind::Segment, id, label,
-                      segmentBitmap != nullptr ? *segmentBitmap : RendererBitmap{}, segmentTexture,
-                      segGen, segMs, /*isDragTarget=*/false, spanPlan);
+      pushPayloadTile(CompositeTileSnapshot::Kind::Segment, id, label, segmentBitmap,
+                      segmentTexture, segGen, segMs, /*isDragTarget=*/false, spanPlan);
     }
     if (i < layerCount) {
       const CompositorLayer& layer = layers_[i];
@@ -882,7 +883,8 @@ CompositorController::snapshotCompositeTiles() const {
       }
       char id[48];
       std::snprintf(id, sizeof(id), "layer:%u", static_cast<unsigned>(layer.entity()));
-      pushPayloadTile(CompositeTileSnapshot::Kind::Layer, id, label, layer.bitmap(),
+      const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
+      pushPayloadTile(CompositeTileSnapshot::Kind::Layer, id, label, layerBitmap,
                       layer.textureSnapshot(), layer.generation(), layer.lastRasterizeMs(),
                       isDragTarget, nullptr);
     }
@@ -943,16 +945,19 @@ CompositorController::snapshotSegmentInspectorRows() const {
 }
 
 std::vector<CompositorController::LayerInspectorRow>
-CompositorController::snapshotLayerInspectorRows() const {
+CompositorController::snapshotLayerInspectorRows(SnapshotThumbnails thumbnails) const {
   std::vector<LayerInspectorRow> rows;
   rows.reserve(layers_.size());
+  const bool includeThumbnails = thumbnails == SnapshotThumbnails::Include;
   for (const CompositorLayer& layer : layers_) {
     LayerInspectorRow row;
     row.layerId = layer.id();
     row.entity = layer.entity();
     if (layer.hasValidBitmap()) {
       row.bitmapSize = layer.bitmap().dimensions;
-      BuildThumbnail(layer.bitmap(), &row.thumbnailDims, &row.thumbnailPixels);
+      if (includeThumbnails) {
+        BuildThumbnail(layer.bitmap(), &row.thumbnailDims, &row.thumbnailPixels);
+      }
     } else if (layer.textureSnapshot() != nullptr) {
       row.bitmapSize = layer.textureSnapshot()->dimensions();
     }
@@ -2058,7 +2063,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // Compose all layers onto the main target.
   {
     ZoneScopedN("Compositor::composeLayers");
-    composeLayers(viewport);
+    composeLayers(viewport, surfaceFromCanvas);
   }
 
   // Dual-path pixel-identity assertion. When enabled, capture the composited
@@ -2769,7 +2774,8 @@ void CompositorController::markAllSegmentsDirty() {
   staticSegmentDirty_.assign(layers_.size() + 1, true);
 }
 
-void CompositorController::composeLayers(const RenderViewport& viewport) {
+void CompositorController::composeLayers(const RenderViewport& viewport,
+                                         const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::composeLayersImpl");
 
   // Split path: bg/fg already composite segments + non-drag promoted
@@ -2827,6 +2833,27 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
 
   renderer().beginFrame(viewport);
 
+  const auto drawImmediateSpan = [&](size_t segmentIndex) {
+    if (segmentIndex >= staticSpanPlans_.size()) {
+      return false;
+    }
+    const StaticSpanPlan& spanPlan = staticSpanPlans_[segmentIndex];
+    if (spanPlan.mode != StaticSpanMode::Immediate || spanPlan.firstEntity == entt::null ||
+        spanPlan.lastEntity == entt::null) {
+      return false;
+    }
+
+    const auto directStart = std::chrono::steady_clock::now();
+    RendererDriver driver(renderer());
+    driver.drawEntityRangeIntoCurrentFrame(document().registry(), spanPlan.firstEntity,
+                                           spanPlan.lastEntity, viewport, surfaceFromCanvas);
+    const auto directEnd = std::chrono::steady_clock::now();
+    const auto elapsedUs =
+        std::chrono::duration_cast<std::chrono::microseconds>(directEnd - directStart).count();
+    lastRenderFrameStats_.immediateRasterizeMs += static_cast<double>(elapsedUs) / 1000.0;
+    return true;
+  };
+
   const auto drawPayload = [this](const RendererBitmap& bitmap,
                                   const std::shared_ptr<const RendererTextureSnapshot>& texture,
                                   const Transform2d& canvasFromPayload) {
@@ -2882,25 +2909,30 @@ void CompositorController::composeLayers(const RenderViewport& viewport) {
     drawPayload(layer.bitmap(), layer.textureSnapshot(), canvasFromBitmap);
   };
 
+  const auto drawSegment = [&](size_t segmentIndex) {
+    if (drawImmediateSpan(segmentIndex)) {
+      return;
+    }
+
+    const Vector2d segmentOffset = segmentIndex < staticSegmentOffsets_.size()
+                                       ? staticSegmentOffsets_[segmentIndex]
+                                       : Vector2d::Zero();
+    const std::shared_ptr<const RendererTextureSnapshot> segmentTexture =
+        segmentIndex < staticSegmentTextures_.size() ? staticSegmentTextures_[segmentIndex]
+                                                     : nullptr;
+    drawPayload(staticSegments_[segmentIndex], segmentTexture,
+                Transform2d::Translate(segmentOffset));
+  };
+
   // Design doc 0033 §M2C: compose static segments and promoted layers in
   // interleaved paint order. Active drag frames may skip this main-renderer
   // compose via the `skipMainCompose` gate above.
   if (!staticSegments_.empty()) {
     for (size_t i = 0; i < layers_.size(); ++i) {
-      const Vector2d segmentOffset =
-          i < staticSegmentOffsets_.size() ? staticSegmentOffsets_[i] : Vector2d::Zero();
-      const std::shared_ptr<const RendererTextureSnapshot> segmentTexture =
-          i < staticSegmentTextures_.size() ? staticSegmentTextures_[i] : nullptr;
-      drawPayload(staticSegments_[i], segmentTexture, Transform2d::Translate(segmentOffset));
+      drawSegment(i);
       drawLayer(layers_[i]);
     }
-    const Vector2d lastOffset = staticSegmentOffsets_.size() == staticSegments_.size()
-                                    ? staticSegmentOffsets_.back()
-                                    : Vector2d::Zero();
-    const std::shared_ptr<const RendererTextureSnapshot> lastTexture =
-        staticSegmentTextures_.size() == staticSegments_.size() ? staticSegmentTextures_.back()
-                                                                : nullptr;
-    drawPayload(staticSegments_.back(), lastTexture, Transform2d::Translate(lastOffset));
+    drawSegment(staticSegments_.size() - 1u);
   }
 
   renderer().endFrame();

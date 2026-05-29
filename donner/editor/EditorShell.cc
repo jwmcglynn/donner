@@ -35,6 +35,10 @@
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/RendererInterface.h"
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/svg/renderer/RendererGeode.h"
+#endif
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
 
@@ -641,6 +645,57 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
   return Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
 }
 
+#ifdef DONNER_EDITOR_WGPU
+Box2d FramebufferBoxFromScreenBox(const Box2d& screenBox, double devicePixelRatio) {
+  return Box2d(screenBox.topLeft * devicePixelRatio, screenBox.bottomRight * devicePixelRatio);
+}
+
+Transform2d FramebufferFromDocumentTransform(const ViewportState& viewport) {
+  const double devicePixelsPerDocUnit = viewport.devicePixelsPerDocUnit();
+  const Vector2d framebufferOriginFromDocumentOrigin =
+      viewport.panScreenPoint * viewport.devicePixelRatio -
+      viewport.panDocPoint * devicePixelsPerDocUnit;
+
+  Transform2d framebufferFromDocument(Transform2d::uninitialized);
+  framebufferFromDocument.data[0] = devicePixelsPerDocUnit;
+  framebufferFromDocument.data[1] = 0.0;
+  framebufferFromDocument.data[2] = 0.0;
+  framebufferFromDocument.data[3] = devicePixelsPerDocUnit;
+  framebufferFromDocument.data[4] = framebufferOriginFromDocumentOrigin.x;
+  framebufferFromDocument.data[5] = framebufferOriginFromDocumentOrigin.y;
+  return framebufferFromDocument;
+}
+
+void DrawImmediateOverlaySnapshotToFramebuffer(svg::RendererGeode& renderer,
+                                               const gui::EditorWindowWgpuRenderTarget& target,
+                                               const ViewportState& viewport,
+                                               const Box2d& imageClipRect,
+                                               const SelectionChromeSnapshot& snapshot) {
+  if (!target.texture || target.framebufferSizePx.x <= 0 || target.framebufferSizePx.y <= 0) {
+    return;
+  }
+
+  SelectionChromeSnapshot framebufferSnapshot = snapshot;
+  framebufferSnapshot.canvasFromDoc = FramebufferFromDocumentTransform(viewport);
+
+  svg::RenderViewport renderViewport;
+  renderViewport.size = Vector2d(static_cast<double>(target.framebufferSizePx.x),
+                                 static_cast<double>(target.framebufferSizePx.y));
+  renderViewport.devicePixelRatio = 1.0;
+
+  renderer.setTargetTexture(target.texture);
+  renderer.setPreserveTargetOnBeginFrame(true);
+  renderer.beginFrame(renderViewport);
+  svg::ResolvedClip clip;
+  clip.clipRect = FramebufferBoxFromScreenBox(imageClipRect, viewport.devicePixelRatio);
+  renderer.pushClip(clip);
+  OverlayRenderer::drawChromeFromSnapshot(renderer, framebufferSnapshot);
+  renderer.popClip();
+  renderer.endFrame();
+  renderer.clearTargetTexture();
+}
+#endif
+
 }  // namespace
 
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
@@ -728,6 +783,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   app_.setCleanSourceText(textEditor_.getText());
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   textures_.initialize();
+#ifdef DONNER_EDITOR_WGPU
+  if (window_.geodeFramebufferDevice() != nullptr) {
+    directOverlayRenderer_ = std::make_unique<svg::RendererGeode>(window_.geodeFramebufferDevice());
+  }
+#endif
   if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
     std::fprintf(stderr, "[editor] custom rotate cursor unavailable; using fallback cursor\n");
   }
@@ -774,6 +834,9 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+#ifdef DONNER_EDITOR_WGPU
+  window_.setWgpuDirectRenderCallback({});
+#endif
   if (reproRecorder_) {
     if (!reproRecorder_->flush()) {
       std::fprintf(stderr, "[repro] flush failed — recording lost\n");
@@ -1783,19 +1846,45 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
+  bool directFramebufferOverlay = false;
+#ifdef DONNER_EDITOR_WGPU
+  window_.setWgpuDirectRenderCallback({});
+  const std::optional<Box2d> directOverlayClipRect =
+      PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
+  if (!contentOnlyCaptureThisFrame_ && directOverlayRenderer_ != nullptr &&
+      renderCoordinator_.immediateOverlaySnapshot().has_value() &&
+      directOverlayClipRect.has_value()) {
+    SelectionChromeSnapshot overlaySnapshot = *renderCoordinator_.immediateOverlaySnapshot();
+    ViewportState overlayViewport = interactionController_.viewport();
+    const Box2d overlayClipRect = *directOverlayClipRect;
+    window_.setWgpuDirectRenderCallback(
+        [this, overlaySnapshot = std::move(overlaySnapshot), overlayViewport,
+         overlayClipRect](const gui::EditorWindowWgpuRenderTarget& target) {
+          if (directOverlayRenderer_ == nullptr) {
+            return;
+          }
+          DrawImmediateOverlaySnapshotToFramebuffer(
+              *directOverlayRenderer_, target, overlayViewport, overlayClipRect, overlaySnapshot);
+        });
+    directFramebufferOverlay = true;
+  }
+#endif
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .frameHistory = interactionController_.frameHistory(),
       .textures = textures_,
+      .immediateOverlaySnapshot = renderCoordinator_.immediateOverlaySnapshot(),
       .activeDragPreview = activeDragPreview,
       .displayedDragPreview = displayedDragPreview,
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
       .suppressedLayerEntity = suppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .showOverlay = !contentOnlyCaptureThisFrame_,
+      .drawImmediateOverlay = !directFramebufferOverlay,
       .showFrameGraph = !contentOnlyCaptureThisFrame_,
   };
-  renderPanePresenter_.render(paneState);
+  const RenderPanePresenterCost paneCost = renderPanePresenter_.render(paneState);
+  renderCoordinator_.addImmediateOverlayDrawCost(paneCost.immediateOverlayDrawMs);
   if (!contentOnlyCaptureThisFrame_) {
     renderPenToolPreview();
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);

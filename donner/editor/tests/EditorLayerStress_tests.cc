@@ -223,7 +223,7 @@ void ExpectCompositedTileGeometryCoherent(const RenderResult& result, const Vect
   const double pixelsPerDocY = static_cast<double>(canvasSize.y) / viewBoxHeight;
 
   int tileCount = 0;
-  int nonEmptyTiles = 0;
+  int tilesWithDimensions = 0;
   for (const RenderResult::CompositedTile& tile : result.compositedPreview->tiles) {
     ++tileCount;
     const Vector2d displayOffsetDoc = tile.canvasOffsetDoc + tile.dragTranslationDoc;
@@ -240,21 +240,23 @@ void ExpectCompositedTileGeometryCoherent(const RenderResult& result, const Vect
     EXPECT_LT(displayOffsetDoc.x, viewBoxWidth + 80.0) << phase << ": tile off right";
     EXPECT_LT(displayOffsetDoc.y, viewBoxHeight + 80.0) << phase << ": tile off bottom";
 
-    if (tile.bitmap.empty()) {
+    const Vector2i payloadDims =
+        !tile.bitmap.empty() ? tile.bitmap.dimensions
+                             : (tile.textureSnapshot != nullptr ? tile.textureSnapshot->dimensions()
+                                                                : tile.bitmapDimsPx);
+    if (payloadDims.x <= 0 || payloadDims.y <= 0) {
       continue;
     }
-    ++nonEmptyTiles;
+    ++tilesWithDimensions;
 
-    EXPECT_NEAR(tile.bitmapDimsDoc.x * pixelsPerDocX, static_cast<double>(tile.bitmap.dimensions.x),
-                2.0)
+    EXPECT_NEAR(tile.bitmapDimsDoc.x * pixelsPerDocX, static_cast<double>(payloadDims.x), 2.0)
         << phase << ": tile " << tile.id << " width metadata no longer matches bitmap pixels";
-    EXPECT_NEAR(tile.bitmapDimsDoc.y * pixelsPerDocY, static_cast<double>(tile.bitmap.dimensions.y),
-                2.0)
+    EXPECT_NEAR(tile.bitmapDimsDoc.y * pixelsPerDocY, static_cast<double>(payloadDims.y), 2.0)
         << phase << ": tile " << tile.id << " height metadata no longer matches bitmap pixels";
   }
 
   EXPECT_GE(tileCount, 3) << phase << ": stress scene did not produce enough layer tiles";
-  EXPECT_GE(nonEmptyTiles, 1) << phase << ": stress scene did not publish any tile pixels";
+  EXPECT_GE(tilesWithDimensions, 1) << phase << ": stress scene did not publish any tile geometry";
 }
 
 class EditorLayerStressTest : public ::testing::Test {

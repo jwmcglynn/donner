@@ -1735,6 +1735,84 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
       << testing::PrintToString(changedTiles);
 }
 
+TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="before" x="0" y="0" width="12" height="12" fill="blue"/>
+    <rect id="target" x="20" y="0" width="20" height="20" fill="red"/>
+    <rect id="after" x="50" y="0" width="12" height="12" fill="green"/>
+  )svg");
+  document.setCanvasSize(80, 40);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  const auto waitForResult = [&]() -> std::optional<RenderResult> {
+    for (int i = 0; i < 200; ++i) {
+      auto result = asyncRenderer.pollResult();
+      if (result.has_value()) return result;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return std::nullopt;
+  };
+  const auto postActiveDrag = [&](std::uint64_t version, double x) {
+    target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(x, 0.0)));
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = entity,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+    asyncRenderer.requestRender(request);
+    return waitForResult();
+  };
+  const auto findDragTile = [entity](const RenderResult::CompositedPreview& preview) {
+    return std::find_if(preview.tiles.begin(), preview.tiles.end(),
+                        [entity](const RenderResult::CompositedTile& tile) {
+                          return tile.isDragTarget && tile.layerEntity == entity;
+                        });
+  };
+
+  auto firstDrag = postActiveDrag(/*version=*/1, /*x=*/4.0);
+  ASSERT_TRUE(firstDrag.has_value());
+  ASSERT_TRUE(firstDrag->compositedPreview.has_value());
+  const auto firstDragTile = findDragTile(*firstDrag->compositedPreview);
+  ASSERT_NE(firstDragTile, firstDrag->compositedPreview->tiles.end());
+  ASSERT_TRUE(HasPresentationPayload(*firstDragTile))
+      << "First active drag frame must upload the drag target texture.";
+
+  auto secondDrag = postActiveDrag(/*version=*/2, /*x=*/8.0);
+  ASSERT_TRUE(secondDrag.has_value());
+  ASSERT_TRUE(secondDrag->compositedPreview.has_value());
+  const auto secondDragTile = findDragTile(*secondDrag->compositedPreview);
+  ASSERT_NE(secondDragTile, secondDrag->compositedPreview->tiles.end());
+
+  EXPECT_EQ(secondDragTile->id, firstDragTile->id);
+  EXPECT_EQ(secondDragTile->generation, firstDragTile->generation);
+  EXPECT_FALSE(HasPresentationPayload(*secondDragTile))
+      << "Once the drag target texture is published and its generation is unchanged, steady drag "
+         "frames should send metadata only. Re-uploading the active bitmap every mouse move is the "
+         "#Blue_center_burst high-zoom lag.";
+  EXPECT_NE(secondDragTile->dragTranslationDoc, firstDragTile->dragTranslationDoc)
+      << "Metadata-only reuse must still carry updated presentation geometry.";
+
+  for (const auto& row : asyncRenderer.compositorLayerInspectorRows()) {
+    EXPECT_TRUE(row.thumbnailPixels.empty())
+        << "Active-drag diagnostics should keep metadata current without rebuilding layer "
+           "thumbnails on the drag hot path.";
+  }
+  for (const auto& tile : asyncRenderer.compositorCompositeTiles()) {
+    EXPECT_TRUE(tile.thumbnailPixels.empty())
+        << "Active-drag diagnostics should keep tile metadata current without rebuilding composite "
+           "thumbnails on the drag hot path.";
+  }
+}
+
 TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGenerations) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
@@ -2237,10 +2315,10 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
 
 // Faithful-to-editor per-frame stats: the `EndToEndDragStats` above
 // measures only the async-renderer round-trip. The real editor's
-// main thread *additionally* synchronously rasterizes the selection
+// main thread *additionally* synchronously captures the selection
 // chrome overlay every frame where the selection, canvas size, or
 // document version changed — and during a drag, the version bumps
-// each mouse-move, so the overlay pass runs every frame.
+// each mouse-move, so the overlay capture runs every frame.
 // `RunFaithfulEditorFrameDragHarness` measures THAT too, so the
 // test numbers match what the user feels when they drag.
 struct FaithfulFrameDragStats {
@@ -2252,6 +2330,20 @@ struct FaithfulFrameDragStats {
   double overlayMaxMs = 0.0;
   double workerAvgMs = 0.0;
   double workerMaxMs = 0.0;
+  double workerSetupAvgMs = 0.0;
+  double workerRenderFrameAvgMs = 0.0;
+  double workerBuildPreviewAvgMs = 0.0;
+  double workerFinalSnapshotAvgMs = 0.0;
+  double workerDiagnosticsAvgMs = 0.0;
+  double immediateRasterizeAvgMs = 0.0;
+  double immediateRasterizeMaxMs = 0.0;
+  double cachedRasterizeAvgMs = 0.0;
+  double cachedRasterizeMaxMs = 0.0;
+  int immediateTileCount = 0;
+  int cachedTileCount = 0;
+  std::uint64_t fastPathFrames = 0;
+  std::uint64_t slowPathFramesWithDirty = 0;
+  std::uint64_t noDirtyFrames = 0;
   int steadyFrames = 0;
   // Bitmap payload sizes (rough proxy for per-frame GL upload bytes).
   // GL upload throughput on Apple silicon is ~10 GB/s for
@@ -2259,8 +2351,24 @@ struct FaithfulFrameDragStats {
   // ~0.55 ms of GPU bandwidth — useful to compare against CPU cost.
   std::size_t compositedUploadBytesPerFrame = 0;
   std::size_t flatUploadBytesPerFrame = 0;
+  // Retained overlay payload bytes. The immediate overlay path keeps this at zero.
   std::size_t overlayUploadBytesPerFrame = 0;
+  std::size_t steadyCompositedUploadBytesPerFrame = 0;
 };
+
+std::size_t CompositedPreviewPayloadBytes(const RenderResult::CompositedPreview& preview) {
+  std::size_t totalBytes = 0;
+  for (const auto& tile : preview.tiles) {
+    totalBytes += static_cast<std::size_t>(tile.bitmap.dimensions.x) *
+                  static_cast<std::size_t>(tile.bitmap.dimensions.y) * 4u;
+    if (tile.textureSnapshot != nullptr) {
+      const Vector2i dimensions = tile.textureSnapshot->dimensions();
+      totalBytes +=
+          static_cast<std::size_t>(dimensions.x) * static_cast<std::size_t>(dimensions.y) * 4u;
+    }
+  }
+  return totalBytes;
+}
 
 FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& asyncDoc,
                                                          svg::Renderer& renderer,
@@ -2273,10 +2381,6 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
   };
 
   AsyncRenderer asyncRenderer;
-  // The overlay renderer is persistent across frames in the real
-  // editor (`RenderCoordinator::overlayRenderer_`). Re-creating it
-  // per frame would miss caches the renderer may hold onto.
-  svg::Renderer overlayRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
     const auto deadline = Clock::now() + std::chrono::seconds(30);
@@ -2305,38 +2409,28 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
     asyncRenderer.requestRender(request);
   };
 
-  const auto rasterizeOverlay = [&]() {
+  const auto captureOverlay = [&]() {
     // Matches `RenderCoordinator::rasterizeOverlayForCurrentSelection`:
-    // set up an overlay viewport, draw the selection chrome into the
-    // overlay renderer, end the frame, and take a snapshot.
-    ZoneScopedN("Harness::rasterizeOverlay");
-    svg::RenderViewport vp;
-    const Vector2i canvasSize = asyncDoc.document().canvasSize();
-    vp.size = Vector2d(canvasSize.x, canvasSize.y);
-    vp.devicePixelRatio = 1.0;
-    {
-      ZoneScopedN("Harness::overlayBeginFrame");
-      overlayRenderer.beginFrame(vp);
-    }
+    // capture a race-free selection chrome snapshot. Presentation draws
+    // the snapshot immediately, so there is no retained overlay texture
+    // or upload payload in the current editor path.
+    ZoneScopedN("Harness::captureOverlay");
     const Transform2d canvasFromDoc = asyncDoc.document().canvasFromDocumentTransform();
     std::array<svg::SVGElement, 1> selection{target};
-    OverlayRenderer::drawChromeWithTransform(
-        overlayRenderer, std::span<const svg::SVGElement>(selection), canvasFromDoc);
-    {
-      ZoneScopedN("Harness::overlayEndFrame");
-      overlayRenderer.endFrame();
-    }
-    svg::RendererBitmap snapshot;
-    {
-      ZoneScopedN("Harness::overlayTakeSnapshot");
-      snapshot = overlayRenderer.takeSnapshot();
-    }
-    return snapshot;
+    return OverlayRenderer::captureChromeSnapshot(std::span<const svg::SVGElement>(selection),
+                                                  std::nullopt, canvasFromDoc);
   };
 
   FaithfulFrameDragStats stats;
   double overlayTotal = 0.0;
   double workerTotal = 0.0;
+  double workerSetupTotal = 0.0;
+  double workerRenderFrameTotal = 0.0;
+  double workerBuildPreviewTotal = 0.0;
+  double workerFinalSnapshotTotal = 0.0;
+  double workerDiagnosticsTotal = 0.0;
+  double immediateRasterizeTotal = 0.0;
+  double cachedRasterizeTotal = 0.0;
 
   // Phase 0 — page-load cold render.
   {
@@ -2352,7 +2446,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
 
   // Phase 1 — click-then-drag, one frame. Measures:
   //   (a) async render worker time
-  //   (b) main-thread overlay rasterize
+  //   (b) main-thread overlay capture
   //   (c) combined click → first-pixel-with-overlay wall-clock
   {
     target.cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
@@ -2361,16 +2455,23 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
     const auto tWorker = Clock::now();
     postRequest(2, true, true);
     auto result = waitForResult();
-    const double workerMs = elapsedMs(tWorker);
     EXPECT_TRUE(result.has_value());
+    const double workerMs = result.has_value() ? result->workerMs : elapsedMs(tWorker);
+    const auto clickRenderStats = asyncRenderer.compositorRenderFrameStats();
 
     const auto tOverlay = Clock::now();
-    const auto overlayBitmap = rasterizeOverlay();
+    const SelectionChromeSnapshot overlaySnapshot = captureOverlay();
     const double overlayMs = elapsedMs(tOverlay);
 
     stats.clickToFirstPixelMs = elapsedMs(tTotal);
     stats.workerMaxMs = std::max(stats.workerMaxMs, workerMs);
     stats.overlayMaxMs = std::max(stats.overlayMaxMs, overlayMs);
+    stats.immediateRasterizeMaxMs =
+        std::max(stats.immediateRasterizeMaxMs, clickRenderStats.immediateRasterizeMs);
+    stats.cachedRasterizeMaxMs =
+        std::max(stats.cachedRasterizeMaxMs, clickRenderStats.cachedRasterizeMs);
+    stats.immediateTileCount = clickRenderStats.immediateTileCount;
+    stats.cachedTileCount = clickRenderStats.cachedTileCount;
 
     // Record upload byte counts (first frame is representative of
     // steady-state sizes since canvas dims don't change).
@@ -2379,22 +2480,18 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
         // M2C: composited preview is now a paint-order tile list, not
         // a flattened bg/promoted/fg triple. Total upload bytes is the
         // sum over all tiles' RGBA8 buffers.
-        std::size_t totalBytes = 0;
-        for (const auto& tile : result->compositedPreview->tiles) {
-          totalBytes += static_cast<std::size_t>(tile.bitmap.dimensions.x) *
-                        static_cast<std::size_t>(tile.bitmap.dimensions.y) * 4u;
-        }
-        stats.compositedUploadBytesPerFrame = totalBytes;
+        stats.compositedUploadBytesPerFrame =
+            CompositedPreviewPayloadBytes(*result->compositedPreview);
       }
       stats.flatUploadBytesPerFrame = static_cast<std::size_t>(result->bitmap.dimensions.x) *
                                       static_cast<std::size_t>(result->bitmap.dimensions.y) * 4u;
     }
-    stats.overlayUploadBytesPerFrame = static_cast<std::size_t>(overlayBitmap.dimensions.x) *
-                                       static_cast<std::size_t>(overlayBitmap.dimensions.y) * 4u;
+    EXPECT_FALSE(overlaySnapshot.paths.empty());
+    stats.overlayUploadBytesPerFrame = 0u;
   }
 
   // Phase 2 — steady-state drag frames. Each frame does the same
-  // worker round-trip + overlay rasterize the editor does.
+  // worker round-trip + overlay capture the editor does.
   double steadyTotal = 0.0;
   for (int i = 0; i < steadyFrames; ++i) {
     target.cast<svg::SVGGraphicsElement>().setTransform(
@@ -2404,25 +2501,54 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
     const auto tWorker = Clock::now();
     postRequest(static_cast<uint64_t>(3 + i), true, true);
     auto result = waitForResult();
-    const double workerMs = elapsedMs(tWorker);
     EXPECT_TRUE(result.has_value());
+    const double workerMs = result.has_value() ? result->workerMs : elapsedMs(tWorker);
+    const auto renderStats = asyncRenderer.compositorRenderFrameStats();
 
     const auto tOverlay = Clock::now();
-    (void)rasterizeOverlay();
+    (void)captureOverlay();
     const double overlayMs = elapsedMs(tOverlay);
 
     const double frameMs = elapsedMs(tTotal);
     steadyTotal += frameMs;
     overlayTotal += overlayMs;
     workerTotal += workerMs;
+    workerSetupTotal += result.has_value() ? result->workerTiming.setupMs : 0.0;
+    workerRenderFrameTotal += result.has_value() ? result->workerTiming.renderFrameMs : 0.0;
+    workerBuildPreviewTotal += result.has_value() ? result->workerTiming.buildPreviewMs : 0.0;
+    workerFinalSnapshotTotal += result.has_value() ? result->workerTiming.finalSnapshotMs : 0.0;
+    workerDiagnosticsTotal += result.has_value() ? result->workerTiming.diagnosticsMs : 0.0;
+    immediateRasterizeTotal += renderStats.immediateRasterizeMs;
+    cachedRasterizeTotal += renderStats.cachedRasterizeMs;
+    if (result.has_value() && result->compositedPreview.has_value()) {
+      stats.steadyCompositedUploadBytesPerFrame =
+          CompositedPreviewPayloadBytes(*result->compositedPreview);
+    }
     stats.steadyMaxMs = std::max(stats.steadyMaxMs, frameMs);
     stats.overlayMaxMs = std::max(stats.overlayMaxMs, overlayMs);
     stats.workerMaxMs = std::max(stats.workerMaxMs, workerMs);
+    stats.immediateRasterizeMaxMs =
+        std::max(stats.immediateRasterizeMaxMs, renderStats.immediateRasterizeMs);
+    stats.cachedRasterizeMaxMs =
+        std::max(stats.cachedRasterizeMaxMs, renderStats.cachedRasterizeMs);
+    stats.immediateTileCount = renderStats.immediateTileCount;
+    stats.cachedTileCount = renderStats.cachedTileCount;
   }
   stats.steadyFrames = steadyFrames;
   stats.steadyAvgMs = steadyTotal / steadyFrames;
   stats.overlayAvgMs = overlayTotal / steadyFrames;
   stats.workerAvgMs = workerTotal / steadyFrames;
+  stats.workerSetupAvgMs = workerSetupTotal / steadyFrames;
+  stats.workerRenderFrameAvgMs = workerRenderFrameTotal / steadyFrames;
+  stats.workerBuildPreviewAvgMs = workerBuildPreviewTotal / steadyFrames;
+  stats.workerFinalSnapshotAvgMs = workerFinalSnapshotTotal / steadyFrames;
+  stats.workerDiagnosticsAvgMs = workerDiagnosticsTotal / steadyFrames;
+  stats.immediateRasterizeAvgMs = immediateRasterizeTotal / steadyFrames;
+  stats.cachedRasterizeAvgMs = cachedRasterizeTotal / steadyFrames;
+  const auto fastPathCounters = asyncRenderer.compositorFastPathCountersForTesting();
+  stats.fastPathFrames = fastPathCounters.fastPathFrames;
+  stats.slowPathFramesWithDirty = fastPathCounters.slowPathFramesWithDirty;
+  stats.noDirtyFrames = fastPathCounters.noDirtyFrames;
 
   return stats;
 }
@@ -2672,13 +2798,30 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
             << " ms over " << stats.steadyFrames << " frames\n"
             << "  worker (compositor renderFrame): avg=" << stats.workerAvgMs
             << " ms, max=" << stats.workerMaxMs << " ms\n"
-            << "  overlay rasterize (main-thread): avg=" << stats.overlayAvgMs
+            << "  worker split: setup=" << stats.workerSetupAvgMs
+            << " ms, renderFrame=" << stats.workerRenderFrameAvgMs
+            << " ms, buildPreview=" << stats.workerBuildPreviewAvgMs
+            << " ms, finalSnapshot=" << stats.workerFinalSnapshotAvgMs
+            << " ms, diagnostics=" << stats.workerDiagnosticsAvgMs << " ms\n"
+            << "  immediate rasterize: avg=" << stats.immediateRasterizeAvgMs
+            << " ms, max=" << stats.immediateRasterizeMaxMs
+            << " ms, tiles=" << stats.immediateTileCount << "\n"
+            << "  cached rasterize: avg=" << stats.cachedRasterizeAvgMs
+            << " ms, max=" << stats.cachedRasterizeMaxMs << " ms, tiles=" << stats.cachedTileCount
+            << "\n"
+            << "  fast-path counters: fast=" << stats.fastPathFrames
+            << ", slowDirty=" << stats.slowPathFramesWithDirty
+            << ", noDirty=" << stats.noDirtyFrames << "\n"
+            << "  overlay capture (main-thread): avg=" << stats.overlayAvgMs
             << " ms, max=" << stats.overlayMaxMs << " ms\n"
             << "  composited upload bytes/frame: " << stats.compositedUploadBytesPerFrame << " (~"
             << (stats.compositedUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n"
+            << "  steady composited upload bytes/frame: "
+            << stats.steadyCompositedUploadBytesPerFrame << " (~"
+            << (stats.steadyCompositedUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n"
             << "  flat upload bytes/frame: " << stats.flatUploadBytesPerFrame << " (~"
             << (stats.flatUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n"
-            << "  overlay upload bytes/frame: " << stats.overlayUploadBytesPerFrame << " (~"
+            << "  retained overlay bytes/frame: " << stats.overlayUploadBytesPerFrame << " (~"
             << (stats.overlayUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n";
 
   // The user observes 80 ms per drag frame in the real editor. If this
@@ -2697,7 +2840,72 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
   // lines above tell you WHERE the regression lives.
   EXPECT_LT(stats.steadyAvgMs, 75.0)
       << "faithful per-frame drag cost exceeded 75 ms on a real splash drag. Breakdown above "
-         "tells you WHICH component grew — worker (compositor) vs overlay rasterize.";
+         "tells you WHICH component grew — worker (compositor) vs overlay capture.";
+}
+
+TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBlueCenterBurstBreaksDownPerFrameCost) {
+  if (!kAsyncRendererWallclockTestsEnabled) {
+    GTEST_SKIP() << "Runner-speed-sensitive wall-clock budget test runs in the manual perf "
+                    "target //donner/editor/tests:async_renderer_wallclock_tests.";
+  }
+
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty());
+
+  AsyncSVGDocument asyncDoc;
+  ASSERT_TRUE(asyncDoc.loadFromString(splashSource));
+  asyncDoc.document().setCanvasSize(1784, 1024);
+
+  auto target = asyncDoc.document().querySelector("#Blue_center_burst ellipse");
+  ASSERT_TRUE(target.has_value()) << "splash lacks #Blue_center_burst ellipse";
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  const auto stats =
+      RunFaithfulEditorFrameDragHarness(asyncDoc, renderer, targetEntity, *target, 20);
+
+  std::cerr << "[PERF] FaithfulFrameDragOnRealSplashBlueCenterBurst:\n"
+            << "  cold=" << stats.coldRenderMs << " ms\n"
+            << "  click->firstPixel (incl. first overlay)=" << stats.clickToFirstPixelMs << " ms\n"
+            << "  steady: avg=" << stats.steadyAvgMs << " ms, max=" << stats.steadyMaxMs
+            << " ms over " << stats.steadyFrames << " frames\n"
+            << "  worker (compositor renderFrame): avg=" << stats.workerAvgMs
+            << " ms, max=" << stats.workerMaxMs << " ms\n"
+            << "  worker split: setup=" << stats.workerSetupAvgMs
+            << " ms, renderFrame=" << stats.workerRenderFrameAvgMs
+            << " ms, buildPreview=" << stats.workerBuildPreviewAvgMs
+            << " ms, finalSnapshot=" << stats.workerFinalSnapshotAvgMs
+            << " ms, diagnostics=" << stats.workerDiagnosticsAvgMs << " ms\n"
+            << "  immediate rasterize: avg=" << stats.immediateRasterizeAvgMs
+            << " ms, max=" << stats.immediateRasterizeMaxMs
+            << " ms, tiles=" << stats.immediateTileCount << "\n"
+            << "  cached rasterize: avg=" << stats.cachedRasterizeAvgMs
+            << " ms, max=" << stats.cachedRasterizeMaxMs << " ms, tiles=" << stats.cachedTileCount
+            << "\n"
+            << "  fast-path counters: fast=" << stats.fastPathFrames
+            << ", slowDirty=" << stats.slowPathFramesWithDirty
+            << ", noDirty=" << stats.noDirtyFrames << "\n"
+            << "  overlay capture (main-thread): avg=" << stats.overlayAvgMs
+            << " ms, max=" << stats.overlayMaxMs << " ms\n"
+            << "  composited upload bytes/frame: " << stats.compositedUploadBytesPerFrame << " (~"
+            << (stats.compositedUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n"
+            << "  steady composited upload bytes/frame: "
+            << stats.steadyCompositedUploadBytesPerFrame << " (~"
+            << (stats.steadyCompositedUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n"
+            << "  flat upload bytes/frame: " << stats.flatUploadBytesPerFrame << " (~"
+            << (stats.flatUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n"
+            << "  retained overlay bytes/frame: " << stats.overlayUploadBytesPerFrame << " (~"
+            << (stats.overlayUploadBytesPerFrame / (1024.0 * 1024.0)) << " MB)\n";
+
+  EXPECT_LT(stats.steadyAvgMs, 75.0)
+      << "faithful burst drag cost exceeded current CI-runner budget; breakdown above tells you "
+         "whether the regression is worker, overlay, or upload volume.";
 }
 
 // Repros the user-observed multi-second compositor renderFrame on
@@ -3660,13 +3868,7 @@ TEST(RenderCoordinatorTest, DisplayNoneSuppressionClearsWhenSameElementBecomesVi
          "cached layer to render again.";
 }
 
-TEST(RenderCoordinatorTest, OverlayUploadPublishesCurrentFrameWithoutVersionGate) {
-  svg::Renderer rendererProbe;
-  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "Tiny-skia overlay upload needs a live GL context; the Geode direct-texture "
-                    "path exercises this regression.";
-  }
-
+TEST(RenderCoordinatorTest, ImmediateOverlayPublishesCurrentFrameWithoutVersionGate) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -3691,19 +3893,63 @@ TEST(RenderCoordinatorTest, OverlayUploadPublishesCurrentFrameWithoutVersionGate
   RenderCoordinator coordinator;
   EXPECT_TRUE(
       coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
-  EXPECT_EQ(textures.overlayWidth(), 64);
-  EXPECT_EQ(textures.overlayHeight(), 96);
-  ASSERT_TRUE(textures.overlayScreenRect().has_value());
-  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(12.0, 34.0, 32.0, 48.0));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
+  EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.canvasSize, Vector2i(64, 96));
+  EXPECT_EQ(textures.overlayWidth(), 0);
+  EXPECT_EQ(textures.overlayHeight(), 0);
+  EXPECT_FALSE(textures.overlayScreenRect().has_value());
+}
+
+TEST(RenderCoordinatorTest, IdleSelectionReusesImmediateOverlayForPresentation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+  auto target = app.document().document().querySelector("rect");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+  app.document().document().setCanvasSize(512, 512);
+
+  ViewportState viewport;
+  viewport.paneOrigin = Vector2d(12.0, 34.0);
+  viewport.paneSize = Vector2d(32.0, 48.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.panDocPoint = Vector2d::Zero();
+  viewport.panScreenPoint = viewport.paneOrigin;
+
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  ASSERT_TRUE(
+      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  const SelectionChromeSnapshot firstSnapshot = *coordinator.immediateOverlaySnapshot();
+  EXPECT_EQ(textures.overlayWidth(), 0);
+  EXPECT_EQ(textures.overlayHeight(), 0);
+
+  SelectTool selectTool;
+  coordinator.beginFrameCostTracking();
+  EXPECT_FALSE(coordinator.rasterizeOverlayForPresentation(app, selectTool, viewport, textures,
+                                                           std::nullopt, std::nullopt))
+      << "Idle selected chrome should reuse the previous immediate overlay snapshot instead of "
+         "recapturing every frame.";
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), firstSnapshot.paths.size());
+  EXPECT_EQ(textures.overlayWidth(), 0);
+  EXPECT_EQ(textures.overlayHeight(), 0);
+  const FrameCostBreakdown::Overlay overlayCost = coordinator.lastFrameCostBreakdown().overlay;
+  EXPECT_EQ(overlayCost.payloadBytes, 0u);
+  EXPECT_EQ(overlayCost.captureMs, 0.0);
+  EXPECT_EQ(overlayCost.drawMs, 0.0);
+  EXPECT_EQ(overlayCost.snapshotMs, 0.0);
+  EXPECT_EQ(overlayCost.uploadMs, 0.0);
+  EXPECT_EQ(overlayCost.selectedElementCount, 1);
 }
 
 TEST(RenderCoordinatorTest, LargeSelectionAutoDetailPromotesFromBoundsOnlyToFullAfterIdle) {
-  svg::Renderer rendererProbe;
-  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "Immediate overlay upload needs a live GL context; the Geode direct-texture "
-                    "path exercises the coordinator auto-detail heuristic.";
-  }
-
   constexpr int kSelectedRectCount = 130;
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(MakeManyRectsSvg(kSelectedRectCount)));
@@ -3742,11 +3988,6 @@ TEST(RenderCoordinatorTest, LargeSelectionAutoDetailPromotesFromBoundsOnlyToFull
 }
 
 TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
-  svg::Renderer rendererProbe;
-  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "Overlay drag presentation is exercised by the Geode direct-texture path.";
-  }
-
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -3773,8 +4014,9 @@ TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
   RenderCoordinator coordinator;
   EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt,
                                                               selectTool.activeDragPreview()));
-  ASSERT_TRUE(textures.overlayScreenRect().has_value());
-  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_EQ(textures.overlayWidth(), 0);
+  EXPECT_EQ(textures.overlayHeight(), 0);
 
   selectTool.onMouseMove(app, Vector2d(20.0, 12.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.flushFrame());
@@ -3790,16 +4032,12 @@ TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
   EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.pathCount, 1)
       << "Pure translation drags should rerasterize overlay chrome for the current frame instead "
          "of carrying a cached overlay drag baseline.";
-  ASSERT_TRUE(textures.overlayScreenRect().has_value());
-  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_EQ(textures.overlayWidth(), 0);
+  EXPECT_EQ(textures.overlayHeight(), 0);
 }
 
 TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingTextureTransform) {
-  svg::Renderer rendererProbe;
-  if (!rendererProbe.requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "Overlay drag presentation is exercised by the Geode direct-texture path.";
-  }
-
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -3824,8 +4062,9 @@ TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingT
   RenderCoordinator coordinator;
   EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt,
                                                               selectTool.activeDragPreview()));
-  ASSERT_TRUE(textures.overlayScreenRect().has_value());
-  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_EQ(textures.overlayWidth(), 0);
+  EXPECT_EQ(textures.overlayHeight(), 0);
 
   selectTool.onMouseMove(app, Vector2d(32.0, 32.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.flushFrame());
@@ -3840,9 +4079,10 @@ TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingT
   EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.selectedElementCount, 1);
   EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.pathCount, 1)
       << "Affine resize/rotate drags should rerasterize chrome instead of stretching the previous "
-         "overlay texture at presentation time.";
-  ASSERT_TRUE(textures.overlayScreenRect().has_value());
-  EXPECT_EQ(*textures.overlayScreenRect(), Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0));
+         "immediate overlay snapshot at presentation time.";
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_EQ(textures.overlayWidth(), 0);
+  EXPECT_EQ(textures.overlayHeight(), 0);
 }
 
 TEST(RenderCoordinatorTest, OverlayGesturePreviewUsesRepresentedDragTransformForChip) {

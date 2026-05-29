@@ -89,6 +89,26 @@ public:
                        const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /**
+   * Render a range of entities into the renderer's already-active frame.
+   *
+   * This is the current-frame form of \ref drawEntityRange: the caller owns
+   * `RendererInterface::beginFrame()` / `endFrame()`, and this method only
+   * emits the entity-range draw commands. It is used by the compositor when an
+   * immediate-mode span should be drawn directly into the composition render
+   * target instead of first being rasterized into an offscreen tile.
+   *
+   * @param registry The registry containing the prepared render tree.
+   * @param firstEntity First entity in the range to render (inclusive).
+   * @param lastEntity Last entity in the range to render (inclusive).
+   * @param viewport Viewport for the active render pass.
+   * @param surfaceFromCanvas Transform that maps canvas coords to the active
+   *     render surface.
+   */
+  void drawEntityRangeIntoCurrentFrame(Registry& registry, Entity firstEntity, Entity lastEntity,
+                                       const RenderViewport& viewport,
+                                       const Transform2d& surfaceFromCanvas);
+
+  /**
    * Compute the canvas-space bounding box of every pixel a subsequent
    * `drawEntityRange(registry, firstEntity, lastEntity, viewport,
    * baseTransform)` call would write to. Runs the same entity traversal
@@ -149,6 +169,7 @@ private:
   void drawPreparedDocument(SVGDocument& document);
   void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                             const Transform2d& surfaceFromCanvas);
+  void drawPreparedEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity);
   void traverse(RenderingInstanceView& view, Registry& registry);
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);

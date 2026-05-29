@@ -2,7 +2,7 @@
 /// @file
 ///
 /// `OverlayRenderer` draws editor chrome (currently selection path outlines)
-/// directly into the renderer's existing frame buffer using
+/// directly into the renderer's existing framebuffer using
 /// the canvas primitives `RendererInterface` already exposes. It is **not**
 /// a separate compositing layer and **not** a fabricated SVG subtree —
 /// chrome and document share one render target so there is no subpixel
@@ -36,7 +36,7 @@
 #include "donner/svg/SVGElement.h"
 
 namespace donner::svg {
-class Renderer;
+class RendererInterface;
 }
 
 namespace donner::editor {
@@ -133,17 +133,18 @@ public:
   /// selection. Pulls the `canvasFromDocument` transform from the editor's
   /// document so chrome lands on the same pixels as the rendered content,
   /// regardless of canvas/viewBox aspect mismatch.
-  static void drawChrome(svg::Renderer& renderer, const EditorApp& editor);
+  static void drawChrome(svg::RendererInterface& renderer, const EditorApp& editor);
 
   /// Overload that takes a selection snapshot directly. Single-element
   /// back-compat shim — kept so worker-thread callers and existing
   /// tests don't have to switch to spans. Identity `canvasFromDoc`.
-  static void drawChrome(svg::Renderer& renderer, const std::optional<svg::SVGElement>& selection);
+  static void drawChrome(svg::RendererInterface& renderer,
+                         const std::optional<svg::SVGElement>& selection);
 
   /// Lower-level single-element entry: draw chrome for `selection`
   /// (or none) using `canvasFromDoc`. Kept for back-compat with the
   /// existing single-select call sites.
-  static void drawChromeWithTransform(svg::Renderer& renderer,
+  static void drawChromeWithTransform(svg::RendererInterface& renderer,
                                       const std::optional<svg::SVGElement>& selection,
                                       const Transform2d& canvasFromDoc);
 
@@ -151,11 +152,9 @@ public:
   /// element, selection AABBs, and the optional marquee rect into
   /// `renderer`'s active frame using `canvasFromDoc`.
   ///
-  /// All chrome lives in this one rasterized overlay layer. The earlier
-  /// "two-path" design that drew AABBs + marquee directly via
-  /// ImGui's draw list in `RenderPanePresenter` was folded into here
-  /// — in Geode editor builds the resulting overlay is exported as a
-  /// `RendererTextureSnapshot` and presented directly through WebGPU.
+  /// This renderer-backed path is kept for pixel tests and non-editor callers. The live editor
+  /// presentation path captures the same snapshot, then draws it immediately through
+  /// `RenderPanePresenter` to avoid allocating and uploading a full overlay texture.
   ///
   /// AABBs are computed inline from `selection` (via
   /// `SnapshotSelectionWorldBounds`) at overlay-draw time so they
@@ -174,7 +173,7 @@ public:
   ///   skipped before draw.
   /// @param selectionDetail Detail level for selected-element chrome.
   static void drawChromeWithTransform(
-      svg::Renderer& renderer, std::span<const svg::SVGElement> selection,
+      svg::RendererInterface& renderer, std::span<const svg::SVGElement> selection,
       const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc,
       const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview = std::nullopt,
       std::span<const svg::SVGElement> sourceHover = {},
@@ -185,7 +184,7 @@ public:
   /// Back-compat overload without marquee. Kept for existing callers
   /// that don't need a marquee rect (older tests, worker-thread
   /// helpers). Path outlines + selection AABBs are still drawn.
-  static void drawChromeWithTransform(svg::Renderer& renderer,
+  static void drawChromeWithTransform(svg::RendererInterface& renderer,
                                       std::span<const svg::SVGElement> selection,
                                       const Transform2d& canvasFromDoc);
 
@@ -219,7 +218,7 @@ public:
   /// `drawChromeWithTransform(selection, marqueeRectDoc, canvasFromDoc)`
   /// given the same input snapshot — pinned by
   /// `OverlayRendererTest.SnapshotProducesByteIdenticalPixels`.
-  static void drawChromeFromSnapshot(svg::Renderer& renderer,
+  static void drawChromeFromSnapshot(svg::RendererInterface& renderer,
                                      const SelectionChromeSnapshot& snapshot);
 };
 

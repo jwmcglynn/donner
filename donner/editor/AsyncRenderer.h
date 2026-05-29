@@ -174,6 +174,20 @@ struct PresentationSnapshotPlan {
 
 /// Presentation payload plus the document version it was rendered from.
 struct RenderResult {
+  /// Internal timing split for one async worker iteration.
+  struct WorkerTimingBreakdown {
+    /// Time before `CompositorController::renderFrame`, including compositor selection setup.
+    double setupMs = 0.0;
+    /// Time spent in `CompositorController::renderFrame`.
+    double renderFrameMs = 0.0;
+    /// Time spent building composited-preview tile metadata/payloads.
+    double buildPreviewMs = 0.0;
+    /// Time spent taking the final fallback canvas snapshot, when needed.
+    double finalSnapshotMs = 0.0;
+    /// Time spent copying compositor diagnostics for editor panels.
+    double diagnosticsMs = 0.0;
+  };
+
   /// One composite tile from the worker's `CompositorController::
   /// snapshotCompositorTiles()` snapshot (design doc 0033 §M2C). The
   /// editor uploads one GL texture per tile (keyed on `id`) and
@@ -259,6 +273,7 @@ struct RenderResult {
   /// Reported so the editor can plot worker latency alongside ImGui frame time
   /// on the frame graph. Zero means no worker timing was recorded.
   double workerMs = 0.0;
+  WorkerTimingBreakdown workerTiming;
 };
 
 class AsyncRenderer {

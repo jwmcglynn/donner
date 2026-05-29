@@ -761,6 +761,7 @@ struct RendererGeode::Impl {
   // When non-null, `beginFrame()` renders into this texture instead of
   // creating its own offscreen target. The host retains ownership.
   wgpu::Texture hostTarget;
+  bool preserveTargetOnBeginFrame = false;
 
   // Texture format for all render targets. Matches the GeodeDevice's configured
   // format (RGBA8Unorm for headless, host-specified for embedded mode).
@@ -1827,6 +1828,11 @@ void RendererGeode::setTargetTexture(wgpu::Texture texture) {
 
 void RendererGeode::clearTargetTexture() {
   impl_->hostTarget = wgpu::Texture();
+  impl_->preserveTargetOnBeginFrame = false;
+}
+
+void RendererGeode::setPreserveTargetOnBeginFrame(bool preserve) {
+  impl_->preserveTargetOnBeginFrame = preserve;
 }
 
 RendererGeode::~RendererGeode() {
@@ -2006,9 +2012,13 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->encoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
       impl_->msaaTarget, impl_->target, impl_->frameCommandEncoder.get());
-  // Default to a transparent clear so an empty frame matches the other
-  // backends' "no document content" appearance.
-  impl_->encoder->clear(css::RGBA(0, 0, 0, 0));
+  if (impl_->preserveTargetOnBeginFrame) {
+    impl_->encoder->setLoadPreserve();
+  } else {
+    // Default to a transparent clear so an empty frame matches the other
+    // backends' "no document content" appearance.
+    impl_->encoder->clear(css::RGBA(0, 0, 0, 0));
+  }
 }
 
 void RendererGeode::endFrame() {

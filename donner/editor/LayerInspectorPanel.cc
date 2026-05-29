@@ -66,14 +66,18 @@ const char* RefusalReasonLabel(svg::compositor::CompositorController::PromoteRef
   return "?";
 }
 
-const char* TileStorageLabel(
+const char* TileRenderModeLabel(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
   using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
   if (tile.kind == Kind::Segment && tile.immediate) {
-    return "immediate";
+    return "direct";
   }
 
-  return "bitmap";
+  if (tile.kind == Kind::Background || tile.kind == Kind::Foreground) {
+    return "composed";
+  }
+
+  return "cached";
 }
 
 const char* ImmediateReasonLabel(
@@ -515,7 +519,7 @@ void LayerInspectorPanel::render(
   ImGui::TableSetupColumn("Kind", ImGuiTableColumnFlags_WidthFixed, 64.0f);
   ImGui::TableSetupColumn("Mode", ImGuiTableColumnFlags_WidthFixed, 86.0f);
   ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthStretch, 1.5f);
-  ImGui::TableSetupColumn("Bitmap", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+  ImGui::TableSetupColumn("Payload", ImGuiTableColumnFlags_WidthStretch, 1.0f);
   ImGui::TableSetupColumn("Raster", ImGuiTableColumnFlags_WidthStretch, 1.1f);
   ImGui::TableHeadersRow();
 
@@ -564,7 +568,7 @@ void LayerInspectorPanel::render(
     const ImVec4 modeColor = tile.immediate ? ImVec4(1.0f, 0.65f, 0.25f, 1.0f)
                                             : (demoted ? ImVec4(1.0f, 0.72f, 0.35f, 1.0f)
                                                        : ImGui::GetStyle().Colors[ImGuiCol_Text]);
-    ImGui::TextColored(modeColor, "%s", TileStorageLabel(tile));
+    ImGui::TextColored(modeColor, "%s", TileRenderModeLabel(tile));
     if (const char* reason = ImmediateReasonLabel(tile); reason[0] != '\0') {
       ImGui::TextDisabled("%s", reason);
     }

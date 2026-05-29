@@ -99,6 +99,12 @@ public:
   }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
+  /// Add immediate presenter-side overlay draw-list time to the current frame counters.
+  ///
+  /// @param drawMs Milliseconds spent issuing immediate overlay draw-list commands.
+  void addImmediateOverlayDrawCost(double drawMs) {
+    lastFrameCostBreakdown_.overlay.drawMs += drawMs;
+  }
   /// Replace transient source-hover chrome elements.
   ///
   /// @param elements Elements to highlight as source-hover preview chrome.
@@ -108,11 +114,10 @@ public:
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
-  /// Rasterize the editor chrome (path outlines, selection AABBs,
-  /// marquee) into the overlay texture. `marqueeRectDoc` is the active
-  /// marquee rectangle in document space (nullopt when the user isn't
-  /// marquee-dragging). All chrome is baked into this single overlay
-  /// texture — Geode will later own the whole layer end-to-end.
+  /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
+  /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
+  /// the user isn't marquee-dragging). The snapshot is drawn directly by \ref RenderPanePresenter
+  /// so selected chrome does not allocate, rasterize, snapshot, or upload an overlay texture.
   bool rasterizeOverlayForCurrentSelection(
       EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
       const std::optional<Box2d>& marqueeRectDoc,
@@ -151,6 +156,10 @@ public:
   [[nodiscard]] Entity suppressedCompositedLayerEntity(EditorApp& app);
   /// Return true when the live selected graphics element is hidden by `display:none`.
   [[nodiscard]] bool selectedElementIsDisplayNone(EditorApp& app) const;
+  /// Latest race-free overlay chrome snapshot for immediate screen-space presentation.
+  [[nodiscard]] const std::optional<SelectionChromeSnapshot>& immediateOverlaySnapshot() const {
+    return immediateOverlaySnapshot_;
+  }
 
 private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
@@ -166,9 +175,9 @@ private:
   };
 
   RenderWorkerBundle renderWorker_;
-  svg::Renderer overlayRenderer_;
   CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
+  std::optional<SelectionChromeSnapshot> immediateOverlaySnapshot_;
 
   std::uint64_t displayedDocVersion_ = 0;
 
@@ -179,14 +188,15 @@ private:
   std::optional<Box2d> lastOverlayScreenRect_;
   std::optional<Transform2d> lastOverlayCanvasFromDocument_;
   SelectionChromeDetail lastOverlaySelectionDetail_ = SelectionChromeDetail::Full;
+  bool lastOverlayInteractionActive_ = false;
   std::chrono::steady_clock::time_point overlayStableSince_{};
   std::uint64_t lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
-  /// Last marquee rect baked into the overlay texture, or nullopt if
-  /// the last overlay rasterize didn't include one. Used to invalidate
-  /// the cached overlay when the marquee geometry changes.
+  /// Last marquee rect captured into the immediate overlay snapshot, or nullopt if the last
+  /// overlay capture didn't include one. Used to invalidate cached chrome when marquee geometry
+  /// changes.
   std::optional<Box2d> lastOverlayMarqueeRectDoc_;
-  /// Active rotation bounds baked into the overlay texture, or nullopt
-  /// when the last overlay used normal axis-aligned selection bounds.
+  /// Active rotation bounds captured into the immediate overlay snapshot, or nullopt when the last
+  /// overlay used normal axis-aligned selection bounds.
   std::optional<SelectTool::ActiveTransformBoundsPreview> lastOverlayActiveBoundsPreview_;
 
   PresentationRenderScheduler renderScheduler_;

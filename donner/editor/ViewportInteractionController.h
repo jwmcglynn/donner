@@ -20,11 +20,11 @@ constexpr std::size_t kFrameHistoryCapacity = 120;
 struct FrameProfilerSample {
   /// Time spent collecting overlay chrome geometry.
   float overlayCaptureMs = 0.0f;
-  /// Time spent drawing overlay chrome into the overlay renderer.
+  /// Time spent drawing overlay chrome into a retained overlay payload.
   float overlayDrawMs = 0.0f;
   /// Time spent snapshotting overlay chrome from the renderer.
   float overlaySnapshotMs = 0.0f;
-  /// Time spent uploading or registering overlay presentation payloads.
+  /// Time spent uploading or registering retained overlay presentation payloads.
   float overlayUploadMs = 0.0f;
   /// Time spent uploading or registering composited content tiles.
   float compositedUploadMs = 0.0f;
@@ -45,7 +45,7 @@ struct FrameProfilerSample {
 
 /// Presentation memory retained by the editor texture cache for one UI frame.
 struct FrameMemorySample {
-  /// Bytes retained by the current overlay texture.
+  /// Bytes retained by the current overlay texture, if the retained overlay fallback is active.
   std::uint64_t overlayBytes = 0;
   /// Bytes retained by active composited tile textures.
   std::uint64_t activeTileBytes = 0;

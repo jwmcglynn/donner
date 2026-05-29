@@ -273,6 +273,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
       wgpuAdapterInfoFreeMembers(info);
     }
   }
+  if (config.forceSingleSampleAlphaCoverage) {
+    result->useAlphaCoverageAA_ = true;
+  }
 
   result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);
 

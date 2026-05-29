@@ -958,7 +958,28 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
+  drawPreparedEntityRange(registry, firstEntity, lastEntity);
+  renderer_.endFrame();
+  surfaceFromCanvasTransform_ = Transform2d();
+  preparedFilterGraphs_.clear();
+  preparedFilterRegions_.clear();
+}
 
+void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity firstEntity,
+                                                     Entity lastEntity,
+                                                     const RenderViewport& viewport,
+                                                     const Transform2d& surfaceFromCanvas) {
+  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  surfaceFromCanvasTransform_ = surfaceFromCanvas;
+
+  drawPreparedEntityRange(registry, firstEntity, lastEntity);
+  surfaceFromCanvasTransform_ = Transform2d();
+  preparedFilterGraphs_.clear();
+  preparedFilterRegions_.clear();
+}
+
+void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEntity,
+                                             Entity lastEntity) {
   // Snapshot the entity slice [firstEntity, lastEntity] and pre-resolve filter graphs before the
   // main traversal, for the same reason as `draw()`: `preRenderFeImageFragments` mutates
   // `RenderingInstanceComponent` storage (emplace + sort inside `createFeImageShadowTree`), which
@@ -1172,11 +1193,6 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     }
     subtreeMarkers_.pop_back();
   }
-
-  renderer_.endFrame();
-  surfaceFromCanvasTransform_ = Transform2d();
-  preparedFilterGraphs_.clear();
-  preparedFilterRegions_.clear();
 }
 
 std::optional<Box2d> RendererDriver::computeEntityRangeBounds(

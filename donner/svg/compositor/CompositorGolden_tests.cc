@@ -3560,6 +3560,98 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
          "grew past pre-existing baseline";
 }
 
+TEST_F(CompositorGoldenTest, RealSplashBlueCenterBurstEllipseDragLatency) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles — skipping splash perf test";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty()) << "donner_splash.svg is empty";
+
+  SVGDocument document = parseDocument(splashSource);
+  document.setCanvasSize(1784, 1024);
+
+  RenderViewport fullViewport;
+  fullViewport.size = Vector2d(1784, 1024);
+  fullViewport.devicePixelRatio = 1.0;
+
+  CompositorConfig config;
+  CompositorController compositor(document, renderer_, config);
+  compositor.setSkipMainComposeDuringSplit(true);
+
+  using Clock = std::chrono::steady_clock;
+  const auto elapsedMs = [](Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+  };
+  const auto findLayerRow = [](const auto& rows, Entity entity) {
+    return std::find_if(rows.begin(), rows.end(),
+                        [entity](const auto& row) { return row.entity == entity; });
+  };
+
+  const auto t0 = Clock::now();
+  compositor.renderFrame(fullViewport);
+  const double coldRenderMs = elapsedMs(t0);
+
+  auto burstEllipse = document.querySelector("#Blue_center_burst ellipse");
+  ASSERT_TRUE(burstEllipse.has_value())
+      << "splash has no `#Blue_center_burst ellipse` — has the file structure changed?";
+  const Entity burstEntity = burstEllipse->unsafeEntityHandle().entity();
+
+  const auto rowsAfterCold = compositor.snapshotLayerInspectorRows();
+  const auto burstRowAfterCold = findLayerRow(rowsAfterCold, burstEntity);
+  ASSERT_NE(burstRowAfterCold, rowsAfterCold.end())
+      << "#Blue_center_burst ellipse should be mandatory-promoted by opacity.";
+  const uint64_t coldGeneration = burstRowAfterCold->generation;
+  const uint32_t coldRasterizeCount = burstRowAfterCold->rasterizeCount;
+
+  ASSERT_TRUE(compositor.promoteEntity(burstEntity, InteractionHint::ActiveDrag))
+      << "burst ellipse failed to promote — this drag should reuse its mandatory layer.";
+  burstEllipse->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
+  const auto t1 = Clock::now();
+  compositor.renderFrame(fullViewport);
+  const double firstDragFrameMs = elapsedMs(t1);
+
+  const auto rowsAfterFirstDrag = compositor.snapshotLayerInspectorRows();
+  const auto burstRowAfterFirstDrag = findLayerRow(rowsAfterFirstDrag, burstEntity);
+  ASSERT_NE(burstRowAfterFirstDrag, rowsAfterFirstDrag.end());
+  EXPECT_EQ(burstRowAfterFirstDrag->generation, coldGeneration)
+      << "Click-to-drag should not mint a new burst texture; the mandatory layer is already warm.";
+  EXPECT_EQ(burstRowAfterFirstDrag->rasterizeCount, coldRasterizeCount)
+      << "Click-to-drag should reuse the mandatory burst bitmap instead of rerasterizing it.";
+
+  double steadyMaxMs = 0.0;
+  double steadyTotalMs = 0.0;
+  constexpr int kSteadyFrames = 20;
+  for (int i = 2; i <= kSteadyFrames + 1; ++i) {
+    burstEllipse->cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(static_cast<double>(i) * 4.0, 0.0)));
+    const auto tFrame = Clock::now();
+    compositor.renderFrame(fullViewport);
+    const double frameMs = elapsedMs(tFrame);
+    steadyMaxMs = std::max(steadyMaxMs, frameMs);
+    steadyTotalMs += frameMs;
+  }
+  const double steadyAvgMs = steadyTotalMs / kSteadyFrames;
+
+  const auto rowsAfterSteady = compositor.snapshotLayerInspectorRows();
+  const auto burstRowAfterSteady = findLayerRow(rowsAfterSteady, burstEntity);
+  ASSERT_NE(burstRowAfterSteady, rowsAfterSteady.end());
+  EXPECT_EQ(burstRowAfterSteady->generation, coldGeneration);
+  EXPECT_EQ(burstRowAfterSteady->rasterizeCount, coldRasterizeCount);
+
+  std::cerr << "[PERF] RealSplashBlueCenterBurstEllipseDragLatency: cold=" << coldRenderMs
+            << " ms, firstDrag=" << firstDragFrameMs << " ms, steadyAvg=" << steadyAvgMs
+            << " ms, steadyMax=" << steadyMaxMs << " ms\n";
+
+  EXPECT_LT(firstDragFrameMs, 300.0)
+      << "burst ellipse click-to-drag should reuse its mandatory layer even at high zoom.";
+  EXPECT_LT(steadyAvgMs, 10.0) << "burst ellipse steady drag should stay comfortably interactive";
+  EXPECT_LT(steadyMaxMs, 30.0) << "burst ellipse steady drag frame spiked above budget";
+}
+
 // The editor's drag-end path: source-pane writeback fires a
 // `ReplaceDocumentCommand`, `AsyncSVGDocument::setDocument` replaces the
 // inner SVGDocument in place (bumping `documentGeneration`), and

@@ -584,6 +584,11 @@ donner_cc_library(
     name = "editor_shell",
     srcs = ["EditorShell.cc"],
     hdrs = ["EditorShell.h"],
+    defines = select({
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":dialog_presenter",
         ":document_save",
@@ -619,10 +624,19 @@ donner_cc_library(
         "//donner/editor/gui:editor_window",
         "//donner/editor/repro:repro_recorder",
         "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
         "//third_party/fira-code",
         "//third_party/roboto",
         "@imgui",
     ] + select({
+        ":wasm_geode_enabled": [
+            "//donner/svg/renderer:renderer_geode",
+        ],
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+        ],
+        "//conditions:default": [],
+    }) + select({
         "//donner/editor/wasm:wasm_enabled": [
             "//third_party/emscripten-glfw",
         ],

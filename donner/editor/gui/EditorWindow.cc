@@ -426,6 +426,7 @@ struct EditorWindow::WgpuState {
   wgpu::TextureUsage surfaceUsage = wgpu::TextureUsage::RenderAttachment;
   wgpu::CompositeAlphaMode alphaMode = wgpu::CompositeAlphaMode::Auto;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
+  std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
   int configuredWidth = 0;
   int configuredHeight = 0;
 };
@@ -632,6 +633,18 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwTerminate();
     return;
   }
+  geode::GeodeEmbedConfig framebufferEmbedConfig = embedConfig;
+  framebufferEmbedConfig.forceSingleSampleAlphaCoverage = true;
+  wgpuState_->framebufferGeodeDevice =
+      geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
+  if (wgpuState_->framebufferGeodeDevice == nullptr) {
+    std::fprintf(stderr, "EditorWindow: framebuffer GeodeDevice::CreateFromExternal failed\n");
+    wgpuState_->surface.unconfigure();
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    glfwTerminate();
+    return;
+  }
 #else
 #ifndef __EMSCRIPTEN__
   glfwMakeContextCurrent(window_);
@@ -752,6 +765,7 @@ EditorWindow::~EditorWindow() {
 #endif
 #ifdef DONNER_EDITOR_WGPU
   if (wgpuState_ != nullptr) {
+    wgpuState_->framebufferGeodeDevice.reset();
     wgpuState_->geodeDevice.reset();
     if (wgpuState_->surface) {
       wgpuState_->surface.unconfigure();
@@ -827,6 +841,16 @@ std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeDevice() const {
   return nullptr;
 #endif
 }
+
+#ifdef DONNER_EDITOR_WGPU
+std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeFramebufferDevice() const {
+  return wgpuState_ != nullptr ? wgpuState_->framebufferGeodeDevice : nullptr;
+}
+
+void EditorWindow::setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback) {
+  wgpuDirectRenderCallback_ = std::move(callback);
+}
+#endif
 
 void EditorWindow::pollEvents() {
   glfwPollEvents();
@@ -1027,10 +1051,27 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     pass.get().end();
     pass.reset();
-    if (readbackBuffer) {
-      CopySurfaceTextureToReadbackBuffer(target.get(), readbackBuffer.get(), readbackWidth,
-                                         readbackHeight, readbackBytesPerRow, encoder.get());
+    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
+    if (!commands) {
+      return;
     }
+    wgpuState_->queue.submit(1, &commands.get());
+  }
+  if (wgpuDirectRenderCallback_) {
+    EditorWindowWgpuRenderTarget directTarget{
+        .texture = target.get(),
+        .framebufferSizePx = Vector2i(displayW, displayH),
+    };
+    wgpuDirectRenderCallback_(directTarget);
+  }
+  if (readbackBuffer) {
+    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
+        wgpuState_->device.createCommandEncoder());
+    if (!encoder) {
+      return;
+    }
+    CopySurfaceTextureToReadbackBuffer(target.get(), readbackBuffer.get(), readbackWidth,
+                                       readbackHeight, readbackBytesPerRow, encoder.get());
     donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
     if (!commands) {
       return;

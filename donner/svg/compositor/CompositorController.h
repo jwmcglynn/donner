@@ -469,6 +469,12 @@ public:
   /// while staying legible at the editor's right-pane width.
   static constexpr int kLayerThumbnailMaxSide = 64;
 
+  /// Whether diagnostic snapshots should synthesize CPU thumbnails.
+  enum class SnapshotThumbnails : uint8_t {
+    Include,
+    Omit,
+  };
+
   /// One row of diagnostic state per active compositor layer, intended
   /// for the editor's read-only layer-inspector panel (design doc 0033
   /// M1). Cheap to build, cheap to copy: a few ints and one short
@@ -517,7 +523,8 @@ public:
   /// Done-transition point as `fastPathCountersForTesting`). Allocates a
   /// `vector` and one short string per layer — fine for diagnostics, not
   /// hot-path-grade.
-  [[nodiscard]] std::vector<LayerInspectorRow> snapshotLayerInspectorRows() const;
+  [[nodiscard]] std::vector<LayerInspectorRow> snapshotLayerInspectorRows(
+      SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;
 
   /// One row of diagnostic state per static segment (the non-promoted
   /// content between promoted layers, plus the pre-first and post-last
@@ -689,7 +696,8 @@ public:
   ///   - Otherwise: `Segment 0`, `Layer 0`, `Segment 1`, `Layer 1`,
   ///     …, `Segment N`. (Editor-facing bg/fg are inactive in this
   ///     mode.)
-  [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles() const;
+  [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles(
+      SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;
 
   /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
   /// caused by immediate-mode transient spans or retained cached tiles.
@@ -935,7 +943,7 @@ private:
   void markAllSegmentsDirty();
 
   /// Compose all layers onto the main render target.
-  void composeLayers(const RenderViewport& viewport);
+  void composeLayers(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /// Check dirty flags on promoted entities and mark affected layers.
   /// Translate a pre-captured set of dirty entities (snapshotted before

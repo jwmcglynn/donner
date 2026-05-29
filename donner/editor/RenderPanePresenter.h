@@ -5,6 +5,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/editor/GlTextureCache.h"
+#include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportInteractionController.h"
@@ -15,13 +16,21 @@ struct RenderPanePresenterState {
   const ViewportState& viewport;
   const FrameHistory& frameHistory;
   const GlTextureCache& textures;
+  const std::optional<SelectionChromeSnapshot>& immediateOverlaySnapshot;
   const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview;
   const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview;
   Vector2d contentRegion = Vector2d::Zero();
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
   bool showOverlay = true;
+  bool drawImmediateOverlay = true;
   bool showFrameGraph = true;
+};
+
+/// CPU cost counters produced while presenting the render pane.
+struct RenderPanePresenterCost {
+  /// Milliseconds spent issuing immediate overlay draw-list commands.
+  double immediateOverlayDrawMs = 0.0;
 };
 
 /**
@@ -68,10 +77,15 @@ struct RenderPanePresenterState {
 [[nodiscard]] std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect,
                                                           const Box2d& imageRect);
 
-/// Draws the advanced editor render pane's image, overlay chrome, and frame graph.
 class RenderPanePresenter {
 public:
-  void render(const RenderPanePresenterState& state) const;
+  /**
+   * Draw the advanced editor render pane's image, overlay chrome, and frame graph.
+   *
+   * @param state Presentation inputs for the current UI frame.
+   * @return CPU cost counters for work issued by the presenter.
+   */
+  [[nodiscard]] RenderPanePresenterCost render(const RenderPanePresenterState& state) const;
 };
 
 }  // namespace donner::editor

@@ -34,6 +34,12 @@ namespace donner::editor::gui {
 class EditorWindow;
 }
 
+#ifdef DONNER_EDITOR_WGPU
+namespace donner::svg {
+class RendererGeode;
+}
+#endif
+
 namespace donner::editor::repro {
 class ReproRecorder;
 }  // namespace donner::editor::repro
@@ -96,7 +102,8 @@ struct LayerInspectorStatusReadback {
   int metadataOnlyMissCount = 0;
   /// Duplicate live texture handles found across different tile ids.
   int duplicateLiveTextureCount = 0;
-  /// Overlay texture dimensions in pixels.
+  /// Retained overlay texture dimensions in pixels. Zero when immediate overlay presentation is
+  /// active.
   Vector2i overlayDimsPx = Vector2i::Zero();
   /// Backend overlay texture/view handle, represented as an integer for diagnostics.
   std::uint64_t overlayTextureHandle = 0;
@@ -244,6 +251,9 @@ private:
   LayerInspectorPanel layerInspectorPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
+#ifdef DONNER_EDITOR_WGPU
+  std::unique_ptr<svg::RendererGeode> directOverlayRenderer_;
+#endif
 
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;

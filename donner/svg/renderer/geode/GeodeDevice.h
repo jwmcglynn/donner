@@ -57,6 +57,11 @@ struct GeodeEmbedConfig {
   /// When null, workaround detection is skipped — the host is assumed to
   /// know its own hardware characteristics.
   wgpu::Adapter adapter;
+
+  /// Force the single-sample alpha-coverage path even when hardware 4× MSAA is available.
+  /// Intended for appending Geode draws directly to an already-rendered host framebuffer, where
+  /// a multisample resolve would overwrite framebuffer pixels outside the new draw coverage.
+  bool forceSingleSampleAlphaCoverage = false;
 };
 
 /**
@@ -167,19 +172,19 @@ public:
    *
    * Returns true on Intel + Vulkan, where writing `@builtin(sample_mask)`
    * from overlapping band quads hangs Mesa ANV / Xe KMD (observed on
-   * Arc A380, Mesa 25.2.8). The alpha-coverage path folds coverage
+   * Arc A380, Mesa 25.2.8), or when an embedded host explicitly requests
+   * single-sample alpha coverage. The alpha-coverage path folds coverage
    * into the fragment color instead of relying on the hardware sample
-   * mask, and runs at `sampleCount() == 1` (no MSAA / no resolve) to
-   * avoid a second class of flaky MSAA-resolve hangs on the same driver.
+   * mask, and runs at `sampleCount() == 1` (no MSAA / no resolve).
    */
   bool useAlphaCoverageAA() const { return useAlphaCoverageAA_; }
 
   /**
    * MSAA sample count for render pipelines and render-target textures.
    *
-   * Returns 1 on the alpha-coverage path (Intel Arc + Vulkan), where
-   * MSAA resolve triggers flaky GPU hangs on Mesa ANV / Xe KMD. All
-   * other adapters get 4× MSAA with hardware sample-mask AA.
+   * Returns 1 on the alpha-coverage path (Intel Arc + Vulkan or explicit
+   * embedded-host request), where MSAA resolve must be avoided. All other
+   * adapters get 4× MSAA with hardware sample-mask AA.
    */
   uint32_t sampleCount() const { return 1u; }
 

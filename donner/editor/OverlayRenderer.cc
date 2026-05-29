@@ -18,7 +18,6 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/properties/PaintServer.h"
-#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
 
@@ -306,7 +305,7 @@ std::optional<SelectionChromeSnapshot::OrientedBox> CullOrientedBox(
 
 }  // namespace
 
-void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& editor) {
+void OverlayRenderer::drawChrome(svg::RendererInterface& renderer, const EditorApp& editor) {
   if (!editor.hasDocument()) {
     return;
   }
@@ -320,12 +319,12 @@ void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& edito
   drawChromeWithTransform(renderer, editor.selectedElements(), canvasFromDoc);
 }
 
-void OverlayRenderer::drawChrome(svg::Renderer& renderer,
+void OverlayRenderer::drawChrome(svg::RendererInterface& renderer,
                                  const std::optional<svg::SVGElement>& selection) {
   drawChromeWithTransform(renderer, selection, Transform2d());
 }
 
-void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
+void OverlayRenderer::drawChromeWithTransform(svg::RendererInterface& renderer,
                                               const std::optional<svg::SVGElement>& selection,
                                               const Transform2d& canvasFromDoc) {
   if (!selection.has_value()) {
@@ -335,7 +334,7 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
   drawChromeWithTransform(renderer, std::span<const svg::SVGElement>(single), canvasFromDoc);
 }
 
-void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
+void OverlayRenderer::drawChromeWithTransform(svg::RendererInterface& renderer,
                                               std::span<const svg::SVGElement> selection,
                                               const Transform2d& canvasFromDoc) {
   drawChromeWithTransform(renderer, selection, /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
@@ -416,7 +415,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   return snapshot;
 }
 
-void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
+void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
                                              const SelectionChromeSnapshot& snapshot) {
   ZoneScopedN("OverlayRenderer::drawChromeFromSnapshot");
   if (snapshot.paths.empty() && snapshot.hoverPaths.empty() && snapshot.aabbsDoc.empty() &&
@@ -514,7 +513,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
 }
 
 void OverlayRenderer::drawChromeWithTransform(
-    svg::Renderer& renderer, std::span<const svg::SVGElement> selection,
+    svg::RendererInterface& renderer, std::span<const svg::SVGElement> selection,
     const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc,
     const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
     std::span<const svg::SVGElement> sourceHover, const std::optional<Box2d>& cullRectDoc,
