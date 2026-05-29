@@ -49,9 +49,9 @@ This design proposes a second responsiveness pass:
 ## Next Steps
 
 - Rebaseline with current Geode offline and live-editor telemetry before changing the next
-  architectural piece. The current offline worker paths are mostly green; the live regression needs
-  frame-graph and layer-heuristic samples from the actual editor loop.
-- Capture manual telemetry for the regressed flow first: far zoom in/out followed by drag on a
+  architectural piece. The replay telemetry now shows the cached-span zoom+drag reraster fixed; the
+  remaining live signal is WGPU surface acquisition/backpressure plus any manual frame-graph spikes.
+- Capture manual telemetry for the regressed flow next: far zoom in/out followed by drag on a
   Donner letter, especially after the worker is busy or the surface has just resized. Record the
   frame graph, terminal WGPU timing logs, and Layers-panel heuristic history JSONL from the default
   path `/tmp/donner-compositor-heuristics.jsonl` or an explicit run-specific path.
@@ -170,23 +170,23 @@ tools/llm-bazel-wrap.sh test -c opt --config=geode \
 
 Headline results:
 
-| Scenario                                      |                               Current measurement | Why it matters                                                                 |
-| --------------------------------------------- | ------------------------------------------------: | ------------------------------------------------------------------------------ |
-| Real splash worker-only drag                  |                          1.51 ms steady avg / max | Compositor worker is not the current broad drag-frame bottleneck.              |
-| Faithful real splash drag frame               |                      10.18 ms avg, 23.70 ms max | Misses the 120 Hz frame budget and occasionally exceeds 60 Hz.                 |
-| Faithful frame worker portion                 |                       1.51 ms avg, 10.56 ms max | Worker spikes exist, but the average is small.                                 |
-| Faithful frame overlay portion                |                       8.66 ms avg, 22.19 ms max | Overlay raster/upload dominates the faithful offline frame.                    |
-| Overlay upload, natural canvas                |                                    1.74 MiB/frame | Still a real per-frame payload in the faithful harness.                        |
-| HiDPI multi-shape repro at 1784x1024          | 9-11 ms click/promote, ~1.51 ms repeated drags | The old offline 100+ ms repeated-drag repro is green.                          |
-| Filter drag replay worker frames              |                0.03 ms avg first drag, 0.02 ms second | The filter drag worker fast path remains green.                                |
-| Filter group subtree drag                     |                           1.51 ms avg / max | Filter-group drag is not reproducing the live regression offline.              |
-| Mock compositor drag overhead, 10k nodes       |                                  0.05 ms/frame | Warm compositor traversal is cheap after the recent immediate-span work.       |
-| Mock compositor click-to-first, 10k nodes      |      464 ms prewarm, 0.067 ms first drag frame | Cold prewarm is still linear and worth keeping out of interactive gestures.    |
-| RendererGeode `donner_splash.svg`             |      6.59 ms parse, 11.15 ms draw, 29.87 ms snapshot | Full-document Geode snapshot is over interactive budgets if forced per frame.  |
-| Geode no-dirty perf counters                  |                          0 path encodes / textures | No-dirty renderer counters are green; counter regressions are not obvious.     |
-| Geode zoom+drag GL replay correctness          |                             4 focused tests passed | Lockstep/freeze correctness is green, but this is not a frame-time gate.       |
-| GL replay surface acquisition                  |                     392 ms and 579 ms log spikes | Strong signal for surface acquisition/GPU backpressure during zoom+drag.       |
-| Async zoom-after-drag replay                   | max worker 131.9 ms; click-to-drag 19.8 ms and 43.6 ms | The second zoom+drag click misses 60 Hz/120 Hz feedback budgets offline.       |
+| Scenario                                  |                                    Current measurement | Why it matters                                                                |
+| ----------------------------------------- | -----------------------------------------------------: | ----------------------------------------------------------------------------- |
+| Real splash worker-only drag              |                               1.51 ms steady avg / max | Compositor worker is not the current broad drag-frame bottleneck.             |
+| Faithful real splash drag frame           |                             10.18 ms avg, 23.70 ms max | Misses the 120 Hz frame budget and occasionally exceeds 60 Hz.                |
+| Faithful frame worker portion             |                              1.51 ms avg, 10.56 ms max | Worker spikes exist, but the average is small.                                |
+| Faithful frame overlay portion            |                              8.66 ms avg, 22.19 ms max | Overlay raster/upload dominates the faithful offline frame.                   |
+| Overlay upload, natural canvas            |                                         1.74 MiB/frame | Still a real per-frame payload in the faithful harness.                       |
+| HiDPI multi-shape repro at 1784x1024      |         9-11 ms click/promote, ~1.51 ms repeated drags | The old offline 100+ ms repeated-drag repro is green.                         |
+| Filter drag replay worker frames          |                 0.03 ms avg first drag, 0.02 ms second | The filter drag worker fast path remains green.                               |
+| Filter group subtree drag                 |                                      1.51 ms avg / max | Filter-group drag is not reproducing the live regression offline.             |
+| Mock compositor drag overhead, 10k nodes  |                                          0.05 ms/frame | Warm compositor traversal is cheap after the recent immediate-span work.      |
+| Mock compositor click-to-first, 10k nodes |              464 ms prewarm, 0.067 ms first drag frame | Cold prewarm is still linear and worth keeping out of interactive gestures.   |
+| RendererGeode `donner_splash.svg`         |        6.59 ms parse, 11.15 ms draw, 29.87 ms snapshot | Full-document Geode snapshot is over interactive budgets if forced per frame. |
+| Geode no-dirty perf counters              |                              0 path encodes / textures | No-dirty renderer counters are green; counter regressions are not obvious.    |
+| Geode zoom+drag GL replay correctness     |                                 4 focused tests passed | Lockstep/freeze correctness is green, but this is not a frame-time gate.      |
+| GL replay surface acquisition             |                           392 ms and 579 ms log spikes | Strong signal for surface acquisition/GPU backpressure during zoom+drag.      |
+| Async zoom-after-drag replay              | max worker 131.9 ms; click-to-drag 19.8 ms and 43.6 ms | The second zoom+drag click misses 60 Hz/120 Hz feedback budgets offline.      |
 
 Interpretation:
 
@@ -202,6 +202,39 @@ Interpretation:
 - The next measurement needs to happen in the live editor with the color-bar profiler and Layers
   panel heuristic telemetry, because final ImGui composition, source-pane chrome, and live
   immediate-span decisions are not fully covered by the offline worker tests.
+
+### Zoom+Drag Telemetry Update
+
+The first replay telemetry pass on `donner/editor/tests/geode_drag_zoom_o_pop.rnr` isolated a
+specific live-frame regression: zooming while dragging a cached selection repeatedly committed a
+new document canvas size, which invalidated the render tree and rerasterized every cached
+compositor span before the next pointer frame.
+
+The policy after this pass:
+
+- If an active drag has a matching cached composited entity, `PresentationRenderScheduler` keeps the
+  interaction on presenter-side transforms and suppresses regular renders even when the desired
+  canvas size or raster viewport changes.
+- `RenderCoordinator` keeps `SVGDocument::setCanvasSize()` debounced and additionally defers
+  zoom-driven canvas commits while that active drag is live. The crisp refresh happens after the
+  drag settles.
+- `CompositedPresentation` treats active-drag cache validity as entity-based. A canvas-size
+  mismatch during drag is acceptable because the interaction invariant is coherent, lockstep
+  presentation; high-resolution canvas freshness is an idle/settle refinement.
+
+Measured on the same replay window, active drag frames `39-81` changed from:
+
+| Metric                                           |   Before | After |
+| ------------------------------------------------ | -------: | ----: |
+| Cached compositor raster, average                | 30.64 ms |  0 ms |
+| Cached compositor raster, max                    | 99.64 ms |  0 ms |
+| Zoom-driven document canvas commits in window    |       15 |     0 |
+| Cached compositor tiles rerendered in bad frames | 12/frame |     0 |
+
+The Geode GL replay lane still logged a `surface.getCurrentTexture` stall during one focused test,
+so GPU surface acquisition remains a separate investigation item. This update removes the repeated
+cached-span reraster from the zoom+drag hot path; it does not claim to fix every WGPU backpressure
+source.
 
 ## Background and Prior Art
 

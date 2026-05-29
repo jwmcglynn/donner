@@ -201,9 +201,8 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesCanva
       .dragGeneration = 14,
   };
   const PresentationRenderScheduleDecision decision =
-      scheduler.evaluate(presentation,
-                         Input(Entity(7), /*version=*/8, activeDrag, RasterViewport(),
-                               Vector2i(kCanvasSize.x + 20, kCanvasSize.y + 20)));
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/8, activeDrag, RasterViewport(),
+                                             Vector2i(kCanvasSize.x + 20, kCanvasSize.y + 20)));
 
   EXPECT_FALSE(decision.shouldRequestRender())
       << "Continuous zoom changes the desired canvas size. During active drag the presenter should "

@@ -82,8 +82,7 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
         .interactionKind = svg::compositor::InteractionHint::Selection,
     };
   }
-  if (input.activeDragPreview.has_value() && !decision.needsCompositedLayerCapture &&
-      !canvasSizeChanged && !rasterViewportChanged) {
+  if (input.activeDragPreview.has_value() && !decision.needsCompositedLayerCapture) {
     decision.needsRegularRender = false;
   }
 

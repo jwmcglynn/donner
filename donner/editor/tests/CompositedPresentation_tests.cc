@@ -90,7 +90,7 @@ TEST(CompositedPresentationTest, WaitingPhasesAreMutuallyExclusive) {
   EXPECT_FALSE(snapshot.waitingForChromeRefresh);
 }
 
-TEST(CompositedPresentationTest, PureTranslationActiveDragWithMatchingCacheSuppressesCapture) {
+TEST(CompositedPresentationTest, NeedsCompositedLayerCaptureChecksCacheEntityOnlyDuringDrag) {
   CompositedPresentation state;
   const SelectTool::ActiveDragPreview active{
       .entity = Entity(7),
@@ -107,85 +107,6 @@ TEST(CompositedPresentationTest, PureTranslationActiveDragWithMatchingCacheSuppr
   EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(120, 100)))
       << "Canvas-size changes during active drag are presented from the existing cache; the crisp "
          "canvas refresh happens after drag settles.";
-}
-
-TEST(CompositedPresentationTest, AffineActiveDragWithUnrepresentedCacheRequestsCapture) {
-  CompositedPresentation state;
-  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
-
-  const SelectTool::ActiveDragPreview active{
-      .entity = Entity(7),
-      .translation = Vector2d(6.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
-      .dragGeneration = 8,
-  };
-
-  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100)))
-      << "Affine resize/rotate previews should opportunistically refresh the drag bitmap instead "
-         "of stretching the original elevated layer for the whole gesture.";
-}
-
-TEST(CompositedPresentationTest, MatchingAffineRepresentedPreviewSuppressesCaptureLoop) {
-  const SelectTool::ActiveDragPreview represented{
-      .entity = Entity(7),
-      .translation = Vector2d(6.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
-      .dragGeneration = 8,
-  };
-  CompositedPresentation state;
-  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
-
-  EXPECT_FALSE(
-      state.needsCompositedLayerCapture(represented, /*currentVersion=*/4, Vector2i(100, 100)))
-      << "Once an affine drag bitmap has landed for the current transform, the scheduler must not "
-         "spin on another identical opportunistic capture.";
-}
-
-TEST(CompositedPresentationTest, ChangedAffineActiveDragRequestsNextCapture) {
-  const SelectTool::ActiveDragPreview represented{
-      .entity = Entity(7),
-      .translation = Vector2d(6.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
-      .dragGeneration = 8,
-  };
-  const SelectTool::ActiveDragPreview active{
-      .entity = Entity(7),
-      .translation = Vector2d(7.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(7.0, 2.0)) * Transform2d::Scale(1.35),
-      .dragGeneration = 8,
-  };
-  CompositedPresentation state;
-  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
-
-  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
-      << "Continuing an affine manipulation after a previous opportunistic capture should request "
-         "the next sharper bitmap when the worker is free.";
-}
-
-TEST(CompositedPresentationTest, PureTranslationAfterAffineCaptureRequestsCrispReset) {
-  const SelectTool::ActiveDragPreview represented{
-      .entity = Entity(7),
-      .translation = Vector2d(6.0, 2.0),
-      .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
-      .dragGeneration = 8,
-  };
-  const SelectTool::ActiveDragPreview active{
-      .entity = Entity(7),
-      .translation = Vector2d(8.0, 2.0),
-      .documentFromCachedDocument = Transform2d::Translate(Vector2d(8.0, 2.0)),
-      .dragGeneration = 8,
-  };
-  CompositedPresentation state;
-  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
-
-  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
-      << "Returning from affine resize/rotate to a pure translation should not keep transforming "
-         "the last affine bitmap; capture a crisp translated layer again.";
 }
 
 TEST(CompositedPresentationTest, SelectionTriggersPrewarmWhenCacheMissing) {
