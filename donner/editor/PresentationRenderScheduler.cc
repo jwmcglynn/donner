@@ -80,7 +80,7 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
         .interactionKind = svg::compositor::InteractionHint::Selection,
     };
   }
-  if (input.activeDragPreview.has_value() && !decision.needsCompositedLayerCapture) {
+  if (input.activeDragPreview.has_value()) {
     decision.needsRegularRender = false;
   }
 

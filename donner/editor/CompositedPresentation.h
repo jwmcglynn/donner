@@ -7,6 +7,7 @@
 #include <variant>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/MathUtils.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/SelectTool.h"
 
@@ -141,13 +142,24 @@ public:
     }
 
     const std::optional<CachedTextures> cache = currentCache();
-    // Drag transform writes bump the document version every mouse move, but
-    // the active preview already carries that affine delta for presenter-side
-    // texture placement. Zoom can also change the desired raster canvas while
-    // the drag is live; keep presenting the existing cache and refresh the
-    // sharper canvas after the drag settles so shape and overlay remain in
-    // lockstep instead of blocking on a full cached-span reraster.
-    return !cache.has_value() || cache->entity != activePreview->entity;
+    // Drag transform writes bump the document version every mouse move. Pure
+    // translation stays crisp through presenter-side texture placement, but
+    // affine resize/rotate previews can blur a cached bitmap. Refresh those
+    // opportunistically only when the cached bitmap represents an older affine
+    // transform. Zoom-driven canvas-size changes still settle after the drag so
+    // we do not block pointer frames on a full cached-span reraster.
+    if (!cache.has_value() || cache->entity != activePreview->entity) {
+      return true;
+    }
+
+    const SelectTool::ActiveDragPreview representedPreview =
+        representedPreviewForActiveCache(*cache, *activePreview);
+    if (activePreview->documentFromCachedDocument.isTranslation() &&
+        representedPreview.documentFromCachedDocument.isTranslation()) {
+      return false;
+    }
+
+    return !SameDragPreviewTransform(representedPreview, *activePreview);
   }
 
   /// Returns true when a released drag should request a settled composited refresh.
@@ -374,6 +386,28 @@ private:
         .documentFromCachedDocument = Transform2d(),
         .dragGeneration = activePreview.dragGeneration,
     };
+  }
+
+  static bool SameVector(const Vector2d& lhs, const Vector2d& rhs) {
+    constexpr double kTolerance = 1e-6;
+    return NearEquals(lhs.x, rhs.x, kTolerance) && NearEquals(lhs.y, rhs.y, kTolerance);
+  }
+
+  static bool SameTransform(const Transform2d& lhs, const Transform2d& rhs) {
+    constexpr double kTolerance = 1e-6;
+    for (int i = 0; i < 6; ++i) {
+      if (!NearEquals(lhs.data[i], rhs.data[i], kTolerance)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool SameDragPreviewTransform(const SelectTool::ActiveDragPreview& lhs,
+                                       const SelectTool::ActiveDragPreview& rhs) {
+    return lhs.entity == rhs.entity && lhs.dragGeneration == rhs.dragGeneration &&
+           SameVector(lhs.translation, rhs.translation) &&
+           SameTransform(lhs.documentFromCachedDocument, rhs.documentFromCachedDocument);
   }
 
   State state_ = NoCache{};

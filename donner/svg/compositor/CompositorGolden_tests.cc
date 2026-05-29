@@ -2562,6 +2562,50 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
                                "(only premul round-trip drift ≤ 3).";
 }
 
+TEST_F(CompositorGoldenTest, SplashDonnerLetterDragKeepsCheapGradientSpansImmediate) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+
+  SVGDocument document = parseDocument(splashBuf.str());
+  document.setCanvasSize(892, 512);
+  auto target = document.querySelector("#Donner_D");
+  ASSERT_TRUE(target.has_value());
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(892, 512);
+  viewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag));
+  compositor.renderFrame(viewport);
+
+  int immediateSegments = 0;
+  int gradientEligibleSegments = 0;
+  for (const auto& tile : compositor.snapshotCompositeTiles()) {
+    using Kind = CompositorController::CompositeTileSnapshot::Kind;
+    if (tile.kind != Kind::Segment) {
+      continue;
+    }
+    if (tile.immediate) {
+      ++immediateSegments;
+    }
+    if (tile.visible && !tile.hasExpensiveEffect && tile.estimatedDrawOps > 0) {
+      ++gradientEligibleSegments;
+    }
+  }
+
+  EXPECT_GT(gradientEligibleSegments, 0)
+      << "Donner letter gradients should not be hard-blocked from immediate consideration.";
+  EXPECT_GT(immediateSegments, 0)
+      << "Dragging a Donner letter should leave at least one cheap static span in immediate mode.";
+}
+
 // Evolving minimal repro of the Clouds_with_gradients drag artifact.
 // Adds a mandatory-promoted sub-layer (clip-path group) as a sibling of
 // a radial-gradient-filled shape inside the dragged group. If this fails
@@ -2701,7 +2745,8 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
   // phase-1 snapshot.
 
   // Two-phase: Selection prewarm → demote → ActiveDrag re-promote.
-  ASSERT_TRUE(compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection));
+  ASSERT_TRUE(
+      compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection));
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->unsafeEntityHandle().entity());
   // §M9: flush the hysteresis so the demote+re-promote cycle this
@@ -3707,7 +3752,8 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
       << "identity remap must succeed — every required entity is present";
 
   // Cached bitmaps should be preserved (same `.pixels.data()` pointer).
-  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(), glowBitmapBefore)
+  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(),
+            glowBitmapBefore)
       << "glow filter-layer bitmap was reallocated during identity remap — cache lost";
   EXPECT_EQ(compositor.layerBitmapOf(target->unsafeEntityHandle().entity()).pixels.data(),
             targetBitmapBefore)
@@ -3717,7 +3763,8 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(), glowBitmapBefore)
+  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(),
+            glowBitmapBefore)
       << "glow bitmap was reallocated on the post-remap drag frame — fast path broke";
 }
 

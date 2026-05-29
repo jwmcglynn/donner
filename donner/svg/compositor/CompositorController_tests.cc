@@ -882,6 +882,81 @@ TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
   EXPECT_EQ(countersAfterDrag.slowPathFramesWithDirty, countersBeforeDrag.slowPathFramesWithDirty);
 }
 
+TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextureFastPath) {
+  SVGDocument document = makeDocument(R"svg(
+    <g id="Blue_center_burst">
+      <ellipse id="burst_child" cx="45" cy="30" rx="18" ry="21" fill="blue" opacity="0.75" />
+    </g>
+  )svg");
+
+  configureMockForTextureCaching();
+  auto target = document.querySelector("#Blue_center_burst");
+  auto child = document.querySelector("#burst_child");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(child.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+  const Entity childEntity = child->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
+  ASSERT_GT(rowsAfterFirst.size(), 1u)
+      << "The opacity child should remain a mandatory promoted descendant layer.";
+  const auto rowAfterFirst =
+      std::find_if(rowsAfterFirst.begin(), rowsAfterFirst.end(),
+                   [entity](const auto& row) { return row.entity == entity; });
+  const auto childRowAfterFirst =
+      std::find_if(rowsAfterFirst.begin(), rowsAfterFirst.end(),
+                   [childEntity](const auto& row) { return row.entity == childEntity; });
+  ASSERT_NE(rowAfterFirst, rowsAfterFirst.end());
+  ASSERT_NE(childRowAfterFirst, rowsAfterFirst.end());
+  ASSERT_TRUE(rowAfterFirst->hasValidBitmap);
+  ASSERT_TRUE(childRowAfterFirst->hasValidBitmap);
+  const uint64_t generationAfterFirst = rowAfterFirst->generation;
+  const uint32_t rasterizeCountAfterFirst = rowAfterFirst->rasterizeCount;
+  const uint64_t childGenerationAfterFirst = childRowAfterFirst->generation;
+  const uint32_t childRasterizeCountAfterFirst = childRowAfterFirst->rasterizeCount;
+
+  const auto countersBeforeDrag = compositor.fastPathCountersForTesting();
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(7.0, 11.0));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rowsAfterDrag = compositor.snapshotLayerInspectorRows();
+  const auto rowAfterDrag =
+      std::find_if(rowsAfterDrag.begin(), rowsAfterDrag.end(),
+                   [entity](const auto& row) { return row.entity == entity; });
+  const auto childRowAfterDrag =
+      std::find_if(rowsAfterDrag.begin(), rowsAfterDrag.end(),
+                   [childEntity](const auto& row) { return row.entity == childEntity; });
+  ASSERT_NE(rowAfterDrag, rowsAfterDrag.end());
+  ASSERT_NE(childRowAfterDrag, rowsAfterDrag.end());
+  EXPECT_EQ(rowAfterDrag->generation, generationAfterFirst)
+      << "A translation-only drag of a promoted group with a mandatory child layer must reuse the "
+         "cached texture.";
+  EXPECT_EQ(rowAfterDrag->rasterizeCount, rasterizeCountAfterFirst)
+      << "Re-rasterizing this subtree on every drag frame is the #Blue_center_burst lag.";
+  EXPECT_EQ(childRowAfterDrag->generation, childGenerationAfterFirst);
+  EXPECT_EQ(childRowAfterDrag->rasterizeCount, childRasterizeCountAfterFirst);
+
+  const auto countersAfterDrag = compositor.fastPathCountersForTesting();
+  EXPECT_EQ(countersAfterDrag.fastPathFrames, countersBeforeDrag.fastPathFrames + 1u);
+  EXPECT_EQ(countersAfterDrag.slowPathFramesWithDirty, countersBeforeDrag.slowPathFramesWithDirty);
+
+  const auto* layer = compositor.findLayerForTest(entity);
+  ASSERT_NE(layer, nullptr);
+  ASSERT_TRUE(layer->canvasFromBitmap().isTranslation());
+  EXPECT_NEAR(layer->canvasFromBitmap().translation().x, 7.0, 1e-10);
+  EXPECT_NEAR(layer->canvasFromBitmap().translation().y, 11.0, 1e-10);
+
+  const auto* childLayer = compositor.findLayerForTest(childEntity);
+  ASSERT_NE(childLayer, nullptr);
+  ASSERT_TRUE(childLayer->canvasFromBitmap().isTranslation());
+  EXPECT_NEAR(childLayer->canvasFromBitmap().translation().x, 7.0, 1e-10);
+  EXPECT_NEAR(childLayer->canvasFromBitmap().translation().y, 11.0, 1e-10);
+}
+
 TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsThumbnailWithMaxSideClamp) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" x="0" y="0" width="10" height="10" fill="red" />
@@ -987,6 +1062,37 @@ TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
   EXPECT_TRUE(inspectorTileIt->staticHeuristicImmediate);
   EXPECT_FALSE(inspectorTileIt->dynamicHeuristicImmediate);
   EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#cheap"));
+}
+
+TEST_F(CompositorControllerTest, GradientStaticSpanPlanCanChooseImmediate) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="8" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="blue" />
+        <stop offset="1" stop-color="white" />
+      </linearGradient>
+    </defs>
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="gradient" x="2" y="2" width="8" height="8" fill="url(#g)" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  EXPECT_TRUE(plans[1].visible);
+  EXPECT_FALSE(plans[1].hasExpensiveEffect)
+      << "Gradient fills are direct path paints; timing should decide immediate vs cached.";
+  EXPECT_EQ(plans[1].estimatedDrawOps, 1);
+  EXPECT_TRUE(plans[1].staticHeuristicImmediate || plans[1].dynamicHeuristicImmediate);
+  EXPECT_THAT(plans[1].spanRangeLabel, HasSubstr("rect#gradient"));
 }
 
 TEST_F(CompositorControllerTest, StaticImmediateHeuristicDoesNotDemoteAfterSlowMeasurement) {

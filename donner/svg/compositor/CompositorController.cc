@@ -21,6 +21,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/TransformComponent.h"
+#include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -256,8 +257,21 @@ struct StaticSpanPresentationCost {
   double cacheOverheadCost = 0.0;
 };
 
-bool PaintUsesResource(const components::ResolvedPaintServer& paint) {
-  return std::holds_alternative<components::PaintResolvedReference>(paint);
+bool PaintUsesExpensiveResource(const components::ResolvedPaintServer& paint) {
+  const auto* ref = std::get_if<components::PaintResolvedReference>(&paint);
+  if (ref == nullptr) {
+    return false;
+  }
+  if (!ref->reference.valid()) {
+    return true;
+  }
+
+  // Gradients are still a direct path paint in both renderer backends. They may
+  // be slower than solids, but the immediate-span timing heuristic can measure
+  // and demote them. Pattern paints and unresolved/unknown references may
+  // instantiate subtrees or need broader context, so keep those cached.
+  return ref->subtreeInfo.has_value() ||
+         ref->reference.handle.try_get<components::ComputedGradientComponent>() == nullptr;
 }
 
 StaticSpanCostEstimate EstimateStaticSpanCost(Registry& registry,
@@ -284,8 +298,8 @@ StaticSpanCostEstimate EstimateStaticSpanCost(Registry& registry,
     if (instance->isolatedLayer || instance->resolvedFilter.has_value() ||
         instance->clipPath.has_value() || (instance->mask.has_value() && instance->mask->valid()) ||
         instance->markerStart.has_value() || instance->markerMid.has_value() ||
-        instance->markerEnd.has_value() || PaintUsesResource(instance->resolvedFill) ||
-        PaintUsesResource(instance->resolvedStroke)) {
+        instance->markerEnd.has_value() || PaintUsesExpensiveResource(instance->resolvedFill) ||
+        PaintUsesExpensiveResource(instance->resolvedStroke)) {
       estimate.hasExpensiveEffect = true;
     }
 
@@ -1418,6 +1432,68 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     resolutions.reserve(dirtyEntitySnapshot.size());
 
     bool eligible = true;
+    const auto hasResolutionForEntity = [&resolutions](Entity entity) {
+      return std::any_of(
+          resolutions.begin(), resolutions.end(),
+          [entity](const FastPathResolution& resolution) { return resolution.entity == entity; });
+    };
+    const auto appendLayerResolution = [&](Entity entity, CompositorLayer* matchedLayer) {
+      if (!registry.all_of<components::RenderingInstanceComponent>(entity) ||
+          matchedLayer == nullptr || !matchedLayer->hasRenderablePayload() ||
+          !matchedLayer->bitmapEntityFromWorldTransform().has_value()) {
+        return false;
+      }
+
+      const auto& abs =
+          components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, entity));
+      const Transform2d canvasFromDocument =
+          components::LayoutSystem().getCanvasFromDocumentTransform(registry);
+      const Transform2d newWorldFromEntity =
+          abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
+      // `bitmapEntityFromEntity`: takes a point in the entity's CURRENT
+      // frame and returns it in the bitmap's stamp-time entity frame.
+      // The compositor uses this as `canvasFromBitmap` on the layer's
+      // bitmap-reuse fast path: rendering the cached bitmap (which was
+      // rasterized in stamp-frame coords) through this transform places
+      // its pixels at the entity's current world position.
+      //
+      // Under donner's post-multiply convention (`A * B` applied to v
+      // means "first B, then A"), `bitmapEntityFromWorld_at_stamp *
+      // newWorldFromEntity_now` walks v from current entity → world →
+      // stamp entity. The reverse order (`newWFE * oldEFW`) reads as a
+      // direct entity-local mapping and collapses to the right answer
+      // ONLY when the stamped transform's linear part is identity. For a
+      // previously-resized element the reverse misreports the canvas
+      // delta as `oldScale.inverse() * delta_doc`, so the cached bitmap
+      // moves at `delta_doc / scale` pixels per drag step while the
+      // overlay (driven by worldBounds) moves at `delta_doc`. See
+      // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` for
+      // the regression pin.
+      const Transform2d bitmapEntityFromEntity =
+          matchedLayer->bitmapEntityFromWorldTransform()->inverse() *
+          (newWorldFromEntity * surfaceFromCanvas);
+
+      const bool isSubtree =
+          matchedLayer->firstEntity() != entity || matchedLayer->lastEntity() != entity;
+      // Subtree layers require a pure-translation delta: only then can we
+      // cheaply propagate the same offset to descendant RICs without
+      // walking the layout system. Non-translation subtree mutations
+      // (scale, rotate, transform-list change) stay on the slow path.
+      // Single-entity layers can tolerate non-translation deltas via a
+      // targeted re-rasterize later in `renderFrame`.
+      if (isSubtree && !bitmapEntityFromEntity.isTranslation()) {
+        return false;
+      }
+
+      resolutions.push_back(FastPathResolution{
+          .entity = entity,
+          .layer = matchedLayer,
+          .newWorldFromEntity = newWorldFromEntity,
+          .bitmapEntityFromEntity = bitmapEntityFromEntity,
+          .isSubtree = isSubtree,
+      });
+      return true;
+    };
     for (Entity e : dirtyEntitySnapshot) {
       const auto* dirty = registry.try_get<components::DirtyFlagsComponent>(e);
       if (dirty == nullptr) continue;
@@ -1428,6 +1504,9 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       if (!registry.all_of<components::RenderingInstanceComponent>(e)) {
         eligible = false;
         break;
+      }
+      if (hasResolutionForEntity(e)) {
+        continue;
       }
 
       // A promoted layer root owns the stamp transform used by the
@@ -1457,86 +1536,46 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         eligible = false;
         break;
       }
-      if (!matchedLayer->hasRenderablePayload() ||
-          !matchedLayer->bitmapEntityFromWorldTransform().has_value()) {
+      if (!appendLayerResolution(e, matchedLayer)) {
         eligible = false;
         break;
       }
 
-      const auto& abs =
-          components::LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry, e));
-      const Transform2d canvasFromDocument =
-          components::LayoutSystem().getCanvasFromDocumentTransform(registry);
-      const Transform2d newWorldFromEntity =
-          abs.worldFromEntity * (abs.worldIsCanvas ? canvasFromDocument : Transform2d());
-      // `bitmapEntityFromEntity`: takes a point in the entity's CURRENT
-      // frame and returns it in the bitmap's stamp-time entity frame.
-      // The compositor uses this as `canvasFromBitmap` on the layer's
-      // bitmap-reuse fast path: rendering the cached bitmap (which was
-      // rasterized in stamp-frame coords) through this transform places
-      // its pixels at the entity's current world position.
-      //
-      // Under donner's post-multiply convention (`A * B` applied to v
-      // means "first B, then A"), `bitmapEntityFromWorld_at_stamp *
-      // newWorldFromEntity_now` walks v from current entity → world →
-      // stamp entity. The reverse order (`newWFE * oldEFW`) reads as a
-      // direct entity-local mapping and collapses to the right answer
-      // ONLY when the stamped transform's linear part is identity. For a
-      // previously-resized element the reverse misreports the canvas
-      // delta as `oldScale.inverse() * delta_doc`, so the cached bitmap
-      // moves at `delta_doc / scale` pixels per drag step while the
-      // overlay (driven by worldBounds) moves at `delta_doc`. See
-      // `LayerComposeOffsetReflectsDocumentDeltaForResizedElement` for
-      // the regression pin.
-      const Transform2d bitmapEntityFromEntity =
-          matchedLayer->bitmapEntityFromWorldTransform()->inverse() *
-          (newWorldFromEntity * surfaceFromCanvas);
-
-      const bool isSubtree = matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e;
-      // Subtree layers require a pure-translation delta: only then can we
-      // cheaply propagate the same offset to descendant RICs without
-      // walking the layout system. Non-translation subtree mutations
-      // (scale, rotate, transform-list change) stay on the slow path.
-      // Single-entity layers can tolerate non-translation deltas via a
-      // targeted re-rasterize later in `renderFrame`.
-      if (isSubtree && !bitmapEntityFromEntity.isTranslation()) {
-        eligible = false;
-        break;
-      }
-
-      // Defensive guard (see `IsDomDescendantOf`): if another promoted
-      // layer's entity is a descendant of our subtree root, translating
-      // only this layer's `canvasFromBitmap` while leaving the child
-      // layer's anchored to its rasterize-time transform would produce
-      // ghosting. The invariants in `promoteEntity` and `MandatoryHint
-      // Detector` should already prevent this, but bail to the slow path
-      // rather than trust the invariant — the slow path will re-rasterize
-      // correctly.
-      if (isSubtree) {
-        bool hasDescendantLayer = false;
-        for (const auto& other : layers_) {
-          if (&other == matchedLayer) continue;
-          if (IsDomDescendantOf(registry, other.entity(), e)) {
-            hasDescendantLayer = true;
+      if (matchedLayer->firstEntity() != e || matchedLayer->lastEntity() != e) {
+        for (auto& other : layers_) {
+          if (&other == matchedLayer || hasResolutionForEntity(other.entity())) {
+            continue;
+          }
+          if (!IsDomDescendantOf(registry, other.entity(), e)) {
+            continue;
+          }
+          // Mandatory descendants (opacity/filter/mask) may remain promoted
+          // inside an editor-promoted drag subtree. A pure translation applies
+          // to every cached layer in the subtree, so update each descendant
+          // compose transform in the same fast-path batch instead of falling
+          // back to an every-frame subtree re-rasterize.
+          if (!appendLayerResolution(other.entity(), &other)) {
+            eligible = false;
             break;
           }
         }
-        if (hasDescendantLayer) {
-          eligible = false;
-          break;
-        }
       }
-
-      resolutions.push_back(FastPathResolution{
-          .entity = e,
-          .layer = matchedLayer,
-          .newWorldFromEntity = newWorldFromEntity,
-          .bitmapEntityFromEntity = bitmapEntityFromEntity,
-          .isSubtree = isSubtree,
-      });
+      if (!eligible) {
+        break;
+      }
     }
 
     if (eligible) {
+      std::stable_sort(resolutions.begin(), resolutions.end(),
+                       [&registry](const FastPathResolution& a, const FastPathResolution& b) {
+                         if (IsDomDescendantOf(registry, b.entity, a.entity)) {
+                           return true;
+                         }
+                         if (IsDomDescendantOf(registry, a.entity, b.entity)) {
+                           return false;
+                         }
+                         return false;
+                       });
       std::vector<Entity> unhandledDirtyEntities;
       unhandledDirtyEntities.reserve(resolutions.size());
       for (const auto& res : resolutions) {
