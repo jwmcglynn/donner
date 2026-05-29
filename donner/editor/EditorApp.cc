@@ -217,23 +217,17 @@ struct PathOperationSelection {
   std::vector<PathBooleanInput> inputs;
 };
 
-struct CompoundPathSplit {
-  std::vector<Path> components;
-};
-
 std::vector<svg::SVGElement> SortSelectionByPaintOrder(const svg::SVGDocument& document,
                                                        std::span<const svg::SVGElement> selection) {
   std::vector<svg::SVGElement> result;
   result.reserve(selection.size());
 
-  document.withReadAccess([&](svg::DocumentReadAccess&) {
-    auto visit = [&](const svg::SVGElement& element) {
-      if (std::find(selection.begin(), selection.end(), element) != selection.end()) {
-        result.push_back(element);
-      }
-    };
-    ForEachElement(document.svgElement(), visit);
-  });
+  auto visit = [&](const svg::SVGElement& element) {
+    if (std::find(selection.begin(), selection.end(), element) != selection.end()) {
+      result.push_back(element);
+    }
+  };
+  ForEachElement(document.svgElement(), visit);
   return result;
 }
 
@@ -254,7 +248,7 @@ PathOperationSelection CollectPathOperationSelection(std::span<const svg::SVGEle
       continue;
     }
 
-    const svg::SVGGeometryElement geometry = *maybeGeometry;
+    const svg::SVGGeometryElement geometry = element.cast<svg::SVGGeometryElement>();
     std::optional<Path> spline = geometry.computedSpline();
     if (!spline.has_value() || spline->empty()) {
       continue;
@@ -263,7 +257,7 @@ PathOperationSelection CollectPathOperationSelection(std::span<const svg::SVGEle
     const Transform2d documentFromElement = geometry.elementFromWorld();
     result.inputs.push_back(PathBooleanInput{
         .path = std::move(*spline),
-        .fillRule = geometry.getComputedStyle().fillRule.get().value(),
+        .fillRule = geometry.getComputedStyle().fillRule.getRequired(),
         .outputFromPath = documentFromElement,
     });
   }
@@ -388,106 +382,6 @@ bool BoxContainsBox(const Box2d& outer, const Box2d& inner, double tolerance) {
          inner.topLeft.y >= outer.topLeft.y - tolerance &&
          inner.bottomRight.x <= outer.bottomRight.x + tolerance &&
          inner.bottomRight.y <= outer.bottomRight.y + tolerance;
-}
-
-bool IsCopiedUnbundleAttribute(const xml::XMLQualifiedNameRef& name) {
-  return name != xml::XMLQualifiedNameRef("d") && name != xml::XMLQualifiedNameRef("id");
-}
-
-std::vector<xml::XMLQualifiedName> CopiedAttributeNames(const svg::SVGElement& source) {
-  std::vector<xml::XMLQualifiedName> result;
-  source.withReadAccess([&source, &result](const svg::DocumentReadAccess&, EntityHandle) {
-    const SmallVector<xml::XMLQualifiedNameRef, 10> names = source.attributes();
-    result.reserve(names.size());
-    for (const xml::XMLQualifiedNameRef& name : names) {
-      if (!IsCopiedUnbundleAttribute(name)) {
-        continue;
-      }
-      result.emplace_back(RcString(name.namespacePrefix), RcString(name.name));
-    }
-  });
-  return result;
-}
-
-void CopyUnbundleAttributes(const svg::SVGElement& source, svg::SVGPathElement& target) {
-  for (const xml::XMLQualifiedName& name : CopiedAttributeNames(source)) {
-    const xml::XMLQualifiedNameRef nameRef(name);
-    std::optional<RcString> value = source.getAttribute(nameRef);
-    if (value.has_value()) {
-      target.setAttribute(nameRef, std::string_view(*value));
-    }
-  }
-}
-
-void AppendCommandToBuilder(PathBuilder& builder, Path::Verb verb,
-                            std::span<const Vector2d> points) {
-  switch (verb) {
-    case Path::Verb::MoveTo: builder.moveTo(points[0]); break;
-    case Path::Verb::LineTo: builder.lineTo(points[0]); break;
-    case Path::Verb::QuadTo: builder.quadTo(points[0], points[1]); break;
-    case Path::Verb::CurveTo: builder.curveTo(points[0], points[1], points[2]); break;
-    case Path::Verb::ClosePath: builder.closePath(); break;
-  }
-}
-
-std::vector<Path> ExtractCompoundPathContours(const Path& path) {
-  std::vector<Path> contours;
-  PathBuilder builder;
-  bool activeContour = false;
-  bool contourHasSegment = false;
-
-  const auto flushContour = [&]() {
-    if (!activeContour || !contourHasSegment) {
-      builder = PathBuilder();
-      activeContour = false;
-      contourHasSegment = false;
-      return;
-    }
-
-    contours.push_back(builder.build());
-    activeContour = false;
-    contourHasSegment = false;
-  };
-
-  path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
-    if (verb == Path::Verb::MoveTo) {
-      flushContour();
-      builder.moveTo(points[0]);
-      activeContour = true;
-      return;
-    }
-
-    if (!activeContour) {
-      return;
-    }
-
-    AppendCommandToBuilder(builder, verb, points);
-    if (verb != Path::Verb::ClosePath) {
-      contourHasSegment = true;
-    }
-  });
-  flushContour();
-
-  return contours;
-}
-
-CompoundPathSplit SplitCompoundPathIntoContours(const Path& path) {
-  return CompoundPathSplit{
-      .components = ExtractCompoundPathContours(path),
-  };
-}
-
-std::optional<svg::SVGElement> ResolveCompoundPathUnbundleTarget(
-    const EditorApp& app, std::optional<svg::SVGElement> target) {
-  if (target.has_value()) {
-    return target;
-  }
-
-  if (app.selectedElements().size() == 1u) {
-    return app.selectedElements().front();
-  }
-
-  return std::nullopt;
 }
 
 bool PathOperationResultFitsInputBounds(const Path& result,
@@ -884,19 +778,11 @@ bool EditorApp::applyPathOperation(PathOperationKind operation) {
   }
 
   const svg::SVGElement baseElement = BaseElementForPathOperation(operation, selected);
-  svg::SVGElement parent = document.withReadAccess([&](svg::DocumentReadAccess&) {
-    return baseElement.parentElement().value_or(document.svgElement());
-  });
+  svg::SVGElement parent = baseElement.parentElement().value_or(document.svgElement());
   Transform2d parentFromDocument;
-  std::optional<svg::SVGGraphicsElement> parentGraphics = parent.withReadAccess(
-      [&parent](svg::DocumentReadAccess&, EntityHandle) -> std::optional<svg::SVGGraphicsElement> {
-        if (!parent.isa<svg::SVGGraphicsElement>()) {
-          return std::nullopt;
-        }
-        return parent.cast<svg::SVGGraphicsElement>();
-      });
-  if (parentGraphics.has_value()) {
-    const Transform2d documentFromParent = parentGraphics->elementFromWorld();
+  if (parent.isa<svg::SVGGraphicsElement>()) {
+    const Transform2d documentFromParent =
+        parent.cast<svg::SVGGraphicsElement>().elementFromWorld();
     parentFromDocument = documentFromParent.inverse();
   }
 
