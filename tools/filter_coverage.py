@@ -265,8 +265,17 @@ def main() -> None:
                 record_lines.append(line)
                 if line.startswith("SF:"):
                     source_path = line[3:].strip()
-                    # Skip records for third-party/vendored code entirely.
-                    if "/third_party/" in source_path or source_path.startswith("third_party/"):
+                    # Skip records for third-party/vendored code and test-support
+                    # code entirely. Test target sources (`*_tests.cc`) are already
+                    # absent from the report; this drops the test *helper* libraries
+                    # (fixtures, mocks, golden-compare utils) that live under
+                    # `*/tests/` — they are test infrastructure, not product code,
+                    # so counting them in the coverage denominator is misleading.
+                    if (
+                        "/third_party/" in source_path
+                        or source_path.startswith("third_party/")
+                        or "/tests/" in source_path
+                    ):
                         current_source_filter = None
                         # Mark this record for skipping by setting a sentinel.
                         record_lines = ["__SKIP__"]
