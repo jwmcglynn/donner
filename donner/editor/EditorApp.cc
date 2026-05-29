@@ -533,15 +533,25 @@ std::vector<svg::SVGGeometryElement> EditorApp::hitTestRect(const Box2d& documen
   // `DonnerController` because it's point-only; the linear walk is
   // simple, allocation-light, and fine for documents up to a few
   // thousand elements (the typical editor workload).
-  const svg::SVGElement root = document_.document().svgElement();
-  auto visit = [&](const svg::SVGGeometryElement& geometry) {
-    if (auto bounds = geometry.worldBounds(); bounds.has_value()) {
-      if (BoxesIntersect(*bounds, documentRect)) {
-        hits.push_back(geometry);
+  //
+  // §concurrent-dom: the editor keeps the live document in ConcurrentDom, so
+  // this UI-thread walk needs a scoped access guard or its DOM reads (isa /
+  // firstChild / nextSibling) trip the `ElementAnchor` release assertion.
+  // `worldBounds()` lazily computes shape state under *write* access, so the
+  // whole traversal takes one coarse write guard — a read guard would deadlock
+  // on the read→write upgrade. Mirrors `SnapshotSelectionWorldBounds`.
+  svg::SVGDocument doc = document_.document();
+  doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
+    const svg::SVGElement root = doc.svgElement();
+    auto visit = [&](const svg::SVGGeometryElement& geometry) {
+      if (auto bounds = geometry.worldBounds(); bounds.has_value()) {
+        if (BoxesIntersect(*bounds, documentRect)) {
+          hits.push_back(geometry);
+        }
       }
-    }
-  };
-  ForEachGeometryElement(root, visit);
+    };
+    ForEachGeometryElement(root, visit);
+  });
   return hits;
 }
 
