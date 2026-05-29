@@ -450,6 +450,15 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   useNullPlatform = useNullPlatform || !hasDisplay;
   if (useNullPlatform) {
     glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_NULL);
+    // Force Mesa's software renderer (llvmpipe) for offscreen/headless replay.
+    // The null-platform path uses an EGL surfaceless context, which otherwise
+    // binds the host GPU when one is present (e.g. an Intel Arc dev box). That
+    // driver renders replay frames differently from CI's GPU-less software
+    // path, making golden/content checks host-dependent (gl_rnr_replay passed
+    // on CI but failed on Arc). CI already lands on llvmpipe because it has no
+    // GPU; set it explicitly so every host matches. overwrite=0 honors an
+    // operator who deliberately pre-set it.
+    setenv("LIBGL_ALWAYS_SOFTWARE", "1", /*overwrite=*/0);
   }
 #endif
 #endif
