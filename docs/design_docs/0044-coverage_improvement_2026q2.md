@@ -1,8 +1,13 @@
 # Design: Coverage Improvement 2026-Q2 (81.5% → 85%+)
 
-**Status:** Design
+**Status:** Implementing
 **Author:** Claude Opus 4.8
 **Created:** 2026-05-29
+
+> **Progress (2026-05-29):** Phases 0–3 landed. Repo-wide line coverage
+> **81.47% → 83.42%** (full `coverage.sh` run). Per-file: `SandboxCodecs.cc`
+> 50%→69%, `RenderCoordinator.cc` 19%→69%, `XMLDocument.cc` 74%→80%. Phase 4
+> (ImGui widgets) remains deferred. See [Results](#results).
 
 ## Summary
 
@@ -50,24 +55,45 @@ touching ImGui code.
 Phases 1–3 are independent (distinct files, mostly distinct BUILD targets) and
 are being executed in parallel.
 
-- [ ] **Phase 0: Denominator hygiene** (~+0.8%, ~558 lines)
-  - [ ] Exclude `donner/**/tests/**` helper `.cc` (e.g. `ImageComparisonTestFixture.cc`
+- [x] **Phase 0: Denominator hygiene** (measured +0.59%, 558 lines)
+  - [x] Exclude `donner/**/tests/**` helper `.cc` (e.g. `ImageComparisonTestFixture.cc`
         ~295, `BitmapGoldenCompare.cc` ~131) from the coverage denominator in
-        `tools/filter_coverage.py`.
-  - [ ] Confirm `*_tool.cc` / `*_benchmark.cc` / CLI `main()` files are excluded.
-- [ ] **Phase 1: Sandbox wire codecs** (~+1.3%, 775 lines, biggest winnable gap)
-  - [ ] Expand `WireFormat_tests.cc` to round-trip every `Encode*/Decode*` pair
-        in `SandboxCodecs.cc` (Vector2d/2i, Transform2d, Box2d, Rgba, Color, …).
-  - [ ] Add malformed/truncated-input `Decode*` failure cases (trust boundary).
-- [ ] **Phase 2: Core + coordinator** (~+1.4%, ~756 lines)
-  - [ ] `XMLDocument_tests.cc` — mutation/lifetime paths (442 @ 74%, no test).
-  - [ ] `RenderCoordinator_tests.cc` via the `EditorBackendCore` harness (314 @ 19%).
-- [ ] **Phase 3: Expand thin editor tests** (~+0.7%)
-  - [ ] `DocumentSyncController` (146 @ 62%), `XmlAutocomplete` (81 @ 73%),
-        `RopeSimulation` (70 @ 85%), `AttributeWriteback` (65 @ 82%).
+        `tools/filter_coverage.py`. (`*_tests.cc` bodies were already absent.)
+- [x] **Phase 1: Sandbox wire codecs** (`SandboxCodecs.cc` 50%→69%, ~300 lines)
+  - [x] Expand `WireFormat_tests.cc` to round-trip all 25 `Encode*/Decode*` pairs.
+  - [x] Add 24 malformed/truncated-input `Decode*` failure cases (trust boundary).
+  - [ ] Remaining 475 uncovered: the ~14 per-filter-primitive helpers reachable
+        only through `EncodeFilterGraph` — cover one graph node per primitive type.
+- [x] **Phase 2: Core + coordinator**
+  - [x] `XMLDocument_tests.cc` — 45 cases, mutation/error branches (74%→80%).
+  - [x] `RenderCoordinator_tests.cc` — 26 cases, GL-free predicates + rasterize/
+        park/dispatch (19%→69%). GL-upload paths stay on the `.rnr` integration suites.
+- [x] **Phase 3: Expand thin editor tests** (+43 cases)
+  - [x] `DocumentSyncController`, `XmlAutocomplete`, `RopeSimulation`, `AttributeWriteback`.
 - [ ] **Phase 4 (deferred): ImGui widgets via UI harness** (stretch, ~2,000 lines)
   - [ ] `TextEditor.cc` (1364 @ 57%), `TextEditorCore.cc` (654 @ 62%) need a
-        headless ImGui-driving harness. Scope separately.
+        headless ImGui-driving harness. Scope separately — this is the bulk of the
+        remaining gap to reach 85%+.
+
+## Results
+
+Measured by full `tools/coverage.sh --no-html //donner/...` before/after.
+
+| Metric | Before | After |
+|--------|-------:|------:|
+| Repo-wide line coverage | 81.47% | **83.42%** |
+| `editor/sandbox/SandboxCodecs.cc` | 50% | 69% |
+| `editor/RenderCoordinator.cc` | 19% | 69% |
+| `base/xml/XMLDocument.cc` | 74% | 80% |
+
+Reaching the 85% goal now depends primarily on Phase 4 (the ImGui `TextEditor*`
+widgets, ~2,000 lines) plus the Phase 1 filter-primitive remainder.
+
+### Follow-ups surfaced
+
+- `EncodeColor`'s CurrentColor path writes a default `css::RGBA()` (opaque white),
+  not the "transparent" its comment at `SandboxCodecs.cc:135` claims. Behavior
+  change out of scope here; documented by test `ColorCurrentColorEncodesAsDefaultRgba`.
 
 ## Background
 
