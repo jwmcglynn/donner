@@ -1130,8 +1130,6 @@ INSTANTIATE_TEST_SUITE_P(
                     {"invalid-id-attribute-1.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"invalid-id-attribute-2.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"mixed-namespaces.svg", Params::Skip("Bug? mixed namespaces")},
-                    {"nested-svg-with-overflow-auto.svg", Params::Skip("Not impl: overflow")},
-                    {"nested-svg-with-overflow-visible.svg", Params::Skip("Not impl: overflow")},
                     {"no-size.svg", Params::Skip("Not impl: Computed bounds from content")},
                     {"not-UTF-8-encoding.svg", Params::Skip("Bug/Not impl? Non-UTF8 encoding")},
                     {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
