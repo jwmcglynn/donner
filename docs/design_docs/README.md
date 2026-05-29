@@ -98,7 +98,7 @@ conventions automated agents should follow when editing design docs.
 | 0041-2 | [path_authoring_and_boolean_operations](0041-2-path_authoring_and_boolean_operations.md) | Prototype | Illustrator-like path authoring, direct path editing, and Donner-level boolean path operations for the editor. |
 | 0042 | [geode_slug_conformance](0042-geode_slug_conformance.md) | Developer reference | Geode Slug implementation reference: encoder + shader pipeline, invariants, and known limitations. |
 | 0043 | [deterministic_replay_testing](0043-deterministic_replay_testing.md) | Design | Deterministic multi-thread replay framework and premortem for re-enabling #601-related tests. |
-| 0044 | [coverage_improvement_2026q2](0044-coverage_improvement_2026q2.md) | Design | Raise line coverage 81.5%→85%+: editor holds 63% of the gap; phased plan (denominator hygiene, sandbox codecs, core/coordinator tests) deferring ImGui widgets. |
+| 0044 | [coverage_improvement_2026q2](0044-coverage_improvement_2026q2.md) | Implemented | Raised line coverage 81.5%→85.6% (phases 0–4); also fixed 3 bugs the push surfaced (2 TextEditor crashes + EncodeColor CurrentColor). |
 
 ## Cross-reference: developer docs
 

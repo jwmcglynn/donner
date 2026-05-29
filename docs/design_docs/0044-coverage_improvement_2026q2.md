@@ -1,13 +1,15 @@
 # Design: Coverage Improvement 2026-Q2 (81.5% → 85%+)
 
-**Status:** Implementing
+**Status:** Implemented
 **Author:** Claude Opus 4.8
 **Created:** 2026-05-29
 
-> **Progress (2026-05-29):** Phases 0–3 landed. Repo-wide line coverage
-> **81.47% → 83.42%** (full `coverage.sh` run). Per-file: `SandboxCodecs.cc`
-> 50%→69%, `RenderCoordinator.cc` 19%→69%, `XMLDocument.cc` 74%→80%. Phase 4
-> (ImGui widgets) remains deferred. See [Results](#results).
+> **Done (2026-05-29):** Phases 0–4 landed. Repo-wide line coverage
+> **81.47% → 85.63%** (full `coverage.sh` run) — the 85% goal is met. Per-file:
+> `SandboxCodecs.cc` 50%→95%, `RenderCoordinator.cc` 19%→69%, `TextEditorCore.cc`
+> 62%→80%, `XMLDocument.cc` 74%→80%, `TextEditor.cc` 57%→69%. The coverage push
+> also surfaced and fixed three real bugs (two TextEditor crashes + the
+> `EncodeColor` CurrentColor semantics). See [Results](#results).
 
 ## Summary
 
@@ -70,10 +72,12 @@ are being executed in parallel.
         park/dispatch (19%→69%). GL-upload paths stay on the `.rnr` integration suites.
 - [x] **Phase 3: Expand thin editor tests** (+43 cases)
   - [x] `DocumentSyncController`, `XmlAutocomplete`, `RopeSimulation`, `AttributeWriteback`.
-- [ ] **Phase 4 (deferred): ImGui widgets via UI harness** (stretch, ~2,000 lines)
-  - [ ] `TextEditor.cc` (1364 @ 57%), `TextEditorCore.cc` (654 @ 62%) need a
-        headless ImGui-driving harness. Scope separately — this is the bulk of the
-        remaining gap to reach 85%+.
+- [x] **Phase 4: ImGui widgets via the existing headless harness**
+  - [x] `TextEditorCore.cc` 62%→80% (+69 cases, headless editing substrate).
+  - [x] `TextEditor.cc` 57%→69% (+33 cases via the existing ImGui-context harness:
+        keyboard, mouse, render-option toggles, find/replace). The residual ~966
+        lines are deep render/layout paths needing a real GPU/font backend — left
+        as a future stretch, not required to hold ≥85%.
 
 ## Results
 
@@ -81,13 +85,17 @@ Measured by full `tools/coverage.sh --no-html //donner/...` before/after.
 
 | Metric | Before | After |
 |--------|-------:|------:|
-| Repo-wide line coverage | 81.47% | **83.42%** |
-| `editor/sandbox/SandboxCodecs.cc` | 50% | 69% |
+| Repo-wide line coverage | 81.47% | **85.63%** |
+| `editor/sandbox/SandboxCodecs.cc` | 50% | 95% |
 | `editor/RenderCoordinator.cc` | 19% | 69% |
+| `editor/TextEditorCore.cc` | 62% | 80% |
 | `base/xml/XMLDocument.cc` | 74% | 80% |
+| `editor/TextEditor.cc` | 57% | 69% |
 
-Reaching the 85% goal now depends primarily on Phase 4 (the ImGui `TextEditor*`
-widgets, ~2,000 lines) plus the Phase 1 filter-primitive remainder.
+The **85% goal is met** (85.63%). `TextEditor.cc` (69%, ~966 lines uncovered)
+still has headroom — the residual is deep ImGui render/layout paths that need a
+real GPU/font backend rather than the headless harness; tracked as a future
+stretch, not required to hold ≥85%.
 
 ### Follow-ups surfaced
 
