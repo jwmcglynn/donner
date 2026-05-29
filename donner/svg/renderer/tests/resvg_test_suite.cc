@@ -771,7 +771,9 @@ INSTANTIATE_TEST_SUITE_P(
             "painting/marker",
             {
                 {"default-clip.svg", WithMaxPixels(300, "Marker clip edge AA")},
-                {"marker-on-circle.svg", WithMaxPixels(120, "Marker edge AA")},
+                {"marker-on-circle.svg", WithMaxPixels(160,
+                                                       "Circle stroke edge: cross-GPU coverage "
+                                                       "fringe, 122px on Mesa lavapipe vs golden")},
                 {"marker-on-text.svg", Params::Skip("Not impl: `text`")},
                 {"orient=auto-on-M-C-C-4.svg",
                  Params::WithGoldenOverride(

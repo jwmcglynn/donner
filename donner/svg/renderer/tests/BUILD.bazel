@@ -455,6 +455,16 @@ donner_cc_test(
         "@resvg-test-suite//:resources",
         "@resvg-test-suite//:tests",
     ],
+    # The Geode variant runs every resvg case through software Vulkan (Mesa
+    # lavapipe) on the GPU-less CI runners. The first Geode render in a shard
+    # pays a one-time wgpu device-init + WGSL->LLVM pipeline compile (~23 s
+    # locally), and O(radius^2) filters like feMorphology huge-radius run far
+    # slower than on a real GPU — both legitimately exceed gtest_timeout_main's
+    # 60 s per-case watchdog on the slower CI host (Exit 124). Raise the
+    # per-case budget for this suite; bazel's outer `timeout = "long"` (900 s)
+    # still backstops a genuine driver hang. CPU variants finish well under 60 s
+    # so the higher ceiling never triggers for them.
+    env = {"DONNER_TEST_TIMEOUT_SECONDS": "300"},
     shard_count = 16,
     target_compatible_with = select({
         "//donner/svg/renderer:resvg_test_suite_enabled": [],
@@ -511,7 +521,12 @@ donner_variant_cc_test(
         # Geode variant: runs the same resvg Params and thresholds as the CPU
         # variants. Per-test exceptions belong in the normal Params maps, not in
         # backend-specific gate tables.
-        {"name": "geode", "backend": "geode", "text": "true", "text_full": "false"},
+        {
+            "name": "geode",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "false",
+        },
     ],
 )
 

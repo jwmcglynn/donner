@@ -62,8 +62,25 @@ namespace {
 /// Strict identity check used only for the remaining Geode-only
 /// goldens (gradients, patterns, image_data_url). Shared-golden tests
 /// pass their own widened `WithThreshold(...)` instead.
+///
+/// Strict-0 only holds for a golden captured on the SAME GPU/driver that runs
+/// the test: axis-aligned / non-curved geometry (e.g. StrokingStrokewidth,
+/// LinearGradientStroke) is bit-identical across drivers, so those keep this.
 ImageComparisonParams strictGeodeParams() {
   return ImageComparisonParams::WithThreshold(0.0f, 0).includeAntiAliasingDifferences();
+}
+
+/// Comparison for Geode goldens whose analytic coverage carries a sub-pixel
+/// edge fringe that differs across GPU drivers. The per-backend goldens here
+/// are captured on macOS/Metal; on Linux CI's Mesa lavapipe (llvmpipe) the
+/// WGSL Slug coverage math diverges by a few LSB along edges (ULP-level
+/// `sqrt`/`fma`/derivative precision) — NOT hardware MSAA, which this backend
+/// no longer uses (0041, sampleCount=1). Measured: every differing pixel is a
+/// <=1px edge band of magnitude <=28/255; a genuine regression (color flip)
+/// scores ~70x above this threshold's maxDelta, so it still trips loudly. 0.1
+/// is the same tolerance the rest of this suite's golden tests already use.
+ImageComparisonParams crossDriverGeodeParams() {
+  return ImageComparisonParams::WithThreshold(0.1f);
 }
 
 class RendererGeodeGoldenTests : public ImageComparisonTestFixture {
@@ -219,11 +236,13 @@ TEST_F(RendererGeodeGoldenTests, QuadBezier) {
   // Per-backend golden: Geode's analytic dual-ray Slug coverage (0041) renders
   // the curved stroke's edges with a ~1px-finer band than tiny-skia's
   // finite-sample scan-converter along the full length of the Bézier, so the
-  // shared golden diff exceeds the strict budget. Pin a Geode-owned golden at
-  // the strict-0 budget instead (the shared `golden/quadbezier1.png` stays the
-  // tiny-skia reference for the CPU suite).
+  // shared `golden/quadbezier1.png` stays the tiny-skia reference for the CPU
+  // suite and Geode pins its own golden here. The long control-hull lines make
+  // the cross-driver edge fringe span ~380 sub-pixel pixels on llvmpipe (all
+  // <=25/255), so use the suite's standard threshold rather than strict-0.
   compareWithGeodeGolden("donner/svg/renderer/testdata/quadbezier1.svg",
-                         "donner/svg/renderer/testdata/golden/geode/quadbezier1.png");
+                         "donner/svg/renderer/testdata/golden/geode/quadbezier1.png",
+                         crossDriverGeodeParams());
 }
 
 /// `stroke-linecap` variants (butt, round, square). All three are rendering
@@ -282,19 +301,22 @@ TEST_F(RendererGeodeGoldenTests, StrokingStrokewidth) {
 /// Basic linear gradient: red → blue horizontal, `objectBoundingBox` units.
 TEST_F(RendererGeodeGoldenTests, LinearGradientBasic) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/linear_gradient_basic.svg",
-                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_basic.png");
+                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_basic.png",
+                         crossDriverGeodeParams());
 }
 
 /// `userSpaceOnUse` gradient with a `gradientTransform="rotate(...)"`.
 TEST_F(RendererGeodeGoldenTests, LinearGradientUserSpace) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/linear_gradient_userspace.svg",
-                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_userspace.png");
+                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_userspace.png",
+                         crossDriverGeodeParams());
 }
 
 /// Pad / reflect / repeat spread modes rendered side by side.
 TEST_F(RendererGeodeGoldenTests, LinearGradientSpread) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/linear_gradient_spread.svg",
-                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_spread.png");
+                         "donner/svg/renderer/testdata/golden/geode/linear_gradient_spread.png",
+                         crossDriverGeodeParams());
 }
 
 /// Stroke outline filled with a linear gradient.
@@ -422,7 +444,8 @@ TEST_F(RendererGeodeGoldenTests, PatternOffset) {
 /// sampling the repeating pattern for interior pixels.
 TEST_F(RendererGeodeGoldenTests, PatternNonRect) {
   compareWithGeodeGolden("donner/svg/renderer/testdata/geode_pattern_nonrect.svg",
-                         "donner/svg/renderer/testdata/golden/geode/geode_pattern_nonrect.png");
+                         "donner/svg/renderer/testdata/golden/geode/geode_pattern_nonrect.png",
+                         crossDriverGeodeParams());
 }
 
 // ----------------------------------------------------------------------------
