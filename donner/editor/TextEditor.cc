@@ -3497,7 +3497,14 @@ void TextEditor::processFind(const std::string& findWord, bool findNext) {
     scrollToCursor_ = true;
 
     if (!findNext) {
-      ImGui::SetKeyboardFocusHere(-1);
+      // `SetKeyboardFocusHere()` dereferences the current window, which only exists inside an
+      // active frame. In production processFind() runs from the find-dialog render path (always
+      // mid-frame), but guard it so the find/select logic above is safe to invoke outside a frame
+      // (tests, or any non-render caller) instead of dereferencing a null window and crashing.
+      const ImGuiContext* g = ImGui::GetCurrentContext();
+      if (g != nullptr && g->WithinFrameScope) {
+        ImGui::SetKeyboardFocusHere(-1);
+      }
     }
   }
 }

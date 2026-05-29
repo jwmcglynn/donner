@@ -382,6 +382,23 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "render_coordinator_tests",
+    srcs = ["RenderCoordinator_tests.cc"],
+    deps = [
+        "//donner/editor:async_renderer",
+        "//donner/editor:composited_presentation",
+        "//donner/editor:editor_app",
+        "//donner/editor:gl_texture_cache",
+        "//donner/editor:render_coordinator",
+        "//donner/editor:select_tool",
+        "//donner/editor:selection_aabb",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "async_renderer_wallclock_tests",
     srcs = ["AsyncRenderer_tests.cc"],
     data = [

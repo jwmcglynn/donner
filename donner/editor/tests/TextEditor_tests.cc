@@ -29,6 +29,10 @@ protected:
     // that query glyph metrics don't crash.
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(800, 600);
+    // ImGui defaults ConfigMacOSXBehaviors to true on Apple, which remaps shortcut chords from
+    // Ctrl to Cmd (Super). Force it off so the Ctrl-based shortcut tests below exercise the same
+    // modifier on every host OS instead of failing on macOS runners.
+    io.ConfigMacOSXBehaviors = false;
     io.Fonts->Build();
   }
 
@@ -76,6 +80,187 @@ protected:
     editor.render("##editor", editorSize);
     ImGui::End();
     ImGui::Render();
+  }
+
+  // Drives one render frame with keyboard input handling enabled, injecting
+  // the supplied modifier state, key presses, and typed characters. ImGui
+  // reports `IsKeyPressed` on the frame a key transitions from up→down, so
+  // each key is released first (via `ResetKeyboardState`) and pressed here so
+  // the editor's shortcut matcher (`Shortcut::matches`) sees a fresh press.
+  void RenderEditorFrameWithKeyboard(const std::vector<ImGuiKey>& keys,
+                                     std::string_view characters = "", bool ctrl = false,
+                                     bool shift = false, bool alt = false,
+                                     const ImVec2& editorSize = ImVec2(240.0f, 180.0f)) {
+    EnsureEditorChildWindow(editorSize);
+    editor.setHandleKeyboardInputs(true);
+    editor.setHandleMouseInputs(false);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+    if (ctrl) {
+      io.AddKeyEvent(ImGuiMod_Ctrl, true);
+    }
+    if (shift) {
+      io.AddKeyEvent(ImGuiMod_Shift, true);
+    }
+    if (alt) {
+      io.AddKeyEvent(ImGuiMod_Alt, true);
+    }
+    for (ImGuiKey key : keys) {
+      io.AddKeyEvent(key, true);
+    }
+    for (char c : characters) {
+      io.AddInputCharacter(static_cast<unsigned int>(static_cast<unsigned char>(c)));
+    }
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(editorSize.x + 40.0f, editorSize.y + 40.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "TextEditorTestWindow", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    FocusEditorChildWindow();
+    // Match the live editor, which always has a font on the stack; the
+    // find/replace dialog branch pops and re-pushes it.
+    ImGui::PushFont(io.Fonts->Fonts[0]);
+    editor.render("##editor", editorSize);
+    ImGui::PopFont();
+    ImGui::End();
+    ImGui::Render();
+  }
+
+  // Renders a frame that releases every modifier and key fed in the previous
+  // keyboard frame so the next `IsKeyPressed` query observes a clean
+  // up→down transition.
+  void ResetKeyboardState(const std::vector<ImGuiKey>& keys, bool ctrl = false, bool shift = false,
+                          bool alt = false, const ImVec2& editorSize = ImVec2(240.0f, 180.0f)) {
+    EnsureEditorChildWindow(editorSize);
+    editor.setHandleKeyboardInputs(true);
+    editor.setHandleMouseInputs(false);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+    for (ImGuiKey key : keys) {
+      io.AddKeyEvent(key, false);
+    }
+    if (ctrl) {
+      io.AddKeyEvent(ImGuiMod_Ctrl, false);
+    }
+    if (shift) {
+      io.AddKeyEvent(ImGuiMod_Shift, false);
+    }
+    if (alt) {
+      io.AddKeyEvent(ImGuiMod_Alt, false);
+    }
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(editorSize.x + 40.0f, editorSize.y + 40.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "TextEditorTestWindow", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    FocusEditorChildWindow();
+    editor.render("##editor", editorSize);
+    ImGui::End();
+    ImGui::Render();
+  }
+
+  // True if the editor's `BeginChild` window has been created in a prior frame.
+  [[nodiscard]] bool EditorChildWindowExists() const {
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context == nullptr) {
+      return false;
+    }
+    for (ImGuiWindow* window : context->Windows) {
+      const std::string_view name(window->Name);
+      if (name.find("##editor") != std::string_view::npos &&
+          (window->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Renders one input-free frame so the editor's child window exists and can be
+  // focused on the following keyboard frame.
+  void EnsureEditorChildWindow(const ImVec2& editorSize) {
+    if (EditorChildWindowExists()) {
+      return;
+    }
+    RenderEditorFrame(editorSize);
+  }
+
+  // Focuses the editor's child window so `handleKeyboardInputs()` sees
+  // `ImGui::IsWindowFocused()` as true. The editor builds its content inside a
+  // `BeginChild("##editor", ...)` whose ImGui name is
+  // "<parent>/##editor_<hash>"; the window object persists across frames once
+  // created, so focusing it by name before `editor.render()` re-begins the
+  // child makes the child the active nav window for that frame.
+  void FocusEditorChildWindow() {
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context == nullptr) {
+      return;
+    }
+    for (ImGuiWindow* window : context->Windows) {
+      const std::string_view name(window->Name);
+      if (name.find("##editor") != std::string_view::npos &&
+          (window->Flags & ImGuiWindowFlags_ChildWindow) != 0) {
+        ImGui::FocusWindow(window);
+        return;
+      }
+    }
+  }
+
+  // Renders one frame with an editor font pushed on the ImGui font stack. The
+  // find/replace dialog branch in `render()` unconditionally pops the editor
+  // font and pushes it back, so it requires a font to already be on the stack
+  // (the live editor always pushes one before `render()`).
+  void RenderEditorFrameWithFont(const ImVec2& editorSize = ImVec2(320.0f, 180.0f)) {
+    editor.setHandleKeyboardInputs(false);
+    editor.setHandleMouseInputs(false);
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(editorSize.x + 40.0f, editorSize.y + 40.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "TextEditorTestWindow", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::PushFont(io.Fonts->Fonts[0]);
+    editor.render("##editor", editorSize);
+    ImGui::PopFont();
+    ImGui::End();
+    ImGui::Render();
+  }
+
+  void SetFindOpened(bool opened, bool justOpened = false) {
+    editor.findOpened_ = opened;
+    editor.findJustOpened_ = justOpened;
+  }
+
+  void SetReplaceOpened(bool opened) { editor.replaceOpened_ = opened; }
+
+  [[nodiscard]] bool FindOpened() const { return editor.findOpened_; }
+  [[nodiscard]] bool ReplaceOpened() const { return editor.replaceOpened_; }
+  [[nodiscard]] bool AutocompleteOpened() const { return editor.autocompleteOpened_; }
+  [[nodiscard]] int AutocompleteIndex() const { return editor.autocompleteIndex_; }
+  [[nodiscard]] int AutocompleteSuggestionCount() const {
+    return static_cast<int>(editor.autocompleteSuggestions_.size());
+  }
+  void SetAutocompleteSwitched(bool value) { editor.autocompleteSwitched_ = value; }
+
+  // Opens the autocomplete popup with the provided (display == insert)
+  // suggestions, anchored at the current cursor.
+  void OpenAutocompleteWithSuggestions(const std::vector<std::string>& suggestions) {
+    editor.autocompleteOpened_ = true;
+    editor.autocompleteSuggestions_.clear();
+    for (const std::string& suggestion : suggestions) {
+      editor.autocompleteSuggestions_.emplace_back(RcString(suggestion), RcString(suggestion));
+    }
+    editor.autocompleteIndex_ = 0;
+    editor.autocompletePosition_ = editor.getCursorPosition();
   }
 
   [[nodiscard]] int VisualLineCount() const { return static_cast<int>(editor.visualLines_.size()); }
@@ -1905,6 +2090,461 @@ TEST_F(TextEditorTests, SelectAllOnMultilineDocument) {
   editor.selectAll();
   EXPECT_EQ(editor.getSelectedText(), content)
       << "selectAll should select entire multi-line document";
+}
+
+// ============================================================================
+// KEYBOARD INPUT THROUGH THE FULL RENDER PATH
+//
+// These tests drive `handleKeyboardInputs()` / `executeAction()` /
+// `handleCharacterInput()` by injecting ImGui key + character events and
+// rendering a frame with keyboard handling enabled, mirroring how the live
+// editor processes input. The `Shortcut::matches()` matcher requires a fresh
+// up→down key transition, so each test releases keys via `ResetKeyboardState`
+// before pressing them.
+// ============================================================================
+
+TEST_F(TextEditorTests, TypedCharacterFlowsThroughRenderIntoBuffer) {
+  editor.setText("");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  RenderEditorFrameWithKeyboard(/*keys=*/{}, /*characters=*/"Hi");
+
+  EXPECT_EQ(editor.getText(), "Hi")
+      << "Characters from InputQueueCharacters should be inserted via the render path";
+}
+
+TEST_F(TextEditorTests, ArrowRightKeyMovesCursorThroughRenderPath) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  ResetKeyboardState({ImGuiKey_RightArrow});
+  RenderEditorFrameWithKeyboard({ImGuiKey_RightArrow});
+
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 1))
+      << "RightArrow routed through handleKeyboardInputs should advance the cursor";
+}
+
+TEST_F(TextEditorTests, ShiftDownArrowSelectsThroughRenderPath) {
+  // Note: `executeAction` only wires the vertical select shortcuts
+  // (`SelectUp`/`SelectDown`); the horizontal `SelectLeft`/`SelectRight`
+  // entries fall through to `default:` and are intentionally no-ops on the
+  // keyboard path. Exercise the wired vertical case here.
+  editor.setText("Line1\nLine2");
+  editor.setCursorPosition(Coordinates(0, 2));
+
+  ResetKeyboardState({ImGuiKey_DownArrow}, /*ctrl=*/false, /*shift=*/true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_DownArrow}, /*characters=*/"", /*ctrl=*/false,
+                                /*shift=*/true);
+
+  EXPECT_TRUE(editor.hasSelection()) << "Shift+Down should extend the selection";
+  EXPECT_EQ(editor.getSelectedText(), "ne1\nLi");
+}
+
+TEST_F(TextEditorTests, EnterKeyInsertsNewlineThroughRenderPath) {
+  // Drives the keyboard NewLine path through the full render loop with the default
+  // smartIndent enabled. This previously crashed via a use-after-realloc in
+  // TextEditorCore::handleNewLine (a Line& held across insertLine) — now fixed.
+  editor.setText("  AB");                       // leading indent so smart indent runs
+  editor.setCursorPosition(Coordinates(0, 4));  // end of "  AB"
+
+  ResetKeyboardState({ImGuiKey_Enter});
+  RenderEditorFrameWithKeyboard({ImGuiKey_Enter});
+
+  EXPECT_EQ(editor.getText(), "  AB\n  ")
+      << "Enter should split the line at the cursor and auto-indent the new line";
+}
+
+TEST_F(TextEditorTests, BackspaceKeyDeletesThroughRenderPath) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 5));
+
+  ResetKeyboardState({ImGuiKey_Backspace});
+  RenderEditorFrameWithKeyboard({ImGuiKey_Backspace});
+
+  EXPECT_EQ(editor.getText(), "Hell") << "Backspace should delete the character before the cursor";
+}
+
+TEST_F(TextEditorTests, DeleteKeyDeletesForwardThroughRenderPath) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  ResetKeyboardState({ImGuiKey_Delete});
+  RenderEditorFrameWithKeyboard({ImGuiKey_Delete});
+
+  EXPECT_EQ(editor.getText(), "ello") << "Delete should remove the character at the cursor";
+}
+
+TEST_F(TextEditorTests, TabKeyInsertsTabCharacterThroughRenderPath) {
+  editor.setText("");
+  // setText runs indentation detection, so configure tab-vs-space behavior
+  // afterwards. With hard tabs the Indent shortcut inserts a single '\t'.
+  editor.setInsertSpaces(false);
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  ResetKeyboardState({ImGuiKey_Tab});
+  RenderEditorFrameWithKeyboard({ImGuiKey_Tab});
+
+  EXPECT_EQ(editor.getText(), "\t")
+      << "Tab with no selection and hard tabs should insert a tab character";
+}
+
+TEST_F(TextEditorTests, TabKeyInsertsSpacesWhenSoftTabsThroughRenderPath) {
+  editor.setText("");
+  editor.setInsertSpaces(true);
+  editor.setTabSize(4);
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  ResetKeyboardState({ImGuiKey_Tab});
+  RenderEditorFrameWithKeyboard({ImGuiKey_Tab});
+
+  EXPECT_EQ(editor.getText(), "    ")
+      << "Tab with no selection and soft tabs should insert tab-sized spaces";
+}
+
+TEST_F(TextEditorTests, CtrlAUndoRedoThroughRenderPath) {
+  editor.setText("Hello world");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  ResetKeyboardState({ImGuiKey_A}, /*ctrl=*/true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_A}, /*characters=*/"", /*ctrl=*/true);
+
+  EXPECT_EQ(editor.getSelectedText(), "Hello world")
+      << "Ctrl+A through the render path should select all";
+}
+
+TEST_F(TextEditorTests, CtrlCAndCtrlVRoundTripThroughRenderPath) {
+  editor.setText("Hello world");
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
+  editor.setCursorPosition(Coordinates(0, 5));
+
+  ResetKeyboardState({ImGuiKey_C}, /*ctrl=*/true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_C}, /*characters=*/"", /*ctrl=*/true);
+  EXPECT_STREQ(ImGui::GetClipboardText(), "Hello")
+      << "Ctrl+C through the render path should copy the selection";
+
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 0));
+  editor.setCursorPosition(Coordinates(0, 11));
+  ResetKeyboardState({ImGuiKey_V}, /*ctrl=*/true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_V}, /*characters=*/"", /*ctrl=*/true);
+  EXPECT_EQ(editor.getText(), "Hello worldHello")
+      << "Ctrl+V through the render path should paste at the cursor";
+}
+
+TEST_F(TextEditorTests, CtrlXCutsSelectionThroughRenderPath) {
+  editor.setText("Hello world");
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 6));
+  editor.setCursorPosition(Coordinates(0, 6));
+
+  ResetKeyboardState({ImGuiKey_X}, /*ctrl=*/true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_X}, /*characters=*/"", /*ctrl=*/true);
+
+  EXPECT_EQ(editor.getText(), "world") << "Ctrl+X through the render path should cut the selection";
+}
+
+TEST_F(TextEditorTests, CtrlZUndoThroughRenderPath) {
+  editor.setText("Hello");
+  editor.setCursorPosition(Coordinates(0, 5));
+  EnterCharacter('!');
+  ASSERT_EQ(editor.getText(), "Hello!");
+
+  ResetKeyboardState({ImGuiKey_Z}, /*ctrl=*/true);
+  RenderEditorFrameWithKeyboard({ImGuiKey_Z}, /*characters=*/"", /*ctrl=*/true);
+
+  EXPECT_EQ(editor.getText(), "Hello") << "Ctrl+Z through the render path should undo";
+}
+
+// ============================================================================
+// RENDER-PATH OPTION TOGGLES
+//
+// Each test flips a render-affecting option and renders a frame, exercising
+// the corresponding draw branch (whitespace dots/arrows, line numbers,
+// scrollbar markers, error markers, fold markers, the non-wrapped renderLine
+// path, custom palettes) without a GPU backend.
+// ============================================================================
+
+TEST_F(TextEditorTests, ShowWhitespacesRendersWithoutCrash) {
+  editor.setShowWhitespaces(true);
+  EXPECT_TRUE(editor.isShowingWhitespaces());
+  editor.setText("a\tb c\n  indented");
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  EXPECT_GT(VisualLineCount(), 0) << "Whitespace rendering should produce visual rows";
+}
+
+TEST_F(TextEditorTests, LineNumbersDisabledStillRenders) {
+  editor.setShowLineNumbers(false);
+  editor.setText("Line1\nLine2\nLine3");
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  EXPECT_EQ(editor.getTextStart(), 3.0f)
+      << "getTextStart should report the no-line-number offset when disabled";
+}
+
+TEST_F(TextEditorTests, LineNumbersEnabledRenders) {
+  editor.setShowLineNumbers(true);
+  editor.setText("Line1\nLine2\nLine3");
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  EXPECT_EQ(editor.getTextStart(), 7.0f)
+      << "getTextStart should report the line-number offset when enabled";
+}
+
+TEST_F(TextEditorTests, NonWrappedRenderPathDrawsLines) {
+  editor.setWordWrapEnabled(false);
+  EXPECT_FALSE(editor.wordWrapEnabled());
+  editor.setText("Line1\nLine2\nLine3");
+  editor.setCursorPosition(Coordinates(1, 0));
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  // With wrapping off the visual layout mirrors logical lines one-for-one.
+  EXPECT_EQ(VisualLineLogicalLines(), (std::vector<int>{0, 1, 2}));
+}
+
+TEST_F(TextEditorTests, ScrollbarMarkersRenderWithChangesAndErrors) {
+  editor.setScrollbarMarkers(true);
+  std::ostringstream source;
+  for (int i = 0; i < 80; ++i) {
+    source << "line" << i << "\n";
+  }
+  editor.setText(source.str());
+  editor.setErrorMarkers(ErrorMarkers{{3, "boom"}, {10, "kaboom"}});
+  editor.setCursorPosition(Coordinates(20, 0));
+  // Produce a change-tracking entry so renderScrollbarChanges has work.
+  EnterCharacter('x');
+
+  RenderEditorFrame(ImVec2(240.0f, 120.0f));
+  RenderEditorFrame(ImVec2(240.0f, 120.0f));
+
+  EXPECT_GT(VisualLineCount(), 0) << "Scrollbar marker rendering should not disturb layout";
+}
+
+TEST_F(TextEditorTests, ErrorMarkersRenderLineBackground) {
+  editor.setText("first\nsecond\nthird");
+  editor.setErrorMarkers(ErrorMarkers{{2, "syntax error"}});
+  editor.setCursorPosition(Coordinates(1, 0));
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  EXPECT_GT(VisualLineCount(), 0);
+}
+
+TEST_F(TextEditorTests, HighlightedLinesRender) {
+  editor.setWordWrapEnabled(false);
+  editor.setText("one\ntwo\nthree");
+  editor.setHighlightedLines({1});
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  EXPECT_GT(VisualLineCount(), 0);
+
+  editor.clearHighlightedLines();
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  EXPECT_GT(VisualLineCount(), 0);
+}
+
+TEST_F(TextEditorTests, FoldMarkersRenderForBracedBlock) {
+  editor.setWordWrapEnabled(false);
+  editor.setFoldEnabled(true);
+  editor.setText("{\n  child\n}\ntrailing");
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  EXPECT_GT(VisualLineCount(), 0) << "Folded-document rendering should not disturb layout";
+}
+
+TEST_F(TextEditorTests, CustomPaletteIsAppliedThroughRender) {
+  TextEditor::Palette palette = TextEditor::getDarkPalette();
+  palette[static_cast<int>(ColorIndex::Background)] = 0xff123456;
+  editor.setPalette(palette);
+  editor.setText("colored");
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+
+  EXPECT_EQ(editor.getPalette()[static_cast<int>(ColorIndex::Background)], 0xff123456u);
+}
+
+TEST_F(TextEditorTests, ColorizerDisabledRenders) {
+  editor.setColorizerEnabled(false);
+  EXPECT_FALSE(editor.isColorizerEnabled());
+  editor.setText("<rect x=\"10\"/>");
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  EXPECT_GT(VisualLineCount(), 0);
+
+  editor.setColorizerEnabled(true);
+  EXPECT_TRUE(editor.isColorizerEnabled());
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  EXPECT_GT(VisualLineCount(), 0);
+}
+
+// ============================================================================
+// FIND / REPLACE
+// ============================================================================
+
+TEST_F(TextEditorTests, ProcessFindSelectsMatchAndMovesCursor) {
+  editor.setText("alpha beta gamma beta");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  // `findNext=true` skips the `ImGui::SetKeyboardFocusHere` call, which can
+  // only run inside an active ImGui frame; the located selection/cursor is the
+  // same as the initial-find path.
+  editor.processFind("beta", /*findNext=*/true);
+
+  EXPECT_EQ(editor.getSelectedText(), "beta") << "processFind should select the first match";
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 10))
+      << "processFind should move the cursor to the end of the match";
+}
+
+TEST_F(TextEditorTests, ProcessFindInitialOutsideFrameDoesNotCrash) {
+  editor.setText("alpha beta gamma beta");
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  // Regression: the initial-find path (findNext=false) called
+  // `ImGui::SetKeyboardFocusHere(-1)` unconditionally. Outside an active ImGui
+  // frame (the fixture has a context but has not called NewFrame) that
+  // dereferences a null current window and segfaults. The find/select logic
+  // must still run; only the focus side-effect is frame-scoped.
+  editor.processFind("beta", /*findNext=*/false);
+
+  EXPECT_EQ(editor.getSelectedText(), "beta");
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 10));
+}
+
+TEST_F(TextEditorTests, ProcessFindNextAdvancesPastCurrentMatch) {
+  editor.setText("beta and beta again");
+  editor.setCursorPosition(Coordinates(0, 5));
+
+  editor.processFind("beta", /*findNext=*/true);
+
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 13))
+      << "find-next should locate the match after the cursor";
+}
+
+TEST_F(TextEditorTests, ProcessFindWrapsAroundWhenNoMatchAhead) {
+  editor.setText("target trailing");
+  editor.setCursorPosition(Coordinates(0, 10));
+
+  editor.processFind("target", /*findNext=*/true);
+
+  EXPECT_EQ(editor.getSelectedText(), "target")
+      << "processFind should wrap to the document start when nothing matches ahead";
+}
+
+TEST_F(TextEditorTests, ProcessReplaceAllReplacesEveryOccurrence) {
+  editor.setText("red red red");
+
+  editor.processReplace("red", "blue", /*replaceAll=*/true);
+
+  EXPECT_EQ(editor.getText(), "blue blue blue")
+      << "replaceAll should replace every occurrence in the buffer";
+}
+
+TEST_F(TextEditorTests, ProcessReplaceWithEmptyFindIsNoOp) {
+  editor.setText("unchanged");
+
+  editor.processReplace("", "X", /*replaceAll=*/true);
+
+  EXPECT_EQ(editor.getText(), "unchanged")
+      << "processReplace with an empty find term should make no edits";
+}
+
+TEST_F(TextEditorTests, FindDialogRendersAndClosesOnEscape) {
+  editor.setText("alpha beta");
+
+  // Prime the child window with the dialog closed, then open it and show it.
+  RenderEditorFrameWithFont(ImVec2(320.0f, 180.0f));
+  SetFindOpened(true, /*justOpened=*/true);
+  RenderEditorFrameWithFont(ImVec2(320.0f, 180.0f));
+  EXPECT_TRUE(FindOpened()) << "Find dialog should stay open while rendering";
+
+  // Escape was never pressed before, so a single down-transition frame is a
+  // fresh `IsKeyPressed`; the keyboard render helper pushes an editor font so
+  // the dialog's pop/push font balance holds.
+  RenderEditorFrameWithKeyboard({ImGuiKey_Escape}, /*characters=*/"", /*ctrl=*/false,
+                                /*shift=*/false, /*alt=*/false, ImVec2(320.0f, 180.0f));
+
+  EXPECT_FALSE(FindOpened()) << "Escape should dismiss the find dialog";
+}
+
+TEST_F(TextEditorTests, ReplaceDialogRendersExpandedRow) {
+  editor.setText("red red");
+  SetFindOpened(true);
+  SetReplaceOpened(true);
+
+  RenderEditorFrameWithFont(ImVec2(360.0f, 200.0f));
+
+  EXPECT_TRUE(FindOpened());
+  EXPECT_TRUE(ReplaceOpened()) << "Replace row should render when expanded";
+}
+
+// ============================================================================
+// AUTOCOMPLETE NAVIGATION & SELECTION THROUGH THE RENDER PATH
+// ============================================================================
+
+TEST_F(TextEditorTests, AutocompleteDownArrowNavigatesThroughRenderPath) {
+  editor.setText("ab");
+  editor.setCursorPosition(Coordinates(0, 2));
+  OpenAutocompleteWithSuggestions({"alpha", "beta"});
+
+  ResetKeyboardState({ImGuiKey_DownArrow});
+  RenderEditorFrameWithKeyboard({ImGuiKey_DownArrow});
+
+  EXPECT_EQ(AutocompleteIndex(), 1) << "DownArrow should advance the autocomplete selection";
+  EXPECT_TRUE(AutocompleteOpened()) << "Navigating should keep the popup open";
+}
+
+TEST_F(TextEditorTests, AutocompleteEnterInsertsSelectionThroughRenderPath) {
+  editor.setText("al");
+  editor.setCursorPosition(Coordinates(0, 2));
+  OpenAutocompleteWithSuggestions({"pha"});
+  SetAutocompleteSwitched(true);
+
+  ResetKeyboardState({ImGuiKey_Enter});
+  RenderEditorFrameWithKeyboard({ImGuiKey_Enter});
+
+  EXPECT_EQ(editor.getText(), "alpha")
+      << "Enter on an active autocomplete entry should insert the suggestion";
+  EXPECT_FALSE(AutocompleteOpened()) << "Selecting a suggestion should close the popup";
+}
+
+// ============================================================================
+// MOUSE INTERACTION VARIANTS
+// ============================================================================
+
+TEST_F(TextEditorTests, DoubleClickSelectsWordThroughRenderPath) {
+  editor.setText("Hello world");
+  editor.setCursorPosition(Coordinates(0, 0));
+  RenderEditorFrame();
+
+  const ImVec2 clickPos =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/2);
+  RenderEditorFrameWithMouse(clickPos, false);
+  RenderEditorFrameWithMouse(clickPos, true);
+  // Second press within the double-click window triggers word selection.
+  RenderEditorFrameWithMouse(clickPos, false);
+  RenderEditorFrameWithMouse(clickPos, true);
+
+  EXPECT_EQ(editor.getSelectedText(), "Hello")
+      << "A double click in the text area should select the word under the cursor";
+}
+
+TEST_F(TextEditorTests, MouseDragExtendsSelectionThroughRenderPath) {
+  editor.setText("Hello world");
+  editor.setCursorPosition(Coordinates(0, 0));
+  RenderEditorFrame();
+
+  const ImVec2 start = ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/0);
+  const ImVec2 end = ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/5);
+
+  RenderEditorFrameWithMouse(start, false);
+  RenderEditorFrameWithMouse(start, true);
+  RenderEditorFrameWithMouse(end, true);  // drag with button held
+
+  EXPECT_TRUE(editor.hasSelection()) << "Dragging the mouse should create a selection";
 }
 
 }  // namespace donner::editor
