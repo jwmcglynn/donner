@@ -142,7 +142,8 @@ public:
   /// is allowed for callers that don't care about backend timing.
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
-  void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport);
+  void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
+                          const GlTextureCache* textures = nullptr);
   /**
    * Return the selected layer whose cached pixels should be hidden while editor chrome remains
    * visible. This is used when the live selected element is `display:none`: hit-testing and the

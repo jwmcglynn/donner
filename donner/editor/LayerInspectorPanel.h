@@ -82,6 +82,7 @@ public:
               const svg::compositor::CompositorController::StateSnapshot& state,
               Entity workerCompositorEntity, double viewportZoom, double viewportDpr,
               const Vector2i& viewportDesiredCanvas, const Vector2i& documentCanvas,
+              const PresentationCoverageDiagnostics& coverageDiagnostics,
               const svg::compositor::CompositorController::FastPathCounters& fastPath,
               const svg::compositor::CompositorController::RenderFrameStats& renderStats);
 

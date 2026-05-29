@@ -339,11 +339,62 @@ TEST(GlTextureCacheTest, UnboundedUploadRetainsSeparateOverviewAcrossBoundedUplo
   ASSERT_EQ(cache.tiles().size(), 1u);
   ASSERT_EQ(cache.overviewTiles().size(), 1u);
   EXPECT_TRUE(cache.activeTilesViewportBounded());
+  const PresentationCoverageDiagnostics coverage = cache.coverageDiagnostics();
+  EXPECT_TRUE(coverage.activeTilesViewportBounded);
+  EXPECT_TRUE(coverage.overviewInfillAvailable);
+  EXPECT_EQ(coverage.activeRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+  EXPECT_EQ(coverage.overviewRasterDocumentRect, Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
+  EXPECT_EQ(coverage.activeOutputSizePx, Vector2i(20, 20));
+  EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i(100, 100));
   EXPECT_EQ(cache.tiles().front().rasterCanvasSize, Vector2i(20, 20));
   EXPECT_EQ(cache.overviewTiles().front().rasterCanvasSize, Vector2i(100, 100))
       << "Bounded uploads may reuse tile ids and must not overwrite the retained overview.";
   EXPECT_EQ(overviewDestructionCount, 0);
   EXPECT_EQ(boundedDestructionCount, 0);
+}
+
+TEST(GlTextureCacheTest, OverviewUploadDoesNotReplaceActiveBoundedTiles) {
+  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
+  ASSERT_NE(device, nullptr);
+
+  int boundedDestructionCount = 0;
+  RenderResult::CompositedPreview boundedPreview;
+  RenderResult::CompositedTile boundedTile = MetadataTile(
+      RenderResult::CompositedTile::Kind::Segment, 2, Vector2i(1, 1), Vector2i(20, 20));
+  boundedTile.id = "seg:0";
+  boundedTile.canvasOffsetDoc = Vector2d(40.0, 40.0);
+  boundedTile.bitmapDimsDoc = Vector2d(10.0, 10.0);
+  boundedTile.textureSnapshot =
+      CreateCountingGeodeTextureSnapshot(device, &boundedDestructionCount);
+  ASSERT_NE(boundedTile.textureSnapshot, nullptr);
+  boundedPreview.tiles.push_back(std::move(boundedTile));
+
+  GlTextureCache cache(device);
+  cache.uploadComposited(boundedPreview, RasterViewportForTest(/*viewportBounded=*/true));
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  EXPECT_TRUE(cache.overviewTiles().empty());
+
+  int overviewDestructionCount = 0;
+  RenderResult::CompositedPreview overviewPreview;
+  RenderResult::CompositedTile overviewTile = MetadataTile(
+      RenderResult::CompositedTile::Kind::Segment, 1, Vector2i(1, 1), Vector2i(100, 100));
+  overviewTile.id = "full-canvas";
+  overviewTile.bitmapDimsDoc = Vector2d(100.0, 100.0);
+  overviewTile.textureSnapshot =
+      CreateCountingGeodeTextureSnapshot(device, &overviewDestructionCount);
+  ASSERT_NE(overviewTile.textureSnapshot, nullptr);
+  overviewPreview.tiles.push_back(std::move(overviewTile));
+
+  cache.uploadCompositedOverview(overviewPreview, RasterViewportForTest(/*viewportBounded=*/false));
+
+  ASSERT_EQ(cache.tiles().size(), 1u);
+  ASSERT_EQ(cache.overviewTiles().size(), 1u);
+  EXPECT_TRUE(cache.activeTilesViewportBounded());
+  EXPECT_EQ(cache.tiles().front().id, "seg:0");
+  EXPECT_EQ(cache.overviewTiles().front().id, "full-canvas");
+  EXPECT_TRUE(cache.coverageDiagnostics().overviewInfillAvailable);
+  EXPECT_EQ(boundedDestructionCount, 0);
+  EXPECT_EQ(overviewDestructionCount, 0);
 }
 #endif
 

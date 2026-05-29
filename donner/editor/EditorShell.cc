@@ -2011,9 +2011,10 @@ void EditorShell::renderLayerPanelContents() {
                                       : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
   const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
   const auto renderStats = renderCoordinator_.asyncRenderer().compositorRenderFrameStats();
+  const PresentationCoverageDiagnostics coverageDiagnostics = textures_.coverageDiagnostics();
   layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
                               viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
-                              documentCanvas, fastPath, renderStats);
+                              documentCanvas, coverageDiagnostics, fastPath, renderStats);
 }
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -3149,7 +3150,8 @@ void EditorShell::runFrame() {
   renderFloatingLayerPanel();
   if (requestRenderAtEndOfFrame_ && !renderCoordinator_.asyncRenderer().isBusy() &&
       app_.hasDocument()) {
-    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport());
+    renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
+                                          &textures_);
   }
   FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
   if (sourcePaneVisible_) {

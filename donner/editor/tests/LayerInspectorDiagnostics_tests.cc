@@ -68,6 +68,12 @@ TEST(LayerInspectorDiagnosticsTest, SerializesHeuristicTelemetryForOfflineRefine
   context.viewportDpr = 2.0;
   context.viewportDesiredCanvas = Vector2i(1024, 768);
   context.documentCanvas = Vector2i(1024, 768);
+  context.activeTilesViewportBounded = true;
+  context.overviewInfillAvailable = true;
+  context.activeRasterDocumentRect = Box2d::FromXYWH(10.0, 20.0, 50.0, 40.0);
+  context.overviewRasterDocumentRect = Box2d::FromXYWH(0.0, 0.0, 100.0, 80.0);
+  context.activeOutputSizePx = Vector2i(512, 384);
+  context.overviewOutputSizePx = Vector2i(1024, 768);
   context.state.canvasSize = Vector2i(1024, 768);
   context.fastPath.fastPathFrames = 5;
   context.fastPath.slowPathFramesWithDirty = 1;
@@ -86,6 +92,10 @@ TEST(LayerInspectorDiagnosticsTest, SerializesHeuristicTelemetryForOfflineRefine
   EXPECT_NE(json.find("\"reason\":\"dynamic_timing\""), std::string::npos);
   EXPECT_NE(json.find("\"signal\":\"over_budget_immediate\""), std::string::npos);
   EXPECT_NE(json.find("\"bounds\":{\"tl\":[10.000,20.000]"), std::string::npos);
+  EXPECT_NE(json.find("\"active_viewport_bounded\":true"), std::string::npos);
+  EXPECT_NE(json.find("\"overview_infill\":true"), std::string::npos);
+  EXPECT_NE(json.find("\"active_output_canvas\":[512,384]"), std::string::npos);
+  EXPECT_NE(json.find("\"overview_raster_rect\":{\"tl\":[0.000,0.000]"), std::string::npos);
 
   const std::string sampleJson =
       BuildCompositorHeuristicTelemetrySampleJson(immediateTile, context, 17);

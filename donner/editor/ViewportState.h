@@ -71,6 +71,12 @@ struct ViewportState {
   /// needing a larger target while avoiding whole-document rasters at
   /// extreme zoom.
   static constexpr int kHighZoomRasterMarginScreenPx = 128;
+  /// Minimum logical-pixel overdraw margin for selected-layer prewarm rasters.
+  static constexpr int kSelectedPrewarmMinOverdrawScreenPx = 256;
+  /// Per-axis pane fraction added on each side for selected-layer prewarm overdraw.
+  static constexpr double kSelectedPrewarmOverdrawPaneFraction = 0.25;
+  /// Maximum output dimension for low-resolution full-document overview infill.
+  static constexpr int kOverviewInfillMaxCanvasDim = 1536;
 
   // ---------------------------------------------------------------------------
   // Inputs (set once per frame from user state).
@@ -132,6 +138,20 @@ struct ViewportState {
 
   /// Raster viewport the SVG renderer should produce for this editor view.
   [[nodiscard]] EditorRasterViewport rasterViewport() const;
+
+  /// Raster viewport for idle selected-layer prewarms.
+  ///
+  /// This matches \ref rasterViewport at normal zooms. When the base raster is viewport-bounded,
+  /// the prewarm viewport adds conservative screen-space overdraw so short zoom-outs do not expose
+  /// unrendered edges before the settled crisp render lands.
+  [[nodiscard]] EditorRasterViewport selectedPrewarmRasterViewport() const;
+
+  /// Low-resolution full-document raster used underneath viewport-bounded tiles.
+  ///
+  /// This is intentionally not viewport-bounded: it trades crispness for full-document coverage so
+  /// zooming out does not expose transparent/checkerboard gaps while the crisp bounded render is
+  /// debounced.
+  [[nodiscard]] EditorRasterViewport overviewInfillRasterViewport() const;
 
   /// Output canvas size (in device pixels) the SVG renderer should produce.
   /// Equivalent to `rasterViewport().outputSizePx`.

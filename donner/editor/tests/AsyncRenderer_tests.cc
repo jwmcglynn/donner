@@ -4123,6 +4123,12 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
       << "Once the viewport has settled, the coordinator should request one crisp selected "
          "prewarm.";
   EXPECT_TRUE(waitForCoordinator());
+  const Vector2i paddedCanvas = viewport.selectedPrewarmRasterViewport().outputSizePx;
+  ASSERT_FALSE(textures.tiles().empty());
+  for (const GlTextureCache::TileView& tile : textures.tiles()) {
+    EXPECT_EQ(tile.rasterCanvasSize, paddedCanvas)
+        << "Settled selected prewarm should use the overdraw-padded raster viewport.";
+  }
 }
 
 TEST(RenderCoordinatorTest,
@@ -4170,6 +4176,7 @@ TEST(RenderCoordinatorTest,
   const std::uint64_t displayedVersion = coordinator.displayedDocVersion();
   ASSERT_EQ(displayedVersion, app.document().currentFrameVersion());
 
+  std::this_thread::sleep_for(std::chrono::milliseconds(140));
   app.setSelection(*target);
   coordinator.asyncRenderer().setReplayRenderDelayForTesting(std::chrono::milliseconds(200));
   coordinator.maybeRequestRender(app, selectTool, viewport);
@@ -4190,6 +4197,123 @@ TEST(RenderCoordinatorTest,
       << "Cancelled selected prewarm should not publish stale selected-viewport tiles.";
   EXPECT_EQ(coordinator.displayedDocVersion(), displayedVersion)
       << "Zoom cancellation should keep presenting the previously displayed full-frame content.";
+}
+
+TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActivePrewarm) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="target" x="20" y="20" width="60" height="60" fill="red"/>
+    </svg>
+  )svg"));
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  viewport.zoomAround(32.0, viewport.paneCenter());
+  ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context "
+                    "for composited texture upload.";
+  }
+
+  const auto waitForCoordinator = [&]() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      coordinator.pollRenderResult(app, viewport, textures);
+      if (!coordinator.asyncRenderer().isBusy()) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  };
+
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  ASSERT_TRUE(waitForCoordinator());
+  EXPECT_TRUE(textures.tiles().empty())
+      << "The first high-zoom selected render should not publish a bounded active tile without "
+         "overview infill.";
+  ASSERT_FALSE(textures.overviewTiles().empty());
+  EXPECT_TRUE(textures.coverageDiagnostics().overviewInfillAvailable);
+  EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(140));
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
+  ASSERT_TRUE(waitForCoordinator());
+  EXPECT_FALSE(textures.tiles().empty());
+  EXPECT_FALSE(textures.overviewTiles().empty())
+      << "Publishing the crisp bounded selected prewarm must preserve the overview fallback.";
+}
+
+TEST(RenderCoordinatorTest, ViewportBoundedResultWithoutOverviewIsDiscarded) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="target" x="20" y="20" width="60" height="60" fill="red"/>
+    </svg>
+  )svg"));
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(200.0, 120.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  viewport.devicePixelRatio = 2.0;
+  viewport.resetTo100Percent();
+  viewport.zoomAround(32.0, viewport.paneCenter());
+  ASSERT_TRUE(viewport.rasterViewport().viewportBounded);
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context "
+                    "for composited texture upload.";
+  }
+
+  const auto waitForCoordinator = [&]() {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      coordinator.pollRenderResult(app, viewport, textures);
+      if (!coordinator.asyncRenderer().isBusy()) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+  };
+
+  const std::uint64_t previousDisplayedVersion = coordinator.displayedDocVersion();
+  coordinator.maybeRequestRender(app, selectTool, viewport);
+  ASSERT_TRUE(coordinator.asyncRenderer().isBusy())
+      << "This simulates a stale selected prewarm that was already in flight before the cache "
+         "noticed it lacked overview infill.";
+  ASSERT_TRUE(waitForCoordinator());
+  EXPECT_TRUE(textures.tiles().empty())
+      << "A bounded result without overview infill must not become the only visible content, "
+         "because zooming out would reveal checkerboard for missing tile coverage.";
+  EXPECT_TRUE(textures.overviewTiles().empty());
+  EXPECT_EQ(coordinator.displayedDocVersion(), previousDisplayedVersion);
+
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+  ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
+  ASSERT_TRUE(waitForCoordinator());
+  EXPECT_TRUE(textures.tiles().empty());
+  EXPECT_FALSE(textures.overviewTiles().empty())
+      << "After discarding the unsafe bounded result, the next request should build the overview "
+         "fallback first.";
 }
 
 TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPreReparseCachedLayer) {

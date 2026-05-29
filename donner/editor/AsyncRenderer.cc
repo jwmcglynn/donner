@@ -551,6 +551,10 @@ void AsyncRenderer::workerLoop() {
       if (request.overviewInfillOnly) {
         return std::nullopt;
       }
+      if (!request.dragPreview.has_value() || compositorEntity_ == entt::null ||
+          compositor_->layerCount() == 0u) {
+        return std::nullopt;
+      }
       const Box2d viewBox = requestDocument.svgElement().viewBox().value_or(
           Box2d::FromXYWH(0, 0, static_cast<double>(semanticCanvasSize.x),
                           static_cast<double>(semanticCanvasSize.y)));
@@ -809,6 +813,7 @@ void AsyncRenderer::workerLoop() {
         done.result.bitmap = std::move(bitmap);
         done.result.compositedPreview = std::move(compositedPreview);
         done.result.rasterViewport = rasterViewport;
+        done.result.overviewInfillOnly = request.overviewInfillOnly;
         done.result.version = request.version;
         done.replayHoldPollsRemaining = replayResultHoldFramesForTesting_;
         const auto diagnosticsStart = std::chrono::steady_clock::now();
