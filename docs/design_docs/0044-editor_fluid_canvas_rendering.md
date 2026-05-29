@@ -76,6 +76,9 @@ This design proposes a second responsiveness pass:
   - [x] Add worker-side content tile raster phase counters.
   - [x] Add a Layers-panel JSONL history export for per-segment immediate-vs-cached heuristic
         telemetry across zooms and interactions.
+  - [x] Emit structured frame-budget-miss JSONL telemetry with the same contributor regions used
+        by the color-bar profiler. Set `DONNER_EDITOR_FRAME_MISS_LOG=stderr` or a file path; setting
+        `DONNER_EDITOR_RESOURCE_LOG` also enables stderr miss records.
   - [ ] Extend `async_renderer_wallclock_tests` with a large-selection/select-all real-splash case.
   - [ ] Add a replay/perf fixture for zooming to the 8192 px clamp and panning while selected.
 - [x] **M2: Immediate-mode editor chrome.**

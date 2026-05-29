@@ -83,6 +83,14 @@ float FrameHistory::latest() const {
   return deltaMs[idx];
 }
 
+float FrameHistory::latestBackend() const {
+  if (samples == 0) {
+    return 0.0f;
+  }
+  const std::size_t idx = (writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  return backendMs[idx];
+}
+
 float FrameHistory::max() const {
   float maximum = 0.0f;
   for (std::size_t i = 0; i < samples; ++i) {

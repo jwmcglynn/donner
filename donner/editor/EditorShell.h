@@ -175,6 +175,7 @@ private:
   void renderFloatingLayerPanel();
   void renderLayerPanelContents();
   void maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost);
+  void maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost);
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
   [[nodiscard]] std::vector<svg::SVGElement> sourceHoverElements() const;
   [[nodiscard]] std::vector<SourceByteRange> sourceHoverRangesForElements(
@@ -271,9 +272,11 @@ private:
   std::optional<ImVec2> lastPostedScreenPoint_;
   bool treeviewPendingScroll_ = false;
   std::uint64_t resourceDiagnosticsFrame_ = 0;
+  std::uint64_t frameTelemetryFrame_ = 0;
   std::uint64_t lastLoggedPresentationPeakBytes_ = 0;
   std::uint64_t lastLoggedWgpuTextureCreates_ = 0;
   std::uint64_t lastLoggedWgpuBufferCreates_ = 0;
+  bool frameMissTelemetryWriteErrorLogged_ = false;
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
   bool sourceFocusOriginatedInStyle_ = false;

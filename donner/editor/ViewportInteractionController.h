@@ -103,6 +103,8 @@ struct FrameHistory {
   /// Return the newest non-zero presentation-memory sample, or zeroes if none exist.
   [[nodiscard]] FrameMemorySample latestNonZeroMemorySample() const;
   [[nodiscard]] float latest() const;
+  /// Return the async worker timing that landed on the newest frame, or zero.
+  [[nodiscard]] float latestBackend() const;
   [[nodiscard]] float max() const;
 };
 

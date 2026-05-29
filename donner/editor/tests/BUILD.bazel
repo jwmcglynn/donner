@@ -293,6 +293,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "frame_miss_telemetry_tests",
+    srcs = ["FrameMissTelemetry_tests.cc"],
+    deps = [
+        "//donner/editor:frame_miss_telemetry",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "composited_presentation_tests",
     srcs = ["CompositedPresentation_tests.cc"],
     deps = [
