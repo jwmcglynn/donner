@@ -860,14 +860,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"negative-sum.svg", Params::RenderOnly("UB (negative sum)")},
                     {"negative-values.svg", Params::RenderOnly("UB (negative values)")},
 
-                    {"0-n-with-butt-caps.svg",
-                     Params::Skip("Bug: stroke-dasharray edge cases (specific value patterns)")},
-                    {"0-n-with-round-caps.svg",
-                     Params::Skip("Bug: stroke-dasharray edge cases (specific value patterns)")},
-                    {"0-n-with-square-caps.svg",
-                     Params::Skip("Bug: stroke-dasharray edge cases (specific value patterns)")},
-                    {"n-0.svg",
-                     Params::Skip("Bug: stroke-dasharray edge cases (specific value patterns)")},
+                    // `0 N` dash patterns (zero-length dashes -> caps/dots) now render. `40 0`
+                    // (zero gap) still differs by ~625px at the closed-rect dash-start vertex —
+                    // a dasher seam/wrap difference at the first contour segment, not the `0 N`
+                    // gap this entry originally covered.
+                    {"n-0.svg", Params::Skip("closed-path dash-start-vertex seam (40 0 pattern)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -978,12 +975,13 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "structure/a",
                 {
-                    {"inside-text.svg",
-                     Params::Skip("Not impl: <a> link element rendering / hyperlink processing")},
-                    {"inside-tspan.svg",
-                     Params::Skip("Not impl: <a> link element rendering / hyperlink processing")},
-                    {"on-tspan.svg",
-                     Params::Skip("Not impl: <a> link element rendering / hyperlink processing")},
+                    // `<a>` parses as SVGUnknownElement, so it lacks the TextComponent/
+                    // TextPositioningComponent the text layout descends into — its text
+                    // children are dropped. Needs a real SVGAElement that acts as a text-content
+                    // grouping element (like <tspan>); larger than a renderer-side change.
+                    {"inside-text.svg", Params::Skip("Not impl: <a> as text-content element")},
+                    {"inside-tspan.svg", Params::Skip("Not impl: <a> as text-content element")},
+                    {"on-tspan.svg", Params::Skip("Not impl: <a> as text-content element")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
