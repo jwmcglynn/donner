@@ -468,4 +468,208 @@ TEST(RopeSimulationTest, ConvertsToBezierPathEndingAtTarget) {
   EXPECT_EQ(path.points().back(), Vector2d(100.0, 0.0));
 }
 
+// --- Degenerate reset / empty rope -----------------------------------------
+
+TEST(RopeSimulationTest, ResetWithFewerThanTwoPointsClearsAndSleeps) {
+  const RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope = MakeStraightRope(options);
+  ASSERT_FALSE(rope.empty());
+
+  const std::vector<Vector2d> single = {Vector2d(5.0, 5.0)};
+  rope.reset(single, options);
+
+  EXPECT_TRUE(rope.empty());
+  EXPECT_FALSE(rope.needsAnimation());
+  EXPECT_TRUE(rope.toPath(options).empty());
+}
+
+TEST(RopeSimulationTest, ResetWithEmptyRouteClearsRope) {
+  const RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope;
+  rope.reset(std::span<const Vector2d>(), options);
+
+  EXPECT_TRUE(rope.empty());
+  EXPECT_FALSE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, ResetWithCoincidentEndpointsCollapsesToPoint) {
+  // Zero-length route exercises the totalLength <= kMinDistance branch in
+  // reset(), filling every particle with the shared endpoint.
+  const RopeSimulationOptions options = TestOptions();
+  const std::vector<Vector2d> route = {Vector2d(7.0, 9.0), Vector2d(7.0, 9.0)};
+  RopeSimulation rope;
+  rope.reset(route, options);
+
+  ASSERT_GE(rope.points().size(), 2u);
+  for (const Vector2d& point : rope.points()) {
+    EXPECT_EQ(point, Vector2d(7.0, 9.0));
+  }
+}
+
+// --- Self-healing update on an empty/uninitialized rope --------------------
+
+TEST(RopeSimulationTest, UpdateOnEmptyRopeSelfInitializesCatenary) {
+  const RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope;
+  ASSERT_TRUE(rope.empty());
+
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 7u, false,
+              options);
+
+  ASSERT_GE(rope.points().size(), 2u);
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+}
+
+TEST(RopeSimulationTest, ZeroDeltaUpdateSolvesConstraintsWithoutAdvancing) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation rope = MakeStraightRope(options);
+  rope.applyImpulse(Vector2d(3.0, 0.0));
+
+  // A zero-time frame should pin endpoints and solve constraints without
+  // integrating any motion.
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 0.0, 0.0, 0.0, 1u, false, options);
+
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+}
+
+// --- Impulse guards --------------------------------------------------------
+
+TEST(RopeSimulationTest, ApplyImpulseIgnoredOnEmptyRope) {
+  RopeSimulation rope;
+  rope.applyImpulse(Vector2d(5.0, 5.0));
+  EXPECT_TRUE(rope.empty());
+  EXPECT_FALSE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, ApplyImpulseIgnoredForNegligibleImpulse) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), options);
+  ASSERT_FALSE(rope.needsAnimation());
+
+  rope.applyImpulse(Vector2d(0.0, 0.0));
+
+  // A zero impulse must not wake the rope.
+  EXPECT_FALSE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, ApplyBottomImpulseIgnoredOnEmptyRope) {
+  RopeSimulation rope;
+  rope.applyBottomImpulse(Vector2d(5.0, 5.0), 0.2);
+  EXPECT_TRUE(rope.empty());
+  EXPECT_FALSE(rope.needsAnimation());
+}
+
+TEST(RopeSimulationTest, ApplyBottomImpulseIgnoredForNegligibleImpulse) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), options);
+  ASSERT_FALSE(rope.needsAnimation());
+
+  rope.applyBottomImpulse(Vector2d(0.0, 0.0), 0.2);
+
+  EXPECT_FALSE(rope.needsAnimation());
+}
+
+// --- toPath / endTangent degenerate shapes ---------------------------------
+
+TEST(RopeSimulationTest, EmptyRopeEndTangentIsXAxis) {
+  RopeSimulation rope;
+  EXPECT_EQ(rope.endTangent(), Vector2d::XAxis());
+}
+
+TEST(RopeSimulationTest, EndTangentPointsAlongFinalSegment) {
+  const RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope = MakeStraightRope(options);
+
+  const Vector2d tangent = rope.endTangent();
+  EXPECT_GT(tangent.x, 0.0);
+  EXPECT_NEAR(tangent.y, 0.0, 1e-9);
+}
+
+TEST(RopeSimulationTest, EndTangentFallsBackToXAxisWhenAllPointsCoincide) {
+  // Coincident endpoints collapse every particle onto one point, so no segment
+  // has non-zero length and endTangent() must fall back to the X axis.
+  const RopeSimulationOptions options = TestOptions();
+  const std::vector<Vector2d> route = {Vector2d(3.0, 3.0), Vector2d(3.0, 3.0)};
+  RopeSimulation rope;
+  rope.reset(route, options);
+
+  EXPECT_EQ(rope.endTangent(), Vector2d::XAxis());
+}
+
+TEST(RopeSimulationTest, TwoParticleRopeProducesSingleLineSegmentPath) {
+  RopeSimulationOptions options = TestOptions();
+  options.segmentCount = 1;  // particleCount == 2
+  const std::vector<Vector2d> route = {Vector2d(0.0, 0.0), Vector2d(40.0, 0.0)};
+  RopeSimulation rope;
+  rope.reset(route, options);
+
+  ASSERT_EQ(rope.points().size(), 2u);
+  const Path path = rope.toPath(options);
+  ASSERT_GE(path.commands().size(), 2u);
+  EXPECT_EQ(path.commands().front().verb, Path::Verb::MoveTo);
+  EXPECT_EQ(path.commands().back().verb, Path::Verb::LineTo);
+  EXPECT_EQ(path.points().back(), Vector2d(40.0, 0.0));
+}
+
+// --- Catenary fallback geometry --------------------------------------------
+
+TEST(RopeSimulationTest, VerticalEndpointsUseFallbackCatenaryRoute) {
+  // start.x == end.x triggers the BuildFallbackCatenaryRoute branch (the
+  // catenary solver requires horizontal separation).
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(50.0, 0.0), Vector2d(50.0, 120.0), options);
+
+  ASSERT_GE(rope.points().size(), 3u);
+  EXPECT_NEAR(rope.points().front().x, 50.0, 1e-9);
+  EXPECT_NEAR(rope.points().front().y, 0.0, 1e-9);
+  EXPECT_NEAR(rope.points().back().x, 50.0, 1e-9);
+  EXPECT_NEAR(rope.points().back().y, 120.0, 1e-9);
+  // The fallback sags the interior downward in y while x tracks the chord.
+  const Vector2d middle = rope.points()[rope.points().size() / 2u];
+  EXPECT_NEAR(middle.x, 50.0, 1e-9);
+  EXPECT_GT(middle.y, 0.0);
+}
+
+TEST(RopeSimulationTest, CoincidentEndpointCatenaryStaysAtSharedPoint) {
+  // chordLength <= kMinDistance also routes through the fallback path.
+  RopeSimulationOptions options = TestOptions();
+  RopeSimulation rope;
+  rope.resetCatenary(Vector2d(10.0, 10.0), Vector2d(10.0, 10.0), options);
+
+  ASSERT_GE(rope.points().size(), 2u);
+  EXPECT_EQ(rope.points().front(), Vector2d(10.0, 10.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(10.0, 10.0));
+}
+
+TEST(RopeSimulationTest, FrozenUpdateRigidlyCarriesBodyWithMovedEndpoints) {
+  RopeSimulationOptions options = TestOptions();
+  options.gravityPxPerSec2 = 0.0;
+  RopeSimulation rope = MakeStraightRope(options);
+  rope.applyImpulse(Vector2d(2.0, 0.0));
+  rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 9u, false,
+              options);
+  const std::vector<Vector2d> before(rope.points().begin(), rope.points().end());
+
+  // Frozen with both endpoints shifted +5 in y: integration is skipped, but the
+  // body follows the endpoints rigidly (follow == 1.0 when frozen), so every
+  // interior particle shifts by the same uniform delta.
+  rope.update(Vector2d(0.0, 5.0), Vector2d(100.0, 5.0), 1.0 / 60.0, 0.0, 2.0 / 60.0, 9u, true,
+              options);
+
+  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 5.0));
+  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 5.0));
+  const std::size_t middle = rope.points().size() / 2u;
+  EXPECT_NEAR(rope.points()[middle].x, before[middle].x, 1e-9);
+  EXPECT_NEAR(rope.points()[middle].y, before[middle].y + 5.0, 1e-9);
+}
+
 }  // namespace donner::editor

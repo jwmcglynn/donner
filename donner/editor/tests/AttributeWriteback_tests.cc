@@ -305,5 +305,204 @@ TEST(AttributeWritebackRegressionTest, RemoveContainerElementDeletesSubtree) {
   EXPECT_EQ(source, "<svg xmlns=\"http://www.w3.org/2000/svg\">\n  <rect id=\"after\"/>\n</svg>\n");
 }
 
+// --- resolveAttributeWritebackTarget ---------------------------------------
+
+TEST_F(AttributeWritebackTest, ResolveTargetRoundTripsCapturedElement) {
+  const auto target = captureAttributeWritebackTarget(*rect_);
+  ASSERT_TRUE(target.has_value());
+  EXPECT_THAT(target->elementId, testing::Optional(RcString("r1")));
+
+  const auto resolved = resolveAttributeWritebackTarget(document_, *target);
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(resolved->id(), "r1");
+  EXPECT_TRUE(*resolved == *rect_);
+}
+
+TEST(AttributeWritebackResolveTest, ResolvesNestedElementByIdSearch) {
+  auto document = ParseDocument(kGroupedCircleSvg);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "#c1");
+  const auto target = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(target->elementId.has_value());
+
+  const auto resolved = resolveAttributeWritebackTarget(*document, *target);
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(resolved->id(), "c1");
+}
+
+TEST(AttributeWritebackResolveTest, ResolvesNestedElementByPathWhenIdAbsent) {
+  // No id on the circle forces the path-walk branch instead of the id search.
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g><circle cx="1" cy="2" r="3"/></g></svg>)svg";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "circle");
+  const auto target = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(target.has_value());
+  EXPECT_FALSE(target->elementId.has_value());
+
+  const auto resolved = resolveAttributeWritebackTarget(*document, *target);
+  ASSERT_TRUE(resolved.has_value());
+  EXPECT_EQ(resolved->tagName().name, "circle");
+}
+
+TEST(AttributeWritebackResolveTest, EmptyPathResolvesToNullopt) {
+  auto document = ParseDocument(kSimpleSvg);
+  ASSERT_TRUE(document.has_value());
+
+  AttributeWritebackTarget empty;
+  EXPECT_FALSE(resolveAttributeWritebackTarget(*document, empty).has_value());
+}
+
+TEST(AttributeWritebackResolveTest, RootSegmentMismatchResolvesToNullopt) {
+  auto document = ParseDocument(kSimpleSvg);
+  ASSERT_TRUE(document.has_value());
+
+  // Path with a wrong root tag name (path-walk branch, no id) must not resolve.
+  AttributeWritebackTarget target;
+  target.elementPath.push_back(
+      AttributeWritebackPathSegment{0, xml::XMLQualifiedName(RcString(), RcString("notSvg"))});
+  EXPECT_FALSE(resolveAttributeWritebackTarget(*document, target).has_value());
+}
+
+TEST(AttributeWritebackResolveTest, ChildIndexOutOfRangeResolvesToNullopt) {
+  auto document = ParseDocument(kGroupedCircleSvg);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "#c1");
+  auto target = captureAttributeWritebackTarget(circle);
+  ASSERT_TRUE(target.has_value());
+
+  // Drop the id so resolution must use the path, then break the leaf child
+  // index so the path walk fails to find a matching child.
+  target->elementId.reset();
+  ASSERT_GE(target->elementPath.size(), 2u);
+  target->elementPath.back().elementChildIndex = 99;
+  EXPECT_FALSE(resolveAttributeWritebackTarget(*document, *target).has_value());
+}
+
+// --- buildAttributeWriteback element overload, stale-source fallback --------
+
+TEST(AttributeWritebackResolveTest, ElementOverloadFallsBackToPathWhenSourceStale) {
+  // The element's tracked start offset points at the *original* source, but the
+  // patch source has had content inserted before it, so HasExpectedOpeningTagAt
+  // fails and we fall back to re-resolving via the captured target.
+  auto document = ParseDocument(kGroupedCircleSvg);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement circle = GetElementById(*document, "#c1");
+
+  auto patch =
+      buildAttributeWriteback(kGroupedCircleSourceShiftedBeforeCircle, circle, "fill", "purple");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kGroupedCircleSourceShiftedBeforeCircle);
+  const auto result = applyPatches(source, {{*patch}});
+  EXPECT_EQ(result.applied, 1u);
+  EXPECT_THAT(source, testing::HasSubstr("fill=\"purple\""));
+  EXPECT_THAT(source, testing::HasSubstr("data-note=\"shifted\""));
+}
+
+TEST(AttributeWritebackResolveTest, ElementOverloadReturnsNulloptWhenElementMissingFromSource) {
+  // The element exists in the document, but the patch source doesn't contain it
+  // at all — neither the tracked offset nor the path/id can resolve it.
+  auto document = ParseDocument(kSimpleSvg);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement rect = GetElementById(*document, "#r1");
+
+  constexpr std::string_view kSourceWithoutRect =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"></svg>)svg";
+  EXPECT_FALSE(buildAttributeWriteback(kSourceWithoutRect, rect, "fill", "blue").has_value());
+}
+
+// --- target overload + malformed source ------------------------------------
+
+TEST(AttributeWritebackTargetOverloadTest, MalformedSourceReturnsNullopt) {
+  constexpr std::string_view kMalformed = R"(<svg><circle id="c1" )";
+  AttributeWritebackTarget target;
+  target.elementId = RcString("c1");
+  target.elementPath.push_back(
+      AttributeWritebackPathSegment{0, xml::XMLQualifiedName(RcString(), RcString("circle"))});
+
+  EXPECT_FALSE(buildAttributeWriteback(kMalformed, target, "fill", "blue").has_value());
+  EXPECT_FALSE(buildAttributeRemoveWriteback(kMalformed, target, "fill").has_value());
+  EXPECT_FALSE(buildElementRemoveWriteback(kMalformed, target).has_value());
+}
+
+TEST(AttributeWritebackTargetOverloadTest, TargetNotInSourceReturnsNullopt) {
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r1"/></svg>)";
+  AttributeWritebackTarget target;
+  target.elementId = RcString("missing");
+  target.elementPath.push_back(
+      AttributeWritebackPathSegment{0, xml::XMLQualifiedName(RcString(), RcString("rect"))});
+
+  EXPECT_FALSE(buildAttributeWriteback(kSource, target, "fill", "blue").has_value());
+}
+
+TEST(AttributeWritebackTargetOverloadTest, InsertsAttributeViaTargetOverload) {
+  auto document = ParseDocument(kSimpleSvg);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement rect = GetElementById(*document, "#r1");
+  const auto target = captureAttributeWritebackTarget(rect);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildAttributeWriteback(kSimpleSvg, *target, "stroke", "green");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSimpleSvg);
+  const auto result = applyPatches(source, {{*patch}});
+  EXPECT_EQ(result.applied, 1u);
+  EXPECT_THAT(source, testing::HasSubstr("stroke=\"green\""));
+}
+
+TEST(AttributeWritebackTargetOverloadTest, RemovesAttributeWithLeadingSpaceViaTargetOverload) {
+  // Single-attribute element: the removal must consume the leading space rather
+  // than the (absent) trailing space, exercising the `start - 1` branch.
+  constexpr std::string_view kSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r1" fill="red"/></svg>)";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement rect = GetElementById(*document, "#r1");
+  const auto target = captureAttributeWritebackTarget(rect);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildAttributeRemoveWriteback(kSource, *target, "fill");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_EQ(source, R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r1"/></svg>)");
+}
+
+// --- buildAttributeWriteback inserts before tag close ----------------------
+
+TEST(AttributeWritebackTargetOverloadTest, InsertsBeforeSelfClosingSlash) {
+  // Element written with a space before `/>` — insertion point is just before
+  // the `/`, exercising the `/>` detection branch in the insert scanner.
+  constexpr std::string_view kSource = R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r1" />)"
+                                       R"(</svg>)";
+  auto document = ParseDocument(kSource);
+  ASSERT_TRUE(document.has_value());
+  const svg::SVGElement rect = GetElementById(*document, "#r1");
+  const auto target = captureAttributeWritebackTarget(rect);
+  ASSERT_TRUE(target.has_value());
+
+  auto patch = buildAttributeWriteback(kSource, *target, "fill", "blue");
+  ASSERT_TRUE(patch.has_value());
+
+  std::string source(kSource);
+  const auto result = applyPatches(source, {{*patch}});
+  ASSERT_EQ(result.applied, 1u);
+  EXPECT_THAT(source, testing::HasSubstr("fill=\"blue\""));
+
+  ParseWarningSink sink;
+  auto reparse = svg::parser::SVGParser::ParseSVG(source, sink);
+  ASSERT_TRUE(reparse.hasResult()) << source;
+  auto reRect = reparse.result().querySelector("#r1");
+  ASSERT_TRUE(reRect.has_value());
+  EXPECT_THAT(reRect->getAttribute("fill"), testing::Optional(RcString("blue")));
+}
+
 }  // namespace
 }  // namespace donner::editor

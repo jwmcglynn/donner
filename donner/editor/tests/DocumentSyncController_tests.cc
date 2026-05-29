@@ -778,6 +778,175 @@ TEST(DocumentSyncControllerStructuredTest, SourceTypingMutationStressKeepsSelect
   }
 }
 
+TEST_F(DocumentSyncControllerTest, NextTextSyncWakeIsNulloptAfterDebounceDrains) {
+  // The fixture's initial setText marks the editor changed; the first
+  // handleTextEdits dispatches and arms the throttle.
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  // Idling past the debounce window with no further edits drains the throttle,
+  // after which no wake is pending.
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
+  EXPECT_FALSE(controller_.nextTextSyncWakeSeconds().has_value());
+}
+
+TEST_F(DocumentSyncControllerTest, NextTextSyncWakeReportsRemainingDebounceWindow) {
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  const std::size_t insertOffset = textEditor_.getText().find("<rect");
+  ASSERT_NE(insertOffset, std::string::npos);
+  textEditor_.setCursorPosition(textEditor_.getCoordinatesAtByteOffset(insertOffset));
+  textEditor_.insertText(" ");
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  const std::optional<float> initialWake = controller_.nextTextSyncWakeSeconds();
+  ASSERT_TRUE(initialWake.has_value());
+  EXPECT_GT(*initialWake, 0.0f);
+
+  // Advancing the idle timer (without new edits) shrinks the reported wake but
+  // does not drop below zero.
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.05f);
+  const std::optional<float> laterWake = controller_.nextTextSyncWakeSeconds();
+  ASSERT_TRUE(laterWake.has_value());
+  EXPECT_LT(*laterWake, *initialWake);
+  EXPECT_GE(*laterWake, 0.0f);
+}
+
+TEST_F(DocumentSyncControllerTest, SyncParseErrorMarkersHandlesErrorAppearAndClear) {
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+
+  // No parse error initially: the no-error branch is taken and must not throw.
+  controller_.syncParseErrorMarkers(app_, textEditor_);
+
+  // Introduce a malformed attribute value so the next flush yields a parse error.
+  const std::size_t widthOffset = textEditor_.getText().find("width=\"20\"");
+  ASSERT_NE(widthOffset, std::string::npos);
+  textEditor_.setSelection(textEditor_.getCoordinatesAtByteOffset(widthOffset),
+                           textEditor_.getCoordinatesAtByteOffset(
+                               widthOffset + std::string_view("width=\"20\"").size()));
+  textEditor_.insertText("width=\"20");
+  // Dispatch then drain the debounce so the malformed source is reparsed.
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
+  (void)app_.flushFrame();
+
+  ASSERT_TRUE(app_.document().lastParseError().has_value());
+  // Error-present branch: sets markers from the diagnostic.
+  controller_.syncParseErrorMarkers(app_, textEditor_);
+  // Repeated calls with the same error hit the change-detection short-circuit.
+  controller_.syncParseErrorMarkers(app_, textEditor_);
+
+  // Revert to valid source; the next sync takes the clear branch.
+  textEditor_.setText(kTrivialSvg);
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
+  controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
+  (void)app_.flushFrame();
+  ASSERT_FALSE(app_.document().lastParseError().has_value());
+  controller_.syncParseErrorMarkers(app_, textEditor_);
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasWithEmptyDeltasReturnsFalse) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  EXPECT_FALSE(controller.mirrorSourceDeltas(app, textEditor, {}));
+}
+
+TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasOutOfRangeFallsBackToFullMirror) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  // A delta whose offset/lengths point far past the current source forces the
+  // out-of-range guard, which falls back to a full document mirror rather than
+  // applying a corrupt splice. The mirror still succeeds (returns true) and
+  // leaves the editor text equal to the document source.
+  std::vector<xml::XMLSourceDelta> deltas;
+  xml::XMLSourceDelta delta;
+  delta.offset = 100000;
+  delta.removedLength = 5;
+  delta.insertedLength = 5;
+  deltas.push_back(delta);
+
+  EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, deltas));
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+}
+
+TEST(DocumentSyncControllerStructuredTest, ResetForLoadedDocumentClearsThrottleState) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  // Make an edit so the controller enters its throttled state.
+  const std::size_t offset = textEditor.getText().find("<rect");
+  ASSERT_NE(offset, std::string::npos);
+  textEditor.setCursorPosition(textEditor.getCoordinatesAtByteOffset(offset));
+  textEditor.insertText(" ");
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+  ASSERT_TRUE(controller.nextTextSyncWakeSeconds().has_value());
+
+  // Resetting for a freshly loaded document clears the throttle so no wake is
+  // pending.
+  controller.resetForLoadedDocument(std::string(kTwoRectSvg));
+  EXPECT_FALSE(controller.nextTextSyncWakeSeconds().has_value());
+}
+
+TEST(DocumentSyncControllerStructuredTest, DebouncedTrailingEditAppliesOnIdle) {
+  EditorApp app;
+  app.setStructuredEditingEnabled(true);
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  app.setCleanSourceText(kTwoRectSvg);
+
+  TextEditor textEditor;
+  textEditor.setText(kTwoRectSvg);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kTwoRectSvg)};
+
+  // First edit dispatches immediately and starts the throttle.
+  std::size_t fillOffset = textEditor.getText().find("width=\"10\"");
+  ASSERT_NE(fillOffset, std::string::npos);
+  textEditor.setSelection(
+      textEditor.getCoordinatesAtByteOffset(fillOffset),
+      textEditor.getCoordinatesAtByteOffset(fillOffset + std::string_view("width=\"10\"").size()));
+  textEditor.insertText("width=\"12\"");
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+  ASSERT_TRUE(controller.nextTextSyncWakeSeconds().has_value());
+
+  // A second edit within the debounce window is held as pending (not dispatched
+  // yet) because the controller is still throttled.
+  fillOffset = textEditor.getText().find("width=\"12\"");
+  ASSERT_NE(fillOffset, std::string::npos);
+  textEditor.setSelection(
+      textEditor.getCoordinatesAtByteOffset(fillOffset),
+      textEditor.getCoordinatesAtByteOffset(fillOffset + std::string_view("width=\"12\"").size()));
+  textEditor.insertText("width=\"24\"");
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
+
+  // Idle past the debounce window: the pending trailing edit flushes and the
+  // throttle clears.
+  controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.2f);
+  EXPECT_FALSE(controller.nextTextSyncWakeSeconds().has_value());
+
+  (void)app.flushFrame();
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  EXPECT_EQ(rect->getAttribute("width"), std::optional<RcString>(RcString("24")));
+}
+
 TEST(DocumentSyncControllerStructuredTest, MultiDeltaMoveMirrorsIntoTextPane) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="moved" fill="red" /><g id="target" /></svg>)";

@@ -115,4 +115,110 @@ TEST(XmlAutocomplete, SuggestsStylePropertiesInsideStyleElement) {
   EXPECT_FALSE(HasSuggestion(suggestions, "stroke"));
 }
 
+// --- Cursor / range edge cases ---------------------------------------------
+
+TEST(XmlAutocomplete, CursorPastEndIsClampedToSourceLength) {
+  constexpr std::string_view kSource = "<svg><";
+  // A cursor beyond the source is clamped to source.size().
+  const XmlAutocompleteContext context =
+      DetectXmlAutocompleteContext(kSource, kSource.size() + 100);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::ElementName);
+  EXPECT_EQ(context.replaceStartOffset, kSource.size());
+  EXPECT_EQ(context.replaceEndOffset, kSource.size());
+}
+
+TEST(XmlAutocomplete, EmptySourceProducesUnknownContext) {
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext("", 0);
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::Unknown);
+  EXPECT_TRUE(BuildXmlAutocompleteSuggestions(context).empty());
+}
+
+// --- Closing tag handling --------------------------------------------------
+
+TEST(XmlAutocomplete, ClosingTagSuppressesAttributeSuggestions) {
+  // Cursor inside a `</rect ...` closing tag must not offer attribute names.
+  constexpr std::string_view kSource = "<svg><rect/></rect ";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::Unknown);
+}
+
+TEST(XmlAutocomplete, AttributeNameStillSuggestedAfterMismatchedCloseTag) {
+  // A `</g>` with no matching open `g` exercises the PopElementStack search
+  // miss; later autocomplete state must still track the open element correctly.
+  constexpr std::string_view kSource = "<svg></g><rect ";
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, kSource.size());
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::AttributeName);
+  EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "fill"));
+}
+
+// --- style="" attribute value edge cases -----------------------------------
+
+TEST(XmlAutocomplete, StyleAttributeAfterColonOffersNoSuggestions) {
+  // Once a property name and colon are present, the cursor is in value position
+  // and the autocomplete suppresses the property-name list.
+  constexpr std::string_view kSource = R"(<svg><rect style="fill: re"/></svg>)";
+  const std::size_t cursorOffset = kSource.find("re\"") + 2;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::TextContent);
+  EXPECT_TRUE(BuildXmlAutocompleteSuggestions(context).empty());
+}
+
+TEST(XmlAutocomplete, StyleAttributeSecondPropertyAfterSemicolonResetsSegment) {
+  // The segment scanner resets at `;`, so the second declaration gets its own
+  // property-name completion.
+  constexpr std::string_view kSource = R"(<svg><rect style="fill:red; st"/></svg>)";
+  const std::size_t cursorOffset = kSource.find("; st") + 4;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::StyleValue);
+  EXPECT_EQ(context.prefix, "st");
+  EXPECT_TRUE(HasSuggestion(BuildXmlAutocompleteSuggestions(context), "stroke"));
+}
+
+TEST(XmlAutocomplete, StyleAttributeEmptyValueOffersFullPropertyList) {
+  // Cursor right after the opening quote of an empty style value: the segment
+  // start equals the cursor, prefix is empty, and the full property list is
+  // offered (exercises MakeStylePropertyContext with no prior colon/segment).
+  constexpr std::string_view kSource = R"(<svg><rect style=""/></svg>)";
+  const std::size_t cursorOffset = kSource.find("\"\"") + 1;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::StyleValue);
+  EXPECT_EQ(context.prefix, "");
+  const std::vector<XmlAutocompleteSuggestion> suggestions =
+      BuildXmlAutocompleteSuggestions(context);
+  EXPECT_TRUE(HasSuggestion(suggestions, "fill"));
+  EXPECT_TRUE(HasSuggestion(suggestions, "stroke"));
+}
+
+TEST(XmlAutocomplete, NonStyleAttributeValueOffersNoSuggestions) {
+  // Attribute value autocomplete is only wired for `style`; a `fill="..."`
+  // value must produce no suggestions.
+  constexpr std::string_view kSource = R"(<svg><rect fill="re"/></svg>)";
+  const std::size_t cursorOffset = kSource.find("re\"") + 2;
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::Unknown);
+  EXPECT_TRUE(BuildXmlAutocompleteSuggestions(context).empty());
+}
+
+// --- Element name partial replacement bounds -------------------------------
+
+TEST(XmlAutocomplete, PartialElementNameReportsReplaceSpanAndExtendsToFullName) {
+  // Cursor mid-name: the replace span covers the whole existing name and the
+  // prefix is only the text up to the cursor.
+  constexpr std::string_view kSource = "<svg><rect";
+  const std::size_t cursorOffset = kSource.size() - 2;  // between "re" and "ct"
+  const XmlAutocompleteContext context = DetectXmlAutocompleteContext(kSource, cursorOffset);
+
+  EXPECT_EQ(context.kind, XmlAutocompleteContextKind::ElementName);
+  EXPECT_EQ(context.prefix, "re");
+  EXPECT_EQ(context.replaceStartOffset, kSource.find("rect"));
+  EXPECT_EQ(context.replaceEndOffset, kSource.size());
+}
+
 }  // namespace donner::editor
