@@ -78,6 +78,22 @@ struct PresentationResourceStats {
   std::uint64_t wgpuLifetimeBufferCreates = 0;
 };
 
+/// Presentation coverage state for composited tile fallback diagnostics.
+struct PresentationCoverageDiagnostics {
+  /// True when the active composited tile set only covers a viewport-bounded raster.
+  bool activeTilesViewportBounded = false;
+  /// True when a retained unbounded overview is available under the active bounded tiles.
+  bool overviewInfillAvailable = false;
+  /// Document-space rectangle covered by active composited tiles.
+  Box2d activeRasterDocumentRect;
+  /// Document-space rectangle covered by retained overview tiles.
+  Box2d overviewRasterDocumentRect;
+  /// Output raster size for active composited tiles.
+  Vector2i activeOutputSizePx = Vector2i::Zero();
+  /// Output raster size for retained overview tiles.
+  Vector2i overviewOutputSizePx = Vector2i::Zero();
+};
+
 /**
  * Return the presentation texture identity carried by `tile`.
  *
@@ -164,6 +180,9 @@ public:
   /// textures whose tile is absent from the snapshot.
   void uploadComposited(const RenderResult::CompositedPreview& preview,
                         std::optional<EditorRasterViewport> rasterViewport = std::nullopt);
+  /// Upload a full-document overview preview without replacing active viewport-bounded tiles.
+  void uploadCompositedOverview(const RenderResult::CompositedPreview& preview,
+                                const EditorRasterViewport& rasterViewport);
 
   /// Advance one presentation frame, retiring WGPU texture snapshots whose
   /// handles have aged past the backend's frames-in-flight window.
@@ -233,6 +252,8 @@ public:
   }
   /// Resource counters for the textures currently retained by this cache.
   [[nodiscard]] PresentationResourceStats presentationResourceStats() const;
+  /// Coverage counters for active bounded tiles and retained overview infill.
+  [[nodiscard]] PresentationCoverageDiagnostics coverageDiagnostics() const;
 
 private:
 #ifdef DONNER_EDITOR_WGPU
@@ -317,6 +338,10 @@ private:
   /// Paint-order view of `overviewTileTextures_`.
   std::vector<TileView> overviewTiles_;
   bool activeTilesViewportBounded_ = false;
+  Box2d activeRasterDocumentRect_;
+  Box2d overviewRasterDocumentRect_;
+  Vector2i activeOutputSizePx_ = Vector2i::Zero();
+  Vector2i overviewOutputSizePx_ = Vector2i::Zero();
   int metadataOnlyMissCount_ = 0;
   int duplicateLiveTextureCount_ = 0;
   FrameCostBreakdown::CompositedUpload lastCompositedUploadCost_;

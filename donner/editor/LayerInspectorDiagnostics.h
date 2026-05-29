@@ -6,6 +6,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/Box.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/compositor/CompositorController.h"
 
@@ -42,6 +43,18 @@ struct CompositorHeuristicTelemetryContext {
   Vector2i viewportDesiredCanvas = Vector2i::Zero();
   /// Canvas size currently committed to the document.
   Vector2i documentCanvas = Vector2i::Zero();
+  /// True when the active presentation tiles cover only a viewport-bounded raster.
+  bool activeTilesViewportBounded = false;
+  /// True when retained overview tiles are available below bounded active tiles.
+  bool overviewInfillAvailable = false;
+  /// Document-space coverage for the active presentation raster.
+  Box2d activeRasterDocumentRect;
+  /// Document-space coverage for the retained overview raster.
+  Box2d overviewRasterDocumentRect;
+  /// Output raster size for the active presentation tiles.
+  Vector2i activeOutputSizePx = Vector2i::Zero();
+  /// Output raster size for retained overview tiles.
+  Vector2i overviewOutputSizePx = Vector2i::Zero();
   /// Compositor-wide diagnostic state.
   svg::compositor::CompositorController::StateSnapshot state;
   /// Fast-path counters captured by the compositor.

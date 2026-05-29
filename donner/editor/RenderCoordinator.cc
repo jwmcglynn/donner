@@ -117,6 +117,30 @@ bool SameRasterViewport(const EditorRasterViewport& lhs, const EditorRasterViewp
          SameTransform(lhs.outputFromDocument, rhs.outputFromDocument);
 }
 
+bool SameRasterScaleAndSemanticCanvas(const EditorRasterViewport& lhs,
+                                      const EditorRasterViewport& rhs) {
+  return lhs.semanticCanvasSizePx == rhs.semanticCanvasSizePx && lhs.viewportBounded &&
+         rhs.viewportBounded && lhs.outputFromDocument.data[0] == rhs.outputFromDocument.data[0] &&
+         lhs.outputFromDocument.data[1] == rhs.outputFromDocument.data[1] &&
+         lhs.outputFromDocument.data[2] == rhs.outputFromDocument.data[2] &&
+         lhs.outputFromDocument.data[3] == rhs.outputFromDocument.data[3];
+}
+
+bool DocumentRectContains(const Box2d& outer, const Box2d& inner) {
+  constexpr double kTolerance = 1e-6;
+  return outer.topLeft.x <= inner.topLeft.x + kTolerance &&
+         outer.topLeft.y <= inner.topLeft.y + kTolerance &&
+         outer.bottomRight.x + kTolerance >= inner.bottomRight.x &&
+         outer.bottomRight.y + kTolerance >= inner.bottomRight.y;
+}
+
+bool RasterViewportCanPresentCurrentViewport(const EditorRasterViewport& rendered,
+                                             const EditorRasterViewport& current) {
+  return SameRasterViewport(rendered, current) ||
+         (SameRasterScaleAndSemanticCanvas(rendered, current) &&
+          DocumentRectContains(rendered.documentRect, current.documentRect));
+}
+
 bool SameActiveBoundsPreview(const std::optional<SelectTool::ActiveTransformBoundsPreview>& lhs,
                              const std::optional<SelectTool::ActiveTransformBoundsPreview>& rhs) {
   if (lhs.has_value() != rhs.has_value()) {
@@ -481,13 +505,29 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     frameHistory->setLatestBackendMs(static_cast<float>(result.workerMs));
   }
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
-  const Vector2i viewportDesiredCanvas = rasterViewport.outputSizePx;
-  if (!SameRasterViewport(result.rasterViewport, rasterViewport)) {
+  const bool overviewInfillResult =
+      result.overviewInfillOnly && result.compositedPreview.has_value() &&
+      result.compositedPreview->valid() && !result.rasterViewport.viewportBounded;
+  if (overviewInfillResult && rasterViewport.viewportBounded) {
+    textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport);
+    lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+    displayedDocVersion_ = result.version;
     return;
   }
+  if (!RasterViewportCanPresentCurrentViewport(result.rasterViewport, rasterViewport)) {
+    return;
+  }
+  if (result.rasterViewport.viewportBounded && rasterViewport.viewportBounded &&
+      !textures.coverageDiagnostics().overviewInfillAvailable) {
+    // A viewport-bounded result covers only the currently rasterized window. Never make it the
+    // sole presented content: zooming out would expose checkerboard for missing tile coverage
+    // instead of document transparency. Keep the previous presentation until an overview infill
+    // exists underneath the crisp bounded tiles.
+    return;
+  }
+  const Vector2i resultCanvasSize = result.rasterViewport.outputSizePx;
   if (result.compositedPreview.has_value() && result.compositedPreview->valid()) {
-    if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview,
-                                                   viewportDesiredCanvas)) {
+    if (!ShouldPresentCompositedPreviewForViewport(*result.compositedPreview, resultCanvasSize)) {
       return;
     }
 
@@ -505,13 +545,12 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
       }
     }
     compositedPresentation_.noteCachedTextures(
-        result.compositedPreview->entity, result.version, viewportDesiredCanvas,
+        result.compositedPreview->entity, result.version, resultCanvasSize,
         DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
   }
 
   displayedDocVersion_ = result.version;
-  renderScheduler_.noteRenderCompleted(result.version, viewportDesiredCanvas,
-                                       result.rasterViewport);
+  renderScheduler_.noteRenderCompleted(result.version, resultCanvasSize, result.rasterViewport);
   if (result.compositedPreview.has_value() && result.compositedPreview->valid() &&
       compositedPresentation_.isWaitingForChromeRefresh() && app.hasDocument()) {
     refreshSelectionBoundsCache(app);
@@ -527,7 +566,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 }
 
 void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
-                                           const ViewportState& viewport) {
+                                           const ViewportState& viewport,
+                                           const GlTextureCache* textures) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     return;
@@ -535,7 +575,6 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
-  const Vector2i desiredOutputCanvasSize = rasterViewport.outputSizePx;
   const Vector2i actualDocumentCanvas = app.document().document().canvasSize();
   const auto dragPreview = selectTool.activeDragPreview();
   // Compare desired size against the live document size. Document replacement
@@ -563,19 +602,19 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   // rerasterize every cached span before the next pointer frame; defer that crisp refresh until
   // mouse-up unless the document still needs its first canvas.
   const bool deferCanvasCommitForActiveDrag = dragPreview.has_value() && !firstCommit;
-  const Vector2i currentCanvasSize = desiredOutputCanvasSize;
   const auto currentVersion = app.document().currentFrameVersion();
   const Entity prewarmEntity = selectedCompositedEntity(app);
-  const CompositedPresentation::DiagnosticsSnapshot presentationDiagnostics =
-      compositedPresentation_.diagnostics();
-  const bool canDeferSelectedViewportRefresh =
-      prewarmEntity != entt::null && !dragPreview.has_value() &&
-      currentVersion == displayedDocVersion_ && presentationDiagnostics.hasCachedTextures &&
-      presentationDiagnostics.cachedEntity == prewarmEntity &&
-      presentationDiagnostics.cachedVersion == currentVersion;
+  const PresentationCoverageDiagnostics coverageDiagnostics =
+      textures != nullptr ? textures->coverageDiagnostics() : PresentationCoverageDiagnostics{};
+  const bool needsOverviewInfill = rasterViewport.viewportBounded && !dragPreview.has_value() &&
+                                   textures != nullptr &&
+                                   !coverageDiagnostics.overviewInfillAvailable;
+  const bool canDeferSelectedViewportRefresh = prewarmEntity != entt::null &&
+                                               !dragPreview.has_value() &&
+                                               currentVersion == displayedDocVersion_;
   const bool deferSelectedViewportRefresh =
       canDeferSelectedViewportRefresh && !rasterViewportSettled;
-  if (deferSelectedViewportRefresh) {
+  if (deferSelectedViewportRefresh && !needsOverviewInfill) {
     if (renderWorker_.asyncRenderer.isBusy()) {
       renderWorker_.asyncRenderer.cancelInFlight();
     }
@@ -584,6 +623,17 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (renderWorker_.asyncRenderer.isBusy()) {
     return;
   }
+
+  const bool requestOverviewInfill = needsOverviewInfill;
+  const bool useSelectedPrewarmRasterViewport =
+      !requestOverviewInfill && prewarmEntity != entt::null && !dragPreview.has_value() &&
+      rasterViewport.viewportBounded;
+  const EditorRasterViewport requestRasterViewport =
+      requestOverviewInfill
+          ? viewport.overviewInfillRasterViewport()
+          : (useSelectedPrewarmRasterViewport ? viewport.selectedPrewarmRasterViewport()
+                                              : rasterViewport);
+  const Vector2i currentCanvasSize = requestRasterViewport.outputSizePx;
 
   if (pendingCanvasSize_ != Vector2i::Zero() && wouldChange && !deferCanvasCommitForActiveDrag &&
       (firstCommit || throttleElapsed)) {
@@ -606,13 +656,14 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   }
 
   const PresentationRenderScheduleDecision schedule = renderScheduler_.evaluate(
-      compositedPresentation_, PresentationRenderScheduleInput{
-                                   .selectedEntity = prewarmEntity,
-                                   .activeDragPreview = dragPreview,
-                                   .currentVersion = currentVersion,
-                                   .currentCanvasSize = currentCanvasSize,
-                                   .currentRasterViewport = rasterViewport,
-                               });
+      compositedPresentation_,
+      PresentationRenderScheduleInput{
+          .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
+          .activeDragPreview = dragPreview,
+          .currentVersion = currentVersion,
+          .currentCanvasSize = currentCanvasSize,
+          .currentRasterViewport = requestRasterViewport,
+      });
   if (!schedule.shouldRequestRender()) {
     return;
   }
@@ -620,7 +671,8 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   RenderRequest req(renderWorker_.renderer, app.document().document());
   req.version = currentVersion;
   req.documentGeneration = app.document().documentGeneration();
-  req.rasterViewport = rasterViewport;
+  req.rasterViewport = requestRasterViewport;
+  req.overviewInfillOnly = requestOverviewInfill;
   // Drain any pending structural remap from a recent `setDocumentMaybe
   // Structural` call. Non-empty remap lets the worker preserve the
   // compositor's cached state across the document swap instead of
@@ -635,7 +687,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (prewarmEntity != entt::null) {
     req.selectedEntity = prewarmEntity;
   }
-  if (schedule.dragPreview.has_value()) {
+  if (!requestOverviewInfill && schedule.dragPreview.has_value()) {
     req.dragPreview = *schedule.dragPreview;
   }
   renderWorker_.asyncRenderer.requestRender(req);

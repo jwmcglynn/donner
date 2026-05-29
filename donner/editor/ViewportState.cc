@@ -112,6 +112,66 @@ EditorRasterViewport ViewportState::rasterViewport() const {
   return result;
 }
 
+EditorRasterViewport ViewportState::selectedPrewarmRasterViewport() const {
+  EditorRasterViewport result = rasterViewport();
+  if (!result.viewportBounded || paneSize.x <= 0.0 || paneSize.y <= 0.0 ||
+      devicePixelRatio <= 0.0) {
+    return result;
+  }
+
+  const double scale = devicePixelsPerDocUnit();
+  if (!(scale > 0.0)) {
+    return result;
+  }
+
+  const double marginX = std::max(static_cast<double>(kSelectedPrewarmMinOverdrawScreenPx),
+                                  paneSize.x * kSelectedPrewarmOverdrawPaneFraction);
+  const double marginY = std::max(static_cast<double>(kSelectedPrewarmMinOverdrawScreenPx),
+                                  paneSize.y * kSelectedPrewarmOverdrawPaneFraction);
+  const Vector2i outputSizePx(
+      ClampRasterDim(std::max(static_cast<double>(result.outputSizePx.x),
+                              paneSize.x * devicePixelRatio + 2.0 * marginX * devicePixelRatio)),
+      ClampRasterDim(std::max(static_cast<double>(result.outputSizePx.y),
+                              paneSize.y * devicePixelRatio + 2.0 * marginY * devicePixelRatio)));
+  if (outputSizePx == result.outputSizePx) {
+    return result;
+  }
+
+  const Vector2d outputScreenSize(static_cast<double>(outputSizePx.x) / devicePixelRatio,
+                                  static_cast<double>(outputSizePx.y) / devicePixelRatio);
+  const Vector2d outputScreenTopLeft = paneOrigin - (outputScreenSize - paneSize) * 0.5;
+  const Vector2d documentTopLeft = screenToDocument(outputScreenTopLeft);
+  const Vector2d documentSize(static_cast<double>(outputSizePx.x) / scale,
+                              static_cast<double>(outputSizePx.y) / scale);
+
+  result.documentRect = Box2d(documentTopLeft, documentTopLeft + documentSize);
+  result.outputSizePx = outputSizePx;
+  result.outputFromDocument = OutputFromDocumentTransform(documentTopLeft, scale);
+  result.viewportBounded = true;
+  return result;
+}
+
+EditorRasterViewport ViewportState::overviewInfillRasterViewport() const {
+  EditorRasterViewport result = rasterViewport();
+  const Vector2d docSize = documentViewBox.size();
+  const double longestDocSide = std::max(docSize.x, docSize.y);
+  if (!(longestDocSide > 0.0) || !(devicePixelRatio > 0.0)) {
+    return result;
+  }
+
+  const double targetLongSide =
+      std::max(1.0, std::min(static_cast<double>(kOverviewInfillMaxCanvasDim),
+                             std::ceil(longestDocSide * devicePixelRatio)));
+  const double scale = targetLongSide / longestDocSide;
+  const Vector2i outputSizePx(ClampRasterDim(docSize.x * scale), ClampRasterDim(docSize.y * scale));
+
+  result.documentRect = documentViewBox;
+  result.outputSizePx = outputSizePx;
+  result.outputFromDocument = OutputFromDocumentTransform(documentViewBox.topLeft, scale);
+  result.viewportBounded = false;
+  return result;
+}
+
 Vector2i ViewportState::desiredCanvasSize() const {
   return rasterViewport().outputSizePx;
 }

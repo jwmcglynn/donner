@@ -325,6 +325,9 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
   lastCompositedUploadCost_ = CostForCompositedPreviewUpload(preview);
   activeTilesViewportBounded_ = rasterViewport.has_value() && rasterViewport->viewportBounded;
   const bool retainAsOverview = rasterViewport.has_value() && !rasterViewport->viewportBounded;
+  activeRasterDocumentRect_ = rasterViewport.has_value() ? rasterViewport->documentRect : Box2d();
+  activeOutputSizePx_ =
+      rasterViewport.has_value() ? rasterViewport->outputSizePx : Vector2i::Zero();
 
   // Track which ids appear in the new snapshot so we can evict
   // textures whose tile has disappeared (drag-target switch demoted a
@@ -497,6 +500,8 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
   }
 
   if (retainAsOverview) {
+    overviewRasterDocumentRect_ = rasterViewport->documentRect;
+    overviewOutputSizePx_ = rasterViewport->outputSizePx;
     std::unordered_set<std::string> liveOverviewIds;
     liveOverviewIds.reserve(preview.tiles.size());
     overviewTiles_.clear();
@@ -547,6 +552,171 @@ void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& pre
     auto [ownerIt, inserted] = liveTextureOwners.emplace(tile.texture, tile.id);
     if (!inserted && ownerIt->second != tile.id) {
       ++duplicateLiveTextureCount_;
+    }
+  }
+
+#ifdef DONNER_EDITOR_WGPU
+  retireSnapshots(std::move(retiredSnapshots));
+#endif
+  lastCompositedUploadCost_.uploadMs = MillisecondsSince(uploadStart);
+}
+
+void GlTextureCache::uploadCompositedOverview(const RenderResult::CompositedPreview& preview,
+                                              const EditorRasterViewport& rasterViewport) {
+  ZoneScopedN("GlTextureCache::uploadCompositedOverview");
+  const auto uploadStart = std::chrono::steady_clock::now();
+  lastCompositedUploadCost_ = CostForCompositedPreviewUpload(preview);
+  overviewRasterDocumentRect_ = rasterViewport.documentRect;
+  overviewOutputSizePx_ = rasterViewport.outputSizePx;
+
+  std::unordered_set<std::string> liveOverviewIds;
+  liveOverviewIds.reserve(preview.tiles.size());
+  overviewTiles_.clear();
+  overviewTiles_.reserve(preview.tiles.size());
+  metadataOnlyMissCount_ = 0;
+
+#ifdef DONNER_EDITOR_WGPU
+  RetiredSnapshotBatch retiredSnapshots;
+#endif
+
+  const auto makeTileView = [](const RenderResult::CompositedTile& tile,
+                               const CachedTextureEntry& entry, ImTextureID texture) {
+    TileView view;
+    view.texture = texture;
+    view.id = tile.id;
+    view.kind = tile.kind;
+    view.layerEntity = tile.layerEntity;
+    view.generation = tile.generation;
+    view.bitmapDimsPx =
+        !tile.bitmap.empty() ? tile.bitmap.dimensions : Vector2i(entry.width, entry.height);
+    view.rasterCanvasSize = tile.rasterCanvasSize;
+    view.canvasOffsetDoc = tile.canvasOffsetDoc;
+    view.bitmapDimsDoc = tile.bitmapDimsDoc;
+    view.dragTranslationDoc = tile.dragTranslationDoc;
+    view.uvBottomRight = entry.uvBottomRight;
+    view.documentFromCachedDocument = tile.documentFromCachedDocument;
+    view.metadataOnly = false;
+    view.isDragTarget = tile.isDragTarget;
+    return view;
+  };
+
+  const auto uploadTilePayloadToEntry = [&](const RenderResult::CompositedTile& tile,
+                                            CachedTextureEntry* entry) {
+    if (entry == nullptr || !TileHasPayload(tile)) {
+      return false;
+    }
+
+    const CompositedTileTextureIdentity tileIdentity = TextureIdentityForCompositedTile(tile);
+#ifdef DONNER_EDITOR_WGPU
+    if (entry->texture != 0 && entry->identity == tileIdentity) {
+      return true;
+    }
+
+    NativeTextureHandle textureId = 0;
+    Vector2i textureDims = Vector2i::Zero();
+    Vector2i allocationDims = Vector2i::Zero();
+    Vector2d uvBottomRight(1.0, 1.0);
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
+    std::shared_ptr<WgpuUploadedTexture> uploadedTexture;
+    bool reusedTexture = false;
+
+    if (tile.textureSnapshot != nullptr) {
+      textureId = ToImTextureId(tile.textureSnapshot.get());
+      textureDims = tile.textureSnapshot->dimensions();
+      allocationDims = textureDims;
+      uvBottomRight = TextureUvBottomRightForPayload(textureDims, allocationDims);
+      textureSnapshot = tile.textureSnapshot;
+    } else if (!tile.bitmap.empty()) {
+      const std::shared_ptr<WgpuUploadedTexture> reusableTexture =
+          entry->textureSnapshot == nullptr ? entry->uploadedTexture : nullptr;
+      uploadedTexture = uploadBitmapToWgpu(tile.bitmap, reusableTexture);
+      if (uploadedTexture != nullptr) {
+        textureId = TextureViewToImTextureId(uploadedTexture->view.get());
+        textureDims = tile.bitmap.dimensions;
+        allocationDims = uploadedTexture->allocationDimensions;
+        uvBottomRight = TextureUvBottomRightForPayload(textureDims, allocationDims);
+        reusedTexture = textureId == entry->texture && uploadedTexture == entry->uploadedTexture &&
+                        entry->textureSnapshot == nullptr;
+      }
+    }
+
+    if (textureId == 0) {
+      return false;
+    }
+
+    if (entry->texture != 0 && !reusedTexture) {
+      retiredSnapshots.push_back(RetiredSnapshot{
+          .texture = entry->texture,
+          .snapshot = std::move(entry->textureSnapshot),
+          .uploadedTexture = std::move(entry->uploadedTexture),
+      });
+    }
+    if (textureSnapshot != nullptr) {
+      ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(textureId);
+    }
+    entry->texture = textureId;
+    entry->textureSnapshot = std::move(textureSnapshot);
+    entry->uploadedTexture = std::move(uploadedTexture);
+    entry->identity = tileIdentity;
+    entry->uploadedGeneration = tile.generation;
+    entry->width = textureDims.x;
+    entry->height = textureDims.y;
+    entry->allocatedWidth = allocationDims.x;
+    entry->allocatedHeight = allocationDims.y;
+    entry->uvBottomRight = uvBottomRight;
+    return true;
+#else
+    if (tile.bitmap.empty()) {
+      return false;
+    }
+    if (entry->texture == 0) {
+      glGenTextures(1, &entry->texture);
+      InitializeTexture(entry->texture);
+    }
+
+    const bool needsUpload = entry->identity != tileIdentity;
+    if (needsUpload) {
+      UploadBitmap(entry->texture, tile.bitmap, &entry->width, &entry->height,
+                   &entry->allocatedWidth, &entry->allocatedHeight, &entry->uvBottomRight);
+      entry->identity = tileIdentity;
+      entry->uploadedGeneration = tile.generation;
+    }
+    return entry->texture != 0;
+#endif
+  };
+
+  for (const RenderResult::CompositedTile& tile : preview.tiles) {
+    if (!TileHasPayload(tile)) {
+      ++metadataOnlyMissCount_;
+      continue;
+    }
+
+    auto& entry = overviewTileTextures_[tile.id];
+    if (!uploadTilePayloadToEntry(tile, &entry)) {
+      continue;
+    }
+    liveOverviewIds.insert(tile.id);
+    overviewTiles_.push_back(makeTileView(tile, entry, ToImTextureId(entry.texture)));
+  }
+
+  for (auto it = overviewTileTextures_.begin(); it != overviewTileTextures_.end();) {
+    if (liveOverviewIds.find(it->first) == liveOverviewIds.end()) {
+#ifndef DONNER_EDITOR_WGPU
+      if (it->second.texture != 0) {
+        glDeleteTextures(1, &it->second.texture);
+      }
+#else
+      if (it->second.texture != 0) {
+        retiredSnapshots.push_back(RetiredSnapshot{
+            .texture = it->second.texture,
+            .snapshot = std::move(it->second.textureSnapshot),
+            .uploadedTexture = std::move(it->second.uploadedTexture),
+        });
+      }
+#endif
+      it = overviewTileTextures_.erase(it);
+    } else {
+      ++it;
     }
   }
 
@@ -640,6 +810,10 @@ void GlTextureCache::resetComposited() {
   tiles_.clear();
   overviewTiles_.clear();
   activeTilesViewportBounded_ = false;
+  activeRasterDocumentRect_ = Box2d();
+  overviewRasterDocumentRect_ = Box2d();
+  activeOutputSizePx_ = Vector2i::Zero();
+  overviewOutputSizePx_ = Vector2i::Zero();
   metadataOnlyMissCount_ = 0;
   duplicateLiveTextureCount_ = 0;
   lastCompositedUploadCost_ = FrameCostBreakdown::CompositedUpload{};
@@ -743,6 +917,17 @@ PresentationResourceStats GlTextureCache::presentationResourceStats() const {
   peakTrackedResourceBytes_ = std::max(peakTrackedResourceBytes_, stats.totalTrackedBytes);
   stats.peakTrackedBytes = peakTrackedResourceBytes_;
   return stats;
+}
+
+PresentationCoverageDiagnostics GlTextureCache::coverageDiagnostics() const {
+  return PresentationCoverageDiagnostics{
+      .activeTilesViewportBounded = activeTilesViewportBounded_,
+      .overviewInfillAvailable = !overviewTiles_.empty(),
+      .activeRasterDocumentRect = activeRasterDocumentRect_,
+      .overviewRasterDocumentRect = overviewRasterDocumentRect_,
+      .activeOutputSizePx = activeOutputSizePx_,
+      .overviewOutputSizePx = overviewOutputSizePx_,
+  };
 }
 
 ImTextureID GlTextureCache::overlayTexture() const {

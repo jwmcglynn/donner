@@ -521,6 +521,9 @@ void AsyncRenderer::workerLoop() {
     // metadata only; the GL cache keeps the existing texture and applies
     // updated presentation geometry.
     const auto buildCompositedPreview = [&]() -> std::optional<RenderResult::CompositedPreview> {
+      if (request.overviewInfillOnly) {
+        return std::nullopt;
+      }
       if (!request.dragPreview.has_value() || compositorEntity_ == entt::null ||
           compositor_->layerCount() == 0u) {
         return std::nullopt;
@@ -769,12 +772,15 @@ void AsyncRenderer::workerLoop() {
           continue;
         }
 
-        notePublishedCompositedPreview(compositedPreview);
+        if (!request.overviewInfillOnly) {
+          notePublishedCompositedPreview(compositedPreview);
+        }
 
         DoneState done;
         done.result.bitmap = std::move(bitmap);
         done.result.compositedPreview = std::move(compositedPreview);
         done.result.rasterViewport = rasterViewport;
+        done.result.overviewInfillOnly = request.overviewInfillOnly;
         done.result.version = request.version;
         done.replayHoldPollsRemaining = replayResultHoldFramesForTesting_;
         const auto diagnosticsStart = std::chrono::steady_clock::now();

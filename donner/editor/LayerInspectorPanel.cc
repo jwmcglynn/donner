@@ -394,6 +394,7 @@ void LayerInspectorPanel::render(
     const svg::compositor::CompositorController::StateSnapshot& state,
     Entity workerCompositorEntity, double viewportZoom, double viewportDpr,
     const Vector2i& viewportDesiredCanvas, const Vector2i& documentCanvas,
+    const PresentationCoverageDiagnostics& coverageDiagnostics,
     const svg::compositor::CompositorController::FastPathCounters& fastPath,
     const svg::compositor::CompositorController::RenderFrameStats& renderStats) {
   ImGui::Text("Fast path: %" PRIu64 " fast / %" PRIu64 " slow / %" PRIu64 " no-dirty",
@@ -430,6 +431,12 @@ void LayerInspectorPanel::render(
                                        : ImGui::GetStyle().Colors[ImGuiCol_Text],
                      "  document canvas: %d×%d%s", documentCanvas.x, documentCanvas.y,
                      CanvasFreshnessStatusSuffix(canvasFreshness).data());
+  ImGui::Text("  coverage: active=%s %d×%d  overview=%s %d×%d",
+              coverageDiagnostics.activeTilesViewportBounded ? "viewport-bounded" : "full",
+              coverageDiagnostics.activeOutputSizePx.x, coverageDiagnostics.activeOutputSizePx.y,
+              coverageDiagnostics.overviewInfillAvailable ? "infill" : "none",
+              coverageDiagnostics.overviewOutputSizePx.x,
+              coverageDiagnostics.overviewOutputSizePx.y);
   if (state.splitPathActive || workerCompositorEntity != entt::null) {
     ImGui::Text("  drag entity (split=%u, worker=%u)",
                 static_cast<unsigned>(state.splitStaticLayersEntity),
@@ -472,6 +479,12 @@ void LayerInspectorPanel::render(
       .viewportDpr = viewportDpr,
       .viewportDesiredCanvas = viewportDesiredCanvas,
       .documentCanvas = documentCanvas,
+      .activeTilesViewportBounded = coverageDiagnostics.activeTilesViewportBounded,
+      .overviewInfillAvailable = coverageDiagnostics.overviewInfillAvailable,
+      .activeRasterDocumentRect = coverageDiagnostics.activeRasterDocumentRect,
+      .overviewRasterDocumentRect = coverageDiagnostics.overviewRasterDocumentRect,
+      .activeOutputSizePx = coverageDiagnostics.activeOutputSizePx,
+      .overviewOutputSizePx = coverageDiagnostics.overviewOutputSizePx,
       .state = state,
       .fastPath = fastPath,
       .renderStats = renderStats,

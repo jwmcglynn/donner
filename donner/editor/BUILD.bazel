@@ -481,6 +481,7 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":gl_texture_cache",
         ":imgui_headers",
         ":layer_inspector_diagnostics",
         "//donner/base",

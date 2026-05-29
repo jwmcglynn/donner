@@ -30,8 +30,10 @@ This design proposes a second responsiveness pass:
 4. **Selecting all or a large group is O(visible chrome), not O(all selected paths x full canvas).**
    The first frame may show combined bounds and handles; individual path outlines refine only when
    they are visible and cheap.
-5. **No zoom-out artifacts.** If a user zooms back out before high-resolution tiles finish, the
-   editor displays a coherent lower-resolution overview rather than missing or stale tile holes.
+5. **No zoom-out checkerboard from missing coverage.** If a user zooms back out before
+   high-resolution tiles finish, the editor displays a coherent lower-resolution overview rather
+   than tile holes. The checkerboard is allowed only for real SVG transparency, not because the
+   active viewport-bounded tile set is incomplete.
 6. **Performance regressions are measurable.** Each milestone adds either a deterministic counter
    test or a manual/nightly wall-clock perf test.
 
@@ -111,8 +113,8 @@ This design proposes a second responsiveness pass:
         composing entity-to-canvas and canvas-to-surface transforms in the correct order.
   - [x] Keep the most recent unbounded whole-document tile set as an overview fallback under
         viewport-bounded renders.
-  - [ ] Add an explicit low-resolution overview refresh when no unbounded overview exists or it is
-        too stale for zoom-out fallback.
+  - [x] Add an explicit low-resolution overview refresh when no unbounded overview exists, and
+        reject viewport-bounded results until overview infill is available underneath them.
 - [ ] **M6: Tile pyramid and prioritization.**
   - [ ] Add fixed-size content tiles keyed by `(paint span, tile coord, scale band, generation)`.
   - [ ] Prioritize visible tiles, selection tiles, one-tile margin, then predicted pan/zoom tiles.
@@ -483,6 +485,9 @@ more document area than the high-zoom tiles contain. Use a pyramid:
 - Level N: visible high-resolution tiles at scale bands, e.g. powers of two or half-stop bands.
 - Presentation chooses the highest available level per region.
 - Missing high-res regions display overview pixels until tile refinement lands.
+- A bounded tile result is not presentable by itself. If no overview level exists yet, keep the
+  previous presentation and request the overview first; otherwise the user sees checkerboard caused
+  by cache coverage rather than document transparency.
 - Tiles are requested in priority order: visible center, visible edges, one-tile margin, predicted
   pan direction, then idle overview refresh.
 

@@ -652,7 +652,7 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
         return ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
                                            state.suppressDragTargetTiles);
       });
-  const bool drawOverviewTiles = state.textures.activeTilesViewportBounded();
+  const bool drawOverviewTiles = !state.textures.overviewTiles().empty();
   const bool hasVisibleOverviewTiles =
       drawOverviewTiles &&
       std::ranges::any_of(state.textures.overviewTiles(),

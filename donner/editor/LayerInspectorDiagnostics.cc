@@ -245,6 +245,16 @@ void WriteTelemetryContextObject(std::ostream& os,
   WriteVector2i(os, context.documentCanvas);
   os << ",\"compositor_canvas\":";
   WriteVector2i(os, context.state.canvasSize);
+  os << ",\"active_viewport_bounded\":" << (context.activeTilesViewportBounded ? "true" : "false");
+  os << ",\"overview_infill\":" << (context.overviewInfillAvailable ? "true" : "false");
+  os << ",\"active_output_canvas\":";
+  WriteVector2i(os, context.activeOutputSizePx);
+  os << ",\"overview_output_canvas\":";
+  WriteVector2i(os, context.overviewOutputSizePx);
+  os << ",\"active_raster_rect\":";
+  WriteBox2d(os, context.activeRasterDocumentRect);
+  os << ",\"overview_raster_rect\":";
+  WriteBox2d(os, context.overviewRasterDocumentRect);
   os << ",\"freshness\":";
   WriteQuotedJsonString(os, CanvasFreshnessName(freshness));
   os << '}';

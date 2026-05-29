@@ -21,6 +21,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
 
@@ -74,12 +75,14 @@ public:
   ///   returns — the committed canvas size the worker rendered at.
   ///   Compare against `viewportDesiredCanvas` (commit pipeline) and
   ///   `state.canvasSize` (compositor rasterize freshness).
+  /// @param coverageDiagnostics Active bounded-raster and overview-infill presentation coverage.
   /// @param fastPath Fast-path counters rendered as a summary line
   ///   above the table.
   void render(std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles,
               const svg::compositor::CompositorController::StateSnapshot& state,
               Entity workerCompositorEntity, double viewportZoom, double viewportDpr,
               const Vector2i& viewportDesiredCanvas, const Vector2i& documentCanvas,
+              const PresentationCoverageDiagnostics& coverageDiagnostics,
               const svg::compositor::CompositorController::FastPathCounters& fastPath,
               const svg::compositor::CompositorController::RenderFrameStats& renderStats);
 
