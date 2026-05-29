@@ -18,11 +18,19 @@ void PushTraversalChildrenReverse(EntityHandle element, SmallVector<Entity, 16>&
     return;
   }
 
-  const auto& tree = element.get<donner::components::TreeComponent>();
+  // querySelector is a public API that may run on documents in transient/edited
+  // states (e.g. the editor mid-sync). A node without a TreeComponent, or a
+  // dangling child/sibling link, must not abort the entt sparse-set assertion —
+  // skip rather than crash.
+  const auto* tree = element.try_get<donner::components::TreeComponent>();
+  if (tree == nullptr) {
+    return;
+  }
   Registry& registry = *element.registry();
-  for (Entity child = tree.lastChild(); child != entt::null;
-       child = registry.get<donner::components::TreeComponent>(child).previousSibling()) {
+  for (Entity child = tree->lastChild(); child != entt::null;) {
     stack.push_back(child);
+    const auto* childTree = registry.try_get<donner::components::TreeComponent>(child);
+    child = childTree != nullptr ? childTree->previousSibling() : entt::null;
   }
 }
 

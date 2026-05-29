@@ -695,9 +695,16 @@ private:
    */
   bool isValidCoord(const Coordinates& coord, bool exclusiveEnd = false) const {
     if (coord.line >= 0 && coord.line < (int)lines_.size()) {
-      if (coord.column >= 0 && coord.column <= (int)lines_[coord.line].size()) {
+      // `column` is a *display* column (tabs expand to tabSize), matching
+      // getCharacterIndex(), sanitizeCoordinates() and getLineMaxColumn() — NOT
+      // a raw glyph/byte index. Validate against the display width so a coord at
+      // the tab-expanded end of a line (which those producers consider valid) is
+      // accepted; comparing against lines_[].size() aborted deleteRange() on
+      // lines containing tabs.
+      const int maxColumn = getLineMaxColumn(coord.line);
+      if (coord.column >= 0 && coord.column <= maxColumn) {
         return true;
-      } else if (exclusiveEnd && coord.column == (int)lines_[coord.line].size() + 1) {
+      } else if (exclusiveEnd && coord.column == maxColumn + 1) {
         return true;
       }
     }
