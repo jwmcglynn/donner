@@ -1064,6 +1064,37 @@ TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
   EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#cheap"));
 }
 
+TEST_F(CompositorControllerTest, GradientStaticSpanPlanCanChooseImmediate) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="8" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="blue" />
+        <stop offset="1" stop-color="white" />
+      </linearGradient>
+    </defs>
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="gradient" x="2" y="2" width="8" height="8" fill="url(#g)" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  EXPECT_TRUE(plans[1].visible);
+  EXPECT_FALSE(plans[1].hasExpensiveEffect)
+      << "Gradient fills are direct path paints; timing should decide immediate vs cached.";
+  EXPECT_EQ(plans[1].estimatedDrawOps, 1);
+  EXPECT_TRUE(plans[1].staticHeuristicImmediate || plans[1].dynamicHeuristicImmediate);
+  EXPECT_THAT(plans[1].spanRangeLabel, HasSubstr("rect#gradient"));
+}
+
 TEST_F(CompositorControllerTest, StaticImmediateHeuristicDoesNotDemoteAfterSlowMeasurement) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
