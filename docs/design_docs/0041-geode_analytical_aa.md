@@ -47,6 +47,42 @@ Verified against the reference shader (`SlugRender` / `CalcCoverage`):
    The weighted blend handles the general case; the `min(|xcov|,|ycov|)` floor resolves
    the near-axis-aligned / thin-feature / crosshair cases a single ray conflates (§6).
 
+**Verbatim per-ray accumulation** (reference `SlugRender`, horizontal ray — vertical is
+the transpose using `SolveVertPoly`, `pixelsPerEm.y`, `ycov`/`ywgt`):
+```hlsl
+float2 pixelsPerEm = 1.0 / fwidth(renderCoord);   // path-units → pixels, per axis
+float xcov = 0.0, xwgt = 0.0;
+for (curveIndex in hband) {
+  float4 p12 = curve.p0p1 - renderCoord;          // control pts relative to the pixel
+  float2 p3  = curve.p2   - renderCoord;
+  uint code = CalcRootCode(p12.y, p12.w, p3.y);    // 0x2E74 winding classifier (y-signs)
+  if (code != 0U) {
+    float2 r = SolveHorizPoly(p12, p3) * pixelsPerEm.x;   // root x-distances in pixels
+    if ((code & 1U) != 0U) { xcov += saturate(r.x + 0.5); xwgt = max(xwgt, saturate(1.0 - abs(r.x)*2.0)); }
+    if (code > 1U)         { xcov -= saturate(r.y + 0.5); xwgt = max(xwgt, saturate(1.0 - abs(r.y)*2.0)); }
+  }
+}
+```
+Key pieces to port faithfully in M4:
+- **`CalcRootCode(y0,y1,y2)`** — the `0x2E74` lookup indexed by the sign bits of the three
+  control-point Y's (relative to the pixel) returns which of the two roots are eligible
+  crossings and their winding sign. This *replaces* Geode's current `dy/dt`-sign winding
+  in `curve_winding`. The exact bit math (verbatim):
+  ```
+  uint shift = (i2 & 2U) | (i1 & ~2U);
+  shift = (i3 & 4U) | (shift & ~4U);
+  return ((0x2E74U >> shift) & 0x0101U);   // bit 0 → root x eligible, bit 8 → root y eligible
+  ```
+- **Per-root coverage** `saturate(r + 0.5)`, signed `+`/`−` by which root (encodes winding
+  direction); **per-root weight** `saturate(1 − 2·|r|)` (1 at a crossing through the pixel
+  center, 0 once the crossing is ≥ ½px away — this is what makes the combine pick the ray
+  whose crossing is *nearest* the pixel).
+- **`pixelsPerEm = 1/fwidth(renderCoord)`** — Geode's path-space `sample_pos` is the
+  `renderCoord`; `fwidth(sample_pos)` already gives path-units-per-pixel per axis, so this
+  is correct under arbitrary affine transforms (replaces the current `dpdx`/`dpdy` length).
+- **Fill rule:** non-zero is `saturate(coverage)`; even-odd uses the reference's
+  triangle-wave fold of `coverage` — port it from the reference's even-odd path.
+
 It is exact, resolution-independent, **1-sample, no MSAA, no supersampling** (modern Slug
 3.5+ *removed* adaptive supersampling — "A Decade of Slug" — relying on the analytic
 coverage plus **dynamic glyph dilation** in the vertex shader, em-space `0.5/fontSize`,
@@ -105,29 +141,41 @@ every multi-band path (`StructureTransform` rotate/skew, shapes, nested-svg) —
 Blocker B (§5), not bad luck.
 
 ### M1 — Parity-gate rework (enabler, no shader change)
-- Keep **`GeodeGolden`** (geode vs the resvg reference PNG) as the strict **correctness**
-  gate — analytic Slug must pass it; it is the real "did we render the right thing" test.
-- Change **`GeodeTinyParity`** (geode vs tiny-skia) so two valid-but-different
-  rasterizers are not failed on sub-perceptual edge deltas: either **(a)** drop
-  geode-vs-tiny for the resvg corpus and rely on `GeodeGolden` + tiny's `TinyGolden`
-  (both already compare to the same reference), or **(b)** keep it as an
-  edge-band-tolerant comparison. **Decision (a) vs (b) needs explicit sign-off** — it
-  decides whether "parity" remains a concept for the corpus.
-- No relaxation of the **correctness** gate (0021/0017 no-masking policy holds for
-  `GeodeGolden`).
+**Decision: (a).** `GeodeGolden` (geode vs the resvg reference PNG) is the strict
+**correctness** gate and stays at the strict budget — analytic Slug must pass it; it is
+the real "did we render the right thing" test, and the 0021/0017 no-masking policy holds
+for it unchanged. The **`GeodeTinyParity`** mode (geode pixel-vs-tiny) is **dropped for
+the resvg corpus**: it compared two legitimately-different rasterizers (Slug analytic vs
+Skia-AAA finite-sample) and, per §6 Blocker A, can never be satisfied without degrading
+Geode to tiny's quantization. Both backends already gate against the *same* reference via
+`GeodeGolden` / `TinyGolden`, so geode-vs-tiny adds no correctness signal the goldens
+don't — only a false-failure floor.
+- **Why not (b) edge-tolerant parity:** an edge-band-tolerant geode-vs-tiny comparison is
+  extra harness complexity that still encodes "geode should look like tiny," which is the
+  wrong target now that Slug is the reference we align to. Rejected.
+- **Scope of the drop:** only the `GeodeTinyParity` *instance* in `resvg_test_suite.cc`'s
+  parameterization. `GeodeGolden` and the non-resvg Geode regression/golden tests
+  (`renderer_regression_tests_geode`, `geode/tests/*`) are untouched and stay strict. A
+  one-line note in the suite records that geode-vs-tiny parity was retired in favor of
+  per-backend golden comparison (this doc is the reference).
+- This **needs owner sign-off** before M6 lands (it changes what "parity" means for the
+  corpus) — flagged here as the design's choice; the owner has directed aligning to Slug,
+  which (a) operationalizes.
 - Self-verifiable: after M1 the current edge-floor gates come off and the suite stays
   green **with today's 4× MSAA shader**, because `GeodeGolden` already passes content.
   Any of the 16 that *also* fail `GeodeGolden` (e.g. feImage/svg was 1787px) are genuine
   and stay gated until M4 — that residual list is M4's acceptance set.
 
 ### M2 — Non-overlapping band ownership (clears Blocker B, §5)
-Make each output pixel's coverage written by **exactly one** fragment so folded
-(sampleCount=1) coverage is additive. Candidate mechanisms: full-height band quads with
-a per-fragment owning-band test; single-band encoding for small paths; or scissor/
-stencil clipping each band quad to its `[yMin,yMax)` with no dilation overlap. Acceptance:
-route the **existing 4-sample alpha-coverage shader** to **all** adapters and reproduce
-the MSAA path output with **zero** new regressions — isolating the seam fix from the
-coverage-math change.
+**Resolved: fold into the single-quad design (§8.1).** Instead of per-band quads (which
+overlap at seams under dilation and double-count folded coverage), the path draws **one
+bounding quad** and the fragment looks up its H-band (by Y) and V-band (by X) from dense
+band grids. Each output pixel is then rasterized by **exactly one** fragment, so folded
+sampleCount=1 coverage is additive-free by construction — no per-sample band ownership, no
+seam reconciliation. This is also exactly what the dual-ray shader (M4) needs (a pixel
+needs both its bands), so M2 and M3c/M4 share the single-quad rewrite rather than being
+separate steps. (The reference Slug renderer draws one quad per glyph and looks up the
+band per-fragment for the same reason.)
 
 ### M3 — Vertical (X-monotonic) bands in the encoder  ← the encoder change
 Extend `GeodePathEncoder` to also emit **X-monotonic** quadratics binned into **vertical
@@ -191,7 +239,119 @@ count, and reproduced by the last autonomous attempt's transform/shape regressio
   neutral-to-positive but unproven.
 - **Vertical-band memory:** X-banding ~doubles encoded curve data; reuse the existing
   256-band cap.
-- **M1 (a) vs (b)** is the highest-leverage decision and needs explicit sign-off.
+- **M1** is resolved to (a) above; it still needs owner sign-off before M6 lands.
+- **`CalcRootCode` port:** the `0x2E74` classifier must be ported exactly (it encodes
+  both root eligibility *and* winding sign). A wrong port is the most likely source of a
+  fill-rule or thin-feature bug; unit-test it against the existing integer `curve_winding`
+  on a corpus of curves (they must agree on the set of eligible crossings and signs).
+
+## 8. Concrete implementation design
+
+This section makes M3c/M4/M5 unambiguous. It is the as-designed target; M3b (X-monotonic
+split + `vBands`/`vCurves` in the encoder) already landed (`4aba5c09`).
+
+### 8.1 Data model — `EncodedPath` (dense band grids + single quad)
+
+The fragment must find its band in O(1) from `sample_pos`, so bands are stored **densely**
+(one slot per grid cell; empty cells carry `curveCount = 0`). Replace the packed, empty-
+skipped layout with:
+
+```cpp
+struct EncodedPath {
+  struct Curve { float p0x,p0y, p1x,p1y, p2x,p2y; };   // unchanged
+  struct Band  { uint32_t curveStart, curveCount; };   // SHRINKS: no per-band x/yMin/Max
+                                                        //   (the grid params give strips)
+  // Horizontal grid (horizontal ray): hBands[i] owns the Y-strip
+  //   [yBase + i*hStride, yBase + (i+1)*hStride). hBands.size() == hBandCount (dense).
+  std::vector<Curve> hCurves;  std::vector<Band> hBands;
+  float yBase; float hStride; uint32_t hBandCount;
+  // Vertical grid (vertical ray): vBands[j] owns the X-strip [xBase + j*vStride, …).
+  std::vector<Curve> vCurves;  std::vector<Band> vBands;
+  float xBase; float vStride; uint32_t vBandCount;
+  // Single bounding quad (6 verts) over the dilated pathBounds; corner normals only.
+  std::vector<Vertex> vertices;   // Vertex { posX,posY, normalX,normalY } — bandIndex REMOVED
+  Box2d pathBounds;
+};
+```
+
+Notes:
+- **Dense vs packed:** dense costs one `Band{start,count}` (8 B) per empty cell; bounded by
+  the 256-band cap → ≤ 2 KB/axis worst case. Worth it for branchless O(1) fragment lookup.
+  (Keep the existing skip-empty packing only if a band-index side table is added instead;
+  dense is the simpler correct default.)
+- The current per-band-quad `vertices` (6× per band) collapses to **one quad** for the
+  whole path → each pixel is rasterized by exactly one fragment → **Blocker B (seam
+  additivity) cannot occur** (this *is* M2, folded into the single-quad design).
+- `m3b` shipped `vBands`/`vCurves` with transposed-field `Band`s; 8.1 supersedes that
+  `Band` layout — drop the x/y extents (grid params replace them) when M3c lands.
+
+### 8.2 Encoder (`GeodePathEncoder`)
+
+- Emit dense `hBands` (size `hBandCount`) and `vBands` (size `vBandCount`); a cell with no
+  curves gets `{curveStart=<next>, curveCount=0}`.
+- Set `yBase/hStride/hBandCount` and `xBase/vStride/vBandCount` from `pathBounds` and
+  `computeBandCount`.
+- Emit one dilatable quad: corners `(pathBounds.{min,max})` with outward corner normals
+  `(±1,±1)` (the existing dilation vertex math is unchanged).
+- Degenerate axis (zero width/height): set that axis's `*BandCount = 0`; the shader skips
+  that ray and the combine falls back to the other (a hairline is covered by one ray).
+
+### 8.3 Shaders (`slug_fill` / `slug_gradient` / `slug_mask`)
+
+Single WGSL per primitive (no `_alpha_coverage` variant). Bindings gain the second
+curve+band SSBO and the grid params (in the uniform block).
+
+**Vertex:** unchanged dilation; output path-space `sample_pos`. No `bandIndex` varying.
+
+**Fragment:**
+```
+ppem = 1.0 / fwidth(sample_pos);                       // path→pixel scale, per axis
+hi = clamp(i32((sample_pos.y - yBase)/hStride), 0, hBandCount-1);
+vj = clamp(i32((sample_pos.x - xBase)/vStride), 0, vBandCount-1);
+(xcov,xwgt) = accumulateHoriz(hBands[hi], sample_pos, ppem.x);   // §1 verbatim loop
+(ycov,ywgt) = accumulateVert (vBands[vj], sample_pos, ppem.y);
+coverage = CalcCoverage(xcov,xwgt,ycov,ywgt);          // §1, then fill-rule fold
+coverage *= clipPolygonCoverage(pixel) * clipMaskCoverage(pixel);   // existing, unchanged
+out.color = premultipliedPaint * coverage;             // solid/gradient/pattern as today
+```
+- `accumulateHoriz/Vert` port the §1 verbatim loop incl. `CalcRootCode` (`0x2E74`) and
+  `SolveHorizPoly`/`SolveVertPoly` (reuse the existing `solve_quadratic` Citardauq core).
+- **Mask (`slug_mask`) union semantics:** today it packs one sub-sample per RGBA channel
+  and unions overlapping mask draws with `BlendOperation::Max`. With a single analytic
+  coverage `c`, write `vec4(c,c,c,c)` and keep `Max` blend → overlapping coverage unions as
+  `max(c1,c2)` per channel (correct union; no double-count). The mask *reader*
+  (`clip_mask_coverage`) already averages the 4 channels → returns `c`. So the Max-union
+  invariant is preserved with no reader change.
+
+### 8.4 Pipeline / upload / bind groups (`GeoEncoder`, `GeodePipeline`, `GeodeShaders`)
+
+- **`sampleCount = 1`** for all three pipelines; delete the MSAA color target + resolve in
+  `GeoEncoder` (the `sampleCount>1` branches) and the `useAlphaCoverageShader`/`sampleCount`
+  ctor params in `GeodePipeline`/`GeodeShaders`.
+- Bind-group layout adds: `vCurves` SSBO, `vBands` SSBO (the H ones already exist). Grid
+  params (`yBase,hStride,hBandCount,xBase,vStride,vBandCount`) go in the existing uniform
+  block (pad to 16 B).
+- `GeoEncoder::submitFillDraw` / `fillPathIntoMask` upload both band/curve sets into the
+  arenas and `draw(6)` (one quad) instead of `draw(vertices.size())`.
+
+### 8.5 Deletion gates (M5b — same PR that makes each unused)
+`slug_fill_alpha_coverage.wgsl`, `slug_gradient_alpha_coverage.wgsl`,
+`slug_mask_alpha_coverage.wgsl`; `useAlphaCoverageAA_` (`GeodeDevice.cc`) + its adapter
+probe; `sampleCount()`/`useAlphaCoverageShader` MSAA plumbing (`GeodeDevice.h`,
+`GeodePipeline.*`, `GeodeShaders.*`, `GeoEncoder.cc` MSAA target/resolve).
+
+### 8.6 Test & golden plan
+- **Unit:** `CalcRootCode` vs integer `curve_winding` agreement (8.7 risk); the existing
+  M3b winding-parity test stays.
+- **Acceptance (M4):** the 16 gated entries pass `GeodeGolden` at the strict budget; diff
+  PNGs show edge movement toward the reference; the crosshair case (§6) verified.
+- **Golden regen:** `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run --config=geode
+  <golden target>` **after** eyeballing a sample of diffs confirms movement toward
+  reference (not arbitrary). Record which goldens changed.
+- **Full:** `bazel test //...` green on `resvg_test_suite_{geode,default_text,max}`,
+  `renderer_regression_tests_geode`, `geode/tests/*`. Un-skip the 16; retire
+  `GeodeTinyParity` from the resvg parameterization (M1 (a)).
+- **Perf:** `donner_perf_cc_test` before/after on the splash drag + a text-heavy scene.
 
 ## Appendix — approaches measured and set aside (now recontextualized)
 
