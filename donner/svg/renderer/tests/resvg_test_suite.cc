@@ -21,12 +21,6 @@ using Params = ImageComparisonParams;
 
 namespace {
 
-ImageComparisonParams GeodeDisabled(std::string_view reason) {
-  ImageComparisonParams params;
-  params.disableBackend(RendererBackend::Geode, reason);
-  return params;
-}
-
 ImageComparisonParams WithMaxPixels(int maxMismatchedPixels, std::string_view reason) {
   ImageComparisonParams params;
   params.withMaxPixelsDifferent(maxMismatchedPixels).withReason(reason);
@@ -154,10 +148,16 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
                 {"type=matrix-with-non-normalized-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "non-normalized values")
-                     .disableBackend(RendererBackend::Geode,
-                                     "Geode slug_fill edge-coverage quantization on the gradient "
-                                     "rect's left edge, amplified past threshold by the "
-                                     "non-normalized matrix (shared with structure/svg gap)")},
+                     .withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/"
+                         "filters_feColorMatrix_type=matrix-with-non-normalized-values.png",
+                         "Geode renders the gradient byte-identically to tiny-skia (verified), but "
+                         "its 8-bit premultiplied filter intermediates, un-premultiplied at the "
+                         "rect's edge-AA columns and amplified ~100x by the -100 matrix "
+                         "coefficient, diverge from tiny-skia's float pipeline in thin 1px "
+                         "vertical "
+                         "bands at the gradient stop transitions. Geode's output is correct; only "
+                         "the pathological amplification of sub-LSB precision differs.")},
                 {"type=matrix-with-not-enough-values.svg",
                  Params::WithThreshold(0.05f, kDefaultMismatchedPixels, "identity matrix")},
                 {"type=matrix-with-too-many-values.svg",
@@ -219,43 +219,13 @@ INSTANTIATE_TEST_SUITE_P(
                     // (slug_fill 4-sample vs tiny-skia analytic), which the kernel
                     // spreads above threshold — the same root cause as the structure/svg
                     // and feImage/svg parity gaps. Not the color-space round-trip.
-                    {"custom-divisor.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
-                    {"edgeMode=none.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
                     {"edgeMode=wrap-with-matrix-larger-than-target.svg",
                      Params::RenderOnly("UB: wrap with oversized kernel")},
                     {"edgeMode=wrap.svg",
                      Params::WithThreshold(kDefaultThreshold, 200,
-                                           "Minor algorithm differences on edge handling (180px)")
-                         .disableBackend(RendererBackend::Geode,
-                                         "Geode slug_fill edge-coverage quantization in the "
-                                         "filtered pattern input (shared with structure/svg gap)")},
+                                           "Minor algorithm differences on edge handling (180px)")},
                     {"kernelMatrix-with-zero-sum-and-no-divisor.svg",
                      Params::RenderOnly("MatrixConvolution edge shift vs golden")},
-                    {"order=4-2.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
-                    {"order=4-4.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
-                    {"order=4.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
-                    {"preserveAlpha=true.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
-                    {"targetX=0.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
-                    {"targetX=2.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
-                    {"unset-order.svg",
-                     GeodeDisabled("Geode slug_fill edge-coverage quantization in the filtered "
-                                   "pattern input (shared with structure/svg parity gap)")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -321,29 +291,31 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeImage, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feImage",
-                {
-                    {"empty.svg", Params::Skip("Linux CI: std::bad_alloc in test setup.")},
-                    {"simple-case.svg",
-                     Params::Skip("External file reference (no ResourceLoader)")},
-                    {"svg.svg",
-                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
-                         .withReason("We render higher quality")
-                         .disableBackend(RendererBackend::Geode,
-                                         "Geode slug_fill edge-coverage quantization vs tiny-skia "
-                                         "analytic AA on the rasterized nested SVG (shared root "
-                                         "cause with the structure/svg parity gap)")},
-                    {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/feImage",
+            {
+                {"empty.svg", Params::Skip("Linux CI: std::bad_alloc in test setup.")},
+                {"simple-case.svg", Params::Skip("External file reference (no ResourceLoader)")},
+                {"svg.svg",
+                 Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
+                     .withReason("We render higher quality")
+                     .withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/filters_feImage_svg.png",
+                         "feImage rasterizes the nested SVG to the same source bitmap for both "
+                         "backends (shared imageData); Geode then resamples it with GPU "
+                         "bilinear filtering, whose 1px edge band differs from tiny-skia's CPU "
+                         "resampler. Geode's content matches; only the resample edge differs.")},
+                {"with-subregion-5.svg", Params::Skip("Subregion with rotation: filter")},
 
-                    {"with-x-y-and-protruding-subregion-1.svg",
-                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                    {"with-x-y-and-protruding-subregion-2.svg",
-                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                    {"with-x-y.svg",
-                     Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+                {"with-x-y-and-protruding-subregion-1.svg",
+                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                {"with-x-y-and-protruding-subregion-2.svg",
+                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+                {"with-x-y.svg",
+                 Params::Skip("Bug: feImage edge cases / unsupported subregion combinations")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
@@ -357,18 +329,14 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(FiltersFeMorphology, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory(
-                                     "filters/feMorphology",
-                                     {
-                                         {"source-with-opacity.svg",
-                                          GeodeDisabled("Geode slug_fill edge-coverage "
-                                                        "quantization in the opacity-0.75 pattern "
-                                                        "input, spread by erode (shared with "
-                                                        "structure/svg parity gap)")},
-                                     })),
-                                 ValuesIn(ActiveComparisonModes())),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFeMorphology, ImageComparisonTestFixture,
+    Combine(ValuesIn(getTestsInCategory("filters/feMorphology",
+                                        {
+                                            {"source-with-opacity.svg", Params{}},
+                                        })),
+            ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeOffset, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("filters/feOffset")),
@@ -802,11 +770,7 @@ INSTANTIATE_TEST_SUITE_P(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
                      .withReason("Pre-existing rendering diff (stroke/AA), not cusp-related")},
                 {"orient=auto-on-M-L-L-Z-Z-Z.svg", Params::Skip("Bug: Multiple closepaths")},
-                {"orient=auto-on-M-L-Z.svg",
-                 GeodeDisabled("Geode slug_fill edge-coverage quantization: the horizontal path "
-                               "stroke straddling the y=100 pixel row distributes coverage "
-                               "differently than tiny-skia's analytic AA (shared with "
-                               "structure/svg parity gap)")},
+                {"orient=auto-on-M-L-Z.svg", Params{}},
                 {"target-with-subpaths-2.svg", Params::RenderOnly("UB: Target with subpaths")},
                 {"with-a-large-stroke.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-a-text-child.svg",
@@ -1201,18 +1165,10 @@ INSTANTIATE_TEST_SUITE_P(
                                            "Has anti-aliasing artifacts.")},
                     {"preserveAspectRatio=xMinYMin.svg",
                      Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")
-                         .disableGeodeParity(
-                             "Geode matches its golden; only the geode-vs-tiny parity differs "
-                             "(244px) — slug_fill edge-coverage quantization vs tiny-skia "
-                             "analytic AA on the letterbox frame stroke at 1.25x device scale")},
+                                           "Has anti-aliasing artifacts.")},
                     {"proportional-viewBox.svg",
                      Params::WithThreshold(0.13f, kDefaultMismatchedPixels,
-                                           "Has anti-aliasing artifacts.")
-                         .disableGeodeParity(
-                             "Geode matches its golden; only the geode-vs-tiny parity differs "
-                             "(244px) — slug_fill edge-coverage quantization vs tiny-skia "
-                             "analytic AA on the letterbox frame stroke at 1.25x device scale")},
+                                           "Has anti-aliasing artifacts.")},
                     {"rect-inside-a-non-SVG-element.svg",
                      Params::Skip("Bug? Rect inside unknown element")},
                     {"viewBox-not-at-zero-pos.svg",

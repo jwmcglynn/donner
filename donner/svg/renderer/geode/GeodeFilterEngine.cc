@@ -1525,7 +1525,24 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       } else {
         const int rx = static_cast<int>(std::round(toPixelX(morph->radiusX)));
         const int ry = static_cast<int>(std::round(toPixelY(morph->radiusY)));
-        outputTex = applyMorphology(arena, inputTex, *morph, rx, ry);
+        // feMorphology operates in the filter's color-interpolation-filters
+        // space (linearRGB by default). Erode/dilate are component-wise min/max
+        // on PREMULTIPLIED channels, and the un-premultiply → linearize →
+        // re-premultiply round-trip changes those premultiplied values, so the
+        // result depends on the space. Match tiny-skia (FilterGraph.cpp's
+        // Morphology branch wraps in srgbToLinear/linearToSrgb when the node
+        // resolves to linearRGB).
+        const bool nodeLinearRGB =
+            node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
+            svg::ColorInterpolationFilters::SRGB;
+        if (nodeLinearRGB) {
+          wgpu::Texture linearInput =
+              applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
+          wgpu::Texture morphOutput = applyMorphology(arena, linearInput, *morph, rx, ry);
+          outputTex = applyColorSpaceConversion(arena, morphOutput, /*srgbToLinear=*/false);
+        } else {
+          outputTex = applyMorphology(arena, inputTex, *morph, rx, ry);
+        }
       }
     } else if (const auto* ct = std::get_if<filter_primitive::ComponentTransfer>(&node.primitive)) {
       // Per SVG spec, feComponentTransfer operates in the filter's color-

@@ -107,6 +107,13 @@ struct ImageComparisonParams {
   std::optional<Vector2i> canvasSize;
   /// Optional filename to use for the golden image, overriding the default.
   std::string_view overrideGoldenFilename;
+  /// Optional Geode-specific golden image, used ONLY for the `GeodeGolden`
+  /// comparison mode. Captures Geode's (correct) output when it legitimately
+  /// differs from the shared resvg/tiny golden by a genuine sub-pixel analytic
+  /// difference that no structural fix can close (e.g. amplified 8-bit
+  /// filter-intermediate precision, or GPU bilinear resampling of a feImage
+  /// raster). The TinyGolden mode still compares against the shared golden.
+  std::string_view geodeOverrideGoldenFilename;
   /// If false, skip the test when the active backend is TinySkia.
   bool allowTinySkia = true;
   /// If false, skip the test when the active backend is Geode.
@@ -200,6 +207,26 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& withReason(std::string_view text) {
     reason = text;
+    return *this;
+  }
+
+  /**
+   * @brief Use a Geode-specific golden for the `GeodeGolden` comparison mode.
+   *
+   * The shared golden still gates `TinyGolden`. Use only when Geode's output is
+   * verified correct and differs from the shared reference by a genuine
+   * sub-pixel analytic difference (never to absorb a structural bug).
+   *
+   * @param filename Path (under the workspace) to the Geode golden PNG.
+   * @param text Justification for the per-backend golden.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& withGeodeGoldenOverride(std::string_view filename,
+                                                 std::string_view text = std::string_view()) {
+    geodeOverrideGoldenFilename = filename;
+    if (!text.empty()) {
+      reason = text;
+    }
     return *this;
   }
 

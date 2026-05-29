@@ -789,7 +789,15 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
 
   // Goldens are shared across backends. Per-test exceptions belong in
   // ImageComparisonParams so every comparison mode sees the same policy.
-  const char* const effectiveGoldenFilename = goldenImageFilename;
+  // Exception: a verified-correct Geode output that differs from the shared
+  // reference only by a sub-pixel analytic difference may carry its own
+  // per-backend golden, used ONLY for the GeodeGolden mode.
+  std::string geodeGoldenStorage;
+  const char* effectiveGoldenFilename = goldenImageFilename;
+  if (mode == ComparisonMode::GeodeGolden && !params.geodeOverrideGoldenFilename.empty()) {
+    geodeGoldenStorage = std::string(params.geodeOverrideGoldenFilename);
+    effectiveGoldenFilename = geodeGoldenStorage.c_str();
+  }
 
   std::cout << "[  COMPARE ] " << svgFilename.string() << " [" << RendererBackendName(backend)
             << "]: ";  // No endl yet, the line will be continued
