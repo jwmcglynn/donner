@@ -186,10 +186,13 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   //                       is 0, see `*_ZeroTextures` tests below).
   //   M6 instrumentation: drawCalls=3 (one per solid fill),
   //                       pipelineSwitches=1 (solid pipeline only).
-  EXPECT_LE(c.pathEncodes, 5u);       // M2: target = 0 on unchanged-geometry frames.
-  EXPECT_LE(c.bufferCreates, 8u);     // M1.f.2: target = 1 (readback only).
+  EXPECT_LE(c.pathEncodes, 5u);  // M2: target = 0 on unchanged-geometry frames.
+  // 0041 analytic dual-ray fill: each draw now binds 4 extra read-only SSBO
+  // arenas (vBands/vCurves/hBandGrid/vBandGrid) on top of bands/curves/vertex/
+  // uniform, so first-frame arena growth costs a few more buffer creates.
+  EXPECT_LE(c.bufferCreates, 12u);
   EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines (3 today).
-  EXPECT_LE(c.textureCreates, 3u);    // Target + MSAA pair on frame 1; 0 on repeat.
+  EXPECT_LE(c.textureCreates, 3u);    // Target on frame 1; 0 on repeat (sampleCount=1).
   EXPECT_LE(c.submits, 3u);           // M3: target = 1.
   EXPECT_LE(c.drawCalls, 4u);         // 3 shapes, one draw each.
   EXPECT_LE(c.pipelineSwitches, 2u);  // Solid pipeline bound once.
@@ -226,10 +229,12 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   //   M6 instrumentation: drawCalls=2 (solid fill + gradient fill),
   //                   pipelineSwitches=~3 (solid for layer, image
   //                   blit on layer composite, gradient for rect).
-  EXPECT_LE(c.pathEncodes, 4u);       // M2: target = 0.
-  EXPECT_LE(c.bufferCreates, 12u);    // M1.f.2 + future arena-share: target ~= 5.
+  EXPECT_LE(c.pathEncodes, 4u);  // M2: target = 0.
+  // 0041 analytic dual-ray: fill + gradient each grow 4 extra SSBO arenas
+  // (vBands/vCurves/hBandGrid/vBandGrid) on first use.
+  EXPECT_LE(c.bufferCreates, 20u);
   EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines.
-  EXPECT_LE(c.textureCreates, 6u);    // Target+MSAA + layer+MSAA on first render; 0 on repeat.
+  EXPECT_LE(c.textureCreates, 6u);    // Target + layer on first render; 0 on repeat.
   EXPECT_LE(c.submits, 3u);           // M3: target = 2 steady-state (frame + readback).
   EXPECT_LE(c.drawCalls, 6u);         // 2 fills + blit composites.
   EXPECT_LE(c.pipelineSwitches, 6u);  // Solid / gradient / image pipelines + mask if any.
@@ -278,10 +283,11 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   //                       (`<use>` instancing) is the knob that moves
   //                       drawCalls for `<use>`-heavy fixtures; Lion
   //                       has no `<use>` so this ceiling stays at 132.
-  EXPECT_LE(c.pathEncodes, 200u);        // M2: target = 0.
-  EXPECT_LE(c.bufferCreates, 10u);       // M1.f.2: target ~= 5 steady-state.
+  EXPECT_LE(c.pathEncodes, 200u);  // M2: target = 0.
+  // 0041 analytic dual-ray fill: 4 extra SSBO arenas grow once on first use.
+  EXPECT_LE(c.bufferCreates, 14u);
   EXPECT_LE(c.bindgroupCreates, 200u);   // M1.f.2: target <= #pipelines.
-  EXPECT_LE(c.textureCreates, 3u);       // Target + MSAA on first render; 0 on repeat.
+  EXPECT_LE(c.textureCreates, 3u);       // Target on first render; 0 on repeat.
   EXPECT_LE(c.submits, 3u);              // M3: target = 1.
   EXPECT_LE(c.drawCalls, 200u);          // 132 paths, one draw each (no <use>).
   EXPECT_LE(c.pipelineSwitches, 2u);     // All-solid fixture: tracker binds solid once.
@@ -612,8 +618,11 @@ TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
   EXPECT_LE(deltaTex, 4u * kRendererCount) << "Per-renderer texture growth exceeds expected "
                                               "(target + MSAA + slack). Did pipeline construction "
                                               "move back onto `RendererGeode::Impl`?";
-  EXPECT_LE(deltaBuf, 8u * kRendererCount) << "Per-renderer buffer growth exceeds expected "
-                                              "(arenas + readback + slack). See issue #575.";
+  // 0041 analytic dual-ray fill adds 4 read-only SSBO arenas per encoder
+  // (vBands/vCurves/hBandGrid/vBandGrid), so per-renderer first-frame arena
+  // growth is a few buffers higher than the pre-analytic 3-arena layout.
+  EXPECT_LE(deltaBuf, 11u * kRendererCount) << "Per-renderer buffer growth exceeds expected "
+                                               "(arenas + readback + slack). See issue #575.";
 }
 
 }  // namespace
