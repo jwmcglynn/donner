@@ -97,8 +97,9 @@ This design proposes a second responsiveness pass:
         estimated redraw cost below cached-texture overhead, plus measured timing against a 120 Hz
         frame-budget slice. Static-cheap spans stay immediate; dynamically-expanded spans fall back
         to cached presentation after an over-budget immediate render.
-  - [x] Emit immediate spans as clipped draw commands or viewport-sized transient tiles instead of
-        persistent offscreen textures.
+  - [x] Emit immediate spans into the active composition render target via
+        `RendererDriver::drawEntityRangeIntoCurrentFrame`; keep transient tile payloads only for
+        the current editor split-tile presentation handoff.
 - [ ] **M5: Viewport-bounded high-zoom rendering.**
   - [x] Split display transform from raster target: high-zoom raster target is pane-sized plus
         margin, not full document viewBox sized.
@@ -117,6 +118,10 @@ This design proposes a second responsiveness pass:
   - [ ] Prioritize visible tiles, selection tiles, one-tile margin, then predicted pan/zoom tiles.
   - [ ] Add memory caps, LRU eviction, and stale-but-coherent fallback rules.
 - [ ] **M7: Geode-rendered source-pane flair and UI chrome.**
+  - [x] Render selection/path chrome through `OverlayRenderer` + `RendererGeode` directly into the
+        editor framebuffer after ImGui submits the editor draw data. This path uses a single-sample
+        alpha-coverage Geode device and `LoadOp::Load`, so it appends to the swapchain instead of
+        allocating an overlay texture or re-tessellating curves through ImGui.
   - [ ] Move source-reference ropes from ImGui path commands to a clipped Geode screen-space chrome
         layer. Keep the existing ImGui hit testing and tooltips as invisible interaction owners.
   - [ ] Draw chip backgrounds, borders, glows, and connector flair through Geode. Keep chip text in
@@ -417,11 +422,19 @@ Selection chrome is UI, not document content. It should not use a full-document 
 
 Replace the current full-canvas overlay texture with:
 
-- immediate Geode drawing for handles, AABBs, marquee, and simple path outlines;
+- immediate Geode drawing for handles, AABBs, marquee, and path outlines directly into the
+  framebuffer;
 - a viewport-sized transient overlay only for software-backend fallback cases that cannot draw
   directly;
 - a strict clip rect around the render pane;
 - culling against the visible document rect before path transformation/draw.
+
+In Geode editor builds, the immediate chrome path must use Donner renderer calls, not ImGui path
+commands. The render-pane presenter still uses ImGui to present cached canvas tiles, then
+`EditorWindow` invokes a post-ImGui direct-render callback before surface presentation/readback.
+That callback points `RendererGeode` at the current swapchain texture, preserves existing
+framebuffer contents, pushes a framebuffer-space clip rect for the artboard, and calls
+`OverlayRenderer::drawChromeFromSnapshot`.
 
 The overlay is rebuilt every frame from the current viewport and current interaction state. It is
 not retained behind the async document-content version gate and it is not reprojected from a cached
@@ -591,8 +604,8 @@ contain many paths, filters, or references:
 
 1. Ship M1 counters first and leave current behavior unchanged.
 2. Enable immediate chrome by default after it passes pixel/clip tests.
-3. Land immediate compositor spans directly once mixed paint-order goldens are stable; use the
-   heuristic to decide immediate vs cached behavior, not a feature flag.
+3. Land immediate compositor spans directly in the composition render target; use the heuristic to
+   decide immediate vs cached behavior, not a feature flag.
 4. Replace full-document high-zoom rendering directly above a zoom threshold where full-document
    rasterization exceeds `2 x pane pixels`; use tests and counters as the rollback boundary, not a
    dormant alternate implementation.
@@ -614,8 +627,8 @@ contain many paths, filters, or references:
 ## Open Questions
 
 - What scale bands are acceptable before visible blur feels worse than a short refinement delay?
-- Should immediate spans exist on the software path, or only after the Geode/direct presentation
-  path is active?
+- Can the editor presentation path move split-tile composition onto Geode so immediate spans no
+  longer need transient tile payloads for ImGui presentation?
 - Can `RenderingInstanceComponent` expose enough effect/bounds metadata to classify cheap spans
   without a second tree walk?
 - Should select-all mean every renderable geometry element, or should it select top-level editable

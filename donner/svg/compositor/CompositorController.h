@@ -717,24 +717,6 @@ public:
     return lastRenderFrameStats_;
   }
 
-  /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
-  /// caused by immediate-mode transient spans or retained cached tiles.
-  struct RenderFrameStats {
-    /// Segment raster time caused by immediate-mode static spans.
-    double immediateRasterizeMs = 0.0;
-    /// Segment/layer raster time that produces retained cached bitmap/texture tiles.
-    double cachedRasterizeMs = 0.0;
-    /// Count of static spans charged to immediate raster work.
-    int immediateTileCount = 0;
-    /// Count of segment/layer tiles charged to cached raster work.
-    int cachedTileCount = 0;
-  };
-
-  /// Return the current render-frame raster cost split.
-  [[nodiscard]] const RenderFrameStats& lastRenderFrameStats() const {
-    return lastRenderFrameStats_;
-  }
-
   /// Compositor-wide state useful for diagnosing why the editor's
   /// expected drag fast path didn't engage. Lets the operator confirm
   /// at a glance:

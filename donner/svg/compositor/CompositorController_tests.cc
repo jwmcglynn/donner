@@ -1064,6 +1064,29 @@ TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
   EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#cheap"));
 }
 
+TEST_F(CompositorControllerTest, ImmediateStaticSpanComposesDirectlyIntoCurrentFrame) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  EXPECT_CALL(renderer_, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer_, endFrame()).Times(1);
+  EXPECT_CALL(renderer_, drawPath(_, _)).Times(AtLeast(1));
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+}
+
 TEST_F(CompositorControllerTest, GradientStaticSpanPlanCanChooseImmediate) {
   SVGDocument document = makeDocument(R"svg(
     <defs>

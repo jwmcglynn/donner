@@ -100,6 +100,12 @@ public:
   }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
+  /// Add immediate presenter-side overlay draw-list time to the current frame counters.
+  ///
+  /// @param drawMs Milliseconds spent issuing immediate overlay draw-list commands.
+  void addImmediateOverlayDrawCost(double drawMs) {
+    lastFrameCostBreakdown_.overlay.drawMs += drawMs;
+  }
   /// Replace transient source-hover chrome elements.
   ///
   /// @param elements Elements to highlight as source-hover preview chrome.
@@ -187,6 +193,7 @@ private:
   std::optional<Box2d> lastOverlayScreenRect_;
   std::optional<Transform2d> lastOverlayCanvasFromDocument_;
   SelectionChromeDetail lastOverlaySelectionDetail_ = SelectionChromeDetail::Full;
+  bool lastOverlayInteractionActive_ = false;
   std::chrono::steady_clock::time_point overlayStableSince_{};
   std::uint64_t lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   /// Last marquee rect captured into the immediate overlay snapshot, or nullopt if the last

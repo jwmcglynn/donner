@@ -5,6 +5,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/editor/GlTextureCache.h"
+#include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportInteractionController.h"
@@ -76,7 +77,6 @@ struct RenderPanePresenterCost {
 [[nodiscard]] std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect,
                                                           const Box2d& imageRect);
 
-/// Draws the advanced editor render pane's image, overlay chrome, and frame graph.
 class RenderPanePresenter {
 public:
   /**

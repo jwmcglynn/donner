@@ -813,45 +813,46 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
   std::vector<CompositeTileSnapshot> tiles;
   const bool includeThumbnails = thumbnails == SnapshotThumbnails::Include;
 
-  const auto pushPayloadTile =
-      [&tiles](CompositeTileSnapshot::Kind kind, std::string id, std::string label,
-               const RendererBitmap& bitmap,
-               const std::shared_ptr<const RendererTextureSnapshot>& texture, uint64_t generation,
-               double lastRasterizeMs, bool isDragTarget, const StaticSpanPlan* spanPlan) {
-        CompositeTileSnapshot tile;
-        tile.kind = kind;
-        tile.id = std::move(id);
-        tile.label = std::move(label);
-        tile.generation = generation;
-        tile.lastRasterizeMs = lastRasterizeMs;
-        tile.isDragTarget = isDragTarget;
-        if (spanPlan != nullptr) {
-          tile.immediate = spanPlan->mode == StaticSpanMode::Immediate;
-          tile.staticHeuristicImmediate = spanPlan->staticHeuristicImmediate;
-          tile.dynamicHeuristicImmediate = spanPlan->dynamicHeuristicImmediate;
-          tile.demotedDynamicImmediate = spanPlan->demotedDynamicImmediate;
-          tile.immediateBudgetChargeMs = spanPlan->immediateBudgetChargeMs;
-          tile.immediateBudgetMs = spanPlan->immediateBudgetMs;
-          tile.estimatedDrawOps = spanPlan->estimatedDrawOps;
-          tile.estimatedPathVerbs = spanPlan->estimatedPathVerbs;
-          tile.hasExpensiveEffect = spanPlan->hasExpensiveEffect;
-          tile.visible = spanPlan->visible;
-          tile.boundsCanvas = spanPlan->boundsCanvas;
-          tile.estimatedRetainedBytes = spanPlan->estimatedRetainedBytes;
-          tile.estimatedRedrawCost = spanPlan->estimatedRedrawCost;
-          tile.estimatedCacheOverheadCost = spanPlan->estimatedCacheOverheadCost;
-          tile.spanRangeLabel = spanPlan->spanRangeLabel;
-        }
-        tile.hasValidBitmap = !bitmap.empty() || texture != nullptr;
-        if (tile.hasValidBitmap) {
-          tile.bitmapDims = !bitmap.empty() ? bitmap.dimensions : texture->dimensions();
-          if (!bitmap.empty()) {
-            BuildThumbnail(bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
-          }
-          tile.textureSnapshot = texture;
-        }
-        tiles.push_back(std::move(tile));
-      };
+  const auto pushPayloadTile = [&tiles, includeThumbnails](
+                                   CompositeTileSnapshot::Kind kind, std::string id,
+                                   std::string label, const RendererBitmap* bitmap,
+                                   const std::shared_ptr<const RendererTextureSnapshot>& texture,
+                                   uint64_t generation, double lastRasterizeMs, bool isDragTarget,
+                                   const StaticSpanPlan* spanPlan) {
+    CompositeTileSnapshot tile;
+    tile.kind = kind;
+    tile.id = std::move(id);
+    tile.label = std::move(label);
+    tile.generation = generation;
+    tile.lastRasterizeMs = lastRasterizeMs;
+    tile.isDragTarget = isDragTarget;
+    if (spanPlan != nullptr) {
+      tile.immediate = spanPlan->mode == StaticSpanMode::Immediate;
+      tile.staticHeuristicImmediate = spanPlan->staticHeuristicImmediate;
+      tile.dynamicHeuristicImmediate = spanPlan->dynamicHeuristicImmediate;
+      tile.demotedDynamicImmediate = spanPlan->demotedDynamicImmediate;
+      tile.immediateBudgetChargeMs = spanPlan->immediateBudgetChargeMs;
+      tile.immediateBudgetMs = spanPlan->immediateBudgetMs;
+      tile.estimatedDrawOps = spanPlan->estimatedDrawOps;
+      tile.estimatedPathVerbs = spanPlan->estimatedPathVerbs;
+      tile.hasExpensiveEffect = spanPlan->hasExpensiveEffect;
+      tile.visible = spanPlan->visible;
+      tile.boundsCanvas = spanPlan->boundsCanvas;
+      tile.estimatedRetainedBytes = spanPlan->estimatedRetainedBytes;
+      tile.estimatedRedrawCost = spanPlan->estimatedRedrawCost;
+      tile.estimatedCacheOverheadCost = spanPlan->estimatedCacheOverheadCost;
+      tile.spanRangeLabel = spanPlan->spanRangeLabel;
+    }
+    tile.hasValidBitmap = (bitmap != nullptr && !bitmap->empty()) || texture != nullptr;
+    if (tile.hasValidBitmap) {
+      tile.bitmapDims = bitmap != nullptr ? bitmap->dimensions : texture->dimensions();
+      if (includeThumbnails && bitmap != nullptr) {
+        BuildThumbnail(*bitmap, &tile.thumbnailDims, &tile.thumbnailPixels);
+      }
+      tile.textureSnapshot = texture;
+    }
+    tiles.push_back(std::move(tile));
+  };
 
   // Always emit the full segments+layers paint-order breakdown — even
   // when the editor's split-bitmap optimization is active. User
@@ -879,9 +880,8 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
       const double segMs =
           i < staticSegmentLastRasterizeMs_.size() ? staticSegmentLastRasterizeMs_[i] : 0.0;
       const StaticSpanPlan* spanPlan = i < staticSpanPlans_.size() ? &staticSpanPlans_[i] : nullptr;
-      pushPayloadTile(CompositeTileSnapshot::Kind::Segment, id, label,
-                      segmentBitmap != nullptr ? *segmentBitmap : RendererBitmap{}, segmentTexture,
-                      segGen, segMs, /*isDragTarget=*/false, spanPlan);
+      pushPayloadTile(CompositeTileSnapshot::Kind::Segment, id, label, segmentBitmap,
+                      segmentTexture, segGen, segMs, /*isDragTarget=*/false, spanPlan);
     }
     if (i < layerCount) {
       const CompositorLayer& layer = layers_[i];

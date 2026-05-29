@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <cstdlib>
 #include <span>
 #include <utility>
 
@@ -155,15 +154,6 @@ double MillisecondsSince(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
-void ApplyOverlayUploadCost(FrameCostBreakdown::Overlay* overlay,
-                            const FrameCostBreakdown::Overlay& uploadCost) {
-  overlay->uploadMs = uploadCost.uploadMs;
-  overlay->payloadBytes = uploadCost.payloadBytes;
-  if (uploadCost.canvasSize != Vector2i::Zero()) {
-    overlay->canvasSize = uploadCost.canvasSize;
-  }
-}
-
 FrameCostBreakdown::CompositedRender CompositedRenderCostFromStats(
     const svg::compositor::CompositorController::RenderFrameStats& stats) {
   return FrameCostBreakdown::CompositedRender{
@@ -293,10 +283,12 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlaySelectionVec_.clear();
   sourceHoverElements_.clear();
   lastOverlaySourceHoverVec_.clear();
+  immediateOverlaySnapshot_.reset();
   lastOverlayRasterSize_ = Vector2i::Zero();
   lastOverlayScreenRect_.reset();
   lastOverlayCanvasFromDocument_.reset();
   lastOverlaySelectionDetail_ = SelectionChromeDetail::Full;
+  lastOverlayInteractionActive_ = false;
   overlayStableSince_ = std::chrono::steady_clock::time_point{};
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   lastOverlayMarqueeRectDoc_.reset();
@@ -352,28 +344,45 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const auto currentVersion = app.document().currentFrameVersion();
   const auto now = std::chrono::steady_clock::now();
   const auto& overlaySelection = app.selectedElements();
+  const std::optional<SelectTool::ActiveDragPreview> effectiveLiveDragPreview =
+      liveDragPreview.has_value() ? liveDragPreview : representedDragPreview;
+  const bool overlayInteractionActive =
+      effectiveLiveDragPreview.has_value() || representedDragPreview.has_value() ||
+      marqueeRectDoc.has_value() || activeBoundsPreview.has_value();
+  const bool overlayGeometryDiffers =
+      overlaySelection != lastOverlaySelectionVec_ ||
+      sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
+      marqueeRectDoc != lastOverlayMarqueeRectDoc_ ||
+      currentOverlayRasterSize != lastOverlayRasterSize_ || !lastOverlayScreenRect_.has_value() ||
+      currentOverlayScreenRect != *lastOverlayScreenRect_ ||
+      !lastOverlayCanvasFromDocument_.has_value() ||
+      !SameTransform(currentOverlayCanvasFromDocument, *lastOverlayCanvasFromDocument_) ||
+      !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_) ||
+      currentVersion != lastOverlayVersion_ ||
+      overlayInteractionActive != lastOverlayInteractionActive_;
   if (!selectionDetail.has_value()) {
-    const bool overlayGeometryDiffers =
-        overlaySelection != lastOverlaySelectionVec_ ||
-        sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
-        marqueeRectDoc != lastOverlayMarqueeRectDoc_ ||
-        currentOverlayRasterSize != lastOverlayRasterSize_ || !lastOverlayScreenRect_.has_value() ||
-        currentOverlayScreenRect != *lastOverlayScreenRect_ ||
-        !lastOverlayCanvasFromDocument_.has_value() ||
-        !SameTransform(currentOverlayCanvasFromDocument, *lastOverlayCanvasFromDocument_) ||
-        !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_) ||
-        currentVersion != lastOverlayVersion_;
     if (overlayGeometryDiffers || IsUnsetTimePoint(overlayStableSince_)) {
       overlayStableSince_ = now;
     }
 
-    const bool overlayInteractionActive = representedDragPreview.has_value() ||
-                                          marqueeRectDoc.has_value() ||
-                                          activeBoundsPreview.has_value();
     selectionDetail = ChooseSelectionChromeDetail(overlaySelection.size(), overlayInteractionActive,
                                                   now, overlayStableSince_);
   }
   const SelectionChromeDetail resolvedSelectionDetail = *selectionDetail;
+
+  if (!overlayInteractionActive && !overlayGeometryDiffers &&
+      resolvedSelectionDetail == lastOverlaySelectionDetail_ &&
+      (immediateOverlaySnapshot_.has_value() ||
+       (textures.overlayWidth() > 0 && textures.overlayHeight() > 0))) {
+    FrameCostBreakdown::Overlay overlayCost;
+    overlayCost.canvasSize = currentOverlayRasterSize;
+    overlayCost.selectedElementCount = static_cast<int>(overlaySelection.size());
+    overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
+    overlayCost.selectionBoundsOnly =
+        resolvedSelectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
+    lastFrameCostBreakdown_.overlay = overlayCost;
+    return false;
+  }
 
   FrameCostBreakdown::Overlay overlayCost;
   overlayCost.canvasSize = currentOverlayRasterSize;
@@ -381,8 +390,6 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
   overlayCost.selectionBoundsOnly =
       resolvedSelectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
-  const std::optional<SelectTool::ActiveDragPreview> effectiveLiveDragPreview =
-      liveDragPreview.has_value() ? liveDragPreview : representedDragPreview;
   overlayCost.hasLiveDragPreview = effectiveLiveDragPreview.has_value();
   overlayCost.hasRepresentedDragPreview = representedDragPreview.has_value();
   if (effectiveLiveDragPreview.has_value()) {
@@ -394,10 +401,6 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const Transform2d representedDocumentFromLiveDocument =
       OverlayRepresentedDocumentFromLiveDocument(effectiveLiveDragPreview, representedDragPreview);
 
-  svg::RenderViewport overlayViewport;
-  overlayViewport.size = viewport.paneSize;
-  overlayViewport.devicePixelRatio = viewport.devicePixelRatio;
-  overlayRenderer_.beginFrame(overlayViewport);
   std::optional<SelectionChromeBoundsPreview> chromeBoundsPreview;
   if (activeBoundsPreview.has_value()) {
     chromeBoundsPreview = SelectionChromeBoundsPreview{
@@ -421,41 +424,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.hoverAabbCount = static_cast<int>(chromeSnapshot.hoverAabbsDoc.size());
   overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleBoxesDoc.size());
   overlayCost.hasMarquee = chromeSnapshot.marqueeDoc.has_value();
-
-  const auto drawStart = std::chrono::steady_clock::now();
-  OverlayRenderer::drawChromeFromSnapshot(overlayRenderer_, chromeSnapshot);
-  overlayCost.drawMs = MillisecondsSince(drawStart);
-
-  const auto snapshotStart = std::chrono::steady_clock::now();
-  overlayRenderer_.endFrame();
-  std::shared_ptr<const svg::RendererTextureSnapshot> overlayTexture =
-      overlayRenderer_.takeTextureSnapshot();
-  std::optional<svg::RendererBitmap> overlayBitmap;
-  if (overlayTexture != nullptr) {
-    overlayCost.payloadBytes = TexturePayloadBytes(overlayTexture->dimensions());
-  } else if (overlayRenderer_.requiresTextureSnapshotPresentation()) {
-    UTILS_RELEASE_ASSERT_MSG(
-        overlayTexture != nullptr,
-        "Geode overlay rasterization did not produce a GPU texture. Refusing CPU "
-        "readback/upload fallback in Geode presentation mode.");
-  } else {
-    overlayBitmap = overlayRenderer_.takeSnapshot();
-    overlayCost.payloadBytes = overlayBitmap.has_value() ? BitmapPayloadBytes(*overlayBitmap) : 0u;
-  }
-  overlayCost.snapshotMs = MillisecondsSince(snapshotStart);
-
-  if (overlayTexture != nullptr) {
-    textures.uploadOverlayTexture(std::move(overlayTexture));
-    textures.setOverlayScreenRect(currentOverlayScreenRect);
-    ApplyOverlayUploadCost(&overlayCost, textures.lastOverlayUploadCost());
-  } else if (overlayBitmap.has_value() && !overlayBitmap->empty()) {
-    textures.uploadOverlay(*overlayBitmap);
-    textures.setOverlayScreenRect(currentOverlayScreenRect);
-    ApplyOverlayUploadCost(&overlayCost, textures.lastOverlayUploadCost());
-  } else {
-    textures.clearOverlay();
-    ApplyOverlayUploadCost(&overlayCost, textures.lastOverlayUploadCost());
-  }
+  immediateOverlaySnapshot_ = chromeSnapshot;
+  textures.clearOverlay();
 
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlaySourceHoverVec_ = sourceHoverElements_;
@@ -463,6 +433,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayScreenRect_ = currentOverlayScreenRect;
   lastOverlayCanvasFromDocument_ = currentOverlayCanvasFromDocument;
   lastOverlaySelectionDetail_ = resolvedSelectionDetail;
+  lastOverlayInteractionActive_ = overlayInteractionActive;
   lastOverlayVersion_ = currentVersion;
   lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
   lastOverlayActiveBoundsPreview_ = activeBoundsPreview;

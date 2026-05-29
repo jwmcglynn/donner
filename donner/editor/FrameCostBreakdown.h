@@ -9,17 +9,20 @@ namespace donner::editor {
 
 /// Per-frame cost counters for editor rendering diagnostics.
 struct FrameCostBreakdown {
-  /// Cost counters for rasterizing and uploading selection/source-hover chrome.
+  /// Cost counters for capturing and presenting selection/source-hover chrome.
   struct Overlay {
     /// Milliseconds spent capturing live DOM selection chrome into a snapshot.
     double captureMs = 0.0;
-    /// Milliseconds spent drawing the captured chrome snapshot.
+    /// Milliseconds spent drawing the captured chrome snapshot into a retained overlay payload.
+    /// Zero for the editor's immediate screen-space overlay path.
     double drawMs = 0.0;
-    /// Milliseconds spent ending the renderer frame and acquiring the presentation payload.
+    /// Milliseconds spent ending the renderer frame and acquiring a retained overlay payload. Zero
+    /// for the editor's immediate screen-space overlay path.
     double snapshotMs = 0.0;
-    /// Milliseconds spent handing the overlay payload to the presentation texture cache.
+    /// Milliseconds spent handing a retained overlay payload to the presentation texture cache.
+    /// Zero for the editor's immediate screen-space overlay path.
     double uploadMs = 0.0;
-    /// Approximate overlay payload bytes retained or uploaded for presentation.
+    /// Approximate retained overlay payload bytes. Zero for immediate screen-space presentation.
     std::uint64_t payloadBytes = 0;
     /// Document elements selected when the overlay snapshot was captured.
     int selectedElementCount = 0;
@@ -47,7 +50,7 @@ struct FrameCostBreakdown {
     Vector2d liveDragTranslationDoc = Vector2d::Zero();
     /// Document-space drag translation represented by the overlay presented this frame.
     Vector2d representedDragTranslationDoc = Vector2d::Zero();
-    /// Document canvas size used for the overlay raster.
+    /// Viewport overlay size that would have been rasterized before immediate presentation.
     Vector2i canvasSize = Vector2i::Zero();
   };
 

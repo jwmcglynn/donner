@@ -1882,6 +1882,29 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
+  bool directFramebufferOverlay = false;
+#ifdef DONNER_EDITOR_WGPU
+  window_.setWgpuDirectRenderCallback({});
+  const std::optional<Box2d> directOverlayClipRect =
+      PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
+  if (!contentOnlyCaptureThisFrame_ && directOverlayRenderer_ != nullptr &&
+      renderCoordinator_.immediateOverlaySnapshot().has_value() &&
+      directOverlayClipRect.has_value()) {
+    SelectionChromeSnapshot overlaySnapshot = *renderCoordinator_.immediateOverlaySnapshot();
+    ViewportState overlayViewport = interactionController_.viewport();
+    const Box2d overlayClipRect = *directOverlayClipRect;
+    window_.setWgpuDirectRenderCallback(
+        [this, overlaySnapshot = std::move(overlaySnapshot), overlayViewport,
+         overlayClipRect](const gui::EditorWindowWgpuRenderTarget& target) {
+          if (directOverlayRenderer_ == nullptr) {
+            return;
+          }
+          DrawImmediateOverlaySnapshotToFramebuffer(
+              *directOverlayRenderer_, target, overlayViewport, overlayClipRect, overlaySnapshot);
+        });
+    directFramebufferOverlay = true;
+  }
+#endif
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .frameHistory = interactionController_.frameHistory(),

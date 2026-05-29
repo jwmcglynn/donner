@@ -540,8 +540,7 @@ void AsyncRenderer::workerLoop() {
     const bool activeDragRequest =
         request.dragPreview.has_value() &&
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
-    const bool splitPreviewSafe = !desiredPromotionIncomplete;
-    compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe);
+    compositor_->setSkipMainComposeDuringSplit(activeDragRequest);
     workerTiming.setupMs = elapsedSince(workerStart);
 
     // Build a CompositedPreview from the compositor's current tile state.
@@ -583,7 +582,8 @@ void AsyncRenderer::workerLoop() {
       auto compositorTiles =
           compositor_->snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
       bool canReuseNonDragTextures = !publishedCompositedTiles_.empty();
-      bool activeDragTileWillHaveBitmap = !activeDragRequest;
+      bool activeDragTileAvailable = !activeDragRequest;
+      bool activeDragTileNeedsPayload = false;
       bool hasImmediateTile = false;
       for (const auto& ct : compositorTiles) {
         if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) {
@@ -600,14 +600,9 @@ void AsyncRenderer::workerLoop() {
         const bool currentActiveDragLayer = activeDragRequest && request.dragPreview.has_value() &&
                                             ct.layerEntity == request.dragPreview->entity;
         if (currentActiveDragLayer) {
-          activeDragTileWillHaveBitmap =
-              ct.isDragTarget ||
-              publishedTextureMatches(std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims,
-                                      outputCanvasSize);
-          if (!activeDragTileWillHaveBitmap) {
-            canReuseNonDragTextures = false;
-            break;
-          }
+          activeDragTileAvailable = true;
+          activeDragTileNeedsPayload = !publishedTextureMatches(
+              std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims, outputCanvasSize);
           continue;
         }
         if (currentActiveDragLayer) {
@@ -623,16 +618,16 @@ void AsyncRenderer::workerLoop() {
           break;
         }
       }
-      if (activeDragRequest && activeDragTilesAvailable < dragPreviewEntities.size()) {
+      if (!activeDragTileAvailable) {
         canReuseNonDragTextures = false;
       }
       CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All;
       if (canReuseNonDragTextures) {
-        if (hasImmediateTile && activeDragRequest) {
+        if (hasImmediateTile && activeDragTileNeedsPayload) {
           payload = CompositorTileBitmapPayload::ImmediateAndDragTargetOnly;
         } else if (hasImmediateTile) {
           payload = CompositorTileBitmapPayload::ImmediateOnly;
-        } else if (activeDragRequest) {
+        } else if (activeDragTileNeedsPayload) {
           payload = CompositorTileBitmapPayload::DragTargetOnly;
         } else {
           payload = CompositorTileBitmapPayload::MetadataOnly;
@@ -654,7 +649,7 @@ void AsyncRenderer::workerLoop() {
             ct.immediate ? OutKind::Immediate
                          : (ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer);
         const bool metadataOnly =
-            !ct.immediate && (!ct.isDragTarget || !activeDragRequest) &&
+            !ct.immediate &&
             publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims, outputCanvasSize);
         if (!metadataOnly && ct.bitmap.empty() && ct.textureSnapshot == nullptr) continue;
         RenderResult::CompositedTile tile;
@@ -711,7 +706,9 @@ void AsyncRenderer::workerLoop() {
       // presentation-gating iteration, including any readback or tile
       // snapshot work after renderFrame. Keep this scoped timing in
       // Tracy only for drilling into the compositor itself.
+      const auto renderFrameStart = std::chrono::steady_clock::now();
       renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+      workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
     }
 
     // §M4: a cancelled render leaves compositor dirty flags ready for the next
@@ -817,7 +814,7 @@ void AsyncRenderer::workerLoop() {
                               : svg::compositor::CompositorController::SnapshotThumbnails::Include;
         lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
         lastCompositorRenderFrameStats_ = compositor_->lastRenderFrameStats();
-        lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows();
+        lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows(thumbnailMode);
         lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
         lastCompositeTiles_ = compositor_->snapshotCompositeTiles(thumbnailMode);
         lastStateSnapshot_ = compositor_->snapshotState();
