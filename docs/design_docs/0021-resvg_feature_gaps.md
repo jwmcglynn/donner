@@ -1,10 +1,9 @@
 # resvg-test-suite: Feature Gaps & Open Bugs
 
-**Status:** Living catalog (current as of 2026-05-25). **Geode parity closed in
-[#606](https://github.com/jwmcglynn/donner/pull/606)** — the GPU backend is now at
-content parity with the CPU rasterizer (residual items are the accepted 4× MSAA
-edge floor + a short G3/G4/G5 tail). **The CPU-backend (RendererTinySkia) feature
-gaps and bugs are now the active front, and lead this backlog.**
+**Status:** Living catalog. The CPU-backend (RendererTinySkia) feature gaps and bugs
+are the active front, and lead this backlog. Geode runs the same resvg `Params`
+and thresholds as the CPU variants; backend-specific override tables are not part
+of the suite policy.
 
 The triage backlog for [0022](0022-resvg_test_suite_upgrade.md)'s Milestone 2 —
 working through the tests the suite upgrade pulled in and either fixing the
@@ -26,28 +25,26 @@ PR**. Golden overrides (where Donner is right and resvg's golden is wrong) live 
 
 ## How a test can be "not passing"
 
-There are **four** ways the suite hides a gap — not just `Skip`. The fourth is the
-one most likely to mask a real bug, and was under-tracked before this revision:
+There are **four** supported ways the suite records a known gap. All of them must
+be expressed through the normal `Params` path close to the affected tests:
 
 | State | Count | Meaning |
 |---|---:|---|
-| `Params::Skip("reason")` | 288 | Not run. Feature gap or known bug. The bulk of this doc. |
-| `Params::RenderOnly("UB: …")` | 51 | Rendered, **not** compared. Implementation-defined / UB input; we only assert no-crash. Correctly classified — [out of scope](#out-of-scope-correctly-skipped--do-not-fix). |
+| `Params::Skip("reason")` | 234 | Not run. Feature gap or known bug. The bulk of this doc. |
+| `Params::RenderOnly("reason")` | 72 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful. |
 | Commented-out `INSTANTIATE_TEST_SUITE_P` | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci). |
-| `Params::WithThreshold(…, maxPx)` with **large `maxPx`** | ~22 over 1000 px | **Passes, but only because the diff cap is inflated.** Per [CLAUDE.md](../../CLAUDE.md) (>1000 px non-text = broken feature), several of these are **masked bugs**, not "AA". New section: [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
-
-Geode's separate binary parity gate (`geodeParityGate`) is a fifth axis, now
-nearly closed — see [Geode parity — resolved](#geode-parity--resolved-606).
+| `Params::WithThreshold(…, maxPx)` / local max-pixel budget | 96 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
+| Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature | The analytic-coverage work closed the former ~16-gate cluster; remaining = 1 `feGaussianBlur/complex-transform` ([#625](https://github.com/jwmcglynn/donner/issues/625)) + paint-order/0-N-dash tests Geode doesn't implement yet. See [Geode coverage (resolved)](#geode-coverage-analytic-slug-dual-ray-resolved--the-misdiagnosis-correction). |
 
 ## Current totals
 
 | | Count |
 |---|---:|
-| `Params::Skip(...)` | 288 (→ ~260 once #608–#611 land — 28 un-skipped) |
-| `Params::RenderOnly(...)` | 51 (UB — render-must-not-crash, no pixel compare) |
-| CPU `WithThreshold` overrides (tiny-skia) | 87 (→ ~78 after #610 drops the feImage caps; ~15 still over 1000 px → masked-bug candidates) |
+| `Params::Skip(...)` | 234 |
+| `Params::RenderOnly(...)` | 72 (render-must-not-crash, no pixel compare) |
+| `WithThreshold` / max-pixel overrides | 96 (~15 still over 1000 px -> masked-bug candidates) |
+| Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature (down from 22; analytic dual-ray landed, see 0041) |
 | Commented-out category blocks | 1 (`filters/filter-functions`) |
-| Geode binary parity gate (`geodeParityGate`) | 173 (172 edge-floor + 1 `feColorMatrix/hueRotate`); 0 text, 0 other genuine |
 
 ---
 
@@ -74,8 +71,13 @@ Landed 2026-05-25 from a parallel CPU-backend debugging sweep. IDs are burned (n
   never broken (their 22k–34k px thresholds were pure over-inflation, now removed).
   The real bug: tiny-skia upscaled feImage with **bilinear**; resvg uses
   **Mitchell-Netravali bicubic**. 4 subregion tests 2.6k–8.7k px → 0. `svg.svg`'s
-  custom golden refreshed to bicubic; geode gated pending a WGSL bicubic port (see
-  the geode follow-up in [Geode parity](#geode-parity--resolved-606)).
+  custom golden refreshed to bicubic. **Geode now has the matching WGSL bicubic
+  sampler** (`filter_image.wgsl`, edge-clamped, RGB≤A) plus a per-attribute
+  placement-rect fix in `GeodeFilterEngine::applyImage` (each of x/y/width/height
+  resolved independently, percent/OBB-aware, defaulting to the filter region):
+  6 of 7 Geode feImage gaps closed (embedded-png, preserveAspectRatio=none,
+  with-subregion-1..4). Only `svg.svg` remains Geode-gated — its residual is the
+  shared slug_fill coverage gap below, not a feImage issue.
 
 ## Priority 0: CPU-backend backlog (the active front)
 
@@ -90,14 +92,14 @@ bottom for completeness.
 | ID | Gap | Impact | Kind |
 |---|---|---:|---|
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
-| B3 | `<image>` embedded/data-URL sizing | 18 | Bug — one investigation |
+| B3 | `<image>` embedded/data-URL sizing | 13 | Bug — one investigation |
 | B4 | `<use>` → inline `<svg>` sizing | 5 | Bug (shares machinery with B3) |
-| F12 | `transform-origin` on paint-servers / `<image>` / text | 7 | Feature (split out of the F2 regression) |
+| F12 | `transform-origin` on paint-servers / `<image>` / text | 2 left | **on-text/on-image DONE**; paint-servers (gradient/pattern) + on-text-path remain → [#621](https://github.com/jwmcglynn/donner/issues/621), [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
 | F4 | `<switch>` conditional processing | 12 (+systemLanguage 3) | Feature |
 | F6 | full `alignment-baseline` keyword set | 10 | Feature |
-| F7 | `paint-order` rendering | 8 | Feature (parsed, not rendered) |
+| F7 | `paint-order` rendering | **DONE** (7/8) | Rendered on shapes + text; `on-tspan` residual → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
 | F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`) | 8 | Feature |
 | F11 | BiDi / RTL text shaping | ~8 | Feature (needs `text-full`) |
@@ -185,10 +187,10 @@ the suspected `transformPosition`→`transformVector` (also per-axis percent ext
 
 ### B3: `<image>` embedded / data-URL sizing
 
-**Impact:** 18 tests in `structure/image/` (plus 2 external-URL `Not impl`, 4 UB
+**Impact:** 13 tests in `structure/image/` (plus 2 external-URL `Not impl`, 4 UB
 RenderOnly).
 
-**Symptom:** Embedded images (data URLs, embedded PNG/JPEG/GIF/16-bit/SVG) render
+**Symptom:** Embedded images (data URLs, embedded JPEG/GIF/SVG) render
 but at the wrong size; `preserveAspectRatio` modes
 (`none`/`xMin/Mid/Max…-meet`/`slice`) and the `no-width`/`no-height`/`auto` sizing
 cases disagree with the golden.
@@ -196,8 +198,8 @@ cases disagree with the golden.
 **Root cause:** needs investigation — `<image>` layout/sizing and
 `preserveAspectRatio` resolution for raster + nested-SVG content.
 
-**Next step:** start with `embedded-png` + `preserveAspectRatio=none` (the
-simplest), then walk the no-width/no-height/auto matrix. Shares
+**Next step:** start with `preserveAspectRatio=none`, then walk the
+no-width/no-height/auto matrix and MIME-sniffing failures. Shares
 `preserveAspectRatio` math with [B6 (fixed)](#recently-fixed-prs-608611)
 and [B4](#b4-use-referencing-inline-svg-elements).
 
@@ -326,7 +328,7 @@ bug vs. out-of-scope:
 
 | Category | Tests | Why |
 |---|---:|---|
-| filters/enable-background | 21 | `enable-background` deprecated in SVG 2 (→ `<filter>` chains / `backdrop-filter`). See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
+| filters/enable-background | 21 | Category default `Params::RenderOnly(...)`: deprecated in SVG 2 (→ `<filter>` chains / `backdrop-filter`). See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
 | filters/filter `in=Background*` | 2 | Same deprecation (BackgroundImage/BackgroundAlpha inputs). |
 | text/tref | 9 (+1 display) | `<tref>` removed in SVG 2. |
 | text/kerning | 2 | `kerning` attribute deprecated SVG 1.1. |
@@ -334,62 +336,70 @@ bug vs. out-of-scope:
 | paint-servers/radialGradient | 2 | test-suite bugs (`focal-point-correction`, `fr>` default — SVG2 behavior changed). |
 | painting/opacity/50percent | 1 | css-color-4 allows percentage; test predates it. |
 | structure/style-attribute | 1 | `<svg version="1.1">` disables geometry-in-style (SVG 1.1 behavior). |
-| RenderOnly UB cases | 51 | Implementation-defined output; we verify no-crash only (per project policy, kept RenderOnly not Skip). |
+| Other RenderOnly UB cases | 51 | Implementation-defined output; we verify no-crash only (per project policy, kept RenderOnly not Skip). |
 
 ---
 
-## Geode parity — resolved (#606)
+## Geode / Resvg Override Policy
 
-The GPU backend ([Geode](0017-geode_renderer.md)) reached **content parity** with
-RendererTinySkia across the resvg suite in
-[#606](https://github.com/jwmcglynn/donner/pull/606). Parity is measured
-geode-vs-**tiny-skia** (not geode-vs-resvg-golden, which carries a baseline/crosshair
-offset that fakes bugs), via the in-process backend matrix
-([0017 §Phase 4b](0017-geode_renderer.md)): one geode binary runs `TinyGolden`,
-`GeodeGolden`, and `GeodeTinyParity` modes. The parity gate is pixelmatch
-`includeAA=false`, per-pixel `kDefaultThreshold` (0.02), **flat 100-px max-count, no
-per-test thresholds**; tests over 100 px are binary-gated in `geodeParityGate`.
+Geode is part of the same resvg test matrix as the CPU variants. It should use the
+same `ImageComparisonParams` thresholds, render-only state, skips, and golden
+overrides as the other renderers. Backend support is recorded through normal
+`Params` feature requirements or local backend disables, never through side-table
+gates.
 
-**Gate ledger (current): 173 gated = 172 edge-floor + 1 G2 + 0 text.** The
-structural work is done; what remains is one driver-divergent color case and the
-accepted AA floor.
+Policy:
 
-- **G1 — text parity ✅ complete.** All structural text divergences resolved
-  (text/decoration fill + stroke with the correct fill rule, gradient/pattern on
-  text incl. span-override precedence, per-char dy/rotate, a shared-layout
-  baseline-shift idempotency bug). `kGenuineText` is empty. Developer reference:
-  [0038](0038-geode_tinyskia_text_parity.md).
-- **G2 — filter primitives ✅ complete (1 residual).** All 37 original filter
-  divergences fixed (a systematic linearRGB `color-interpolation-filters` sweep, an
-  feImage shared-`RendererDriver` re-draw idempotency fix, feDisplacementMap
-  correctness, feSpecularLighting spec clamp, anisotropic transformed-blur). **One
-  residual:** `filters/feColorMatrix/type=hueRotate` diverges >100 px on CI's Mesa
-  **llvmpipe** (≤100 px on macOS Metal) — gated as `kGenuineG2`, a driver-divergent
-  color-math case.
-- **G3 — driver / perf one-offs (residual).** `feMorphology/huge-radius` >30 s on
-  llvmpipe (watchdog; ties into [0030](0030-geode_performance.md)); `marker
-  orient=auto` tangent at curve cusps (real geometry bug). Low priority.
-- **G4 — color-emoji / bitmap fonts (residual, structural).** CBDT/CBLC bitmap
-  glyphs are skipped inside `drawText` ([RendererGeode.cc](../../donner/svg/renderer/RendererGeode.cc)) —
-  they need the `GeodeTextureEncoder` path. Overlaps the CPU CJK gap in
-  [B7](#b7-font-substitution--missing-bundled-families).
-- **G5 — premultiply / color-output audit (open).** ~137 non-text tests show a
-  uniform, sub-perceptual color/alpha offset across solid fills — they **pass** the
-  0.02 parity gate but the whole fill region differs at strict-0. Likely one
-  premultiplied-alpha / unpremult-on-store rounding root cause in Geode's solid +
-  filter output path; one fix likely clears most. Repro: run `GeodeTinyParity` at
-  threshold 0 and diff a solid-fill test (`painting/fill/rgb-0-127-0-0.5`). AA
-  background + the accepted 4× MSAA edge floor: [0041 §2](0041-geode_analytical_aa.md).
-- **G6 — feImage bicubic shader (new, from #610).** tiny-skia now upscales feImage
-  with Mitchell-Netravali bicubic to match resvg; geode's WGSL image sampler
-  (`filter_image.wgsl`) is still bilinear, so `filters/feImage/svg.svg` is gated on
-  geode (`disableBackend(Geode)`). Port the bicubic kernel into the shader to match,
-  then un-gate.
+- Do not add `geodeCategoryGate`, `geodeFilenameGate`, or backend-specific threshold
+  side tables.
+- Do not maintain symptom-ledger sets such as `kEdgeFloor` or `kGenuineG2` in the
+  resvg file. If a parity-only exception is truly needed, express it through the
+  local `Params` override for that test, using `disableGeodeParity(...)` with a
+  short reason.
+- Category-wide defaults are acceptable only when every file in the category has
+  the same reason. `filters/enable-background` is the model: one category default
+  `Params::RenderOnly(...)`, not a per-file list. Category feature requirements
+  such as `text/*` requiring text support are additive, so per-test overrides do
+  not accidentally opt out of backend capability checks.
+- Non-resvg regression tests belong in focused renderer test files, not in
+  `resvg_test_suite.cc`. Use the resvg suite file only for resvg-test-suite data.
+- Test comments should state the current expected behavior and why an override
+  exists. Avoid PR history, audit logs, and long failure narratives in the test
+  file; put durable analysis here instead.
 
-> The 172 `kEdgeFloor` entries are the **accepted-by-design** 4× MSAA edge-coverage
-> quantization (content matches tiny-skia; the sub-pixel edge differs). Geode stays
-> at 4× MSAA for performance — these ratchet out together if/when finer AA lands,
-> not one-by-one. Do **not** widen per-test thresholds to "fix" them.
+The practical goal is fewer overrides over time. A large override map is a signal
+to either fix the feature, classify it as a clear unsupported/deprecated case, or
+write a focused non-resvg regression that exercises the root cause directly.
+
+### Geode coverage: analytic Slug dual-ray (resolved) + the misdiagnosis correction
+
+**RESOLVED.** Geode now uses official Slug analytic dual-ray coverage at 1 sample/pixel
+on every adapter (4× MSAA and the Intel-Arc alpha-coverage fallback deleted; Mac/Linux
+unified; `GeodeTinyParity` retired). See [0041](0041-geode_analytical_aa.md) (as-built).
+
+The earlier theory in this section — that ~16 Geode gates shared one "slug_fill
+edge-coverage quantization" root cause — was **wrong**, and is preserved here only as a
+caution: the analytic rewrite left those tests **byte-identical**, *proving* coverage was
+never the cause. They were three real, separate bugs plus two legitimate per-backend
+goldens, all now fixed/closed:
+
+- `filters/feConvolveMatrix/*` (10) + `filters/feMorphology/source-with-opacity` —
+  a **pattern-tile filter-region-scissor leak** (`beginPatternTile` didn't clear the
+  outer clip stack, shifting tiled cells ~1px) + a missing feMorphology linearRGB
+  round-trip. Both fixed → 0 px.
+- `structure/svg/preserveAspectRatio=xMinYMin` + `proportional-viewBox` — were
+  parity-only; pass once `GeodeTinyParity` is retired.
+- `painting/marker/orient=auto-on-M-L-Z` — degenerate zero-area closed stroke
+  decomposed into overlapping triangles; fixed by de-closing collinear closed subpaths
+  before `strokeToFill` → 0 px.
+- `filters/feColorMatrix/type=matrix-with-non-normalized-values` + `filters/feImage/svg`
+  — Geode verified-correct, differs from resvg's finite-sample reference; **per-backend
+  Geode goldens** (`withGeodeGoldenOverride`).
+
+**Lesson:** a large diff amplified by a filter/matrix is not evidence of a coverage
+problem — inspect whether a coverage change actually moves it before attributing it.
+The only remaining Geode resvg gate is `feGaussianBlur/complex-transform` (genuine
+analytic-vs-finite-sample 1px blur edge) — [#625](https://github.com/jwmcglynn/donner/issues/625).
 
 ---
 

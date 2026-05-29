@@ -20,7 +20,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   // identity buffer (`GeodeDevice::identityInstanceTransformBuffer`)
   // for single-draw fills, a full per-instance array for
   // `fillPathInstanced`.
-  wgpu::BindGroupLayoutEntry entries[8] = {};
+  wgpu::BindGroupLayoutEntry entries[12] = {};
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -64,9 +64,31 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[7].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   entries[7].buffer.minBindingSize = 0;
 
+  // Analytic dual-ray fill (0041 §8): vertical bands SSBO, vertical curves
+  // SSBO, horizontal band grid, vertical band grid. All fragment-read-only.
+  entries[8].binding = 8;
+  entries[8].visibility = wgpu::ShaderStage::Fragment;
+  entries[8].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+  entries[8].buffer.minBindingSize = 0;
+
+  entries[9].binding = 9;
+  entries[9].visibility = wgpu::ShaderStage::Fragment;
+  entries[9].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+  entries[9].buffer.minBindingSize = 0;
+
+  entries[10].binding = 10;
+  entries[10].visibility = wgpu::ShaderStage::Fragment;
+  entries[10].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+  entries[10].buffer.minBindingSize = 0;
+
+  entries[11].binding = 11;
+  entries[11].visibility = wgpu::ShaderStage::Fragment;
+  entries[11].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+  entries[11].buffer.minBindingSize = 0;
+
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
   bglDesc.label = wgpuLabel("GeodeSlugFillBGL");
-  bglDesc.entryCount = 8;
+  bglDesc.entryCount = 12;
   bglDesc.entries = entries;
   bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
@@ -79,8 +101,10 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
   // ----- Shader module -----
-  wgpu::ShaderModule shader = useAlphaCoverageShader ? createSlugFillAlphaCoverageShader(device)
-                                                     : createSlugFillShader(device);
+  // The fill shader is always the analytic dual-ray variant (0041 §8); it runs
+  // at sampleCount=1 on every adapter, so there is no alpha-coverage variant.
+  (void)useAlphaCoverageShader;
+  wgpu::ShaderModule shader = createSlugFillShader(device);
 
   // ----- Vertex buffer layout -----
   // Matches EncodedPath::Vertex: pos (vec2f) + normal (vec2f) + bandIndex (u32)
@@ -156,11 +180,12 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
                                              wgpu::TextureFormat colorFormat,
                                              bool useAlphaCoverageShader, uint32_t sampleCount)
     : colorFormat_(colorFormat) {
-  // Five bindings — uniforms, bands SSBO, curves SSBO, clip-mask texture,
-  // clip-mask sampler. The clip-mask bindings always carry something
-  // valid; when `hasClipMask == 0` a 1x1 dummy texture is bound and
+  // Nine bindings — uniforms, H bands SSBO, H curves SSBO, clip-mask texture,
+  // clip-mask sampler, and (analytic dual-ray, 0041 §8) V bands SSBO, V curves
+  // SSBO, H band grid, V band grid. The clip-mask bindings always carry
+  // something valid; when `hasClipMask == 0` a 1x1 dummy texture is bound and
   // the shader skips the sample work.
-  wgpu::BindGroupLayoutEntry entries[5] = {};
+  wgpu::BindGroupLayoutEntry entries[9] = {};
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -188,9 +213,17 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   entries[4].visibility = wgpu::ShaderStage::Fragment;
   entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
 
+  // Analytic dual-ray (0041 §8): vertical bands/curves + dense band grids.
+  for (int i = 5; i <= 8; ++i) {
+    entries[i].binding = static_cast<uint32_t>(i);
+    entries[i].visibility = wgpu::ShaderStage::Fragment;
+    entries[i].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[i].buffer.minBindingSize = 0;
+  }
+
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
   bglDesc.label = wgpuLabel("GeodeSlugGradientBGL");
-  bglDesc.entryCount = 5;
+  bglDesc.entryCount = 9;
   bglDesc.entries = entries;
   bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
@@ -201,8 +234,9 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   plDesc.bindGroupLayouts = layouts;
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
-  wgpu::ShaderModule shader = useAlphaCoverageShader ? createSlugGradientAlphaCoverageShader(device)
-                                                     : createSlugGradientShader(device);
+  // Always the analytic dual-ray gradient shader (0041 §8); sampleCount=1.
+  (void)useAlphaCoverageShader;
+  wgpu::ShaderModule shader = createSlugGradientShader(device);
 
   // Same vertex buffer layout as the solid-fill pipeline.
   wgpu::VertexAttribute vertexAttribs[3] = {};
@@ -269,11 +303,11 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 
 GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader,
                                      uint32_t sampleCount) {
-  // Five bindings — uniforms, bands SSBO, curves SSBO, nested clip
-  // mask texture, nested clip mask sampler. The clip-mask slot is
-  // always bound; a 1x1 dummy is used when `uniforms.hasClipMask ==
-  // 0` so the draw stays valid without layout variants.
-  wgpu::BindGroupLayoutEntry entries[5] = {};
+  // Nine bindings — uniforms, H bands SSBO, H curves SSBO, nested clip mask
+  // texture, nested clip mask sampler, and (analytic dual-ray, 0041 §8) V bands
+  // SSBO, V curves SSBO, H band grid, V band grid. The clip-mask slot is always
+  // bound; a 1x1 dummy is used when `uniforms.hasClipMask == 0`.
+  wgpu::BindGroupLayoutEntry entries[9] = {};
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -300,9 +334,17 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   entries[4].visibility = wgpu::ShaderStage::Fragment;
   entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
 
+  // Analytic dual-ray (0041 §8): vertical bands/curves + dense band grids.
+  for (int i = 5; i <= 8; ++i) {
+    entries[i].binding = static_cast<uint32_t>(i);
+    entries[i].visibility = wgpu::ShaderStage::Fragment;
+    entries[i].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+    entries[i].buffer.minBindingSize = 0;
+  }
+
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
   bglDesc.label = wgpuLabel("GeodeSlugMaskBGL");
-  bglDesc.entryCount = 5;
+  bglDesc.entryCount = 9;
   bglDesc.entries = entries;
   bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
 
@@ -313,8 +355,9 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   plDesc.bindGroupLayouts = layouts;
   wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
 
-  wgpu::ShaderModule shader = useAlphaCoverageShader ? createSlugMaskAlphaCoverageShader(device)
-                                                     : createSlugMaskShader(device);
+  // Always the analytic dual-ray mask shader (0041 §8); sampleCount=1.
+  (void)useAlphaCoverageShader;
+  wgpu::ShaderModule shader = createSlugMaskShader(device);
 
   // Same vertex buffer layout as the fill pipelines: pos (vec2f) +
   // normal (vec2f) + bandIndex (u32) = 20 bytes per vertex.

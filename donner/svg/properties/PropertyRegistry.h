@@ -24,6 +24,7 @@
 #include "donner/svg/core/Isolation.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/Overflow.h"
+#include "donner/svg/core/PaintOrder.h"
 #include "donner/svg/core/PointerEvents.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/core/TextAnchor.h"
@@ -385,6 +386,11 @@ public:
   Property<ImageRendering, PropertyCascade::Inherit> imageRendering{
       "image-rendering", []() -> std::optional<ImageRendering> { return ImageRendering::Auto; }};
 
+  /// `paint-order` property. Controls the order in which fill, stroke, and markers
+  /// of a shape/text are painted. Inherited. Defaults to fill, stroke, markers.
+  Property<PaintOrder, PropertyCascade::Inherit> paintOrder{
+      "paint-order", []() -> std::optional<PaintOrder> { return PaintOrder{}; }};
+
   /// Properties which don't have specific listings above, which are stored as raw css
   /// declarations.
   std::map<RcString, parser::UnparsedProperty> unparsedProperties;
@@ -418,7 +424,7 @@ public:
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
         textDecoration, dominantBaseline, writingMode, letterSpacing, wordSpacing, baselineShift,
-        alignmentBaseline, mixBlendMode, isolation, imageRendering);
+        alignmentBaseline, mixBlendMode, isolation, imageRendering, paintOrder);
   }
 
   /**

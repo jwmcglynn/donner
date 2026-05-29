@@ -303,6 +303,24 @@ TEST(Path, ToMonotonicSplitsCubic) {
   EXPECT_EQ(cubicCount, 3u);
 }
 
+TEST(Path, ToMonotonicXSplitsCubicAtXExtrema) {
+  // A cubic that is monotonic in Y (0->3->7->10) but NOT in X (0->10->-10->0).
+  // Under MonotonicAxis::X it must split at the X-extrema; the Y solver would
+  // see no extrema and leave it as a single (X-non-monotonic) segment — the bug
+  // this guards (cubic branch must use the axis-selected extrema solver).
+  Path path = PathBuilder().moveTo({0, 0}).curveTo({10, 3}, {-10, 7}, {0, 10}).build();
+
+  Path result = path.toMonotonic(Path::MonotonicAxis::X);
+
+  size_t cubicCount = 0;
+  result.forEach([&](Path::Verb verb, std::span<const Vector2d>) {
+    if (verb == Path::Verb::CurveTo) {
+      ++cubicCount;
+    }
+  });
+  EXPECT_GT(cubicCount, 1u) << "X-monotonic split must subdivide an X-non-monotonic cubic";
+}
+
 // =============================================================================
 // Path::flatten
 // =============================================================================

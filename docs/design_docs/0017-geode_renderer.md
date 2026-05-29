@@ -1,9 +1,17 @@
 # Design: Geode — GPU-Native Rendering Backend
 
-**Status:** Phases 0–3d + 5/6/7 landed on main (Phase 0 #481; Phase 1 #484 + #492; Phase 2 #497; Phase 3 clip/mask #506; Phase 5b MSAA #504; Phase 3d blend modes + miter + markers #541; Phase 5/6/7 completion + parity push #547); vendor story swapped from Dawn-from-source to prebuilt wgpu-native in #510; first real-GPU verification on 2026-04-17 (Intel Arc A380 / Mesa Xe-KMD Vulkan — smoke + 1-band path-fill green; multi-band paths hung on Xe-KMD sample_mask output; vendor-gated alpha-coverage shader fallback shipped in #536). `RendererGeode::drawText` (text → Slug fill) and `pushFilterLayer` (offscreen filter graph) are now **implemented**, not stubs; clip, mask, blend modes, markers, patterns, gradients, and images all run live. resvg-suite parity as of 2026-05-15: **1,345 passing / 0 failing / 291 skipped** (268 text gated off pending the text-suite un-gate — root cause now **identified**: the bulk is the proven 4× MSAA edge floor (**not AA** in the hand-wavy sense — pixelmatch already excludes AA; this is a quantified 64-step edge-alpha quantization), and the doc's "large per-glyph divergence" was a wrong-metric artifact of measuring geode-vs-resvg-golden instead of geode-vs-tiny-skia — plus 23 per-test pixel divergences) — see [0021 §Geode parity](0021-resvg_feature_gaps.md#geode-parity--priority-0). The G1 structural tail is cleared (one real bug — pattern-on-text — fixed; default-fill/vertical/CJK were phantoms); un-gate proceeds via [Phase 4b Strategy B](#phase-4b-text-suite-un-gate-geode-vs-tiny-skia-comparison--strategy-b). Remaining: text-suite un-gate, color-emoji/bitmap glyphs, and the filter-primitive divergences.
+**Status:** ✅ Feature-complete GPU backend. Paths, strokes, clip, mask, blend modes,
+markers, patterns, gradients, images, text (Slug fill), and filters all render live.
+Geode runs the full resvg suite as the `*_geode` variant under `bazel test //...`, using
+the same `ImageComparisonParams` as the CPU backends
+([0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)).
+Text + filter parity with tiny-skia is reached; the only residual geode↔tiny diff is the
+accepted sub-pixel coverage floor ([0041](0041-geode_analytical_aa.md)). Real-GPU verified
+on Intel Arc A380 / Mesa Vulkan, with a vendor-gated alpha-coverage shader fallback for
+drivers that hang on `sample_mask` output.
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
-**Last updated:** 2026-05-15
+**Last updated:** 2026-05-29
 
 ## Implementation status
 
@@ -1460,80 +1468,38 @@ test runs up to three comparison modes via a `ComparisonMode` parameter dimensio
 
 | Mode | Compares | Notes |
 |---|---|---|
-| `TinyGolden` | tiny-skia → resvg golden | ground truth oracle, unchanged |
-| `GeodeGolden` | geode → resvg golden | existing geode behavior; golden is text-contaminated, so text stays category-gated here |
-| `GeodeTinyParity` | geode → tiny-skia, golden ignored | the metric that un-gates text/filters |
+| `TinyGolden` | tiny-skia → resvg golden | ground-truth oracle |
+| `GeodeGolden` | geode → resvg golden | geode against the shared golden |
+| `GeodeTinyParity` | geode → tiny-skia, golden ignored | the geode↔tiny metric for text/filters |
 
 tiny-skia is the validated oracle (passes all text tests vs golden at strict budgets), so
 geode↔tiny-skia + tiny-skia↔golden transitively validates Geode without the golden's
-~1313 px baseline offset. Parity uses pixelmatch `includeAA=false`, per-pixel
-`kDefaultThreshold` (0.02), and a **flat max-pixel-count of 100 with no per-test
-thresholds** — a diff >100 px is binary-gated, never absorbed (masking is banned).
-`GeodeTinyParity` bypasses the `requireFeature(Text/FilterEffects)` skips so geode
-actually renders text/filters; explicit `Skip()` / `disableBackend(Geode)` stay honored.
-The combined matrix lives only in the geode build (rides the `*_geode` wrapper under
-`bazel test //...`); the pure-CPU `resvg_test_suite` is unchanged.
+~1313 px baseline offset. `GeodeTinyParity` compares with pixelmatch `includeAA=false` at
+**each test's own `ImageComparisonParams` threshold and max-pixel budget** — the same
+budget its golden comparison uses. Geode runs the same params as the CPU variants; a
+parity-only exception is a per-test `disableGeodeParity(reason)`, and `Skip()` /
+`disableBackend(Geode)` are honored. The combined matrix lives only in the geode build
+(rides the `*_geode` wrapper under `bazel test //...`); the pure-CPU `resvg_test_suite`
+runs the same params without the parity mode. See
+[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)
+for the override policy.
 
-**Outcome.** All originally-structural text divergences and all 37 filter (G2)
-divergences are resolved; `kGenuineText` is empty. The remaining ~190 gated entries are
-the accepted edge floor (geode renders correctly; diff is the sub-pixel coverage delta vs
-tiny-skia's scan-converter + the resvg crosshair — proven sample-independent, see
-[0041 §2](0041-geode_analytical_aa.md)). The ~137 sub-visual premultiply fills pass at
-0.02 and are tracked in [0021 §G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds).
-
-**Final numbers (geode build, all green):**
-
-| Mode | pass | gated/skip | fail |
-|---|---|---|---|
-| `TinyGolden` (tiny-skia vs golden) | 1335 | 4 | 0 |
-| `GeodeGolden` (geode vs golden) | 1046 | 582 | 0 |
-| `GeodeTinyParity` (geode vs tiny-skia) | 1086 | 502 | 0 |
-
-Parity comparison (1263 rendered + compared): **1035 pass / 228 gated** at the time of
-landing; subsequent text + filter fixes drove the genuine portion to 0, leaving the edge
-floor + honest skips. (`GeodeTinyParity` OK > pass because `RenderOnly` UB tests count as
-OK without a parity compare.) Gates live in `geodeParityGate(category, filename)`
-(`resvg_test_suite.cc`); un-gate an entry only when it measures ≤100 px.
+**Coverage.** All structural text divergences and all 37 filter divergences are resolved.
+The residual geode↔tiny diff is the accepted edge floor: geode renders correctly, and the
+diff is the sub-pixel coverage delta vs tiny-skia's scan-converter + the resvg crosshair —
+proven sample-independent (see [0041 §2](0041-geode_analytical_aa.md)). A separate set of
+~137 non-text tests shows a uniform sub-perceptual premultiply/color-space offset that
+stays within their `0.02` budget; tracked in
+[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 
 **Risk:** parity uses tiny-skia as the geode oracle, so a tiny-skia regression could mask
-a geode one — mitigated because `TinyGolden` gates tiny-skia against ground truth in the
+a geode one — mitigated because `TinyGolden` checks tiny-skia against ground truth in the
 same run.
 
-**Out of scope (separate items):** color-emoji / bitmap glyphs ([G4](0021-resvg_feature_gaps.md#g4-color-emoji--bitmap-fonts-structural),
-`drawText` skips CBDT at `RendererGeode.cc:3162`); the CJK `xml:lang` font-fallback gap
+**Out of scope (separate items):** color-emoji / bitmap glyphs ([0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy),
+`drawText` skips CBDT bitmap glyphs); the CJK `xml:lang` font-fallback gap
 (CPU-tier, not Geode-specific); the latent vertical-text + `lengthAdjust=spacingAndGlyphs`
 transform-order divergence (no current test triggers it).
-
-<details>
-<summary>Build-out history (how the matrix landed — for reference)</summary>
-
-The hard enabling refactor was making both renderers linkable in one binary:
-`RendererTestBackend{TinySkia,Geode}.cc` each defined the same symbols
-(`ActiveRendererBackend`, `RenderDocumentWithActiveBackend`), so the variant system linked
-exactly one per binary (ODR). Landed in-place, each step green on `main`:
-
-1. ✅ Characterize the geode↔tiny distribution (bimodal: edge floor topping out at 763 px,
-   an empty gap, then genuine bugs ≥ 1599 px — hence the original ~800 px ceiling idea,
-   later replaced by the flat-100 policy).
-2. ✅ **Backend dispatch refactor** (`be7de1653`): `ActiveRendererBackend()` /
-   `RenderDocumentWithActiveBackend()` → runtime `RenderDocumentWithBackend(doc, backend)`;
-   both backend TUs coexist; geode build links both, CPU build links tiny only.
-3. ✅ **`ComparisonMode` parameter dimension** (`a924c84f9`): fixture param is
-   `std::tuple<ImageComparisonTestcase, ComparisonMode>`; active mode list is
-   build-dependent; gates are per-(backend, mode).
-4. ✅ **Implement `GeodeTinyParity` + whole-suite activation:** render geode + tiny
-   in-process in `renderAndCompare` and pixelmatch geode-vs-tiny.
-5. ✅ **Final parity policy:** `includeAA=false`, 0.02 per-pixel, flat 100 max-count, no
-   per-test thresholds (0.02 keeps the ~137 sub-visual premultiply offsets passing while
-   still catching genuine bugs; flat 100 means a solid-region regression still trips). The
-   rejected alternative — a blanket `widenThresholdForGeode` 0.3 bump — was the
-   [G5](0021-resvg_feature_gaps.md#g5-audit-the-aa-justified-geode-thresholds) masking
-   pattern (pixelmatch already excludes AA, so 0.3 hides real diffs).
-6. ✅ **228 binary parity gates** via `geodeParityGate`. Initially 172 edge-floor + 56
-   genuine (18 text → 0038, 38 filter → 0021 G2); all genuine text + filter divergences
-   were then resolved (0038, 0039), leaving the edge floor.
-
-</details>
 
 ### Phase 5: ECS Cache Integration and Performance
 
@@ -1547,108 +1513,14 @@ exactly one per binary (ODR). Landed in-place, each step green on `main`:
 
 ### Phase 5b: Full Test-Suite Parity with tiny-skia
 
-Today Geode runs a curated `renderer_geode_golden_tests` target (33 SVGs as of Phase 2)
-against per-backend goldens, while the main `renderer_tests` target (87 SVGs) and the
-resvg test suite (~600 SVGs) are gated out of the Geode build via `target_compatible_with`.
-This gap exists because:
-  - Geode's Slug-based rasterization has sub-pixel AA differences from tiny-skia's
-    supersampling that would fail strict-identity comparisons on every edge pixel.
-  - Some features (text, clipping, masks, filter layers) are still stubbed in
-    `RendererGeode` as of Phase 2, so most resvg tests would fail outright.
-
-The target is to lift `target_compatible_with = [skia, tiny_skia]` from the main
-test targets and run them through Geode too. **Per-backend golden files are
-treated as a bug smell**: the preferred override is a threshold bump with a
-TODO explaining the divergence source, not a separate `golden/geode/*.png`
-capture. The `ImageComparisonParams` override table in
-`Renderer_tests.cc::geodeOverrides()` carries those per-test widenings, same
-pattern as the resvg suite's `getTestsWithPrefix` map.
-
-- [x] **Unblock the main renderer golden suite for Geode.** `:renderer_tests`
-  now runs under `--config=geode` against the shared tiny-skia-authored
-  goldens. Sub-pixel AA divergences are absorbed by a widened default
-  threshold (`kGeodeDefaultMaxMismatchedPixels = 2000`), and per-test
-  exceptions live in `geodeOverrides()` with TODO comments describing the
-  root cause to investigate. Filter-dependent tests (e.g., `feImage`)
-  auto-skip via `requireFeature(FilterEffects)` until Phase 7 lands.
-- [x] **Root-cause the current `geodeOverrides()` entries and shrink the
-  table.** The Phase 5b parity push deleted 7 of 8 `geodeOverrides()` entries
-  after root-causing and fixing the underlying divergences; the lone
-  remaining entry is `Ghostscript_Tiger.png` with a narrowed 4500-px
-  threshold (was 6000 — actual diff is ~3944 px on 4× MSAA stroke edges).
-  The long-term goal of an empty map is essentially reached.
-- [x] **Unblock the resvg test suite for Geode.** A `geode` variant is
-  now live on `donner/svg/renderer/tests:resvg_test_suite`. The category
-  auto-gate in `resvg_test_suite.cc::geodeCategoryGate` cleanly skips
-  entire directories (`filters/*`, `text/*`, `masking/{clip,clipPath,
-  mask,clip-rule}`, `painting/{marker,mix-blend-mode,isolation}`) via
-  `requireFeature` / `disableBackend` on Geode only so Skia / TinySkia
-  continue to run the full suite at their strict thresholds. Per-
-  filename cross-category gates (`*-on-text*`, `*-on-tspan*`,
-  `*-on-marker*`, `*-on-clipPath*`, `bBox-impact`, etc.) catch tests
-  that embed blocked features without living in the blocked categories.
-  The `widenThresholdForGeode` helper raises the per-pixel threshold
-  only when `kActiveIsGeode` is true — used for a handful of
-  `structure/image/preserveAspectRatio` tests where Geode's 4× MSAA
-  quantisation drifts within ~10% of tiny-skia's 16× supersample but
-  trips the default 2% cutoff.
-- [x] **Close the feature gaps that show up as systematic resvg failures.**
-  Most of the remaining failures after the category gates are genuine
-  Geode bugs that landed as part of the MSAA PR (#504):
-    * Nested isolated-layer blit double-premult (fixed via a
-      `sourceIsPremultiplied` flag on `GeodeTextureEncoder::QuadParams`
-      → `image_blit.wgsl` skips its default straight-to-premult
-      conversion for layer textures).
-    * Gradient stop interpolation in straight alpha instead of
-      premult (fixed in `GeoEncoder::populateSharedGradientUniforms`
-      + `slug_gradient.wgsl` fragment stage).
-    * Closed-subpath dash wrap-around producing double-coverage at
-      the seam (fixed in `Path::strokeDashedSubpath` — truncate at
-      `totalArc` and let the first dash cover the head region).
-    * Open-subpath stroke fill rule (now per-source, selected by
-      counting `MoveTo` verbs in the `strokeToFill` result).
-    * Zero-length subpath stroke caps (SVG 2 §11.4 shapes emitted
-      directly from `strokeSubpath`).
-  Phase 3a polygon clipping unblocked
-  `structure/symbol/with-transform-on-use{,-no-size}` — the remaining
-  per-file TODOs are `structure/image/preserveAspectRatio=xMaxYMax-
-  slice-on-svg` (polygon clip edge AA fringes 4 pixels past the 100-px
-  max — a follow-up, not a functional gap) and
-  `painting/stroke-linejoin/miter` (bevel-fallback corner drift).
-- [x] **Track the pass-rate delta between Geode and the full-Skia renderer.**
-  After #504, `resvg_test_suite_geode_text` was **596 passing / 0
-  failing / 765 skipped via feature gates** on top of the category
-  auto-gate infrastructure.
-
-  The Phase 5b parity push that followed took the unskipped-failure
-  count from 153 down to roughly 35 (−77%). Notable fixes that landed:
-    * Per-primitive subregion clipping in compute dispatches
-      (`filter_subregion_clip.wgsl`) — unlocked `filters/feFlood/*`,
-      `filters/feTile/*`, `filter/multiple-primitives-{1,2,3}`,
-      `filter/negative-subregion`, etc.
-    * Ancestor-CTM projection through the filter graph — unlocked
-      `feGaussianBlur/complex-transform`, `feMerge/complex-transform`,
-      the `filters/filter/*transform*` suite.
-    * feOffset layer-expansion + feImage fragment-ref round-trip
-      (previously every same-document-ref feImage test was silently
-      failing because `createOffscreenInstance()` returned null).
-    * feColorMatrix/feConvolveMatrix/feComponentTransfer input
-      colorspace (`filter_color_space_convert.wgsl` now actually
-      dispatched from the primary loop).
-    * feTurbulence Perlin tables matching tiny-skia's librsvg port;
-      negative-`baseFrequency` spec compliance.
-    * feConvolveMatrix `edgeMode="none"` + oversized kernels.
-    * 30-second per-test-case SIGALRM watchdog via
-      `//donner/base:gtest_timeout_main` so a GPU-driver hang can't
-      chew a 900 s Bazel timeout.
-
-  The remaining Geode-specific skips are a short list of narrower
-  bugs (feComponentTransfer gradient+mixed-types, feTurbulence
-  complex-transform CTM cluster, F7b/c marker cusp tangent in
-  `Path.cc`, 4× MSAA thin-stroke fringe on nested `<image>` data
-  URLs) plus the `painting/marker/*`, `painting/mix-blend-mode`,
-  `painting/isolation` whole-category CI-runtime-budget gates which
-  are there for llvmpipe perf, not correctness.
+✅ Complete. The renderer golden suites and the resvg suite run under the `*_geode`
+variant against the shared tiny-skia-authored goldens, plus the `GeodeTinyParity`
+geode↔tiny check. Per-test exceptions live in the normal `ImageComparisonParams` — no
+per-backend golden files, no backend-specific threshold tables — see
+[§Phase 4b](#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
+and [0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
+A 30-second per-test SIGALRM watchdog (`//donner/base:gtest_timeout_main`) keeps a
+GPU-driver hang from consuming the whole Bazel timeout.
 
 ### Phase 6: Embeddability
 

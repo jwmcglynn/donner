@@ -34,6 +34,25 @@ All design documents live under `docs/design_docs/`.
    but they must end in concrete review findings, fragility/refactoring
    opportunities, and follow-up actions.
 
+## No History / Changelog
+
+Design and developer-facing docs describe the **current** state in present tense. They
+are not a changelog — git history is the changelog.
+
+- **Report the latest state, not how it got there.** Don't narrate "X landed in #547,
+  then Y was fixed in #592," don't keep dated snapshots ("parity as of 2026-05-15:
+  1,345 passing…"), and don't preserve "at landing, Z worked like…" asides. These drift
+  stale immediately and bury the current answer.
+- **Remove stale references; don't annotate them as superseded.** When code a doc names
+  is renamed or deleted, rewrite the prose to current reality and delete the old symbol
+  names. Do **not** add "(superseded: formerly `kEdgeFloor`)" / "this section describes
+  the mechanism as it shipped" notes — a superseded-note is itself a changelog entry.
+- **Keep the `Status:` line short.** 2–4 sentences of current state: what works, what's
+  left, and where the detail lives. No PR-number ledgers, no per-phase landing log.
+- **Exception — retrospectives.** `retrospective_template.md` docs may carry a
+  timeline/history by design (see Workflow §5); the rule above is for design and
+  developer-facing docs.
+
 ## Templates
 
 - In-flight designs: `design_template.md` (Summary, Goals, Non-Goals, Next Steps, Implementation Plan, Security/Privacy, Testing/Validation).

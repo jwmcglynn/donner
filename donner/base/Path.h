@@ -266,15 +266,23 @@ public:
    */
   Path cubicToQuadratic(double tolerance = 0.1) const;
 
+  /// Axis along which \ref toMonotonic splits curves.
+  enum class MonotonicAxis : uint8_t {
+    Y,  ///< Split at Y-extrema (each segment monotonic in Y) — horizontal-ray banding.
+    X,  ///< Split at X-extrema (each segment monotonic in X) — vertical-ray banding.
+  };
+
   /**
-   * Split all curves at Y-extrema so each segment is monotonic in Y.
+   * Split all curves at the chosen axis's extrema so each segment is monotonic along it.
    *
-   * Required for Slug band decomposition — a monotonic curve intersects any horizontal band
-   * boundary at most once.
+   * Required for Slug band decomposition — a Y-monotonic curve intersects any horizontal
+   * band boundary at most once (horizontal ray); an X-monotonic curve intersects any
+   * vertical band boundary at most once (vertical ray, used by Slug dual-ray coverage).
    *
-   * @return A new Path where every QuadTo and CurveTo segment is Y-monotonic.
+   * @param axis The axis to make monotonic along (default Y for the horizontal-ray path).
+   * @return A new Path where every QuadTo and CurveTo segment is monotonic along @p axis.
    */
-  Path toMonotonic() const;
+  Path toMonotonic(MonotonicAxis axis = MonotonicAxis::Y) const;
 
   /**
    * Flatten all curves to line segments within \p tolerance.

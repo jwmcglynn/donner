@@ -206,6 +206,14 @@ def _donner_transitioned_executable_impl(ctx):
     if InstrumentedFilesInfo in dep_target:
         providers.append(dep_target[InstrumentedFilesInfo])
 
+    # Forward the dep's run environment so `env`/`env_inherit` set on the
+    # underlying test impl actually take effect on the transitioned wrapper.
+    # Without this, the variant targets silently drop the impl's `env` (e.g.
+    # the resvg suite's per-case watchdog override) — the symlinked binary
+    # would run with a bare environment.
+    if RunEnvironmentInfo in dep_target:
+        providers.append(dep_target[RunEnvironmentInfo])
+
     return providers
 
 donner_transitioned_cc_test = rule(

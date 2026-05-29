@@ -286,6 +286,115 @@ StrokeStyle toStrokeStyle(const StrokeParams& params) {
   return style;
 }
 
+/// Rewrite a geometry so that any *closed* subpath whose anchor points are all
+/// collinear (a degenerate zero-thickness line, e.g. `M 30 100 L 170 100 Z`)
+/// is left *open* instead.
+///
+/// `Path::strokeToFill` of a collinear closed subpath emits two same-winding
+/// contours that, instead of nesting into an annulus, decompose the stroke
+/// rectangle into two overlapping triangles meeting along a diagonal. The
+/// analytic dual-ray coverage shader under-covers that thin diagonal-split band
+/// (the line's edge rows render at ~half coverage). An *open* subpath strokes
+/// into a single clean rectangle that the shader covers correctly. Closing a
+/// collinear subpath adds no enclosed area, so de-closing is visually
+/// equivalent and only touches this degenerate case.
+///
+/// Collinearity (not signed area) is the right test: a self-intersecting but
+/// genuinely 2D closed polygon — e.g. the symmetric zigzag
+/// `40 40 80 160 120 40 160 160` in painting/marker/marker-on-polygon — has
+/// zero *signed* area yet is a real shape whose close must be preserved.
+Path deCloseZeroAreaSubpaths(const Path& geometry) {
+  const std::span<const Path::Command> cmds = geometry.commands();
+  const std::span<const Vector2d> pts = geometry.points();
+
+  // Per-subpath: collect the index range of its points and whether it closes.
+  struct SubpathInfo {
+    size_t firstPoint = 0;
+    size_t pointCount = 0;
+    bool closed = false;
+    bool collinear = false;
+  };
+  std::vector<SubpathInfo> subpaths;
+  {
+    size_t pointIdx = 0;
+    for (const Path::Command& cmd : cmds) {
+      if (cmd.verb == Path::Verb::MoveTo) {
+        subpaths.push_back(SubpathInfo{pointIdx, 1, false, false});
+      } else if (cmd.verb == Path::Verb::ClosePath) {
+        if (!subpaths.empty()) {
+          subpaths.back().closed = true;
+        }
+      } else if (!subpaths.empty()) {
+        subpaths.back().pointCount += Path::pointsPerVerb(cmd.verb);
+      }
+      pointIdx += Path::pointsPerVerb(cmd.verb);
+    }
+  }
+
+  // A subpath is collinear when every point lies on the line through its first
+  // two distinct points (cross product ≈ 0). Single-point subpaths count as
+  // collinear (degenerate).
+  bool anyDegenerateClosed = false;
+  for (SubpathInfo& sp : subpaths) {
+    if (!sp.closed) {
+      continue;
+    }
+    const Vector2d& p0 = pts[sp.firstPoint];
+    Vector2d dir{0.0, 0.0};
+    bool haveDir = false;
+    bool collinear = true;
+    for (size_t i = 1; i < sp.pointCount; ++i) {
+      const Vector2d d = pts[sp.firstPoint + i] - p0;
+      if (!haveDir) {
+        if (d.lengthSquared() > 1e-12) {
+          dir = d;
+          haveDir = true;
+        }
+        continue;
+      }
+      const double cross = dir.x * d.y - dir.y * d.x;
+      if (std::abs(cross) > 1e-6) {
+        collinear = false;
+        break;
+      }
+    }
+    sp.collinear = collinear;
+    if (collinear) {
+      anyDegenerateClosed = true;
+    }
+  }
+
+  if (!anyDegenerateClosed) {
+    return geometry;
+  }
+
+  // Rebuild, dropping the ClosePath of each collinear closed subpath.
+  PathBuilder builder;
+  size_t pointIdx = 0;
+  size_t subpathIdx = static_cast<size_t>(-1);
+  for (const Path::Command& cmd : cmds) {
+    switch (cmd.verb) {
+      case Path::Verb::MoveTo:
+        ++subpathIdx;
+        builder.moveTo(pts[pointIdx]);
+        break;
+      case Path::Verb::LineTo: builder.lineTo(pts[pointIdx]); break;
+      case Path::Verb::QuadTo: builder.quadTo(pts[pointIdx], pts[pointIdx + 1]); break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(pts[pointIdx], pts[pointIdx + 1], pts[pointIdx + 2]);
+        break;
+      case Path::Verb::ClosePath:
+        if (subpathIdx >= subpaths.size() || !subpaths[subpathIdx].collinear) {
+          builder.closePath();
+        }
+        break;
+    }
+    pointIdx += Path::pointsPerVerb(cmd.verb);
+  }
+
+  return builder.build();
+}
+
 /// Coerce a `Lengthd` into a percent-bearing length when the gradient is in
 /// `objectBoundingBox` mode. Mirrors the helper used by the software renderer
 /// for gradient coordinate resolution.
@@ -724,6 +833,11 @@ struct RendererGeode::Impl {
   // so the subsequent draw call samples the tile through the existing fill
   // pipeline — no separate textured-quad pass is needed and the path's
   // Slug coverage test naturally handles arbitrary (non-rectangular) fills.
+
+  // Forward declaration so `PatternStackFrame::savedClipStack` can name the
+  // clip-stack entry type (defined in full further down alongside `clipStack`).
+  struct ClipStackEntry;
+
   struct PatternStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
     wgpu::Texture savedTarget;
@@ -732,6 +846,13 @@ struct RendererGeode::Impl {
     std::vector<Transform2d> savedDeviceFromLocalTransformStack;
     int savedPixelWidth = 0;
     int savedPixelHeight = 0;
+    // Outer clip stack (filter-region scissor, clip-path masks, etc.) saved at
+    // `beginPatternTile`. The pattern tile rasterises into its OWN texture in a
+    // private coordinate space, so the outer scissor/clip MUST NOT apply to it
+    // — otherwise the outer filter region's device-pixel scissor (e.g.
+    // (10,10)-(490,490)) clips the tile texture's top-left rows/columns,
+    // shifting every tiled cell. Restored in `endPatternTile`.
+    std::vector<ClipStackEntry> savedClipStack;
 
     // The pattern tile being recorded.
     Box2d tileRect;                 // In pattern space (topLeft at origin).
@@ -1431,8 +1552,11 @@ struct RendererGeode::Impl {
     if (source) {
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
       if (!cache.strokeSlot || cache.strokeSlot->strokeKey != strokeStyle) {
-        // Miss (or stroke-params changed) — rebuild.
-        Path stroked = geometry.strokeToFill(strokeStyle);
+        // Miss (or stroke-params changed) — rebuild. De-close zero-area closed
+        // subpaths first (see `deCloseZeroAreaSubpaths`) so a degenerate
+        // `M L Z` line strokes into a clean rectangle the analytic shader
+        // covers correctly, instead of overlapping triangles.
+        Path stroked = deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle);
         if (stroked.empty()) {
           cache.strokeSlot.reset();
           return result;  // strokedPath stays null.
@@ -1457,7 +1581,7 @@ struct RendererGeode::Impl {
     }
     // No-entity fallback: compute into the Impl-local scratch buffer.
     // GeoEncoder will encode inline when `encoded` is left null.
-    strokeScratchPath = geometry.strokeToFill(strokeStyle);
+    strokeScratchPath = deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle);
     if (strokeScratchPath.empty()) {
       return result;
     }
@@ -3022,6 +3146,12 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   frame.savedDeviceFromLocalTransformStack = std::move(impl_->deviceFromLocalTransformStack);
   frame.savedPixelWidth = impl_->pixelWidth;
   frame.savedPixelHeight = impl_->pixelHeight;
+  // The tile rasterises in its own coordinate space; the outer clip/scissor
+  // (e.g. the active filter-region scissor) must not bleed into it. Save and
+  // clear the clip stack so the tile encoder starts unclipped; endPatternTile
+  // restores it before the outer fill that samples the tile.
+  frame.savedClipStack = std::move(impl_->clipStack);
+  impl_->clipStack.clear();
   frame.tileRect = tileRect;
   frame.targetFromPattern = targetFromPattern;
   frame.tileTexture = std::move(tileTexture);
@@ -3065,6 +3195,8 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
+  // Apply the (now-empty) clip stack so the fresh tile encoder has no scissor.
+  impl_->updateEncoderScissor();
 
   // Compose the pattern raster scale into targetFromPattern so it takes
   // pattern-pixel coordinates to target units. We record the raster scale
@@ -3096,6 +3228,10 @@ void RendererGeode::endPatternTile(bool forStroke) {
   impl_->pixelHeight = frame.savedPixelHeight;
   impl_->deviceFromLocalTransform = frame.savedDeviceFromLocalTransform;
   impl_->deviceFromLocalTransformStack = std::move(frame.savedDeviceFromLocalTransformStack);
+  // Restore the outer clip stack (saved/cleared in beginPatternTile) so the
+  // upcoming fill that samples this tile is scissored to the outer clip /
+  // filter region again.
+  impl_->clipStack = std::move(frame.savedClipStack);
 
   // Create a fresh encoder for the outer target. The old outer encoder was
   // finished in `beginPatternTile`; the new one loads the current contents
@@ -3215,7 +3351,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   const bool batchable = !hasStroke && fillEncoded != nullptr &&
                          path.sourceEntity.entity() != entt::null &&
                          std::holds_alternative<PaintServer::Solid>(impl_->paint.fill) &&
-                         !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr;
+                         !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr &&
+                         impl_->paint.drawFillComponent;
   if (batchable) {
     const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
     const css::RGBA color = solid.color.resolve(impl_->paint.currentColor.rgba(),
@@ -3227,7 +3364,13 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
 
   // Non-batchable: flush whatever's pending, then emit normally.
   impl_->flushPendingBatch();
-  impl_->fillResolved(path.path, path.fillRule, fillEncoded);
+  // Honor the driver's paint-order component switch: when paint-order issues a
+  // per-component pass (RendererInterface PaintParams::drawFillComponent), skip
+  // the fill on stroke-only passes so Geode reorders rather than double-paints.
+  // Both default to true, so this is a no-op for ordinary fill-then-stroke draws.
+  if (impl_->paint.drawFillComponent) {
+    impl_->fillResolved(path.path, path.fillRule, fillEncoded);
+  }
 
   // Mirror fillResolved's no-op safety: if there's no encoder (headless
   // device init failed, zero-pixel viewport, or draw-before-beginFrame),
@@ -3237,7 +3380,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     return;
   }
 
-  if (stroke.strokeWidth <= 0.0 || std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
+  if (!impl_->paint.drawStrokeComponent || stroke.strokeWidth <= 0.0 ||
+      std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
     return;
   }
 

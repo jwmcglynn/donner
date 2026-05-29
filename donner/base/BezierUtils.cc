@@ -67,7 +67,8 @@ void approximateCubicWithQuadraticsImpl(const Vector2d& p0, const Vector2d& p1, 
                                      depth + 1);
 }
 
-/// Find parameter values in (0,1) where dx/dt = 0 for a quadratic Bezier.
+}  // namespace
+
 SmallVector<double, 1> QuadraticXExtrema(const Vector2d& p0, const Vector2d& p1,
                                          const Vector2d& p2) {
   SmallVector<double, 1> result;
@@ -85,7 +86,6 @@ SmallVector<double, 1> QuadraticXExtrema(const Vector2d& p0, const Vector2d& p1,
   return result;
 }
 
-/// Find parameter values in (0,1) where dx/dt = 0 for a cubic Bezier.
 SmallVector<double, 2> CubicXExtrema(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
                                      const Vector2d& p3) {
   SmallVector<double, 2> result;
@@ -140,8 +140,6 @@ SmallVector<double, 2> CubicXExtrema(const Vector2d& p0, const Vector2d& p1, con
 
   return result;
 }
-
-}  // namespace
 
 Vector2d EvalQuadratic(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2, double t) {
   const double s = 1.0 - t;

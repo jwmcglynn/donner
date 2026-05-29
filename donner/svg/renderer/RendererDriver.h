@@ -135,6 +135,15 @@ private:
   void traverseRange(RenderingInstanceView& view, Registry& registry, Entity startEntity,
                      Entity endEntity);
   void skipUntil(RenderingInstanceView& view, Entity endEntity);
+  /// Draw a shape's fill, stroke, and markers honoring the resolved `paint-order`
+  /// property. `paint` is the shape's resolved paint state; `drawFillComponent` /
+  /// `drawStrokeComponent` are toggled per pass so a single shape draw emits one
+  /// paint component at a time.
+  void drawPathWithPaintOrder(RenderingInstanceView& view, Registry& registry,
+                              const components::RenderingInstanceComponent& instance,
+                              const components::ComputedPathComponent& path,
+                              const components::ComputedStyleComponent& style,
+                              const PaintParams& paint, const Transform2d& deviceFromLocalForShape);
   void drawMarkers(RenderingInstanceView& view, Registry& registry,
                    const components::RenderingInstanceComponent& instance,
                    const components::ComputedPathComponent& path,

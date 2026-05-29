@@ -27,6 +27,7 @@ cc_library(
         "MaskUnits.h",
         "MixBlendMode.h",
         "Overflow.h",
+        "PaintOrder.h",
         "Pattern.h",
         "PointerEvents.h",
         "PreserveAspectRatio.h",

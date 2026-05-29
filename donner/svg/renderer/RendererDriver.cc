@@ -203,6 +203,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
       span.strokeLinecap = style->properties->strokeLinecap.getRequired();
       span.strokeLinejoin = style->properties->strokeLinejoin.getRequired();
       span.strokeMiterLimit = style->properties->strokeMiterlimit.getRequired();
+      span.paintOrder = style->properties->paintOrder.getRequired();
     }
 
     // Resolve decoration from ancestors. Per CSS Text Decoration §3, text-decoration is NOT
@@ -1033,9 +1034,8 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     if (instance.visible && !filterHidesElement) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
-                           paint.strokeParams);
-        drawMarkers(view, registry, instance, *path, style);
+        drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
+                               instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
@@ -1525,9 +1525,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
-                           paint.strokeParams);
-        drawMarkers(view, registry, instance, *path, style);
+        drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
+                               surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
@@ -1795,9 +1794,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     if (instance.visible && !filterHidesElement && !cullDraw) {
       if (const auto* path =
               instance.dataHandle(registry).try_get<components::ComputedPathComponent>()) {
-        renderer_.drawPath(toPathShape(instance.dataHandle(registry), *path, style),
-                           paint.strokeParams);
-        drawMarkers(view, registry, instance, *path, style);
+        drawPathWithPaintOrder(view, registry, instance, *path, style, paint,
+                               instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
       } else if (auto* text =
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
@@ -2079,6 +2077,57 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 
   renderer_.endPatternTile(forStroke);
+}
+
+void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registry& registry,
+                                            const components::RenderingInstanceComponent& instance,
+                                            const components::ComputedPathComponent& path,
+                                            const components::ComputedStyleComponent& style,
+                                            const PaintParams& paint,
+                                            const Transform2d& deviceFromLocalForShape) {
+  const PaintOrder paintOrder = style.properties->paintOrder.getRequired();
+  const PathShape pathShape = toPathShape(instance.dataHandle(registry), path, style);
+
+  // Fast path: canonical order (fill, stroke, markers) is the common case and lets a
+  // single drawPath emit both fill and stroke together.
+  if (paintOrder == PaintOrder{}) {
+    renderer_.drawPath(pathShape, paint.strokeParams);
+    drawMarkers(view, registry, instance, path, style);
+    return;
+  }
+
+  for (const PaintComponent component : paintOrder.order) {
+    switch (component) {
+      case PaintComponent::Fill: {
+        PaintParams fillPaint = paint;
+        fillPaint.drawFillComponent = true;
+        fillPaint.drawStrokeComponent = false;
+        renderer_.setPaint(fillPaint);
+        renderer_.drawPath(pathShape, fillPaint.strokeParams);
+        break;
+      }
+      case PaintComponent::Stroke: {
+        PaintParams strokePaint = paint;
+        strokePaint.drawFillComponent = false;
+        strokePaint.drawStrokeComponent = true;
+        renderer_.setPaint(strokePaint);
+        renderer_.drawPath(pathShape, strokePaint.strokeParams);
+        break;
+      }
+      case PaintComponent::Markers:
+        // Drawing markers sub-traverses the marker shadow tree, which leaves the
+        // renderer's transform pointing at the last marker child. Restore the painted
+        // shape's transform afterwards so any following fill/stroke pass draws in the
+        // correct space.
+        drawMarkers(view, registry, instance, path, style);
+        renderer_.setTransform(deviceFromLocalForShape);
+        break;
+    }
+  }
+
+  // Restore the combined paint state so subsequent draw calls for this instance
+  // (and the post-draw bookkeeping) see the unmodified params.
+  renderer_.setPaint(paint);
 }
 
 void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry,

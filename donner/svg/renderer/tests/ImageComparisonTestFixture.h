@@ -5,7 +5,6 @@
 
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -30,9 +29,7 @@ enum class ComparisonMode : uint8_t {
   TinyGolden,
   /// geode render vs the committed golden (today's geode behavior; geode build).
   GeodeGolden,
-  /// geode render vs an in-process tiny-skia render, golden ignored (the parity
-  /// metric that un-gates text). Defined here but NOT activated until Phase 4b
-  /// increment 4.
+  /// geode render vs an in-process tiny-skia render, golden ignored.
   GeodeTinyParity,
 };
 
@@ -47,19 +44,6 @@ constexpr RendererBackend BackendForMode(ComparisonMode mode) {
 }
 
 /**
- * @brief Whether a comparison mode renders with the geode backend.
- *
- * The geode feature/threshold gates apply to geode-backed modes only, never to
- * `TinyGolden` (tiny-skia supports every feature at strict golden thresholds).
- *
- * @param mode The comparison mode.
- * @return True if the mode uses the geode backend.
- */
-constexpr bool ModeUsesGeode(ComparisonMode mode) {
-  return BackendForMode(mode) == RendererBackend::Geode;
-}
-
-/**
  * @brief Short suffix appended to a test name to disambiguate modes.
  *
  * @param mode The comparison mode.
@@ -71,7 +55,7 @@ std::string_view ComparisonModeName(ComparisonMode mode);
  * @brief The comparison modes active for the current build.
  *
  * Pure-CPU build: `{ TinyGolden }`. Geode-enabled build:
- * `{ TinyGolden, GeodeGolden }` (GeodeTinyParity is added in increment 4).
+ * `{ TinyGolden, GeodeGolden, GeodeTinyParity }`.
  *
  * @return The active modes, in run order.
  */
@@ -123,6 +107,13 @@ struct ImageComparisonParams {
   std::optional<Vector2i> canvasSize;
   /// Optional filename to use for the golden image, overriding the default.
   std::string_view overrideGoldenFilename;
+  /// Optional Geode-specific golden image, used ONLY for the `GeodeGolden`
+  /// comparison mode. Captures Geode's (correct) output when it legitimately
+  /// differs from the shared resvg/tiny golden by a genuine sub-pixel analytic
+  /// difference that no structural fix can close (e.g. amplified 8-bit
+  /// filter-intermediate precision, or GPU bilinear resampling of a feImage
+  /// raster). The TinyGolden mode still compares against the shared golden.
+  std::string_view geodeOverrideGoldenFilename;
   /// If false, skip the test when the active backend is TinySkia.
   bool allowTinySkia = true;
   /// If false, skip the test when the active backend is Geode.
@@ -139,14 +130,7 @@ struct ImageComparisonParams {
   /// `// comments` so the reason is discoverable from test logs.
   std::string_view reason;
 
-  // ── GeodeTinyParity-only knob (consumed only by the `GeodeTinyParity`
-  // comparison mode; ignored by `TinyGolden` / `GeodeGolden`). See
-  // docs/design_docs/0017 §Phase 4b. ──────────────────────────────────────────
-  /// If true, skip the `GeodeTinyParity` instance for this test (a genuine
-  /// geode-vs-tiny divergence tracked elsewhere — see `reason`). Does NOT affect
-  /// `TinyGolden` / `GeodeGolden`. Parity uses a flat `kDefaultMismatchedPixels`
-  /// budget at `kDefaultThreshold` (no per-test budgets); diffs above it that are
-  /// real bugs (not the 4× MSAA edge floor) get gated here.
+  /// If true, skip only the `GeodeTinyParity` instance for this test.
   bool disableGeodeTinyParity = false;
 
   /**
@@ -223,6 +207,26 @@ struct ImageComparisonParams {
    */
   ImageComparisonParams& withReason(std::string_view text) {
     reason = text;
+    return *this;
+  }
+
+  /**
+   * @brief Use a Geode-specific golden for the `GeodeGolden` comparison mode.
+   *
+   * The shared golden still gates `TinyGolden`. Use only when Geode's output is
+   * verified correct and differs from the shared reference by a genuine
+   * sub-pixel analytic difference (never to absorb a structural bug).
+   *
+   * @param filename Path (under the workspace) to the Geode golden PNG.
+   * @param text Justification for the per-backend golden.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& withGeodeGoldenOverride(std::string_view filename,
+                                                 std::string_view text = std::string_view()) {
+    geodeOverrideGoldenFilename = filename;
+    if (!text.empty()) {
+      reason = text;
+    }
     return *this;
   }
 
@@ -321,13 +325,12 @@ struct ImageComparisonParams {
   }
 
   /**
-   * @brief Skips the `GeodeTinyParity` instance for this test (genuine divergence).
+   * @brief Skips only the `GeodeTinyParity` instance for this test.
    *
-   * Use for a real geode-vs-tiny bug tracked elsewhere (G2 filters / 0038 text).
-   * Leaves `TinyGolden` / `GeodeGolden` untouched. NOT a budget bump — the
-   * divergence is large/structural and must be fixed, not masked.
+   * Use sparingly for a known geode-vs-tiny divergence that should not disable
+   * the normal golden comparisons.
    *
-   * @param reason Tracking reference (e.g. "geode feComposite arithmetic — 0021 G2").
+   * @param reason Short tracking reason.
    * @return Reference to this ImageComparisonParams object.
    */
   ImageComparisonParams& disableGeodeParity(std::string_view reason = std::string_view()) {
@@ -385,13 +388,7 @@ struct ImageComparisonParams {
  */
 struct ImageComparisonTestcase {
   std::filesystem::path svgFilename;  //!< Path to the SVG file for this test case.
-  ImageComparisonParams params;       //!< Base (tiny-skia / CPU) parameters for this test case.
-
-  /// Geode-only parameter mutator (feature gates + threshold widening). Applied
-  /// at runtime *only* for geode-backed modes, so the `TinyGolden` mode keeps
-  /// the strict golden thresholds. Empty when the category/file has no geode
-  /// gate. See `getTestsInCategory`.
-  std::function<void(ImageComparisonParams&)> geodeGate;
+  ImageComparisonParams params;       //!< Parameters for this test case.
 
   /**
    * @brief Comparison operator for sorting test cases by filename.

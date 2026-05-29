@@ -1,6 +1,7 @@
 #include "donner/svg/properties/PropertyRegistry.h"
 
 #include <array>
+#include <cstdio>
 #include <span>
 #include <string>
 #include <string_view>
@@ -163,6 +164,77 @@ ParseResult<ImageRendering> ParseImageRendering(std::span<const css::ComponentVa
   err.reason = "Invalid image-rendering value";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
+}
+
+/// Parse CSS `paint-order` property: `normal | [ fill || stroke || markers ]`.
+/// Listed keywords come first in the given order; any unlisted paint type is
+/// appended in the canonical order (fill, stroke, markers). Duplicate keywords
+/// and trailing tokens are an error per the grammar.
+/// @see https://www.w3.org/TR/SVG2/painting.html#PaintOrder
+ParseResult<PaintOrder> ParsePaintOrder(std::span<const css::ComponentValue> components) {
+  ParseDiagnostic err;
+  err.reason = "Invalid paint-order value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+
+  // Collect non-whitespace idents; whitespace separates keywords in the attribute form.
+  std::vector<const RcString*> idents;
+  for (const auto& component : components) {
+    if (component.tryGetToken<css::Token::Whitespace>()) {
+      continue;
+    }
+    const auto* ident = component.tryGetToken<css::Token::Ident>();
+    if (!ident) {
+      return err;
+    }
+    idents.push_back(&ident->value);
+  }
+
+  // `normal` is the single-keyword reset to the canonical order.
+  if (idents.size() == 1 && idents.front()->equalsLowercase("normal")) {
+    return PaintOrder{};
+  }
+
+  std::array<PaintComponent, 3> listed;
+  size_t count = 0;
+  bool seenFill = false;
+  bool seenStroke = false;
+  bool seenMarkers = false;
+
+  for (const RcString* ident : idents) {
+    if (count >= 3) {
+      return err;
+    }
+
+    if (ident->equalsLowercase("fill")) {
+      if (seenFill) return err;
+      seenFill = true;
+      listed[count++] = PaintComponent::Fill;
+    } else if (ident->equalsLowercase("stroke")) {
+      if (seenStroke) return err;
+      seenStroke = true;
+      listed[count++] = PaintComponent::Stroke;
+    } else if (ident->equalsLowercase("markers")) {
+      if (seenMarkers) return err;
+      seenMarkers = true;
+      listed[count++] = PaintComponent::Markers;
+    } else {
+      return err;
+    }
+  }
+
+  if (count == 0) {
+    return err;
+  }
+
+  // Append any paint types not explicitly listed, in canonical order.
+  PaintOrder result;
+  result.order = listed;
+  size_t idx = count;
+  if (!seenFill) result.order[idx++] = PaintComponent::Fill;
+  if (!seenStroke) result.order[idx++] = PaintComponent::Stroke;
+  if (!seenMarkers) result.order[idx++] = PaintComponent::Markers;
+
+  return result;
 }
 
 ParseResult<TextDecoration> ParseTextDecoration(std::span<const css::ComponentValue> components) {
@@ -1614,6 +1686,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseImageRendering(params.components());
                        },
                        &registry.imageRendering);
+                 }},  //
+                {"paint-order",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParsePaintOrder(params.components());
+                       },
+                       &registry.paintOrder);
                  }},  //
                 {"display",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

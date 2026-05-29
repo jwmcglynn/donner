@@ -127,6 +127,17 @@ donner_cc_library(
 )
 
 donner_cc_test(
+    name = "image_comparison_test_fixture_tests",
+    srcs = [
+        "ImageComparisonTestFixture_tests.cc",
+    ],
+    deps = [
+        ":image_comparison_test_fixture",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "filter_graph_executor_tests",
     srcs = [
         "FilterGraphExecutor_tests.cc",
@@ -135,6 +146,25 @@ donner_cc_test(
     deps = [
         "//donner/svg/renderer:filter_graph_executor",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "renderer_regression_tests",
+    srcs = ["RendererRegression_tests.cc"],
+    data = [
+        "//donner/svg/renderer/testdata",
+        "@resvg-test-suite//:fonts",
+        "@resvg-test-suite//:resources",
+    ],
+    variants = [
+        "text_full",
+        "geode",
+    ],
+    deps = [
+        ":image_comparison_test_fixture",
+        "//donner/base:base_test_utils",
+        "//donner/base:gtest_timeout_main",
     ],
 )
 
@@ -425,6 +455,16 @@ donner_cc_test(
         "@resvg-test-suite//:resources",
         "@resvg-test-suite//:tests",
     ],
+    # The Geode variant runs every resvg case through software Vulkan (Mesa
+    # lavapipe) on the GPU-less CI runners. The first Geode render in a shard
+    # pays a one-time wgpu device-init + WGSL->LLVM pipeline compile (~23 s
+    # locally), and O(radius^2) filters like feMorphology huge-radius run far
+    # slower than on a real GPU — both legitimately exceed gtest_timeout_main's
+    # 60 s per-case watchdog on the slower CI host (Exit 124). Raise the
+    # per-case budget for this suite; bazel's outer `timeout = "long"` (900 s)
+    # still backstops a genuine driver hang. CPU variants finish well under 60 s
+    # so the higher ceiling never triggers for them.
+    env = {"DONNER_TEST_TIMEOUT_SECONDS": "300"},
     shard_count = 16,
     target_compatible_with = select({
         "//donner/svg/renderer:resvg_test_suite_enabled": [],
@@ -478,16 +518,15 @@ donner_variant_cc_test(
             "text": "true",
             "text_full": "true",
         },
-        # Geode variant: runs the same suite on the WebGPU backend,
-        # auto-transitioned into `--config=geode` + `enable_geode`. Text and
-        # filters are implemented (not stubs): the text suite is gated off in
-        # `geodeCategoryGate` pending root-cause of a large per-glyph divergence
-        # (a real defect, not AA), filters run live with widened thresholds, and
-        # `geodeFilenameGate` disables ~23 per-test pixel divergences. See
-        # `docs/design_docs/0021-resvg_feature_gaps.md` §Geode parity.
-        # Everything else (fills, strokes, gradients, patterns, images, shapes,
-        # clipping, masking, markers, isolation) runs live.
-        {"name": "geode", "backend": "geode", "text": "true", "text_full": "false"},
+        # Geode variant: runs the same resvg Params and thresholds as the CPU
+        # variants. Per-test exceptions belong in the normal Params maps, not in
+        # backend-specific gate tables.
+        {
+            "name": "geode",
+            "backend": "geode",
+            "text": "true",
+            "text_full": "false",
+        },
     ],
 )
 

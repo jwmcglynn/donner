@@ -447,9 +447,22 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
     EntityHandle currentHandle(registry, parents[parents.size() - 1]);
     parents.pop_back();
 
-    const Transform2d worldFromEntity = getEntityContentFromEntityTransform(currentHandle) *
-                                        getEntityFromParentTransform(currentHandle) *
-                                        parentFromWorld;
+    // Elements whose rendering behavior disables self-transform (e.g. `<symbol>` under
+    // SVG 1.1, where a `transform` attribute is ignored) do not contribute their own
+    // `transform` to the cascade — only their viewport/content mapping. The light entity
+    // carries the RenderingBehaviorComponent for shadow instances.
+    Entity behaviorEntity = currentHandle.entity();
+    while (const auto* shadowEntity = registry.try_get<ShadowEntityComponent>(behaviorEntity)) {
+      behaviorEntity = shadowEntity->lightEntity;
+    }
+    const auto* renderingBehavior = registry.try_get<RenderingBehaviorComponent>(behaviorEntity);
+    const Transform2d entityFromParent =
+        (renderingBehavior && !renderingBehavior->appliesSelfTransform)
+            ? Transform2d()
+            : getEntityFromParentTransform(currentHandle);
+
+    const Transform2d worldFromEntity =
+        getEntityContentFromEntityTransform(currentHandle) * entityFromParent * parentFromWorld;
     currentHandle.emplace<ComputedAbsoluteTransformComponent>(worldFromEntity, worldIsCanvas);
 
     parentFromWorld = worldFromEntity;

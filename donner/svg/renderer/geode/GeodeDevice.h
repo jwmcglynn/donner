@@ -181,7 +181,7 @@ public:
    * MSAA resolve triggers flaky GPU hangs on Mesa ANV / Xe KMD. All
    * other adapters get 4× MSAA with hardware sample-mask AA.
    */
-  uint32_t sampleCount() const { return useAlphaCoverageAA_ ? 1u : 4u; }
+  uint32_t sampleCount() const { return 1u; }
 
   /**
    * Install a `GeodeCounters` struct for this device. Non-owning; the

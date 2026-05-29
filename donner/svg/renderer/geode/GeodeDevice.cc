@@ -234,8 +234,10 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
     // Lazy: most documents never hit the clip-path mask pass, and
     // production WASM callers that never need it should not pay the
     // pipeline-compile cost at startup.
-    impl_->maskPipeline =
-        std::make_unique<GeodeMaskPipeline>(device_, useAlphaCoverageAA_, sampleCount());
+    // Mask runs the alpha-coverage 4-sample shader at sampleCount=1 for now
+    // (0041 increment (a)); migrated to analytic dual-ray in increment (b).
+    impl_->maskPipeline = std::make_unique<GeodeMaskPipeline>(
+        device_, /*useAlphaCoverageShader=*/true, sampleCount());
   }
   return *impl_->maskPipeline;
 }
@@ -365,12 +367,16 @@ void GeodeDevice::initSharedPipelines() {
   // be fully populated — `CreateHeadless` and `CreateFromExternal` both
   // call this as the final step.
   const wgpu::TextureFormat fmt = textureFormat_;
-  const uint32_t samples = sampleCount();
-  const bool alphaCoverage = useAlphaCoverageAA_;
+  const uint32_t samples = sampleCount();  // Always 1 (0041 §8: analytic AA).
 
-  impl_->pipeline = std::make_unique<GeodePipeline>(device_, fmt, alphaCoverage, samples);
+  // The fill pipeline always uses the analytic dual-ray shader (its
+  // `useAlphaCoverageShader` flag is ignored). Gradient and mask still run
+  // their `_alpha_coverage` 4-sample shaders for now (0041 increment (a));
+  // both are sampleCount=1-compatible, so they are selected unconditionally
+  // until they are migrated to the analytic dual-ray path.
+  impl_->pipeline = std::make_unique<GeodePipeline>(device_, fmt, /*alphaCoverage=*/false, samples);
   impl_->gradientPipeline =
-      std::make_unique<GeodeGradientPipeline>(device_, fmt, alphaCoverage, samples);
+      std::make_unique<GeodeGradientPipeline>(device_, fmt, /*alphaCoverage=*/true, samples);
   impl_->imagePipeline = std::make_unique<GeodeImagePipeline>(device_, fmt, samples);
   // Mask pipeline is built on first `maskPipeline()` access — see header.
   impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
