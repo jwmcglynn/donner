@@ -3351,7 +3351,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   const bool batchable = !hasStroke && fillEncoded != nullptr &&
                          path.sourceEntity.entity() != entt::null &&
                          std::holds_alternative<PaintServer::Solid>(impl_->paint.fill) &&
-                         !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr;
+                         !impl_->patternFillPaint.has_value() && impl_->encoder != nullptr &&
+                         impl_->paint.drawFillComponent;
   if (batchable) {
     const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
     const css::RGBA color = solid.color.resolve(impl_->paint.currentColor.rgba(),
@@ -3363,7 +3364,13 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
 
   // Non-batchable: flush whatever's pending, then emit normally.
   impl_->flushPendingBatch();
-  impl_->fillResolved(path.path, path.fillRule, fillEncoded);
+  // Honor the driver's paint-order component switch: when paint-order issues a
+  // per-component pass (RendererInterface PaintParams::drawFillComponent), skip
+  // the fill on stroke-only passes so Geode reorders rather than double-paints.
+  // Both default to true, so this is a no-op for ordinary fill-then-stroke draws.
+  if (impl_->paint.drawFillComponent) {
+    impl_->fillResolved(path.path, path.fillRule, fillEncoded);
+  }
 
   // Mirror fillResolved's no-op safety: if there's no encoder (headless
   // device init failed, zero-pixel viewport, or draw-before-beginFrame),
@@ -3373,7 +3380,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     return;
   }
 
-  if (stroke.strokeWidth <= 0.0 || std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
+  if (!impl_->paint.drawStrokeComponent || stroke.strokeWidth <= 0.0 ||
+      std::holds_alternative<PaintServer::None>(impl_->paint.stroke)) {
     return;
   }
 
