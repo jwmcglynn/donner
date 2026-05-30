@@ -2248,7 +2248,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       }
 
       recordDisplayFrame(*result);
-      renderScheduler.noteRenderCompleted(result->version, result->rasterViewport.outputSizePx,
+      renderScheduler.noteRenderCompleted(result->version, asyncRenderer_.lastDocumentCanvasSize(),
                                           result->rasterViewport);
       ++renderedFrameCount;
       return true;
