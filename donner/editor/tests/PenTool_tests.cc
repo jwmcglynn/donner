@@ -492,5 +492,101 @@ TEST_F(PenToolTest, DirtyTextPaneWithTrailingRootLikeCommentKeepsPathInsideSvgRo
   EXPECT_EQ(sourceText.find("<path", svgCloseOffset), std::string::npos) << sourceText;
 }
 
+// =============================================================================
+// Faithful live-backend repro for the user-reported "Pen path inserted after
+// </svg> so it never renders" GUI bug.
+//
+// The bare-EditorApp FinalizedPenPathStaysInsideSvgRootSource test above passes,
+// yet the user re-confirmed the bug is live in the GUI. The difference is the
+// per-frame source-pane mirror + writeback reparse the real editor runs every
+// frame (EditorShell), which the bare-app test skips:
+//
+//   per frame: app.flushFrame()
+//              controller.syncParseErrorMarkers(app, textEditor)
+//              controller.applyPendingWritebacks(app, selectTool, textEditor)
+//              controller.handleTextEdits(app, textEditor, deltaSeconds)
+//
+// applyPendingWritebacks mirrors the DOM's source deltas into the text-pane
+// buffer; handleTextEdits then dispatches any divergence as a writeback reparse
+// that swaps the document on the next flush. This harness mirrors that exact
+// frame loop through a multi-click pen session + commitOpenPath finalize, then
+// asserts the new <path> stays before the root </svg> AND is a renderable child
+// of the root <svg>.
+// =============================================================================
+class PenToolLiveSyncTest : public ::testing::Test {
+protected:
+  void Load(std::string_view svg) {
+    ASSERT_TRUE(app.loadFromString(svg));
+    textEditor.setText(svg);
+    textEditor.resetTextChanged();
+    controller.emplace(std::string(svg));
+  }
+
+  // One faithful editor frame: drain the command queue, then run the source-sync
+  // controller in the same order EditorShell does. A large deltaSeconds drains
+  // the text-change debounce so any queued writeback reparse is dispatched
+  // promptly (the GUI reaches the same state after the debounce idle window).
+  void Frame() {
+    app.flushFrame();
+    controller->syncParseErrorMarkers(app, textEditor);
+    controller->applyPendingWritebacks(app, selectTool, textEditor);
+    controller->handleTextEdits(app, textEditor, /*deltaSeconds=*/1.0f);
+  }
+
+  // Run frames until the editor would be idle (bounded so a bug can't spin).
+  void Settle() {
+    for (int i = 0; i < 8; ++i) {
+      Frame();
+    }
+  }
+
+  EditorApp app;
+  PenTool tool;
+  TextEditor textEditor;
+  SelectTool selectTool;
+  std::optional<DocumentSyncController> controller;
+};
+
+TEST_F(PenToolLiveSyncTest, FinalizedPenPathRendersThroughLiveSourceSync) {
+  Load(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>)");
+
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  Frame();
+  tool.onMouseDown(app, Vector2d(30.0, 40.0), MouseModifiers{});
+  Frame();
+  tool.onMouseDown(app, Vector2d(60.0, 70.0), MouseModifiers{});
+  Frame();
+
+  ASSERT_TRUE(tool.commitOpenPath(app));
+  Settle();
+
+  const std::string source(app.document().document().source());
+  const std::size_t pathOffset = source.find("<path");
+  const std::size_t svgCloseOffset = source.rfind("</svg>");
+  ASSERT_NE(pathOffset, std::string::npos)
+      << "the finalized pen path vanished from the document source:\n"
+      << source;
+  ASSERT_NE(svgCloseOffset, std::string::npos) << source;
+  EXPECT_LT(pathOffset, svgCloseOffset)
+      << "<path> was placed AFTER the root </svg> by the live source-sync path, "
+         "so the shape never renders:\n"
+      << source;
+  EXPECT_EQ(source.find("<path", svgCloseOffset), std::string::npos)
+      << "no <path> may appear after the root </svg>:\n"
+      << source;
+
+  auto livePath = app.document().document().querySelector("path");
+  ASSERT_TRUE(livePath.has_value())
+      << "the finalized pen path is missing from the live DOM (never renders):\n"
+      << source;
+  const auto liveParent = livePath->parentElement();
+  ASSERT_TRUE(liveParent.has_value()) << source;
+  EXPECT_EQ(*liveParent, app.document().document().svgElement())
+      << "the pen path is not a child of the root <svg>, so it never renders:\n"
+      << source;
+
+  EXPECT_EQ(textEditor.getText(), source);
+}
+
 }  // namespace
 }  // namespace donner::editor
