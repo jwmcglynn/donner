@@ -1,11 +1,14 @@
 #include "donner/editor/LayersPanel.h"
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "donner/base/Path.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/ElementType.h"
+#include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 
@@ -46,14 +49,119 @@ ImU32 ToImU32(const css::RGBA& rgba) {
   return IM_COL32(rgba.r, rgba.g, rgba.b, rgba.a);
 }
 
+/// True for element types whose computed outline we can sample into a real
+/// per-shape thumbnail via `SVGGeometryElement::computedSpline()`.
+bool IsGeometryThumbnailType(svg::ElementType type) {
+  switch (type) {
+    case svg::ElementType::Path:
+    case svg::ElementType::Rect:
+    case svg::ElementType::Circle:
+    case svg::ElementType::Ellipse:
+    case svg::ElementType::Line:
+    case svg::ElementType::Polyline:
+    case svg::ElementType::Polygon: return true;
+    default: return false;
+  }
+}
+
+/// Resolve a computed paint to a solid RGBA, or `std::nullopt` when it is
+/// `none`/unresolved or a non-solid paint (gradient/pattern).
+std::optional<css::RGBA> SolidPaintColor(const svg::PropertyRegistry& style, bool fillSlot) {
+  const auto paint = fillSlot ? style.fill.get() : style.stroke.get();
+  if (!paint.has_value() || !paint->is<svg::PaintServer::Solid>()) {
+    return std::nullopt;
+  }
+  const css::Color& color = paint->get<svg::PaintServer::Solid>().color;
+  if (!color.hasRGBA()) {
+    return std::nullopt;
+  }
+  return color.rgba();
+}
+
+/// Build a real geometry thumbnail for @p element: its computed outline sampled
+/// into a polyline normalized into the unit square, plus its computed
+/// fill/stroke. Returns `std::nullopt` for non-geometry elements or when the
+/// outline is degenerate (no area), so the caller falls back to the swatch.
+std::optional<LayersPanel::RowThumbnail> BuildRowThumbnail(const svg::SVGElement& element) {
+  const std::optional<svg::ElementType> type = element.tryType();
+  if (!type.has_value() || !IsGeometryThumbnailType(*type)) {
+    return std::nullopt;
+  }
+
+  const svg::SVGGeometryElement geometry = element.cast<svg::SVGGeometryElement>();
+  const std::optional<Path> spline = geometry.computedSpline();
+  if (!spline.has_value() || spline->empty()) {
+    return std::nullopt;
+  }
+
+  // Walk the path verbs collecting on-path endpoints only (the destination point
+  // of each MoveTo/LineTo/QuadTo/CurveTo), skipping Bézier control points so the
+  // silhouette traces the shape's outline rather than its control hull. Record
+  // whether any subpath closes for the fill/stroke decision below.
+  std::vector<Vector2d> points;
+  bool closedPath = false;
+  spline->forEach([&](Path::Verb verb, std::span<const Vector2d> verbPoints) {
+    if (verb == Path::Verb::ClosePath) {
+      closedPath = true;
+      return;
+    }
+    if (!verbPoints.empty()) {
+      points.push_back(verbPoints.back());
+    }
+  });
+  if (points.size() < 2) {
+    return std::nullopt;
+  }
+
+  // Normalize the outline into the unit square, preserving aspect ratio and
+  // centering, so every row's silhouette fills its preview cell consistently.
+  Vector2d minPoint = points.front();
+  Vector2d maxPoint = points.front();
+  for (const Vector2d& point : points) {
+    minPoint.x = std::min(minPoint.x, point.x);
+    minPoint.y = std::min(minPoint.y, point.y);
+    maxPoint.x = std::max(maxPoint.x, point.x);
+    maxPoint.y = std::max(maxPoint.y, point.y);
+  }
+  const Vector2d extent = maxPoint - minPoint;
+  const double span = std::max(extent.x, extent.y);
+  if (span <= 0.0) {
+    return std::nullopt;
+  }
+  const Vector2d offset((1.0 - extent.x / span) * 0.5, (1.0 - extent.y / span) * 0.5);
+
+  LayersPanel::RowThumbnail thumbnail;
+  thumbnail.normalizedPoints.reserve(points.size());
+  for (const Vector2d& point : points) {
+    thumbnail.normalizedPoints.push_back(Vector2d((point.x - minPoint.x) / span + offset.x,
+                                                  (point.y - minPoint.y) / span + offset.y));
+  }
+
+  const svg::PropertyRegistry& style = element.getComputedStyle();
+  const std::optional<css::RGBA> fill = SolidPaintColor(style, /*fillSlot=*/true);
+  const std::optional<css::RGBA> stroke = SolidPaintColor(style, /*fillSlot=*/false);
+  thumbnail.fill = fill.value_or(css::RGBA(0, 0, 0, 0));
+  // When the shape has a real fill, treat the silhouette as a closed filled
+  // region; otherwise draw it as an outline using the stroke (or a neutral line
+  // when neither is solid) so stroke-only shapes stop collapsing to a flat box.
+  thumbnail.closed = fill.has_value() && fill->a > 0;
+  thumbnail.stroke = stroke.value_or(fill.value_or(css::RGBA(200, 200, 200, 255)));
+  return thumbnail;
+}
+
 }  // namespace
 
 void LayersPanel::refreshSnapshot(const EditorApp& app) {
   model_.refresh(app);
 
   swatchByStableId_.clear();
+  thumbnailByStableId_.clear();
   for (const LayerTreeRow& row : model_.rows()) {
     swatchByStableId_.emplace(row.stableId, SwatchColorForElement(row.element));
+    if (std::optional<RowThumbnail> thumbnail = BuildRowThumbnail(row.element);
+        thumbnail.has_value()) {
+      thumbnailByStableId_.emplace(row.stableId, std::move(*thumbnail));
+    }
   }
 
   // Drop a stale active row if it no longer maps to a visible row.
@@ -82,6 +190,14 @@ bool LayersPanel::hasThumbnailOrSwatch(std::uint64_t stableId) const {
 std::optional<css::RGBA> LayersPanel::rowFallbackSwatch(std::uint64_t stableId) const {
   const auto it = swatchByStableId_.find(stableId);
   if (it == swatchByStableId_.end()) {
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+std::optional<LayersPanel::RowThumbnail> LayersPanel::rowThumbnail(std::uint64_t stableId) const {
+  const auto it = thumbnailByStableId_.find(stableId);
+  if (it == thumbnailByStableId_.end()) {
     return std::nullopt;
   }
   return it->second;
@@ -159,15 +275,42 @@ void LayersPanel::render(EditorApp* liveApp) {
     ImGui::TextUnformatted(row.isVisible ? "o" : "-");
     ImGui::SameLine();
 
-    // 24x24 preview swatch (deterministic fill-derived fallback; see
-    // SwatchColorForElement for why a real subtree render is deferred).
+    // 24x24 preview cell. Geometry rows (path/rect/circle/…) draw a real
+    // per-shape silhouette of the element's computed outline, filled/stroked
+    // with its computed colors; other rows fall back to the deterministic
+    // fill-derived swatch (see SwatchColorForElement / RowThumbnail for why a
+    // full offscreen subtree raster is deferred).
     const ImVec2 swatchMin = ImGui::GetCursorScreenPos();
     const ImVec2 swatchMax(swatchMin.x + kPreviewSize, swatchMin.y + kPreviewSize);
-    const auto swatchIt = swatchByStableId_.find(row.stableId);
-    const css::RGBA swatch =
-        swatchIt != swatchByStableId_.end() ? swatchIt->second : kPlaceholderSwatch;
-    drawList->AddRectFilled(swatchMin, swatchMax, ToImU32(swatch), 3.0f);
-    drawList->AddRect(swatchMin, swatchMax, IM_COL32(255, 255, 255, 60), 3.0f);
+    const auto thumbnailIt = thumbnailByStableId_.find(row.stableId);
+    if (thumbnailIt != thumbnailByStableId_.end()) {
+      const RowThumbnail& thumbnail = thumbnailIt->second;
+      // Inset the geometry slightly so strokes are not clipped by the cell edge.
+      constexpr float kInset = 2.0f;
+      const float drawSize = kPreviewSize - kInset * 2.0f;
+      drawList->AddRectFilled(swatchMin, swatchMax, IM_COL32(40, 40, 40, 255), 3.0f);
+      std::vector<ImVec2> screenPoints;
+      screenPoints.reserve(thumbnail.normalizedPoints.size());
+      for (const Vector2d& point : thumbnail.normalizedPoints) {
+        screenPoints.push_back(
+            ImVec2(swatchMin.x + kInset + static_cast<float>(point.x) * drawSize,
+                   swatchMin.y + kInset + static_cast<float>(point.y) * drawSize));
+      }
+      if (thumbnail.closed && screenPoints.size() >= 3) {
+        drawList->AddConvexPolyFilled(screenPoints.data(), static_cast<int>(screenPoints.size()),
+                                      ToImU32(thumbnail.fill));
+      }
+      drawList->AddPolyline(screenPoints.data(), static_cast<int>(screenPoints.size()),
+                            ToImU32(thumbnail.stroke),
+                            thumbnail.closed ? ImDrawFlags_Closed : ImDrawFlags_None, 1.5f);
+      drawList->AddRect(swatchMin, swatchMax, IM_COL32(255, 255, 255, 60), 3.0f);
+    } else {
+      const auto swatchIt = swatchByStableId_.find(row.stableId);
+      const css::RGBA swatch =
+          swatchIt != swatchByStableId_.end() ? swatchIt->second : kPlaceholderSwatch;
+      drawList->AddRectFilled(swatchMin, swatchMax, ToImU32(swatch), 3.0f);
+      drawList->AddRect(swatchMin, swatchMax, IM_COL32(255, 255, 255, 60), 3.0f);
+    }
     ImGui::Dummy(ImVec2(kPreviewSize, kPreviewSize));
     ImGui::SameLine();
 

@@ -22,6 +22,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/LayerTreeModel.h"
@@ -81,6 +82,25 @@ public:
   /// Access the underlying model (testing/diagnostics).
   [[nodiscard]] const LayerTreeModel& model() const { return model_; }
 
+  /// A real per-element geometry thumbnail: the element's computed outline
+  /// sampled into a polyline and normalized into the unit square `[0,1]^2`,
+  /// alongside its computed fill/stroke. Drawn into the row's 24×24 preview cell.
+  struct RowThumbnail {
+    /// Outline points in normalized `[0,1]` coordinates (y-down, matching ImGui).
+    std::vector<Vector2d> normalizedPoints;
+    /// Whether the outline encloses an area (drawn filled) vs. an open stroke.
+    bool closed = false;
+    /// Computed fill color (used when `closed`); falls back to transparent.
+    css::RGBA fill = css::RGBA(0, 0, 0, 0);
+    /// Computed stroke color for the outline.
+    css::RGBA stroke = css::RGBA(0, 0, 0, 255);
+  };
+
+  /// The geometry thumbnail for the row identified by @p stableId, or
+  /// `std::nullopt` when the row has no real geometry preview (it then uses the
+  /// fallback swatch). Testing/diagnostics accessor.
+  [[nodiscard]] std::optional<RowThumbnail> rowThumbnail(std::uint64_t stableId) const;
+
 private:
   /// Find the model index of the row with @p stableId, or std::nullopt.
   [[nodiscard]] std::optional<std::size_t> rowIndexForStableId(std::uint64_t stableId) const;
@@ -89,6 +109,19 @@ private:
   /// Per-row fallback swatch colors keyed by stable id. Rebuilt on every
   /// refresh so it tracks the current document and styles.
   std::unordered_map<std::uint64_t, css::RGBA> swatchByStableId_;
+  /// Per-row geometry thumbnails keyed by stable id. For geometry rows
+  /// (path/rect/circle/…) this holds the element's computed outline normalized
+  /// into the unit square plus its computed fill/stroke, so the row icon is a
+  /// real per-shape silhouette rather than a flat color block. Non-geometry rows
+  /// (groups, text, image, use) have no entry and fall back to the swatch.
+  ///
+  /// A full offscreen subtree *raster* (rendering each layer's pixels through the
+  /// SVG renderer) is deferred: `RendererTinySkia` only renders a whole
+  /// `SVGDocument`, and there is no subtree-render entrypoint reachable from this
+  /// panel, so a faithful raster would require a cross-module renderer change.
+  /// The vector silhouette below is the real per-element preview achievable
+  /// in-panel (design doc 0046 Milestone 3 follow-up).
+  std::unordered_map<std::uint64_t, RowThumbnail> thumbnailByStableId_;
   /// Visible-row index of the most recent plain/ctrl click; the anchor for
   /// shift-range selection.
   std::optional<std::size_t> anchorRowIndex_;
