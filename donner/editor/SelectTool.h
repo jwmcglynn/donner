@@ -131,6 +131,15 @@ public:
                                               std::span<const Box2d> selectionBoundsDoc,
                                               std::span<const Box2d> occludingBoundsDoc = {});
 
+  /// Returns true when live hit-testing at @p documentPoint hits the current selection or one of
+  /// its renderable descendants.
+  ///
+  /// This reads the live document through \ref EditorApp::hitTest, so callers must only use it when
+  /// the async renderer is idle. EditorShell uses this to keep clicks on already-selected elements
+  /// on the immediate drag path instead of converting a held press into a marquee.
+  [[nodiscard]] bool clickHitsCurrentSelection(EditorApp& editor,
+                                               const Vector2d& documentPoint) const;
+
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).
   [[nodiscard]] bool isDragging() const { return dragState_.has_value(); }
@@ -138,6 +147,9 @@ public:
   /// Whether a marquee selection is currently in progress (button is
   /// held after a `onMouseDown` that hit empty space).
   [[nodiscard]] bool isMarqueeing() const { return marqueeState_.has_value(); }
+
+  /// Start a marquee drag from `documentPoint` without performing a hit-test.
+  void beginMarquee(EditorApp& editor, const Vector2d& documentPoint, bool additive);
 
   /// The current marquee rectangle in document coordinates, or
   /// `std::nullopt` if no marquee drag is active. Returned even on

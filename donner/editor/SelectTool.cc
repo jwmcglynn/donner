@@ -16,7 +16,6 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
-#include "donner/svg/SVGSVGElement.h"
 
 namespace donner::editor {
 
@@ -270,6 +269,33 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
       .generation = nextDragGeneration_++,
   };
   return true;
+}
+
+bool SelectTool::clickHitsCurrentSelection(EditorApp& editor, const Vector2d& documentPoint) const {
+  const auto& currentSelection = editor.selectedElements();
+  if (currentSelection.empty()) {
+    return false;
+  }
+
+  const std::optional<svg::SVGGeometryElement> hit = editor.hitTest(documentPoint);
+  if (!hit.has_value()) {
+    return false;
+  }
+
+  const svg::SVGElement hitElement = *hit;
+  for (const svg::SVGElement& selected : currentSelection) {
+    if (selected == hitElement) {
+      return true;
+    }
+
+    for (const svg::SVGGeometryElement& geometry : CollectRenderableGeometry(selected)) {
+      if (geometry == hitElement) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
@@ -538,6 +564,19 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
     extra.currentTransform = extra.startTransform * *documentFromStartDocument;
     editor.applyMutation(EditorCommand::SetTransformCommand(extra.element, extra.currentTransform));
   }
+}
+
+void SelectTool::beginMarquee(EditorApp& editor, const Vector2d& documentPoint, bool additive) {
+  dragState_.reset();
+  marqueeState_.reset();
+  if (!additive) {
+    editor.clearSelection();
+  }
+  marqueeState_ = MarqueeState{
+      .startDocumentPoint = documentPoint,
+      .currentDocumentPoint = documentPoint,
+      .additive = additive,
+  };
 }
 
 void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/) {

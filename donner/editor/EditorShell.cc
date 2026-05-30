@@ -62,6 +62,7 @@ constexpr float kMinInspectorPaneHeight = 96.0f;
 constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
+constexpr double kSelectMarqueeHoldDelaySeconds = 0.20;
 constexpr int kMaxSaveSyncFlushPasses = 4;
 constexpr float kSelectionSizeChipPaddingX = 6.0f;
 constexpr float kSelectionSizeChipPaddingY = 3.0f;
@@ -1657,6 +1658,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     modifiers.option = ImGui::GetIO().KeyAlt;
     modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
+    pendingSelectClickStartSeconds_ = ImGui::GetTime();
   }
 
   // Design doc 0033 §M8 — click→drag handoff doesn't wait for raster.
@@ -1709,29 +1711,59 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       interactionController_.clearPendingClick();
       pendingClickFollowupAfterIdle_ = true;
     } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
-      // Slow path: full `onMouseDown` (hitTest + selection change +
-      // possible drag start). Race-safe only when the worker is idle.
-      lastPostedScreenPoint_.reset();
-      bool queuedMutationForNextFrame = false;
-      if (selectToolActive) {
-        selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-      } else if (penToolActive) {
-        penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && penTool_.isDraggingAnchor()) {
-          penTool_.onMouseUp(app_, pendingClick.documentPoint);
-        }
-        queuedMutationForNextFrame = true;
-      }
-      if (queuedMutationForNextFrame) {
-        flushQueuedMutationAndRefreshOverlay();
-      } else {
+      const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+      const bool selectHoldElapsed =
+          pendingSelectClickStartSeconds_.has_value() &&
+          ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
+      const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+      const bool pendingClickHitsSelection =
+          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
+      if (selectToolActive && leftMouseDown &&
+          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          !pendingClickHitsSelection && (selectHoldElapsed || selectDragIntent)) {
+        lastPostedScreenPoint_.reset();
+        selectTool_.beginMarquee(app_, pendingClick.documentPoint, pendingClick.modifiers.shift);
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         requestRenderAtEndOfFrame_ = true;
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
             app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
             selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+        interactionController_.clearPendingClick();
+      } else if (selectToolActive && leftMouseDown &&
+                 pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+                 !pendingClickHitsSelection) {
+        // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or the
+        // hold delay above starts marquee. This prevents full-canvas/background elements from being
+        // selected just because the user is preparing a marquee drag.
+      } else {
+        // Slow path: full `onMouseDown` (hitTest + selection change +
+        // possible drag start). Race-safe only when the worker is idle.
+        lastPostedScreenPoint_.reset();
+        bool queuedMutationForNextFrame = false;
+        if (selectToolActive) {
+          selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+          if (!leftMouseDown) {
+            selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+          }
+        } else if (penToolActive) {
+          penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+          if (!leftMouseDown && penTool_.isDraggingAnchor()) {
+            penTool_.onMouseUp(app_, pendingClick.documentPoint);
+          }
+          queuedMutationForNextFrame = true;
+        }
+        if (queuedMutationForNextFrame) {
+          flushQueuedMutationAndRefreshOverlay();
+        } else {
+          renderCoordinator_.refreshSelectionBoundsCache(app_);
+          requestRenderAtEndOfFrame_ = true;
+          renderCoordinator_.rasterizeOverlayForCurrentSelection(
+              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+        }
+        interactionController_.clearPendingClick();
       }
-      interactionController_.clearPendingClick();
     } else {
       // Worker is busy with a (likely-stale) prewarm render at the
       // previous canvas size or zoom. Cancel it so the next idle frame
@@ -1804,6 +1836,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
             app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
       }
     }
+  }
+
+  if (!interactionController_.pendingClick().has_value()) {
+    pendingSelectClickStartSeconds_.reset();
   }
 
   if (penToolActive && penTool_.isDraggingAnchor()) {

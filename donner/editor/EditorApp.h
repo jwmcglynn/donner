@@ -315,10 +315,9 @@ public:
   /// canvas space (the same space as the root `<svg>` viewBox).
   [[nodiscard]] std::optional<svg::SVGGeometryElement> hitTest(const Vector2d& documentPoint);
 
-  /// Find every geometry element whose world-space bounding box
-  /// intersects `documentRect`. Used by marquee selection. Returns
-  /// elements in document order (root-to-leaf depth-first), so
-  /// callers that care about z-order can rely on a stable sequence.
+  /// Find every geometry element whose painted shape intersects `documentRect`. Used by marquee
+  /// selection. Returns elements in document order (root-to-leaf depth-first), so callers that care
+  /// about z-order can rely on a stable sequence.
   [[nodiscard]] std::vector<svg::SVGGeometryElement> hitTestRect(const Box2d& documentRect);
 
   // ---------------------------------------------------------------------------

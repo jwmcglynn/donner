@@ -1135,6 +1135,62 @@ TEST(EditorAppTest, HitTestRectFindsAllIntersectingElements) {
   EXPECT_EQ(edgeHits[0].id(), "r1");
 }
 
+TEST(EditorAppTest, HitTestRectUsesFilledShapeIntersectionNotAabb) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+           <path id="triangle" d="M 10 10 L 100 10 L 10 100 Z" fill="red"/>
+         </svg>)"));
+
+  EXPECT_TRUE(app.hitTestRect(Box2d::FromXYWH(80.0, 80.0, 10.0, 10.0)).empty())
+      << "The marquee intersects the triangle AABB, but not the filled triangle.";
+
+  auto hits = app.hitTestRect(Box2d::FromXYWH(5.0, 5.0, 20.0, 20.0));
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id(), "triangle");
+}
+
+TEST(EditorAppTest, HitTestRectDoesNotSelectShapeThatContainsMarquee) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <rect id="background" x="0" y="0" width="200" height="200" fill="white"/>
+           <rect id="target" x="70" y="70" width="20" height="20" fill="red"/>
+         </svg>)svg"));
+
+  auto hits = app.hitTestRect(Box2d::FromXYWH(65.0, 65.0, 30.0, 30.0));
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id(), "target");
+}
+
+TEST(EditorAppTest, HitTestRectAppliesElementTransformToShapeIntersection) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160">
+           <path id="triangle" d="M 0 0 L 100 0 L 0 100 Z" fill="red"
+                 transform="translate(20 30)"/>
+         </svg>)svg"));
+
+  EXPECT_TRUE(app.hitTestRect(Box2d::FromXYWH(100.0, 100.0, 10.0, 10.0)).empty())
+      << "The marquee intersects the transformed AABB, but not the transformed fill.";
+
+  auto hits = app.hitTestRect(Box2d::FromXYWH(15.0, 25.0, 30.0, 30.0));
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id(), "triangle");
+}
+
+TEST(EditorAppTest, HitTestRectUsesStrokeShapeIntersection) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+           <path id="stroke" d="M 10 50 L 90 50" fill="none" stroke="black" stroke-width="10"/>
+         </svg>)"));
+
+  auto hits = app.hitTestRect(Box2d::FromXYWH(40.0, 53.0, 10.0, 4.0));
+  ASSERT_EQ(hits.size(), 1u);
+  EXPECT_EQ(hits[0].id(), "stroke");
+}
+
 TEST(EditorAppTest, HitTestRectSkipsXmlTextNodeChildren) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(

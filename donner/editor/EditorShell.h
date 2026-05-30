@@ -311,6 +311,7 @@ private:
   /// frame so re-drag hit testing catches up without posting a
   /// pre-move render ahead of the drag update.
   bool pendingClickFollowupAfterIdle_ = false;
+  std::optional<double> pendingSelectClickStartSeconds_;
   bool sourceFocusMode_ = true;
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;

@@ -17,6 +17,8 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/core/Stroke.h"
+#include "donner/svg/properties/PaintServer.h"
 
 namespace donner::editor {
 
@@ -28,6 +30,151 @@ namespace {
 bool BoxesIntersect(const Box2d& a, const Box2d& b) {
   return a.topLeft.x <= b.bottomRight.x && a.bottomRight.x >= b.topLeft.x &&
          a.topLeft.y <= b.bottomRight.y && a.bottomRight.y >= b.topLeft.y;
+}
+
+Path RectPath(const Box2d& box) {
+  return PathBuilder()
+      .moveTo(box.topLeft)
+      .lineTo(Vector2d(box.bottomRight.x, box.topLeft.y))
+      .lineTo(box.bottomRight)
+      .lineTo(Vector2d(box.topLeft.x, box.bottomRight.y))
+      .closePath()
+      .build();
+}
+
+std::array<Vector2d, 4> BoxCorners(const Box2d& box) {
+  return {
+      box.topLeft,
+      Vector2d(box.bottomRight.x, box.topLeft.y),
+      box.bottomRight,
+      Vector2d(box.topLeft.x, box.bottomRight.y),
+  };
+}
+
+LineCap ToLineCap(svg::StrokeLinecap cap) {
+  switch (cap) {
+    case svg::StrokeLinecap::Butt: return LineCap::Butt;
+    case svg::StrokeLinecap::Round: return LineCap::Round;
+    case svg::StrokeLinecap::Square: return LineCap::Square;
+  }
+  return LineCap::Butt;
+}
+
+LineJoin ToLineJoin(svg::StrokeLinejoin join) {
+  switch (join) {
+    case svg::StrokeLinejoin::Miter: return LineJoin::Miter;
+    case svg::StrokeLinejoin::MiterClip: return LineJoin::Miter;
+    case svg::StrokeLinejoin::Round: return LineJoin::Round;
+    case svg::StrokeLinejoin::Bevel: return LineJoin::Bevel;
+    case svg::StrokeLinejoin::Arcs: return LineJoin::Miter;
+  }
+  return LineJoin::Miter;
+}
+
+bool PathEndpointIntersectsRect(const Path& path, const Transform2d& documentFromPath,
+                                const Box2d& documentRect) {
+  bool intersects = false;
+  path.forEach([&](Path::Verb /*verb*/, std::span<const Vector2d> points) {
+    if (points.empty()) {
+      return;
+    }
+
+    if (documentRect.contains(documentFromPath.transformPosition(points.back()))) {
+      intersects = true;
+    }
+  });
+  return intersects;
+}
+
+int CountRectCornersInsidePath(const Path& path, FillRule fillRule,
+                               const Transform2d& documentFromPath, const Box2d& documentRect) {
+  if (std::abs(documentFromPath.determinant()) < 1e-12) {
+    return 0;
+  }
+
+  const Transform2d pathFromDocument = documentFromPath.inverse();
+  int insideCount = 0;
+  for (const Vector2d& corner : BoxCorners(documentRect)) {
+    if (path.isInside(pathFromDocument.transformPosition(corner), fillRule)) {
+      ++insideCount;
+    }
+  }
+  return insideCount;
+}
+
+bool FilledPathIntersectsRect(const Path& path, FillRule fillRule,
+                              const Transform2d& documentFromPath, const Box2d& documentRect) {
+  if (PathEndpointIntersectsRect(path, documentFromPath, documentRect)) {
+    return true;
+  }
+
+  const int insideCornerCount =
+      CountRectCornersInsidePath(path, fillRule, documentFromPath, documentRect);
+  if (insideCornerCount == 4) {
+    // The marquee is fully inside this filled shape. Do not select large containing geometry
+    // (backgrounds/glows) unless its own boundary or vertices enter the marquee.
+    return false;
+  }
+  if (insideCornerCount > 0) {
+    return true;
+  }
+
+  const std::array<PathBooleanInput, 2> inputs = {
+      PathBooleanInput{
+          .path = path,
+          .fillRule = fillRule,
+          .outputFromPath = documentFromPath,
+      },
+      PathBooleanInput{
+          .path = RectPath(documentRect),
+          .fillRule = FillRule::NonZero,
+          .outputFromPath = Transform2d(),
+      },
+  };
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Intersect, inputs);
+  return result.status == PathBooleanStatus::Ok;
+}
+
+bool GeometryIntersectsRect(const svg::SVGGeometryElement& geometry, const Box2d& documentRect) {
+  std::optional<Box2d> bounds = geometry.worldBounds();
+  if (!bounds.has_value()) {
+    return false;
+  }
+
+  const auto style = geometry.getComputedStyle();
+  const double strokeWidth = style.strokeWidth.getRequired().value;
+  const bool hasStroke =
+      strokeWidth > 0.0 && !style.stroke.getRequired().is<svg::PaintServer::None>();
+  const Box2d interactionBounds =
+      hasStroke ? bounds->inflatedBy(strokeWidth * style.strokeMiterlimit.getRequired()) : *bounds;
+  if (!BoxesIntersect(interactionBounds, documentRect)) {
+    return false;
+  }
+
+  std::optional<Path> spline = geometry.computedSpline();
+  if (!spline.has_value() || spline->empty()) {
+    return false;
+  }
+
+  const Transform2d documentFromGeometry = geometry.elementFromWorld();
+  if (!style.fill.getRequired().is<svg::PaintServer::None>() &&
+      FilledPathIntersectsRect(*spline, style.fillRule.getRequired(), documentFromGeometry,
+                               documentRect)) {
+    return true;
+  }
+
+  if (hasStroke) {
+    StrokeStyle strokeStyle;
+    strokeStyle.width = strokeWidth;
+    strokeStyle.cap = ToLineCap(style.strokeLinecap.getRequired());
+    strokeStyle.join = ToLineJoin(style.strokeLinejoin.getRequired());
+    strokeStyle.miterLimit = style.strokeMiterlimit.getRequired();
+    const Path strokePath = spline->strokeToFill(strokeStyle);
+    return FilledPathIntersectsRect(strokePath, FillRule::NonZero, documentFromGeometry,
+                                    documentRect);
+  }
+
+  return false;
 }
 
 /// Depth-first walk of the SVG tree rooted at `node`, invoking
@@ -916,26 +1063,20 @@ std::vector<svg::SVGGeometryElement> EditorApp::hitTestRect(const Box2d& documen
     return hits;
   }
 
-  // Walk the live document and collect every geometry element whose
-  // world-space AABB intersects the marquee rect. We don't go through
-  // `DonnerController` because it's point-only; the linear walk is
-  // simple, allocation-light, and fine for documents up to a few
-  // thousand elements (the typical editor workload).
+  // Walk the live document and collect every geometry element whose filled or stroked path
+  // intersects the marquee rect. We don't go through `DonnerController` because it's point-only;
+  // the linear walk is simple and fine for typical editor workloads.
   //
-  // §concurrent-dom: the editor keeps the live document in ConcurrentDom, so
-  // this UI-thread walk needs a scoped access guard or its DOM reads (isa /
-  // firstChild / nextSibling) trip the `ElementAnchor` release assertion.
-  // `worldBounds()` lazily computes shape state under *write* access, so the
-  // whole traversal takes one coarse write guard — a read guard would deadlock
-  // on the read→write upgrade. Mirrors `SnapshotSelectionWorldBounds`.
+  // §concurrent-dom: the editor keeps the live document in ConcurrentDom, so this UI-thread walk
+  // needs a scoped access guard or its DOM reads (isa / firstChild / nextSibling) trip the
+  // `ElementAnchor` release assertion. GeometryIntersectsRect() calls worldBounds(), which lazily
+  // computes shape state under *write* access, so the whole traversal takes one coarse write guard.
   svg::SVGDocument doc = document_.document();
   doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
     const svg::SVGElement root = doc.svgElement();
     auto visit = [&](const svg::SVGGeometryElement& geometry) {
-      if (auto bounds = geometry.worldBounds(); bounds.has_value()) {
-        if (BoxesIntersect(*bounds, documentRect)) {
-          hits.push_back(geometry);
-        }
+      if (GeometryIntersectsRect(geometry, documentRect)) {
+        hits.push_back(geometry);
       }
     };
     ForEachGeometryElement(root, visit);
