@@ -51,7 +51,7 @@ struct RenderPanePresenterCost {
  *
  * @param textures Presentation texture cache.
  * @param activeDragPreview Active drag preview driving presenter-side transforms.
- * @param suppressedLayerEntity Promoted layer entity hidden from presentation.
+ * @param suppressedLayerEntity Promoted entity hidden from presentation.
  * @param suppressDragTargetTiles True when drag target tiles are globally hidden.
  */
 [[nodiscard]] bool HasPresentableDragTargetTile(

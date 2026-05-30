@@ -4387,7 +4387,7 @@ TEST(RenderCoordinatorTest, DeletedSelectionSuppressesStaleCachedLayer) {
          "cached texture metadata.";
 }
 
-TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRender) {
+TEST(RenderCoordinatorTest, DeletedBackgroundInvalidatesFullCanvasCachedPresentation) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
@@ -4411,47 +4411,20 @@ TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRe
   SelectTool selectTool;
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
-    GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context for "
-                    "composited texture upload.";
-  }
-  const std::uint64_t cachedVersion = app.document().currentFrameVersion();
-  coordinator.compositedPresentation().noteCachedTextures(entt::null, cachedVersion,
+  coordinator.compositedPresentation().noteCachedTextures(entt::null, /*version=*/1,
                                                           Vector2i(64, 64));
   ASSERT_TRUE(coordinator.compositedPresentation().hasCachedTextures());
 
   ASSERT_TRUE(app.deleteSelectionWithUndo(std::string(app.document().document().source())));
   ASSERT_TRUE(app.flushFrame());
   ASSERT_FALSE(app.document().document().querySelector("#target").has_value());
-  const std::uint64_t deletedVersion = app.document().currentFrameVersion();
-  ASSERT_NE(deletedVersion, cachedVersion);
 
-  coordinator.invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult());
-  EXPECT_TRUE(coordinator.compositedPresentation().hasCachedTextures())
-      << "A delete must not blank the whole canvas while the replacement render is pending; that "
-         "creates a one-frame checkerboard flicker.";
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
-  EXPECT_TRUE(coordinator.compositedPresentation().hasCachedTextures())
-      << "Render scheduling should keep the previous presentation alive until a current-version "
-         "render atomically replaces it.";
-  ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
 
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-  while (std::chrono::steady_clock::now() < deadline) {
-    coordinator.pollRenderResult(app, viewport, textures);
-    if (!coordinator.asyncRenderer().isBusy()) {
-      break;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-
-  EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
-  EXPECT_EQ(coordinator.displayedDocVersion(), deletedVersion);
-  const CompositedPresentation::DiagnosticsSnapshot diagnostics =
-      coordinator.compositedPresentation().diagnostics();
-  EXPECT_TRUE(diagnostics.hasCachedTextures);
-  EXPECT_EQ(diagnostics.cachedVersion, deletedVersion)
-      << "The stale presentation should be replaced, not cleared, once the delete render lands.";
+  EXPECT_FALSE(coordinator.compositedPresentation().hasCachedTextures())
+      << "Deleting the background can leave stale full-canvas/static-segment pixels, not just a "
+         "stale selected layer. Those cached document pixels must be invalidated immediately so "
+         "the transparent checkerboard is visible while the replacement render is pending.";
 }
 
 TEST(RenderCoordinatorTest, DisplayNoneSelectionKeepsPreReparseSuppressionAfterCacheDiscard) {

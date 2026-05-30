@@ -143,7 +143,13 @@ public:
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          const GlTextureCache* textures = nullptr);
+                          GlTextureCache* textures = nullptr);
+  /// Immediately drop stale presented document pixels after a structural delete flush.
+  ///
+  /// @param flushResult Metadata from the just-flushed editor command batch.
+  /// @param textures Presentation texture cache to clear when old document pixels are invalid.
+  void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult,
+                                                GlTextureCache& textures);
   /**
    * Return the selected layer whose cached pixels should be hidden while editor chrome remains
    * visible. This is used when the live selected element is `display:none`: hit-testing and the

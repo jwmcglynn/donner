@@ -173,6 +173,27 @@ bool IsDisplayNone(const svg::SVGElement& element) {
   return element.getComputedStyle().display.get().value() == svg::Display::None;
 }
 
+bool SubtreeContainsEntity(const svg::SVGElement& element, Entity entity) {
+  if (element.unsafeEntityHandle().entity() == entity) {
+    return true;
+  }
+
+  for (auto child = element.firstChild(); child.has_value(); child = child->nextSibling()) {
+    if (SubtreeContainsEntity(*child, entity)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool DocumentContainsEntity(const svg::SVGDocument& document, Entity entity) {
+  if (entity == entt::null) {
+    return false;
+  }
+  return SubtreeContainsEntity(document.svgElement(), entity);
+}
+
 double MillisecondsSince(std::chrono::steady_clock::time_point start) {
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
       .count();
@@ -569,10 +590,14 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 
 void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
                                            const ViewportState& viewport,
-                                           const GlTextureCache* textures) {
+                                           GlTextureCache* textures) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     return;
+  }
+
+  if (textures != nullptr) {
+    invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult(), *textures);
   }
 
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
@@ -696,12 +721,15 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 }
 
 void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
-    const AsyncSVGDocument::FlushResult& flushResult) {
+    const AsyncSVGDocument::FlushResult& flushResult, GlTextureCache& textures) {
   if (!flushResult.removedElements) {
     return;
   }
 
-  pendingDocumentMutationOverviewRefresh_ = true;
+  compositedPresentation_ = CompositedPresentation{};
+  textures.resetComposited();
+  displayNoneSuppressedSelectionEntity_ = entt::null;
+  displayNoneSuppressedLayerEntity_ = entt::null;
 }
 
 Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
