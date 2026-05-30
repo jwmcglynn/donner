@@ -249,7 +249,7 @@ source.
 ## Background and Prior Art
 
 The previous responsiveness plan is
-[0033-editor_design_tool_responsiveness](0033-editor_design_tool_responsiveness.md). It landed
+[0033-2-editor_design_tool_responsiveness](0033-2-editor_design_tool_responsiveness.md). It landed
 important pieces: intrinsic layer rasters, async cancellation, preemptive result wakeups, selection
 chrome snapshots, re-drag bypasses, and demotion hysteresis. It still leaves full-canvas overlay,
 full-document high-zoom rasterization, and large-selection LOD open.

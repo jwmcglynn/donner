@@ -3,8 +3,8 @@
 **Status:** Design
 **Author:** Codex
 **Created:** 2026-05-30
-**Related:** [0033-editor_design_tool_responsiveness](0033-editor_design_tool_responsiveness.md),
-[0044-editor_fluid_canvas_rendering](0044-editor_fluid_canvas_rendering.md),
+**Related:** [0033-2-editor_design_tool_responsiveness](0033-2-editor_design_tool_responsiveness.md),
+[0044-2-editor_fluid_canvas_rendering](0044-2-editor_fluid_canvas_rendering.md),
 [0045-editor_geode_chrome_migration](0045-editor_geode_chrome_migration.md)
 
 ## Summary
