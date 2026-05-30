@@ -2336,7 +2336,10 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
     flushQueuedMutationAndRefreshOverlay();
   }
 
-  if (layerPanelDetached_) {
+  // The Compositor Debug panel is a developer diagnostics view, hidden unless
+  // toggled on from the View menu. The user-facing Layers/Inspector panes above
+  // are unaffected.
+  if (!showCompositorDebugPanel_ || layerPanelDetached_) {
     return;
   }
 
@@ -2533,7 +2536,7 @@ void EditorShell::renderDockedLayerPanelDragHandle() {
 }
 
 void EditorShell::renderFloatingLayerPanel() {
-  if (!layerPanelDetached_) {
+  if (!showCompositorDebugPanel_ || !layerPanelDetached_) {
     return;
   }
 

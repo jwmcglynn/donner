@@ -21,6 +21,12 @@ struct MenuBarState {
   /// True when the canvas selection is exactly one or more `<text>` elements,
   /// the precondition for "Convert Text to Outlines" (design doc 0047 M5).
   bool hasTextSelection = false;
+  /// Current visibility of the Compositor Debug panel (drives the View-menu
+  /// checkmark). Off by default.
+  bool showCompositorDebugPanel = false;
+  /// Current visibility of the render-pane performance overlay (drives the
+  /// View-menu checkmark). On by default.
+  bool showPerfOverlay = true;
 };
 
 struct MenuBarActions {
@@ -45,6 +51,10 @@ struct MenuBarActions {
   bool zoomOut = false;
   bool actualSize = false;
   bool toggleSourceFocusMode = false;
+  /// Set when the user toggles the Compositor Debug panel via the View menu.
+  bool toggleCompositorDebugPanel = false;
+  /// Set when the user toggles the performance overlay via the View menu.
+  bool togglePerfOverlay = false;
 };
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.

@@ -366,6 +366,13 @@ private:
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;
   bool sourcePaneVisible_ = true;
+  /// Whether the Compositor Debug panel window renders. Off by default: it is a
+  /// developer-facing composite-tile diagnostics view, toggled on via the View
+  /// menu. The user-facing Layers panel is unrelated and always visible.
+  bool showCompositorDebugPanel_ = false;
+  /// Whether the render-pane frame-timing/perf overlay renders. On by default;
+  /// toggled via the View menu.
+  bool showPerfOverlay_ = true;
 
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;
