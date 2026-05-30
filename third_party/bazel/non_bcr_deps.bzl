@@ -12,7 +12,6 @@ shipped over BCR:
 - woff2           : WOFF2 font format           (--config=text-full)
 - wgpu_native     : WebGPU (Geode renderer)     (--//donner/svg/renderer/geode:enable_geode=true)
 - tracy           : In-process profiling client (//donner/editor only — see check_banned_patterns.py)
-- resvg-test-suite: Reference SVG goldens       (image comparison tests)
 - bazel_clang_tidy: clang-tidy aspect           (--config=clang-tidy)
 - sysroot_linux_*: Hermetic Debian Bullseye sysroots for Bazel remote execution
                    (--config=re). Wired into the `llvm_toolchain` via its
@@ -136,18 +135,6 @@ HBEOF""",
         # Pinned to the latest stable upstream release. Bump deliberately.
         tag = "v0.13.1",
         remote = "https://github.com/wolfpld/tracy.git",
-    )
-
-    # resvg test suite: reference renderings used by image comparison tests.
-    # Layout (post-2023-05 restructure + Great Rename): tests are under
-    # tests/<category>/<feature>/<name>.svg with paired <name>.png in the
-    # same directory. Resources (external images) under resources/, fonts
-    # under fonts/.
-    new_git_repository(
-        name = "resvg-test-suite",
-        build_file = "//third_party:BUILD.resvg-test-suite",
-        commit = "d8e064337faf01bc5a9579187a56dbdbe3eacc72",
-        remote = "https://github.com/linebender/resvg-test-suite.git",
     )
 
     # bazel_clang_tidy: --config=clang-tidy aspect (see .bazelrc).

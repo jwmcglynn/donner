@@ -15,7 +15,7 @@ namespace {
 
 FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilename,
                          const std::string& familyName) {
-  const std::string fontsDir = Runfiles::instance().RlocationExternal("resvg-test-suite", "fonts");
+  const std::string fontsDir = Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts");
   const std::string fontPath = fontsDir + "/" + fontFilename;
 
   std::ifstream file(fontPath, std::ios::binary);

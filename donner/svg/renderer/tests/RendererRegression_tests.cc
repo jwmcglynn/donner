@@ -11,7 +11,7 @@ namespace {
 using Params = ImageComparisonParams;
 
 std::filesystem::path ResvgResourceRoot() {
-  return Runfiles::instance().RlocationExternal("resvg-test-suite", "");
+  return Runfiles::instance().Rlocation("third_party/resvg-test-suite/");
 }
 
 ImageComparisonParams GoldenParams() {

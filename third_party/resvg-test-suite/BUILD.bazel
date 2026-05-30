@@ -1,0 +1,48 @@
+"""resvg test suite: reference SVG renderings used by Donner's image-comparison tests.
+
+Vendored from https://github.com/linebender/resvg-test-suite at commit
+d8e064337faf01bc5a9579187a56dbdbe3eacc72 (MIT-licensed; see LICENSE). Previously
+fetched via `new_git_repository(name = "resvg-test-suite", ...)` in
+third_party/bazel/non_bcr_deps.bzl; vendored in-tree so the goldens are available
+without a network fetch and travel with the source archive.
+
+Layout (post-2023-05 restructure + Great Rename): tests are under
+tests/<category>/<feature>/<name>.svg with paired <name>.png in the same
+directory. Resources (external images) under resources/, fonts under fonts/.
+
+The upstream `tools/` (the multi-backend `vdiff` runner), `check.py`, and
+`stats.py` are vendored alongside the data but are not wired into any Bazel
+target here — they are standalone scripts run directly.
+"""
+
+package(default_visibility = ["//visibility:public"])
+
+exports_files(["LICENSE"])
+
+filegroup(
+    name = "tests",
+    srcs = glob([
+        "tests/**/*.svg",
+        "tests/**/*.png",
+    ]),
+)
+
+filegroup(
+    name = "resources",
+    srcs = glob(
+        ["resources/**"],
+        exclude = ["resources/README.md"],
+        allow_empty = True,
+    ),
+)
+
+filegroup(
+    name = "fonts",
+    srcs = glob(
+        [
+            "fonts/*.ttf",
+            "fonts/*.otf",
+        ],
+        allow_empty = True,
+    ),
+)
