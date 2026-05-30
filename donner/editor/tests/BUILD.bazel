@@ -889,3 +889,23 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+# Preview-vs-source save/reload coherence: after each committed editor op, the
+# live preview (rendering `AsyncSVGDocument::document()`) must be pixel-identical
+# to a save->reload (reparse `document().source()`) of the current source.
+donner_cc_test(
+    name = "preview_source_coherence_tests",
+    srcs = ["PreviewSourceCoherence_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base",
+        "//donner/editor:async_svg_document",
+        "//donner/editor:command_queue",
+        "//donner/editor:text_to_outlines",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
