@@ -40,6 +40,7 @@ struct MenuBarActions {
   bool pasteInFront = false;
   bool convertTextToOutlines = false;
   bool selectAll = false;
+  bool deselectAll = false;
   bool zoomIn = false;
   bool zoomOut = false;
   bool actualSize = false;

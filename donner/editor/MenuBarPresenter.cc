@@ -89,6 +89,11 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Select All", "Cmd+A", false, state.sourcePaneFocused)) {
       actions.selectAll = true;
     }
+    // Deselect All clears the canvas selection; enabled only when something is
+    // selected. Cmd+Shift+A mirrors the shortcut handled in EditorShell.
+    if (ImGui::MenuItem("Deselect All", "Cmd+Shift+A", false, state.hasShapeSelection)) {
+      actions.deselectAll = true;
+    }
     ImGui::EndMenu();
   }
 

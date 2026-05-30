@@ -1330,6 +1330,15 @@ void EditorShell::handleGlobalShortcuts() {
     app_.setSelection(std::nullopt);
   }
 
+  // Cmd+Shift+A ("Deselect All") clears the canvas selection through the same
+  // canonical clear path Escape uses (clearSelection() == setSelection(nullopt))
+  // so the canvas highlight, source-pane sync, and overlay all update together.
+  // The Shift requirement keeps it distinct from a plain Cmd+A.
+  if (CanDeselectAllFromShortcut(ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false), cmd, shift,
+                                 app_.hasSelection(), anyPopupOpen, sourcePaneFocused)) {
+    app_.clearSelection();
+  }
+
   // Shape clipboard shortcuts route through the canvas selection only when the
   // source pane is not focused — the text editor owns Cmd+X/C/V while it has
   // keyboard focus. Cmd+F is Paste in Front (exact-position duplication).
@@ -3501,6 +3510,10 @@ void EditorShell::runFrame() {
   }
   if (menuActions.selectAll) {
     textEditor_.selectAll();
+  }
+  if (menuActions.deselectAll) {
+    // Same canonical clear path as the Cmd+Shift+A shortcut and Escape.
+    app_.clearSelection();
   }
   if (menuActions.zoomIn) {
     interactionController_.applyZoom(kKeyboardZoomStep,
