@@ -331,6 +331,24 @@ public:
   [[nodiscard]] UndoTimeline& undoTimeline() { return undoTimeline_; }
   [[nodiscard]] const UndoTimeline& undoTimeline() const { return undoTimeline_; }
 
+  /**
+   * Defer a single document-source undo entry to the next `flushFrame()`.
+   *
+   * The "before" source is captured now (by the caller, while the document is
+   * still in sync); the "after" source is captured during the next
+   * `flushFrame()` once queued geometry has been applied, and one undo entry is
+   * recorded only if the source actually changed. This lets a multi-step
+   * authoring gesture (e.g. a whole Pen-tool session) collapse into one
+   * undoable command without the tool having to flush the frame itself, so the
+   * normal per-frame source-sync path stays intact.
+   *
+   * @param label Human-readable undo label.
+   * @param anchorElement Element used to anchor the source snapshot.
+   * @param beforeSource Document source captured before the gesture began.
+   */
+  void recordDocumentSourceUndoOnNextFlush(std::string label, svg::SVGElement anchorElement,
+                                           std::string beforeSource);
+
   /// Whether there is an entry to undo.
   [[nodiscard]] bool canUndo() const { return undoTimeline_.canUndo(); }
 

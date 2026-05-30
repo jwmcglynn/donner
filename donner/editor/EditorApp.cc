@@ -1007,6 +1007,15 @@ bool EditorApp::unbundleCompoundPath(std::optional<svg::SVGElement> target) {
   return true;
 }
 
+void EditorApp::recordDocumentSourceUndoOnNextFlush(std::string label,
+                                                    svg::SVGElement anchorElement,
+                                                    std::string beforeSource) {
+  pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+      .label = std::move(label),
+      .before = captureDocumentSourceSnapshot(anchorElement, beforeSource),
+  };
+}
+
 void EditorApp::refreshFirstSelectionCache() {
   if (selection_.empty()) {
     cachedFirstSelection_.reset();

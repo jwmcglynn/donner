@@ -1208,8 +1208,11 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_V, /*repeat=*/false)) {
+    // Switching to Select commits any in-progress pen path as one undoable
+    // command instead of discarding it.
+    penTool_.commitOpenPath(app_);
+    flushQueuedMutationAndRefreshOverlay();
     activeTool_ = ActiveTool::Select;
-    penTool_.cancel();
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
@@ -1217,9 +1220,21 @@ void EditorShell::handleGlobalShortcuts() {
     activeTool_ = ActiveTool::Pen;
   }
 
+  if (!anyPopupOpen && !cmd && activeTool_ == ActiveTool::Pen && penTool_.isDrafting() &&
+      (ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/false) ||
+       ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false))) {
+    // Enter commits the in-progress open path without closing it.
+    penTool_.commitOpenPath(app_);
+    flushQueuedMutationAndRefreshOverlay();
+    return;
+  }
+
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
       penTool_.isDrafting()) {
-    penTool_.cancel();
+    // Escape discards the in-progress path, restoring the document and undo
+    // stack to the pre-pen baseline.
+    penTool_.cancel(app_);
+    flushQueuedMutationAndRefreshOverlay();
     return;
   }
 
@@ -1472,10 +1487,14 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.35f, 0.78f, 1.0f));
     }
     if (ImGui::Button(label, ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize))) {
-      activeTool_ = tool;
       if (tool == ActiveTool::Select) {
-        penTool_.cancel();
+        // Leaving the Pen tool commits any in-progress path as one undoable
+        // command rather than dropping it.
+        if (penTool_.commitOpenPath(app_)) {
+          flushQueuedMutationAndRefreshOverlay();
+        }
       }
+      activeTool_ = tool;
     }
     if (icon == ToolButtonIcon::SelectPointer) {
       DrawSelectToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
@@ -1653,7 +1672,14 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     rotateCursorSet_.clearIfActive();
     SetImGuiOsCursorManagementEnabled(true);
   }
-  if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+  // Double-click while drafting commits the in-progress open path (no trailing
+  // Z) as one undoable command, matching Enter. Checked before the click is
+  // buffered so the double-click doesn't also place a stray anchor.
+  if (penToolActive && toolEligible && penTool_.isDrafting() &&
+      ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    penTool_.commitOpenPath(app_);
+    flushQueuedMutationAndRefreshOverlay();
+  } else if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     preserveSourceEditFocusCursor_ = false;
     MouseModifiers modifiers;
     modifiers.shift = ImGui::GetIO().KeyShift;
@@ -1847,7 +1873,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   if (penToolActive && penTool_.isDraggingAnchor()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
-      penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+      MouseModifiers dragModifiers;
+      dragModifiers.option = ImGui::GetIO().KeyAlt;
+      dragModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+      penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true,
+                           dragModifiers);
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       penTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
@@ -2633,6 +2663,20 @@ void EditorShell::renderPenToolPreview() {
     const ImVec2 max(center.x + 4.0f, center.y + 4.0f);
     drawList->AddRectFilled(min, max, anchorFill, 1.0f);
     drawList->AddRect(min, max, anchorStroke, 1.0f, 0, 1.4f);
+  }
+
+  // Close-path affordance: highlight the first anchor with a ring when a click
+  // at the current mouse position would close the contour.
+  if (const std::optional<Vector2d> first = penTool_.firstAnchor(); first.has_value()) {
+    const ImVec2 mouseScreen = ImGui::GetMousePos();
+    const Vector2d mouseDoc = viewport.screenToDocument(Vector2d(mouseScreen.x, mouseScreen.y));
+    MouseModifiers closeModifiers;
+    closeModifiers.pixelsPerDocUnit = viewport.pixelsPerDocUnit();
+    if (penTool_.wouldCloseAt(mouseDoc, closeModifiers)) {
+      const ImVec2 center = ToImVec2(viewport.documentToScreen(*first));
+      const ImU32 closeColor = ImGui::GetColorU32(ImVec4(0.10f, 0.65f, 0.35f, 1.0f));
+      drawList->AddCircle(center, 7.0f, closeColor, 0, 2.0f);
+    }
   }
 }
 

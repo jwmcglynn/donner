@@ -2,13 +2,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include "donner/base/FormatNumber.h"
 #include "donner/base/Path.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/UndoTimeline.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGSVGElement.h"
@@ -18,7 +21,9 @@ namespace donner::editor {
 
 namespace {
 
-constexpr double kClosePointScreenTolerance = 10.0;
+// Close the contour when a click lands within this many logical (screen)
+// pixels of the first anchor. Matches the v0.8 Pen tool quality bar.
+constexpr double kClosePointScreenTolerance = 6.0;
 
 std::string FormatPoint(const Vector2d& point) {
   return donner::detail::FormatNumberForSVG(point.x) + " " +
@@ -42,6 +47,8 @@ void PenTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     return;
   }
 
+  pixelsPerDocUnit_ = std::max(modifiers.pixelsPerDocUnit, 0.000001);
+
   if (!activePath_.has_value()) {
     if (std::optional<OpenPathState> state = openStateForSelectedPath(editor); state.has_value()) {
       continueSelectedPath(editor, editor.selectedElements().front().cast<svg::SVGPathElement>(),
@@ -62,12 +69,17 @@ void PenTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 }
 
 void PenTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) {
+  onMouseMove(editor, documentPoint, buttonHeld, MouseModifiers{});
+}
+
+void PenTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
+                          MouseModifiers modifiers) {
   (void)editor;
   if (!buttonHeld || !draggingAnchor_) {
     return;
   }
 
-  updateDraggedAnchor(documentPoint);
+  updateDraggedAnchor(documentPoint, /*breakSymmetry=*/modifiers.option);
 }
 
 void PenTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
@@ -75,12 +87,32 @@ void PenTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
     return;
   }
 
-  updateDraggedAnchor(documentPoint);
+  updateDraggedAnchor(documentPoint, /*breakSymmetry=*/false);
   draggingAnchor_ = false;
   if (draggedAnchorChanged_) {
     commitActivePathData(editor);
   }
   draggedAnchorChanged_ = false;
+}
+
+void PenTool::cancel(EditorApp& editor) {
+  // Escape/abort must leave the document AND the undo stack exactly as they
+  // were before the pen session began. The session created exactly one new
+  // `<path>` element (`activePath_`), so removing it restores the original
+  // document without rewriting any existing geometry. DeleteElement is a soft
+  // delete routed through the mutation seam: it detaches the element next flush
+  // and records no undo entry, so the undo stack stays untouched.
+  std::optional<svg::SVGElement> createdPath;
+  if (sessionCreatedPath_ && activePath_.has_value()) {
+    createdPath = *activePath_;
+  }
+
+  if (createdPath.has_value()) {
+    editor.setSelection(std::nullopt);
+    editor.applyMutation(EditorCommand::DeleteElementCommand(*createdPath));
+  }
+
+  cancel();
 }
 
 void PenTool::cancel() {
@@ -93,6 +125,10 @@ void PenTool::cancel() {
   draggingAnchor_ = false;
   draggedAnchorChanged_ = false;
   draggingAnchorIndex_ = 0;
+  pixelsPerDocUnit_ = 1.0;
+  sessionBeforeSource_.reset();
+  sessionUndoAnchor_.reset();
+  sessionCreatedPath_ = false;
 }
 
 std::optional<PenTool::OpenPathState> PenTool::openStateForSelectedPath(
@@ -190,6 +226,20 @@ bool PenTool::shouldCloseAt(const Vector2d& documentPoint, const MouseModifiers&
   return distance <= toleranceDoc;
 }
 
+bool PenTool::wouldCloseAt(const Vector2d& documentPoint, MouseModifiers modifiers) const {
+  if (modifiers.pixelsPerDocUnit <= 0.0) {
+    modifiers.pixelsPerDocUnit = pixelsPerDocUnit_;
+  }
+  return shouldCloseAt(documentPoint, modifiers);
+}
+
+std::optional<Vector2d> PenTool::firstAnchor() const {
+  if (!activePath_.has_value() || anchors_.empty()) {
+    return std::nullopt;
+  }
+  return anchors_.front().point;
+}
+
 std::string PenTool::serializePathData() const {
   if (anchors_.empty()) {
     return "";
@@ -267,6 +317,10 @@ std::vector<PenTool::PreviewHandleLine> PenTool::previewHandleLines() const {
 }
 
 void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
+  // Capture the source baseline BEFORE queueing the first insert so the whole
+  // pen session can later collapse into one undoable command.
+  beginPenSession(editor);
+
   svg::SVGDocument& document = editor.document().document();
   svg::SVGPathElement path = svg::SVGPathElement::Create(document);
   anchors_.clear();
@@ -282,6 +336,8 @@ void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
   startPoint_ = documentPoint;
   currentPoint_ = documentPoint;
   activePath_ = path;
+  sessionUndoAnchor_ = path;
+  sessionCreatedPath_ = true;
   beginDragLastAnchor();
 
   svg::SVGElement parent = document.svgElement();
@@ -292,7 +348,10 @@ void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
 void PenTool::continueSelectedPath(EditorApp& editor, const svg::SVGPathElement& path,
                                    const OpenPathState& state, const Vector2d& documentPoint,
                                    const MouseModifiers& modifiers) {
+  beginPenSession(editor);
+
   activePath_ = path;
+  sessionUndoAnchor_ = path;
   anchors_ = state.anchors;
   closed_ = false;
   startPoint_ = anchors_.front().point;
@@ -316,7 +375,7 @@ void PenTool::beginDragLastAnchor() {
   draggingAnchorIndex_ = anchors_.empty() ? 0u : anchors_.size() - 1u;
 }
 
-void PenTool::updateDraggedAnchor(const Vector2d& documentPoint) {
+void PenTool::updateDraggedAnchor(const Vector2d& documentPoint, bool breakSymmetry) {
   if (!draggingAnchor_ || draggingAnchorIndex_ >= anchors_.size()) {
     return;
   }
@@ -327,7 +386,12 @@ void PenTool::updateDraggedAnchor(const Vector2d& documentPoint) {
     return;
   }
 
-  if (draggingAnchorIndex_ > 0u) {
+  // The outgoing handle always follows the mouse. With symmetry (default) the
+  // incoming handle mirrors it through the anchor for a smooth node; Alt/Option
+  // breaks that link so the incoming handle keeps whatever value it already had
+  // (its previous segment's tangent) — the anchor becomes a corner with
+  // mismatched handles.
+  if (draggingAnchorIndex_ > 0u && !breakSymmetry) {
     anchor.inHandle = anchor.point - delta;
   }
   anchor.outHandle = anchor.point + delta;
@@ -364,6 +428,56 @@ void PenTool::closePath(EditorApp& editor) {
   closed_ = true;
   rebuildActivePathData();
   commitActivePathData(editor);
+  finalize(editor);
+}
+
+bool PenTool::commitOpenPath(EditorApp& editor) {
+  // Enter / double-click / tool-switch commit of an in-progress open path.
+  // Requires at least one real segment; a lone anchor is not a path.
+  if (!activePath_.has_value() || anchors_.size() < 2u) {
+    return false;
+  }
+
+  // A drag may still be shaping the final anchor's handles when commit fires.
+  if (draggingAnchor_) {
+    draggingAnchor_ = false;
+    if (draggedAnchorChanged_) {
+      commitActivePathData(editor);
+    }
+    draggedAnchorChanged_ = false;
+  }
+
+  closed_ = false;
+  rebuildActivePathData();
+  commitActivePathData(editor);
+  finalize(editor);
+  return true;
+}
+
+void PenTool::beginPenSession(EditorApp& editor) {
+  if (sessionBeforeSource_.has_value()) {
+    return;  // Session already open — keep the original baseline.
+  }
+  if (editor.document().hasDocument() && editor.document().document().hasSourceStore()) {
+    sessionBeforeSource_ = std::string(editor.document().document().source());
+  }
+}
+
+void PenTool::finalize(EditorApp& editor) {
+  // Defer one DocumentSource undo entry spanning the whole pen session
+  // (baseline source -> finalized source) to the editor's next flushFrame().
+  // The just-committed `SetAttribute` geometry is still queued; recording the
+  // undo on the normal flush path keeps the source-sync writeback intact and
+  // lets the entire pen session collapse into a single undoable command. Undo
+  // therefore removes the whole pen path in one step, and redo restores it.
+  if (sessionBeforeSource_.has_value() && sessionUndoAnchor_.has_value()) {
+    editor.recordDocumentSourceUndoOnNextFlush("Pen path", *sessionUndoAnchor_,
+                                               *sessionBeforeSource_);
+  }
+
+  // Clear local draft state without rolling back the document — the queued
+  // geometry is the committed path. (cancel() with no editor only resets the
+  // tool's own fields.)
   cancel();
 }
 
