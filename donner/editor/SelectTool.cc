@@ -214,11 +214,15 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
   // `onMouseDown` passes a freshly-computed live snapshot (its caller has
   // already gated on `!isBusy()`).
+  const svg::SVGElement element = currentSelection.front();
+  const bool isGraphics =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.isa<svg::SVGGraphicsElement>();
+      });
   const double hitSlopDoc =
       modifiers.pixelsPerDocUnit > 0.0 ? kRedragHitSlopScreenPx / modifiers.pixelsPerDocUnit : 0.0;
   if (selectionBoundsDoc.empty() ||
-      !selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint) ||
-      !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
+      !selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint) || !isGraphics) {
     return false;
   }
   for (const Box2d& occludingBounds : occludingBoundsDoc) {
@@ -228,14 +232,6 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   }
 
   // Reuse the currently-selected element as the drag target.
-  const svg::SVGElement element = currentSelection.front();
-  const bool isGraphics =
-      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
-        return element.isa<svg::SVGGraphicsElement>();
-      });
-  if (!isGraphics) {
-    return false;
-  }
   const svg::SVGGraphicsElement graphicsElement =
       element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
         return element.cast<svg::SVGGraphicsElement>();
