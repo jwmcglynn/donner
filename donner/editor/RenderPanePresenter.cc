@@ -578,9 +578,7 @@ bool ShouldPresentCompositedTile(const GlTextureCache::TileView& tile, Entity su
     return false;
   }
 
-  if (suppressedLayerEntity != entt::null &&
-      tile.kind == RenderResult::CompositedTile::Kind::Layer &&
-      tile.layerEntity == suppressedLayerEntity) {
+  if (suppressedLayerEntity != entt::null && tile.layerEntity == suppressedLayerEntity) {
     return false;
   }
 
@@ -666,10 +664,7 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
   const bool hasTextureOverlay =
       state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0;
   const bool hasOverlay = hasImmediateOverlay || hasTextureOverlay;
-  if (!hasVisibleTiles && !hasVisibleOverviewTiles && !hasOverlay) {
-    ImGui::TextUnformatted("(no rendered image)");
-    return cost;
-  }
+  const bool hasPresentedContent = hasVisibleTiles || hasVisibleOverviewTiles || hasOverlay;
 
   const Box2d paneRect = Box2d::FromXYWH(state.viewport.paneOrigin.x, state.viewport.paneOrigin.y,
                                          state.viewport.paneSize.x, state.viewport.paneSize.y);
@@ -687,6 +682,10 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
   paneDrawList->PushClipRect(ToImVec2(paneRect.topLeft), ToImVec2(paneRect.bottomRight),
                              /*intersect_with_current_clip_rect=*/true);
   DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
+  if (!hasPresentedContent) {
+    paneDrawList->PopClipRect();
+    return cost;
+  }
 
   const double pxPerDoc = state.viewport.pixelsPerDocUnit();
   const Vector2d imageOriginScreen(imageOrigin.x, imageOrigin.y);

@@ -37,8 +37,8 @@ struct RenderPanePresenterCost {
  * Return true when a composited tile should be drawn in the render pane.
  *
  * @param tile Tile view published by \ref GlTextureCache.
- * @param suppressedLayerEntity Promoted layer entity whose cached pixels should not be drawn while
- *   selection chrome remains visible. Null leaves all layer tiles eligible.
+ * @param suppressedLayerEntity Promoted entity whose cached or immediate pixels should not be drawn
+ *   while selection chrome remains visible. Null leaves all entity-owned tiles eligible.
  * @param suppressDragTargetTiles True when the current selected element is `display:none` and
  *   legacy/metadata-missing elevated drag-target tiles should be hidden as a fallback.
  */
@@ -51,7 +51,7 @@ struct RenderPanePresenterCost {
  *
  * @param textures Presentation texture cache.
  * @param activeDragPreview Active drag preview driving presenter-side transforms.
- * @param suppressedLayerEntity Promoted layer entity hidden from presentation.
+ * @param suppressedLayerEntity Promoted entity hidden from presentation.
  * @param suppressDragTargetTiles True when drag target tiles are globally hidden.
  */
 [[nodiscard]] bool HasPresentableDragTargetTile(

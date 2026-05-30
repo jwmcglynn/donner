@@ -29,6 +29,18 @@ TEST(RenderPanePresenterTest, SuppressedLayerEntityTileIsNotPresented) {
   EXPECT_FALSE(ShouldPresentCompositedTile(tile, static_cast<Entity>(42)));
 }
 
+TEST(RenderPanePresenterTest, SuppressedImmediateEntityTileIsNotPresented) {
+  GlTextureCache::TileView tile;
+  tile.texture = static_cast<ImTextureID>(static_cast<std::uintptr_t>(7));
+  tile.kind = RenderResult::CompositedTile::Kind::Immediate;
+  tile.layerEntity = static_cast<Entity>(42);
+  tile.isDragTarget = false;
+
+  EXPECT_FALSE(ShouldPresentCompositedTile(tile, static_cast<Entity>(42)))
+      << "Immediate-mode promoted layers still carry layerEntity ownership, so deleting or hiding "
+         "the selection must suppress them just like cached layer tiles.";
+}
+
 TEST(RenderPanePresenterTest, HiddenSelectionSuppressionKeepsDifferentDragTargetTileVisible) {
   GlTextureCache::TileView tile;
   tile.texture = static_cast<ImTextureID>(static_cast<std::uintptr_t>(7));

@@ -10,6 +10,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/GlTextureCache.h"
@@ -142,13 +143,21 @@ public:
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          const GlTextureCache* textures = nullptr);
+                          GlTextureCache* textures = nullptr);
+  /// Immediately drop stale presented document pixels after a structural delete flush.
+  ///
+  /// @param flushResult Metadata from the just-flushed editor command batch.
+  /// @param textures Presentation texture cache to clear when old document pixels are invalid.
+  void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult,
+                                                GlTextureCache& textures);
   /**
    * Return the selected layer whose cached pixels should be hidden while editor chrome remains
    * visible. This is used when the live selected element is `display:none`: hit-testing and the
    * next render already treat it as non-rendering, so the presenter must not keep drawing a stale
    * promoted texture for that entity. If a source reparse remapped the selected element to a new
    * entity, this returns the currently cached pre-reparse entity so that stale texture is hidden.
+   * Deleted selected layers are also suppressed while the next render catches up so detached cached
+   * tiles cannot remain visible.
    *
    * @param app Editor application state containing the live selection.
    * @return Entity whose cached layer should be suppressed, or entt::null if no suppression is

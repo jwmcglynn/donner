@@ -10,6 +10,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/svg/SVGDocument.h"
 #include "donner/svg/core/Display.h"
 
 namespace donner::editor {
@@ -169,6 +170,27 @@ std::optional<svg::SVGElement> SelectedGraphicsElement(EditorApp& app) {
 
 bool IsDisplayNone(const svg::SVGElement& element) {
   return element.getComputedStyle().display.get().value() == svg::Display::None;
+}
+
+bool SubtreeContainsEntity(const svg::SVGElement& element, Entity entity) {
+  if (element.unsafeEntityHandle().entity() == entity) {
+    return true;
+  }
+
+  for (auto child = element.firstChild(); child.has_value(); child = child->nextSibling()) {
+    if (SubtreeContainsEntity(*child, entity)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool DocumentContainsEntity(const svg::SVGDocument& document, Entity entity) {
+  if (entity == entt::null) {
+    return false;
+  }
+  return SubtreeContainsEntity(document.svgElement(), entity);
 }
 
 double MillisecondsSince(std::chrono::steady_clock::time_point start) {
@@ -567,10 +589,14 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 
 void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectTool,
                                            const ViewportState& viewport,
-                                           const GlTextureCache* textures) {
+                                           GlTextureCache* textures) {
   ZoneScopedN("RenderCoordinator::maybeRequestRender");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     return;
+  }
+
+  if (textures != nullptr) {
+    invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult(), *textures);
   }
 
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
@@ -693,6 +719,18 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   renderWorker_.asyncRenderer.requestRender(req);
 }
 
+void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
+    const AsyncSVGDocument::FlushResult& flushResult, GlTextureCache& textures) {
+  if (!flushResult.removedElements) {
+    return;
+  }
+
+  compositedPresentation_ = CompositedPresentation{};
+  textures.resetComposited();
+  displayNoneSuppressedSelectionEntity_ = entt::null;
+  displayNoneSuppressedLayerEntity_ = entt::null;
+}
+
 Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
   const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
   if (!selected.has_value()) {
@@ -709,7 +747,20 @@ Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
 Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {
   const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
   if (!selected.has_value()) {
-    return displayNoneSuppressedLayerEntity_;
+    if (displayNoneSuppressedLayerEntity_ != entt::null) {
+      return displayNoneSuppressedLayerEntity_;
+    }
+
+    const CompositedPresentation::DiagnosticsSnapshot diagnostics =
+        compositedPresentation_.diagnostics();
+    if (diagnostics.hasCachedTextures && diagnostics.cachedEntity != entt::null &&
+        !DocumentContainsEntity(app.document().document(), diagnostics.cachedEntity)) {
+      displayNoneSuppressedSelectionEntity_ = entt::null;
+      displayNoneSuppressedLayerEntity_ = diagnostics.cachedEntity;
+      return diagnostics.cachedEntity;
+    }
+
+    return entt::null;
   }
 
   if (!IsDisplayNone(*selected)) {

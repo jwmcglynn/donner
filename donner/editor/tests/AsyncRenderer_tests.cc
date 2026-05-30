@@ -720,8 +720,14 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
 TEST(AsyncRendererTest, DisplayNoneSelectionDropsStaleCompositedLayerImmediately) {
   svg::SVGDocument document =
       svg::instantiateSubtree(R"svg(
+    <defs>
+      <clipPath id="target-clip">
+        <rect x="20" y="0" width="16" height="16"/>
+      </clipPath>
+    </defs>
     <rect id="under" x="0" y="0" width="64" height="64" fill="white" />
-    <rect id="target" x="20" y="0" width="16" height="16" fill="red" />
+    <rect id="target" x="20" y="0" width="16" height="16" fill="red"
+          clip-path="url(#target-clip)" />
   )svg",
                               svg::parser::SVGParser::Options(), Vector2i(64, 64));
 
@@ -4299,6 +4305,79 @@ TEST(RenderCoordinatorTest, DisplayNoneSelectionSuppressesPreReparseCachedLayer)
       << "A display:none source edit after full reparse must suppress the cached pre-reparse "
          "layer, "
          "not just the remapped hidden selection entity.";
+}
+
+TEST(RenderCoordinatorTest, DeletedSelectionSuppressesStaleCachedLayer) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <g id="Background">
+        <rect id="target" x="0" y="0" width="64" height="64" fill="red"/>
+      </g>
+    </svg>
+  )svg"));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+  app.setSelection(*target);
+
+  RenderCoordinator coordinator;
+  coordinator.compositedPresentation().noteCachedTextures(targetEntity, /*version=*/1,
+                                                          Vector2i(64, 64));
+
+  ASSERT_TRUE(app.deleteSelectionWithUndo(std::string(app.document().document().source())));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(app.document().document().querySelector("#target").has_value());
+  EXPECT_FALSE(app.selectedElement().has_value());
+
+  EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), targetEntity)
+      << "Deleting a selected promoted layer must suppress the old cached texture immediately; "
+         "otherwise the stale layer keeps drawing until a later full render replaces it.";
+  ASSERT_TRUE(coordinator.compositedPresentation().discardCachedTexturesForEntity(targetEntity));
+  EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), targetEntity)
+      << "The presenter still needs the suppression entity after render scheduling discards the "
+         "cached texture metadata.";
+}
+
+TEST(RenderCoordinatorTest, DeletedBackgroundInvalidatesFullCanvasCachedPresentation) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <g id="Background">
+        <rect id="target" x="0" y="0" width="64" height="64" fill="white"/>
+      </g>
+      <circle id="foreground" cx="32" cy="32" r="8" fill="blue"/>
+    </svg>
+  )svg"));
+
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(128.0, 128.0);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 64.0, 64.0);
+  viewport.devicePixelRatio = 1.0;
+  viewport.resetTo100Percent();
+
+  SelectTool selectTool;
+  GlTextureCache textures;
+  RenderCoordinator coordinator;
+  coordinator.compositedPresentation().noteCachedTextures(entt::null, /*version=*/1,
+                                                          Vector2i(64, 64));
+  ASSERT_TRUE(coordinator.compositedPresentation().hasCachedTextures());
+
+  ASSERT_TRUE(app.deleteSelectionWithUndo(std::string(app.document().document().source())));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_FALSE(app.document().document().querySelector("#target").has_value());
+
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
+
+  EXPECT_FALSE(coordinator.compositedPresentation().hasCachedTextures())
+      << "Deleting the background can leave stale full-canvas/static-segment pixels, not just a "
+         "stale selected layer. Those cached document pixels must be invalidated immediately so "
+         "the transparent checkerboard is visible while the replacement render is pending.";
 }
 
 TEST(RenderCoordinatorTest, DisplayNoneSelectionKeepsPreReparseSuppressionAfterCacheDiscard) {
