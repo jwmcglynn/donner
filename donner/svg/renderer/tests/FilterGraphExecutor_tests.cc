@@ -127,22 +127,113 @@ TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenFilterRegion) {
   }
 }
 
-TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenRightFilterRegion) {
-  auto maybePixmap = tiny_skia::Pixmap::fromSize(8, 8);
+// Regression: a filter region whose origin x maps past the pixmap width writes out of bounds.
+// In the axis-aligned clip, x0 = max(0, floor(originX)) was clamped at the low end but NOT the high
+// end, while x1 = clamp(ceil(right), 0, width) was clamped to width. With originX = 15 on a 10-wide
+// pixmap, x0 = 15 and x1 = 10, so the "clear the left border [0, x0)" fill writes x0*4 = 60 bytes
+// into each 40-byte row; on the last row that runs 20 bytes past the 400-byte buffer (heap-buffer-
+// overflow under ASan; corrupted pixels otherwise). The region is fully outside, so every pixel must
+// be cleared and no write may leave the buffer.
+TEST(FilterGraphExecutorTest, ClipsRegionWithOriginPastPixmapWidth) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(10, 10);
   ASSERT_TRUE(maybePixmap.has_value());
   tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
 
-  for (int y = 0; y < 8; ++y) {
-    for (int x = 0; x < 8; ++x) {
+  for (int y = 0; y < 10; ++y) {
+    for (int x = 0; x < 10; ++x) {
+      SetPixel(pixmap, x, y, Pixel{255, 0, 0, 255});
+    }
+  }
+
+  // Origin x = 15, right edge x = 20, both past the 10-px width; covers the full height.
+  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(15.0, 0.0, 5.0, 10.0), Transform2d());
+
+  for (int y = 0; y < 10; ++y) {
+    for (int x = 0; x < 10; ++x) {
+      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0})) << "at " << x << "," << y;
+    }
+  }
+}
+
+// Regression: a filter region whose origin y maps past the pixmap height walks the first clear loop
+// (for y in [0, y0)) past the buffer. y0 = max(0, floor(originY)) was not clamped to height, so the
+// fill at data + y*width*4 indexes out of bounds for y >= height. The region is fully outside, so
+// every pixel must be cleared and no write may leave the buffer.
+TEST(FilterGraphExecutorTest, ClipsRegionWithOriginPastPixmapHeight) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(10, 10);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  for (int y = 0; y < 10; ++y) {
+    for (int x = 0; x < 10; ++x) {
+      SetPixel(pixmap, x, y, Pixel{0, 255, 0, 255});
+    }
+  }
+
+  // Origin y = 15, bottom edge y = 20, both past the 10-px height; covers the full width.
+  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(0.0, 15.0, 10.0, 5.0), Transform2d());
+
+  for (int y = 0; y < 10; ++y) {
+    for (int x = 0; x < 10; ++x) {
+      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0})) << "at " << x << "," << y;
+    }
+  }
+}
+
+// Regression: a filter region whose origin is in-bounds but whose far edge runs past the surface
+// must keep the in-bounds portion and clear the rest, with no out-of-bounds write from the overlarge
+// far edge. Keep [4,10) x [4,10) on a 10x10 pixmap; right/bottom extend well past the surface.
+TEST(FilterGraphExecutorTest, ClipsRegionPartlyPastPixmapKeepsInBounds) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(10, 10);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  for (int y = 0; y < 10; ++y) {
+    for (int x = 0; x < 10; ++x) {
       SetPixel(pixmap, x, y, Pixel{255, 255, 255, 255});
     }
   }
 
-  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(20.0, 2.0, 4.0, 4.0), Transform2d());
+  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(4.0, 4.0, 100.0, 100.0), Transform2d());
 
-  for (int y = 0; y < 8; ++y) {
-    for (int x = 0; x < 8; ++x) {
-      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0}));
+  for (int y = 0; y < 10; ++y) {
+    for (int x = 0; x < 10; ++x) {
+      const bool inside = (x >= 4 && y >= 4);
+      EXPECT_EQ(GetPixel(pixmap, x, y), inside ? Pixel({255, 255, 255, 255}) : Pixel({0, 0, 0, 0}))
+          << "at " << x << "," << y;
+    }
+  }
+}
+
+// Regression for applySubregionClipping (the vendored tiny-skia filter rasterizer) reached through
+// ApplyFilterGraphToPixmap: a primitive subregion whose origin maps past the pixmap is clamped at
+// the low end (max(0, ...)) but not the high end, so the per-row border fill writes out of bounds.
+// Drive it via a Flood node with x/y placed past the surface; the flood must produce no opaque pixel
+// inside the pixmap and must not write out of bounds.
+TEST(FilterGraphExecutorTest, SubregionClipWithOriginPastPixmapDoesNotOverflow) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(10, 10);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.inputs.push_back(components::FilterInput{});
+  node.primitive = components::filter_primitive::Flood{
+      .floodColor = css::Color(css::RGBA(0, 0, 255, 255)),
+      .floodOpacity = 1.0,
+  };
+  // Subregion origin (15,0) is past the 10-px width; nothing should land inside the pixmap.
+  node.x = Lengthd(15.0);
+  node.y = Lengthd(0.0);
+  node.width = Lengthd(5.0);
+  node.height = Lengthd(10.0);
+  graph.nodes.push_back(std::move(node));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 10.0, 10.0));
+
+  for (int y = 0; y < 10; ++y) {
+    for (int x = 0; x < 10; ++x) {
+      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0})) << "at " << x << "," << y;
     }
   }
 }

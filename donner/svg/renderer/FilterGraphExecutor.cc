@@ -750,6 +750,12 @@ void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box
   const Box2d pixelRegion = deviceFromFilter.transformBox(*filterRegion);
   const int width = static_cast<int>(pixmap.width());
   const int height = static_cast<int>(pixmap.height());
+  // Clamp the kept-rect origin to the pixmap bounds as well as the far edge. Clamping x0/y0 only at
+  // the low end (max(0, ...)) leaves them able to exceed width/height when the region maps entirely
+  // past the right/bottom edge; the per-row "clear the left border [0, x0)" fill would then write
+  // x0*4 bytes into a width*4-byte row and walk past the buffer (heap-buffer-overflow). Clamping to
+  // [0, width]/[0, height] keeps every fill in bounds; a fully-outside region collapses to an empty
+  // kept rect (x0 == x1 or y0 == y1) so the whole pixmap is cleared.
   const int x0 = std::clamp(static_cast<int>(std::floor(pixelRegion.topLeft.x)), 0, width);
   const int y0 = std::clamp(static_cast<int>(std::floor(pixelRegion.topLeft.y)), 0, height);
   const int x1 = std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.x)), 0, width);
