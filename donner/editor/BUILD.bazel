@@ -83,6 +83,7 @@ donner_cc_library(
     srcs = ["ViewportSvgExport.cc"],
     hdrs = ["ViewportSvgExport.h"],
     deps = [
+        ":overlay_renderer",
         ":viewport_state",
         "//donner/base",
         "//donner/svg",

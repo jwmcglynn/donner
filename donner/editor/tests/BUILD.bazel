@@ -830,6 +830,7 @@ donner_cc_test(
     srcs = ["ViewportSvgExport_tests.cc"],
     deps = [
         "//donner/base",
+        "//donner/editor:overlay_renderer",
         "//donner/editor:viewport_state",
         "//donner/editor:viewport_svg_export",
         "//donner/svg",

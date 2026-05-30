@@ -9,14 +9,18 @@
 /// raster `<image>`. The crop is derived entirely from \ref ViewportState — it
 /// is the single source of truth for the screen↔document mapping.
 ///
-/// This milestone covers *content-only* export. The optional editor selection
-/// overlay is emitted only as an empty placeholder group; the overlay
-/// primitives themselves are produced by Milestone 7's `OverlayRenderer` SVG
-/// emit path. See \ref ViewportExportOptions::includeSelectionOverlay.
+/// Content export is vector-first as described above. When
+/// \ref ViewportExportOptions::includeSelectionOverlay is set and a
+/// \ref SelectionChromeSnapshot is supplied, the editor selection chrome
+/// (path outlines, AABBs, resize handles, marquee) is serialized into the
+/// `id="donner-editor-overlay"` group via \ref SerializeOverlaySnapshotToSvg.
+/// The overlay group is clipped to the same `donner-viewport-clip` clipPath as
+/// the content and uses deterministic, theme-independent styling.
 
 #include <string>
 
 #include "donner/base/Box.h"
+#include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
 
@@ -52,11 +56,31 @@ struct ViewportExportOptions {
   /// When true, the exported SVG preserves transparency (no background rect).
   /// When false, a covering background rect is prepended (white fallback).
   bool transparentBackground = true;
-  /// When true, an `id="donner-editor-overlay"` group placeholder is emitted.
-  /// In Milestone 6 the group is always empty; Milestone 7 populates it with
-  /// serialized overlay primitives.
+  /// When true, an `id="donner-editor-overlay"` group is emitted. If a
+  /// \ref SelectionChromeSnapshot is supplied to \ref ExportViewportAsSvg the
+  /// group is populated with serialized overlay primitives; otherwise it is
+  /// emitted empty (M6 back-compat).
   bool includeSelectionOverlay = false;
 };
+
+/**
+ * Serialize an editor selection-chrome snapshot to overlay SVG children.
+ *
+ * Emits overlay primitives (selected path outlines, selection AABBs, the
+ * oriented rotation box, resize handles, and the marquee rect) as SVG element
+ * strings in **document space**, with NO wrapping `<g>` — the caller is
+ * responsible for the enclosing `<g id="donner-editor-overlay">`.
+ *
+ * Backend-neutral: this reads only the snapshot struct and `Path` geometry. It
+ * never touches ImGui, a GPU backend, or any renderer. Styling is governed by
+ * fixed, theme-independent constants so the exported chrome is deterministic
+ * regardless of ImGui theme drift.
+ *
+ * @param snapshot Captured selection chrome (document-space geometry).
+ * @return Concatenated overlay SVG children, or an empty string when the
+ *   snapshot has no drawable primitives.
+ */
+std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapshot);
 
 /**
  * Export the currently-visible document region as a cropped, standalone SVG.
@@ -76,15 +100,24 @@ struct ViewportExportOptions {
  * `href` / `xlink:href` are refused with a human-readable error, since the
  * export cannot embed or safely reference them (vector-first; no rasterizing).
  *
+ * When \p options.includeSelectionOverlay is true and \p overlaySnapshot is
+ * non-null, the overlay group is populated with the serialized snapshot (see
+ * \ref SerializeOverlaySnapshotToSvg). When the flag is true but the pointer is
+ * null, an empty overlay group is emitted (M6 back-compat). The overlay group
+ * is clipped to the same `donner-viewport-clip` clipPath as the content.
+ *
  * @param doc Source SVG document. Must have an owned XML source store.
  * @param viewport Viewport state describing the screen↔document mapping.
  * @param renderPaneRect Render pane content rect in screen (CSS) pixels.
  * @param options Export options (background + overlay handling).
+ * @param overlaySnapshot Optional selection-chrome snapshot, used only when
+ *   \p options.includeSelectionOverlay is true. The snapshot must be captured
+ *   at export time so the overlay samples the same selection state the editor
+ *   currently displays.
  * @return Exported SVG text, or a human-readable error string.
  */
-Result<std::string, std::string> ExportViewportAsSvg(const svg::SVGDocument& doc,
-                                                     const ViewportState& viewport,
-                                                     const Recti& renderPaneRect,
-                                                     const ViewportExportOptions& options);
+Result<std::string, std::string> ExportViewportAsSvg(
+    const svg::SVGDocument& doc, const ViewportState& viewport, const Recti& renderPaneRect,
+    const ViewportExportOptions& options, const SelectionChromeSnapshot* overlaySnapshot = nullptr);
 
 }  // namespace donner::editor

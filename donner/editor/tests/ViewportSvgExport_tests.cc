@@ -2,13 +2,16 @@
 
 #include <gtest/gtest.h>
 
+#include <cstddef>
 #include <string>
+#include <string_view>
 
 #include "donner/base/Box.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseResult.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -238,6 +241,157 @@ TEST(ViewportSvgExportTest, NonTransparentBackgroundPrependsCoveringRect) {
   EXPECT_TRUE(Contains(result.value,
                        "<rect x=\"0\" y=\"0\" width=\"400\" height=\"300\" fill=\"#ffffff\"/>"))
       << result.value;
+}
+
+// --- Milestone 7: overlay serialization ---------------------------------
+
+/// Return the substring of @p haystack spanning the `<g id="donner-editor-
+/// overlay" ...>` open tag through its matching `</g>`. Empty if not found.
+std::string OverlayGroupSpan(const std::string& haystack) {
+  const std::size_t open = haystack.find("<g id=\"donner-editor-overlay\"");
+  if (open == std::string::npos) {
+    return std::string();
+  }
+  const std::size_t close = haystack.find("</g>", open);
+  if (close == std::string::npos) {
+    return std::string();
+  }
+  return haystack.substr(open, (close + 4) - open);
+}
+
+/// Parse the double value of attribute @p attr (e.g. `x`) from the first
+/// occurrence of `attr="<number>"` at or after @p from in @p text.
+double ParseAttr(const std::string& text, std::string_view attr, std::size_t from) {
+  const std::string needle = std::string(attr) + "=\"";
+  const std::size_t at = text.find(needle, from);
+  EXPECT_NE(at, std::string::npos) << "attribute " << attr << " not found";
+  const std::size_t valueStart = at + needle.size();
+  const std::size_t valueEnd = text.find('"', valueStart);
+  EXPECT_NE(valueEnd, std::string::npos);
+  return std::stod(text.substr(valueStart, valueEnd - valueStart));
+}
+
+/// A viewport whose `screenToDocument` is the identity over the render pane, so
+/// the exported viewBox is "0 0 400 300" and document coords map 1:1.
+ViewportState IdentityViewport() {
+  return MakeViewport(/*zoom=*/1.0, /*panDocPoint=*/Vector2d(0.0, 0.0),
+                      /*panScreenPoint=*/Vector2d(0.0, 0.0),
+                      /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(400.0, 300.0));
+}
+
+/// A snapshot with a single AABB at (50,60)-(150,160) and one resize handle.
+SelectionChromeSnapshot MakeAabbSnapshot() {
+  SelectionChromeSnapshot snapshot;
+  snapshot.aabbsDoc.push_back(Box2d(Vector2d(50.0, 60.0), Vector2d(150.0, 160.0)));
+  snapshot.handleBoxesDoc.push_back(Box2d(Vector2d(48.0, 58.0), Vector2d(52.0, 62.0)));
+  return snapshot;
+}
+
+TEST(ViewportSvgExportTest, OverlayGroupPopulatedFromSnapshot) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  const SelectionChromeSnapshot snapshot = MakeAabbSnapshot();
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  const std::string overlay = OverlayGroupSpan(result.value);
+  ASSERT_FALSE(overlay.empty()) << result.value;
+  // The overlay group must now be NON-empty: it contains primitives.
+  EXPECT_NE(overlay.find("<rect"), std::string::npos) << overlay;
+
+  // The AABB rect is emitted first (paths -> aabbs -> handles), so the first
+  // `<rect` is the AABB. Its coordinates must match the snapshot AABB.
+  const std::size_t aabbRect = overlay.find("<rect");
+  ASSERT_NE(aabbRect, std::string::npos);
+  EXPECT_NEAR(ParseAttr(overlay, "x", aabbRect), 50.0, 1e-3) << overlay;
+  EXPECT_NEAR(ParseAttr(overlay, "y", aabbRect), 60.0, 1e-3) << overlay;
+  EXPECT_NEAR(ParseAttr(overlay, "width", aabbRect), 100.0, 1e-3) << overlay;
+  EXPECT_NEAR(ParseAttr(overlay, "height", aabbRect), 100.0, 1e-3) << overlay;
+}
+
+TEST(ViewportSvgExportTest, OverlayHandlesRendered) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  const SelectionChromeSnapshot snapshot = MakeAabbSnapshot();
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  const std::string overlay = OverlayGroupSpan(result.value);
+  ASSERT_FALSE(overlay.empty()) << result.value;
+  // The resize handle is a white-filled rect.
+  EXPECT_NE(overlay.find("fill=\"#ffffff\""), std::string::npos) << overlay;
+}
+
+TEST(ViewportSvgExportTest, OverlayGroupCarriesClipPath) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  const SelectionChromeSnapshot snapshot = MakeAabbSnapshot();
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  // The overlay group reuses the M6 content clipPath; it is not a new one.
+  const std::size_t open = result.value.find("<g id=\"donner-editor-overlay\"");
+  ASSERT_NE(open, std::string::npos) << result.value;
+  const std::size_t openTagEnd = result.value.find('>', open);
+  ASSERT_NE(openTagEnd, std::string::npos);
+  const std::string openTag = result.value.substr(open, openTagEnd - open);
+  EXPECT_NE(openTag.find("clip-path=\"url(#donner-viewport-clip)\""), std::string::npos) << openTag;
+}
+
+TEST(ViewportSvgExportTest, OverlayStyleIsDeterministic) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  const SelectionChromeSnapshot snapshot = MakeAabbSnapshot();
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  const std::string overlay = OverlayGroupSpan(result.value);
+  ASSERT_FALSE(overlay.empty()) << result.value;
+  // Theme-independent stroke color.
+  EXPECT_NE(overlay.find("stroke=\"#1ea7fd\""), std::string::npos) << overlay;
+}
+
+TEST(ViewportSvgExportTest, OverlayExportDoesNotMutateSourceDocument) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  const std::string sourceBefore(doc.source());
+
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  const SelectionChromeSnapshot snapshot = MakeAabbSnapshot();
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  const std::string sourceAfter(doc.source());
+  EXPECT_EQ(sourceBefore, sourceAfter);
 }
 
 }  // namespace

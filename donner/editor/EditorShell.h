@@ -162,8 +162,10 @@ private:
   void requestSave();
   void requestSaveAs(std::string error = std::string());
   /// Open the save dialog to export the current viewport as a cropped SVG.
-  /// See `docs/design_docs/0047-v0_8_showcase.md` Milestone 6.
-  void requestExportViewportSvg(std::string error = std::string());
+  /// When \p includeOverlay is true, the export also serializes the current
+  /// editor selection overlay (Milestone 7); otherwise it is content-only
+  /// (Milestone 6). See `docs/design_docs/0047-v0_8_showcase.md`.
+  void requestExportViewportSvg(bool includeOverlay = false, std::string error = std::string());
   /// Generate the viewport SVG content and write it to \p path. Returns false
   /// and sets \p error on failure (mirrors \ref trySavePath's contract).
   bool tryExportViewportSvgToPath(std::string_view path, std::string* error);
@@ -253,6 +255,11 @@ private:
   /// rather than an ordinary document save. Routes the dialog's write callback
   /// to \ref tryExportViewportSvgToPath.
   bool pendingViewportExport_ = false;
+  /// True when the pending viewport export should include the editor selection
+  /// overlay (File → Export Viewport as SVG (with overlay)). Drives
+  /// \ref ViewportExportOptions::includeSelectionOverlay and the
+  /// capture-at-export-time overlay snapshot in \ref tryExportViewportSvgToPath.
+  bool pendingViewportExportOverlay_ = false;
   bool contentOnlyCaptureForNextFrame_ = false;
   bool contentOnlyCaptureThisFrame_ = false;
   bool requestRenderAtEndOfFrame_ = false;

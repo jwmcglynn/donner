@@ -1107,8 +1107,9 @@ void EditorShell::requestSaveAs(std::string error) {
   dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
 }
 
-void EditorShell::requestExportViewportSvg(std::string error) {
+void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string error) {
   pendingViewportExport_ = true;
+  pendingViewportExportOverlay_ = includeOverlay;
   // Default export filename: "<stem>_viewport.svg" beside the source document,
   // or "untitled_viewport.svg" for documents with no path.
   std::string defaultPath;
@@ -1144,10 +1145,22 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
 
   ViewportExportOptions options;
   options.transparentBackground = true;
-  options.includeSelectionOverlay = false;  // M6: content only. Overlay is M7.
+  options.includeSelectionOverlay = pendingViewportExportOverlay_;
+
+  // Capture the overlay snapshot at export time so the serialized chrome samples
+  // the same selection state the editor currently displays — it cannot be a
+  // frame behind. Mirrors how `OverlayRenderer::drawChrome(renderer, editor)`
+  // derives the transform + selection for the live chrome.
+  std::optional<SelectionChromeSnapshot> overlaySnapshot;
+  if (pendingViewportExportOverlay_) {
+    const Transform2d canvasFromDocument = app_.document().document().canvasFromDocumentTransform();
+    overlaySnapshot = OverlayRenderer::captureChromeSnapshot(
+        app_.selectedElements(), /*marqueeRectDoc=*/std::nullopt, canvasFromDocument);
+  }
 
   Result<std::string, std::string> exportResult =
-      ExportViewportAsSvg(app_.document().document(), viewport, renderPaneRect, options);
+      ExportViewportAsSvg(app_.document().document(), viewport, renderPaneRect, options,
+                          overlaySnapshot.has_value() ? &*overlaySnapshot : nullptr);
   if (!exportResult.ok()) {
     *error = exportResult.error;
     return false;
@@ -1162,6 +1175,7 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
 
   dialogPresenter_.clearSaveFileError();
   pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
   return true;
 }
 
@@ -3195,7 +3209,10 @@ void EditorShell::runFrame() {
     requestSaveAs();
   }
   if (menuActions.exportViewportSvg) {
-    requestExportViewportSvg();
+    requestExportViewportSvg(/*includeOverlay=*/false);
+  }
+  if (menuActions.exportViewportSvgWithOverlay) {
+    requestExportViewportSvg(/*includeOverlay=*/true);
   }
   if (menuActions.revertFile) {
     requestRevert();

@@ -2,10 +2,16 @@
 
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "donner/base/Box.h"
+#include "donner/base/RcString.h"
+#include "donner/base/Vector2.h"
+#include "donner/editor/OverlayRenderer.h"
 
 namespace donner::editor {
 
@@ -13,8 +19,18 @@ namespace {
 
 /// Identifier for the clip path injected into exported documents.
 constexpr std::string_view kClipPathId = "donner-viewport-clip";
-/// Identifier for the (M6: empty) editor overlay placeholder group.
+/// Identifier for the editor overlay group.
 constexpr std::string_view kOverlayGroupId = "donner-editor-overlay";
+
+// Deterministic overlay styling. These constants are intentionally fixed and
+// MUST stay independent of the ImGui editor theme: the exported overlay is a
+// standalone artifact, so it cannot inherit live theme colors that drift
+// between builds/themes. Changing them changes the exported chrome appearance.
+//
+/// Selection chrome stroke color (path outlines, AABBs, handles, marquee).
+constexpr std::string_view kOverlayStroke = "#1ea7fd";
+/// Resize-handle fill color.
+constexpr std::string_view kOverlayHandleFill = "#ffffff";
 
 /// Format a double for SVG attribute output, trimming trailing zeros so
 /// `100.0` becomes `100` and `12.50` becomes `12.5`. Determinism matters: the
@@ -262,12 +278,70 @@ std::string FindExternalReference(std::string_view source) {
   return std::string();
 }
 
+/// Append a `<rect>` element for a document-space box with explicit fill/stroke.
+void AppendRect(std::string* out, const Box2d& boxDoc, std::string_view fill,
+                std::string_view stroke, std::string_view strokeWidth) {
+  *out += "<rect x=\"" + FormatNumber(boxDoc.topLeft.x) + "\" y=\"" +
+          FormatNumber(boxDoc.topLeft.y) + "\" width=\"" + FormatNumber(boxDoc.width()) +
+          "\" height=\"" + FormatNumber(boxDoc.height()) + "\" fill=\"" + std::string(fill) +
+          "\" stroke=\"" + std::string(stroke) + "\" stroke-width=\"" + std::string(strokeWidth) +
+          "\"/>";
+}
+
+/// Append a closed `<path>` element tracing the four corners of an oriented box.
+void AppendOrientedBox(std::string* out, const std::array<Vector2d, 4>& cornersDoc) {
+  std::string d = "M " + FormatNumber(cornersDoc[0].x) + " " + FormatNumber(cornersDoc[0].y);
+  for (std::size_t i = 1; i < cornersDoc.size(); ++i) {
+    d += " L " + FormatNumber(cornersDoc[i].x) + " " + FormatNumber(cornersDoc[i].y);
+  }
+  d += " Z";
+  *out += "<path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
+          "\" stroke-width=\"1\"/>";
+}
+
 }  // namespace
 
-Result<std::string, std::string> ExportViewportAsSvg(const svg::SVGDocument& doc,
-                                                     const ViewportState& viewport,
-                                                     const Recti& renderPaneRect,
-                                                     const ViewportExportOptions& options) {
+std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapshot) {
+  std::string out;
+
+  // Selected path outlines. `vector-effect="non-scaling-stroke"` keeps the 1.5px
+  // chrome stroke constant regardless of the export viewBox scale.
+  for (const SelectionChromeSnapshot::PathItem& item : snapshot.paths) {
+    const RcString pathData = item.pathDoc.toSVGPathData();
+    if (pathData.empty()) {
+      continue;
+    }
+    out += "<path d=\"" + EscapeXml(pathData.str()) + "\" fill=\"none\" stroke=\"" +
+           std::string(kOverlayStroke) +
+           "\" stroke-width=\"1.5\" vector-effect=\"non-scaling-stroke\"/>";
+  }
+
+  // Selection AABBs.
+  for (const Box2d& aabbDoc : snapshot.aabbsDoc) {
+    AppendRect(&out, aabbDoc, "none", kOverlayStroke, "1");
+  }
+
+  // Oriented rotation box (drawn instead of axis-aligned AABBs during rotation).
+  if (snapshot.orientedBoundsDoc.has_value()) {
+    AppendOrientedBox(&out, snapshot.orientedBoundsDoc->cornersDoc);
+  }
+
+  // Resize handles: small filled squares.
+  for (const Box2d& handleBoxDoc : snapshot.handleBoxesDoc) {
+    AppendRect(&out, handleBoxDoc, kOverlayHandleFill, kOverlayStroke, "1");
+  }
+
+  // Marquee rect.
+  if (snapshot.marqueeDoc.has_value()) {
+    AppendRect(&out, *snapshot.marqueeDoc, "none", kOverlayStroke, "1");
+  }
+
+  return out;
+}
+
+Result<std::string, std::string> ExportViewportAsSvg(
+    const svg::SVGDocument& doc, const ViewportState& viewport, const Recti& renderPaneRect,
+    const ViewportExportOptions& options, const SelectionChromeSnapshot* overlaySnapshot) {
   using ResultType = Result<std::string, std::string>;
 
   if (!doc.hasSourceStore()) {
@@ -388,13 +462,20 @@ Result<std::string, std::string> ExportViewportAsSvg(const svg::SVGDocument& doc
   }
   output += "</g>\n";
 
-  // Optional editor overlay placeholder. In Milestone 6 this group is always
-  // empty; Milestone 7's OverlayRenderer SVG emit populates it.
+  // Optional editor overlay group. Populated from the captured selection-chrome
+  // snapshot when one is supplied; otherwise emitted empty (M6 back-compat).
+  // Clipped to the same document-space viewport rect as the content so overlay
+  // chrome never spills outside the exported crop.
   if (options.includeSelectionOverlay) {
     output += "  <g id=\"";
     output += kOverlayGroupId;
-    output += "\" data-donner-export-role=\"editor-overlay\" pointer-events=\"none\">";
-    // TODO(M7): overlay primitives populated by OverlayRenderer SVG emit
+    output +=
+        "\" data-donner-export-role=\"editor-overlay\" pointer-events=\"none\" clip-path=\"url(#";
+    output += kClipPathId;
+    output += ")\">";
+    if (overlaySnapshot != nullptr) {
+      output += SerializeOverlaySnapshotToSvg(*overlaySnapshot);
+    }
     output += "</g>\n";
   }
 

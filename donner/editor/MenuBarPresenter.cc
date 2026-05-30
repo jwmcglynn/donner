@@ -45,6 +45,10 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Export Viewport as SVG...", nullptr, false, state.canSave)) {
       actions.exportViewportSvg = true;
     }
+    if (ImGui::MenuItem("Export Viewport as SVG (with overlay)...", nullptr, false,
+                        state.canSave)) {
+      actions.exportViewportSvgWithOverlay = true;
+    }
     ImGui::Separator();
     if (ImGui::MenuItem("Revert", nullptr, false, state.canRevert)) {
       actions.revertFile = true;
