@@ -302,11 +302,17 @@ SVGElement& SVGElement::operator=(const SVGElement& other) = default;
 SVGElement& SVGElement::operator=(SVGElement&& other) noexcept = default;
 
 ElementType SVGElement::type() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<components::ElementTypeComponent>().type();
 }
 
 std::optional<ElementType> SVGElement::tryType() const {
-  if (!handle_ || !handle_.all_of<components::ElementTypeComponent>()) {
+  if (!handle_) {
+    return std::nullopt;
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  if (!handle_.all_of<components::ElementTypeComponent>()) {
     return std::nullopt;
   }
 
@@ -314,11 +320,17 @@ std::optional<ElementType> SVGElement::tryType() const {
 }
 
 xml::XMLQualifiedNameRef SVGElement::tagName() const {
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<donner::components::TreeComponent>().tagName();
 }
 
 std::optional<xml::XMLQualifiedNameRef> SVGElement::tryTagName() const {
-  if (!handle_ || !handle_.all_of<donner::components::TreeComponent>()) {
+  if (!handle_) {
+    return std::nullopt;
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
+  if (!handle_.all_of<donner::components::TreeComponent>()) {
     return std::nullopt;
   }
 
@@ -330,6 +342,11 @@ bool SVGElement::isKnownType() const {
 }
 
 RcString SVGElement::id() const {
+  if (!handle_) {
+    return "";
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (const auto* component = handle_.try_get<components::IdComponent>()) {
     return component->id();
   } else {
@@ -475,23 +492,43 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 }
 
 bool SVGElement::hasAttribute(const xml::XMLQualifiedNameRef& name) const {
+  if (!handle_) {
+    return false;
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
   return attributes != nullptr && attributes->hasAttribute(name);
 }
 
 std::optional<RcString> SVGElement::getAttribute(const xml::XMLQualifiedNameRef& name) const {
+  if (!handle_) {
+    return std::nullopt;
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
   return attributes != nullptr ? attributes->getAttribute(name) : std::nullopt;
 }
 
 SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
     const xml::XMLQualifiedNameRef& matcher) const {
+  if (!handle_) {
+    return SmallVector<xml::XMLQualifiedNameRef, 1>();
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
   return attributes != nullptr ? attributes->findMatchingAttributes(matcher)
                                : SmallVector<xml::XMLQualifiedNameRef, 1>();
 }
 
 SmallVector<xml::XMLQualifiedNameRef, 10> SVGElement::attributes() const {
+  if (!handle_) {
+    return SmallVector<xml::XMLQualifiedNameRef, 10>();
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
   return attributes != nullptr ? attributes->attributes()
                                : SmallVector<xml::XMLQualifiedNameRef, 10>();
@@ -601,6 +638,11 @@ std::optional<SVGElement> SVGElement::parentElement() const {
 }
 
 std::optional<SVGElement> SVGElement::firstChild() const {
+  if (!handle_) {
+    return std::nullopt;
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = FirstElementChild(handle_)) {
     return SVGElement(*handle);
   }
@@ -609,6 +651,11 @@ std::optional<SVGElement> SVGElement::firstChild() const {
 }
 
 std::optional<SVGElement> SVGElement::lastChild() const {
+  if (!handle_) {
+    return std::nullopt;
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = LastElementChild(handle_)) {
     return SVGElement(*handle);
   }
@@ -617,6 +664,11 @@ std::optional<SVGElement> SVGElement::lastChild() const {
 }
 
 std::optional<SVGElement> SVGElement::previousSibling() const {
+  if (!handle_) {
+    return std::nullopt;
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = PreviousElementSibling(handle_)) {
     return SVGElement(*handle);
   }
@@ -625,6 +677,11 @@ std::optional<SVGElement> SVGElement::previousSibling() const {
 }
 
 std::optional<SVGElement> SVGElement::nextSibling() const {
+  if (!handle_) {
+    return std::nullopt;
+  }
+
+  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   if (std::optional<EntityHandle> handle = NextElementSibling(handle_)) {
     return SVGElement(*handle);
   }
