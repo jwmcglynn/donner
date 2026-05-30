@@ -9,6 +9,7 @@
 
 #include "donner/base/FormatNumber.h"
 #include "donner/base/PathOps.h"
+#include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -68,6 +69,10 @@ std::optional<std::string> MergeStyleProperty(std::string_view existingStyle,
 
 struct PathOperationSelection {
   std::vector<PathBooleanInput> inputs;
+};
+
+struct CompoundPathSplit {
+  std::vector<Path> components;
 };
 
 std::vector<svg::SVGElement> SortSelectionByPaintOrder(const svg::SVGDocument& document,
@@ -227,6 +232,111 @@ bool BoxContainsBox(const Box2d& outer, const Box2d& inner, double tolerance) {
          inner.topLeft.y >= outer.topLeft.y - tolerance &&
          inner.bottomRight.x <= outer.bottomRight.x + tolerance &&
          inner.bottomRight.y <= outer.bottomRight.y + tolerance;
+}
+
+bool IsCopiedUnbundleAttribute(const xml::XMLQualifiedNameRef& name) {
+  return name != xml::XMLQualifiedNameRef("d") && name != xml::XMLQualifiedNameRef("id");
+}
+
+std::vector<xml::XMLQualifiedName> CopiedAttributeNames(const svg::SVGElement& source) {
+  std::vector<xml::XMLQualifiedName> result;
+  source.withReadAccess([&](const svg::DocumentReadAccess&, EntityHandle handle) {
+    const auto* attributes = handle.try_get<components::AttributesComponent>();
+    if (attributes == nullptr) {
+      return;
+    }
+
+    const SmallVector<xml::XMLQualifiedNameRef, 10> names = attributes->attributes();
+    result.reserve(names.size());
+    for (const xml::XMLQualifiedNameRef& name : names) {
+      if (!IsCopiedUnbundleAttribute(name)) {
+        continue;
+      }
+      result.emplace_back(RcString(name.namespacePrefix), RcString(name.name));
+    }
+  });
+  return result;
+}
+
+void CopyUnbundleAttributes(const svg::SVGElement& source, svg::SVGPathElement& target) {
+  for (const xml::XMLQualifiedName& name : CopiedAttributeNames(source)) {
+    const xml::XMLQualifiedNameRef nameRef(name);
+    std::optional<RcString> value = source.getAttribute(nameRef);
+    if (value.has_value()) {
+      target.setAttribute(nameRef, std::string_view(*value));
+    }
+  }
+}
+
+void AppendCommandToBuilder(PathBuilder& builder, Path::Verb verb,
+                            std::span<const Vector2d> points) {
+  switch (verb) {
+    case Path::Verb::MoveTo: builder.moveTo(points[0]); break;
+    case Path::Verb::LineTo: builder.lineTo(points[0]); break;
+    case Path::Verb::QuadTo: builder.quadTo(points[0], points[1]); break;
+    case Path::Verb::CurveTo: builder.curveTo(points[0], points[1], points[2]); break;
+    case Path::Verb::ClosePath: builder.closePath(); break;
+  }
+}
+
+std::vector<Path> ExtractCompoundPathContours(const Path& path) {
+  std::vector<Path> contours;
+  PathBuilder builder;
+  bool activeContour = false;
+  bool contourHasSegment = false;
+
+  const auto flushContour = [&]() {
+    if (!activeContour || !contourHasSegment) {
+      builder = PathBuilder();
+      activeContour = false;
+      contourHasSegment = false;
+      return;
+    }
+
+    contours.push_back(builder.build());
+    activeContour = false;
+    contourHasSegment = false;
+  };
+
+  path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
+    if (verb == Path::Verb::MoveTo) {
+      flushContour();
+      builder.moveTo(points[0]);
+      activeContour = true;
+      return;
+    }
+
+    if (!activeContour) {
+      return;
+    }
+
+    AppendCommandToBuilder(builder, verb, points);
+    if (verb != Path::Verb::ClosePath) {
+      contourHasSegment = true;
+    }
+  });
+  flushContour();
+
+  return contours;
+}
+
+CompoundPathSplit SplitCompoundPathIntoContours(const Path& path) {
+  return CompoundPathSplit{
+      .components = ExtractCompoundPathContours(path),
+  };
+}
+
+std::optional<svg::SVGElement> ResolveCompoundPathUnbundleTarget(
+    const EditorApp& app, std::optional<svg::SVGElement> target) {
+  if (target.has_value()) {
+    return target;
+  }
+
+  if (app.selectedElements().size() == 1u) {
+    return app.selectedElements().front();
+  }
+
+  return std::nullopt;
 }
 
 bool PathOperationResultFitsInputBounds(const Path& result,
@@ -657,6 +767,94 @@ bool EditorApp::applyPathOperation(PathOperationKind operation) {
     applyMutation(EditorCommand::DeleteElementCommand(element));
   }
   setSelection(resultPath);
+  return true;
+}
+
+PathOperationAvailability EditorApp::compoundPathUnbundleAvailability(
+    std::optional<svg::SVGElement> target) const {
+  if (!document_.hasDocument()) {
+    return {.canApply = false, .reason = "No SVG document is loaded"};
+  }
+
+  if (document_.hasPendingMutations()) {
+    return {.canApply = false, .reason = "Document edits are still applying"};
+  }
+
+  std::optional<svg::SVGElement> resolvedTarget = ResolveCompoundPathUnbundleTarget(*this, target);
+  if (!resolvedTarget.has_value()) {
+    return {.canApply = false, .reason = "Select one compound path"};
+  }
+
+  if (!resolvedTarget->isa<svg::SVGPathElement>()) {
+    return {.canApply = false, .reason = "Target is not a path"};
+  }
+
+  if (!resolvedTarget->parentElement().has_value()) {
+    return {.canApply = false, .reason = "Target path is detached"};
+  }
+
+  const svg::SVGPathElement pathElement = resolvedTarget->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = pathElement.computedSpline();
+  if (!spline.has_value() || spline->empty()) {
+    return {.canApply = false, .reason = "Path has no geometry"};
+  }
+
+  const CompoundPathSplit split = SplitCompoundPathIntoContours(*spline);
+  if (split.components.size() < 2u) {
+    return {.canApply = false, .reason = "Path has one contour"};
+  }
+
+  return {.canApply = true};
+}
+
+bool EditorApp::unbundleCompoundPath(std::optional<svg::SVGElement> target) {
+  const PathOperationAvailability availability = compoundPathUnbundleAvailability(target);
+  if (!availability.canApply) {
+    return false;
+  }
+
+  svg::SVGDocument& document = document_.document();
+  std::optional<svg::SVGElement> resolvedTarget = ResolveCompoundPathUnbundleTarget(*this, target);
+  if (!resolvedTarget.has_value() || !resolvedTarget->isa<svg::SVGPathElement>()) {
+    return false;
+  }
+
+  const svg::SVGPathElement sourcePath = resolvedTarget->cast<svg::SVGPathElement>();
+  const std::optional<Path> sourceSpline = sourcePath.computedSpline();
+  if (!sourceSpline.has_value()) {
+    return false;
+  }
+
+  const CompoundPathSplit split = SplitCompoundPathIntoContours(*sourceSpline);
+  if (split.components.size() < 2u) {
+    return false;
+  }
+
+  svg::SVGElement parent = sourcePath.parentElement().value_or(document.svgElement());
+  std::vector<svg::SVGElement> replacementSelection;
+  replacementSelection.reserve(split.components.size());
+
+  if (document.hasSourceStore()) {
+    UndoSnapshot before = captureDocumentSourceSnapshot(sourcePath, document.source());
+    const std::array<svg::SVGElement, 1> sourceSelection = {sourcePath};
+    before.selectionTargets = CaptureSelectionTargets(sourceSelection);
+    pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+        .label = "Unbundle compound path",
+        .before = std::move(before),
+    };
+  }
+
+  for (const Path& component : split.components) {
+    svg::SVGPathElement replacement = svg::SVGPathElement::Create(document);
+    const RcString pathData = component.toSVGPathData();
+    replacement.setAttribute("d", std::string_view(pathData));
+    CopyUnbundleAttributes(sourcePath, replacement);
+    replacementSelection.push_back(replacement);
+    applyMutation(EditorCommand::InsertElementCommand(parent, replacement, sourcePath));
+  }
+  applyMutation(EditorCommand::DeleteElementCommand(sourcePath));
+
+  setSelection(std::move(replacementSelection));
   return true;
 }
 

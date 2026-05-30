@@ -2639,10 +2639,6 @@ void EditorShell::renderRenderPaneContextMenu() {
 
     const bool alreadySelected =
         ContainsElement(std::span<const svg::SVGElement>(app_.selectedElements()), hitElement);
-    if (ImGui::MenuItem("Select Element")) {
-      app_.setSelection(hitElement);
-      selectionChanged = true;
-    }
     if (ImGui::MenuItem("Add to Selection", nullptr, false, !alreadySelected)) {
       app_.addToSelection(hitElement);
       selectionChanged = true;
@@ -2660,6 +2656,15 @@ void EditorShell::renderRenderPaneContextMenu() {
   }
   if (ImGui::MenuItem("Delete Selection", nullptr, false, app_.hasSelection())) {
     selectionChanged = app_.deleteSelectionWithUndo(textEditor_.getText());
+  }
+  std::optional<svg::SVGElement> unbundleTarget;
+  if (renderContextMenuHitElement_.has_value()) {
+    unbundleTarget = *renderContextMenuHitElement_;
+  }
+  const PathOperationAvailability unbundleAvailability =
+      app_.compoundPathUnbundleAvailability(unbundleTarget);
+  if (ImGui::MenuItem("Unbundle Compound Path", nullptr, false, unbundleAvailability.canApply)) {
+    selectionChanged = app_.unbundleCompoundPath(unbundleTarget);
   }
   if (referenceHighlightSummary_.totalCount() > 1) {
     if (ImGui::MenuItem("Highlight Refs", nullptr, referenceHighlightActive_)) {

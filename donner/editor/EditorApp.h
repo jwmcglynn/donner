@@ -280,6 +280,32 @@ public:
    */
   bool applyPathOperation(PathOperationKind operation);
 
+  /**
+   * Return whether a compound path can be unbundled into separate path elements.
+   *
+   * If \p target is provided, availability is checked for that element. Otherwise the current
+   * single-element selection is used.
+   *
+   * @param target Optional explicit path element to inspect.
+   * @return Availability and a user-facing disabled reason.
+   */
+  [[nodiscard]] PathOperationAvailability compoundPathUnbundleAvailability(
+      std::optional<svg::SVGElement> target = std::nullopt) const;
+
+  /**
+   * Queue an unbundle operation for one compound path.
+   *
+   * The source path is split into one path per contour, including hole/counter contours such as the
+   * center of a letter D. New path elements inherit the original path's non-geometry attributes
+   * except `id`, and the original path is removed after the replacement paths are inserted at the
+   * same paint-order position.
+   *
+   * @param target Optional explicit path element to unbundle. If omitted, the current
+   *   single-element selection is used.
+   * @return true if commands were queued.
+   */
+  bool unbundleCompoundPath(std::optional<svg::SVGElement> target = std::nullopt);
+
   // ---------------------------------------------------------------------------
   // Hit testing
   // ---------------------------------------------------------------------------
