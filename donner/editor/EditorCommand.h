@@ -63,21 +63,19 @@ struct EditorCommand {
     /// valid. Not coalesced.
     DeleteElement,
 
-    /// Replace the entire document by reparsing the post-cut bytes for a
-    /// shape-clipboard Cut. Behaves like ReplaceDocument with
-    /// `preserveUndoOnReparse=true`, but tags the operation so undo /
-    /// telemetry can label it "Cut shapes" instead of a generic reparse.
-    /// Exclusive: drains the queue of every prior command. See
-    /// `donner/editor/ShapeClipboardCommands.h`.
-    CutShapes,
+    /// Insert a `<text>` element carrying `textContent` as a child of
+    /// `parentElement`, optionally before `referenceElement`. Used by the
+    /// Text authoring tool (`TextTool`). The element's text content is set
+    /// from `textContent` and the element is then attached exactly like
+    /// InsertElement. Not coalesced.
+    InsertText,
 
-    /// Replace the entire document by reparsing the post-paste bytes for
-    /// a shape-clipboard Paste / Paste in Front. Behaves like
-    /// ReplaceDocument with `preserveUndoOnReparse=true`, but tags the
-    /// operation so undo / telemetry can label it "Paste shapes".
-    /// Exclusive: drains the queue of every prior command. See
-    /// `donner/editor/ShapeClipboardCommands.h`.
-    PasteShapes,
+    /// Replace the element's text content with `textContent` (the element is
+    /// a `<text>` or `<tspan>`). Used by the text-property inspector's
+    /// content field. Coalesces by element identity at flush time —
+    /// successive SetTextContent commands targeting the same element collapse
+    /// to the most-recently-queued value, like SetTransform.
+    SetTextContent,
   };
 
   Kind kind = Kind::SetTransform;
@@ -114,6 +112,11 @@ struct EditorCommand {
 
   /// SetAttribute payload: the new attribute value.
   std::string attributeValue;
+
+  /// InsertText / SetTextContent payload: the text content to apply. Stored
+  /// by value because the source string (default content or inspector
+  /// buffer) may go out of scope before the queue flushes.
+  std::string textContent;
 
   /// Builds a SetTransform command.
   static EditorCommand SetTransformCommand(svg::SVGElement element, const Transform2d& transform) {
@@ -165,23 +168,26 @@ struct EditorCommand {
     return cmd;
   }
 
-  /// Builds a CutShapes command from the post-cut source bytes. The caller
-  /// is responsible for recording the matching undo entry on the timeline;
-  /// the command itself just swaps the document.
-  static EditorCommand CutShapesCommand(std::string bytes) {
+  /// Builds an InsertText command. `textElement` should be a freshly-created
+  /// `<text>` element; its text content is set to `content` when applied.
+  static EditorCommand InsertTextCommand(svg::SVGElement parent, svg::SVGElement textElement,
+                                         std::string content,
+                                         std::optional<svg::SVGElement> reference = std::nullopt) {
     EditorCommand cmd;
-    cmd.kind = Kind::CutShapes;
-    cmd.bytes = std::move(bytes);
-    cmd.preserveUndoOnReparse = true;
+    cmd.kind = Kind::InsertText;
+    cmd.parentElement = std::move(parent);
+    cmd.element = std::move(textElement);
+    cmd.textContent = std::move(content);
+    cmd.referenceElement = std::move(reference);
     return cmd;
   }
 
-  /// Builds a PasteShapes command from the post-paste source bytes.
-  static EditorCommand PasteShapesCommand(std::string bytes) {
+  /// Builds a SetTextContent command.
+  static EditorCommand SetTextContentCommand(svg::SVGElement element, std::string content) {
     EditorCommand cmd;
-    cmd.kind = Kind::PasteShapes;
-    cmd.bytes = std::move(bytes);
-    cmd.preserveUndoOnReparse = true;
+    cmd.kind = Kind::SetTextContent;
+    cmd.element = std::move(element);
+    cmd.textContent = std::move(content);
     return cmd;
   }
 };

@@ -3,6 +3,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -240,21 +241,40 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       break;
     }
 
-    case EditorCommand::Kind::CutShapes:
-    case EditorCommand::Kind::PasteShapes: {
-      // Shape-clipboard structural replaces reparse `bytes` into a fresh
-      // document, exactly like ReplaceDocument(preserveUndoOnReparse=true).
-      // The kind discriminator is preserved at this layer purely for
-      // labelling — undo entries are recorded by the orchestrator
-      // (EditorShell), not here. On parse failure we leave the existing
-      // document in place and surface a diagnostic.
-      ParseWarningSink sink;
-      auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink);
-      if (result.hasError()) {
-        lastParseError_ = std::move(result.error());
+    case EditorCommand::Kind::InsertText: {
+      if (!command.parentElement.has_value() || !command.element.has_value()) {
         return;
       }
-      (void)setDocumentMaybeStructural(std::move(result).result());
+      // Insert the element first, then set its text content. `insertElement`
+      // re-projects the element's XML subtree (which has no data child yet),
+      // so setting the text before insertion would be overwritten by the
+      // projection. Setting it afterward leaves the live DOM with the text.
+      svg::SVGElement textElement = *command.element;
+      xml::ApplySourceEditResult result =
+          document_->insertElement(*command.parentElement, textElement, command.referenceElement);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
+      if (result.diagnostic.has_value()) {
+        lastParseError_ = std::move(result.diagnostic);
+      }
+      if (textElement.isa<svg::SVGTextContentElement>()) {
+        textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
+      }
+      break;
+    }
+
+    case EditorCommand::Kind::SetTextContent: {
+      if (!command.element.has_value()) {
+        return;
+      }
+      svg::SVGElement textElement = *command.element;
+      if (!textElement.isa<svg::SVGTextContentElement>()) {
+        return;
+      }
+      // Replace the live DOM text content so the renderer and inspector reflect
+      // the new content immediately. The source pane re-syncs through the
+      // editor's normal DOM->source path.
+      textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
       break;
     }
   }

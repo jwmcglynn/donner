@@ -1293,6 +1293,8 @@ void EditorShell::handleGlobalShortcuts() {
     penTool_.commitOpenPath(app_);
     flushQueuedMutationAndRefreshOverlay();
     activeTool_ = ActiveTool::Select;
+    penTool_.cancel();
+    textTool_.cancel();
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
@@ -1300,13 +1302,9 @@ void EditorShell::handleGlobalShortcuts() {
     activeTool_ = ActiveTool::Pen;
   }
 
-  if (!anyPopupOpen && !cmd && activeTool_ == ActiveTool::Pen && penTool_.isDrafting() &&
-      (ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/false) ||
-       ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false))) {
-    // Enter commits the in-progress open path without closing it.
-    penTool_.commitOpenPath(app_);
-    flushQueuedMutationAndRefreshOverlay();
-    return;
+  if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
+      ImGui::IsKeyPressed(ImGuiKey_T, /*repeat=*/false)) {
+    activeTool_ = ActiveTool::Text;
   }
 
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
@@ -1315,6 +1313,13 @@ void EditorShell::handleGlobalShortcuts() {
     // stack to the pre-pen baseline.
     penTool_.cancel(app_);
     flushQueuedMutationAndRefreshOverlay();
+    return;
+  }
+
+  if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
+      activeTool_ == ActiveTool::Text) {
+    textTool_.cancel();
+    activeTool_ = ActiveTool::Select;
     return;
   }
 
@@ -1670,6 +1675,7 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
     None,
     SelectPointer,
     PenTool,
+    Text,
   };
   const auto renderButton = [&](ActiveTool tool, const char* label, ToolButtonIcon icon,
                                 const char* tooltip) {
@@ -1693,6 +1699,14 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       DrawSelectToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     } else if (icon == ToolButtonIcon::PenTool) {
       DrawPenToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    } else if (icon == ToolButtonIcon::Text) {
+      const ImVec2 buttonMin = ImGui::GetItemRectMin();
+      const ImVec2 buttonMax = ImGui::GetItemRectMax();
+      const char* glyph = "T";
+      const ImVec2 textSize = ImGui::CalcTextSize(glyph);
+      drawList->AddText(ImVec2((buttonMin.x + buttonMax.x - textSize.x) * 0.5f,
+                               (buttonMin.y + buttonMax.y - textSize.y) * 0.5f),
+                        IM_COL32(230, 230, 230, 255), glyph);
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("%s", tooltip);
@@ -1823,6 +1837,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   const bool toolEligible = canvasHovered && !interactionController_.panning() && !spaceHeld;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
+  const bool textToolActive = activeTool_ == ActiveTool::Text;
   const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint, bool includeRotate) {
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     if (boundsCache.lastSelection != app_.selectedElements()) {
@@ -1973,6 +1988,12 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           if (!leftMouseDown && penTool_.isDraggingAnchor()) {
             penTool_.onMouseUp(app_, pendingClick.documentPoint);
           }
+          queuedMutationForNextFrame = true;
+        } else if (textToolActive) {
+          // Text placement is a single click: insert the new `<text>` and
+          // switch back to the Select tool so it can be moved and edited.
+          textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+          activeTool_ = ActiveTool::Select;
           queuedMutationForNextFrame = true;
         }
         if (queuedMutationForNextFrame) {
@@ -2199,8 +2220,12 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::Begin("Inspector", nullptr, paneFlags);
   const bool inspectorQueuedMutation =
       sidebarPresenter_.renderInspector(liveAppForClicks, interactionController_.viewport());
+  // Text-property inspector: shown only when the selection is exactly one
+  // `<text>` element. Content/style edits route through the mutation seam.
+  const bool textInspectorQueuedMutation =
+      textInspectorPanel_.render(liveAppForClicks, ImGui::GetTime());
   ImGui::End();
-  if (inspectorQueuedMutation) {
+  if (inspectorQueuedMutation || textInspectorQueuedMutation) {
     flushQueuedMutationAndRefreshOverlay();
   }
 

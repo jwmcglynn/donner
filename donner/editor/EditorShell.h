@@ -29,6 +29,8 @@
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/editor/TextInspectorPanel.h"
+#include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportInteractionController.h"
 
 namespace donner::editor::gui {
@@ -248,9 +250,11 @@ private:
   EditorApp app_;
   SelectTool selectTool_;
   PenTool penTool_;
+  TextTool textTool_;
   enum class ActiveTool : std::uint8_t {
     Select,
     Pen,
+    Text,
   };
   ActiveTool activeTool_ = ActiveTool::Select;
   TextEditor textEditor_;
@@ -281,6 +285,7 @@ private:
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;
+  TextInspectorPanel textInspectorPanel_;
   LayerInspectorPanel layerInspectorPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;

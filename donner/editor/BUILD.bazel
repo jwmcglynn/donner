@@ -661,6 +661,8 @@ donner_cc_library(
         ":source_selection",
         ":style_source_annotations",
         ":text_editor",
+        ":text_inspector_panel",
+        ":text_tool",
         ":tracy_wrapper",
         ":undo_timeline",
         ":viewport_interaction_controller",
@@ -771,6 +773,34 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
+    name = "text_tool",
+    srcs = ["TextTool.cc"],
+    hdrs = ["TextTool.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        ":tool",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "text_inspector_panel",
+    srcs = ["TextInspectorPanel.cc"],
+    hdrs = ["TextInspectorPanel.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        ":imgui_headers",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+        "@imgui",
     ],
 )
 
