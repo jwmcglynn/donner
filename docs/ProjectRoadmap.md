@@ -15,9 +15,10 @@ development.
 
 The next release target is **v0.8: Donner SVG Editor & Toolkit**. Its scope is everything completed
 since v0.5, plus the editor showcase work needed to honestly demonstrate Donner authoring its own
-new splash: text creation, text-to-outline conversion, viewport SVG export, and optional editor
-overlay export. The broader production-quality v1.0 milestone remains the follow-up release for
-animation, scripting, conformance completion, parser hardening, and ecosystem integration.
+new splash: shape cut/copy/paste, a tuned Pen tool, text creation, text-to-outline conversion,
+viewport SVG export, and optional editor overlay export. The broader production-quality v1.0
+milestone remains the follow-up release for animation, scripting, conformance completion, parser
+hardening, and ecosystem integration.
 
 ---
 
@@ -80,6 +81,8 @@ and ship a self-authored SVG showcase.
   in as SVG.
 - Compatibility story: the final splash does not depend on system fonts because the visible `SVG`
   lettering is converted to path outlines.
+- Usability story: the editor can perform the basic shape authoring operations needed to create the
+  splash without source-pane surgery or external design tools.
 
 ### Completed Work Included in v0.8
 
@@ -101,6 +104,11 @@ The release collects all completed editor/toolkit work since v0.5, including:
 
 These items remain required before the v0.8 release can be cut:
 
+- [ ] **Shape cut/copy/paste** — duplicate, cut, and paste selected SVG shapes/groups with source
+      sync, undo, selection restoration, default paste offset, Paste in Front, and deterministic ID
+      handling.
+- [ ] **Tuned Pen tool** — path creation that supports line/curve anchors, close/cancel, live
+      preview, immediate bounds/overlay updates, root-contained source insertion, and undo/redo.
 - [ ] **Text authoring UI** — create and edit short SVG text from the editor.
 - [ ] **Convert Text to Outlines** — convert selected `<text>` into deterministic path geometry
       using Donner text layout and glyph outlines.
@@ -117,6 +125,10 @@ These items remain required before the v0.8 release can be cut:
 ### v0.8 Release Criteria
 
 - The checked-in v0.8 showcase SVG parses and renders in Donner.
+- The editor can cut/copy/paste representative showcase shapes without losing source/canvas sync or
+  selection/undo state.
+- The Pen tool can author and close a path for the showcase with bounds and overlay matching the
+  rendered path in the same visible frame.
 - The visible `SVG` lettering in the final showcase is path geometry, not live `<text>`.
 - The showcase export includes the selected outlined `SVG` letters and editor overlay chrome when
   the overlay variant is requested.
