@@ -285,6 +285,23 @@ donner_cc_library(
     ],
 )
 
+# Convert Text to Outlines (Milestone 5 of
+# `docs/design_docs/0047-v0_8_showcase.md` §"Convert Text to Outlines"). Pure
+# geometry->SVG conversion: resolves placed glyph outlines via the
+# renderer-facing text geometry (`SVGTextElement::convertToPath`) and splices a
+# replacement outline `<g>` into the document source. Editor-command-agnostic so
+# it can be unit-tested headlessly.
+donner_cc_library(
+    name = "text_to_outlines",
+    srcs = ["TextToOutlines.cc"],
+    hdrs = ["TextToOutlines.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
 donner_cc_library(
     name = "attribute_writeback",
     srcs = ["AttributeWriteback.cc"],
@@ -659,6 +676,7 @@ donner_cc_library(
         ":shape_clipboard_commands",
         ":shape_clipboard_payload",
         ":sidebar_presenter",
+        ":text_to_outlines",
         ":source_selection",
         ":style_source_annotations",
         ":text_editor",

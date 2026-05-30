@@ -241,8 +241,19 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       break;
     }
 
-    case EditorCommand::Kind::InsertText: {
-      if (!command.parentElement.has_value() || !command.element.has_value()) {
+    case EditorCommand::Kind::CutShapes:
+    case EditorCommand::Kind::PasteShapes:
+    case EditorCommand::Kind::ConvertTextToOutlines: {
+      // Shape-clipboard and text-to-outline structural replaces reparse `bytes`
+      // into a fresh document, exactly like
+      // ReplaceDocument(preserveUndoOnReparse=true). The kind discriminator is
+      // preserved at this layer purely for labelling — undo entries are
+      // recorded by the orchestrator (EditorShell), not here. On parse failure
+      // we leave the existing document in place and surface a diagnostic.
+      ParseWarningSink sink;
+      auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink);
+      if (result.hasError()) {
+        lastParseError_ = std::move(result.error());
         return;
       }
       // Insert the element first, then set its text content. `insertElement`

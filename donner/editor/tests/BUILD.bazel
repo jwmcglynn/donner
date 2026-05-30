@@ -859,3 +859,27 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+# Milestone 5 Convert Text to Outlines
+# (`docs/design_docs/0047-v0_8_showcase.md` §"Convert Text to Outlines"). Covers
+# the pure conversion helper, the structural-replace apply path through
+# AsyncSVGDocument, undo restoration, the empty-outline failure path, a
+# before/after pixel-compare, and the three-glyph performance budget. Runs in
+# the default basic-text (stb_truetype) configuration using the embedded
+# fallback font, so no checked-in font or `--config=text-full` is required.
+donner_cc_test(
+    name = "text_outline_tests",
+    srcs = ["TextToOutlines_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base",
+        "//donner/editor:async_svg_document",
+        "//donner/editor:command_queue",
+        "//donner/editor:text_to_outlines",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

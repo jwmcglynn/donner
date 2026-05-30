@@ -33,12 +33,14 @@
 #include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/StyleSourceAnnotations.h"
+#include "donner/editor/TextToOutlines.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -1447,6 +1449,99 @@ void EditorShell::pasteShapesFromClipboard(bool inFront) {
 
   app_.restoreSelectionAfterNextDocumentReplace(std::move(selectionTargets));
   app_.applyMutation(EditorCommand::PasteShapesCommand(std::move(prepared.mergedSource)));
+}
+
+bool EditorShell::selectionIsAllText() const {
+  if (!app_.hasSelection()) {
+    return false;
+  }
+  for (const svg::SVGElement& element : app_.selectedElements()) {
+    if (element.tagName().name != svg::SVGTextElement::Tag) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void EditorShell::convertSelectedTextToOutlines() {
+  if (!app_.hasDocument() || !selectionIsAllText()) {
+    return;
+  }
+
+  svg::SVGDocument& document = app_.document().document();
+  if (!document.hasSourceStore()) {
+    return;
+  }
+  const std::string sourceBefore(document.source());
+
+  // Convert each selected `<text>` against the running merged source so the
+  // whole selection collapses into one undoable structural replace. Per design
+  // doc 0047 § "Error Handling", any failure abandons the command without
+  // mutating the document.
+  std::string mergedSource = sourceBefore;
+  std::vector<std::string> outlineGroupIds;
+  for (const svg::SVGElement& element : app_.selectedElements()) {
+    ParseWarningSink stageSink;
+    auto staged = svg::parser::SVGParser::ParseSVG(mergedSource, stageSink);
+    if (!staged.hasResult()) {
+      lastConvertTextError_ = "Convert to outlines failed: intermediate source did not parse.";
+      return;
+    }
+    svg::SVGDocument stagedDoc = staged.result();
+
+    // Re-resolve the element in the staged document so the source range matches
+    // `mergedSource`. Multi-select requires ids; a lone unidentified `<text>`
+    // resolves by tag.
+    std::optional<svg::SVGElement> stagedElement;
+    const RcString id = element.id();
+    if (!id.empty()) {
+      stagedElement = stagedDoc.querySelector("#" + id.str());
+    } else if (app_.selectedElements().size() == 1u) {
+      stagedElement = stagedDoc.querySelector("text");
+    }
+    if (!stagedElement.has_value()) {
+      lastConvertTextError_ =
+          "Convert to outlines failed: could not locate the <text> element to convert.";
+      return;
+    }
+
+    ConvertTextToOutlinesResult result = convertTextToOutlines(stagedDoc, *stagedElement);
+    if (!result.ok) {
+      lastConvertTextError_ = result.error;
+      return;
+    }
+    mergedSource = std::move(result.mergedSource);
+    outlineGroupIds.push_back(std::move(result.outlineGroupId));
+  }
+
+  // Build selection-restore targets for the new outline groups from a scratch
+  // parse, mirroring the shape-paste flow so the converted geometry is selected
+  // after the reparse.
+  std::vector<AttributeWritebackTarget> selectionTargets;
+  {
+    ParseWarningSink sink;
+    auto scratch = svg::parser::SVGParser::ParseSVG(mergedSource, sink);
+    if (scratch.hasResult()) {
+      svg::SVGDocument scratchDoc = scratch.result();
+      for (const std::string& groupId : outlineGroupIds) {
+        if (auto element = scratchDoc.querySelector("#" + groupId); element.has_value()) {
+          if (auto target = captureAttributeWritebackTarget(*element); target.has_value()) {
+            selectionTargets.push_back(std::move(*target));
+          }
+        }
+      }
+    }
+  }
+
+  // Record one undo entry spanning the whole conversion, mirroring the
+  // structural source-edit undo used by paste / delete.
+  const svg::SVGElement undoAnchor = document.svgElement();
+  app_.undoTimeline().record("Convert text to outlines",
+                             captureDocumentSourceSnapshot(undoAnchor, sourceBefore),
+                             captureDocumentSourceSnapshot(undoAnchor, mergedSource));
+
+  app_.restoreSelectionAfterNextDocumentReplace(std::move(selectionTargets));
+  app_.applyMutation(EditorCommand::ConvertTextToOutlinesCommand(std::move(mergedSource)));
 }
 
 void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float paneWidth,
@@ -3343,6 +3438,7 @@ void EditorShell::runFrame() {
       .sourceFocusMode = sourceFocusMode_,
       .hasShapeSelection = app_.hasSelection(),
       .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
+      .hasTextSelection = selectionIsAllText(),
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -3399,6 +3495,9 @@ void EditorShell::runFrame() {
   }
   if (menuActions.pasteInFront) {
     pasteShapesFromClipboard(/*inFront=*/true);
+  }
+  if (menuActions.convertTextToOutlines) {
+    convertSelectedTextToOutlines();
   }
   if (menuActions.selectAll) {
     textEditor_.selectAll();

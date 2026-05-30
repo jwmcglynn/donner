@@ -18,6 +18,9 @@ struct MenuBarState {
   /// True when the shape clipboard holds a paste-able payload. Enables shape
   /// Paste / Paste in Front when the source pane is not focused.
   bool hasShapeClipboard = false;
+  /// True when the canvas selection is exactly one or more `<text>` elements,
+  /// the precondition for "Convert Text to Outlines" (design doc 0047 M5).
+  bool hasTextSelection = false;
 };
 
 struct MenuBarActions {
@@ -35,6 +38,7 @@ struct MenuBarActions {
   bool copy = false;
   bool paste = false;
   bool pasteInFront = false;
+  bool convertTextToOutlines = false;
   bool selectAll = false;
   bool zoomIn = false;
   bool zoomOut = false;

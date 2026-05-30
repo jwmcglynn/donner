@@ -70,12 +70,22 @@ struct EditorCommand {
     /// InsertElement. Not coalesced.
     InsertText,
 
-    /// Replace the element's text content with `textContent` (the element is
-    /// a `<text>` or `<tspan>`). Used by the text-property inspector's
-    /// content field. Coalesces by element identity at flush time —
-    /// successive SetTextContent commands targeting the same element collapse
-    /// to the most-recently-queued value, like SetTransform.
-    SetTextContent,
+    /// Replace the entire document by reparsing the post-paste bytes for
+    /// a shape-clipboard Paste / Paste in Front. Behaves like
+    /// ReplaceDocument with `preserveUndoOnReparse=true`, but tags the
+    /// operation so undo / telemetry can label it "Paste shapes".
+    /// Exclusive: drains the queue of every prior command. See
+    /// `donner/editor/ShapeClipboardCommands.h`.
+    PasteShapes,
+
+    /// Replace the entire document by reparsing the post-conversion bytes for a
+    /// "Convert Text to Outlines" operation. Behaves like ReplaceDocument with
+    /// `preserveUndoOnReparse=true`, but tags the operation so undo / telemetry
+    /// can label it "Convert text to outlines". The reparsed source has the
+    /// original `<text>` element replaced in situ by an outline `<g>` group.
+    /// Exclusive: drains the queue of every prior command. See
+    /// `donner/editor/TextToOutlines.h`.
+    ConvertTextToOutlines,
   };
 
   Kind kind = Kind::SetTransform;
@@ -188,6 +198,18 @@ struct EditorCommand {
     cmd.kind = Kind::SetTextContent;
     cmd.element = std::move(element);
     cmd.textContent = std::move(content);
+    return cmd;
+  }
+
+  /// Builds a ConvertTextToOutlines command from the post-conversion source
+  /// bytes. The caller (TextToOutlines + EditorShell) prepares `bytes` with the
+  /// original `<text>` replaced by the outline `<g>`; the command swaps the
+  /// document. The caller records the matching undo entry.
+  static EditorCommand ConvertTextToOutlinesCommand(std::string bytes) {
+    EditorCommand cmd;
+    cmd.kind = Kind::ConvertTextToOutlines;
+    cmd.bytes = std::move(bytes);
+    cmd.preserveUndoOnReparse = true;
     return cmd;
   }
 };

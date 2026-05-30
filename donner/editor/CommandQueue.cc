@@ -21,7 +21,8 @@ CommandQueue::FlushResult CommandQueue::flush() {
   // commands hold, so prior commands must be discarded.
   auto isStructuralReplace = [](EditorCommand::Kind kind) {
     return kind == EditorCommand::Kind::ReplaceDocument || kind == EditorCommand::Kind::CutShapes ||
-           kind == EditorCommand::Kind::PasteShapes;
+           kind == EditorCommand::Kind::PasteShapes ||
+           kind == EditorCommand::Kind::ConvertTextToOutlines;
   };
 
   std::size_t startIndex = 0;

@@ -168,6 +168,15 @@ private:
   void copySelectedShapesToClipboard();
   void cutSelectedShapesToClipboard();
   void pasteShapesFromClipboard(bool inFront);
+  // Convert Text to Outlines (design doc 0047 §"Convert Text to Outlines"). Runs
+  // when the selection is exactly one or more `<text>` elements. Builds the
+  // outlined source via `convertTextToOutlines`, records one undo step, and
+  // selects the new outline group(s). Abandoned without mutating if any selected
+  // `<text>` fails outline generation (§"Error Handling").
+  void convertSelectedTextToOutlines();
+  // True when the canvas selection is non-empty and every selected element is a
+  // `<text>` element — the precondition for "Convert Text to Outlines".
+  [[nodiscard]] bool selectionIsAllText() const;
   void resetPresentationForLoadedDocument(std::string_view canonicalSource);
   void requestRevert();
   void requestSave();
@@ -264,6 +273,10 @@ private:
   /// Ids of just-pasted elements to select once the PasteShapes reparse lands.
   /// Resolved against the new document in the next `flushFrame()` and cleared.
   std::vector<std::string> pendingPasteSelectionIds_;
+  /// Most recent "Convert Text to Outlines" failure reason, surfaced to the user
+  /// (design doc 0047 §"Error Handling": the command reports the blocking
+  /// element rather than partially mutating).
+  std::string lastConvertTextError_;
   GlTextureCache textures_;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;

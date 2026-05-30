@@ -82,6 +82,10 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Paste in Front", "Cmd+F", false, state.hasShapeClipboard)) {
       actions.pasteInFront = true;
     }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Convert Text to Outlines", nullptr, false, state.hasTextSelection)) {
+      actions.convertTextToOutlines = true;
+    }
     if (ImGui::MenuItem("Select All", "Cmd+A", false, state.sourcePaneFocused)) {
       actions.selectAll = true;
     }
