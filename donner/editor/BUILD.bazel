@@ -682,6 +682,7 @@ donner_cc_library(
         ":text_editor",
         ":text_inspector_panel",
         ":text_tool",
+        ":tool_keybinding",
         ":tracy_wrapper",
         ":undo_timeline",
         ":viewport_interaction_controller",
@@ -997,6 +998,12 @@ donner_cc_library(
 #library pulls in the real Tracy client; otherwise the macros are no - ops.
 #Tracy is linked into every editor build(including release + WASM), runtime -
 #gated by a UI toggle — see the Security section of docs / design_docs / 0020 - editor.md.
+donner_cc_library(
+    name = "tool_keybinding",
+    hdrs = ["ToolKeybinding.h"],
+    visibility = ["//visibility:public"],
+)
+
 donner_cc_library(
     name = "tracy_wrapper",
     hdrs = ["TracyWrapper.h"],

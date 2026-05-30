@@ -34,6 +34,7 @@
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextToOutlines.h"
+#include "donner/editor/ToolKeybinding.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/editor/XmlAutocomplete.h"
@@ -266,6 +267,14 @@ void DrawSelectToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImV
                         IM_COL32(255, 255, 255, 255), ImDrawFlags_Closed, 3.2f);
   drawList->AddPolyline(points.data(), static_cast<int>(points.size()), IM_COL32(0, 0, 0, 255),
                         ImDrawFlags_Closed, 1.7f);
+}
+
+// Build the "<label> (<key>)" tooltip string for a tool button from the shared
+// Illustrator-compatible keybinding table, so the tooltip and the keyboard
+// shortcut handler can never disagree about which key activates the tool.
+std::string ToolTooltipText(ToolId tool) {
+  const ToolKeybinding binding = KeybindingForTool(tool);
+  return std::string(binding.label) + " (" + binding.key + ")";
 }
 
 float ColorChannelToFloat(std::uint8_t value) {
