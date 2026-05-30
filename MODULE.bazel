@@ -1,9 +1,12 @@
-"""Donner SVG: Embeddable browser-grade SVG2 engine for your application.
+"""Donner SVG Editor & Toolkit: an SVG editor application plus reusable SVG libraries.
 
-A C++20 SVG rendering library providing full SVG DOM access with complete rendering
-support including text, filters, and animation."""
+A C++20 SVG editor plus rendering, geometry, and toolkit libraries providing full SVG DOM
+access with complete rendering support including text, filters, and animation."""
 
-module(name = "donner", version = "0.8.0-pre")
+# ReleaseBot: bump `version` to the published v0.8 version string when stamping the
+# "Donner SVG Editor & Toolkit" release. The value here is a real published version (not a
+# placeholder), so the M9 rebrand leaves it at 0.5.1 rather than inventing a version.
+module(name = "donner", version = "0.5.1")
 
 # Donner build-time feature configuration.
 # Downstream consumers can override these defaults via donner.configure() in their MODULE.bazel.

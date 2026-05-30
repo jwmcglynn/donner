@@ -147,6 +147,8 @@ See [v0_8_showcase](design_docs/0047-v0_8_showcase.md) for the detailed executio
 
 ## v1.0 — Production Release (future)
 
+The production-quality milestone that follows the v0.8 **Donner SVG Editor & Toolkit** release.
+
 Focus: interactive editing, conformance, parser hardening, and ecosystem integration.
 
 ### SVG Animation
