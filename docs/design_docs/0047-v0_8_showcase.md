@@ -18,6 +18,10 @@ showcase image is not just a refreshed logo; it is proof that the editor can aut
 content, convert text into editable vector outlines, preserve selection chrome, and export the
 current editor viewport as a static SVG "screenshot".
 
+The editor also needs the everyday authoring affordances required to make that workflow credible:
+shape cut/copy/paste and a tuned Pen tool. The showcase should not require source-pane surgery,
+external duplication, or a fragile path-authoring workflow to place and refine the new artwork.
+
 The target artifact is a cropped SVG export of the editor viewport showing the new Donner splash
 with the letters `SVG` added to the design, converted to outlines, selected, and rendered with the
 editor's path overlay UI visible. The final public splash is therefore both artwork and product
@@ -39,6 +43,12 @@ demo: it shows Donner editing Donner's own logo.
 - Add an editor export command that saves the current viewport as a cropped SVG file.
 - Let viewport SVG export optionally include editor path overlay UI: selected path outlines,
   bounds, and handles.
+- Add shape cut/copy/paste for selected SVG elements, including undoable Cut and deterministic
+  pasted source insertion.
+- Include Paste in Front with `Cmd+F` for exact-position duplication; default Paste offsets the
+  result from the copied location so the new shapes are visible.
+- Tune the Pen tool enough for release-authoring use: reliable point placement, handle editing,
+  closure, preview, undo, and same-frame bounds/overlay updates.
 - Produce a final showcase SVG where the outlined `SVG` letters are selected and the overlay UI is
   visible.
 - Keep the showcase reproducible enough that future releases can update it without guessing which
@@ -55,10 +65,15 @@ demo: it shows Donner editing Donner's own logo.
 - PNG screenshot export. The v0.8 showcase is an SVG output.
 - Replacing the normal Save / Save As document path. Viewport export is a separate Export command.
 - Making the final showcase depend on installed system fonts.
+- Full Illustrator/Figma parity for path editing. V0.8 needs a dependable Pen tool for authored
+  showcase paths, not every advanced path editing mode.
+- Cross-application rich clipboard interoperability beyond sensible SVG/text payloads. Internal
+  editor round-trip correctness comes first.
 
 ## Next Steps
 
 - Update public copy and release metadata for the **Donner SVG Editor & Toolkit** rebrand.
+- Add shape clipboard and Pen tool polish to the editor implementation plan.
 - Add the text authoring and text-to-outline design slice to the editor plan.
 - Implement viewport SVG export with an overlay inclusion option.
 - Use the editor to create and export the v0.8 showcase asset, then check in the final SVG and its
@@ -72,21 +87,38 @@ demo: it shows Donner editing Donner's own logo.
   - [ ] Add a manual release checklist describing the editor-only operations used to create the
         asset.
   - [ ] Add a test fixture that loads the planned source asset and fails if it is missing or invalid.
-- [ ] **Milestone 2: Text authoring UI**
+- [ ] **Milestone 2: Core shape authoring affordances**
+  - [ ] Add Edit -> Cut / Copy / Paste behavior for selected shapes, groups, and compound paths.
+  - [ ] Use an SVG-native clipboard payload for copied elements, with plain text fallback where
+        platform clipboard APIs require it.
+  - [ ] Paste into the current document inside the appropriate parent/root `<svg>`, not after the
+        root close tag.
+  - [ ] Offset pasted shapes visibly from the source selection while preserving transforms and paint
+        order semantics.
+  - [ ] Add Paste in Front with `Cmd+F` for exact-position duplication when the user needs a
+        perfectly aligned copy in front of the copied artwork.
+  - [ ] Regenerate conflicting IDs and update internal references where possible, or fail without
+        mutating when safe ID/reference repair is not possible.
+  - [ ] Make Cut a single undoable operation that restores the original selection and source text.
+  - [ ] Tune the Pen tool for predictable release use: click-to-line, click-drag handles, close
+        path, cancel/commit, live preview, immediate selection bounds, and overlay lockstep.
+  - [ ] Ensure Pen-created paths enter the document inside the root `<svg>` and participate in
+        undo/source sync like other editor commands.
+- [ ] **Milestone 3: Text authoring UI**
   - [ ] Add a Text tool or Insert Text command that creates a `<text>` element at the current
         viewport/click position.
   - [ ] Add inspector controls for text content, font family, font size, fill, stroke, and basic
         transform.
   - [ ] Route text creation and edits through `EditorCommand` and undo snapshots.
   - [ ] Keep text source insertion rooted inside the current `<svg>` element.
-- [ ] **Milestone 3: Convert Text to Outlines**
+- [ ] **Milestone 4: Convert Text to Outlines**
   - [ ] Add a `ConvertTextToOutlinesCommand` for selected text elements.
   - [ ] Reuse `TextEngine` placed glyph geometry so conversion matches Donner rendering.
   - [ ] Emit deterministic `<path>` elements or a grouped outline subtree in document space.
   - [ ] Preserve visual style, transforms, fill rule, opacity, and paint order.
   - [ ] Delete or replace the original `<text>` only after outline generation succeeds.
   - [ ] Select the new outline group/paths and restore the original selection on undo.
-- [ ] **Milestone 4: Viewport SVG export**
+- [ ] **Milestone 5: Viewport SVG export**
   - [ ] Add File -> Export Viewport as SVG.
   - [ ] Compute the export crop from `ViewportState` and the render pane content rect.
   - [ ] Save an SVG whose `viewBox` is the visible document rect and whose viewport dimensions match
@@ -96,21 +128,22 @@ demo: it shows Donner editing Donner's own logo.
         handling.
   - [ ] Ensure export does not trigger a full document reparse or cache clear in the active editor
         session.
-- [ ] **Milestone 5: Overlay-to-SVG serialization**
+- [ ] **Milestone 6: Overlay-to-SVG serialization**
   - [ ] Factor overlay chrome into backend-neutral vector primitives or add an SVG serialization
         target for `OverlayRenderer`.
   - [ ] Serialize selected path outlines, selection AABBs, handles, and optional labels/chips as an
         `id="donner-editor-overlay"` group.
   - [ ] Keep overlay styling deterministic and independent of ImGui theme drift.
   - [ ] Clip overlay primitives to the exported viewport.
-- [ ] **Milestone 6: Produce the v0.8 showcase**
+- [ ] **Milestone 7: Produce the v0.8 showcase**
   - [ ] Open the base splash in Donner Editor.
+  - [ ] Use Pen tool and shape clipboard operations where needed instead of external SVG edits.
   - [ ] Add and style the `SVG` text using the new text UI.
   - [ ] Convert the `SVG` text to outlines.
   - [ ] Select the outlined `SVG` letters and frame the viewport.
   - [ ] Export the viewport SVG with overlay enabled.
   - [ ] Check in the final asset and provenance notes.
-- [ ] **Milestone 7: Rebrand and release packaging**
+- [ ] **Milestone 8: Rebrand and release packaging**
   - [ ] Update public docs, README text, release notes, and app labels to use
         `Donner SVG Editor & Toolkit`.
   - [ ] Audit places that describe Donner only as a rendering library and update them to reflect
@@ -122,6 +155,10 @@ demo: it shows Donner editing Donner's own logo.
 ## User Stories
 
 - As a user evaluating v0.8, I can look at the splash and immediately see Donner editing SVG.
+- As a designer, I can copy, cut, paste, and reposition shapes without switching to source text or
+  another editor.
+- As a designer, I can create and refine path geometry with the Pen tool without fighting stale
+  bounds, lagging overlays, or source insertion bugs.
 - As a designer, I can add text to an SVG, tune its placement, and convert it to normal editable
   paths.
 - As a release author, I can export the exact current canvas view as SVG without using a browser or
@@ -156,6 +193,8 @@ additional work needed to make the showcase honest and reproducible:
 - In-tree path operations and editor pathfinder fixes.
 - Compound path unbundle support.
 - Group-aware editing and layer-panel groundwork where it supports the showcase workflow.
+- Shape cut/copy/paste for authoring and duplicating artwork in the editor.
+- A tuned Pen tool suitable for authoring release artwork.
 - Text authoring UI for placing `SVG`.
 - Convert Text to Outlines.
 - Viewport SVG export with optional selection overlay chrome.
@@ -168,6 +207,13 @@ milestone.
 ## Requirements and Constraints
 
 - All showcase artwork edits are performed through editor commands.
+- Shape clipboard operations use editor commands, preserve source synchronization, and are undoable.
+- Paste inserts new elements inside the destination root or selected parent, never outside the root
+  `<svg>`.
+- Default Paste offsets pasted elements from their source location for visibility; Paste in Front
+  preserves the copied geometry's document-space placement exactly.
+- Pen tool point placement updates the live path, selection bounds, and overlay in the same visible
+  frame.
 - The final asset is an SVG file, not a raster image embedded in SVG.
 - The final `SVG` lettering is path geometry, not live `<text>`.
 - Text-to-outline output is deterministic for the same text, font, style, and transform.
@@ -209,6 +255,44 @@ V0.8 text UI should be intentionally small:
 The created element is a normal SVG `<text>` element. The editor does not need a full in-canvas text
 caret for v0.8; inspector-based content editing is enough for the showcase. A future text tool can
 add direct text editing once source/selection semantics are designed.
+
+### Shape Clipboard
+
+Shape clipboard operations are structural SVG edits, not screenshots:
+
+- **Copy** serializes the selected elements as SVG fragment text plus enough metadata to preserve
+  paint order, selection order, and paste offset.
+- **Cut** performs Copy and then deletes the selected elements as one undoable editor command.
+- **Paste** parses the clipboard fragment into the current document, repairs IDs when needed,
+  inserts inside the current root or selected compatible parent, offsets the pasted selection, and
+  selects the pasted elements.
+- **Paste in Front** (`Cmd+F`) uses the same parsing, repair, insertion, undo, and selection path
+  as Paste, but suppresses the visibility offset so the duplicated elements stay exactly aligned
+  with and painted in front of the source geometry.
+- Paste from Donner's own clipboard payload is expected to preserve groups, compound paths,
+  transforms, styles, and internal references when they can be repaired deterministically.
+- Paste from generic SVG text is allowed as a best-effort import path, but failures must leave the
+  open document unchanged.
+
+Initial v0.8 support can reject payloads with unresolved external resources or references that
+cannot be rewritten safely. That is preferable to pasting broken geometry into the showcase source.
+
+### Pen Tool Quality Bar
+
+The Pen tool must be good enough to author the showcase without source edits:
+
+- Click places line anchors.
+- Click-drag places a smooth anchor with handles.
+- Modifier behavior for corner/smooth conversion is documented and covered by tests.
+- Hover/drag preview shows the segment that will be committed.
+- Closing a path is predictable and creates a valid closed contour.
+- Escape/cancel leaves the document unchanged; commit produces one undoable path operation.
+- Every placed point updates the path bounds and overlay immediately.
+- Source insertion places the new `<path>` inside the root `<svg>` and preserves source sync.
+
+The Pen tool does not need full node-edit mode for existing arbitrary paths in v0.8, but the paths
+it creates must be normal editable geometry that selection, drag, path operations, and viewport
+export can consume.
 
 ### Convert Text to Outlines
 
@@ -308,6 +392,9 @@ This work is not on the interactive drag hot path, but it must not make the edit
 
 | Operation                        | Target                                        |
 | -------------------------------- | --------------------------------------------- |
+| Copy/cut selected shapes         | visible next frame                            |
+| Paste selected shapes            | visible next frame for showcase-sized payload |
+| Place Pen point                  | visible same frame                            |
 | Insert short text                | visible next frame                            |
 | Edit text content in inspector   | visible next frame after command commit       |
 | Convert `SVG` to outlines        | <= 100 ms for three glyphs on an M-series Mac |
@@ -354,6 +441,18 @@ CI targets for core invariants:
   - Creates a `<text>` element inside the root `<svg>`.
   - Updates text content through an editor command and undo/redo.
   - Preserves source sync and selection after insertion.
+- `//donner/editor/tests:shape_clipboard_tests`
+  - Copy serializes selected shapes as SVG fragment data.
+  - Cut deletes selected shapes and restores them with selection on undo.
+  - Paste inserts inside the root `<svg>` or selected compatible parent.
+  - Paste offsets the new selection and regenerates conflicting IDs deterministically.
+  - Paste in Front preserves the copied document-space placement and places the result in front.
+  - Failed paste leaves source, DOM, selection, and undo stack unchanged.
+- `//donner/editor/tests:pen_tool_tests`
+  - Places line and curve anchors with deterministic path data.
+  - Inserts new paths inside the root `<svg>`.
+  - Updates bounds and overlay state as soon as each point is placed.
+  - Supports close, cancel, undo, and redo without stale selection chrome.
 - `//donner/editor/tests:text_outline_tests`
   - Converts `SVG` to path geometry with no live `<text>` in the result.
   - Pixel-compares text rendering before conversion and outlined rendering after conversion.
@@ -375,6 +474,10 @@ Manual validation:
 
 - Create the `SVG` text in the editor, convert it to outlines, and verify the letter shapes remain
   visually unchanged.
+- Duplicate, cut, and paste representative splash shapes, then undo/redo and verify source/canvas
+  stay in sync.
+- Author a small path with the Pen tool, close it, edit the viewport, and verify bounds/overlay
+  stay locked to the rendered geometry.
 - Select the outlined `SVG` letters and export the viewport with overlay enabled.
 - Open the exported showcase in Donner and a browser to verify the crop, overlay, and transparency.
 - Confirm the final asset still looks correct when system fonts are unavailable.
@@ -383,6 +486,8 @@ Manual validation:
 
 - Existing SVG text layout and glyph outline extraction in the text engine.
 - Existing editor command, undo, and source-sync infrastructure.
+- Existing clipboard abstraction used by the text editor, extended for SVG shape payloads.
+- Existing Pen tool path creation and source insertion flow from the path authoring workstream.
 - Existing `OverlayRenderer` path outline and selection bounds logic.
 - Existing `ViewportState` coordinate conversion.
 - Existing file save/export UI in `MenuBarPresenter`.
@@ -390,12 +495,14 @@ Manual validation:
 
 ## Rollout Plan
 
-1. Land text insertion and inspector editing.
-2. Land text-to-outline conversion with tests.
-3. Land viewport SVG export content-only.
-4. Land overlay SVG export.
-5. Create the v0.8 showcase asset in the editor and check it in with provenance.
-6. Update docs and release notes to use the new splash.
+1. Land shape cut/copy/paste with source-sync and undo coverage.
+2. Land Pen tool polish needed for release artwork.
+3. Land text insertion and inspector editing.
+4. Land text-to-outline conversion with tests.
+5. Land viewport SVG export content-only.
+6. Land overlay SVG export.
+7. Create the v0.8 showcase asset in the editor and check it in with provenance.
+8. Update docs and release notes to use the new splash.
 
 ## Alternatives Considered
 
