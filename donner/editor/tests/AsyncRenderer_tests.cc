@@ -382,7 +382,7 @@ TEST(AsyncRendererTest, ImmediateStaticSpansCarryPayloadAcrossPublishedFrames) {
   expectImmediatePayload(*second);
 }
 
-TEST(AsyncRendererE2ETest, SplashDonnerSelectionPublishesImmediateSpansForLayerPanel) {
+TEST(AsyncRendererE2ETest, SplashDonnerSelectionPublishesImmediateTilesForLayerPanel) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
     GTEST_SKIP() << "donner_splash.svg not found in runfiles";
@@ -421,11 +421,15 @@ TEST(AsyncRendererE2ETest, SplashDonnerSelectionPublishesImmediateSpansForLayerP
   const auto isSegment = [](const auto& tile) {
     return tile.kind == svg::compositor::CompositorController::CompositeTileSnapshot::Kind::Segment;
   };
+  const auto isImmediateDiagnosticTile = [](const auto& tile) {
+    using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
+    return (tile.kind == Kind::Segment || tile.kind == Kind::Layer) && tile.immediate;
+  };
   const int segmentCount =
       static_cast<int>(std::count_if(compositeTiles.begin(), compositeTiles.end(), isSegment));
-  const int immediateSegmentCount = static_cast<int>(
+  const int immediateDiagnosticTileCount = static_cast<int>(
       std::count_if(compositeTiles.begin(), compositeTiles.end(),
-                    [&](const auto& tile) { return isSegment(tile) && tile.immediate; }));
+                    [&](const auto& tile) { return isImmediateDiagnosticTile(tile); }));
   const int immediateEligibleSegmentCount = static_cast<int>(
       std::count_if(compositeTiles.begin(), compositeTiles.end(), [&](const auto& tile) {
         return isSegment(tile) && tile.visible && !tile.hasExpensiveEffect &&
@@ -437,9 +441,9 @@ TEST(AsyncRendererE2ETest, SplashDonnerSelectionPublishesImmediateSpansForLayerP
       << "The real splash should expose at least one cheap visible static span when a Donner "
          "letter is selected.\n"
       << DescribeCompositeSegments(compositeTiles);
-  EXPECT_GT(immediateSegmentCount, 0)
-      << "Layer-panel diagnostics are reporting every splash span as cached even though at least "
-         "one selected-letter static span is eligible for immediate rendering.\n"
+  EXPECT_GT(immediateDiagnosticTileCount, 0)
+      << "Layer-panel diagnostics are reporting every splash renderable tile as cached even "
+         "though at least one selected-letter static span is eligible for immediate rendering.\n"
       << DescribeCompositeSegments(compositeTiles);
 }
 

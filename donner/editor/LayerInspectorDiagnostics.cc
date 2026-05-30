@@ -92,9 +92,18 @@ const char* TileKindName(svg::compositor::CompositorController::CompositeTileSna
   return "unknown";
 }
 
-const char* TileModeName(const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+bool TileHasCachedOrImmediateMode(
+    const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
   using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
-  if (tile.kind == Kind::Segment && tile.immediate) {
+  return tile.kind == Kind::Segment || tile.kind == Kind::Layer;
+}
+
+bool TileIsImmediate(const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  return TileHasCachedOrImmediateMode(tile) && tile.immediate;
+}
+
+const char* TileModeName(const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
+  if (TileIsImmediate(tile)) {
     return "immediate";
   }
   return "cached";
@@ -126,15 +135,14 @@ bool TileOverBudget(const svg::compositor::CompositorController::CompositeTileSn
 
 const char* TileTelemetrySignal(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
-  using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
-  if (tile.kind == Kind::Segment && tile.immediate && TileOverBudget(tile)) {
+  if (TileIsImmediate(tile) && TileOverBudget(tile)) {
     return "over_budget_immediate";
   }
   if (tile.demotedDynamicImmediate) {
     return "demoted_dynamic";
   }
-  if (tile.kind == Kind::Segment && !tile.immediate && tile.visible && !tile.hasExpensiveEffect &&
-      tile.estimatedDrawOps > 0 && tile.immediateBudgetMs > 0.0 &&
+  if (TileHasCachedOrImmediateMode(tile) && !tile.immediate && tile.visible &&
+      !tile.hasExpensiveEffect && tile.estimatedDrawOps > 0 && tile.immediateBudgetMs > 0.0 &&
       tile.lastRasterizeMs <= tile.immediateBudgetMs) {
     return "cached_fast_candidate";
   }
@@ -166,10 +174,10 @@ TelemetrySummary SummarizeTelemetryTiles(
       ++summary.layerCount;
     }
 
-    const bool immediateSegment = tile.kind == Kind::Segment && tile.immediate;
-    if (immediateSegment) {
+    const bool immediateTile = TileIsImmediate(tile);
+    if (immediateTile) {
       ++summary.immediateCount;
-    } else if (tile.kind == Kind::Segment || tile.kind == Kind::Layer) {
+    } else if (TileHasCachedOrImmediateMode(tile)) {
       ++summary.cachedCount;
     }
 
@@ -183,9 +191,9 @@ TelemetrySummary SummarizeTelemetryTiles(
       ++summary.demotedDynamicCount;
     }
     if (TileOverBudget(tile)) {
-      if (immediateSegment) {
+      if (immediateTile) {
         ++summary.overBudgetImmediateCount;
-      } else if (tile.kind == Kind::Segment || tile.kind == Kind::Layer) {
+      } else if (TileHasCachedOrImmediateMode(tile)) {
         ++summary.overBudgetCachedCount;
       }
     }

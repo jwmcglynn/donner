@@ -105,6 +105,33 @@ TEST(LayerInspectorDiagnosticsTest, SerializesHeuristicTelemetryForOfflineRefine
   EXPECT_NE(sampleJson.find("\"tile\":{\"id\":\"seg:1\""), std::string::npos);
 }
 
+TEST(LayerInspectorDiagnosticsTest, SerializesImmediatePromotedLayersAsImmediate) {
+  CompositeTileSnapshot immediateLayer;
+  immediateLayer.kind = CompositeTileSnapshot::Kind::Layer;
+  immediateLayer.id = "layer:99";
+  immediateLayer.label = "promoted layer";
+  immediateLayer.lastRasterizeMs = 5.0;
+  immediateLayer.immediate = true;
+  immediateLayer.dynamicHeuristicImmediate = true;
+  immediateLayer.immediateBudgetMs = 2.083;
+  immediateLayer.immediateBudgetChargeMs = 5.0;
+  immediateLayer.estimatedDrawOps = 1;
+  immediateLayer.visible = true;
+
+  CompositorHeuristicTelemetryContext context;
+  context.state.canvasSize = Vector2i(256, 256);
+  context.renderStats.immediateRasterizeMs = 5.0;
+  context.renderStats.immediateTileCount = 1;
+
+  const std::vector<CompositeTileSnapshot> tiles = {immediateLayer};
+  const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
+
+  EXPECT_NE(json.find("\"layers\":1,\"immediate\":1,\"cached\":0"), std::string::npos);
+  EXPECT_NE(json.find("\"kind\":\"layer\""), std::string::npos);
+  EXPECT_NE(json.find("\"mode\":\"immediate\""), std::string::npos);
+  EXPECT_NE(json.find("\"signal\":\"over_budget_immediate\""), std::string::npos);
+}
+
 TEST(LayerInspectorDiagnosticsTest, AppendsHeuristicTelemetryJsonLine) {
   const std::string path = ::testing::TempDir() + "/donner-heuristic-telemetry.jsonl";
   std::string error;
