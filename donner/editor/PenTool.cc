@@ -456,6 +456,46 @@ void PenTool::commitActivePathData(EditorApp& editor) {
     return;
   }
 
+  // Re-resolve the active path against the live document before writing.
+  //
+  // The editor's source-sync runs a self-writeback reparse on the frame after
+  // every pen mutation (DOM change -> source mirror -> ReplaceDocument that
+  // refreshes XML source ranges; see DocumentSyncController). That reparse swaps
+  // `document_` for a fresh one, which makes the entity handle cached in
+  // `activePath_` (and in `sessionUndoAnchor_`) stale: it names an element in
+  // the *previous* document, whose XML node has no source range in the new
+  // source store. Queueing `SetAttribute("d")` against that stale handle makes
+  // `setElementAttribute` fail to locate the element's source span and
+  // re-serialize the `<path>` at the end of the document -- AFTER the root
+  // `</svg>` -- so the shape never renders (the user-reported Pen bug).
+  //
+  // The editor keeps the *selection* fresh across that reparse (it re-resolves
+  // selection targets against the new document), and the pen keeps its active
+  // path as the sole selection. Adopt that fresh handle so the geometry write
+  // and undo anchor target a valid, source-backed element -- exactly the path
+  // that already works for the per-click commits.
+  if (editor.selectedElements().size() == 1u) {
+    // §concurrent-dom: `isa`/`cast` resolve the element's EntityHandle (a raw ECS
+    // read). The live editor keeps the document in ThreadingMode::ConcurrentDom,
+    // which requires a read-access scope keyed to the element's own document
+    // state; scope the inspection off the selected element itself (the same
+    // idiom the rest of PenTool uses) so the access marker matches.
+    const svg::SVGElement selected = editor.selectedElements().front();
+    const std::optional<svg::SVGPathElement> freshPath = selected.withReadAccess(
+        [&selected](svg::DocumentReadAccess&, EntityHandle) -> std::optional<svg::SVGPathElement> {
+          if (!selected.isa<svg::SVGPathElement>()) {
+            return std::nullopt;
+          }
+          return selected.cast<svg::SVGPathElement>();
+        });
+    if (freshPath.has_value()) {
+      activePath_ = *freshPath;
+      if (sessionUndoAnchor_.has_value()) {
+        sessionUndoAnchor_ = *freshPath;
+      }
+    }
+  }
+
   editor.applyMutation(EditorCommand::SetAttributeCommand(*activePath_, "d", activePathData_));
   editor.setSelection(*activePath_);
 }
