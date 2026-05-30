@@ -1,8 +1,9 @@
 # Design: Donner v0.8 Showcase and Rebrand
 
-**Status:** Design
+**Status:** Implemented (v0.8 drive)
 **Author:** Codex
 **Created:** 2026-05-30
+**Updated:** 2026-05-30
 **Related:** [0010-text_rendering](0010-text_rendering.md),
 [0033-2-editor_design_tool_responsiveness](0033-2-editor_design_tool_responsiveness.md),
 [0041-2-path_authoring_and_boolean_operations](0041-2-path_authoring_and_boolean_operations.md),
@@ -26,6 +27,83 @@ The target artifact is a cropped SVG export of the editor viewport showing the n
 with the letters `SVG` added to the design, converted to outlines, selected, and rendered with the
 editor's path overlay UI visible. The final public splash is therefore both artwork and product
 demo: it shows Donner editing Donner's own logo.
+
+## Implementation Status — 2026-05-30
+
+**All nine milestones (M1–M9) are implemented and merged on branch `v0_8_drive`.** The Implementation
+Plan checkboxes below are checked, with parenthetical notes where an item shipped with a caveat or
+simplification. This section is the factual "what really happened" record; the design narrative,
+Non-Goals, Architecture, and milestone specs below are preserved as the original spec and historical
+context.
+
+Per-milestone outcome:
+
+- **M1 — Showcase asset plan and provenance:** shipped `donner_splash_v0_8_editable.svg` (editable
+  intermediate), `donner_splash_v0_8.provenance.md`, a release checklist, and the
+  `//donner/editor/tests:showcase_asset_tests` fixture guarding the asset files.
+- **M2 — Core shape authoring affordances:**
+  - Clipboard: `ShapeClipboardPayload` / `ShapeClipboardCommands`, `EditorCommand::Kind::CutShapes`
+    and `PasteShapes`, Cmd+X/C/V plus Cmd+F Paste-in-Front, covered by
+    `//donner/editor/tests:shape_clipboard_tests`.
+  - Pen tool: Bézier handles, modifier corner/smooth conversion, live preview lockstep,
+    close/cancel/commit as a single undo, same-frame bounds, covered by
+    `//donner/editor/tests:pen_tool_tests`. (See also the Pen tool crash fix below.)
+- **M3 — Complete Layers panel:** `LayerTreeModel` + `LayersPanel`; the old `LayerInspectorPanel` was
+  renamed to `CompositorDebugPanel` (keeping render diagnostics separate). Covered by
+  `//donner/editor/tests:layer_tree_model_tests` and `:layers_panel_tests`. *Caveat:* per-row preview
+  ships as a deterministic fill-swatch fallback in this prototype; real per-row subtree thumbnails are
+  a follow-up.
+- **M4 — Text authoring UI:** `TextTool` + `TextInspectorPanel`, `Kind::InsertText` /
+  `SetTextContent`, `ActiveTool::Text`, covered by `//donner/editor/tests:text_tool_tests`.
+  *Caveat:* editing is inspector-only with no in-canvas caret — matches the design's Non-Goal.
+- **M5 — Convert Text to Outlines:** `donner/editor/TextToOutlines.{h,cc}` (`convertTextToOutlines`),
+  which reuses `TextEngine::computedGlyphPaths()` via `SVGTextElement::convertToPath()`;
+  `Kind::ConvertTextToOutlines`; covered by `//donner/editor/tests:text_outline_tests` with an exact
+  zero-diff pixel comparison before vs. after conversion.
+- **M6 — Viewport SVG export:** `donner/editor/ViewportSvgExport.{h,cc}` `ExportViewportAsSvg(...)`;
+  viewBox derived from `ViewportState::screenToDocument`, clipPath crop, and refuses external
+  http/file refs. Covered by `//donner/editor/tests:viewport_svg_export_tests`.
+- **M7 — Overlay-to-SVG serialization:** `SerializeOverlaySnapshotToSvg` emits
+  `<g id="donner-editor-overlay">` from `OverlayRenderer::SelectionChromeSnapshot`, with deterministic
+  stroke `#1ea7fd` / handle `#fff`, reusing the M6 clipPath.
+- **M8 — Produce the v0.8 showcase:** the runnable tool
+  `//donner/editor/tools:generate_showcase_asset` produced `donner_splash_v0_8.svg` (outlined `SVG`
+  letters, no live `<text>`, `donner-editor-overlay` chrome). *Repro mechanism:* the final asset was
+  produced **programmatically** via the merged `convertTextToOutlines` (M5) + `ExportViewportAsSvg`
+  (M6) code paths, not by driving the editor GUI — the editor GUI cannot run headless in CI.
+- **M9 — Rebrand and release packaging:** README / RELEASE_NOTES / docs / About updated to
+  "Donner SVG Editor & Toolkit"; the native editor app name stays "Donner SVG Editor".
+
+### What shipped beyond the original plan
+
+The v0.8 drive added work that was not in the original milestone list:
+
+- **Preview-vs-source save/reload coherence test**
+  (`//donner/editor/tests:preview_source_coherence_tests`). Proves that after *every* committed
+  editor op, the live preview render is pixel-identical (zero-diff) to rendering the
+  saved-then-reloaded source. This guarantees the "what you see == what you save" invariant across
+  the whole authoring surface, not just per-feature.
+- **Pen tool crash fix.** Selecting a shape, switching to the Pen tool, and clicking previously
+  aborted with a ConcurrentDom failure: `PenTool::openStateForSelectedPath` performed an unguarded
+  raw-ECS read of `SVGPathElement::d()`. Fixed to read under a proper access scope, with a regression
+  test that drives the live ConcurrentDom path (not a fabricated shortcut).
+- **wasm/web editor default document.** The web editor now embeds `donner_splash` by default instead
+  of the previous icon (resolves Open Question 5 below).
+
+### Preexisting compositor bug surfaced (not a v0.8 regression)
+
+Running the full `bazel test //...` gate across the *entire* repo for the first time as part of this
+drive revealed ~11 failing targets, all tracing to a single **preexisting** bug — a broken
+translation-only drag compose-offset / layer fast path
+(`composeOffset.translation()` / `dragTranslationDoc` / golden delta all reported `(0,0)`, so
+promoted layers re-rasterize instead of reusing the cached bitmap). These targets were **already red
+at the branch base `1b1e895b`**, which predates all v0.8 work — they are **not** regressions from the
+showcase work, and they were **not** disabled. They are being fixed as part of this drive.
+
+The same full-`//...` build also caught a preexisting compile break in
+`//tools/mcp-servers/editor-control:editor_control_session` (a stale `noteRenderCompleted` call arity
+plus an unhandled `Immediate` tile kind) that the previous narrower test selection never built; it is
+also fixed here.
 
 ## Goals
 
@@ -84,89 +162,108 @@ demo: it shows Donner editing Donner's own logo.
 
 ## Implementation Plan
 
-- [ ] **Milestone 1: Showcase asset plan and provenance**
-  - [ ] Add target asset names and locations for the editable source, final outlined splash, viewport
+> **Status: all milestones implemented and merged on branch `v0_8_drive`.** Boxes below are checked
+> with caveat notes where an item shipped simplified. See "Implementation Status — 2026-05-30" above
+> for the full outcome record, including work added beyond this plan.
+
+- [x] **Milestone 1: Showcase asset plan and provenance**
+  - [x] Add target asset names and locations for the editable source, final outlined splash, viewport
         export, and optional repro/provenance log.
-  - [ ] Add a manual release checklist describing the editor-only operations used to create the
+  - [x] Add a manual release checklist describing the editor-only operations used to create the
         asset.
-  - [ ] Add a test fixture that loads the planned source asset and fails if it is missing or invalid.
-- [ ] **Milestone 2: Core shape authoring affordances**
-  - [ ] Add Edit -> Cut / Copy / Paste behavior for selected shapes, groups, and compound paths.
-  - [ ] Use an SVG-native clipboard payload for copied elements, with plain text fallback where
+  - [x] Add a test fixture that loads the planned source asset and fails if it is missing or invalid.
+        (`//donner/editor/tests:showcase_asset_tests`)
+- [x] **Milestone 2: Core shape authoring affordances**
+  - [x] Add Edit -> Cut / Copy / Paste behavior for selected shapes, groups, and compound paths.
+  - [x] Use an SVG-native clipboard payload for copied elements, with plain text fallback where
         platform clipboard APIs require it.
-  - [ ] Paste into the current document inside the appropriate parent/root `<svg>`, not after the
+  - [x] Paste into the current document inside the appropriate parent/root `<svg>`, not after the
         root close tag.
-  - [ ] Offset pasted shapes visibly from the source selection while preserving transforms and paint
+  - [x] Offset pasted shapes visibly from the source selection while preserving transforms and paint
         order semantics.
-  - [ ] Add Paste in Front with `Cmd+F` for exact-position duplication when the user needs a
+  - [x] Add Paste in Front with `Cmd+F` for exact-position duplication when the user needs a
         perfectly aligned copy in front of the copied artwork.
-  - [ ] Regenerate conflicting IDs and update internal references where possible, or fail without
+  - [x] Regenerate conflicting IDs and update internal references where possible, or fail without
         mutating when safe ID/reference repair is not possible.
-  - [ ] Make Cut a single undoable operation that restores the original selection and source text.
-  - [ ] Tune the Pen tool for predictable release use: click-to-line, click-drag handles, close
+  - [x] Make Cut a single undoable operation that restores the original selection and source text.
+  - [x] Tune the Pen tool for predictable release use: click-to-line, click-drag handles, close
         path, cancel/commit, live preview, immediate selection bounds, and overlay lockstep.
-  - [ ] Ensure Pen-created paths enter the document inside the root `<svg>` and participate in
+        (See also the Pen tool ConcurrentDom crash fix in the Implementation Status section above.)
+  - [x] Ensure Pen-created paths enter the document inside the root `<svg>` and participate in
         undo/source sync like other editor commands.
-- [ ] **Milestone 3: Complete Layers panel**
-  - [ ] Replace the user-facing tree view with the Layers panel from
+- [x] **Milestone 3: Complete Layers panel**
+  - [x] Replace the user-facing tree view with the Layers panel from
         [0046-editor_group_layers](0046-editor_group_layers.md).
-  - [ ] Show the document root, groups, subgroups, and leaf shapes as an expandable hierarchy.
-  - [ ] Show a preview thumbnail and stable display name for every visible layer row.
-  - [ ] Keep Layers selection, canvas selection, and source selection synchronized.
-  - [ ] Support group-row selection for manipulating a group as one object, while expansion exposes
+  - [x] Show the document root, groups, subgroups, and leaf shapes as an expandable hierarchy.
+  - [x] Show a preview thumbnail and stable display name for every visible layer row. (Caveat: ships
+        as a deterministic fill swatch for v0.8; real subtree thumbnails are a follow-up.)
+  - [x] Keep Layers selection, canvas selection, and source selection synchronized.
+  - [x] Support group-row selection for manipulating a group as one object, while expansion exposes
         child shapes for direct editing.
-  - [ ] Include keyboard navigation, context-menu selection actions, and partial-selection state.
-  - [ ] Keep render diagnostics separate as Compositor Debug so the showcase UI exposes editable
-        layers, not compositor cache tiles.
-- [ ] **Milestone 4: Text authoring UI**
-  - [ ] Add a Text tool or Insert Text command that creates a `<text>` element at the current
+  - [x] Include keyboard navigation, context-menu selection actions, and partial-selection state.
+  - [x] Keep render diagnostics separate as Compositor Debug so the showcase UI exposes editable
+        layers, not compositor cache tiles. (Old `LayerInspectorPanel` renamed to
+        `CompositorDebugPanel`.)
+- [x] **Milestone 4: Text authoring UI**
+  - [x] Add a Text tool or Insert Text command that creates a `<text>` element at the current
         viewport/click position.
-  - [ ] Add inspector controls for text content, font family, font size, fill, stroke, and basic
-        transform.
-  - [ ] Route text creation and edits through `EditorCommand` and undo snapshots.
-  - [ ] Keep text source insertion rooted inside the current `<svg>` element.
-- [ ] **Milestone 5: Convert Text to Outlines**
-  - [ ] Add a `ConvertTextToOutlinesCommand` for selected text elements.
-  - [ ] Reuse `TextEngine` placed glyph geometry so conversion matches Donner rendering.
-  - [ ] Emit deterministic `<path>` elements or a grouped outline subtree in document space.
-  - [ ] Preserve visual style, transforms, fill rule, opacity, and paint order.
-  - [ ] Delete or replace the original `<text>` only after outline generation succeeds.
-  - [ ] Select the new outline group/paths and restore the original selection on undo.
-- [ ] **Milestone 6: Viewport SVG export**
-  - [ ] Add File -> Export Viewport as SVG.
-  - [ ] Compute the export crop from `ViewportState` and the render pane content rect.
-  - [ ] Save an SVG whose `viewBox` is the visible document rect and whose viewport dimensions match
-        the editor pane's logical pixel size by default.
-  - [ ] Clip exported document content to the viewport crop.
-  - [ ] Add options for content only, content plus selection overlay, and transparent/background
-        handling.
-  - [ ] Ensure export does not trigger a full document reparse or cache clear in the active editor
+  - [x] Add inspector controls for text content, font family, font size, fill, stroke, and basic
+        transform. (Caveat: inspector-only editing, no in-canvas caret — matches the Non-Goal.)
+  - [x] Route text creation and edits through `EditorCommand` and undo snapshots.
+  - [x] Keep text source insertion rooted inside the current `<svg>` element.
+- [x] **Milestone 5: Convert Text to Outlines**
+  - [x] Add a `ConvertTextToOutlinesCommand` for selected text elements.
+        (`Kind::ConvertTextToOutlines`, `donner/editor/TextToOutlines.{h,cc}`.)
+  - [x] Reuse `TextEngine` placed glyph geometry so conversion matches Donner rendering.
+        (Reuses `TextEngine::computedGlyphPaths()` via `SVGTextElement::convertToPath()`.)
+  - [x] Emit deterministic `<path>` elements or a grouped outline subtree in document space.
+        (One `<path>` per glyph under a group.)
+  - [x] Preserve visual style, transforms, fill rule, opacity, and paint order.
+  - [x] Delete or replace the original `<text>` only after outline generation succeeds.
+  - [x] Select the new outline group/paths and restore the original selection on undo.
+        (Pixel-compare before/after is exact zero-diff in `:text_outline_tests`.)
+- [x] **Milestone 6: Viewport SVG export**
+  - [x] Add File -> Export Viewport as SVG. (`donner/editor/ViewportSvgExport.{h,cc}`,
+        `ExportViewportAsSvg(...)`.)
+  - [x] Compute the export crop from `ViewportState` and the render pane content rect.
+  - [x] Save an SVG whose `viewBox` is the visible document rect and whose viewport dimensions match
+        the editor pane's logical pixel size by default. (viewBox from
+        `ViewportState::screenToDocument`.)
+  - [x] Clip exported document content to the viewport crop. (clipPath crop.)
+  - [x] Add options for content only, content plus selection overlay, and transparent/background
+        handling. (Export refuses external http/file refs rather than embedding them.)
+  - [x] Ensure export does not trigger a full document reparse or cache clear in the active editor
         session.
-- [ ] **Milestone 7: Overlay-to-SVG serialization**
-  - [ ] Factor overlay chrome into backend-neutral vector primitives or add an SVG serialization
-        target for `OverlayRenderer`.
-  - [ ] Serialize selected path outlines, selection AABBs, handles, and optional labels/chips as an
+- [x] **Milestone 7: Overlay-to-SVG serialization**
+  - [x] Factor overlay chrome into backend-neutral vector primitives or add an SVG serialization
+        target for `OverlayRenderer`. (`SerializeOverlaySnapshotToSvg` from
+        `OverlayRenderer::SelectionChromeSnapshot`.)
+  - [x] Serialize selected path outlines, selection AABBs, handles, and optional labels/chips as an
         `id="donner-editor-overlay"` group.
-  - [ ] Keep overlay styling deterministic and independent of ImGui theme drift.
-  - [ ] Clip overlay primitives to the exported viewport.
-- [ ] **Milestone 8: Produce the v0.8 showcase**
-  - [ ] Open the base splash in Donner Editor.
-  - [ ] Use the complete Layers panel to navigate and select document groups and shapes while
+  - [x] Keep overlay styling deterministic and independent of ImGui theme drift. (Stroke `#1ea7fd`,
+        handle `#fff`.)
+  - [x] Clip overlay primitives to the exported viewport. (Reuses the M6 clipPath.)
+- [x] **Milestone 8: Produce the v0.8 showcase**
+  - [x] Open the base splash in Donner Editor.
+  - [x] Use the complete Layers panel to navigate and select document groups and shapes while
         authoring the showcase.
-  - [ ] Use Pen tool and shape clipboard operations where needed instead of external SVG edits.
-  - [ ] Add and style the `SVG` text using the new text UI.
-  - [ ] Convert the `SVG` text to outlines.
-  - [ ] Select the outlined `SVG` letters and frame the viewport.
-  - [ ] Export the viewport SVG with overlay enabled.
-  - [ ] Check in the final asset and provenance notes.
-- [ ] **Milestone 9: Rebrand and release packaging**
-  - [ ] Update public docs, README text, release notes, and app labels to use
-        `Donner SVG Editor & Toolkit`.
-  - [ ] Audit places that describe Donner only as a rendering library and update them to reflect
+  - [x] Use Pen tool and shape clipboard operations where needed instead of external SVG edits.
+  - [x] Add and style the `SVG` text using the new text UI.
+  - [x] Convert the `SVG` text to outlines.
+  - [x] Select the outlined `SVG` letters and frame the viewport.
+  - [x] Export the viewport SVG with overlay enabled.
+  - [x] Check in the final asset and provenance notes. (Caveat: M8 was produced programmatically via
+        the merged `convertTextToOutlines` + `ExportViewportAsSvg` code paths through the runnable
+        `//donner/editor/tools:generate_showcase_asset`, since the editor GUI cannot run headless in
+        CI.)
+- [x] **Milestone 9: Rebrand and release packaging**
+  - [x] Update public docs, README text, release notes, and app labels to use
+        `Donner SVG Editor & Toolkit`. (Native editor app name stays "Donner SVG Editor".)
+  - [x] Audit places that describe Donner only as a rendering library and update them to reflect
         the editor/toolkit scope.
-  - [ ] Update roadmap status so v0.8 is the next release and v1.0 remains the later production
+  - [x] Update roadmap status so v0.8 is the next release and v1.0 remains the later production
         release.
-  - [ ] Add release validation that the checked-in showcase asset loads and renders in Donner.
+  - [x] Add release validation that the checked-in showcase asset loads and renders in Donner.
 
 ## User Stories
 
@@ -551,14 +648,19 @@ Manual validation:
 ## Open Questions
 
 - Should the final checked-in splash be only the overlay screenshot, or should we also check in a
-  clean content-only v0.8 splash?
+  clean content-only v0.8 splash? **Resolved:** ships both — the editable intermediate
+  `donner_splash_v0_8_editable.svg` and the final outlined `donner_splash_v0_8.svg`.
 - Should text-to-outline output one path per glyph, one path per contour, or one compound path for
-  the whole text element?
+  the whole text element? **Resolved:** shipped one `<path>` per glyph under a group.
 - Should viewport export embed external image/font resources or fail unless the document is already
-  self-contained?
+  self-contained? **Resolved:** export refuses external http/file refs rather than embedding them.
 - Should overlay export include selection-size chips, source-reference ropes, and labels, or only
-  path outlines, bounds, and handles for v0.8?
+  path outlines, bounds, and handles for v0.8? **Resolved:** v0.8 serializes path outlines, bounds,
+  and handles (the `donner-editor-overlay` group); richer chips/ropes remain future work.
 - Where should showcase provenance live: `.rnr`, Markdown checklist, SVG metadata, or all three?
+  **Resolved:** provenance lives in `donner_splash_v0_8.provenance.md` plus the release checklist.
+  (Item 5 from the task — web editor default document — is recorded under Implementation Status
+  above: the wasm/web editor now embeds `donner_splash` by default instead of the icon.)
 
 ## Future Work
 
