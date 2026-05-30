@@ -95,6 +95,8 @@ private:
 struct RenderRequest {
   struct DragPreview {
     Entity entity = entt::null;
+    /// Additional entities moving with \ref entity under the same active drag transform.
+    std::vector<Entity> extraEntities;
     /// Which interaction phase drove this preview. `Selection` means the
     /// editor is pre-warming a layer for the selected entity before any
     /// drag begins. `ActiveDrag` means the user is actively dragging — the
@@ -542,6 +544,8 @@ private:
   std::optional<svg::SVGDocument> compositorDocument_;
   svg::Renderer* compositorRenderer_ = nullptr;
   Entity compositorEntity_ = entt::null;
+  /// Full set of explicit editor-promoted entities currently tracked by the worker compositor.
+  std::vector<Entity> compositorEntities_;
   /// Kind under which `compositorEntity_` is currently promoted. Tracked
   /// alongside the entity so a Selection→ActiveDrag transition refreshes
   /// the hint in place instead of demote-then-re-promote (which would

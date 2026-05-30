@@ -721,6 +721,16 @@ bool CompositorController::dropNonRenderableInteractionHints(Registry& registry)
   return true;
 }
 
+bool CompositorController::isActiveDragTarget(Entity entity) const {
+  if (entity == entt::null || pendingDemotions_.contains(entity)) {
+    return false;
+  }
+
+  const auto hintIt = activeHints_.find(entity);
+  return hintIt != activeHints_.end() &&
+         hintIt->second.interactionKind() == InteractionHint::ActiveDrag;
+}
+
 bool CompositorController::isPromoted(Entity entity) const {
   return activeHints_.contains(entity);
 }
@@ -945,7 +955,8 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
     }
     if (i < layerCount) {
       const CompositorLayer& layer = layers_[i];
-      const bool isDragTarget = layer.entity() == splitStaticLayersEntity_;
+      const bool isDragTarget =
+          layer.entity() == splitStaticLayersEntity_ || isActiveDragTarget(layer.entity());
       char label[64];
       if (isDragTarget) {
         std::snprintf(label, sizeof(label), "layer #%u (drag)",
@@ -1049,29 +1060,39 @@ CompositorController::snapshotLayerInspectorRows(SnapshotThumbnails thumbnails) 
 bool CompositorController::hasSplitStaticLayers() const {
   // Post-design-doc 0033 §M2C: the editor blits segments + layers
   // directly, no bg/fg flatten step exists anymore. "Split static
-  // layers active" now means "there's exactly one editor-promoted
-  // entity (the drag target) with a rasterized layer the editor can
-  // upload". Bucket layers stay static during a drag and don't
-  // invalidate the split, so we check `activeHints_` (explicit
-  // promotions) rather than `layers_.size()`.
+  // layers active" now means "there is at least one editor-promoted
+  // drag target with a rasterized layer the editor can upload". Bucket
+  // layers stay static during a drag and don't invalidate the split, so
+  // we check `activeHints_` (explicit promotions) rather than
+  // `layers_.size()`.
   //
   // §M9 wrinkle: pending-demote entries linger in `activeHints_` for
   // the hysteresis window. Counting them would mean a selection-
-  // change drag (demote old → promote new) makes this return false
-  // for ~30 renderFrames, disabling the `skipMainCompose`
-  // optimization and forcing `composeLayers` to do 2N+1 bitmap blits
-  // every fast-path drag frame at canvas scale — visible to the
-  // operator as "fast path counter bumps but framerate stays low,
-  // worse at higher zoom". Match `splitStaticLayersEntity_`'s
-  // carve-out: count only entries NOT pending demotion.
+  // change drag (demote old → promote new) can otherwise disable the
+  // `skipMainCompose` optimization for ~30 renderFrames and force
+  // `composeLayers` to do 2N+1 bitmap blits every fast-path drag frame
+  // at canvas scale — visible to the operator as "fast path counter
+  // bumps but framerate stays low, worse at higher zoom". Count only
+  // entries NOT pending demotion.
+  bool hasActiveDragHint = false;
   uint32_t liveHints = 0;
   Entity liveCandidate = entt::null;
   for (const auto& [hintEntity, hint] : activeHints_) {
     if (pendingDemotions_.contains(hintEntity)) {
       continue;
     }
+    if (hint.interactionKind() == InteractionHint::ActiveDrag) {
+      hasActiveDragHint = true;
+      if (const CompositorLayer* layer = findLayer(hintEntity);
+          layer != nullptr && layer->hasRenderablePayload()) {
+        return true;
+      }
+    }
     ++liveHints;
     liveCandidate = hintEntity;
+  }
+  if (hasActiveDragHint) {
+    return false;
   }
   if (liveHints != 1) {
     return false;
@@ -2863,7 +2884,8 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
     const auto& layer = layers_[i];
     const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
     const std::shared_ptr<const RendererTextureSnapshot> layerTexture = layer.textureSnapshot();
-    const bool isDragTarget = layer.entity() == splitStaticLayersEntity_;
+    const bool isDragTarget =
+        layer.entity() == splitStaticLayersEntity_ || isActiveDragTarget(layer.entity());
     const bool immediate = layer.isImmediate();
     const bool includeLayerPayload =
         includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget, immediate);

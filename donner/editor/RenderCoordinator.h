@@ -171,6 +171,8 @@ public:
 
 private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
+  [[nodiscard]] std::vector<Entity> selectedCompositedExtraEntities(EditorApp& app,
+                                                                    Entity primaryEntity) const;
 
   struct RenderWorkerBundle {
     explicit RenderWorkerBundle(

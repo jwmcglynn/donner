@@ -649,15 +649,16 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
   if (!dragState_.has_value()) {
     return std::nullopt;
   }
-  // Multi-element drags run through the mutation path (not compositor)
-  // because the drag-preview transport only models a single moving layer.
-  // When we have extras, there's no composited preview to report.
-  if (!dragState_->extras.empty()) {
-    return std::nullopt;
+
+  std::vector<Entity> extraEntities;
+  extraEntities.reserve(dragState_->extras.size());
+  for (const PerElementDrag& extra : dragState_->extras) {
+    extraEntities.push_back(extra.element.unsafeEntityHandle().entity());
   }
 
   return ActiveDragPreview{
       .entity = dragState_->primary.element.unsafeEntityHandle().entity(),
+      .extraEntities = std::move(extraEntities),
       .translation = dragState_->currentDocumentDelta,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
       .dragGeneration = dragState_->generation};

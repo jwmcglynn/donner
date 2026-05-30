@@ -190,7 +190,7 @@ TEST(CompositedPresentationTest, PureTranslationAfterAffineCaptureRequestsCrispR
 
 TEST(CompositedPresentationTest, SelectionTriggersPrewarmWhenCacheMissing) {
   CompositedPresentation state;
-  EXPECT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(100, 100),
+  EXPECT_TRUE(state.shouldPrewarm(Entity(7), {}, /*currentVersion=*/3, Vector2i(100, 100),
                                   /*dragActive=*/false));
 }
 
@@ -198,7 +198,7 @@ TEST(CompositedPresentationTest, UpToDateCacheSuppressesPrewarm) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
 
-  EXPECT_FALSE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(100, 100),
+  EXPECT_FALSE(state.shouldPrewarm(Entity(7), {}, /*currentVersion=*/3, Vector2i(100, 100),
                                    /*dragActive=*/false));
 }
 
@@ -244,6 +244,31 @@ TEST(CompositedPresentationTest, ActiveDragUsesCachedRepresentedTranslation) {
   EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 0.0);
   EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.y, 0.0);
   EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+}
+
+TEST(CompositedPresentationTest, ActiveDragKeepsGroupedSelectionPrewarmEntities) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100),
+                           SelectTool::ActiveDragPreview{
+                               .entity = Entity(7),
+                               .extraEntities = {Entity(8)},
+                           });
+
+  SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .extraEntities = {Entity(8)},
+      .translation = Vector2d(4.0, 0.0),
+      .dragGeneration = 9,
+  };
+  const std::optional<SelectTool::ActiveDragPreview> displayed = state.presentationPreview(active);
+
+  ASSERT_TRUE(displayed.has_value());
+  EXPECT_EQ(displayed->entity, Entity(7));
+  EXPECT_EQ(displayed->extraEntities, std::vector<Entity>{Entity(8)})
+      << "Selection-prewarmed grouped tiles must remain tied to the active drag group so the "
+         "first live drag frames translate every unbundled component.";
+  EXPECT_EQ(displayed->dragGeneration, active.dragGeneration);
+  EXPECT_EQ(displayed->translation, Vector2d::Zero());
 }
 
 TEST(CompositedPresentationTest, ActiveDragUsesLandedRepresentedTranslation) {
@@ -474,7 +499,7 @@ TEST(CompositedPresentationTest, SettlingCompletionTriggersPrewarmOnNextSelectio
   // The cache remains live after settling, but its older version still
   // triggers prewarm for the current document version.
   state.noteFullRenderLanded(/*landedVersion=*/4);
-  EXPECT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/4, Vector2i(100, 100),
+  EXPECT_TRUE(state.shouldPrewarm(Entity(7), {}, /*currentVersion=*/4, Vector2i(100, 100),
                                   /*dragActive=*/false));
 }
 
@@ -586,7 +611,7 @@ TEST(CompositedPresentationTest, ClearSettlingIfSelectionChangedKeepsTexturesWit
   EXPECT_TRUE(Snapshot(state).hasCachedTextures);
   EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
 
-  EXPECT_TRUE(state.shouldPrewarm(Entity(9), /*currentVersion=*/3, Vector2i(100, 100),
+  EXPECT_TRUE(state.shouldPrewarm(Entity(9), {}, /*currentVersion=*/3, Vector2i(100, 100),
                                   /*dragActive=*/false));
 }
 

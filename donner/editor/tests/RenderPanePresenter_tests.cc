@@ -93,6 +93,27 @@ TEST(RenderPanePresenterTest, MissingTextureIsNotPresented) {
   EXPECT_FALSE(ShouldPresentCompositedTile(tile, entt::null));
 }
 
+TEST(RenderPanePresenterTest, SelectionPrewarmLayerMatchesGroupedActiveDragPreview) {
+  GlTextureCache::TileView tile;
+  tile.texture = static_cast<ImTextureID>(static_cast<std::uintptr_t>(7));
+  tile.kind = RenderResult::CompositedTile::Kind::Layer;
+  tile.layerEntity = static_cast<Entity>(43);
+  tile.isDragTarget = false;
+
+  const SelectTool::ActiveDragPreview activeDrag{
+      .entity = static_cast<Entity>(42),
+      .extraEntities = {static_cast<Entity>(43)},
+      .translation = Vector2d(8.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(8.0, 0.0)),
+      .dragGeneration = 5,
+  };
+
+  EXPECT_TRUE(TileMatchesActiveDragPreview(tile, activeDrag))
+      << "Grouped selection prewarm tiles are valid drag targets as soon as the active drag "
+         "starts, "
+         "even though the worker did not mark them as drag targets during the idle prewarm.";
+}
+
 TEST(RenderPanePresenterTest, PresentedTileQuadIntersectingPaneIsVisible) {
   PresentedTileQuad quad;
   quad.topLeft = Vector2d(10.0, 10.0);

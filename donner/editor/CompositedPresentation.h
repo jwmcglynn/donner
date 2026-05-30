@@ -5,6 +5,7 @@
 #include <optional>
 #include <ostream>
 #include <variant>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/MathUtils.h"
@@ -171,16 +172,22 @@ public:
   }
 
   /// Returns true when selection should trigger an async prewarm capture.
-  [[nodiscard]] bool shouldPrewarm(Entity selectedEntity, std::uint64_t currentVersion,
-                                   const Vector2i& currentCanvasSize, bool dragActive) const {
+  [[nodiscard]] bool shouldPrewarm(Entity selectedEntity,
+                                   const std::vector<Entity>& selectedExtraEntities,
+                                   std::uint64_t currentVersion, const Vector2i& currentCanvasSize,
+                                   bool dragActive) const {
     if (selectedEntity == entt::null || dragActive || isWaitingForFullRender() ||
         isWaitingForChromeRefresh()) {
       return false;
     }
 
     const std::optional<CachedTextures> cache = currentCache();
-    return !cache.has_value() || cache->entity != selectedEntity ||
-           cache->version != currentVersion || cache->canvasSize != currentCanvasSize;
+    if (!cache.has_value() || cache->entity != selectedEntity || cache->version != currentVersion ||
+        cache->canvasSize != currentCanvasSize) {
+      return true;
+    }
+
+    return representedPreviewForCache(*cache).extraEntities != selectedExtraEntities;
   }
 
   /// Mark cached composited textures as available for the given entity/version/canvas size.
@@ -382,6 +389,7 @@ private:
 
     return SelectTool::ActiveDragPreview{
         .entity = cache.entity,
+        .extraEntities = activePreview.extraEntities,
         .translation = Vector2d::Zero(),
         .documentFromCachedDocument = Transform2d(),
         .dragGeneration = activePreview.dragGeneration,
@@ -406,7 +414,7 @@ private:
   static bool SameDragPreviewTransform(const SelectTool::ActiveDragPreview& lhs,
                                        const SelectTool::ActiveDragPreview& rhs) {
     return lhs.entity == rhs.entity && lhs.dragGeneration == rhs.dragGeneration &&
-           SameVector(lhs.translation, rhs.translation) &&
+           lhs.extraEntities == rhs.extraEntities && SameVector(lhs.translation, rhs.translation) &&
            SameTransform(lhs.documentFromCachedDocument, rhs.documentFromCachedDocument);
   }
 

@@ -985,6 +985,9 @@ private:
   /// assignment must be re-resolved and every static segment should be rebuilt.
   bool dropNonRenderableInteractionHints(Registry& registry);
 
+  /// Returns true when @p entity has a non-pending ActiveDrag interaction hint.
+  bool isActiveDragTarget(Entity entity) const;
+
   /// Returns true if the entity is currently within the layer's cached render range.
   bool layerContainsEntity(const CompositorLayer& layer, Entity entity) const;
 

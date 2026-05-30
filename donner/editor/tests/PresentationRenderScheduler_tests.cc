@@ -1,5 +1,8 @@
 #include "donner/editor/PresentationRenderScheduler.h"
 
+#include <utility>
+#include <vector>
+
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -20,9 +23,11 @@ PresentationRenderScheduleInput Input(
     Entity selectedEntity, std::uint64_t version = 1,
     std::optional<SelectTool::ActiveDragPreview> activeDragPreview = std::nullopt,
     EditorRasterViewport rasterViewport = RasterViewport(),
-    const Vector2i& currentCanvasSize = kCanvasSize) {
+    const Vector2i& currentCanvasSize = kCanvasSize,
+    std::vector<Entity> selectedExtraEntities = {}) {
   return PresentationRenderScheduleInput{
       .selectedEntity = selectedEntity,
+      .selectedExtraEntities = std::move(selectedExtraEntities),
       .activeDragPreview = activeDragPreview,
       .currentVersion = version,
       .currentCanvasSize = currentCanvasSize,
@@ -44,6 +49,45 @@ TEST(PresentationRenderSchedulerTest, FirstRenderRequestsRegularAndPrewarm) {
   ASSERT_TRUE(decision.dragPreview.has_value());
   EXPECT_EQ(decision.dragPreview->entity, Entity(7));
   EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
+}
+
+TEST(PresentationRenderSchedulerTest, SelectionPrewarmCarriesGroupedSelectionEntities) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision decision = scheduler.evaluate(
+      presentation,
+      Input(Entity(7), /*version=*/1, std::nullopt, RasterViewport(), kCanvasSize, {Entity(8)}));
+
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_EQ(decision.dragPreview->entity, Entity(7));
+  EXPECT_EQ(decision.dragPreview->extraEntities, std::vector<Entity>{Entity(8)});
+  EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
+}
+
+TEST(PresentationRenderSchedulerTest, ChangedGroupedSelectionRewarmsSamePrimaryEntity) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision warm = scheduler.evaluate(
+      presentation,
+      Input(Entity(7), /*version=*/1, std::nullopt, RasterViewport(), kCanvasSize, {Entity(8)}));
+  ASSERT_TRUE(warm.dragPreview.has_value());
+  scheduler.noteRenderCompleted(warm.currentVersion, warm.currentCanvasSize,
+                                warm.currentRasterViewport);
+  presentation.noteCachedTextures(Entity(7), /*version=*/1, kCanvasSize,
+                                  SelectTool::ActiveDragPreview{
+                                      .entity = Entity(7),
+                                      .extraEntities = {Entity(8)},
+                                  });
+
+  const PresentationRenderScheduleDecision changed = scheduler.evaluate(
+      presentation,
+      Input(Entity(7), /*version=*/1, std::nullopt, RasterViewport(), kCanvasSize, {Entity(9)}));
+
+  EXPECT_TRUE(changed.needsCompositedPrewarm);
+  ASSERT_TRUE(changed.dragPreview.has_value());
+  EXPECT_EQ(changed.dragPreview->extraEntities, std::vector<Entity>{Entity(9)});
 }
 
 TEST(PresentationRenderSchedulerTest, RepeatedUpToDateSelectionDoesNotRequestRender) {

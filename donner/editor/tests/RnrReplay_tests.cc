@@ -630,7 +630,7 @@ protected:
 
       const bool needsRegularRender = canvasChanged || versionChanged;
       const bool needsCompositedPrewarm = compositedPresentation.shouldPrewarm(
-          prewarmEntity, currentVersion, currentCanvasSize, /*dragActive=*/false);
+          prewarmEntity, {}, currentVersion, currentCanvasSize, /*dragActive=*/false);
 
       if (!needsRegularRender && !needsCompositedPrewarm && !dragChanged && !selectionChanged) {
         return;

@@ -717,20 +717,25 @@ TEST_F(SelectToolTest, MultiSelectDragProducesWritebackForAllElements) {
   EXPECT_EQ(writeback->extras.size(), 1u) << "one extra writeback for r2";
 }
 
-TEST_F(SelectToolTest, MultiSelectDragDoesNotUseCompositedPreview) {
-  // When compositing is enabled but the drag is multi-element, the preview
-  // path falls back to DOM mutation — the drag-preview transport models only
-  // a single moving layer.
+TEST_F(SelectToolTest, MultiSelectDragUsesGroupedCompositedPreview) {
+  // Multi-element drags still use one shared document-space transform. Exposing every selected
+  // entity in the preview lets the presenter offset cached tiles and overlay chrome in lockstep
+  // instead of forcing every pointer frame through a full DOM/render update.
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
 
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
   app.flushFrame();
 
-  EXPECT_FALSE(tool.activeDragPreview().has_value())
-      << "multi-select drag must not emit a composited preview (would misrepresent the group)";
+  const auto preview = tool.activeDragPreview();
+  ASSERT_TRUE(preview.has_value());
+  EXPECT_EQ(preview->entity, elementById("#r1").unsafeEntityHandle().entity());
+  ASSERT_EQ(preview->extraEntities.size(), 1u);
+  EXPECT_EQ(preview->extraEntities.front(), elementById("#r2").unsafeEntityHandle().entity());
+  EXPECT_EQ(preview->translation, Vector2d(30.0, 30.0));
 
-  // Elements move via DOM mutation (not the composited preview path).
+  // The DOM write still lands; the preview exists so presentation can stay responsive while async
+  // renders catch up.
   EXPECT_NE(transformOf("#r1").data[4], 0.0) << "r1 moved via mutation path";
 
   tool.onMouseUp(app, Vector2d(45.0, 45.0));

@@ -96,6 +96,7 @@ std::optional<SelectTool::ActiveDragPreview> DragPreviewFromRenderRequest(
 
   return SelectTool::ActiveDragPreview{
       .entity = preview->entity,
+      .extraEntities = preview->extraEntities,
       .translation = preview->translation,
       .documentFromCachedDocument = preview->documentFromCachedDocument,
       .dragGeneration = preview->dragGeneration,
@@ -654,6 +655,9 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   }
 
   const bool requestOverviewInfill = needsOverviewInfill;
+  const std::vector<Entity> prewarmExtraEntities =
+      requestOverviewInfill ? std::vector<Entity>{}
+                            : selectedCompositedExtraEntities(app, prewarmEntity);
   const bool useSelectedPrewarmRasterViewport =
       !requestOverviewInfill && prewarmEntity != entt::null && !dragPreview.has_value() &&
       rasterViewport.viewportBounded;
@@ -688,6 +692,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       compositedPresentation_,
       PresentationRenderScheduleInput{
           .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
+          .selectedExtraEntities = prewarmExtraEntities,
           .activeDragPreview = dragPreview,
           .currentVersion = currentVersion,
           .currentCanvasSize = currentCanvasSize,
@@ -742,6 +747,28 @@ Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
   }
 
   return selected->unsafeEntityHandle().entity();
+}
+
+std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp& app,
+                                                                       Entity primaryEntity) const {
+  std::vector<Entity> extras;
+  if (primaryEntity == entt::null) {
+    return extras;
+  }
+
+  for (const svg::SVGElement& selected : app.selectedElements()) {
+    if (!selected.isa<svg::SVGGraphicsElement>() || IsDisplayNone(selected)) {
+      continue;
+    }
+
+    const Entity entity = selected.unsafeEntityHandle().entity();
+    if (entity == primaryEntity || std::ranges::find(extras, entity) != extras.end()) {
+      continue;
+    }
+
+    extras.push_back(entity);
+  }
+  return extras;
 }
 
 Entity RenderCoordinator::suppressedCompositedLayerEntity(EditorApp& app) {

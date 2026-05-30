@@ -54,6 +54,25 @@ ImVec4 ImU32ToImVec4(ImU32 color) {
   return ImGui::ColorConvertU32ToFloat4(color);
 }
 
+bool DragPreviewContainsEntity(const SelectTool::ActiveDragPreview& preview, Entity entity) {
+  if (entity == preview.entity) {
+    return true;
+  }
+  return std::ranges::find(preview.extraEntities, entity) != preview.extraEntities.end();
+}
+
+PresentedFrameTileGeometry PresentedGeometryFromTile(const GlTextureCache::TileView& tile);
+
+PresentedFrameTileGeometry PresentedGeometryFromTileForActiveDrag(
+    const GlTextureCache::TileView& tile,
+    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview) {
+  PresentedFrameTileGeometry geometry = PresentedGeometryFromTile(tile);
+  if (TileMatchesActiveDragPreview(tile, activeDragPreview)) {
+    geometry.isDragTarget = true;
+  }
+  return geometry;
+}
+
 void DrawProfilerLegendItem(ImU32 color, const char* label, bool sameLine) {
   if (sameLine) {
     ImGui::SameLine();
@@ -585,6 +604,19 @@ bool ShouldPresentCompositedTile(const GlTextureCache::TileView& tile, Entity su
   return true;
 }
 
+bool TileMatchesActiveDragPreview(
+    const GlTextureCache::TileView& tile,
+    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview) {
+  if (!activeDragPreview.has_value()) {
+    return false;
+  }
+  if (tile.isDragTarget) {
+    return true;
+  }
+  return tile.layerEntity != entt::null &&
+         DragPreviewContainsEntity(*activeDragPreview, tile.layerEntity);
+}
+
 bool HasPresentableDragTargetTile(
     const GlTextureCache& textures,
     const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
@@ -594,7 +626,10 @@ bool HasPresentableDragTargetTile(
   }
 
   const auto matchesActiveDragTarget = [&](const GlTextureCache::TileView& tile) {
-    return tile.isDragTarget && tile.layerEntity == activeDragPreview->entity &&
+    if (suppressDragTargetTiles && TileMatchesActiveDragPreview(tile, activeDragPreview)) {
+      return false;
+    }
+    return TileMatchesActiveDragPreview(tile, activeDragPreview) &&
            ShouldPresentCompositedTile(tile, suppressedLayerEntity, suppressDragTargetTiles);
   };
 
@@ -698,8 +733,13 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
                                      state.suppressDragTargetTiles)) {
       return;
     }
+    if (state.suppressDragTargetTiles &&
+        TileMatchesActiveDragPreview(tile, state.activeDragPreview)) {
+      return;
+    }
     const std::optional<PresentedTileQuad> tileQuad = ComputePresentedTileQuad(
-        PresentedGeometryFromTile(tile), screenFromCanvasTransform, dragBaseline);
+        PresentedGeometryFromTileForActiveDrag(tile, state.activeDragPreview),
+        screenFromCanvasTransform, dragBaseline);
     if (!tileQuad.has_value()) {
       return;
     }

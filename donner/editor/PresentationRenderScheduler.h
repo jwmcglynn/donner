@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Vector2.h"
@@ -16,6 +17,8 @@ namespace donner::editor {
 struct PresentationRenderScheduleInput {
   /// Current selected graphics entity, or entt::null when no compositable selection exists.
   Entity selectedEntity = entt::null;
+  /// Additional selected graphics entities that should be prewarmed with \ref selectedEntity.
+  std::vector<Entity> selectedExtraEntities;
   /// Current active drag preview, if a drag is in progress.
   std::optional<SelectTool::ActiveDragPreview> activeDragPreview;
   /// Current document frame version.

@@ -60,8 +60,8 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
                                                   (canvasSizeChanged || rasterViewportChanged);
   decision.needsCompositedPrewarm =
       needsSettledSelectionRefresh ||
-      presentation.shouldPrewarm(input.selectedEntity, input.currentVersion,
-                                 input.currentCanvasSize,
+      presentation.shouldPrewarm(input.selectedEntity, input.selectedExtraEntities,
+                                 input.currentVersion, input.currentCanvasSize,
                                  /*dragActive=*/input.activeDragPreview.has_value()) ||
       selectedViewportRenderNeedsPrewarm;
   decision.needsRegularRender = versionChanged || canvasSizeChanged || rasterViewportChanged;
@@ -69,6 +69,7 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
   if (input.activeDragPreview.has_value()) {
     decision.dragPreview = RenderRequest::DragPreview{
         .entity = input.activeDragPreview->entity,
+        .extraEntities = input.activeDragPreview->extraEntities,
         .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
         .translation = input.activeDragPreview->translation,
         .documentFromCachedDocument = input.activeDragPreview->documentFromCachedDocument,
@@ -77,6 +78,7 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
   } else if (decision.needsCompositedPrewarm && input.selectedEntity != entt::null) {
     decision.dragPreview = RenderRequest::DragPreview{
         .entity = input.selectedEntity,
+        .extraEntities = input.selectedExtraEntities,
         .interactionKind = svg::compositor::InteractionHint::Selection,
     };
   }

@@ -38,6 +38,8 @@ public:
   struct ActiveDragPreview {
     /// Entity being dragged.
     Entity entity = entt::null;
+    /// Additional selected entities moving with \ref entity in the same gesture.
+    std::vector<Entity> extraEntities;
     /// Current drag translation in document coordinates.
     Vector2d translation = Vector2d::Zero();
     /// Current affine transform from the cached document placement to

@@ -47,6 +47,20 @@ struct RenderPanePresenterCost {
                                                bool suppressDragTargetTiles = false);
 
 /**
+ * Return true when @p tile should receive the current active-drag transform.
+ *
+ * Selection prewarm renders can publish layer tiles before the user starts dragging. Those tiles
+ * are valid drag presentation candidates even though their worker-side `isDragTarget` bit was
+ * false at prewarm time.
+ *
+ * @param tile Tile view published by \ref GlTextureCache.
+ * @param activeDragPreview Active drag preview driving presenter-side transforms.
+ */
+[[nodiscard]] bool TileMatchesActiveDragPreview(
+    const GlTextureCache::TileView& tile,
+    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview);
+
+/**
  * Return true when the presenter can move the active drag target in the current tile set.
  *
  * @param textures Presentation texture cache.
