@@ -237,6 +237,40 @@ TEST_F(PenToolTest, SelectedOpenPathCanBeContinued) {
   EXPECT_TRUE(tool.isDrafting());
 }
 
+// Regression for the live-editor Pen crash: clicking the Pen tool while a
+// `<path>` is selected aborted with
+//   UTILS_RELEASE_ASSERT failed: documentHandle_->currentThreadHasAccess()
+// because `PenTool::openStateForSelectedPath` read `SVGPathElement::d()` (raw
+// ECS access through an SVGElement) without holding a ConcurrentDom read-access
+// scope. The unit tests above never tripped it because a freshly loaded
+// document is `ThreadingMode::SingleThreaded`, where `currentThreadHasAccess()`
+// is always true. The live editor flips the document to
+// `ThreadingMode::ConcurrentDom` on its first async render (see
+// AsyncRenderer.cc), which is the state the user was in. This test reproduces
+// the user's exact sequence — select a path, enter ConcurrentDom, Pen
+// onMouseDown — so the guarded read is actually exercised.
+TEST_F(PenToolTest, SelectedOpenPathContinuesUnderConcurrentDom) {
+  ASSERT_TRUE(app.loadFromString(kOpenPathSvg));
+  auto selected = app.document().document().querySelector("#p");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  // Mirror the live editor: the document is in ConcurrentDom mode by the time
+  // the user clicks (the async renderer flips it on first render). The UI
+  // thread holds no read/write access scope when a tool's onMouseDown fires.
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  ASSERT_EQ(app.document().document().threadingMode(), svg::ThreadingMode::ConcurrentDom);
+
+  // At c0e8c53f this aborts via the release assert inside SVGPathElement::d().
+  // After the fix the selected-path read is wrapped in a read-access scope and
+  // the path continues normally.
+  tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_EQ(selected->cast<svg::SVGPathElement>().d(), "M 0 0 L 10 0 L 10 10");
+  EXPECT_TRUE(tool.isDrafting());
+}
+
 TEST_F(PenToolTest, GenericSourceDeltasMirrorPenChangesIntoTextPane) {
   TextEditor textEditor;
   textEditor.setText(kEmptySvg);
