@@ -320,6 +320,13 @@ public:
   /// about z-order can rely on a stable sequence.
   [[nodiscard]] std::vector<svg::SVGGeometryElement> hitTestRect(const Box2d& documentRect);
 
+  /// Return every selectable geometry element in the document, in document order (root-to-leaf
+  /// depth-first). This is the canonical "Select All" set: the same elements `hitTestRect` would
+  /// return for a marquee covering the whole canvas, minus the rectangle filter. Non-geometry
+  /// nodes (`<defs>`, gradients, plain containers, XML text nodes) are excluded, so it matches what
+  /// marquee selection treats as selectable. Empty when there is no document.
+  [[nodiscard]] std::vector<svg::SVGElement> selectableElements();
+
   // ---------------------------------------------------------------------------
   // Undo
   // ---------------------------------------------------------------------------

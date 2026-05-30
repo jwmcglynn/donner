@@ -192,6 +192,12 @@ private:
   bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
   void handleGlobalShortcuts();
+  /// True when the document has at least one selectable element (the canonical marquee/Select-All
+  /// set). Gates whether Cmd+A / the Edit menu's "Select All" act on the canvas.
+  [[nodiscard]] bool canvasHasSelectableElements();
+  /// Selects every selectable element on the canvas via the shared `setSelection()` path, so the
+  /// canvas highlight, source-pane sync, and overlay all update together. No-op without a document.
+  void selectAllCanvasElements();
   void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
   void renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
                         ImGuiWindowFlags paneFlags);

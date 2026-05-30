@@ -1339,6 +1339,18 @@ void EditorShell::handleGlobalShortcuts() {
     app_.setSelection(std::nullopt);
   }
 
+  // Plain Cmd+A ("Select All") selects every selectable element via the same setSelection() path
+  // normal canvas selection uses, so the canvas highlight, source-pane sync, and overlay all
+  // update together. It is gated to the canvas (not while the source pane owns keyboard focus,
+  // where Cmd+A is text Select-All), and the absence of Shift keeps it distinct from the
+  // Cmd+Shift+A "Deselect All" chord below.
+  if (CanSelectAllFromCanvasShortcut(
+          ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false), cmd, shift, anyPopupOpen,
+          sourcePaneFocused,
+          /*canvasHasSelectableElements=*/canvasHasSelectableElements())) {
+    selectAllCanvasElements();
+  }
+
   // Cmd+Shift+A ("Deselect All") clears the canvas selection through the same
   // canonical clear path Escape uses (clearSelection() == setSelection(nullopt))
   // so the canvas highlight, source-pane sync, and overlay all update together.
@@ -1369,6 +1381,23 @@ void EditorShell::handleGlobalShortcuts() {
                                             sourcePaneFocused)) {
     std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
   }
+}
+
+bool EditorShell::canvasHasSelectableElements() {
+  if (!app_.hasDocument()) {
+    return false;
+  }
+  return !app_.selectableElements().empty();
+}
+
+void EditorShell::selectAllCanvasElements() {
+  if (!app_.hasDocument()) {
+    return;
+  }
+  // Route through the same setSelection() path normal selection uses so the canvas highlight,
+  // source-pane sync, and overlay all update together. The selectable set is the canonical
+  // marquee/Select-All set (every selectable geometry element in the document).
+  app_.setSelection(app_.selectableElements());
 }
 
 void EditorShell::copySelectedShapesToClipboard() {
@@ -3536,6 +3565,10 @@ void EditorShell::runFrame() {
   }
   if (menuActions.selectAll) {
     textEditor_.selectAll();
+  }
+  if (menuActions.selectAllCanvas) {
+    // Same canonical canvas Select-All path as the Cmd+A shortcut.
+    selectAllCanvasElements();
   }
   if (menuActions.deselectAll) {
     // Same canonical clear path as the Cmd+Shift+A shortcut and Escape.

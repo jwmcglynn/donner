@@ -22,6 +22,18 @@ namespace donner::editor {
   return pressedA && cmd && shift && hasSelection && !anyPopupOpen && !sourcePaneFocused;
 }
 
+/// Plain Cmd+A ("Select All") selects every selectable element on the canvas. The *absence* of
+/// Shift keeps it distinct from the Cmd+Shift+A "Deselect All" chord, so the two never collide. It
+/// only acts on the canvas: when the source pane owns keyboard focus, Cmd+A keeps doing text
+/// Select-All in the XML editor instead, so this returns false in that case. It is suppressed while
+/// a modal popup is open, and is a no-op when the document has nothing selectable.
+[[nodiscard]] inline bool CanSelectAllFromCanvasShortcut(bool pressedA, bool cmd, bool shift,
+                                                         bool anyPopupOpen, bool sourcePaneFocused,
+                                                         bool canvasHasSelectableElements) {
+  return pressedA && cmd && !shift && canvasHasSelectableElements && !anyPopupOpen &&
+         !sourcePaneFocused;
+}
+
 /// Source focus mode can be toggled globally with Cmd/Ctrl+Enter as long as no modal popup owns
 /// keyboard input.
 [[nodiscard]] inline bool CanToggleSourceFocusModeFromShortcut(bool enterKey, bool commandDown,

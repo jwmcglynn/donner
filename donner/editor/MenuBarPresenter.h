@@ -21,12 +21,9 @@ struct MenuBarState {
   /// True when the canvas selection is exactly one or more `<text>` elements,
   /// the precondition for "Convert Text to Outlines" (design doc 0047 M5).
   bool hasTextSelection = false;
-  /// Current visibility of the Compositor Debug panel (drives the View-menu
-  /// checkmark). Off by default.
-  bool showCompositorDebugPanel = false;
-  /// Current visibility of the render-pane performance overlay (drives the
-  /// View-menu checkmark). On by default.
-  bool showPerfOverlay = true;
+  /// True when the document has at least one selectable element. Enables the canvas "Select All"
+  /// when the source pane is not focused.
+  bool hasSelectableElements = false;
 };
 
 struct MenuBarActions {
@@ -45,7 +42,11 @@ struct MenuBarActions {
   bool paste = false;
   bool pasteInFront = false;
   bool convertTextToOutlines = false;
+  /// Text Select-All in the source/XML pane (fires when the source pane owns keyboard focus).
   bool selectAll = false;
+  /// Canvas Select-All — selects every selectable element (fires when the source pane is not
+  /// focused).
+  bool selectAllCanvas = false;
   bool deselectAll = false;
   bool zoomIn = false;
   bool zoomOut = false;

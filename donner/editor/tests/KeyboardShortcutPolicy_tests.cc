@@ -75,5 +75,43 @@ TEST(KeyboardShortcutPolicyTest, DeselectAllRequiresCmdShiftAWithSelectionOnCanv
                                           /*sourcePaneFocused=*/false));
 }
 
+TEST(KeyboardShortcutPolicyTest, SelectAllRequiresPlainCmdAOnCanvasWithSelectableElements) {
+  // Plain Cmd+A on the canvas, with selectable elements and no popup/source focus, fires.
+  EXPECT_TRUE(CanSelectAllFromCanvasShortcut(/*pressedA=*/true, /*cmd=*/true, /*shift=*/false,
+                                             /*anyPopupOpen=*/false, /*sourcePaneFocused=*/false,
+                                             /*canvasHasSelectableElements=*/true));
+
+  // Cmd+Shift+A is "Deselect All", not Select All — the Shift must suppress this.
+  EXPECT_FALSE(CanSelectAllFromCanvasShortcut(/*pressedA=*/true, /*cmd=*/true, /*shift=*/true,
+                                              /*anyPopupOpen=*/false, /*sourcePaneFocused=*/false,
+                                              /*canvasHasSelectableElements=*/true));
+
+  // When the source pane owns keyboard focus, Cmd+A is text Select-All in the editor, not canvas
+  // Select-All.
+  EXPECT_FALSE(CanSelectAllFromCanvasShortcut(/*pressedA=*/true, /*cmd=*/true, /*shift=*/false,
+                                              /*anyPopupOpen=*/false, /*sourcePaneFocused=*/true,
+                                              /*canvasHasSelectableElements=*/true));
+
+  // Suppressed while a modal popup is open.
+  EXPECT_FALSE(CanSelectAllFromCanvasShortcut(/*pressedA=*/true, /*cmd=*/true, /*shift=*/false,
+                                              /*anyPopupOpen=*/true, /*sourcePaneFocused=*/false,
+                                              /*canvasHasSelectableElements=*/true));
+
+  // No-op when the document has nothing selectable.
+  EXPECT_FALSE(CanSelectAllFromCanvasShortcut(/*pressedA=*/true, /*cmd=*/true, /*shift=*/false,
+                                              /*anyPopupOpen=*/false, /*sourcePaneFocused=*/false,
+                                              /*canvasHasSelectableElements=*/false));
+
+  // A without Cmd is not the chord.
+  EXPECT_FALSE(CanSelectAllFromCanvasShortcut(/*pressedA=*/true, /*cmd=*/false, /*shift=*/false,
+                                              /*anyPopupOpen=*/false, /*sourcePaneFocused=*/false,
+                                              /*canvasHasSelectableElements=*/true));
+
+  // Not pressing A does nothing.
+  EXPECT_FALSE(CanSelectAllFromCanvasShortcut(/*pressedA=*/false, /*cmd=*/true, /*shift=*/false,
+                                              /*anyPopupOpen=*/false, /*sourcePaneFocused=*/false,
+                                              /*canvasHasSelectableElements=*/true));
+}
+
 }  // namespace
 }  // namespace donner::editor

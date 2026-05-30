@@ -1095,4 +1095,28 @@ std::vector<svg::SVGGeometryElement> EditorApp::hitTestRect(const Box2d& documen
   return hits;
 }
 
+std::vector<svg::SVGElement> EditorApp::selectableElements() {
+  std::vector<svg::SVGElement> selectable;
+  if (!document_.hasDocument()) {
+    return selectable;
+  }
+
+  // Mirror `hitTestRect`'s traversal exactly so the "Select All" set and marquee selection agree on
+  // what is selectable: every `SVGGeometryElement` in the tree, in document order. Non-geometry
+  // nodes (`<defs>`, gradients, plain containers, XML text nodes) are skipped by
+  // `ForEachGeometryElement`.
+  //
+  // §concurrent-dom: like `hitTestRect`, the DOM reads (isa / firstChild / nextSibling) need a
+  // scoped access guard against the live ConcurrentDom document.
+  svg::SVGDocument doc = document_.document();
+  doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
+    const svg::SVGElement root = doc.svgElement();
+    auto visit = [&](const svg::SVGGeometryElement& geometry) {
+      selectable.emplace_back(geometry);
+    };
+    ForEachGeometryElement(root, visit);
+  });
+  return selectable;
+}
+
 }  // namespace donner::editor

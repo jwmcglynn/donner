@@ -86,8 +86,16 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Convert Text to Outlines", nullptr, false, state.hasTextSelection)) {
       actions.convertTextToOutlines = true;
     }
-    if (ImGui::MenuItem("Select All", "Cmd+A", false, state.sourcePaneFocused)) {
-      actions.selectAll = true;
+    // "Select All" routes to the source/XML pane's text Select-All while it owns keyboard focus,
+    // and otherwise to the canvas Select-All (every selectable element). Enabled when either path
+    // can act.
+    if (ImGui::MenuItem("Select All", "Cmd+A", false,
+                        state.sourcePaneFocused || state.hasSelectableElements)) {
+      if (state.sourcePaneFocused) {
+        actions.selectAll = true;
+      } else {
+        actions.selectAllCanvas = true;
+      }
     }
     // Deselect All clears the canvas selection; enabled only when something is
     // selected. Cmd+Shift+A mirrors the shortcut handled in EditorShell.

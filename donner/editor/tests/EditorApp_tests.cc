@@ -257,6 +257,45 @@ TEST(EditorAppTest, MultiSelectionStoresEveryElement) {
   EXPECT_FALSE(app.selectedElement().has_value());
 }
 
+TEST(EditorAppTest, SelectableElementsReturnsEveryGeometryElement) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  std::optional<svg::SVGElement> r1 = app.document().document().querySelector("#r1");
+  std::optional<svg::SVGElement> r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+
+  // "Select All" returns both rects regardless of position, in document order — the same selectable
+  // set marquee selection uses.
+  const std::vector<svg::SVGElement> selectable = app.selectableElements();
+  ASSERT_EQ(selectable.size(), 2u);
+  EXPECT_EQ(selectable.at(0), *r1);
+  EXPECT_EQ(selectable.at(1), *r2);
+}
+
+TEST(EditorAppTest, SelectableElementsExcludesNonGeometryNodes) {
+  EditorApp app;
+  // <defs> and its gradient never render as geometry, so they are not selectable; only the rect is.
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <defs><linearGradient id="grad"/></defs>
+           <rect id="r1" x="10" y="10" width="20" height="20" fill="red"/>
+         </svg>)"));
+
+  std::optional<svg::SVGElement> r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+
+  const std::vector<svg::SVGElement> selectable = app.selectableElements();
+  ASSERT_EQ(selectable.size(), 1u);
+  EXPECT_EQ(selectable.at(0), *r1);
+}
+
+TEST(EditorAppTest, SelectableElementsIsEmptyWithoutDocument) {
+  EditorApp app;
+  EXPECT_TRUE(app.selectableElements().empty());
+}
+
 TEST(EditorAppTest, ToggleInSelectionAddsThenRemoves) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
