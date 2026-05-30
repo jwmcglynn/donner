@@ -893,14 +893,6 @@ embed_resources(
 )
 
 embed_resources(
-    name = "editor_icon",
-    header_output = "donner/editor/EditorIcon.h",
-    resources = {
-        "kEditorIconSvg": "//:donner_icon.svg",
-    },
-)
-
-embed_resources(
     name = "editor_splash",
     header_output = "donner/editor/EditorSplash.h",
     resources = {
@@ -916,7 +908,6 @@ donner_cc_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":editor_icon",
         ":editor_shell",
     ],
 )
@@ -935,7 +926,6 @@ donner_cc_binary(
     }),
     visibility = ["//visibility:private"],
     deps = [
-        ":editor_icon",
         ":editor_shell",
         ":notice",
         ":tracy_wrapper",
