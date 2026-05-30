@@ -56,6 +56,12 @@ constexpr std::string_view kResizeRectSvg =
          <rect id="target" x="20" y="20" width="40" height="20" fill="red"/>
        </svg>)";
 
+constexpr std::string_view kRotateRingNeighborSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+         <rect id="target" x="10" y="10" width="20" height="20" fill="red"/>
+         <rect id="nearby" x="40" y="16" width="12" height="12" fill="blue"/>
+       </svg>)";
+
 class SelectToolTest : public ::testing::Test {
 protected:
   void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
@@ -88,6 +94,15 @@ protected:
       return false;
     }
     return *selection == elementById(id);
+  }
+
+  bool selectionContainsId(std::string_view id) const {
+    for (const svg::SVGElement& selected : app.selectedElements()) {
+      if (selected.id() == id) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void quickClick(const Vector2d& point) {
@@ -458,6 +473,26 @@ TEST_F(SelectToolTest, ShiftClickDoesNotStartDrag) {
   ASSERT_TRUE(app.flushFrame() || true);  // No-op flush is fine.
   EXPECT_DOUBLE_EQ(transformOf("#r2").data[4], 0.0);
   EXPECT_DOUBLE_EQ(transformOf("#r2").data[5], 0.0);
+}
+
+TEST_F(SelectToolTest, ShiftClickInRotateRingAddsNearbyElementInsteadOfRotating) {
+  loadSvg(kRotateRingNeighborSvg);
+  app.setSelection(elementById("#target"));
+
+  MouseModifiers shift;
+  shift.shift = true;
+  tool.onMouseDown(app, Vector2d(44.0, 20.0), shift);
+  tool.onMouseMove(app, Vector2d(20.0, 44.0), /*buttonHeld=*/true, shift);
+  tool.onMouseUp(app, Vector2d(20.0, 44.0));
+
+  EXPECT_FALSE(tool.activeGesturePreview().has_value());
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_TRUE(selectionContainsId("target"));
+  EXPECT_TRUE(selectionContainsId("nearby"));
+  EXPECT_DOUBLE_EQ(transformOf("#target").data[0], 1.0);
+  EXPECT_DOUBLE_EQ(transformOf("#target").data[1], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#nearby").data[0], 1.0);
+  EXPECT_DOUBLE_EQ(transformOf("#nearby").data[1], 0.0);
 }
 
 TEST_F(SelectToolTest, ClickOnEmptySpaceStartsMarquee) {

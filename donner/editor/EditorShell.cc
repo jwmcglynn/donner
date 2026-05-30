@@ -1611,7 +1611,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   const bool toolEligible = canvasHovered && !interactionController_.panning() && !spaceHeld;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
-  const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint) {
+  const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint, bool includeRotate) {
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     if (boundsCache.lastSelection != app_.selectedElements()) {
       return SelectionTransformHandleIntent{};
@@ -1620,7 +1620,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                               ? boundsCache.displayedBoundsDoc
                                               : boundsCache.pendingBoundsDoc;
     return HitTestSelectionTransformHandles(boundsDoc, documentPoint,
-                                            interactionController_.viewport().pixelsPerDocUnit());
+                                            interactionController_.viewport().pixelsPerDocUnit(),
+                                            includeRotate);
   };
   SelectionTransformHandleIntent hoverTransformIntent;
   if (penToolActive && !rotateCursorLocked && toolEligible) {
@@ -1633,7 +1634,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
   } else if (selectToolActive && !rotateCursorLocked && toolEligible &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-    hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
+    hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                                /*includeRotate=*/!ImGui::GetIO().KeyShift);
     if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
       if (hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate &&
           rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)) {
@@ -1690,8 +1692,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         !boundsCache.displayedOccludingBoundsDoc.empty() ? boundsCache.displayedOccludingBoundsDoc
                                                          : boundsCache.pendingOccludingBoundsDoc;
     const SelectionTransformHandleIntent pendingHandleIntent =
-        cacheMatchesSelection ? cachedHandleIntentAt(pendingClick.documentPoint)
-                              : SelectionTransformHandleIntent{};
+        cacheMatchesSelection
+            ? cachedHandleIntentAt(pendingClick.documentPoint,
+                                   /*includeRotate=*/!pendingClick.modifiers.shift)
+            : SelectionTransformHandleIntent{};
     bool tookFastRedrag = selectToolActive && cacheMatchesSelection &&
                           pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
                           selectTool_.tryStartRedragOnSelected(

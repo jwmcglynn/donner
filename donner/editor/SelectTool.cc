@@ -327,7 +327,8 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(editor.selectedElements()));
   if (!selectedBoundsDoc.empty() && !editor.selectedElements().empty()) {
     const SelectionTransformHandleIntent handleIntent = HitTestSelectionTransformHandles(
-        selectedBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit);
+        selectedBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit,
+        /*includeRotate=*/!modifiers.shift);
     if (handleIntent.kind != SelectionTransformHandleKind::None) {
       const auto& selection = editor.selectedElements();
       const bool allGraphics = std::all_of(selection.begin(), selection.end(), isGraphicsElement);
