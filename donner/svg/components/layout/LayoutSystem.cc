@@ -587,6 +587,15 @@ void LayoutSystem::instantiateAllComputedComponents(Registry& registry,
     ElementContext current = stack[stack.size() - 1];
     stack.pop_back();
 
+    // Editor reparse cycles can leave a stale/invalid entity reference (e.g. an
+    // invalid root in SVGDocumentContext) reachable from the hit-test path;
+    // `emplace_or_replace` and the TreeComponent walk below would abort the entt
+    // "Invalid entity" assertion. A dead entity has no computed viewBox to
+    // contribute, so skip it.
+    if (!registry.valid(current.entity)) {
+      continue;
+    }
+
     const Box2d currentViewBox =
         GetViewBoxInternal(registry, rootEntity, current.parentViewBox, current.entity);
     registry.emplace_or_replace<ComputedViewBoxComponent>(current.entity, currentViewBox);
@@ -801,7 +810,15 @@ Box2d LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
 Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   const auto& ctx = registry.ctx().get<SVGDocumentContext>();
   const EntityHandle root(registry, ctx.rootEntity);
-  const SizedElementProperties& properties = root.get<SizedElementComponent>().properties;
+  // The root may have no SizedElementComponent (e.g. mid-edit reparse states
+  // reachable from the editor's hit-test path); `get<>` would abort the entt
+  // sparse-set assertion. Treat its absence as "no width/height/x/y
+  // constraints", which falls through to the viewBox/canvas default-sizing path
+  // below. Other call sites already guard with `all_of<SizedElementComponent>()`.
+  const SizedElementComponent* sizedElement = root.try_get<SizedElementComponent>();
+  const SizedElementProperties defaultProperties;
+  const SizedElementProperties& properties =
+      sizedElement != nullptr ? sizedElement->properties : defaultProperties;
 
   const std::optional<Vector2i> maybeCanvasSize = ctx.canvasSize;
   const Box2d canvasMaxBounds = Box2d::WithSize(
@@ -858,12 +875,15 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   // as if its natural dimensions were given as the specified size."
   //
   // > 2. Otherwise, its size is resolved as a contain constraint against the default object size.
-  const ViewBoxComponent& viewBox = root.get<ViewBoxComponent>();
-  if (!viewBox.viewBox) {
+  // As with SizedElementComponent above, the root may have no ViewBoxComponent
+  // in mid-edit reparse states; `get<>` would abort. A missing component is
+  // equivalent to "no viewBox" — fall back to the canvas/default size.
+  const ViewBoxComponent* viewBox = root.try_get<ViewBoxComponent>();
+  if (viewBox == nullptr || !viewBox->viewBox) {
     return maybeCanvasSize.value_or(Vector2i(kDefaultWidth, kDefaultHeight));
   }
 
-  const Vector2d viewBoxSize = viewBox.viewBox->size();
+  const Vector2d viewBoxSize = viewBox->viewBox->size();
 
   // If there's no canvas size, there's no scaling to do, so we can directly return the rounded
   // viewBox.
@@ -879,7 +899,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   // translation (the centering offset for a non-square viewBox), inflating the reported size — e.g.
   // a 200x100 viewBox in a 500x500 canvas would report 500x375 instead of the correct 500x250.
   const Transform2d contentFromViewBox = preserveAspectRatio.elementContentFromViewBoxTransform(
-      Box2d(Vector2d(), canvasSize), viewBox.viewBox);
+      Box2d(Vector2d(), canvasSize), viewBox->viewBox);
 
   return contentFromViewBox.transformVector(viewBoxSize);
 }

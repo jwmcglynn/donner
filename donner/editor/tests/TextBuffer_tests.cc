@@ -187,6 +187,30 @@ TEST(TextBuffer, LineColumnHelpers) {
   EXPECT_EQ(buffer.getTotalLines(), 3);
 }
 
+// Regression: a Coordinate's `column` is a *display* column (tabs expand to
+// tabSize), consistent with sanitizeCoordinates() / getCharacterIndex() /
+// getLineMaxColumn(). isValidCoord() instead validated `column` against the raw
+// glyph/byte count, so a coordinate at the tab-expanded end of a line — which
+// sanitizeCoordinates() produces and getCharacterIndex() accepts — failed
+// isValidCoord() and aborted deleteRange(). Found by editor_state_machine_fuzzer
+// (both the start and end asserts). See the disabled assert in getCharacterIndex.
+TEST(TextBuffer, DeleteRangeAcceptsTabExpandedDisplayColumns) {
+  TextBuffer buffer;
+  buffer.setText("\t\tx");  // tabSize=2: display width 5, glyph/byte count 3
+  const int maxColumn = buffer.getLineMaxColumn(0);
+  ASSERT_GT(maxColumn, buffer.getLineCharacterCount(0) + 1)
+      << "test needs a line whose display width exceeds the glyph count by >1";
+
+  // End coordinate at the tab-expanded end-of-line: must be valid, not abort.
+  buffer.deleteRange({0, 0}, {0, maxColumn});
+  EXPECT_EQ(buffer.getText(), "");
+
+  // Start coordinate inside the tab-expanded zone: must also be valid.
+  buffer.setText("\t\tx");
+  buffer.deleteRange({0, maxColumn - 1}, {0, maxColumn});
+  EXPECT_EQ(buffer.getLineMaxColumn(0), maxColumn - 1);
+}
+
 TEST(TextBuffer, GetByteOffsetResolvesMultilineCoordinates) {
   TextBuffer buffer;
   buffer.setText(
