@@ -304,7 +304,7 @@ void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostE
   if (style == nullptr || !style->properties.has_value()) {
     return;
   }
-  if (!instance->visible || style->properties->display.getRequired() == Display::None) {
+  if (!instance->visible || style->properties->display.get().value() == Display::None) {
     return;
   }
 
