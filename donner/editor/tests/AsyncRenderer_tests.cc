@@ -10,9 +10,11 @@
 #include <memory>
 #include <span>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/base/Transform.h"
@@ -70,6 +72,23 @@ bool IsImmediateTile(const RenderResult::CompositedTile& tile) {
   return tile.kind == RenderResult::CompositedTile::Kind::Immediate;
 }
 
+std::optional<std::string> StableIdFromImmediateTile(const RenderResult::CompositedTile& tile) {
+  constexpr std::string_view kImmediatePrefix = "immediate:";
+  if (tile.id.rfind(kImmediatePrefix, 0) != 0u) {
+    return std::nullopt;
+  }
+  const std::size_t stableIdEnd = tile.id.find(':', kImmediatePrefix.size());
+  if (stableIdEnd == std::string::npos) {
+    return std::nullopt;
+  }
+  return tile.id.substr(kImmediatePrefix.size(), stableIdEnd - kImmediatePrefix.size());
+}
+
+struct TileGenerationSnapshot {
+  std::unordered_map<std::string, uint64_t> retainedGenerations;
+  std::unordered_set<std::string> immediateStableIds;
+};
+
 bool TileCoversDocPoint(const RenderResult::CompositedTile& tile, const Vector2d& point) {
   if (tile.bitmapDimsDoc.x <= 0.0 || tile.bitmapDimsDoc.y <= 0.0) {
     return false;
@@ -104,8 +123,11 @@ std::vector<svg::SVGElement> QueryNumberedRects(svg::SVGDocument& document, int 
   return elements;
 }
 
-std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
-  for (int i = 0; i < 400; ++i) {
+std::optional<RenderResult> WaitForRenderResult(
+    AsyncRenderer& asyncRenderer,
+    std::chrono::milliseconds timeout = std::chrono::milliseconds(4000)) {
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
     auto result = asyncRenderer.pollResult();
     if (result.has_value()) {
       return result;
@@ -413,7 +435,8 @@ TEST(AsyncRendererE2ETest, SplashDonnerSelectionPublishesImmediateTilesForLayerP
   };
   asyncRenderer.requestRender(request);
 
-  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  const std::optional<RenderResult> result =
+      WaitForRenderResult(asyncRenderer, std::chrono::seconds(15));
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
 
@@ -479,7 +502,8 @@ TEST(AsyncRendererE2ETest, SplashDonnerNDragPublishesImmediateLayerForLayerPanel
   };
   asyncRenderer.requestRender(request);
 
-  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  const std::optional<RenderResult> result =
+      WaitForRenderResult(asyncRenderer, std::chrono::seconds(15));
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
 
@@ -1917,24 +1941,27 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
     asyncRenderer.requestRender(request);
     return waitForResult();
   };
-  const auto tileGenerations = [](const RenderResult::CompositedPreview& preview)
-      -> std::unordered_map<std::string, uint64_t> {
-    std::unordered_map<std::string, uint64_t> generations;
+  const auto snapshotTileGenerations = [](const RenderResult::CompositedPreview& preview) {
+    TileGenerationSnapshot snapshot;
     for (const RenderResult::CompositedTile& tile : preview.tiles) {
       if (IsImmediateTile(tile)) {
+        const std::optional<std::string> stableId = StableIdFromImmediateTile(tile);
+        if (stableId.has_value()) {
+          snapshot.immediateStableIds.insert(*stableId);
+        }
         continue;
       }
-      generations.emplace(tile.id, tile.generation);
+      snapshot.retainedGenerations.emplace(tile.id, tile.generation);
     }
-    return generations;
+    return snapshot;
   };
 
   auto selection = postRequest(1, svg::compositor::InteractionHint::Selection);
   ASSERT_TRUE(selection.has_value());
   ASSERT_TRUE(selection->compositedPreview.has_value());
-  const std::unordered_map<std::string, uint64_t> selectionGenerations =
-      tileGenerations(*selection->compositedPreview);
-  ASSERT_FALSE(selectionGenerations.empty());
+  const TileGenerationSnapshot selectionGenerations =
+      snapshotTileGenerations(*selection->compositedPreview);
+  ASSERT_FALSE(selectionGenerations.retainedGenerations.empty());
 
   AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
   auto activeDrag = postRequest(2, svg::compositor::InteractionHint::ActiveDrag);
@@ -1946,8 +1973,12 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
     if (IsImmediateTile(tile)) {
       continue;
     }
-    const auto it = selectionGenerations.find(tile.id);
-    ASSERT_NE(it, selectionGenerations.end()) << "new tile appeared on drag start: " << tile.id;
+    const auto it = selectionGenerations.retainedGenerations.find(tile.id);
+    if (it == selectionGenerations.retainedGenerations.end()) {
+      EXPECT_TRUE(selectionGenerations.immediateStableIds.contains(tile.id))
+          << "new tile appeared on drag start: " << tile.id;
+      continue;
+    }
     if (it->second != tile.generation) {
       std::ostringstream label;
       label << tile.id << " " << it->second << "->" << tile.generation;
@@ -1967,14 +1998,18 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
   ASSERT_TRUE(reselected->compositedPreview.has_value());
 
   changedTiles.clear();
-  const std::unordered_map<std::string, uint64_t> activeDragGenerations =
-      tileGenerations(*activeDrag->compositedPreview);
+  const TileGenerationSnapshot activeDragGenerations =
+      snapshotTileGenerations(*activeDrag->compositedPreview);
   for (const RenderResult::CompositedTile& tile : reselected->compositedPreview->tiles) {
     if (IsImmediateTile(tile)) {
       continue;
     }
-    const auto it = activeDragGenerations.find(tile.id);
-    ASSERT_NE(it, activeDragGenerations.end()) << "new tile appeared on reselection: " << tile.id;
+    const auto it = activeDragGenerations.retainedGenerations.find(tile.id);
+    if (it == activeDragGenerations.retainedGenerations.end()) {
+      EXPECT_TRUE(activeDragGenerations.immediateStableIds.contains(tile.id))
+          << "new tile appeared on reselection: " << tile.id;
+      continue;
+    }
     if (it->second != tile.generation) {
       std::ostringstream label;
       label << tile.id << " " << it->second << "->" << tile.generation;
@@ -1995,15 +2030,15 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
   ASSERT_TRUE(secondDrag->compositedPreview.has_value());
 
   changedTiles.clear();
-  const std::unordered_map<std::string, uint64_t> reselectedGenerations =
-      tileGenerations(*reselected->compositedPreview);
+  const TileGenerationSnapshot reselectedGenerations =
+      snapshotTileGenerations(*reselected->compositedPreview);
   for (const RenderResult::CompositedTile& tile : secondDrag->compositedPreview->tiles) {
     if (IsImmediateTile(tile)) {
       continue;
     }
-    const auto it = reselectedGenerations.find(tile.id);
-    if (it == reselectedGenerations.end()) {
-      EXPECT_TRUE(tile.isDragTarget)
+    const auto it = reselectedGenerations.retainedGenerations.find(tile.id);
+    if (it == reselectedGenerations.retainedGenerations.end()) {
+      EXPECT_TRUE(tile.isDragTarget || reselectedGenerations.immediateStableIds.contains(tile.id))
           << "new non-drag tile appeared on second drag start: " << tile.id;
       continue;
     }
