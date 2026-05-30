@@ -57,13 +57,17 @@ Entity SelectedGraphicsEntity(EditorApp& app) {
   return app.selectedElement()->unsafeEntityHandle().entity();
 }
 
-std::string ElementId(const svg::SVGElement& element) {
-  return element.withReadAccess(
-      [&element](svg::DocumentReadAccess&, EntityHandle) { return std::string(element.id()); });
-}
-
 bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
   return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
+}
+
+bool IsLayerOwnedTile(const RenderResult::CompositedTile& tile, Entity entity) {
+  return tile.layerEntity == entity && (tile.kind == RenderResult::CompositedTile::Kind::Layer ||
+                                        tile.kind == RenderResult::CompositedTile::Kind::Immediate);
+}
+
+bool IsImmediateTile(const RenderResult::CompositedTile& tile) {
+  return tile.kind == RenderResult::CompositedTile::Kind::Immediate;
 }
 
 bool TileCoversDocPoint(const RenderResult::CompositedTile& tile, const Vector2d& point) {
@@ -808,7 +812,7 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   // canvas offset.
   bool sawAPending = false;
   for (const auto& tile : resultB->compositedPreview->tiles) {
-    if (tile.kind != RenderResult::CompositedTile::Kind::Layer) {
+    if (!IsLayerOwnedTile(tile, entityA)) {
       continue;
     }
     if (tile.isDragTarget) {
@@ -1031,8 +1035,11 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
 
   bool sawNextLayer = false;
   for (const RenderResult::CompositedTile& tile : draggingNext->compositedPreview->tiles) {
-    if (tile.kind == RenderResult::CompositedTile::Kind::Layer && tile.layerEntity == nextEntity) {
+    if (IsLayerOwnedTile(tile, nextEntity)) {
       sawNextLayer = true;
+      continue;
+    }
+    if (tile.layerEntity != entt::null) {
       continue;
     }
     if (tile.kind != RenderResult::CompositedTile::Kind::Segment &&
@@ -1266,7 +1273,8 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   // content for the dragged entity.
   bool sawLayerTile = false;
   for (const auto& tile : result->compositedPreview->tiles) {
-    if (tile.kind == RenderResult::CompositedTile::Kind::Layer && HasPresentationPayload(tile)) {
+    if (IsLayerOwnedTile(tile, target->unsafeEntityHandle().entity()) &&
+        HasPresentationPayload(tile)) {
       sawLayerTile = true;
       break;
     }
@@ -1609,7 +1617,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   // to compare against the post-release/re-drag frame below.
   const auto findDragTileBitmap = [](const RenderResult::CompositedPreview& cp) {
     for (const auto& tile : cp.tiles) {
-      if (tile.isDragTarget && tile.kind == RenderResult::CompositedTile::Kind::Layer) {
+      if (tile.isDragTarget && tile.layerEntity != entt::null) {
         return tile.bitmap.pixels;
       }
     }
@@ -1617,7 +1625,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   };
   const auto findDragTileSignature = [](const RenderResult::CompositedPreview& cp) {
     for (const auto& tile : cp.tiles) {
-      if (tile.isDragTarget && tile.kind == RenderResult::CompositedTile::Kind::Layer) {
+      if (tile.isDragTarget && tile.layerEntity != entt::null) {
         return std::tuple<bool, std::uint64_t, Vector2i>(HasPresentationPayload(tile),
                                                          tile.generation, tile.bitmapDimsPx);
       }
@@ -1909,6 +1917,9 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
       -> std::unordered_map<std::string, uint64_t> {
     std::unordered_map<std::string, uint64_t> generations;
     for (const RenderResult::CompositedTile& tile : preview.tiles) {
+      if (IsImmediateTile(tile)) {
+        continue;
+      }
       generations.emplace(tile.id, tile.generation);
     }
     return generations;
@@ -1928,6 +1939,9 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
 
   std::vector<std::string> changedTiles;
   for (const RenderResult::CompositedTile& tile : activeDrag->compositedPreview->tiles) {
+    if (IsImmediateTile(tile)) {
+      continue;
+    }
     const auto it = selectionGenerations.find(tile.id);
     ASSERT_NE(it, selectionGenerations.end()) << "new tile appeared on drag start: " << tile.id;
     if (it->second != tile.generation) {
@@ -1952,6 +1966,9 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
   const std::unordered_map<std::string, uint64_t> activeDragGenerations =
       tileGenerations(*activeDrag->compositedPreview);
   for (const RenderResult::CompositedTile& tile : reselected->compositedPreview->tiles) {
+    if (IsImmediateTile(tile)) {
+      continue;
+    }
     const auto it = activeDragGenerations.find(tile.id);
     ASSERT_NE(it, activeDragGenerations.end()) << "new tile appeared on reselection: " << tile.id;
     if (it->second != tile.generation) {
@@ -1977,6 +1994,9 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
   const std::unordered_map<std::string, uint64_t> reselectedGenerations =
       tileGenerations(*reselected->compositedPreview);
   for (const RenderResult::CompositedTile& tile : secondDrag->compositedPreview->tiles) {
+    if (IsImmediateTile(tile)) {
+      continue;
+    }
     const auto it = reselectedGenerations.find(tile.id);
     if (it == reselectedGenerations.end()) {
       EXPECT_TRUE(tile.isDragTarget)
@@ -2001,8 +2021,9 @@ TEST(AsyncRendererTest, ActiveDragStartDoesNotAdvanceUnchangedTileGenerations) {
 
 TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <defs><filter id="blur"><feGaussianBlur in="SourceGraphic" stdDeviation="1"/></filter></defs>
     <rect id="before" x="0" y="0" width="12" height="12" fill="blue"/>
-    <rect id="target" x="20" y="0" width="20" height="20" fill="red"/>
+    <rect id="target" x="20" y="0" width="20" height="20" fill="red" filter="url(#blur)"/>
     <rect id="after" x="50" y="0" width="12" height="12" fill="green"/>
   )svg");
   document.setCanvasSize(80, 40);
@@ -2023,7 +2044,7 @@ TEST(AsyncRendererTest, SteadyActiveDragTargetReusesPublishedTextureMetadataOnly
     return std::nullopt;
   };
   const auto postActiveDrag = [&](std::uint64_t version, double x) {
-    target->cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(x, 0.0)));
+    AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(x, 0.0)));
     RenderRequest request(renderer, document);
     request.version = version;
     request.documentGeneration = 1;
@@ -4475,6 +4496,10 @@ TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRe
   SelectTool selectTool;
   GlTextureCache textures;
   RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context for "
+                    "composited texture upload.";
+  }
   const std::uint64_t cachedVersion = app.document().currentFrameVersion();
   coordinator.compositedPresentation().noteCachedTextures(entt::null, cachedVersion,
                                                           Vector2i(64, 64));

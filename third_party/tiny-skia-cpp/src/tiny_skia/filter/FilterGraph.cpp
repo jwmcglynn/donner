@@ -143,8 +143,8 @@ void applySubregionClipping(FloatPixmap& output, const PixelRect& sr, int w, int
   }
 
   // Axis-aligned fast path.
-  const int rx0 = std::max(0, static_cast<int>(std::floor(sr.x)));
-  const int ry0 = std::max(0, static_cast<int>(std::floor(sr.y)));
+  const int rx0 = std::clamp(static_cast<int>(std::floor(sr.x)), 0, w);
+  const int ry0 = std::clamp(static_cast<int>(std::floor(sr.y)), 0, h);
   const int rx1 = std::clamp(static_cast<int>(std::ceil(sr.x + sr.w)), 0, w);
   const int ry1 = std::clamp(static_cast<int>(std::ceil(sr.y + sr.h)), 0, h);
 

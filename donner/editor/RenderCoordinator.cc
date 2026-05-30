@@ -757,7 +757,7 @@ std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp
   }
 
   for (const svg::SVGElement& selected : app.selectedElements()) {
-    if (!selected.isa<svg::SVGGraphicsElement>() || IsDisplayNone(selected)) {
+    if (!IsGraphicsElement(selected) || IsDisplayNone(selected)) {
       continue;
     }
 

@@ -226,12 +226,14 @@ std::vector<svg::SVGElement> SortSelectionByPaintOrder(const svg::SVGDocument& d
   std::vector<svg::SVGElement> result;
   result.reserve(selection.size());
 
-  auto visit = [&](const svg::SVGElement& element) {
-    if (std::find(selection.begin(), selection.end(), element) != selection.end()) {
-      result.push_back(element);
-    }
-  };
-  ForEachElement(document.svgElement(), visit);
+  document.withReadAccess([&](svg::DocumentReadAccess&) {
+    auto visit = [&](const svg::SVGElement& element) {
+      if (std::find(selection.begin(), selection.end(), element) != selection.end()) {
+        result.push_back(element);
+      }
+    };
+    ForEachElement(document.svgElement(), visit);
+  });
   return result;
 }
 
@@ -240,11 +242,19 @@ PathOperationSelection CollectPathOperationSelection(std::span<const svg::SVGEle
   result.inputs.reserve(selection.size());
 
   for (const svg::SVGElement& element : selection) {
-    if (!element.isa<svg::SVGGeometryElement>()) {
+    std::optional<svg::SVGGeometryElement> maybeGeometry =
+        element.withReadAccess([&element](svg::DocumentReadAccess&,
+                                          EntityHandle) -> std::optional<svg::SVGGeometryElement> {
+          if (!element.isa<svg::SVGGeometryElement>()) {
+            return std::nullopt;
+          }
+          return element.cast<svg::SVGGeometryElement>();
+        });
+    if (!maybeGeometry.has_value()) {
       continue;
     }
 
-    const svg::SVGGeometryElement geometry = element.cast<svg::SVGGeometryElement>();
+    const svg::SVGGeometryElement geometry = *maybeGeometry;
     std::optional<Path> spline = geometry.computedSpline();
     if (!spline.has_value() || spline->empty()) {
       continue;
@@ -874,11 +884,19 @@ bool EditorApp::applyPathOperation(PathOperationKind operation) {
   }
 
   const svg::SVGElement baseElement = BaseElementForPathOperation(operation, selected);
-  svg::SVGElement parent = baseElement.parentElement().value_or(document.svgElement());
+  svg::SVGElement parent = document.withReadAccess([&](svg::DocumentReadAccess&) {
+    return baseElement.parentElement().value_or(document.svgElement());
+  });
   Transform2d parentFromDocument;
-  if (parent.isa<svg::SVGGraphicsElement>()) {
-    const Transform2d documentFromParent =
-        parent.cast<svg::SVGGraphicsElement>().elementFromWorld();
+  std::optional<svg::SVGGraphicsElement> parentGraphics = parent.withReadAccess(
+      [&parent](svg::DocumentReadAccess&, EntityHandle) -> std::optional<svg::SVGGraphicsElement> {
+        if (!parent.isa<svg::SVGGraphicsElement>()) {
+          return std::nullopt;
+        }
+        return parent.cast<svg::SVGGraphicsElement>();
+      });
+  if (parentGraphics.has_value()) {
+    const Transform2d documentFromParent = parentGraphics->elementFromWorld();
     parentFromDocument = documentFromParent.inverse();
   }
 

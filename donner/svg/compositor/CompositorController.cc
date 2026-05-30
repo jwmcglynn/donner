@@ -252,6 +252,7 @@ struct StaticSpanCostEstimate {
   int drawOps = 0;
   int pathVerbs = 0;
   bool hasExpensiveEffect = false;
+  bool hasGradientPaint = false;
 };
 
 struct StaticSpanPresentationCost {
@@ -275,6 +276,12 @@ bool PaintUsesExpensiveResource(const components::ResolvedPaintServer& paint) {
   // instantiate subtrees or need broader context, so keep those cached.
   return ref->subtreeInfo.has_value() ||
          ref->reference.handle.try_get<components::ComputedGradientComponent>() == nullptr;
+}
+
+bool PaintUsesGradientResource(const components::ResolvedPaintServer& paint) {
+  const auto* ref = std::get_if<components::PaintResolvedReference>(&paint);
+  return ref != nullptr && ref->reference.valid() &&
+         ref->reference.handle.try_get<components::ComputedGradientComponent>() != nullptr;
 }
 
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
@@ -314,6 +321,10 @@ void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostE
       instance->markerEnd.has_value() || PaintUsesExpensiveResource(instance->resolvedFill) ||
       PaintUsesExpensiveResource(instance->resolvedStroke)) {
     estimate->hasExpensiveEffect = true;
+  }
+  if (PaintUsesGradientResource(instance->resolvedFill) ||
+      PaintUsesGradientResource(instance->resolvedStroke)) {
+    estimate->hasGradientPaint = true;
   }
 
   EntityHandle dataHandle = instance->dataHandle(registry);
@@ -1074,7 +1085,8 @@ bool CompositorController::hasSplitStaticLayers() const {
   // at canvas scale — visible to the operator as "fast path counter
   // bumps but framerate stays low, worse at higher zoom". Count only
   // entries NOT pending demotion.
-  bool hasActiveDragHint = false;
+  uint32_t activeDragHints = 0;
+  Entity activeDragCandidate = entt::null;
   uint32_t liveHints = 0;
   Entity liveCandidate = entt::null;
   for (const auto& [hintEntity, hint] : activeHints_) {
@@ -1082,17 +1094,18 @@ bool CompositorController::hasSplitStaticLayers() const {
       continue;
     }
     if (hint.interactionKind() == InteractionHint::ActiveDrag) {
-      hasActiveDragHint = true;
-      if (const CompositorLayer* layer = findLayer(hintEntity);
-          layer != nullptr && layer->hasRenderablePayload()) {
-        return true;
-      }
+      ++activeDragHints;
+      activeDragCandidate = hintEntity;
     }
     ++liveHints;
     liveCandidate = hintEntity;
   }
-  if (hasActiveDragHint) {
-    return false;
+  if (activeDragHints > 0) {
+    if (activeDragHints != 1 || liveHints != 1) {
+      return false;
+    }
+    const CompositorLayer* layer = findLayer(activeDragCandidate);
+    return layer != nullptr && layer->hasRenderablePayload();
   }
   if (liveHints != 1) {
     return false;
@@ -2077,7 +2090,10 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   {
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
     for (auto& layer : layers_) {
-      if (layer.isDirty() || layer.isImmediate() || !layer.hasRenderablePayload() || rootDirty_) {
+      // Immediate promoted layers still keep an internal payload so transform-only drags can reuse
+      // it through `canvasFromBitmap`; the editor-facing snapshot decides whether to retain or
+      // transiently upload that payload.
+      if (layer.isDirty() || !layer.hasRenderablePayload() || rootDirty_) {
         // §M4: bail between layer rasterizes. The remaining dirty
         // layers keep their `isDirty()` flag set, so the next
         // `renderFrame` finishes them. Returns directly out of
@@ -2287,15 +2303,27 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                                    !previousImmediatePlan.staticHeuristicImmediate;
 
   Registry& registry = document().registry();
-  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+  const StaticSpanCostEstimate cost =
+      EstimateEntityRangeCost(registry, layer.firstEntity(), layer.lastEntity());
+  LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
       renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport, surfaceFromCanvas);
+  if (!surfaceFromCanvas.isIdentity() &&
+      ((layer.fallbackReasons() & FallbackReason::Filter) != FallbackReason::None ||
+       cost.hasExpensiveEffect)) {
+    // TinySkia effect subregion clipping is defined in the output pixel frame. Cropping an
+    // effectful layer range and then applying a non-identity editor raster viewport transform can
+    // produce invalid subregion clears inside the backend. Keep identity-canvas renders tight, but
+    // use the full raster viewport for high-zoom/panned editor captures.
+    geometry = LayerRasterGeometry{
+        .viewport = viewport,
+        .surfaceFromCanvas = surfaceFromCanvas,
+    };
+  }
   ImmediateLayerPlan immediatePlan;
   immediatePlan.visible = geometry.boundsCanvas.has_value();
   if (geometry.boundsCanvas.has_value()) {
     immediatePlan.boundsCanvas = *geometry.boundsCanvas;
   }
-  const StaticSpanCostEstimate cost =
-      EstimateEntityRangeCost(registry, layer.firstEntity(), layer.lastEntity());
   const FallbackReason immediateBlockingFallbacks =
       layer.fallbackReasons() &
       (FallbackReason::BlendMode | FallbackReason::Filter | FallbackReason::ClipPath |
@@ -2570,6 +2598,12 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
 
       const StaticSpanCostEstimate cost =
           EstimateStaticSpanCost(registry, paintOrder, startIdx, endIdx);
+      if (cost.hasGradientPaint) {
+        // Gradient paint can differ by a few channels when its paths are rasterized from a cropped
+        // offscreen origin. Keep gradients eligible for immediate timing, but use a full-canvas
+        // segment so the paint server samples in the same coordinate frame as the reference render.
+        useTight = false;
+      }
       spanPlan.estimatedDrawOps = cost.drawOps;
       spanPlan.estimatedPathVerbs = cost.pathVerbs;
       spanPlan.hasExpensiveEffect = cost.hasExpensiveEffect;
@@ -3083,17 +3117,6 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   };
 
   const auto drawLayer = [&](const CompositorLayer& layer) {
-    if (layer.isImmediate()) {
-      const auto directStart = std::chrono::steady_clock::now();
-      RendererDriver driver(renderer());
-      driver.drawEntityRangeIntoCurrentFrame(document().registry(), layer.firstEntity(),
-                                             layer.lastEntity(), viewport, surfaceFromCanvas);
-      const auto directEnd = std::chrono::steady_clock::now();
-      const auto elapsedUs =
-          std::chrono::duration_cast<std::chrono::microseconds>(directEnd - directStart).count();
-      lastRenderFrameStats_.immediateRasterizeMs += static_cast<double>(elapsedUs) / 1000.0;
-      return;
-    }
     if (!layer.hasRenderablePayload()) {
       return;
     }

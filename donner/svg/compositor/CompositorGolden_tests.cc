@@ -1066,13 +1066,14 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
   checkClose(baselineGlowC, dragGlowC, "glow_foreground (further after drag target)");
 }
 
-// Translation-only drag must not re-rasterize the static segment / non-
-// drag-layer tiles between frames. Post §M2C the editor blits segments
-// and non-drag layers directly — if their generations bumped per frame,
-// the editor would re-upload N textures every pointer move (the
-// equivalent of the pre-M2C "bg/fg flatten on every frame" regression).
+// Translation-only drag must not re-rasterize retained static segment /
+// non-drag-layer tiles between frames. Post §M2C the editor blits segments
+// and non-drag layers directly — if retained generations bumped per frame,
+// the editor would re-upload N textures every pointer move (the equivalent of
+// the pre-M2C "bg/fg flatten on every frame" regression). Immediate tiles are
+// intentionally transient and may advance every frame.
 // We probe `snapshotTilesForUpload` and assert generations are stable
-// for non-drag tiles across translation-only drag frames.
+// for retained non-drag tiles across translation-only drag frames.
 TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) {
   SVGDocument document = parseDocument(R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
@@ -1092,14 +1093,14 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  // Capture per-tile generations after the first drag frame, keyed on the
-  // stable `tileId`. The drag-target layer's generation is allowed to bump
-  // (its `canvasFromBitmap` updates each fast-path frame); every other tile
-  // must stay stable.
+  // Capture per-tile generations after the first drag frame, keyed on the stable `tileId`. The
+  // drag-target layer's generation is allowed to bump (its `canvasFromBitmap` updates each
+  // fast-path frame), and immediate tiles are transient. Every retained non-drag tile must stay
+  // stable.
   auto tilesAfterFirstDrag = compositor.snapshotTilesForUpload();
   std::unordered_map<uint64_t, uint64_t> nonDragGenerations;
   for (const auto& tile : tilesAfterFirstDrag) {
-    if (!tile.isDragTarget) {
+    if (!tile.isDragTarget && !tile.immediate) {
       nonDragGenerations[tile.tileId] = tile.generation;
     }
   }
@@ -1113,7 +1114,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
 
   const auto tilesAfterFinalDrag = compositor.snapshotTilesForUpload();
   for (const auto& tile : tilesAfterFinalDrag) {
-    if (tile.isDragTarget) {
+    if (tile.isDragTarget || tile.immediate) {
       continue;
     }
     auto it = nonDragGenerations.find(tile.tileId);
@@ -1210,9 +1211,10 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
   }
   ASSERT_FALSE(preDragGenerations.empty());
 
-  // Starting an active drag on an already-elevated target changes only presentation
-  // geometry: the target's cached pixels are reused through canvasFromBitmap, and unrelated
-  // elevated/filter tiles plus static segments keep their existing textures.
+  // Starting an active drag on an already-elevated target changes only presentation geometry: the
+  // target's cached pixels are reused through canvasFromBitmap, and unrelated retained
+  // elevated/filter tiles plus static segments keep their existing textures. Immediate static
+  // tiles are transient and may legitimately advance.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
   ASSERT_TRUE(compositor.promoteEntity(targetEntity, InteractionHint::ActiveDrag).promotedLayer());
   compositor.renderFrame(viewport_);
@@ -1222,16 +1224,19 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
 
   bool sawTargetLayer = false;
   for (const CompositorTile& tile : activeDragTiles) {
+    if (tile.layerEntity == targetEntity) {
+      sawTargetLayer = true;
+      EXPECT_TRUE(tile.isDragTarget);
+    }
+    if (tile.immediate) {
+      continue;
+    }
     const auto it = preDragGenerations.find(tile.tileId);
     ASSERT_NE(it, preDragGenerations.end())
         << "new tile id appeared on drag start: " << tile.tileId;
     EXPECT_EQ(tile.generation, it->second)
         << "tile " << tile.tileId
         << " advanced generation even though drag start changed only presentation geometry";
-    if (tile.layerEntity == targetEntity) {
-      sawTargetLayer = true;
-      EXPECT_TRUE(tile.isDragTarget);
-    }
   }
   EXPECT_TRUE(sawTargetLayer);
 }
@@ -1545,12 +1550,15 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
       << "expected 2 segments (before/after the promoted layer) + 1 layer tile";
   std::uint64_t segment0GenBefore = 0;
   std::uint64_t segment1GenBefore = 0;
+  bool segment0ImmediateBefore = false;
   for (const auto& tile : tilesBefore) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0)
+      if (tile.paintOrderIndex == 0) {
         segment0GenBefore = tile.generation;
-      else
+        segment0ImmediateBefore = tile.immediate;
+      } else {
         segment1GenBefore = tile.generation;
+      }
     }
   }
 
@@ -1562,18 +1570,23 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   const auto tilesAfter = compositor.snapshotTilesForUpload();
   std::uint64_t segment0GenAfter = 0;
   std::uint64_t segment1GenAfter = 0;
+  bool segment0ImmediateAfter = false;
   for (const auto& tile : tilesAfter) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0)
+      if (tile.paintOrderIndex == 0) {
         segment0GenAfter = tile.generation;
-      else
+        segment0ImmediateAfter = tile.immediate;
+      } else {
         segment1GenAfter = tile.generation;
+      }
     }
   }
-  EXPECT_EQ(segment0GenBefore, segment0GenAfter)
-      << "segment[0] re-rasterized even though the mutation lived in segment[1] — "
-         "Phase B per-segment dirty tracking regressed. `rootDirty_` escalation "
-         "has crept back in somewhere in consumeDirtyFlags.";
+  if (!segment0ImmediateBefore && !segment0ImmediateAfter) {
+    EXPECT_EQ(segment0GenBefore, segment0GenAfter)
+        << "retained segment[0] re-rasterized even though the mutation lived in segment[1] — "
+           "Phase B per-segment dirty tracking regressed. `rootDirty_` escalation "
+           "has crept back in somewhere in consumeDirtyFlags.";
+  }
   EXPECT_NE(segment1GenBefore, segment1GenAfter)
       << "segment[1] did NOT re-rasterize even though `after` (the mutated entity) "
          "lives in it. The dirty cascade lost the segment-dirty flag somewhere "
@@ -2261,7 +2274,7 @@ TEST_F(CompositorGoldenTest, TightBoundsWithRotatingGradientNoDrift) {
 // Rotations don't commute, so the final CTM pushed rotated paths off
 // the tight bitmap entirely, leaving only the surrounding background.
 TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
-  auto makeDoc = [this]() {
+  auto makeDoc = []() {
     return parseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="900" height="400">
         <defs>
