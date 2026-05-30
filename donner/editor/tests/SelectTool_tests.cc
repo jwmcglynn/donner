@@ -640,30 +640,42 @@ TEST_F(SelectToolTest, MarqueeReleaseSelectsZeroWhenEmpty) {
   EXPECT_TRUE(app.selectedElements().empty());
 }
 
-TEST_F(SelectToolTest, PlainDragWithExistingSelectionDoesNotStartMarquee) {
+TEST_F(SelectToolTest, PlainDragFromEmptySpaceWithExistingSelectionStartsMarquee) {
   app.setSelection(elementById("#r1"));
   ASSERT_TRUE(app.hasSelection());
 
   tool.onMouseDown(app, Vector2d(60.0, 60.0), MouseModifiers{});
-  EXPECT_FALSE(tool.isMarqueeing());
-  EXPECT_FALSE(tool.marqueeRect().has_value());
-  EXPECT_FALSE(app.hasSelection()) << "plain miss still clears the existing selection";
+  EXPECT_TRUE(tool.isMarqueeing());
+  ASSERT_TRUE(tool.marqueeRect().has_value());
+  EXPECT_FALSE(app.hasSelection()) << "plain non-additive marquee clears the existing selection";
 
   tool.onMouseMove(app, Vector2d(140.0, 140.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(140.0, 140.0));
 
   EXPECT_FALSE(tool.isMarqueeing());
   EXPECT_FALSE(tool.marqueeRect().has_value());
-  EXPECT_TRUE(app.selectedElements().empty());
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "r2");
 }
 
-TEST_F(SelectToolTest, BeginMarqueeWithExistingSelectionRequiresAdditiveMode) {
+TEST_F(SelectToolTest, PlainDragStartingOnSelectedShapeDoesNotStartMarquee) {
+  app.setSelection(elementById("#r1"));
+  ASSERT_TRUE(app.hasSelection());
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+
+  EXPECT_TRUE(tool.isDragging());
+  EXPECT_FALSE(tool.isMarqueeing());
+  EXPECT_FALSE(tool.marqueeRect().has_value());
+}
+
+TEST_F(SelectToolTest, BeginMarqueeWithExistingSelectionClearsAndStartsNonAdditive) {
   app.setSelection(elementById("#r1"));
   ASSERT_TRUE(app.hasSelection());
 
   tool.beginMarquee(app, Vector2d(60.0, 60.0), /*additive=*/false);
-  EXPECT_FALSE(tool.isMarqueeing());
-  EXPECT_FALSE(tool.marqueeRect().has_value());
+  EXPECT_TRUE(tool.isMarqueeing());
+  ASSERT_TRUE(tool.marqueeRect().has_value());
   EXPECT_FALSE(app.hasSelection());
 
   app.setSelection(elementById("#r1"));

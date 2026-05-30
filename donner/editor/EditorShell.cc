@@ -1723,11 +1723,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const bool pendingClickHitsSelection =
           selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
           selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
-      const bool pendingClickCanStartMarquee = pendingClick.modifiers.shift || !app_.hasSelection();
-      if (selectToolActive && leftMouseDown &&
-          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-          pendingClickCanStartMarquee && !pendingClickHitsSelection &&
-          (selectHoldElapsed || selectDragIntent)) {
+      const bool pendingClickCanStartMarquee =
+          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          !pendingClickHitsSelection;
+      if (leftMouseDown && pendingClickCanStartMarquee && (selectHoldElapsed || selectDragIntent)) {
         lastPostedScreenPoint_.reset();
         selectTool_.beginMarquee(app_, pendingClick.documentPoint, pendingClick.modifiers.shift);
         renderCoordinator_.refreshSelectionBoundsCache(app_);
@@ -1736,9 +1735,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
             app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
             selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         interactionController_.clearPendingClick();
-      } else if (selectToolActive && leftMouseDown &&
-                 pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-                 pendingClickCanStartMarquee && !pendingClickHitsSelection) {
+      } else if (leftMouseDown && pendingClickCanStartMarquee) {
         // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or the
         // hold delay above starts marquee. This prevents full-canvas/background elements from being
         // selected just because the user is preparing a marquee drag.
