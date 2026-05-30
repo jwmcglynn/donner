@@ -508,7 +508,7 @@ TEST_F(SVGInvalidationTests, SourceEditPathDataUpdatesGeometryAttribute) {
 
   const auto* path = target->entityHandle().try_get<components::PathComponent>();
   ASSERT_NE(path, nullptr);
-  EXPECT_EQ(path->d.getRequired(), RcString(updatedPath));
+  EXPECT_EQ(path->d.get().value(), RcString(updatedPath));
   EXPECT_NE(doc.source().find(R"(d="M 1 2 L 3 4")"), std::string_view::npos);
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Style));
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
@@ -533,7 +533,7 @@ TEST_F(SVGInvalidationTests, SourceEditElementSubtreeAttributeRemovalClearsPathP
   ASSERT_TRUE(target.has_value());
   const auto* path = target->entityHandle().try_get<components::PathComponent>();
   ASSERT_NE(path, nullptr);
-  EXPECT_EQ(path->d.getRequired(), RcString("M 0 0 L 10 10"));
+  EXPECT_EQ(path->d.get().value(), RcString("M 0 0 L 10 10"));
 
   xml::ApplySourceEditResult result = doc.applySourceEdit(xml::XMLEditIntent{
       .range = {FileOffset::Offset(pathOffset), FileOffset::Offset(pathEnd + 2)},
@@ -554,7 +554,7 @@ TEST_F(SVGInvalidationTests, SourceEditElementSubtreeAttributeRemovalClearsPathP
   EXPECT_TRUE(sawPathDataRemoved);
 
   EXPECT_FALSE(target->getAttribute("d").has_value());
-  EXPECT_TRUE(path->d.getRequired().empty());
+  EXPECT_TRUE(path->d.get().value().empty());
   EXPECT_EQ(doc.source().find(R"(d="M 0 0 L 10 10")"), std::string_view::npos);
   EXPECT_TRUE(hasDirtyFlags(*target, DirtyFlagsComponent::Shape));
 }

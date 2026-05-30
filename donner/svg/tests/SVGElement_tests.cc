@@ -343,9 +343,9 @@ TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentat
   ASSERT_TRUE(fillResult.hasResult() && fillResult.result());
   styleComponent.setStyle("stroke: green; opacity: 0.5");
 
-  EXPECT_TRUE(styleComponent.properties.fill.hasValue());
-  EXPECT_TRUE(styleComponent.properties.stroke.hasValue());
-  EXPECT_TRUE(styleComponent.properties.opacity.hasValue());
+  EXPECT_TRUE(styleComponent.properties.fill.isSpecified());
+  EXPECT_TRUE(styleComponent.properties.stroke.isSpecified());
+  EXPECT_TRUE(styleComponent.properties.opacity.isSpecified());
   EXPECT_EQ(styleComponent.properties.fill.specificity, css::Specificity::FromABC(0, 0, 0));
   EXPECT_EQ(styleComponent.properties.stroke.specificity, css::Specificity::StyleAttribute());
 
@@ -357,10 +357,10 @@ TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentat
   // style-origin.
   styleComponent.setStyle("stroke: blue");
 
-  EXPECT_TRUE(styleComponent.properties.fill.hasValue())
+  EXPECT_TRUE(styleComponent.properties.fill.isSpecified())
       << "fill presentation attribute must survive setStyle rewrite";
-  EXPECT_TRUE(styleComponent.properties.stroke.hasValue());
-  EXPECT_FALSE(styleComponent.properties.opacity.hasValue())
+  EXPECT_TRUE(styleComponent.properties.stroke.isSpecified());
+  EXPECT_FALSE(styleComponent.properties.opacity.isSpecified())
       << "opacity must be cleared — it was style-origin and no longer appears";
 }
 
@@ -631,7 +631,7 @@ TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
   const auto* initialComputed = child->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(initialComputed, nullptr);
   ASSERT_TRUE(initialComputed->properties.has_value());
-  EXPECT_EQ(initialComputed->properties->fill.getRequired(),
+  EXPECT_EQ(initialComputed->properties->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255))));
 
   parent->setAttribute("fill", "red");
@@ -646,7 +646,7 @@ TEST_F(SVGElementTests, InheritedStyleChangeRecomputesDescendantStyle) {
   const auto* updatedComputed = child->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(updatedComputed, nullptr);
   ASSERT_TRUE(updatedComputed->properties.has_value());
-  EXPECT_EQ(updatedComputed->properties->fill.getRequired(),
+  EXPECT_EQ(updatedComputed->properties->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(255, 0, 0))));
 }
 
@@ -698,12 +698,12 @@ TEST_F(SVGElementTests, SelectiveStyleRecomputeSkipsCleanSiblingsAfterFirstBuild
   const auto* targetComputed = target->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(targetComputed, nullptr);
   ASSERT_TRUE(targetComputed->properties.has_value());
-  EXPECT_DOUBLE_EQ(targetComputed->properties->opacity.getRequired(), 0.5);
+  EXPECT_DOUBLE_EQ(targetComputed->properties->opacity.get().value(), 0.5);
 
   siblingComputed = sibling->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(siblingComputed, nullptr);
   ASSERT_TRUE(siblingComputed->properties.has_value());
-  EXPECT_EQ(siblingComputed->properties->fill.getRequired(),
+  EXPECT_EQ(siblingComputed->properties->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 255, 0))));
 }
 
@@ -741,7 +741,7 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
       second->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(initialComputed, nullptr);
   ASSERT_TRUE(initialComputed->properties.has_value());
-  EXPECT_EQ(initialComputed->properties->fill.getRequired(),
+  EXPECT_EQ(initialComputed->properties->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 255))));
 
   first->setClassName("");
@@ -756,7 +756,7 @@ TEST_F(SVGElementTests, NonLocalSelectorMutationRequestsFullStyleRecompute) {
       second->entityHandle().try_get<components::ComputedStyleComponent>();
   ASSERT_NE(updatedComputed, nullptr);
   ASSERT_TRUE(updatedComputed->properties.has_value());
-  EXPECT_EQ(updatedComputed->properties->fill.getRequired(),
+  EXPECT_EQ(updatedComputed->properties->fill.get().value(),
             PaintServer::Solid(css::Color(css::RGBA::RGB(0, 0, 0))));
 }
 

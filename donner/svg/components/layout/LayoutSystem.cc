@@ -115,7 +115,13 @@ void ApplyUnparsedProperties(SizedElementProperties& properties,
 
 template <typename T, PropertyCascade kCascade>
 bool IsAbsolute(const Property<T, kCascade>& property) {
-  return property.hasValue() && property.getRequired().isAbsoluteSize();
+  // Guard on the *resolved value*, not isSpecified(): a property specified as
+  // inherit/initial/unset is isSpecified()==true but resolves to no value, so
+  // pairing isSpecified() with a value access would abort (e.g. a root
+  // <svg width="inherit">). A property is a definite absolute size only when it
+  // resolves to an absolute Length.
+  const std::optional<T> value = property.get();
+  return value.has_value() && value->isAbsoluteSize();
 }
 
 template <typename T, PropertyCascade kCascade>
@@ -123,7 +129,7 @@ double GetDefiniteSize(const Property<T, kCascade>& property) {
   assert(IsAbsolute(property) && "Property must be absolute to get definite size");
 
   // Since we know the size is absolute, we don't need to specify a real viewBox or FontMetrics.
-  return property.getRequired().toPixels(Box2d::CreateEmpty(Vector2d()), FontMetrics());
+  return property.get().value().toPixels(Box2d::CreateEmpty(Vector2d()), FontMetrics());
 }
 
 Box2d GetViewBoxInternal(Registry& registry, Entity rootEntity, std::optional<Box2d> parentViewBox,
@@ -664,7 +670,7 @@ const ComputedLocalTransformComponent& LayoutSystem::createComputedLocalTransfor
   auto& computedTransform = handle.get_or_emplace<ComputedLocalTransformComponent>();
   if (transform.transform.get()) {
     computedTransform.rawCssTransform = transform.transform.get().value();
-    const TransformOrigin originValue = style.properties->transformOrigin.getRequired();
+    const TransformOrigin originValue = style.properties->transformOrigin.get().value();
 
     // The transform-origin is relative to the element's bounding box.
     Box2d bounds;
@@ -725,7 +731,7 @@ Box2d LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
 
   Vector2d size = inheritedViewBox.size();
   if (const auto* viewBox = entity.try_get<ViewBoxComponent>()) {
-    if (!properties.width.hasValue() && !properties.height.hasValue() && viewBox->viewBox) {
+    if (!properties.width.isSpecified() && !properties.height.isSpecified() && viewBox->viewBox) {
       size = viewBox->viewBox->size();
     }
 
@@ -745,20 +751,20 @@ Box2d LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
   // > viewport (i.e., if it is a 'svg' or 'symbol')
   if (!shadowTree || (shadowTree && shadowTree->mainLightRoot() != entt::null &&
                       entity.registry()->all_of<ViewBoxComponent>(shadowTree->mainLightRoot()))) {
-    if (properties.width.hasValue()) {
-      size.x = properties.width.getRequired().toPixels(inheritedViewBox, fontMetrics,
+    if (properties.width.isSpecified()) {
+      size.x = properties.width.get().value().toPixels(inheritedViewBox, fontMetrics,
                                                        Lengthd::Extent::X);
     }
 
-    if (properties.height.hasValue()) {
-      size.y = properties.height.getRequired().toPixels(inheritedViewBox, fontMetrics,
+    if (properties.height.isSpecified()) {
+      size.y = properties.height.get().value().toPixels(inheritedViewBox, fontMetrics,
                                                         Lengthd::Extent::Y);
     }
   }
 
   const Vector2d origin(
-      properties.x.getRequired().toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::X),
-      properties.y.getRequired().toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::Y));
+      properties.x.get().value().toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::X),
+      properties.y.get().value().toPixels(inheritedViewBox, fontMetrics, Lengthd::Extent::Y));
 
   if (registry.all_of<ImageComponent>(entity)) {
     if (auto maybeImageSize = registry.ctx().get<ResourceManagerContext>().getImageSize(entity)) {
@@ -766,19 +772,19 @@ Box2d LayoutSystem::calculateSizedElementBounds(EntityHandle entity,
 
       // Use the default sizing algorithm to detect the size if any parameters are missing.
       // See https://www.w3.org/TR/css-images-3/#default-sizing
-      if (properties.width.hasValue() && properties.height.hasValue()) {
+      if (properties.width.isSpecified() && properties.height.isSpecified()) {
         return Box2d(origin, origin + size);
-      } else if (!properties.width.hasValue() && !properties.height.hasValue()) {
+      } else if (!properties.width.isSpecified() && !properties.height.isSpecified()) {
         size = Vector2d(imageSize);
       } else {
         const float aspectRatio = static_cast<float>(imageSize.x) / static_cast<float>(imageSize.y);
 
-        if (!properties.width.hasValue()) {
-          size.x = properties.height.getRequired().toPixels(inheritedViewBox, fontMetrics,
+        if (!properties.width.isSpecified()) {
+          size.x = properties.height.get().value().toPixels(inheritedViewBox, fontMetrics,
                                                             Lengthd::Extent::X) *
                    aspectRatio;
-        } else if (!properties.height.hasValue()) {
-          size.y = properties.width.getRequired().toPixels(inheritedViewBox, fontMetrics,
+        } else if (!properties.height.isSpecified()) {
+          size.y = properties.width.get().value().toPixels(inheritedViewBox, fontMetrics,
                                                            Lengthd::Extent::Y) /
                    aspectRatio;
         }
@@ -902,27 +908,27 @@ bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity 
   // Override the width/height if the parent element specifies them
   SizedElementProperties properties = targetSizedElement->properties;
 
-  if (parentSizedElement->properties.width.hasValue()) {
+  if (parentSizedElement->properties.width.isSpecified()) {
     properties.width = parentSizedElement->properties.width;
   }
-  if (parentSizedElement->properties.height.hasValue()) {
+  if (parentSizedElement->properties.height.isSpecified()) {
     properties.height = parentSizedElement->properties.height;
   }
 
   Vector2d size = parentViewBox.size();
 
-  if (properties.width.hasValue()) {
+  if (properties.width.isSpecified()) {
     size.x =
-        properties.width.getRequired().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X);
+        properties.width.get().value().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X);
   }
-  if (properties.height.hasValue()) {
+  if (properties.height.isSpecified()) {
     size.y =
-        properties.height.getRequired().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y);
+        properties.height.get().value().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y);
   }
 
   const Vector2d origin(
-      properties.x.getRequired().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X),
-      properties.y.getRequired().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y));
+      properties.x.get().value().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::X),
+      properties.y.get().value().toPixels(parentViewBox, fontMetrics, Lengthd::Extent::Y));
 
   // Create the shadow component
   auto& shadowSized =

@@ -261,7 +261,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     if (parent != entt::null) {
       const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
       if (parentStyle.properties) {
-        parentFontSizePx = parentStyle.properties->fontSize.getRequired().value;
+        parentFontSizePx = parentStyle.properties->fontSize.get().value().value;
       }
     }
     computedStyle.properties->resolveFontSize(parentFontSizePx);
@@ -271,7 +271,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     if (parent != entt::null) {
       const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
       if (parentStyle.properties) {
-        parentFontWeight = parentStyle.properties->fontWeight.getRequired();
+        parentFontWeight = parentStyle.properties->fontWeight.get().value();
       }
     }
     computedStyle.properties->resolveFontWeight(parentFontWeight);
@@ -281,7 +281,7 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     if (parent != entt::null) {
       const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
       if (parentStyle.properties) {
-        parentFontStretch = parentStyle.properties->fontStretch.getRequired();
+        parentFontStretch = parentStyle.properties->fontStretch.get().value();
       }
     }
     computedStyle.properties->resolveFontStretch(parentFontStretch);

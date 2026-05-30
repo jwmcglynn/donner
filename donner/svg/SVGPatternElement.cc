@@ -50,14 +50,14 @@ PreserveAspectRatio SVGPatternElement::preserveAspectRatio() const {
 
 Lengthd SVGPatternElement::x() const {
   const auto* component = handle_.try_get<components::PatternComponent>();
-  return component ? component->sizeProperties.x.getRequired()
-                   : components::PatternComponent().sizeProperties.x.getRequired();
+  return component ? component->sizeProperties.x.get().value()
+                   : components::PatternComponent().sizeProperties.x.get().value();
 }
 
 Lengthd SVGPatternElement::y() const {
   const auto* component = handle_.try_get<components::PatternComponent>();
-  return component ? component->sizeProperties.y.getRequired()
-                   : components::PatternComponent().sizeProperties.y.getRequired();
+  return component ? component->sizeProperties.y.get().value()
+                   : components::PatternComponent().sizeProperties.y.get().value();
 }
 
 std::optional<Lengthd> SVGPatternElement::width() const {

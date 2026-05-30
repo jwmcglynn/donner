@@ -125,7 +125,7 @@ TEST_F(DocumentSyncControllerTest, ThrottledCompletedStyleEditReportsWakeAndAppl
   rect = app_.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
   EXPECT_EQ(rect->getAttribute("style"), std::optional<RcString>(RcString("display:none")));
-  EXPECT_EQ(rect->getComputedStyle().display.getRequired(), svg::Display::None);
+  EXPECT_EQ(rect->getComputedStyle().display.get().value(), svg::Display::None);
 }
 
 TEST_F(DocumentSyncControllerTest, PartialOpeningTagEditPreservesSelectionWhileInvalid) {
@@ -194,7 +194,7 @@ TEST_F(DocumentSyncControllerTest, TypingDisplayNoneBeforePathClassKeepsSelectio
   }
 
   ASSERT_TRUE(app_.selectedElement().has_value());
-  EXPECT_EQ(app_.selectedElement()->getComputedStyle().display.getRequired(), svg::Display::None);
+  EXPECT_EQ(app_.selectedElement()->getComputedStyle().display.get().value(), svg::Display::None);
 }
 
 TEST_F(DocumentSyncControllerTest, RevertingTextToCleanBaselineClearsDirtyFlag) {

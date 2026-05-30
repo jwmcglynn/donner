@@ -96,7 +96,7 @@ TEST(EllipseComponent, ComputedEllipseComponentAppliesUnparsedProperties) {
 
   EXPECT_FALSE(warningSink.hasWarnings());
   EXPECT_THAT(computed.properties.cx.get(), Optional(Lengthd(15, Lengthd::Unit::None)));
-  EXPECT_TRUE(computed.properties.ry.hasValue());
+  EXPECT_TRUE(computed.properties.ry.isSpecified());
   EXPECT_THAT(computed.properties.ry.get(), Eq(std::nullopt));
 }
 
@@ -109,7 +109,7 @@ TEST(EllipseComponent, ComputedEllipseComponentReportsInvalidUnparsedProperty) {
   ASSERT_TRUE(warningSink.hasWarnings());
   ASSERT_EQ(warningSink.warnings().size(), 1u);
   EXPECT_THAT(warningSink.warnings().front(), ParseErrorIs("Invalid length or percentage"));
-  EXPECT_FALSE(computed.properties.rx.hasValue());
+  EXPECT_FALSE(computed.properties.rx.isSpecified());
 }
 
 TEST(EllipseComponent, ParseEllipsePresentationAttributeParsesKnownAttribute) {
@@ -135,7 +135,7 @@ TEST(EllipseComponent, ParseEllipsePresentationAttributeReturnsErrorForInvalidVa
       ParseErrorIs("Invalid length or percentage"));
 
   const EllipseProperties& properties = ellipse.entityHandle().get<EllipseComponent>().properties;
-  EXPECT_FALSE(properties.ry.hasValue());
+  EXPECT_FALSE(properties.ry.isSpecified());
 }
 
 TEST(EllipseComponent, ParseEllipsePresentationAttributeReturnsFalseForUnknownAttribute) {

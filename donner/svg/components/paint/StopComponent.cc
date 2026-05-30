@@ -75,9 +75,9 @@ ComputedStopComponent::ComputedStopComponent(
   }
 
   // Evaluate stopColor if it is currentColor.
-  if (properties.stopColor.hasValue() && properties.stopColor.getRequired().isCurrentColor()) {
+  if (properties.stopColor.isSpecified() && properties.stopColor.get().value().isCurrentColor()) {
     const auto& currentColor = style.properties->color;
-    properties.stopColor.set(currentColor.getRequired(), currentColor.specificity);
+    properties.stopColor.set(currentColor.get().value(), currentColor.specificity);
   }
 }
 

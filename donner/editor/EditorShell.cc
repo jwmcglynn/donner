@@ -238,7 +238,7 @@ std::optional<css::RGBA> ParseColorAttribute(std::string_view value) {
 }
 
 css::RGBA CurrentColorForElement(const svg::SVGElement& element) {
-  const css::Color color = element.getComputedStyle().color.getRequired();
+  const css::Color color = element.getComputedStyle().color.get().value();
   return color.isCurrentColor() ? css::RGBA::RGB(0, 0, 0) : color.asRGBA();
 }
 
@@ -354,7 +354,7 @@ ToolbarPaintSlotState ToolbarPaintSlotStateForElement(const svg::SVGElement& ele
                                                       std::optional<std::string_view> source) {
   const auto& style = element.getComputedStyle();
   const svg::PaintServer paint =
-      attrName == "fill" ? style.fill.getRequired() : style.stroke.getRequired();
+      attrName == "fill" ? style.fill.get().value() : style.stroke.get().value();
   ToolbarPaintSlotState state =
       ToolbarPaintSlotStateForPaintServer(paint, CurrentColorForElement(element), document, source);
 

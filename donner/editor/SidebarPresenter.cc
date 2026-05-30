@@ -237,7 +237,7 @@ double FirstSelectedStrokeWidth(const EditorApp& app) {
     return 1.0;
   }
 
-  return selection.front().getComputedStyle().strokeWidth.getRequired().value;
+  return selection.front().getComputedStyle().strokeWidth.get().value().value;
 }
 
 bool RenderStrokeControlsPanel(EditorApp* liveApp) {

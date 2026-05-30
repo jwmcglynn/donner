@@ -196,8 +196,8 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   TextLayoutParams params;
   const auto& properties = style.properties.value();
 
-  params.fontFamilies = properties.fontFamily.getRequired();
-  params.fontSize = properties.fontSize.getRequired();
+  params.fontFamilies = properties.fontFamily.get().value();
+  params.fontSize = properties.fontSize.get().value();
   params.viewBox = components::LayoutSystem().getViewBox(handle);
 
   const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
@@ -205,12 +205,12 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
       params.fontSize.toPixels(params.viewBox, baseFontMetrics, Lengthd::Extent::Mixed);
   params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
 
-  params.textAnchor = properties.textAnchor.getRequired();
-  params.dominantBaseline = properties.dominantBaseline.getRequired();
-  params.writingMode = properties.writingMode.getRequired();
-  params.letterSpacingPx = properties.letterSpacing.getRequired().toPixels(
+  params.textAnchor = properties.textAnchor.get().value();
+  params.dominantBaseline = properties.dominantBaseline.get().value();
+  params.writingMode = properties.writingMode.get().value();
+  params.letterSpacingPx = properties.letterSpacing.get().value().toPixels(
       params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-  params.wordSpacingPx = properties.wordSpacing.getRequired().toPixels(
+  params.wordSpacingPx = properties.wordSpacing.get().value().toPixels(
       params.viewBox, params.fontMetrics, Lengthd::Extent::X);
   params.textLength = textComp.textLength;
   params.lengthAdjust = textComp.lengthAdjust;
@@ -242,20 +242,20 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
       continue;
     }
 
-    span.textAnchor = style->properties->textAnchor.getRequired();
-    span.textDecoration = style->properties->textDecoration.getRequired();
-    span.baselineShift = style->properties->baselineShift.getRequired();
-    span.alignmentBaseline = style->properties->alignmentBaseline.getRequired();
-    span.fontWeight = style->properties->fontWeight.getRequired();
-    span.fontStyle = style->properties->fontStyle.getRequired();
-    span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.getRequired());
-    span.fontVariant = style->properties->fontVariant.getRequired();
-    span.fontSize = style->properties->fontSize.getRequired();
-    span.visibility = style->properties->visibility.getRequired();
-    span.opacity = style->properties->opacity.getRequired();
-    span.letterSpacingPx = style->properties->letterSpacing.getRequired().toPixels(
+    span.textAnchor = style->properties->textAnchor.get().value();
+    span.textDecoration = style->properties->textDecoration.get().value();
+    span.baselineShift = style->properties->baselineShift.get().value();
+    span.alignmentBaseline = style->properties->alignmentBaseline.get().value();
+    span.fontWeight = style->properties->fontWeight.get().value();
+    span.fontStyle = style->properties->fontStyle.get().value();
+    span.fontStretch = static_cast<FontStretch>(style->properties->fontStretch.get().value());
+    span.fontVariant = style->properties->fontVariant.get().value();
+    span.fontSize = style->properties->fontSize.get().value();
+    span.visibility = style->properties->visibility.get().value();
+    span.opacity = style->properties->opacity.get().value();
+    span.letterSpacingPx = style->properties->letterSpacing.get().value().toPixels(
         viewBox, fontMetrics, Lengthd::Extent::X);
-    span.wordSpacingPx = style->properties->wordSpacing.getRequired().toPixels(viewBox, fontMetrics,
+    span.wordSpacingPx = style->properties->wordSpacing.get().value().toPixels(viewBox, fontMetrics,
                                                                                Lengthd::Extent::X);
 
     const bool isTextRoot = registry.any_of<components::TextRootComponent>(styleEntity);
@@ -286,9 +286,9 @@ void ResolvePerSpanLayoutStyles(Registry& registry, components::ComputedTextComp
           continue;
         }
 
-        const Lengthd ancestorShift = ancestorStyle->properties->baselineShift.getRequired();
+        const Lengthd ancestorShift = ancestorStyle->properties->baselineShift.get().value();
         const double ancestorFontSizePx =
-            ancestorStyle->properties->fontSize.getRequired().toPixels(viewBox, fontMetrics,
+            ancestorStyle->properties->fontSize.get().value().toPixels(viewBox, fontMetrics,
                                                                        Lengthd::Extent::Mixed);
         BSK ancestorKeyword = BSK::Length;
         if (ancestorShift.unit == Lengthd::Unit::Em && ancestorShift.value == -0.33) {

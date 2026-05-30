@@ -93,12 +93,14 @@ std::optional<Box2d> LocalDrawableBoundsWithStroke(
   }
 
   const auto& props = style.properties.value();
-  const PaintServer& strokeServer = props.stroke.getRequired();
+  // Value (not reference): `get()` returns a temporary optional, so binding a
+  // reference to its `.value()` would dangle. PaintServer is a small variant.
+  const PaintServer strokeServer = props.stroke.get().value();
   if (strokeServer.is<PaintServer::None>()) {
     return box;
   }
 
-  const double strokeWidth = props.strokeWidth.getRequired().value;
+  const double strokeWidth = props.strokeWidth.get().value().value;
   if (strokeWidth <= 0.0) {
     return box;
   }
@@ -194,16 +196,16 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     }
 
     if (style && style->properties) {
-      span.resolvedFill = resolvePaintServer(registry, style->properties->fill.getRequired());
-      span.resolvedStroke = resolvePaintServer(registry, style->properties->stroke.getRequired());
-      span.fillOpacity = style->properties->fillOpacity.getRequired();
-      span.strokeOpacity = style->properties->strokeOpacity.getRequired();
-      span.strokeWidth = style->properties->strokeWidth.getRequired().toPixels(
+      span.resolvedFill = resolvePaintServer(registry, style->properties->fill.get().value());
+      span.resolvedStroke = resolvePaintServer(registry, style->properties->stroke.get().value());
+      span.fillOpacity = style->properties->fillOpacity.get().value();
+      span.strokeOpacity = style->properties->strokeOpacity.get().value();
+      span.strokeWidth = style->properties->strokeWidth.get().value().toPixels(
           viewBox, baseFm, Lengthd::Extent::Mixed);
-      span.strokeLinecap = style->properties->strokeLinecap.getRequired();
-      span.strokeLinejoin = style->properties->strokeLinejoin.getRequired();
-      span.strokeMiterLimit = style->properties->strokeMiterlimit.getRequired();
-      span.paintOrder = style->properties->paintOrder.getRequired();
+      span.strokeLinecap = style->properties->strokeLinecap.get().value();
+      span.strokeLinejoin = style->properties->strokeLinejoin.get().value();
+      span.strokeMiterLimit = style->properties->strokeMiterlimit.get().value();
+      span.paintOrder = style->properties->paintOrder.get().value();
     }
 
     // Resolve decoration from ancestors. Per CSS Text Decoration §3, text-decoration is NOT
@@ -232,7 +234,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
 
         auto* walkStyle = registry.try_get<components::ComputedStyleComponent>(walkEntity);
         if (walkStyle && walkStyle->properties) {
-          const TextDecoration ancestorDeco = walkStyle->properties->textDecoration.getRequired();
+          const TextDecoration ancestorDeco = walkStyle->properties->textDecoration.get().value();
           if (ancestorDeco != TextDecoration::None) {
             // This ancestor declares decoration — accumulate it for descendant glyphs.
             span.textDecoration |= ancestorDeco;
@@ -261,15 +263,15 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
             registry.try_get<components::ComputedStyleComponent>(decorationPaintEntity);
         if (decoStyle && decoStyle->properties) {
           const auto& decoProps = decoStyle->properties.value();
-          span.resolvedDecorationFill = resolvePaintServer(registry, decoProps.fill.getRequired());
+          span.resolvedDecorationFill = resolvePaintServer(registry, decoProps.fill.get().value());
           span.resolvedDecorationStroke =
-              resolvePaintServer(registry, decoProps.stroke.getRequired());
-          span.decorationFillOpacity = decoProps.fillOpacity.getRequired();
-          span.decorationStrokeOpacity = decoProps.strokeOpacity.getRequired();
+              resolvePaintServer(registry, decoProps.stroke.get().value());
+          span.decorationFillOpacity = decoProps.fillOpacity.get().value();
+          span.decorationStrokeOpacity = decoProps.strokeOpacity.get().value();
           span.decorationStrokeWidth =
-              decoProps.strokeWidth.getRequired().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed);
+              decoProps.strokeWidth.get().value().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed);
           span.decorationFontSizePx = static_cast<float>(
-              decoProps.fontSize.getRequired().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed));
+              decoProps.fontSize.get().value().toPixels(viewBox, baseFm, Lengthd::Extent::Mixed));
         }
       }
     }
@@ -280,7 +282,7 @@ PathShape toPathShape(EntityHandle sourceEntity, const components::ComputedPathC
                       const components::ComputedStyleComponent& style) {
   PathShape shape;
   shape.path = path.spline;
-  shape.fillRule = style.properties->fillRule.getRequired();
+  shape.fillRule = style.properties->fillRule.get().value();
   shape.sourceEntity = sourceEntity;
   return shape;
 }
@@ -293,7 +295,7 @@ StrokeParams toStrokeParams(Registry& registry,
 
   const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   const FontMetrics baseFontMetrics = FontMetrics::DefaultsWithFontSize(12.0);
-  const double fontSizePx = properties.fontSize.getRequired().toPixels(viewBox, baseFontMetrics);
+  const double fontSizePx = properties.fontSize.get().value().toPixels(viewBox, baseFontMetrics);
   const FontMetrics fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
 
   const auto toPixels = [&](const Lengthd& length,
@@ -301,11 +303,11 @@ StrokeParams toStrokeParams(Registry& registry,
     return length.toPixels(viewBox, fontMetrics, extent);
   };
 
-  stroke.strokeWidth = toPixels(properties.strokeWidth.getRequired());
-  stroke.lineCap = properties.strokeLinecap.getRequired();
-  stroke.lineJoin = properties.strokeLinejoin.getRequired();
-  stroke.miterLimit = properties.strokeMiterlimit.getRequired();
-  stroke.dashOffset = toPixels(properties.strokeDashoffset.getRequired());
+  stroke.strokeWidth = toPixels(properties.strokeWidth.get().value());
+  stroke.lineCap = properties.strokeLinecap.get().value();
+  stroke.lineJoin = properties.strokeLinejoin.get().value();
+  stroke.miterLimit = properties.strokeMiterlimit.get().value();
+  stroke.dashOffset = toPixels(properties.strokeDashoffset.get().value());
 
   if (const std::optional<StrokeDasharray> dashArray = properties.strokeDasharray.get()) {
     stroke.dashArray.reserve(dashArray->size());
@@ -328,12 +330,12 @@ PaintParams toPaintParams(Registry& registry,
   PaintParams paint;
   const auto& properties = style.properties.value();
 
-  paint.opacity = properties.opacity.getRequired();
+  paint.opacity = properties.opacity.get().value();
   paint.fill = instance.resolvedFill;
-  paint.fillOpacity = properties.fillOpacity.getRequired();
+  paint.fillOpacity = properties.fillOpacity.get().value();
   paint.stroke = instance.resolvedStroke;
-  paint.strokeOpacity = properties.strokeOpacity.getRequired();
-  paint.currentColor = properties.color.getRequired();
+  paint.strokeOpacity = properties.strokeOpacity.get().value();
+  paint.currentColor = properties.color.get().value();
   paint.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   paint.strokeParams = toStrokeParams(registry, instance, style);
 
@@ -378,7 +380,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   // The computed clip rule is inherited if undefined on the clip path itself.
   for (PathShape& path : clip.clipPaths) {
     if (path.fillRule == FillRule::NonZero &&
-        style.properties->clipRule.getRequired() == ClipRule::EvenOdd) {
+        style.properties->clipRule.get().value() == ClipRule::EvenOdd) {
       path.fillRule = FillRule::EvenOdd;
     }
   }
@@ -696,8 +698,8 @@ std::optional<Box2d> computeFilterRegion(Registry& registry,
 css::Color resolveFillColor(const components::RenderingInstanceComponent& instance,
                             const components::ComputedStyleComponent& style) {
   const auto& properties = style.properties.value();
-  const css::RGBA currentColor = properties.color.getRequired().rgba();
-  const float fillOpacity = NarrowToFloat(properties.fillOpacity.getRequired());
+  const css::RGBA currentColor = properties.color.get().value().rgba();
+  const float fillOpacity = NarrowToFloat(properties.fillOpacity.get().value());
 
   const auto resolveSolid = [&](const PaintServer::Solid& solid) {
     return css::Color(solid.color.resolve(currentColor, fillOpacity));
@@ -707,7 +709,7 @@ css::Color resolveFillColor(const components::RenderingInstanceComponent& instan
     return resolveSolid(*resolved);
   }
 
-  const PaintServer fill = properties.fill.getRequired();
+  const PaintServer fill = properties.fill.get().value();
   if (const auto* solid = std::get_if<PaintServer::Solid>(&fill.value)) {
     return resolveSolid(*solid);
   }
@@ -721,13 +723,13 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
                         const components::TextComponent* textComp) {
   TextParams params;
   const auto& properties = style.properties.value();
-  const css::RGBA currentColor = properties.color.getRequired().rgba();
+  const css::RGBA currentColor = properties.color.get().value().rgba();
 
-  params.opacity = properties.opacity.getRequired();
+  params.opacity = properties.opacity.get().value();
   params.fillColor = resolveFillColor(instance, style);
 
   if (const auto* stroke = std::get_if<PaintServer::Solid>(&instance.resolvedStroke)) {
-    const float strokeOpacity = NarrowToFloat(properties.strokeOpacity.getRequired());
+    const float strokeOpacity = NarrowToFloat(properties.strokeOpacity.get().value());
     params.strokeColor = css::Color(stroke->color.resolve(currentColor, strokeOpacity));
   }
 
@@ -737,8 +739,8 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
     params.strokeParams = toStrokeParams(registry, instance, style);
   }
 
-  params.fontFamilies = properties.fontFamily.getRequired();
-  params.fontSize = properties.fontSize.getRequired();
+  params.fontFamilies = properties.fontFamily.get().value();
+  params.fontSize = properties.fontSize.get().value();
   params.viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
   // Resolve font size so that em/ex units in text positioning attributes resolve correctly.
   {
@@ -747,15 +749,15 @@ TextParams toTextParams(Registry& registry, const components::RenderingInstanceC
         params.fontSize.toPixels(params.viewBox, baseFontMetrics, Lengthd::Extent::Mixed);
     params.fontMetrics = FontMetrics::DefaultsWithFontSize(fontSizePx);
   }
-  params.textAnchor = properties.textAnchor.getRequired();
-  params.textDecoration = properties.textDecoration.getRequired();
-  params.dominantBaseline = properties.dominantBaseline.getRequired();
-  params.writingMode = properties.writingMode.getRequired();
+  params.textAnchor = properties.textAnchor.get().value();
+  params.textDecoration = properties.textDecoration.get().value();
+  params.dominantBaseline = properties.dominantBaseline.get().value();
+  params.writingMode = properties.writingMode.get().value();
 
   // Resolve letter-spacing and word-spacing to pixels.
-  params.letterSpacingPx = properties.letterSpacing.getRequired().toPixels(
+  params.letterSpacingPx = properties.letterSpacing.get().value().toPixels(
       params.viewBox, params.fontMetrics, Lengthd::Extent::X);
-  params.wordSpacingPx = properties.wordSpacing.getRequired().toPixels(
+  params.wordSpacingPx = properties.wordSpacing.get().value().toPixels(
       params.viewBox, params.fontMetrics, Lengthd::Extent::X);
 
   if (textComp) {
@@ -789,14 +791,14 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
   }
 
   ImageParams params;
-  params.opacity = style.properties->opacity.getRequired();
+  params.opacity = style.properties->opacity.get().value();
   params.targetRect = Box2d::WithSize(Vector2d(image.image->width, image.image->height));
 
   // `image-rendering: pixelated` and `crisp-edges` (plus the legacy
   // SVG 1.1 `optimizeSpeed` alias) disable bilinear filtering and use
   // nearest-neighbor sampling instead. `auto`, `smooth`, and
   // `optimizeQuality` all fall back to the backend default (bilinear).
-  const ImageRendering imageRendering = style.properties->imageRendering.getRequired();
+  const ImageRendering imageRendering = style.properties->imageRendering.get().value();
   params.imageRenderingPixelated = imageRendering == ImageRendering::Pixelated ||
                                    imageRendering == ImageRendering::CrispEdges ||
                                    imageRendering == ImageRendering::OptimizeSpeed;
@@ -976,9 +978,9 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
     // regression guarded by TightBoundsRotatedEllipseWithRotatingGradient.
     renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
-    const double opacity = style.properties->opacity.getRequired();
-    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
-    const Isolation isolation = style.properties->isolation.getRequired();
+    const double opacity = style.properties->opacity.get().value();
+    const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
+    const Isolation isolation = style.properties->isolation.get().value();
     const bool hasIsolatedLayer =
         opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
@@ -1198,7 +1200,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
     if (!instance.visible) {
       continue;
     }
-    if (style.properties->display.getRequired() == Display::None) {
+    if (style.properties->display.get().value() == Display::None) {
       continue;
     }
 
@@ -1365,11 +1367,11 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         components::LayoutSystem().getViewBox(instance->dataHandle(registry));
     const FontMetrics filterBaseFontMetrics = FontMetrics::DefaultsWithFontSize(16.0);
     const double filterFontSizePx =
-        style.properties->fontSize.getRequired().toPixels(filterViewBox, filterBaseFontMetrics);
+        style.properties->fontSize.get().value().toPixels(filterViewBox, filterBaseFontMetrics);
     const FontMetrics filterFontMetrics = FontMetrics::DefaultsWithFontSize(filterFontSizePx);
 
     std::optional<components::FilterGraph> filterGraph = resolveFilterGraph(
-        registry, instance->resolvedFilter.value(), style.properties->color.getRequired().rgba(),
+        registry, instance->resolvedFilter.value(), style.properties->color.get().value().rgba(),
         filterViewBox, filterFontMetrics);
     const std::optional<Box2d> filterRegion =
         computeFilterRegion(registry, instance->resolvedFilter.value(), *instance);
@@ -1435,9 +1437,9 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     }
     renderer_.setTransform(surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
 
-    const double opacity = style.properties->opacity.getRequired();
-    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
-    const Isolation isolation = style.properties->isolation.getRequired();
+    const double opacity = style.properties->opacity.get().value();
+    const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
+    const Isolation isolation = style.properties->isolation.get().value();
     const bool hasIsolatedLayer =
         opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
@@ -1552,7 +1554,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             const PreserveAspectRatio aspectRatio =
                 preserveAspectRatioComp != nullptr ? preserveAspectRatioComp->preserveAspectRatio
                                                    : PreserveAspectRatio::Default();
-            const double opacity = style.properties->opacity.getRequired();
+            const double opacity = style.properties->opacity.get().value();
 
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
             drawSubDocument(subDoc, sizedElement->bounds, aspectRatio, opacity,
@@ -1570,12 +1572,12 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
             const Transform2d parentAbsoluteTransform =
                 surfaceFromCanvasTransform_ * instance.worldFromEntityTransform;
             drawSubDocumentElement(subDoc, externalUse->fragment, parentAbsoluteTransform,
-                                   style.properties->opacity.getRequired());
+                                   style.properties->opacity.get().value());
           } else {
             const Vector2i subDocSize = subDoc.canvasSize();
             const Box2d viewportBounds = Box2d::WithSize(Vector2d(subDocSize.x, subDocSize.y));
             drawSubDocument(subDoc, viewportBounds, PreserveAspectRatio::Default(),
-                            style.properties->opacity.getRequired(),
+                            style.properties->opacity.get().value(),
                             surfaceFromCanvasTransform_ * instance.worldFromEntityTransform);
           }
 
@@ -1715,9 +1717,9 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
     renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
-    const double opacity = style.properties->opacity.getRequired();
-    const MixBlendMode blendMode = style.properties->mixBlendMode.getRequired();
-    const Isolation isolation = style.properties->isolation.getRequired();
+    const double opacity = style.properties->opacity.get().value();
+    const MixBlendMode blendMode = style.properties->mixBlendMode.get().value();
+    const Isolation isolation = style.properties->isolation.get().value();
     const bool hasIsolatedLayer =
         opacity < 1.0 || blendMode != MixBlendMode::Normal || isolation == Isolation::Isolate;
     if (hasIsolatedLayer) {
@@ -1816,7 +1818,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
             SVGDocument subDoc = SVGDocument::CreateFromHandle(svgImage->subDocument);
             drawSubDocument(subDoc, sizedElement->bounds, aspectRatio,
-                            style.properties->opacity.getRequired(),
+                            style.properties->opacity.get().value(),
                             instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
           }
         }
@@ -2085,7 +2087,7 @@ void RendererDriver::drawPathWithPaintOrder(RenderingInstanceView& view, Registr
                                             const components::ComputedStyleComponent& style,
                                             const PaintParams& paint,
                                             const Transform2d& deviceFromLocalForShape) {
-  const PaintOrder paintOrder = style.properties->paintOrder.getRequired();
+  const PaintOrder paintOrder = style.properties->paintOrder.get().value();
   const PathShape pathShape = toPathShape(instance.dataHandle(registry), path, style);
 
   // Fast path: canonical order (fill, stroke, markers) is the common case and lets a
@@ -2234,7 +2236,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
 
   double markerScale = 1.0;
   if (markerComponent->markerUnits == MarkerUnits::StrokeWidth) {
-    const double strokeWidth = style.properties->strokeWidth.getRequired().value;
+    const double strokeWidth = style.properties->strokeWidth.get().value().value;
     markerScale = strokeWidth;
   }
 
@@ -2262,7 +2264,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   // Apply overflow clipping if needed. The clip rect is in world coordinates,
   // so reset the transform to identity before clipping.
   const auto& markerStyle = markerHandle.get<components::ComputedStyleComponent>();
-  const Overflow overflow = markerStyle.properties->overflow.getRequired();
+  const Overflow overflow = markerStyle.properties->overflow.get().value();
   const bool needsClip = overflow != Overflow::Visible && overflow != Overflow::Auto;
 
   if (needsClip) {

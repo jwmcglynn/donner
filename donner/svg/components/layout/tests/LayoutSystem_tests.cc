@@ -33,6 +33,31 @@ protected:
   LayoutSystem layoutSystem;
 };
 
+// Regression: a root <svg> whose width/height is a CSS-wide keyword
+// (inherit/initial/unset) leaves those Properties in a non-Set state, where
+// isSpecified() is true but get() resolves to no value (width/height have no
+// initial). IsAbsolute() guarded on the cascade predicate and then accessed the
+// value, aborting ("Required property not set") during document-size
+// computation. Donner must not abort on such (valid CSS, untrusted) input.
+// Found by editor_state_machine_fuzzer; see Property::isSpecified() vs get().
+TEST_F(LayoutSystemTest, RootSizeCssWideKeywordDoesNotCrash) {
+  for (const std::string_view keyword : {"inherit", "initial", "unset"}) {
+    SCOPED_TRACE(testing::Message() << "width/height keyword: " << keyword);
+    auto document = ParseSVG(std::string("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"") +
+                             std::string(keyword) + "\" height=\"" + std::string(keyword) +
+                             "\" viewBox=\"0 0 200 200\"></svg>");
+
+    ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+    layoutSystem.instantiateAllComputedComponents(document.registry(), disabledSink);
+
+    // Neither of these must abort; with no definite absolute size the viewBox
+    // falls back to the declared viewBox extents.
+    (void)layoutSystem.calculateDocumentSize(document.registry());
+    EXPECT_THAT(layoutSystem.getViewBox(document.rootEntityHandle()),
+                BoxEq(Vector2i(0, 0), Vector2i(200, 200)));
+  }
+}
+
 TEST_F(LayoutSystemTest, ViewportRoot) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -824,8 +849,8 @@ TEST_F(LayoutSystemTest, CreateShadowSizedElementComponentReturnsFalseWhenNotMai
 
   EXPECT_FALSE(layoutSystem.createShadowSizedElementComponent(
       registry, shadowEntity, document.querySelector("#u")->entityHandle(),
-      document.querySelector("#sym")->unsafeEntityHandle().entity(), ShadowBranchType::OffscreenFill,
-      warningSink));
+      document.querySelector("#sym")->unsafeEntityHandle().entity(),
+      ShadowBranchType::OffscreenFill, warningSink));
 }
 
 // --- transform-origin with keywords ---

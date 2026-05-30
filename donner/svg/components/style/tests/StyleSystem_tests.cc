@@ -261,7 +261,7 @@ TEST_F(StyleSystemTest, DisplayNoneComputed) {
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
   EXPECT_TRUE(computed->properties.has_value());
-  EXPECT_EQ(computed->properties->display.getRequired(), Display::None);
+  EXPECT_EQ(computed->properties->display.get().value(), Display::None);
 }
 
 TEST_F(StyleSystemTest, VisibilityHiddenComputed) {
@@ -276,7 +276,7 @@ TEST_F(StyleSystemTest, VisibilityHiddenComputed) {
   auto* computed = element->entityHandle().try_get<ComputedStyleComponent>();
   ASSERT_THAT(computed, NotNull());
   EXPECT_TRUE(computed->properties.has_value());
-  EXPECT_EQ(computed->properties->visibility.getRequired(), Visibility::Hidden);
+  EXPECT_EQ(computed->properties->visibility.get().value(), Visibility::Hidden);
 }
 
 // --- Individual style computation ---
@@ -376,9 +376,9 @@ TEST_F(StyleSystemTest, UpdateStyleMergesAndInvalidatesComputedStyle) {
 
   ParseWarningSink warningSink;
   const auto& computed = styleSystem.computeStyle(element->entityHandle(), warningSink);
-  EXPECT_EQ(computed.properties->fill.getRequired(),
+  EXPECT_EQ(computed.properties->fill.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 0xFF)))));
-  EXPECT_EQ(computed.properties->stroke.getRequired(),
+  EXPECT_EQ(computed.properties->stroke.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
 }
 
@@ -412,11 +412,13 @@ TEST_F(StyleSystemTest, ComputeAllStylesDirtyOnlyRecomputesStyleDirtyEntities) {
 
   EXPECT_EQ(document.registry()
                 .get<ComputedStyleComponent>(dirty.entity())
-                .properties->fill.getRequired(),
+                .properties->fill.get()
+                .value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
   EXPECT_EQ(document.registry()
                 .get<ComputedStyleComponent>(clean.entity())
-                .properties->fill.getRequired(),
+                .properties->fill.get()
+                .value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0, 0xFF)))));
 }
 
@@ -443,7 +445,8 @@ TEST_F(StyleSystemTest, ComputeAllStylesFullRecomputeClearsAndRebuildsStyles) {
 
   EXPECT_EQ(document.registry()
                 .get<ComputedStyleComponent>(element->unsafeEntityHandle().entity())
-                .properties->fill.getRequired(),
+                .properties->fill.get()
+                .value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
 }
 
@@ -535,12 +538,12 @@ TEST_F(StyleSystemTest, ShadowTreeSelectorsMatchSiblingAndAttributeState) {
   const auto& rectStyle = document.registry().get<ComputedStyleComponent>(shadowRect);
   const auto& circleStyle = document.registry().get<ComputedStyleComponent>(shadowCircle);
 
-  EXPECT_EQ(rectStyle.properties->fill.getRequired(),
+  EXPECT_EQ(rectStyle.properties->fill.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
-  EXPECT_EQ(rectStyle.properties->visibility.getRequired(), Visibility::Hidden);
-  EXPECT_EQ(circleStyle.properties->stroke.getRequired(),
+  EXPECT_EQ(rectStyle.properties->visibility.get().value(), Visibility::Hidden);
+  EXPECT_EQ(circleStyle.properties->stroke.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 0xFF)))));
-  EXPECT_DOUBLE_EQ(circleStyle.properties->opacity.getRequired(), 0.5);
+  EXPECT_DOUBLE_EQ(circleStyle.properties->opacity.get().value(), 0.5);
 }
 
 }  // namespace donner::svg::components

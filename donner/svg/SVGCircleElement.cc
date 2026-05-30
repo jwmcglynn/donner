@@ -38,32 +38,32 @@ void SVGCircleElement::setR(Lengthd value) {
 
 Lengthd SVGCircleElement::cx() const {
   const auto* component = handle_.try_get<components::CircleComponent>();
-  return component ? component->properties.cx.getRequired() : Lengthd();
+  return component ? component->properties.cx.get().value() : Lengthd();
 }
 
 Lengthd SVGCircleElement::cy() const {
   const auto* component = handle_.try_get<components::CircleComponent>();
-  return component ? component->properties.cy.getRequired() : Lengthd();
+  return component ? component->properties.cy.get().value() : Lengthd();
 }
 
 Lengthd SVGCircleElement::r() const {
   const auto* component = handle_.try_get<components::CircleComponent>();
-  return component ? component->properties.r.getRequired() : Lengthd();
+  return component ? component->properties.r.get().value() : Lengthd();
 }
 
 Lengthd SVGCircleElement::computedCx() const {
   compute();
-  return handle_.get<components::ComputedCircleComponent>().properties.cx.getRequired();
+  return handle_.get<components::ComputedCircleComponent>().properties.cx.get().value();
 }
 
 Lengthd SVGCircleElement::computedCy() const {
   compute();
-  return handle_.get<components::ComputedCircleComponent>().properties.cy.getRequired();
+  return handle_.get<components::ComputedCircleComponent>().properties.cy.get().value();
 }
 
 Lengthd SVGCircleElement::computedR() const {
   compute();
-  return handle_.get<components::ComputedCircleComponent>().properties.r.getRequired();
+  return handle_.get<components::ComputedCircleComponent>().properties.r.get().value();
 }
 
 void SVGCircleElement::invalidate() const {
