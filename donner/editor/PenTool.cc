@@ -51,8 +51,19 @@ void PenTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 
   if (!activePath_.has_value()) {
     if (std::optional<OpenPathState> state = openStateForSelectedPath(editor); state.has_value()) {
-      continueSelectedPath(editor, editor.selectedElements().front().cast<svg::SVGPathElement>(),
-                           *state, documentPoint, modifiers);
+      // §concurrent-dom: `cast<SVGPathElement>()` resolves the selected
+      // element's EntityHandle, a raw ECS read. The live editor keeps the
+      // document in ThreadingMode::ConcurrentDom, which requires the calling
+      // thread to hold a read-access scope keyed to that element's own document
+      // state; without it SVGElement's scoped-access release assert aborts the
+      // editor. Scope the read off the selected element itself (the same idiom
+      // SelectTool uses) so the access marker matches the entity being resolved.
+      const svg::SVGElement selectedElement = editor.selectedElements().front();
+      const svg::SVGPathElement pathElement = selectedElement.withReadAccess(
+          [&selectedElement](svg::DocumentReadAccess&, EntityHandle) {
+            return selectedElement.cast<svg::SVGPathElement>();
+          });
+      continueSelectedPath(editor, pathElement, *state, documentPoint, modifiers);
       return;
     }
 
@@ -134,13 +145,31 @@ void PenTool::cancel() {
 std::optional<PenTool::OpenPathState> PenTool::openStateForSelectedPath(
     const EditorApp& editor) const {
   const std::vector<svg::SVGElement>& selected = editor.selectedElements();
-  if (selected.size() != 1u || !selected.front().isa<svg::SVGPathElement>()) {
+  if (selected.empty()) {
     return std::nullopt;
   }
 
-  const svg::SVGPathElement pathElement = selected.front().cast<svg::SVGPathElement>();
-  const std::string pathData(std::string_view(pathElement.d()));
-  auto parsed = svg::parser::PathParser::Parse(pathData);
+  // §concurrent-dom: `isa`, `cast`, and `SVGPathElement::d()` each resolve the
+  // selected element's EntityHandle, a raw ECS read. The live editor keeps the
+  // document in ThreadingMode::ConcurrentDom, which requires the calling thread
+  // to hold a read-access scope keyed to that element's own document state;
+  // without it SVGElement's scoped-access release assert aborts the editor (the
+  // crash the user hit when clicking the Pen tool with a path selected). Scope
+  // the whole inspection off the selected element itself (the same idiom
+  // SelectTool uses) so the access marker matches the entity being resolved.
+  const std::optional<std::string> pathData = selected.front().withReadAccess(
+      [&selected](svg::DocumentReadAccess&, EntityHandle) -> std::optional<std::string> {
+        if (selected.size() != 1u || !selected.front().isa<svg::SVGPathElement>()) {
+          return std::nullopt;
+        }
+        const svg::SVGPathElement pathElement = selected.front().cast<svg::SVGPathElement>();
+        return std::string(std::string_view(pathElement.d()));
+      });
+  if (!pathData.has_value()) {
+    return std::nullopt;
+  }
+
+  auto parsed = svg::parser::PathParser::Parse(*pathData);
   if (parsed.hasError() || !parsed.hasResult()) {
     return std::nullopt;
   }
