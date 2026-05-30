@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGPathElement.h"
@@ -115,6 +116,20 @@ public:
 
   /// Handle guide lines for immediate render-pane chrome.
   [[nodiscard]] std::vector<PreviewHandleLine> previewHandleLines() const;
+
+  /**
+   * Synchronous axis-aligned bounds of the in-progress draft, in document
+   * space, or `std::nullopt` when nothing is being drafted.
+   *
+   * Unlike `SnapshotSelectionWorldBounds`, which reads the live DOM `d`
+   * attribute (one `flushFrame()` behind, because `appendLine()` only *queues*
+   * the `SetAttribute("d")` write), this is computed straight from the tool's
+   * draft anchors and so includes the just-placed point the instant it is
+   * placed. The selection-bounds overlay uses it while drafting so the AABB
+   * encloses the newest point in the same click frame instead of lagging one
+   * click behind.
+   */
+  [[nodiscard]] std::optional<Box2d> draftBounds() const;
 
   /// First anchor of the active contour, used to draw the close-path hover
   /// marker. `std::nullopt` when not drafting.

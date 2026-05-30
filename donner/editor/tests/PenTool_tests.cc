@@ -15,10 +15,21 @@
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
 namespace {
+
+// gmock matcher: a Box2d encloses the given document-space point. On failure it
+// prints the full box (topLeft => bottomRight) and the point so the off-by-one
+// stale-bounds failure is diagnosable without a rerun.
+MATCHER_P(EnclosesPoint, point, "") {
+  const bool ok = arg.contains(point);
+  *result_listener << "box " << arg.topLeft << " => " << arg.bottomRight
+                   << (ok ? " contains " : " does NOT contain ") << point;
+  return ok;
+}
 
 constexpr std::string_view kEmptySvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>)";
@@ -174,6 +185,42 @@ TEST_F(PenToolTest, ConsecutiveClicksBeforeFlushStayInsideSvgRoot) {
   ASSERT_NE(pathOffset, std::string::npos);
   ASSERT_NE(svgCloseOffset, std::string::npos);
   EXPECT_LT(pathOffset, svgCloseOffset);
+}
+
+// Regression for the user-reported "AABB overlay for the pen tool's drawn path
+// is one point out of date" bug. The selection-bounds overlay drew the pen
+// path's AABB from `SnapshotSelectionWorldBounds`, which reads the LIVE DOM `d`
+// attribute. But `PenTool::appendLine` only *queues* a `SetAttribute("d")`
+// command — the live DOM does not reflect the just-placed point until the NEXT
+// `flushFrame()`. So in the same click frame the AABB excluded point N, lagging
+// one click behind. This test places point N WITHOUT an intervening flush and
+// proves: (a) the stale live-DOM snapshot the overlay used does NOT enclose N
+// (the bug), and (b) the synchronous `PenTool::draftBounds()` the overlay now
+// uses DOES enclose N in the same frame.
+TEST_F(PenToolTest, PenDraftBoundsEncloseJustPlacedPointSameFrame) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  // Place point N (80, 90) but do NOT flush — this is the same click frame the
+  // overlay renders in.
+  tool.onMouseDown(app, Vector2d(80.0, 90.0), MouseModifiers{});
+
+  const Vector2d justPlaced(80.0, 90.0);
+
+  // The stale path the overlay used before the fix: the live-DOM snapshot still
+  // has only the first point because the SetAttribute("d") is still queued.
+  const std::vector<Box2d> staleBounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(staleBounds.size(), 1u);
+  EXPECT_THAT(staleBounds.front(), ::testing::Not(EnclosesPoint(justPlaced)))
+      << "live-DOM snapshot should still lag the queued point (demonstrates the bug)";
+
+  // The fix: the synchronous draft bounds reflect the just-placed point in the
+  // same frame, with no extra flush.
+  const std::optional<Box2d> draftBounds = tool.draftBounds();
+  ASSERT_TRUE(draftBounds.has_value());
+  EXPECT_THAT(*draftBounds, EnclosesPoint(justPlaced));
+  EXPECT_THAT(*draftBounds, EnclosesPoint(Vector2d(10.0, 20.0)));
 }
 
 TEST_F(PenToolTest, DraggingPlacedPointCreatesCubicHandles) {

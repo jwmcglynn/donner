@@ -332,6 +332,29 @@ std::vector<Vector2d> PenTool::previewAnchors() const {
   return result;
 }
 
+std::optional<Box2d> PenTool::draftBounds() const {
+  if (!activePath_.has_value() || anchors_.empty()) {
+    return std::nullopt;
+  }
+
+  // Bound every anchor *and* its control handles so the overlay matches the
+  // drawn preview geometry (cubic handles can extend past the anchors). This is
+  // computed straight from the tool's draft state, so it includes the
+  // just-placed point in the same frame it was placed — before the queued
+  // `SetAttribute("d")` reaches the live DOM on the next flush.
+  Box2d bounds = Box2d::CreateEmpty(anchors_.front().point);
+  for (const Anchor& anchor : anchors_) {
+    bounds.addPoint(anchor.point);
+    if (anchor.inHandle.has_value()) {
+      bounds.addPoint(*anchor.inHandle);
+    }
+    if (anchor.outHandle.has_value()) {
+      bounds.addPoint(*anchor.outHandle);
+    }
+  }
+  return bounds;
+}
+
 std::vector<PenTool::PreviewHandleLine> PenTool::previewHandleLines() const {
   std::vector<PreviewHandleLine> result;
   for (const Anchor& anchor : anchors_) {

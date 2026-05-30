@@ -2956,6 +2956,20 @@ void EditorShell::renderPenToolPreview() {
   const ImU32 handleColor = ImGui::GetColorU32(ImVec4(0.10f, 0.43f, 1.0f, 0.42f));
   const ImU32 anchorFill = ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
   const ImU32 anchorStroke = ImGui::GetColorU32(ImVec4(0.06f, 0.20f, 0.48f, 1.0f));
+  const ImU32 aabbColor = ImGui::GetColorU32(ImVec4(0.10f, 0.43f, 1.0f, 0.55f));
+
+  // Draw the in-progress path's selection AABB from the tool's *synchronous*
+  // draft bounds rather than the selection-bounds overlay, which reads the live
+  // DOM `d` attribute one `flushFrame()` behind (PenTool::appendLine only queues
+  // the SetAttribute write). Sourcing the box from `draftBounds()` keeps it
+  // lockstep with the anchors the user just placed — it grows to enclose the
+  // newest point in the same click frame instead of lagging one click behind.
+  if (const std::optional<Box2d> draftBoundsDoc = penTool_.draftBounds();
+      draftBoundsDoc.has_value()) {
+    const ImVec2 topLeft = ToImVec2(viewport.documentToScreen(draftBoundsDoc->topLeft));
+    const ImVec2 bottomRight = ToImVec2(viewport.documentToScreen(draftBoundsDoc->bottomRight));
+    drawList->AddRect(topLeft, bottomRight, aabbColor, 0.0f, 0, 1.0f);
+  }
 
   for (const PenTool::PreviewHandleLine& handle : penTool_.previewHandleLines()) {
     drawList->AddLine(ToImVec2(viewport.documentToScreen(handle.start)),
