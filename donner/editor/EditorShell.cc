@@ -1917,7 +1917,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .showOverlay = !contentOnlyCaptureThisFrame_,
       .drawImmediateOverlay = !directFramebufferOverlay,
-      .showFrameGraph = !contentOnlyCaptureThisFrame_,
+      .showFrameGraph = !contentOnlyCaptureThisFrame_ && perfOverlaysVisible_,
   };
   const RenderPanePresenterCost paneCost = renderPanePresenter_.render(paneState);
   renderCoordinator_.addImmediateOverlayDrawCost(paneCost.immediateOverlayDrawMs);
@@ -1978,21 +1978,21 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
     flushQueuedMutationAndRefreshOverlay();
   }
 
-  if (layerPanelDetached_) {
+  if (!compositorDebugPanelVisible_ || layerPanelDetached_) {
     return;
   }
 
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelPaneY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.layerPanelHeight), ImGuiCond_Always);
-  ImGui::Begin("Layers##docked_layers", nullptr, paneFlags);
-  renderDockedLayerPanelDragHandle();
+  ImGui::Begin("Compositor Debug##docked_compositor_debug", nullptr, paneFlags);
+  renderDockedCompositorDebugPanelDragHandle();
   if (!layerPanelDetached_) {
-    renderLayerPanelContents();
+    renderCompositorDebugPanelContents();
   }
   ImGui::End();
 }
 
-void EditorShell::renderLayerPanelContents() {
+void EditorShell::renderCompositorDebugPanelContents() {
   const auto compositeTiles = renderCoordinator_.asyncRenderer().compositorCompositeTiles();
   const auto compositorState = renderCoordinator_.asyncRenderer().compositorState();
   const auto workerCompositorEntity = renderCoordinator_.asyncRenderer().workerCompositorEntity();
@@ -2104,8 +2104,8 @@ void EditorShell::renderRightPaneSplitter(float windowWidth, float paneOriginY, 
   ImGui::PopStyleVar(2);
 }
 
-void EditorShell::renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
-                                           const RightSidebarLayout& layout) {
+void EditorShell::renderCompositorDebugPanelSplitter(float rightPaneX, float rightPaneWidth,
+                                                     const RightSidebarLayout& layout) {
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelSplitterY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, kLayerPanelSplitterThickness), ImGuiCond_Always);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
@@ -2137,7 +2137,7 @@ void EditorShell::renderLayerPanelSplitter(float rightPaneX, float rightPaneWidt
   ImGui::PopStyleVar(2);
 }
 
-void EditorShell::renderDockedLayerPanelDragHandle() {
+void EditorShell::renderDockedCompositorDebugPanelDragHandle() {
   const ImGuiStyle& style = ImGui::GetStyle();
   const ImVec2 start = ImGui::GetCursorScreenPos();
   const ImVec2 size(ImGui::GetContentRegionAvail().x, kLayerPanelDragHandleHeight);
@@ -2157,7 +2157,7 @@ void EditorShell::renderDockedLayerPanelDragHandle() {
   ImDrawList* drawList = ImGui::GetWindowDrawList();
   drawList->AddRectFilled(start, end, background);
   drawList->AddText(ImVec2(start.x + style.FramePadding.x, start.y + style.FramePadding.y),
-                    textColor, "Layers");
+                    textColor, "Compositor Debug");
 
   const char* handleText = "::";
   const ImVec2 handleTextSize = ImGui::CalcTextSize(handleText);
@@ -2174,8 +2174,8 @@ void EditorShell::renderDockedLayerPanelDragHandle() {
   }
 }
 
-void EditorShell::renderFloatingLayerPanel() {
-  if (!layerPanelDetached_) {
+void EditorShell::renderFloatingCompositorDebugPanel() {
+  if (!compositorDebugPanelVisible_ || !layerPanelDetached_) {
     return;
   }
 
@@ -2197,12 +2197,13 @@ void EditorShell::renderFloatingLayerPanel() {
 
   bool layerPanelOpen = true;
   constexpr ImGuiWindowFlags kFloatingFlags = ImGuiWindowFlags_NoCollapse;
-  ImGui::Begin("Layers##floating_layers", &layerPanelOpen, kFloatingFlags);
+  ImGui::Begin("Compositor Debug##floating_compositor_debug", &layerPanelOpen, kFloatingFlags);
   layerPanelFloatingNeedsPlacement_ = false;
   layerPanelFloatingPos_ = ImGui::GetWindowPos();
   layerPanelFloatingSize_ = ImGui::GetWindowSize();
 
-  if (!layerPanelOpen || ImGui::Button("Dock")) {
+  if (!layerPanelOpen) {
+    compositorDebugPanelVisible_ = false;
     layerPanelDetached_ = false;
     layerPanelDetachDragActive_ = false;
     layerPanelFloatingNeedsPlacement_ = false;
@@ -2210,7 +2211,15 @@ void EditorShell::renderFloatingLayerPanel() {
     return;
   }
 
-  renderLayerPanelContents();
+  if (ImGui::Button("Dock")) {
+    layerPanelDetached_ = false;
+    layerPanelDetachDragActive_ = false;
+    layerPanelFloatingNeedsPlacement_ = false;
+    ImGui::End();
+    return;
+  }
+
+  renderCompositorDebugPanelContents();
   ImGui::End();
 }
 
@@ -3050,6 +3059,7 @@ void EditorShell::runFrame() {
       .rightPaneGap = rightPaneGap,
       .treeViewHeightFraction = kTreeViewHeightFraction,
       .layerPanelHeightFraction = layerPanelHeightFraction_,
+      .layerPanelVisible = compositorDebugPanelVisible_,
       .layerPanelDetached = layerPanelDetached_,
       .layerPanelSplitterThickness = kLayerPanelSplitterThickness,
       .minLayerPanelHeight = kMinLayerPanelHeight,
@@ -3073,6 +3083,8 @@ void EditorShell::runFrame() {
       .canUndo = app_.canUndo(),
       .canRedo = app_.canRedo(),
       .sourceFocusMode = sourceFocusMode_,
+      .compositorDebugVisible = compositorDebugPanelVisible_,
+      .perfOverlaysVisible = perfOverlaysVisible_,
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -3125,6 +3137,18 @@ void EditorShell::runFrame() {
   if (menuActions.toggleSourceFocusMode) {
     toggleSourceFocusMode();
   }
+  if (menuActions.toggleCompositorDebug) {
+    compositorDebugPanelVisible_ = !compositorDebugPanelVisible_;
+    if (!compositorDebugPanelVisible_) {
+      layerPanelDetachDragActive_ = false;
+      layerPanelFloatingNeedsPlacement_ = false;
+    }
+    window_.wakeEventLoop();
+  }
+  if (menuActions.togglePerfOverlays) {
+    perfOverlaysVisible_ = !perfOverlaysVisible_;
+    window_.wakeEventLoop();
+  }
 
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
@@ -3144,10 +3168,10 @@ void EditorShell::runFrame() {
   renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
                            mainPaneLayout.sourcePaneWidth);
   renderRightPaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight);
-  if (!layerPanelDetached_) {
-    renderLayerPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
+  if (compositorDebugPanelVisible_ && !layerPanelDetached_) {
+    renderCompositorDebugPanelSplitter(rightPaneX, rightPaneWidth_, rightSidebarLayout);
   }
-  renderFloatingLayerPanel();
+  renderFloatingCompositorDebugPanel();
   if (requestRenderAtEndOfFrame_ && !renderCoordinator_.asyncRenderer().isBusy() &&
       app_.hasDocument()) {
     renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),

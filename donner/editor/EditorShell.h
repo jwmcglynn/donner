@@ -176,11 +176,11 @@ private:
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
   void renderRightPaneSplitter(float windowWidth, float paneOriginY, float paneHeight);
-  void renderLayerPanelSplitter(float rightPaneX, float rightPaneWidth,
-                                const RightSidebarLayout& layout);
-  void renderDockedLayerPanelDragHandle();
-  void renderFloatingLayerPanel();
-  void renderLayerPanelContents();
+  void renderCompositorDebugPanelSplitter(float rightPaneX, float rightPaneWidth,
+                                          const RightSidebarLayout& layout);
+  void renderDockedCompositorDebugPanelDragHandle();
+  void renderFloatingCompositorDebugPanel();
+  void renderCompositorDebugPanelContents();
   void maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost);
   void maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost);
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
@@ -259,24 +259,27 @@ private:
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;
   /// Width (in pixels) of the right-side column hosting the tree view,
-  /// inspector, and compositor layer panel. Mutated by the
+  /// inspector, and compositor debug panel. Mutated by the
   /// drag-to-resize splitter rendered between the render pane and the
   /// right column.
   float rightPaneWidth_ = 420.0f;
-  /// Fraction of the lower right column assigned to the compositor tile
-  /// panel. Mutated by the horizontal splitter between Inspector and
-  /// Layers.
+  /// Fraction of the lower right column assigned to the compositor debug
+  /// panel. Mutated by the horizontal splitter below Inspector.
   float layerPanelHeightFraction_ = 0.5f;
-  /// Whether the compositor tile panel is detached from the right column.
+  /// Whether the compositor debug panel is visible.
+  bool compositorDebugPanelVisible_ = false;
+  /// Whether the render-pane performance graphs are visible.
+  bool perfOverlaysVisible_ = true;
+  /// Whether the compositor debug panel is detached from the right column.
   bool layerPanelDetached_ = false;
   /// Set while the mouse drag that detached the panel is still in progress.
   bool layerPanelDetachDragActive_ = false;
-  /// Force the floating Layers window to use \ref layerPanelFloatingPos_
+  /// Force the floating Compositor Debug window to use \ref layerPanelFloatingPos_
   /// and \ref layerPanelFloatingSize_ on its next frame.
   bool layerPanelFloatingNeedsPlacement_ = false;
-  /// Last floating Layers window position in screen pixels.
+  /// Last floating Compositor Debug window position in screen pixels.
   ImVec2 layerPanelFloatingPos_ = ImVec2(0.0f, 0.0f);
-  /// Last floating Layers window size in screen pixels.
+  /// Last floating Compositor Debug window size in screen pixels.
   ImVec2 layerPanelFloatingSize_ = ImVec2(420.0f, 360.0f);
   std::vector<svg::SVGElement> lastHighlightedSelection_;
   std::optional<svg::SVGElement> lastTreeSelection_;

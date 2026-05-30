@@ -113,6 +113,17 @@ TEST(EditorShellLayoutTest, DetachedLayerPanelLetsInspectorUseLowerPane) {
   EXPECT_FLOAT_EQ(layout.layerPanelSplitterY, 1020.0f);
 }
 
+TEST(EditorShellLayoutTest, HiddenLayerPanelLetsInspectorUseLowerPane) {
+  RightSidebarLayoutInput input = DefaultLayoutInput();
+  input.layerPanelVisible = false;
+
+  const RightSidebarLayout layout = ComputeRightSidebarLayout(input);
+
+  EXPECT_FLOAT_EQ(layout.inspectorPaneHeight, 662.0f);
+  EXPECT_FLOAT_EQ(layout.layerPanelHeight, 0.0f);
+  EXPECT_FLOAT_EQ(layout.layerPanelSplitterY, 1020.0f);
+}
+
 TEST(EditorShellLayoutTest, DraggingSplitterUpExpandsLayerPanel) {
   const float nextFraction = ResizeLayerPanelHeightFraction(0.5f, 600.0f, 120.0f, 500.0f, -150.0f);
 

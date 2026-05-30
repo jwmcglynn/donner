@@ -58,13 +58,15 @@ struct RightSidebarLayoutInput {
   float rightPaneGap = 0.0f;
   /// Fraction of \ref paneHeight assigned to the tree view.
   float treeViewHeightFraction = 0.0f;
-  /// Fraction of the inspector/layer budget assigned to the layer panel.
+  /// Fraction of the inspector/debug budget assigned to the compositor debug panel.
   float layerPanelHeightFraction = 0.0f;
-  /// Whether the layer panel is rendered as an independent floating window.
+  /// Whether the compositor debug panel is visible at all.
+  bool layerPanelVisible = true;
+  /// Whether the compositor debug panel is rendered as an independent floating window.
   bool layerPanelDetached = false;
-  /// Height of the draggable splitter above the layer panel.
+  /// Height of the draggable splitter above the compositor debug panel.
   float layerPanelSplitterThickness = 0.0f;
-  /// Preferred minimum height for the compositor layer panel.
+  /// Preferred minimum height for the compositor debug panel.
   float minLayerPanelHeight = 0.0f;
   /// Preferred minimum height for the inspector pane.
   float minInspectorPaneHeight = 0.0f;
@@ -78,38 +80,38 @@ struct RightSidebarLayout {
   float inspectorPaneY = 0.0f;
   /// Height of the inspector pane.
   float inspectorPaneHeight = 0.0f;
-  /// Top of the draggable splitter above the layer panel.
+  /// Top of the draggable splitter above the compositor debug panel.
   float layerPanelSplitterY = 0.0f;
-  /// Top of the compositor layer panel in screen pixels.
+  /// Top of the compositor debug panel in screen pixels.
   float layerPanelPaneY = 0.0f;
-  /// Height of the compositor layer panel.
+  /// Height of the compositor debug panel.
   float layerPanelHeight = 0.0f;
-  /// Combined height available to the inspector, splitter, and layer panel.
+  /// Combined height available to the inspector, splitter, and compositor debug panel.
   float lowerPaneHeight = 0.0f;
-  /// Effective minimum layer panel height after clamping to the available budget.
+  /// Effective minimum compositor debug panel height after clamping to the available budget.
   float minLayerPanelHeight = 0.0f;
-  /// Effective maximum layer panel height after preserving the inspector minimum.
+  /// Effective maximum compositor debug panel height after preserving the inspector minimum.
   float maxLayerPanelHeight = 0.0f;
-  /// Normalized layer panel height fraction after min/max clamping.
+  /// Normalized compositor debug panel height fraction after min/max clamping.
   float layerPanelHeightFraction = 0.0f;
 };
 
 /**
  * Compute right sidebar pane geometry for a fixed tree view and resizable
- * inspector/layer split.
+ * inspector/compositor-debug split.
  *
  * @param input Sidebar layout constraints and persisted layer split fraction.
  */
 [[nodiscard]] RightSidebarLayout ComputeRightSidebarLayout(const RightSidebarLayoutInput& input);
 
 /**
- * Update the layer panel height fraction from a vertical splitter drag.
+ * Update the compositor debug panel height fraction from a vertical splitter drag.
  *
- * @param currentFraction Current fraction of \p lowerPaneHeight assigned to the layer panel.
- * @param lowerPaneHeight Height available to the inspector and layer panel.
- * @param minLayerPanelHeight Minimum allowed layer panel height.
- * @param maxLayerPanelHeight Maximum allowed layer panel height.
- * @param splitterDeltaY ImGui mouse delta for the splitter; dragging down shrinks the layer panel.
+ * @param currentFraction Current fraction of \p lowerPaneHeight assigned to the debug panel.
+ * @param lowerPaneHeight Height available to the inspector and debug panel.
+ * @param minLayerPanelHeight Minimum allowed debug panel height.
+ * @param maxLayerPanelHeight Maximum allowed debug panel height.
+ * @param splitterDeltaY ImGui mouse delta for the splitter; dragging down shrinks the debug panel.
  */
 [[nodiscard]] float ResizeLayerPanelHeightFraction(float currentFraction, float lowerPaneHeight,
                                                    float minLayerPanelHeight,

@@ -82,6 +82,12 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     if (ImGui::MenuItem("Source Focus Mode", "Cmd+Enter", state.sourceFocusMode)) {
       actions.toggleSourceFocusMode = true;
     }
+    if (ImGui::MenuItem("Compositor Debug", nullptr, state.compositorDebugVisible)) {
+      actions.toggleCompositorDebug = true;
+    }
+    if (ImGui::MenuItem("Performance Overlays", nullptr, state.perfOverlaysVisible)) {
+      actions.togglePerfOverlays = true;
+    }
     ImGui::Separator();
     if (ImGui::MenuItem("Zoom In", "Cmd+=")) {
       actions.zoomIn = true;

@@ -35,8 +35,9 @@ RightSidebarLayout ComputeRightSidebarLayout(const RightSidebarLayoutInput& inpu
   const float paneOriginY = input.paneOriginY;
   const float paneHeight = std::max(0.0f, input.paneHeight);
   const float rightPaneGap = std::max(0.0f, input.rightPaneGap);
+  const bool layerPanelInSidebar = input.layerPanelVisible && !input.layerPanelDetached;
   const float splitterThickness =
-      input.layerPanelDetached ? 0.0f : std::max(0.0f, input.layerPanelSplitterThickness);
+      layerPanelInSidebar ? std::max(0.0f, input.layerPanelSplitterThickness) : 0.0f;
   const float treeFraction = std::clamp(input.treeViewHeightFraction, 0.0f, 1.0f);
   const float requestedLayerFraction = std::clamp(input.layerPanelHeightFraction, 0.0f, 1.0f);
 
@@ -45,7 +46,7 @@ RightSidebarLayout ComputeRightSidebarLayout(const RightSidebarLayoutInput& inpu
   layout.lowerPaneHeight =
       std::max(0.0f, paneHeight - layout.treePaneHeight - rightPaneGap - splitterThickness);
 
-  if (input.layerPanelDetached) {
+  if (!layerPanelInSidebar) {
     layout.inspectorPaneHeight = layout.lowerPaneHeight;
     layout.inspectorPaneY = paneOriginY + layout.treePaneHeight + rightPaneGap;
     layout.layerPanelSplitterY = layout.inspectorPaneY + layout.inspectorPaneHeight;

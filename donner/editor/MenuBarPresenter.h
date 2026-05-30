@@ -12,6 +12,8 @@ struct MenuBarState {
   bool canUndo = false;
   bool canRedo = false;
   bool sourceFocusMode = true;
+  bool compositorDebugVisible = false;
+  bool perfOverlaysVisible = true;
 };
 
 struct MenuBarActions {
@@ -31,6 +33,8 @@ struct MenuBarActions {
   bool zoomOut = false;
   bool actualSize = false;
   bool toggleSourceFocusMode = false;
+  bool toggleCompositorDebug = false;
+  bool togglePerfOverlays = false;
 };
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.
