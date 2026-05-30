@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-#include "donner/editor/ClipboardInterface.h"
+#include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DialogPresenter.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
@@ -19,7 +19,7 @@
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
-#include "donner/editor/LayerInspectorPanel.h"
+#include "donner/editor/LayersPanel.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/PenTool.h"
 #include "donner/editor/RenderCoordinator.h"
@@ -285,8 +285,8 @@ private:
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;
-  TextInspectorPanel textInspectorPanel_;
-  LayerInspectorPanel layerInspectorPanel_;
+  LayersPanel layersPanel_;
+  CompositorDebugPanel compositorDebugPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
 #ifdef DONNER_EDITOR_WGPU

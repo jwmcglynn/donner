@@ -3367,7 +3367,7 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
 //
 // The test asserts the per-click-drag compositor renderFrame stays
 // under 500 ms. If it trips the threshold, run the editor against the
-// same SVG and inspect the LayerInspectorPanel — the paint-order tile
+// same SVG and inspect the CompositorDebugPanel — the paint-order tile
 // list, raster-time column, and state header (active hints, split
 // path, last promote-refusal reason) give the equivalent breakdown
 // live.

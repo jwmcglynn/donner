@@ -718,7 +718,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       documentSyncController_(InitialDocumentSyncSource(options_)),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
-      layerInspectorPanel_(window.geodeDevice()),
+      compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
@@ -2195,19 +2195,22 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   if (!rendererBusy) {
     sidebarPresenter_.refreshSnapshot(app_);
+    layersPanel_.refreshSnapshot(app_);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
+  // The user-facing Layers panel (design docs 0046/0047 M3) replaces the old
+  // XML tree view in this sidebar window. `SidebarPresenter` is still the
+  // Inspector backend below (`renderInspector`), and its `renderTreeView` /
+  // tests remain; it is simply no longer the user-facing outline.
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.treePaneHeight), ImGuiCond_Always);
-  ImGui::Begin("Tree View", nullptr, paneFlags);
-  TreeViewState treeState{
-      .scrollTarget = selectionBeforeTree,
-      .pendingScroll = treeviewPendingScroll_,
-  };
-  sidebarPresenter_.renderTreeView(liveAppForClicks, treeState);
-  treeviewPendingScroll_ = treeState.pendingScroll;
-  if (treeState.selectionChangedInTree) {
+  ImGui::Begin("Layers", nullptr, paneFlags);
+  layersPanel_.render(liveAppForClicks);
+  if (layersPanel_.consumeSelectionChanged()) {
+    // Reuse the existing tree-origin selection-sync plumbing so a Layers-row
+    // selection change is reflected in the canvas and source panes the same way
+    // the old tree view's selection was.
     preserveSourceEditFocusCursor_ = false;
     treeSelectionOriginatedInTree_ = true;
     treeviewPendingScroll_ = false;
@@ -2235,7 +2238,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
 
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelPaneY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.layerPanelHeight), ImGuiCond_Always);
-  ImGui::Begin("Layers##docked_layers", nullptr, paneFlags);
+  ImGui::Begin("Compositor Debug##docked_compositor_debug", nullptr, paneFlags);
   renderDockedLayerPanelDragHandle();
   if (!layerPanelDetached_) {
     renderLayerPanelContents();
@@ -2263,9 +2266,9 @@ void EditorShell::renderLayerPanelContents() {
   const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
   const auto renderStats = renderCoordinator_.asyncRenderer().compositorRenderFrameStats();
   const PresentationCoverageDiagnostics coverageDiagnostics = textures_.coverageDiagnostics();
-  layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
-                              viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
-                              documentCanvas, coverageDiagnostics, fastPath, renderStats);
+  compositorDebugPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
+                               viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
+                               documentCanvas, coverageDiagnostics, fastPath, renderStats);
 }
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -2448,7 +2451,7 @@ void EditorShell::renderFloatingLayerPanel() {
 
   bool layerPanelOpen = true;
   constexpr ImGuiWindowFlags kFloatingFlags = ImGuiWindowFlags_NoCollapse;
-  ImGui::Begin("Layers##floating_layers", &layerPanelOpen, kFloatingFlags);
+  ImGui::Begin("Compositor Debug##floating_compositor_debug", &layerPanelOpen, kFloatingFlags);
   layerPanelFloatingNeedsPlacement_ = false;
   layerPanelFloatingPos_ = ImGui::GetWindowPos();
   layerPanelFloatingSize_ = ImGui::GetWindowSize();
@@ -3239,7 +3242,7 @@ void EditorShell::runFrame() {
   contentOnlyCaptureForNextFrame_ = false;
   requestRenderAtEndOfFrame_ = false;
   textures_.advancePresentationFrame();
-  layerInspectorPanel_.advancePresentationFrame();
+  compositorDebugPanel_.advancePresentationFrame();
   if (reproRecorder_) {
     // Snapshot before any widget consumes input events. ImGui's IO
     // state for the frame has been populated by

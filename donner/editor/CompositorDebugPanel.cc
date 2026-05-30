@@ -1,4 +1,4 @@
-#include "donner/editor/LayerInspectorPanel.h"
+#include "donner/editor/CompositorDebugPanel.h"
 
 #include <algorithm>
 #include <cinttypes>
@@ -135,13 +135,14 @@ std::string TelemetrySampleKey(
 }  // namespace
 
 #ifdef DONNER_EDITOR_WGPU
-struct LayerInspectorPanel::WgpuUploadedTexture {
+struct CompositorDebugPanel::WgpuUploadedTexture {
   donner::geode::ScopedWgpuHandle<wgpu::Texture> texture;
   donner::geode::ScopedWgpuHandle<wgpu::TextureView> view;
 };
 #endif
 
-LayerInspectorPanel::LayerInspectorPanel(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
+CompositorDebugPanel::CompositorDebugPanel(
+    std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice)
 #ifdef DONNER_EDITOR_WGPU
     : geodeDevice_(std::move(geodeDevice))
 #endif
@@ -154,7 +155,7 @@ LayerInspectorPanel::LayerInspectorPanel(std::shared_ptr<::donner::geode::GeodeD
                telemetryPathBuffer_.size() - 1u);
 }
 
-LayerInspectorPanel::~LayerInspectorPanel() {
+CompositorDebugPanel::~CompositorDebugPanel() {
 #ifdef DONNER_EDITOR_WGPU
   for (const auto& [_, entry] : textures_) {
     ReleaseImGuiTexture(entry.texture);
@@ -176,7 +177,7 @@ LayerInspectorPanel::~LayerInspectorPanel() {
 #endif
 }
 
-void LayerInspectorPanel::recordHeuristicTelemetrySamples(
+void CompositorDebugPanel::recordHeuristicTelemetrySamples(
     std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles,
     const CompositorHeuristicTelemetryContext& context) {
   using Kind = svg::compositor::CompositorController::CompositeTileSnapshot::Kind;
@@ -204,7 +205,7 @@ void LayerInspectorPanel::recordHeuristicTelemetrySamples(
   }
 }
 
-std::string LayerInspectorPanel::heuristicTelemetryHistoryJson() const {
+std::string CompositorDebugPanel::heuristicTelemetryHistoryJson() const {
   std::string result;
   for (const HeuristicTelemetryHistoryEntry& entry : telemetryHistory_) {
     result += entry.jsonLine;
@@ -212,7 +213,7 @@ std::string LayerInspectorPanel::heuristicTelemetryHistoryJson() const {
   return result;
 }
 
-LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail(
+CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::uploadThumbnail(
     const svg::compositor::CompositorController::CompositeTileSnapshot& tile) {
 #ifdef DONNER_EDITOR_WGPU
   const bool hasTextureSnapshot = tile.textureSnapshot != nullptr;
@@ -338,7 +339,7 @@ LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::uploadThumbnail
 #endif
 }
 
-void LayerInspectorPanel::evictAbsentTiles(
+void CompositorDebugPanel::evictAbsentTiles(
     std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles) {
   std::unordered_set<std::string> live;
   live.reserve(tiles.size());
@@ -371,7 +372,7 @@ void LayerInspectorPanel::evictAbsentTiles(
 #endif
 }
 
-void LayerInspectorPanel::advancePresentationFrame() {
+void CompositorDebugPanel::advancePresentationFrame() {
 #ifdef DONNER_EDITOR_WGPU
   if (!pendingRetiredSnapshots_.empty()) {
     retiredSnapshotFrames_.push_back(std::move(pendingRetiredSnapshots_));
@@ -389,7 +390,7 @@ void LayerInspectorPanel::advancePresentationFrame() {
 #endif
 }
 
-void LayerInspectorPanel::render(
+void CompositorDebugPanel::render(
     std::span<const svg::compositor::CompositorController::CompositeTileSnapshot> tiles,
     const svg::compositor::CompositorController::StateSnapshot& state,
     Entity workerCompositorEntity, double viewportZoom, double viewportDpr,
@@ -638,7 +639,7 @@ void LayerInspectorPanel::render(
 }
 
 #ifdef DONNER_EDITOR_WGPU
-LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::ToImTextureId(
+CompositorDebugPanel::ThumbnailTextureHandle CompositorDebugPanel::ToImTextureId(
     const svg::RendererTextureSnapshot* textureSnapshot) {
   if (textureSnapshot == nullptr ||
       textureSnapshot->backend() != svg::RendererTextureSnapshotBackend::Geode) {
@@ -650,9 +651,9 @@ LayerInspectorPanel::ThumbnailTextureHandle LayerInspectorPanel::ToImTextureId(
   return static_cast<ThumbnailTextureHandle>(reinterpret_cast<std::uintptr_t>(textureView));
 }
 
-std::shared_ptr<LayerInspectorPanel::WgpuUploadedTexture>
-LayerInspectorPanel::uploadThumbnailPixelsToWgpu(const std::vector<uint8_t>& pixels,
-                                                 const Vector2i& dimensions) {
+std::shared_ptr<CompositorDebugPanel::WgpuUploadedTexture>
+CompositorDebugPanel::uploadThumbnailPixelsToWgpu(const std::vector<uint8_t>& pixels,
+                                                  const Vector2i& dimensions) {
   if (geodeDevice_ == nullptr || pixels.empty() || dimensions.x <= 0 || dimensions.y <= 0) {
     return nullptr;
   }
@@ -716,7 +717,7 @@ LayerInspectorPanel::uploadThumbnailPixelsToWgpu(const std::vector<uint8_t>& pix
   return uploaded;
 }
 
-LayerInspectorPanel::RetiredSnapshot LayerInspectorPanel::RetireSnapshot(
+CompositorDebugPanel::RetiredSnapshot CompositorDebugPanel::RetireSnapshot(
     ThumbnailTextureHandle texture, std::shared_ptr<const svg::RendererTextureSnapshot> snapshot,
     std::shared_ptr<WgpuUploadedTexture> uploadedTexture) {
   return RetiredSnapshot{
@@ -726,7 +727,7 @@ LayerInspectorPanel::RetiredSnapshot LayerInspectorPanel::RetireSnapshot(
   };
 }
 
-void LayerInspectorPanel::ReleaseImGuiTexture(ThumbnailTextureHandle texture) {
+void CompositorDebugPanel::ReleaseImGuiTexture(ThumbnailTextureHandle texture) {
   if (texture == 0) {
     return;
   }
@@ -735,7 +736,7 @@ void LayerInspectorPanel::ReleaseImGuiTexture(ThumbnailTextureHandle texture) {
   ImGui_ImplWGPU_RemoveTexture(texture);
 }
 
-void LayerInspectorPanel::retireSnapshots(RetiredSnapshotBatch snapshots) {
+void CompositorDebugPanel::retireSnapshots(RetiredSnapshotBatch snapshots) {
   if (snapshots.empty()) {
     return;
   }
