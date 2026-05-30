@@ -142,11 +142,11 @@ bool GeometryIntersectsRect(const svg::SVGGeometryElement& geometry, const Box2d
   }
 
   const auto style = geometry.getComputedStyle();
-  const double strokeWidth = style.strokeWidth.get().value().value;
+  const double strokeWidth = style.strokeWidth.getRequired().value;
   const bool hasStroke =
-      strokeWidth > 0.0 && !style.stroke.get().value().is<svg::PaintServer::None>();
+      strokeWidth > 0.0 && !style.stroke.getRequired().is<svg::PaintServer::None>();
   const Box2d interactionBounds =
-      hasStroke ? bounds->inflatedBy(strokeWidth * style.strokeMiterlimit.get().value()) : *bounds;
+      hasStroke ? bounds->inflatedBy(strokeWidth * style.strokeMiterlimit.getRequired()) : *bounds;
   if (!BoxesIntersect(interactionBounds, documentRect)) {
     return false;
   }
@@ -157,8 +157,8 @@ bool GeometryIntersectsRect(const svg::SVGGeometryElement& geometry, const Box2d
   }
 
   const Transform2d documentFromGeometry = geometry.elementFromWorld();
-  if (!style.fill.get().value().is<svg::PaintServer::None>() &&
-      FilledPathIntersectsRect(*spline, style.fillRule.get().value(), documentFromGeometry,
+  if (!style.fill.getRequired().is<svg::PaintServer::None>() &&
+      FilledPathIntersectsRect(*spline, style.fillRule.getRequired(), documentFromGeometry,
                                documentRect)) {
     return true;
   }
@@ -166,9 +166,9 @@ bool GeometryIntersectsRect(const svg::SVGGeometryElement& geometry, const Box2d
   if (hasStroke) {
     StrokeStyle strokeStyle;
     strokeStyle.width = strokeWidth;
-    strokeStyle.cap = ToLineCap(style.strokeLinecap.get().value());
-    strokeStyle.join = ToLineJoin(style.strokeLinejoin.get().value());
-    strokeStyle.miterLimit = style.strokeMiterlimit.get().value();
+    strokeStyle.cap = ToLineCap(style.strokeLinecap.getRequired());
+    strokeStyle.join = ToLineJoin(style.strokeLinejoin.getRequired());
+    strokeStyle.miterLimit = style.strokeMiterlimit.getRequired();
     const Path strokePath = spline->strokeToFill(strokeStyle);
     return FilledPathIntersectsRect(strokePath, FillRule::NonZero, documentFromGeometry,
                                     documentRect);

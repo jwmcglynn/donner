@@ -1711,22 +1711,19 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       interactionController_.clearPendingClick();
       pendingClickFollowupAfterIdle_ = true;
     } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
-      // Slow path: full `onMouseDown` (hitTest + selection change +
-      // possible drag start). Race-safe only when the worker is idle.
-      lastPostedScreenPoint_.reset();
-      bool queuedMutationForNextFrame = false;
-      if (selectToolActive) {
-        selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-      } else if (penToolActive) {
-        penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && penTool_.isDraggingAnchor()) {
-          penTool_.onMouseUp(app_, pendingClick.documentPoint);
-        }
-        queuedMutationForNextFrame = true;
-      }
-      if (queuedMutationForNextFrame) {
-        flushQueuedMutationAndRefreshOverlay();
-      } else {
+      const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+      const bool selectHoldElapsed =
+          pendingSelectClickStartSeconds_.has_value() &&
+          ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
+      const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+      const bool pendingClickHitsSelection =
+          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
+      if (selectToolActive && leftMouseDown &&
+          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          !pendingClickHitsSelection && (selectHoldElapsed || selectDragIntent)) {
+        lastPostedScreenPoint_.reset();
+        selectTool_.beginMarquee(app_, pendingClick.documentPoint, pendingClick.modifiers.shift);
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         requestRenderAtEndOfFrame_ = true;
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
