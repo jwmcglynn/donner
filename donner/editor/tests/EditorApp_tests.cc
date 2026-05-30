@@ -62,7 +62,7 @@ bool GeometryContainsDocumentPoint(const svg::SVGElement& element, const Vector2
   const Transform2d documentFromElement = geometry.elementFromWorld();
   const Transform2d elementFromDocument = documentFromElement.inverse();
   const Vector2d elementPoint = elementFromDocument.transformPosition(point);
-  return spline->isInside(elementPoint, geometry.getComputedStyle().fillRule.getRequired());
+  return spline->isInside(elementPoint, geometry.getComputedStyle().fillRule.get().value());
 }
 
 std::vector<svg::SVGPathElement> RootPathChildren(EditorApp& app) {
