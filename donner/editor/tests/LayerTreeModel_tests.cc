@@ -139,10 +139,13 @@ TEST(LayerTreeModelTest, ClassifiesRowKinds) {
   ASSERT_NE(groupA, nullptr);
   EXPECT_EQ(groupA->kind, LayerRowKind::Group);
 
-  // Root row is the document <svg> at depth 0.
+  // The document root <svg> is omitted from the panel: the top-level
+  // groups/shapes are the tree roots at depth 0, and no row classifies as Root.
   ASSERT_FALSE(model.rows().empty());
-  EXPECT_EQ(model.rows().front().kind, LayerRowKind::Root);
-  EXPECT_EQ(model.rows().front().depth, 0);
+  for (const LayerTreeRow& row : model.rows()) {
+    EXPECT_NE(row.kind, LayerRowKind::Root) << "the <svg> root row is no longer shown";
+  }
+  EXPECT_EQ(groupA->depth, 0) << "top-level groups are tree roots at depth 0";
 
   const LayerTreeRow* comp = FindRow(model, "comp");
   ASSERT_NE(comp, nullptr);
@@ -264,6 +267,9 @@ TEST(LayerTreeModelTest, CollapsedGroupHidesDescendantsButKeepsChevron) {
   ASSERT_TRUE(app.loadFromString(kSvg));
 
   LayerTreeModel model;
+  // The first refresh default-expands top-level groups; explicitly collapse
+  // groupA afterward to exercise the collapse path.
+  model.refresh(app);
   model.setExpanded(StableIdOf(app, "groupA"), false);
   model.refresh(app);
 
