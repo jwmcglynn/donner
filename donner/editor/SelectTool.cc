@@ -306,7 +306,6 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // silently.
   dragState_.reset();
   marqueeState_.reset();
-  const bool hadSelectionAtMouseDown = editor.hasSelection();
 
   const auto isGraphicsElement = [](const svg::SVGElement& element) {
     return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -390,19 +389,15 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     }
   }
 
-  // Click on empty space → start a marquee when there is no active
-  // selection, or when Shift makes the marquee additive. A plain miss
-  // with an active selection clears the selection but does not switch
-  // into marquee mode; selected-object gestures should default to drag.
+  // Click on empty space → start a marquee. Presses that start on the
+  // selected shape are handled by the drag paths above; starting away
+  // from the selection should still allow a fresh non-additive marquee.
   if (!hit.has_value()) {
     if (!modifiers.shift) {
       // Plain click on empty space clears the selection up-front so
       // the user gets immediate visual feedback even if the drag
       // never grows past zero pixels (i.e. a quick miss-click).
       editor.clearSelection();
-    }
-    if (hadSelectionAtMouseDown && !modifiers.shift) {
-      return;
     }
     marqueeState_ = MarqueeState{
         .startDocumentPoint = documentPoint,
@@ -575,10 +570,6 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
 void SelectTool::beginMarquee(EditorApp& editor, const Vector2d& documentPoint, bool additive) {
   dragState_.reset();
   marqueeState_.reset();
-  if (editor.hasSelection() && !additive) {
-    editor.clearSelection();
-    return;
-  }
   if (!additive) {
     editor.clearSelection();
   }
