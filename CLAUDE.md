@@ -1,5 +1,9 @@
 # Donner Project Instructions
 
+## Agent Delegation
+
+- **Compositor agents go to codex, not Claude sub-agents.** Deep work in `donner/svg/compositor/` (especially `CompositorController.cc` — the layer/segment/fast-path/generation machinery) repeatedly killed Claude `general-purpose` sub-agents with spurious "usage policy" API errors mid-task, losing work. Route compositor debugging/fixing through codex (OpenAI gpt-5.5 backend) instead. This is the **only** standing exception — all other sub-agent work stays on Claude agents by default. Apply the worktree-isolation + commit-early discipline so a death loses nothing.
+
 ## Pull Requests
 
 - **Always squash-and-merge** when merging PRs. Use `gh pr merge --squash`.
