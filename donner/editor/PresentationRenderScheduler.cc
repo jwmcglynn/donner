@@ -60,8 +60,8 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
                                                   (canvasSizeChanged || rasterViewportChanged);
   decision.needsCompositedPrewarm =
       needsSettledSelectionRefresh ||
-      presentation.shouldPrewarm(input.selectedEntity, input.currentVersion,
-                                 input.currentCanvasSize,
+      presentation.shouldPrewarm(input.selectedEntity, input.selectedExtraEntities,
+                                 input.currentVersion, input.currentCanvasSize,
                                  /*dragActive=*/input.activeDragPreview.has_value()) ||
       selectedViewportRenderNeedsPrewarm;
   decision.needsRegularRender = versionChanged || canvasSizeChanged || rasterViewportChanged;

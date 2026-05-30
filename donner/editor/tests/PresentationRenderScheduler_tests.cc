@@ -23,7 +23,8 @@ PresentationRenderScheduleInput Input(
     Entity selectedEntity, std::uint64_t version = 1,
     std::optional<SelectTool::ActiveDragPreview> activeDragPreview = std::nullopt,
     EditorRasterViewport rasterViewport = RasterViewport(),
-    const Vector2i& currentCanvasSize = kCanvasSize) {
+    const Vector2i& currentCanvasSize = kCanvasSize,
+    std::vector<Entity> selectedExtraEntities = {}) {
   return PresentationRenderScheduleInput{
       .selectedEntity = selectedEntity,
       .selectedExtraEntities = std::move(selectedExtraEntities),

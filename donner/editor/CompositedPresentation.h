@@ -414,7 +414,7 @@ private:
   static bool SameDragPreviewTransform(const SelectTool::ActiveDragPreview& lhs,
                                        const SelectTool::ActiveDragPreview& rhs) {
     return lhs.entity == rhs.entity && lhs.dragGeneration == rhs.dragGeneration &&
-           SameVector(lhs.translation, rhs.translation) &&
+           lhs.extraEntities == rhs.extraEntities && SameVector(lhs.translation, rhs.translation) &&
            SameTransform(lhs.documentFromCachedDocument, rhs.documentFromCachedDocument);
   }
 

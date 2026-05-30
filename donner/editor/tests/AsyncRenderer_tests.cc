@@ -198,6 +198,117 @@ TEST(AsyncRendererPresentationPolicyTest, CpuPresentationCapturesFallbackWhenTil
   EXPECT_FALSE(plan.captureTextureSnapshot);
 }
 
+TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <rect id="r1" x="10" y="10" width="20" height="20" fill="red" />
+    <rect id="r2" x="50" y="10" width="20" height="20" fill="blue" />
+  )svg");
+  document.setCanvasSize(128, 128);
+
+  const auto r1 = document.querySelector("#r1");
+  const auto r2 = document.querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  const Entity r1Entity = r1->unsafeEntityHandle().entity();
+  const Entity r2Entity = r2->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.selectedEntity = r1Entity;
+  request.dragPreview = RenderRequest::DragPreview{
+      .entity = r1Entity,
+      .extraEntities = {r2Entity},
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      .translation = Vector2d(16.0, 4.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(16.0, 4.0)),
+      .dragGeneration = 17,
+  };
+  asyncRenderer.requestRender(request);
+
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
+  EXPECT_EQ(result->compositedPreview->representedDragPreview->extraEntities,
+            std::vector<Entity>{r2Entity});
+
+  const auto dragTileFor = [&](Entity entity) {
+    return std::ranges::find_if(result->compositedPreview->tiles,
+                                [entity](const RenderResult::CompositedTile& tile) {
+                                  return tile.isDragTarget && tile.layerEntity == entity;
+                                });
+  };
+  EXPECT_NE(dragTileFor(r1Entity), result->compositedPreview->tiles.end());
+  EXPECT_NE(dragTileFor(r2Entity), result->compositedPreview->tiles.end());
+}
+
+TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
+  auto donnerD = app.document().document().querySelector("#Donner_D");
+  ASSERT_TRUE(donnerD.has_value());
+  ASSERT_TRUE(app.unbundleCompoundPath(*donnerD));
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+
+  const std::vector<svg::SVGElement> unbundled = app.selectedElements();
+  const Entity firstEntity = unbundled[0].unsafeEntityHandle().entity();
+  const Entity secondEntity = unbundled[1].unsafeEntityHandle().entity();
+
+  SelectTool selectTool;
+  selectTool.onMouseDown(app, Vector2d(320.0, 400.0), MouseModifiers{});
+  selectTool.onMouseMove(app, Vector2d(336.0, 404.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  const std::optional<SelectTool::ActiveDragPreview> activeDrag = selectTool.activeDragPreview();
+  ASSERT_TRUE(activeDrag.has_value());
+  EXPECT_EQ(activeDrag->entity, firstEntity);
+  EXPECT_EQ(activeDrag->extraEntities, std::vector<Entity>{secondEntity});
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, app.document().document());
+  request.version = 1;
+  request.documentGeneration = app.document().documentGeneration();
+  request.selectedEntity = firstEntity;
+  request.dragPreview = RenderRequest::DragPreview{
+      .entity = activeDrag->entity,
+      .extraEntities = activeDrag->extraEntities,
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      .translation = activeDrag->translation,
+      .documentFromCachedDocument = activeDrag->documentFromCachedDocument,
+      .dragGeneration = activeDrag->dragGeneration,
+  };
+  asyncRenderer.requestRender(request);
+
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
+  EXPECT_EQ(result->compositedPreview->representedDragPreview->extraEntities,
+            std::vector<Entity>{secondEntity});
+
+  const auto dragTileFor = [&](Entity entity) {
+    return std::ranges::find_if(result->compositedPreview->tiles,
+                                [entity](const RenderResult::CompositedTile& tile) {
+                                  return tile.isDragTarget && tile.layerEntity == entity;
+                                });
+  };
+  EXPECT_NE(dragTileFor(firstEntity), result->compositedPreview->tiles.end());
+  EXPECT_NE(dragTileFor(secondEntity), result->compositedPreview->tiles.end());
+}
+
 TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect x="150" y="250" width="20" height="20" fill="red" />

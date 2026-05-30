@@ -77,6 +77,45 @@ EditorRasterViewport EffectiveRasterViewportForRequest(svg::SVGDocument& documen
   return fallback;
 }
 
+bool ContainsEntity(const std::vector<Entity>& entities, Entity entity) {
+  return std::ranges::find(entities, entity) != entities.end();
+}
+
+void AppendUniqueEntity(std::vector<Entity>* entities, Entity entity) {
+  if (entity != entt::null && !ContainsEntity(*entities, entity)) {
+    entities->push_back(entity);
+  }
+}
+
+std::vector<Entity> DragPreviewEntities(const RenderRequest::DragPreview& preview) {
+  std::vector<Entity> entities;
+  entities.reserve(1u + preview.extraEntities.size());
+  AppendUniqueEntity(&entities, preview.entity);
+  for (Entity entity : preview.extraEntities) {
+    AppendUniqueEntity(&entities, entity);
+  }
+  return entities;
+}
+
+std::vector<Entity> DesiredCompositorEntities(const RenderRequest& request) {
+  if (request.dragPreview.has_value()) {
+    return DragPreviewEntities(*request.dragPreview);
+  }
+
+  std::vector<Entity> entities;
+  AppendUniqueEntity(&entities, request.selectedEntity);
+  return entities;
+}
+
+bool SameEntityList(const std::vector<Entity>& lhs, const std::vector<Entity>& rhs) {
+  return lhs == rhs;
+}
+
+bool ContainsAllEntities(const std::vector<Entity>& haystack, const std::vector<Entity>& needles) {
+  return std::ranges::all_of(needles,
+                             [&](Entity entity) { return ContainsEntity(haystack, entity); });
+}
+
 }  // namespace
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
@@ -540,7 +579,8 @@ void AsyncRenderer::workerLoop() {
     const bool activeDragRequest =
         request.dragPreview.has_value() &&
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
-    compositor_->setSkipMainComposeDuringSplit(activeDragRequest);
+    const bool splitPreviewSafe = !desiredPromotionIncomplete;
+    compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe);
     workerTiming.setupMs = elapsedSince(workerStart);
 
     // Build a CompositedPreview from the compositor's current tile state.
@@ -551,10 +591,11 @@ void AsyncRenderer::workerLoop() {
       if (request.overviewInfillOnly) {
         return std::nullopt;
       }
-      if (!request.dragPreview.has_value() || compositorEntity_ == entt::null ||
-          compositor_->layerCount() == 0u) {
+      if (!splitPreviewSafe || !request.dragPreview.has_value() ||
+          compositorEntity_ == entt::null || compositor_->layerCount() == 0u) {
         return std::nullopt;
       }
+      const std::vector<Entity> dragPreviewEntities = DragPreviewEntities(*request.dragPreview);
       const Box2d viewBox = requestDocument.svgElement().viewBox().value_or(
           Box2d::FromXYWH(0, 0, static_cast<double>(semanticCanvasSize.x),
                           static_cast<double>(semanticCanvasSize.y)));
@@ -586,7 +627,7 @@ void AsyncRenderer::workerLoop() {
       auto compositorTiles =
           compositor_->snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
       bool canReuseNonDragTextures = !publishedCompositedTiles_.empty();
-      bool activeDragTileAvailable = !activeDragRequest;
+      std::size_t activeDragTilesAvailable = 0u;
       bool activeDragTileNeedsPayload = false;
       bool hasImmediateTile = false;
       for (const auto& ct : compositorTiles) {
@@ -597,17 +638,17 @@ void AsyncRenderer::workerLoop() {
         const OutKind kind =
             ct.immediate ? OutKind::Immediate
                          : (ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer);
-        const bool currentActiveDragLayer = activeDragRequest && request.dragPreview.has_value() &&
-                                            ct.layerEntity == request.dragPreview->entity;
+        const bool currentActiveDragLayer =
+            activeDragRequest && ContainsEntity(dragPreviewEntities, ct.layerEntity);
         if (ct.immediate) {
           hasImmediateTile = true;
           if (currentActiveDragLayer) {
-            activeDragTileAvailable = true;
+            ++activeDragTilesAvailable;
           }
           continue;
         }
         if (currentActiveDragLayer) {
-          activeDragTileAvailable = true;
+          ++activeDragTilesAvailable;
           activeDragTileNeedsPayload = !publishedTextureMatches(
               std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims, outputCanvasSize);
           continue;
@@ -625,7 +666,7 @@ void AsyncRenderer::workerLoop() {
           break;
         }
       }
-      if (!activeDragTileAvailable) {
+      if (activeDragRequest && activeDragTilesAvailable < dragPreviewEntities.size()) {
         canReuseNonDragTextures = false;
       }
       CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All;

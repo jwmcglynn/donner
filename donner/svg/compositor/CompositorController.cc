@@ -1074,8 +1074,7 @@ bool CompositorController::hasSplitStaticLayers() const {
   // at canvas scale — visible to the operator as "fast path counter
   // bumps but framerate stays low, worse at higher zoom". Count only
   // entries NOT pending demotion.
-  uint32_t activeDragHints = 0;
-  Entity activeDragCandidate = entt::null;
+  bool hasActiveDragHint = false;
   uint32_t liveHints = 0;
   Entity liveCandidate = entt::null;
   for (const auto& [hintEntity, hint] : activeHints_) {
@@ -1083,18 +1082,17 @@ bool CompositorController::hasSplitStaticLayers() const {
       continue;
     }
     if (hint.interactionKind() == InteractionHint::ActiveDrag) {
-      ++activeDragHints;
-      activeDragCandidate = hintEntity;
+      hasActiveDragHint = true;
+      if (const CompositorLayer* layer = findLayer(hintEntity);
+          layer != nullptr && layer->hasRenderablePayload()) {
+        return true;
+      }
     }
     ++liveHints;
     liveCandidate = hintEntity;
   }
-  if (activeDragHints > 0) {
-    if (activeDragHints != 1 || liveHints != 1) {
-      return false;
-    }
-    const CompositorLayer* layer = findLayer(activeDragCandidate);
-    return layer != nullptr && layer->hasRenderablePayload();
+  if (hasActiveDragHint) {
+    return false;
   }
   if (liveHints != 1) {
     return false;
@@ -2886,7 +2884,8 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
     const auto& layer = layers_[i];
     const RendererBitmap* layerBitmap = layer.hasValidBitmap() ? &layer.bitmap() : nullptr;
     const std::shared_ptr<const RendererTextureSnapshot> layerTexture = layer.textureSnapshot();
-    const bool isDragTarget = layer.entity() == splitStaticLayersEntity_;
+    const bool isDragTarget =
+        layer.entity() == splitStaticLayersEntity_ || isActiveDragTarget(layer.entity());
     const bool immediate = layer.isImmediate();
     const bool includeLayerPayload =
         includePayload(layerBitmap != nullptr || layerTexture != nullptr, isDragTarget, immediate);

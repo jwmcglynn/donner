@@ -655,6 +655,9 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   }
 
   const bool requestOverviewInfill = needsOverviewInfill;
+  const std::vector<Entity> prewarmExtraEntities =
+      requestOverviewInfill ? std::vector<Entity>{}
+                            : selectedCompositedExtraEntities(app, prewarmEntity);
   const bool useSelectedPrewarmRasterViewport =
       !requestOverviewInfill && prewarmEntity != entt::null && !dragPreview.has_value() &&
       rasterViewport.viewportBounded;
@@ -689,6 +692,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
       compositedPresentation_,
       PresentationRenderScheduleInput{
           .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
+          .selectedExtraEntities = prewarmExtraEntities,
           .activeDragPreview = dragPreview,
           .currentVersion = currentVersion,
           .currentCanvasSize = currentCanvasSize,
@@ -753,7 +757,7 @@ std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp
   }
 
   for (const svg::SVGElement& selected : app.selectedElements()) {
-    if (!IsGraphicsElement(selected) || IsDisplayNone(selected)) {
+    if (!selected.isa<svg::SVGGraphicsElement>() || IsDisplayNone(selected)) {
       continue;
     }
 
