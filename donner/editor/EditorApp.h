@@ -27,6 +27,7 @@
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGElement.h"
@@ -48,6 +49,15 @@ struct PathOperationAvailability {
   bool canApply = false;  ///< True when the operation button should be enabled.
   std::string reason;     ///< Short disabled-state reason for tooltips and tests.
 };
+
+/// Whether @p command is a geometry-changing or destructive mutation targeting
+/// a locked element and must be dropped by the edit-gating path. Returns true
+/// only for `SetTransform` / `DeleteElement` whose target `IsLocked` (which
+/// also covers descendants of a locked group). Everything else — attribute and
+/// visibility/lock toggles, inserts, text edits, document replacement — is
+/// allowed, so a locked layer can still be shown/hidden, selected, and
+/// unlocked.
+[[nodiscard]] bool IsLockGatedCommand(const EditorCommand& command);
 
 /// Active paint settings used by authoring tools when creating new geometry.
 struct ActivePaintStyle {
@@ -145,9 +155,30 @@ public:
   /// text pane both flow through here. Pushes the command onto the
   /// document's command queue; nothing is applied until `flushFrame()`.
   void applyMutation(EditorCommand command) {
+    // Edit-gating: locked layers (`data-donner-locked="true"` on the element or
+    // an ancestor) are protected from geometry-changing edits and deletion.
+    // Visibility/lock metadata toggles and selection are NOT gated, so a locked
+    // layer can still be shown/hidden and unlocked. See `IsLockGatedCommand`.
+    if (IsLockGatedCommand(command)) {
+      return;
+    }
     document_.applyMutation(std::move(command));
     isDirty_ = true;
   }
+
+  /// Set the visibility of @p element by toggling its `display` presentation
+  /// attribute: hiding writes `display="none"`, showing writes
+  /// `display="inline"` (a definitively visible value, observable through the
+  /// computed-style visibility check). Routes through `applyMutation` so the
+  /// Layers panel eye button and context menu share one code path. Visibility
+  /// toggles are intentionally NOT lock-gated.
+  void setElementVisible(const svg::SVGElement& element, bool visible);
+
+  /// Lock or unlock @p element by toggling the `data-donner-locked` marker
+  /// attribute (`"true"` to lock, `"false"` to unlock). Routes through
+  /// `applyMutation`. The lock toggle itself is NOT lock-gated, so a locked
+  /// layer can always be unlocked.
+  void setElementLocked(const svg::SVGElement& element, bool locked);
 
   /// Restore these selection targets after the next source-backed document replacement.
   void restoreSelectionAfterNextDocumentReplace(std::vector<AttributeWritebackTarget> targets);

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/editor/LockState.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGPathElement.h"
@@ -234,6 +235,7 @@ void LayerTreeModel::appendRows(const svg::SVGElement& element, int depth,
       .hasChildren = HasRenderableDescendant(element),
       .isExpanded = false,
       .isVisible = IsVisible(element),
+      .isLocked = IsLocked(element),
       .isSelected = IsInSelection(selection, element),
       .isPartiallySelected = false,
       .kind = ClassifyKind(element),

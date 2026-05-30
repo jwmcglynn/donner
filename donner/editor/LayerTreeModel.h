@@ -61,6 +61,11 @@ struct LayerTreeRow {
   bool isExpanded = false;
   /// True when the element is visible (display != none, visibility != hidden).
   bool isVisible = true;
+  /// True when the element (or one of its ancestors) is locked via the
+  /// `data-donner-locked="true"` marker attribute. Locked rows are protected
+  /// from geometry-changing edits and deletion (see `IsLocked` in
+  /// `LockState.h`).
+  bool isLocked = false;
   /// True when the element is in the editor selection.
   bool isSelected = false;
   /// True for a group that is not itself selected but has at least one

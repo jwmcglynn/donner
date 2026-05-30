@@ -12,6 +12,7 @@
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -749,6 +750,41 @@ void EditorApp::setSelection(std::optional<svg::SVGElement> element) {
 void EditorApp::setSelection(std::vector<svg::SVGElement> elements) {
   selection_ = std::move(elements);
   refreshFirstSelectionCache();
+}
+
+bool IsLockGatedCommand(const EditorCommand& command) {
+  // Only geometry-changing / destructive mutations are gated. A SetTransform or
+  // DeleteElement targeting a locked element (or a descendant of a locked
+  // group, via `IsLocked`'s ancestor walk) is dropped. Visibility/lock
+  // attribute toggles flow through SetAttribute and are intentionally never
+  // gated, so a locked layer can still be shown/hidden and unlocked.
+  switch (command.kind) {
+    case EditorCommand::Kind::SetTransform:
+    case EditorCommand::Kind::DeleteElement:
+      return command.element.has_value() && IsLocked(*command.element);
+    default: return false;
+  }
+}
+
+void EditorApp::setElementVisible(const svg::SVGElement& element, bool visible) {
+  // Toggle the `display` presentation attribute. Hiding writes
+  // `display="none"`; showing writes `display="inline"` (a definitively
+  // visible value) so the change is observable through the computed-style
+  // visibility check regardless of whether the surrounding stylesheet sets
+  // display.
+  applyMutation(
+      EditorCommand::SetAttributeCommand(element, "display", visible ? "inline" : "none"));
+}
+
+void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
+  // Toggle the `data-donner-locked` marker. Unlocking writes `"false"` rather
+  // than relying on attribute-removal semantics: `IsLocked` only treats
+  // `"true"` as locked, so `"false"` reads as unlocked and round-trips through
+  // SVG serialization. This mutation is never lock-gated (see
+  // `IsLockGatedCommand`) so a locked layer can always be unlocked.
+  applyMutation(EditorCommand::SetAttributeCommand(
+      element, std::string(kLockedAttributeName),
+      locked ? std::string(kLockedAttributeValue) : std::string("false")));
 }
 
 void EditorApp::toggleInSelection(const svg::SVGElement& element) {

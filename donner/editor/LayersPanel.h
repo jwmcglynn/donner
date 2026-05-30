@@ -66,6 +66,24 @@ public:
   /// @param mods Modifier-key state for the click.
   void handleRowClick(EditorApp& app, std::size_t rowIndex, ClickModifiers mods);
 
+  /// Toggle the visibility of the row at @p rowIndex via the shared
+  /// `EditorApp::setElementVisible` path (the same path the context-menu
+  /// Hide/Show items use). Factored out so the eye-button affordance is
+  /// unit-testable without an ImGui frame. No-op for an out-of-range index.
+  ///
+  /// @param app Live editor app the mutation is applied to.
+  /// @param rowIndex Index into `rows()`.
+  void handleEyeClick(EditorApp& app, std::size_t rowIndex);
+
+  /// Toggle the lock state of the row at @p rowIndex via the shared
+  /// `EditorApp::setElementLocked` path (the same path the context-menu
+  /// Lock/Unlock items use). Factored out so the lock-button affordance is
+  /// unit-testable without an ImGui frame. No-op for an out-of-range index.
+  ///
+  /// @param app Live editor app the mutation is applied to.
+  /// @param rowIndex Index into `rows()`.
+  void handleLockClick(EditorApp& app, std::size_t rowIndex);
+
   /// Whether the row identified by @p stableId has a non-null thumbnail handle
   /// or a deterministic fallback swatch. Always true for every visible row.
   [[nodiscard]] bool hasThumbnailOrSwatch(std::uint64_t stableId) const;

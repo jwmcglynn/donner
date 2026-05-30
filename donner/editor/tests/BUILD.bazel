@@ -857,10 +857,12 @@ donner_cc_test(
     name = "layers_panel_tests",
     srcs = ["LayersPanel_tests.cc"],
     deps = [
+        "//donner/editor:command_queue",
         "//donner/editor:compositor_debug_panel",
         "//donner/editor:editor_app",
         "//donner/editor:layer_tree_model",
         "//donner/editor:layers_panel",
+        "//donner/editor:lock_state",
         "//donner/svg",
         "@com_google_gtest//:gtest_main",
     ],

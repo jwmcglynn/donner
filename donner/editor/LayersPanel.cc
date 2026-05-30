@@ -343,6 +343,22 @@ void LayersPanel::handleRowClick(EditorApp& app, std::size_t rowIndex, ClickModi
   selectionChanged_ = true;
 }
 
+void LayersPanel::handleEyeClick(EditorApp& app, std::size_t rowIndex) {
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (rowIndex >= rows.size()) {
+    return;
+  }
+  app.setElementVisible(rows[rowIndex].element, !rows[rowIndex].isVisible);
+}
+
+void LayersPanel::handleLockClick(EditorApp& app, std::size_t rowIndex) {
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (rowIndex >= rows.size()) {
+    return;
+  }
+  app.setElementLocked(rows[rowIndex].element, !rows[rowIndex].isLocked);
+}
+
 void LayersPanel::render(EditorApp* liveApp) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (rows.empty()) {
@@ -373,12 +389,6 @@ void LayersPanel::render(EditorApp* liveApp) {
     } else {
       ImGui::Dummy(ImVec2(ImGui::GetFrameHeight(), 0.0f));
     }
-    ImGui::SameLine();
-
-    // Eye icon placeholder.
-    // TODO(v0.8): visibility toggle — wire to a hide/show editor command. No-op
-    // for now so the affordance is visible without risking source desync.
-    ImGui::TextUnformatted(row.isVisible ? "o" : "-");
     ImGui::SameLine();
 
     // 24x24 preview cell. Geometry rows (path/rect/circle/…) draw a real
@@ -450,6 +460,28 @@ void LayersPanel::render(EditorApp* liveApp) {
       ImGui::PopStyleColor();
     }
 
+    // Right-aligned per-row affordances: a visibility (eye) toggle and a lock
+    // toggle. Drawn after the Selectable so they paint on top and capture
+    // clicks before the row's selection hit area. Both funnel through the
+    // shared handleEyeClick / handleLockClick seams (the same path the context
+    // menu uses) and are dropped when the worker owns the document (liveApp ==
+    // nullptr), mirroring the selection-click guard.
+    const char* eyeIcon = row.isVisible ? "o" : "-";
+    const char* lockIcon = row.isLocked ? "L" : "u";
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float eyeWidth = ImGui::CalcTextSize(eyeIcon).x + style.FramePadding.x * 2.0f;
+    const float lockWidth = ImGui::CalcTextSize(lockIcon).x + style.FramePadding.x * 2.0f;
+    const float affordancesWidth = eyeWidth + lockWidth + style.ItemSpacing.x;
+    ImGui::SameLine();
+    ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - affordancesWidth);
+    if (ImGui::SmallButton(eyeIcon) && liveApp != nullptr) {
+      handleEyeClick(*liveApp, i);
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton(lockIcon) && liveApp != nullptr) {
+      handleLockClick(*liveApp, i);
+    }
+
     // Right-click context menu with selection actions.
     if (ImGui::BeginPopupContextItem("##layer_row_menu")) {
       if (ImGui::MenuItem("Select") && liveApp != nullptr) {
@@ -474,10 +506,26 @@ void LayersPanel::render(EditorApp* liveApp) {
         liveApp->setSelection(target);
         selectionChanged_ = true;
       }
-      // TODO(v0.8): Hide/Show visibility toggles — no-op until a hide/show
-      // editor command exists.
-      ImGui::MenuItem("Hide", nullptr, false, false);
-      ImGui::MenuItem("Show", nullptr, false, false);
+      // Visibility + lock toggles, routed through the same shared seams as the
+      // right-aligned row buttons so there is a single mutation path.
+      if (row.isVisible) {
+        if (ImGui::MenuItem("Hide") && liveApp != nullptr) {
+          handleEyeClick(*liveApp, i);
+        }
+      } else {
+        if (ImGui::MenuItem("Show") && liveApp != nullptr) {
+          handleEyeClick(*liveApp, i);
+        }
+      }
+      if (row.isLocked) {
+        if (ImGui::MenuItem("Unlock") && liveApp != nullptr) {
+          handleLockClick(*liveApp, i);
+        }
+      } else {
+        if (ImGui::MenuItem("Lock") && liveApp != nullptr) {
+          handleLockClick(*liveApp, i);
+        }
+      }
       // TODO(v0.8): Delete from the Layers panel — needs the in-sync source
       // text that lives in EditorShell, so it is wired at the shell level
       // rather than inventing a new EditorApp API here.

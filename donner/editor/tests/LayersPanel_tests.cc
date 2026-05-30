@@ -133,5 +133,206 @@ TEST(LayersPanelTest, RowsAreDomBacked) {
   EXPECT_EQ(std::string_view(tagName.name), "circle");
 }
 
+// Parse `svg` into `app`, asserting success. `EditorApp` is non-copyable and
+// non-movable, so callers construct it in place and pass it by reference
+// (mirroring the existing tests' `EditorApp app; app.loadFromString(...)`).
+void LoadDocument(EditorApp& app, std::string_view svg) {
+  ASSERT_TRUE(app.loadFromString(svg));
+}
+
+// Copy of the snapshot row whose display name matches `name`, or nullopt.
+std::optional<LayerTreeRow> FindRow(const LayersPanel& panel, std::string_view name) {
+  const int index = RowIndex(panel, name);
+  if (index < 0) {
+    return std::nullopt;
+  }
+  return panel.rows()[static_cast<std::size_t>(index)];
+}
+
+// ---------------------------------------------------------------------------
+// Feature 1: show/hide eye button
+// ---------------------------------------------------------------------------
+
+TEST(LayersPanelTest, EyeClickTogglesVisibility) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int index = RowIndex(panel, "rect1");
+  ASSERT_GE(index, 0);
+  ASSERT_TRUE(panel.rows()[static_cast<std::size_t>(index)].isVisible);
+
+  // Hide: the eye click issues a display:none style mutation, so after the
+  // queued command is applied and the snapshot rebuilt the row reads hidden.
+  panel.handleEyeClick(app, static_cast<std::size_t>(index));
+  EXPECT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> hidden = FindRow(panel, "rect1");
+  ASSERT_TRUE(hidden.has_value());
+  EXPECT_FALSE(hidden->isVisible);
+
+  // Show: toggling again restores visibility.
+  panel.handleEyeClick(app, static_cast<std::size_t>(RowIndex(panel, "rect1")));
+  EXPECT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> shown = FindRow(panel, "rect1");
+  ASSERT_TRUE(shown.has_value());
+  EXPECT_TRUE(shown->isVisible);
+}
+
+TEST(LayersPanelTest, EyeClickOutOfRangeIsNoOp) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  // The seam bounds-checks the row index; an out-of-range click queues nothing.
+  // (The live-app null guard is enforced at the render() call site, mirroring
+  // the existing selection-click guard, so it is exercised there rather than
+  // through this non-ImGui seam.)
+  panel.handleEyeClick(app, panel.rows().size() + 5u);
+  EXPECT_FALSE(app.document().flushFrame());
+}
+
+// ---------------------------------------------------------------------------
+// Feature 2: lock + edit-gating
+// ---------------------------------------------------------------------------
+
+TEST(LayersPanelTest, LockClickSetsLockedAttribute) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> row = FindRow(panel, "rect1");
+  ASSERT_TRUE(row.has_value());
+  EXPECT_FALSE(IsLocked(row->element));
+  EXPECT_FALSE(row->isLocked);
+
+  // Lock: the attribute is set and the rebuilt row reflects it.
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "rect1")));
+  EXPECT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> locked = FindRow(panel, "rect1");
+  ASSERT_TRUE(locked.has_value());
+  EXPECT_TRUE(IsLocked(locked->element));
+  EXPECT_TRUE(locked->isLocked);
+
+  // Unlock: toggling again clears the locked state.
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "rect1")));
+  EXPECT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> unlocked = FindRow(panel, "rect1");
+  ASSERT_TRUE(unlocked.has_value());
+  EXPECT_FALSE(IsLocked(unlocked->element));
+  EXPECT_FALSE(unlocked->isLocked);
+}
+
+TEST(LayersPanelTest, IsLockedReportsDescendantsLocked) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="group1">
+      <rect id="rect1" x="0" y="0" width="10" height="10"/>
+    </g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> group = FindRow(panel, "group1");
+  const std::optional<LayerTreeRow> child = FindRow(panel, "rect1");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(child.has_value());
+  EXPECT_FALSE(IsLocked(group->element));
+  EXPECT_FALSE(IsLocked(child->element));
+
+  // Locking the group locks the group and its descendant.
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "group1")));
+  EXPECT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> lockedGroup = FindRow(panel, "group1");
+  const std::optional<LayerTreeRow> lockedChild = FindRow(panel, "rect1");
+  ASSERT_TRUE(lockedGroup.has_value());
+  ASSERT_TRUE(lockedChild.has_value());
+  EXPECT_TRUE(IsLocked(lockedGroup->element));
+  EXPECT_TRUE(IsLocked(lockedChild->element));
+  EXPECT_TRUE(lockedChild->isLocked);
+
+  // Unlocking the group releases the descendant too.
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "group1")));
+  EXPECT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> unlockedGroup = FindRow(panel, "group1");
+  const std::optional<LayerTreeRow> unlockedChild = FindRow(panel, "rect1");
+  ASSERT_TRUE(unlockedGroup.has_value());
+  ASSERT_TRUE(unlockedChild.has_value());
+  EXPECT_FALSE(IsLocked(unlockedGroup->element));
+  EXPECT_FALSE(IsLocked(unlockedChild->element));
+}
+
+TEST(LayersPanelTest, LockedElementTransformIsNoOp) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="locked" x="0" y="0" width="10" height="10"/>
+    <rect id="free" x="20" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const svg::SVGElement lockedElement = FindRow(panel, "locked")->element;
+  const svg::SVGElement freeElement = FindRow(panel, "free")->element;
+
+  // Lock the first rect.
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "locked")));
+  EXPECT_TRUE(app.document().flushFrame());
+  ASSERT_TRUE(IsLocked(lockedElement));
+
+  const Transform2d translation = Transform2d::Translate({5.0, 7.0});
+
+  // A transform on the locked element is dropped: its transform stays identity.
+  app.applyMutation(EditorCommand::SetTransformCommand(lockedElement, translation));
+  (void)app.document().flushFrame();
+  EXPECT_TRUE(lockedElement.cast<svg::SVGGraphicsElement>().transform().isIdentity());
+
+  // The same transform on the unlocked element is applied.
+  app.applyMutation(EditorCommand::SetTransformCommand(freeElement, translation));
+  EXPECT_TRUE(app.document().flushFrame());
+  EXPECT_FALSE(freeElement.cast<svg::SVGGraphicsElement>().transform().isIdentity());
+}
+
+TEST(LayersPanelTest, LockedElementDeleteIsNoOp) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="locked" x="0" y="0" width="10" height="10"/>
+    <rect id="free" x="20" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const svg::SVGElement lockedElement = FindRow(panel, "locked")->element;
+  const svg::SVGElement freeElement = FindRow(panel, "free")->element;
+
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "locked")));
+  EXPECT_TRUE(app.document().flushFrame());
+  ASSERT_TRUE(IsLocked(lockedElement));
+
+  // Deleting a locked element is dropped: it stays attached to the tree.
+  app.applyMutation(EditorCommand::DeleteElementCommand(lockedElement));
+  (void)app.document().flushFrame();
+  EXPECT_TRUE(lockedElement.parentElement().has_value());
+
+  // Deleting the unlocked element detaches it from the tree.
+  app.applyMutation(EditorCommand::DeleteElementCommand(freeElement));
+  EXPECT_TRUE(app.document().flushFrame());
+  EXPECT_FALSE(freeElement.parentElement().has_value());
+}
+
 }  // namespace
 }  // namespace donner::editor

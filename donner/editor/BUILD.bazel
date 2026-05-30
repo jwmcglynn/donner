@@ -741,6 +741,7 @@ donner_cc_library(
         ":async_svg_document",
         ":attribute_writeback",
         ":command_queue",
+        ":lock_state",
         ":undo_timeline",
         "//donner/base",
         "//donner/svg",
@@ -1061,11 +1062,23 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "lock_state",
+    srcs = ["LockState.cc"],
+    hdrs = ["LockState.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "layer_tree_model",
     srcs = ["LayerTreeModel.cc"],
     hdrs = ["LayerTreeModel.h"],
     deps = [
         ":editor_app",
+        ":lock_state",
         "//donner/base",
         "//donner/svg",
     ],
@@ -1079,6 +1092,7 @@ donner_cc_library(
         ":editor_app",
         ":imgui_headers",
         ":layer_tree_model",
+        ":lock_state",
         "//donner/base",
         "//donner/svg",
         "@imgui",
