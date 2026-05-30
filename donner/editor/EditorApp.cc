@@ -9,6 +9,7 @@
 
 #include "donner/base/FormatNumber.h"
 #include "donner/base/PathOps.h"
+#include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -217,6 +218,10 @@ struct PathOperationSelection {
   std::vector<PathBooleanInput> inputs;
 };
 
+struct CompoundPathSplit {
+  std::vector<Path> components;
+};
+
 std::vector<svg::SVGElement> SortSelectionByPaintOrder(const svg::SVGDocument& document,
                                                        std::span<const svg::SVGElement> selection) {
   std::vector<svg::SVGElement> result;
@@ -382,6 +387,111 @@ bool BoxContainsBox(const Box2d& outer, const Box2d& inner, double tolerance) {
          inner.topLeft.y >= outer.topLeft.y - tolerance &&
          inner.bottomRight.x <= outer.bottomRight.x + tolerance &&
          inner.bottomRight.y <= outer.bottomRight.y + tolerance;
+}
+
+bool IsCopiedUnbundleAttribute(const xml::XMLQualifiedNameRef& name) {
+  return name != xml::XMLQualifiedNameRef("d") && name != xml::XMLQualifiedNameRef("id");
+}
+
+std::vector<xml::XMLQualifiedName> CopiedAttributeNames(const svg::SVGElement& source) {
+  std::vector<xml::XMLQualifiedName> result;
+  source.withReadAccess([&](const svg::DocumentReadAccess&, EntityHandle handle) {
+    const auto* attributes = handle.try_get<components::AttributesComponent>();
+    if (attributes == nullptr) {
+      return;
+    }
+
+    const SmallVector<xml::XMLQualifiedNameRef, 10> names = attributes->attributes();
+    result.reserve(names.size());
+    for (const xml::XMLQualifiedNameRef& name : names) {
+      if (!IsCopiedUnbundleAttribute(name)) {
+        continue;
+      }
+      result.emplace_back(RcString(name.namespacePrefix), RcString(name.name));
+    }
+  });
+  return result;
+}
+
+void CopyUnbundleAttributes(const svg::SVGElement& source, svg::SVGPathElement& target) {
+  for (const xml::XMLQualifiedName& name : CopiedAttributeNames(source)) {
+    const xml::XMLQualifiedNameRef nameRef(name);
+    std::optional<RcString> value = source.getAttribute(nameRef);
+    if (value.has_value()) {
+      target.setAttribute(nameRef, std::string_view(*value));
+    }
+  }
+}
+
+void AppendCommandToBuilder(PathBuilder& builder, Path::Verb verb,
+                            std::span<const Vector2d> points) {
+  switch (verb) {
+    case Path::Verb::MoveTo: builder.moveTo(points[0]); break;
+    case Path::Verb::LineTo: builder.lineTo(points[0]); break;
+    case Path::Verb::QuadTo: builder.quadTo(points[0], points[1]); break;
+    case Path::Verb::CurveTo: builder.curveTo(points[0], points[1], points[2]); break;
+    case Path::Verb::ClosePath: builder.closePath(); break;
+  }
+}
+
+std::vector<Path> ExtractCompoundPathContours(const Path& path) {
+  std::vector<Path> contours;
+  PathBuilder builder;
+  bool activeContour = false;
+  bool contourHasSegment = false;
+
+  const auto flushContour = [&]() {
+    if (!activeContour || !contourHasSegment) {
+      builder = PathBuilder();
+      activeContour = false;
+      contourHasSegment = false;
+      return;
+    }
+
+    contours.push_back(builder.build());
+    activeContour = false;
+    contourHasSegment = false;
+  };
+
+  path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
+    if (verb == Path::Verb::MoveTo) {
+      flushContour();
+      builder.moveTo(points[0]);
+      activeContour = true;
+      return;
+    }
+
+    if (!activeContour) {
+      return;
+    }
+
+    AppendCommandToBuilder(builder, verb, points);
+    if (verb != Path::Verb::ClosePath) {
+      contourHasSegment = true;
+    }
+  });
+  flushContour();
+
+  return contours;
+}
+
+CompoundPathSplit SplitCompoundPathIntoContours(const Path& path) {
+  return CompoundPathSplit{
+      .components = ExtractCompoundPathContours(path),
+  };
+}
+
+std::optional<svg::SVGElement> ResolveCompoundPathUnbundleTarget(
+    const EditorApp& app, std::optional<svg::SVGElement> target) {
+  if (target.has_value()) {
+    return target;
+  }
+
+  if (app.selectedElements().size() == 1u) {
+    return app.selectedElements().front();
+  }
+
+  return std::nullopt;
 }
 
 bool PathOperationResultFitsInputBounds(const Path& result,
