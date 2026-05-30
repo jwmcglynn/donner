@@ -58,9 +58,14 @@ struct SelectionTransformHandleBoxes {
 ///
 /// Resize wins over rotate when zones overlap. Rotate is intentionally outside
 /// the square handle, in a small ring around each corner.
+///
+/// @param selectionBoundsDoc Selection bounds in document coordinates.
+/// @param documentPoint Point to hit test in document coordinates.
+/// @param pixelsPerDocUnit Current viewport scale.
+/// @param includeRotate Whether rotate ring zones should be considered.
 [[nodiscard]] SelectionTransformHandleIntent HitTestSelectionTransformHandles(
     std::span<const Box2d> selectionBoundsDoc, const Vector2d& documentPoint,
-    double pixelsPerDocUnit);
+    double pixelsPerDocUnit, bool includeRotate = true);
 
 /// Return pixels per document unit from a document-to-canvas transform.
 [[nodiscard]] double PixelsPerDocUnitFromTransform(const Transform2d& canvasFromDoc);
