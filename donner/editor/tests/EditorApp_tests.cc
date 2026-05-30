@@ -438,6 +438,24 @@ TEST(EditorAppTest, PathOperationAvailabilityRequiresMultipleGeometryElements) {
   EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::SubtractFront).canApply);
 }
 
+TEST(EditorAppTest, PathOperationAvailabilityUnderConcurrentDomHoldsAccess) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  const PathOperationAvailability availability =
+      app.pathOperationAvailability(PathOperationKind::Union);
+
+  EXPECT_TRUE(availability.canApply) << availability.reason;
+}
+
 TEST(EditorAppTest, PathOperationUnavailableWhileDocumentMutationIsPending) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
