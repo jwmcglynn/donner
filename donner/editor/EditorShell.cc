@@ -2976,8 +2976,8 @@ void EditorShell::runFrame() {
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
     if (app_.flushFrame()) {
-      renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_.document().lastFlushResult(),
-                                                                  textures_);
+      renderCoordinator_.invalidatePresentationAfterDocumentFlush(
+          app_.document().lastFlushResult());
       renderCoordinator_.refreshSelectionBoundsCache(app_);
     }
   }
