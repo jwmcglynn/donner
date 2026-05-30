@@ -31,7 +31,7 @@ bazel_dep(name = "rules_foreign_cc", version = "0.15.1")
 ##
 ## Non-BCR dependencies (dev-only extension)
 ##
-# harfbuzz, woff2, wgpu-native, resvg-test-suite, and bazel_clang_tidy all live
+# harfbuzz, woff2, wgpu-native, and bazel_clang_tidy all live
 # behind `git_repository`/`new_git_repository` calls that are not permitted in
 # modules published to the Bazel Central Registry. We hide them behind a
 # module extension flagged `dev_dependency = True`, so downstream BCR consumers
@@ -48,7 +48,6 @@ use_repo(
     non_bcr_deps,
     "bazel_clang_tidy",
     "harfbuzz",
-    "resvg-test-suite",
     "sysroot_linux_aarch64",
     "sysroot_linux_x86_64",
     "tracy",
@@ -129,9 +128,10 @@ new_local_repository(
     path = "third_party/css-parsing-tests",
 )
 
-# resvg-test-suite and the wgpu-native prebuilts are fetched via the
-# non_bcr_deps module extension declared above — they are not available when
-# donner is consumed from BCR.
+# The wgpu-native prebuilts are fetched via the non_bcr_deps module extension
+# declared above — they are not available when donner is consumed from BCR. The
+# resvg-test-suite goldens are now vendored in-tree under
+# third_party/resvg-test-suite/ so they ship in the source archive.
 
 bazel_dep(name = "rules_python", version = "1.9.0", dev_dependency = True)
 

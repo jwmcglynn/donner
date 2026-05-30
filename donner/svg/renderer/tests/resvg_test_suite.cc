@@ -67,7 +67,7 @@ std::vector<ImageComparisonTestcase> getTestsInCategory(
     std::string_view category, std::map<std::string, ImageComparisonParams> overrides = {},
     ImageComparisonParams defaultParams = {}) {
   const std::string kTestsRoot =
-      Runfiles::instance().RlocationExternal("resvg-test-suite", "tests");
+      Runfiles::instance().Rlocation("third_party/resvg-test-suite/tests");
   const std::filesystem::path kCategoryDir = std::filesystem::path(kTestsRoot) / category;
 
   std::vector<ImageComparisonTestcase> testPlan;
@@ -118,7 +118,7 @@ TEST_P(ImageComparisonTestFixture, ResvgTest) {
   }
 
   SVGDocument document = loadSVG(testcase.svgFilename.string().c_str(),
-                                 Runfiles::instance().RlocationExternal("resvg-test-suite", ""));
+                                 Runfiles::instance().Rlocation("third_party/resvg-test-suite/"));
   renderAndCompare(document, testcase.svgFilename, goldenFilename.string().c_str());
 }
 
