@@ -413,6 +413,20 @@ bool IsStaticSpanImmediateSafe(const CompositorController::StaticSpanPlan& spanP
   return IsImmediateSafe(spanPlan.visible, spanPlan.hasExpensiveEffect, spanPlan.estimatedDrawOps);
 }
 
+bool IsBoundedMultiDrawStaticSpan(const CompositorController::StaticSpanPlan& spanPlan) {
+  constexpr uint64_t kDirectStaticSpanMinBytes = 512u * 1024u;
+  constexpr uint64_t kDirectStaticSpanMaxBytes = 720u * 1024u;
+  return IsStaticSpanImmediateSafe(spanPlan) && spanPlan.estimatedDrawOps > 1 &&
+         spanPlan.estimatedRetainedBytes >= kDirectStaticSpanMinBytes &&
+         spanPlan.estimatedRetainedBytes <= kDirectStaticSpanMaxBytes;
+}
+
+bool ShouldDirectComposeLayer(const CompositorLayer& layer) {
+  return layer.isImmediate() ||
+         (layer.fallbackReasons() & (FallbackReason::ExternalPaint | FallbackReason::IsolatedLayer)) !=
+             FallbackReason::None;
+}
+
 double ImmediateStaticSpanBudgetMs() {
   // 120 Hz leaves 8.33 ms total. Immediate spans rerender on the UI cadence,
   // so dynamic expansion gets one quarter of that frame to leave room for
@@ -812,6 +826,15 @@ bool HasPublicTileBitmap(const RendererBitmap& bitmap) {
   return !bitmap.empty() && !IsTransparentPlaceholderBitmap(bitmap);
 }
 
+// Returns true when two bitmaps are byte-for-byte identical (same format,
+// dimensions, stride, and pixel bytes). Used to detect a no-op re-rasterize
+// of a static segment so its tile generation — the editor's GL-texture-cache
+// invalidation key — isn't advanced when nothing actually changed.
+bool BitmapPixelsEqual(const RendererBitmap& a, const RendererBitmap& b) {
+  return a.dimensions == b.dimensions && a.rowBytes == b.rowBytes && a.alphaType == b.alphaType &&
+         a.pixels == b.pixels;
+}
+
 Entity DataEntityForPaintEntity(const Registry& registry, Entity entity) {
   if (const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity)) {
     return instance->dataEntity;
@@ -1074,25 +1097,23 @@ bool CompositorController::hasSplitStaticLayers() const {
   // at canvas scale — visible to the operator as "fast path counter
   // bumps but framerate stays low, worse at higher zoom". Count only
   // entries NOT pending demotion.
-  bool hasActiveDragHint = false;
+  // Split-static presentation is a SINGLE-drag-target optimization: the editor
+  // blits exactly one promoted layer over the static remainder. It applies
+  // only when there is exactly one live (non-pending-demote) promoted hint.
+  // Count all live hints first — do NOT early-return on the first ActiveDrag
+  // hint, or two simultaneously-promoted layers would both look like a split
+  // when only a single drag target is allowed. Pinned by
+  // `MultiplePromotedLayersDoNotBuildSplitStaticLayers` (>=2 promoted => false)
+  // and `M9PendingDemoteKeepsHasSplitStaticLayersTrue` (sibling pending-demote
+  // is skipped, leaving one live hint => true).
   uint32_t liveHints = 0;
   Entity liveCandidate = entt::null;
   for (const auto& [hintEntity, hint] : activeHints_) {
     if (pendingDemotions_.contains(hintEntity)) {
       continue;
     }
-    if (hint.interactionKind() == InteractionHint::ActiveDrag) {
-      hasActiveDragHint = true;
-      if (const CompositorLayer* layer = findLayer(hintEntity);
-          layer != nullptr && layer->hasRenderablePayload()) {
-        return true;
-      }
-    }
     ++liveHints;
     liveCandidate = hintEntity;
-  }
-  if (hasActiveDragHint) {
-    return false;
   }
   if (liveHints != 1) {
     return false;
@@ -1803,6 +1824,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       ZoneScopedN("Compositor::driver.draw (first-frame)");
       driver.draw(document(), viewport, surfaceFromCanvas);
     }
+    mainRendererHasCachedFrame_ = true;
     // `driver.draw` runs preparation for the first frame. Defensively clear
     // the rebuild flag so the eager-warmed compositor caches survive the next
     // `renderFrame`.
@@ -2077,7 +2099,26 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   {
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
     for (auto& layer : layers_) {
-      if (layer.isDirty() || layer.isImmediate() || !layer.hasRenderablePayload() || rootDirty_) {
+      // An immediate (direct-render) layer normally re-rasterizes every frame.
+      // But on a translation-only drag frame the layer's pixel content is
+      // unchanged — only its position drifted, which the fast path / drift loop
+      // above already encoded as a pure-translation `canvasFromBitmap` against
+      // the still-valid rasterize-time stamp. Re-rasterizing such a layer here
+      // would call `setBitmap`, which resets `canvasFromBitmap_` to identity
+      // (clobbering the just-computed compose offset) and bumps the texture
+      // generation (defeating bitmap reuse on the editor's GL upload path).
+      // Reuse the cached bitmap and keep the compose offset. Genuine content
+      // changes still re-raster: those flip `isDirty()` (consumed above) or
+      // leave a non-translation `canvasFromBitmap` (scale/rotate drift). See
+      // compositor `LayerComposeOffsetTracksDomTranslationDelta`.
+      const bool immediateTranslationOnlyReuse =
+          layer.isImmediate() && !layer.isDirty() && layer.hasRenderablePayload() &&
+          layer.bitmapEntityFromWorldTransform().has_value() &&
+          layer.canvasFromBitmap().isTranslation();
+      const bool needsRaster =
+          (layer.isDirty() || layer.isImmediate() || !layer.hasRenderablePayload() || rootDirty_) &&
+          !immediateTranslationOnlyReuse;
+      if (needsRaster) {
         // §M4: bail between layer rasterizes. The remaining dirty
         // layers keep their `isDirty()` flag set, so the next
         // `renderFrame` finishes them. Returns directly out of
@@ -2477,6 +2518,21 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     ZoneScopedN("Compositor::rasterizeSegment");
     const auto segmentRasterizeStart = std::chrono::steady_clock::now();
 
+    // Snapshot the slot's prior content + offset so we can detect a
+    // no-op re-rasterize below. `Immediate`-mode segments are marked
+    // dirty every frame (they're cheap enough to redraw rather than
+    // cache), but redrawing byte-identical pixels must NOT advance the
+    // generation — the generation is the editor's GL-texture-cache
+    // invalidation key, and bumping it on unchanged content forces a
+    // pointless re-upload and breaks the
+    // SelectionToActiveDragDoesNotAdvanceUnchangedTileGenerations
+    // contract (a hint-kind re-promote re-rasterizes a stable static
+    // segment whose pixels never moved).
+    RendererBitmap previousSegmentBitmap = staticSegments_[i];
+    const std::shared_ptr<const RendererTextureSnapshot> previousSegmentTexture =
+        staticSegmentTextures_[i];
+    const Vector2d previousSegmentOffset = staticSegmentOffsets_[i];
+
     // Segment `i` spans paint order strictly between layer i-1 and
     // layer i (exclusive on both ends). Edge cases: segment 0 starts
     // at the document's first paint-ordered entity; segment N ends at
@@ -2660,6 +2716,11 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       spanPlan.demotedDynamicImmediate = true;
     }
     if (!segmentIsEmpty) {
+      if (!spanPlan.demotedDynamicImmediate && IsBoundedMultiDrawStaticSpan(spanPlan)) {
+        spanPlan.mode = StaticSpanMode::Immediate;
+        spanPlan.staticHeuristicImmediate = true;
+        spanPlan.immediateBudgetChargeMs = ImmediateStaticSpanBudgetChargeMs(elapsedMs);
+      }
       const bool chargeAsImmediate = wasImmediate || spanPlan.mode == StaticSpanMode::Immediate;
       if (chargeAsImmediate) {
         lastRenderFrameStats_.immediateRasterizeMs += elapsedMs;
@@ -2671,10 +2732,22 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     }
     staticSpanPlans_[i] = spanPlan;
     staticSegmentDirty_[i] = spanPlan.mode == StaticSpanMode::Immediate;
-    // Bump the generation so the editor's GL texture cache sees this
-    // slot's pixel content changed and re-uploads on next frame.
+    // Bump the generation only when this re-rasterize actually produced
+    // different content (or moved the segment on the canvas). An
+    // `Immediate` segment redraws every frame; if its entities and the
+    // surfaceFromCanvas transform are unchanged it produces byte-
+    // identical pixels at the same offset, and the editor's GL texture
+    // cache must keep reusing its existing upload. Only a genuine pixel/
+    // offset change is a cache-invalidation event.
     if (i < staticSegmentGeneration_.size()) {
-      staticSegmentGeneration_[i] = nextTileGeneration_++;
+      const bool offsetUnchanged =
+          (staticSegmentOffsets_[i] - previousSegmentOffset).lengthSquared() == 0.0;
+      const bool contentUnchanged = offsetUnchanged &&
+                                    staticSegmentTextures_[i] == previousSegmentTexture &&
+                                    BitmapPixelsEqual(staticSegments_[i], previousSegmentBitmap);
+      if (!contentUnchanged || staticSegmentGeneration_[i] == 0) {
+        staticSegmentGeneration_[i] = nextTileGeneration_++;
+      }
     }
     if (i < staticSegmentLastRasterizeMs_.size()) {
       staticSegmentLastRasterizeMs_[i] = elapsedMs;
@@ -3083,7 +3156,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   };
 
   const auto drawLayer = [&](const CompositorLayer& layer) {
-    if (layer.isImmediate()) {
+    if (ShouldDirectComposeLayer(layer)) {
       const auto directStart = std::chrono::steady_clock::now();
       RendererDriver driver(renderer());
       driver.drawEntityRangeIntoCurrentFrame(document().registry(), layer.firstEntity(),
