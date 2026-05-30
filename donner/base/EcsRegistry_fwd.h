@@ -9,7 +9,7 @@ namespace donner {
 using Entity = entt::entity;
 
 /// Forward declaration of Registry.
-using Registry = entt::basic_registry<Entity, std::allocator<Entity>>;
+using Registry = entt::basic_registry<Entity>;
 
 /// Forward declaration of EntityHandle.
 using EntityHandle = entt::basic_handle<Registry>;

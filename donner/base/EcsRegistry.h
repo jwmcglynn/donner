@@ -47,7 +47,7 @@ inline auto operator<=>(Entity lhs, Entity rhs) {
  *
  * @see \ref EcsArchitecture
  */
-using Registry = entt::basic_registry<Entity, std::allocator<Entity>>;
+using Registry = entt::basic_registry<Entity>;
 
 /**
  * Convenience handle for a \ref Entity with an attached \ref Registry.
