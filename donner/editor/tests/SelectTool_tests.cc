@@ -640,6 +640,39 @@ TEST_F(SelectToolTest, MarqueeReleaseSelectsZeroWhenEmpty) {
   EXPECT_TRUE(app.selectedElements().empty());
 }
 
+TEST_F(SelectToolTest, PlainDragWithExistingSelectionDoesNotStartMarquee) {
+  app.setSelection(elementById("#r1"));
+  ASSERT_TRUE(app.hasSelection());
+
+  tool.onMouseDown(app, Vector2d(60.0, 60.0), MouseModifiers{});
+  EXPECT_FALSE(tool.isMarqueeing());
+  EXPECT_FALSE(tool.marqueeRect().has_value());
+  EXPECT_FALSE(app.hasSelection()) << "plain miss still clears the existing selection";
+
+  tool.onMouseMove(app, Vector2d(140.0, 140.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(140.0, 140.0));
+
+  EXPECT_FALSE(tool.isMarqueeing());
+  EXPECT_FALSE(tool.marqueeRect().has_value());
+  EXPECT_TRUE(app.selectedElements().empty());
+}
+
+TEST_F(SelectToolTest, BeginMarqueeWithExistingSelectionRequiresAdditiveMode) {
+  app.setSelection(elementById("#r1"));
+  ASSERT_TRUE(app.hasSelection());
+
+  tool.beginMarquee(app, Vector2d(60.0, 60.0), /*additive=*/false);
+  EXPECT_FALSE(tool.isMarqueeing());
+  EXPECT_FALSE(tool.marqueeRect().has_value());
+  EXPECT_FALSE(app.hasSelection());
+
+  app.setSelection(elementById("#r1"));
+  tool.beginMarquee(app, Vector2d(60.0, 60.0), /*additive=*/true);
+  EXPECT_TRUE(tool.isMarqueeing());
+  ASSERT_TRUE(tool.marqueeRect().has_value());
+  EXPECT_TRUE(app.hasSelection());
+}
+
 TEST_F(SelectToolTest, ShiftMarqueeAppendsToSelection) {
   // Pre-select r1.
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
