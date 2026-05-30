@@ -248,10 +248,10 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   io.AddKeyEvent(ImGuiKey_LeftShift, inputOverride.keyShift);
   io.AddKeyEvent(ImGuiKey_LeftAlt, inputOverride.keyAlt);
   io.AddKeyEvent(ImGuiKey_LeftSuper, inputOverride.keySuper);
-  // ImGui derives io.KeyCtrl/io.KeyMods from the dedicated ImGuiMod_* reserved
-  // key slots, which are distinct from ImGuiKey_LeftCtrl/etc. The real GLFW
-  // backend populates them via ImGui_ImplGlfw_UpdateKeyModifiers(); mirror that
-  // here so synthesized shortcuts (Ctrl+A, Ctrl+C, ...) match in headless replay.
+  // ImGui derives modifier state from the dedicated ImGuiMod_* reserved key
+  // slots, which are distinct from ImGuiKey_LeftCtrl/etc. The real GLFW backend
+  // populates them via ImGui_ImplGlfw_UpdateKeyModifiers(); mirror that here so
+  // synthesized shortcuts have the same queued input edges as live input.
   io.AddKeyEvent(ImGuiMod_Ctrl, inputOverride.keyCtrl);
   io.AddKeyEvent(ImGuiMod_Shift, inputOverride.keyShift);
   io.AddKeyEvent(ImGuiMod_Alt, inputOverride.keyAlt);
@@ -270,6 +270,18 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   for (const std::uint32_t codepoint : inputOverride.inputCharacters) {
     io.AddInputCharacter(codepoint);
   }
+}
+
+void RestoreInputOverrideModifierSnapshot(const EditorWindowInputOverride& inputOverride) {
+  ImGuiIO& io = ImGui::GetIO();
+  // In the null-window replay path, NewFrame can leave these legacy fields stale
+  // even when the queued ImGuiMod_* events are present. Donner shortcut code reads
+  // io.KeyCtrl/io.KeyShift/etc.; restore only those fields and leave io.KeyMods to
+  // ImGui's processed key state so EndFrame sanity checks remain valid.
+  io.KeyCtrl = inputOverride.keyCtrl;
+  io.KeyShift = inputOverride.keyShift;
+  io.KeyAlt = inputOverride.keyAlt;
+  io.KeySuper = inputOverride.keySuper;
 }
 
 #ifdef __EMSCRIPTEN__
@@ -426,6 +438,7 @@ struct EditorWindow::WgpuState {
   wgpu::TextureUsage surfaceUsage = wgpu::TextureUsage::RenderAttachment;
   wgpu::CompositeAlphaMode alphaMode = wgpu::CompositeAlphaMode::Auto;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
+  std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
   int configuredWidth = 0;
   int configuredHeight = 0;
 };
@@ -632,6 +645,18 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     glfwTerminate();
     return;
   }
+  geode::GeodeEmbedConfig framebufferEmbedConfig = embedConfig;
+  framebufferEmbedConfig.forceSingleSampleAlphaCoverage = true;
+  wgpuState_->framebufferGeodeDevice =
+      geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
+  if (wgpuState_->framebufferGeodeDevice == nullptr) {
+    std::fprintf(stderr, "EditorWindow: framebuffer GeodeDevice::CreateFromExternal failed\n");
+    wgpuState_->surface.unconfigure();
+    glfwDestroyWindow(window_);
+    window_ = nullptr;
+    glfwTerminate();
+    return;
+  }
 #else
 #ifndef __EMSCRIPTEN__
   glfwMakeContextCurrent(window_);
@@ -752,6 +777,7 @@ EditorWindow::~EditorWindow() {
 #endif
 #ifdef DONNER_EDITOR_WGPU
   if (wgpuState_ != nullptr) {
+    wgpuState_->framebufferGeodeDevice.reset();
     wgpuState_->geodeDevice.reset();
     if (wgpuState_->surface) {
       wgpuState_->surface.unconfigure();
@@ -828,6 +854,16 @@ std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeDevice() const {
 #endif
 }
 
+#ifdef DONNER_EDITOR_WGPU
+std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeFramebufferDevice() const {
+  return wgpuState_ != nullptr ? wgpuState_->framebufferGeodeDevice : nullptr;
+}
+
+void EditorWindow::setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback) {
+  wgpuDirectRenderCallback_ = std::move(callback);
+}
+#endif
+
 void EditorWindow::pollEvents() {
   glfwPollEvents();
 }
@@ -903,6 +939,9 @@ void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride
     ApplyInputOverride(*inputOverride);
   }
   ImGui::NewFrame();
+  if (inputOverride != nullptr) {
+    RestoreInputOverrideModifierSnapshot(*inputOverride);
+  }
 }
 
 void EditorWindow::endFrame() {
@@ -1027,10 +1066,27 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     pass.get().end();
     pass.reset();
-    if (readbackBuffer) {
-      CopySurfaceTextureToReadbackBuffer(target.get(), readbackBuffer.get(), readbackWidth,
-                                         readbackHeight, readbackBytesPerRow, encoder.get());
+    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
+    if (!commands) {
+      return;
     }
+    wgpuState_->queue.submit(1, &commands.get());
+  }
+  if (wgpuDirectRenderCallback_) {
+    EditorWindowWgpuRenderTarget directTarget{
+        .texture = target.get(),
+        .framebufferSizePx = Vector2i(displayW, displayH),
+    };
+    wgpuDirectRenderCallback_(directTarget);
+  }
+  if (readbackBuffer) {
+    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
+        wgpuState_->device.createCommandEncoder());
+    if (!encoder) {
+      return;
+    }
+    CopySurfaceTextureToReadbackBuffer(target.get(), readbackBuffer.get(), readbackWidth,
+                                       readbackHeight, readbackBytesPerRow, encoder.get());
     donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
     if (!commands) {
       return;

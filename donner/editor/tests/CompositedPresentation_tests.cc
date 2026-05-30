@@ -90,11 +90,12 @@ TEST(CompositedPresentationTest, WaitingPhasesAreMutuallyExclusive) {
   EXPECT_FALSE(snapshot.waitingForChromeRefresh);
 }
 
-TEST(CompositedPresentationTest, NeedsCompositedLayerCaptureChecksCacheEntityAndCanvas) {
+TEST(CompositedPresentationTest, PureTranslationActiveDragWithMatchingCacheSuppressesCapture) {
   CompositedPresentation state;
   const SelectTool::ActiveDragPreview active{
       .entity = Entity(7),
       .translation = Vector2d(4.0, 0.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(4.0, 0.0)),
   };
 
   EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(100, 100)));
@@ -103,12 +104,93 @@ TEST(CompositedPresentationTest, NeedsCompositedLayerCaptureChecksCacheEntityAnd
   EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(100, 100)));
   EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100)))
       << "DOM version changes during drag are presented as affine texture placement.";
-  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(120, 100)));
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/3, Vector2i(120, 100)))
+      << "Canvas-size changes during active drag are presented from the existing cache; the crisp "
+         "canvas refresh happens after drag settles.";
+}
+
+TEST(CompositedPresentationTest, AffineActiveDragWithUnrepresentedCacheRequestsCapture) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
+
+  const SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(6.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
+      .dragGeneration = 8,
+  };
+
+  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100)))
+      << "Affine resize/rotate previews should opportunistically refresh the drag bitmap instead "
+         "of stretching the original elevated layer for the whole gesture.";
+}
+
+TEST(CompositedPresentationTest, MatchingAffineRepresentedPreviewSuppressesCaptureLoop) {
+  const SelectTool::ActiveDragPreview represented{
+      .entity = Entity(7),
+      .translation = Vector2d(6.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
+      .dragGeneration = 8,
+  };
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
+
+  EXPECT_FALSE(
+      state.needsCompositedLayerCapture(represented, /*currentVersion=*/4, Vector2i(100, 100)))
+      << "Once an affine drag bitmap has landed for the current transform, the scheduler must not "
+         "spin on another identical opportunistic capture.";
+}
+
+TEST(CompositedPresentationTest, ChangedAffineActiveDragRequestsNextCapture) {
+  const SelectTool::ActiveDragPreview represented{
+      .entity = Entity(7),
+      .translation = Vector2d(6.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
+      .dragGeneration = 8,
+  };
+  const SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(7.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(7.0, 2.0)) * Transform2d::Scale(1.35),
+      .dragGeneration = 8,
+  };
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
+
+  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
+      << "Continuing an affine manipulation after a previous opportunistic capture should request "
+         "the next sharper bitmap when the worker is free.";
+}
+
+TEST(CompositedPresentationTest, PureTranslationAfterAffineCaptureRequestsCrispReset) {
+  const SelectTool::ActiveDragPreview represented{
+      .entity = Entity(7),
+      .translation = Vector2d(6.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
+      .dragGeneration = 8,
+  };
+  const SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(8.0, 2.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(8.0, 2.0)),
+      .dragGeneration = 8,
+  };
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
+
+  EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
+      << "Returning from affine resize/rotate to a pure translation should not keep transforming "
+         "the last affine bitmap; capture a crisp translated layer again.";
 }
 
 TEST(CompositedPresentationTest, SelectionTriggersPrewarmWhenCacheMissing) {
   CompositedPresentation state;
-  EXPECT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(100, 100),
+  EXPECT_TRUE(state.shouldPrewarm(Entity(7), {}, /*currentVersion=*/3, Vector2i(100, 100),
                                   /*dragActive=*/false));
 }
 
@@ -116,7 +198,7 @@ TEST(CompositedPresentationTest, UpToDateCacheSuppressesPrewarm) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
 
-  EXPECT_FALSE(state.shouldPrewarm(Entity(7), /*currentVersion=*/3, Vector2i(100, 100),
+  EXPECT_FALSE(state.shouldPrewarm(Entity(7), {}, /*currentVersion=*/3, Vector2i(100, 100),
                                    /*dragActive=*/false));
 }
 
@@ -162,6 +244,31 @@ TEST(CompositedPresentationTest, ActiveDragUsesCachedRepresentedTranslation) {
   EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.x, 0.0);
   EXPECT_DOUBLE_EQ(state.presentationPreview(active)->translation.y, 0.0);
   EXPECT_TRUE(Snapshot(state).hasCachedTextures);
+}
+
+TEST(CompositedPresentationTest, ActiveDragKeepsGroupedSelectionPrewarmEntities) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100),
+                           SelectTool::ActiveDragPreview{
+                               .entity = Entity(7),
+                               .extraEntities = {Entity(8)},
+                           });
+
+  SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .extraEntities = {Entity(8)},
+      .translation = Vector2d(4.0, 0.0),
+      .dragGeneration = 9,
+  };
+  const std::optional<SelectTool::ActiveDragPreview> displayed = state.presentationPreview(active);
+
+  ASSERT_TRUE(displayed.has_value());
+  EXPECT_EQ(displayed->entity, Entity(7));
+  EXPECT_EQ(displayed->extraEntities, std::vector<Entity>{Entity(8)})
+      << "Selection-prewarmed grouped tiles must remain tied to the active drag group so the "
+         "first live drag frames translate every unbundled component.";
+  EXPECT_EQ(displayed->dragGeneration, active.dragGeneration);
+  EXPECT_EQ(displayed->translation, Vector2d::Zero());
 }
 
 TEST(CompositedPresentationTest, ActiveDragUsesLandedRepresentedTranslation) {
@@ -392,7 +499,7 @@ TEST(CompositedPresentationTest, SettlingCompletionTriggersPrewarmOnNextSelectio
   // The cache remains live after settling, but its older version still
   // triggers prewarm for the current document version.
   state.noteFullRenderLanded(/*landedVersion=*/4);
-  EXPECT_TRUE(state.shouldPrewarm(Entity(7), /*currentVersion=*/4, Vector2i(100, 100),
+  EXPECT_TRUE(state.shouldPrewarm(Entity(7), {}, /*currentVersion=*/4, Vector2i(100, 100),
                                   /*dragActive=*/false));
 }
 
@@ -504,7 +611,7 @@ TEST(CompositedPresentationTest, ClearSettlingIfSelectionChangedKeepsTexturesWit
   EXPECT_TRUE(Snapshot(state).hasCachedTextures);
   EXPECT_EQ(Snapshot(state).cachedEntity, Entity(7));
 
-  EXPECT_TRUE(state.shouldPrewarm(Entity(9), /*currentVersion=*/3, Vector2i(100, 100),
+  EXPECT_TRUE(state.shouldPrewarm(Entity(9), {}, /*currentVersion=*/3, Vector2i(100, 100),
                                   /*dragActive=*/false));
 }
 

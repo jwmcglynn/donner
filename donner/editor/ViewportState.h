@@ -29,9 +29,31 @@
 /// window.
 
 #include "donner/base/Box.h"
+#include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 
 namespace donner::editor {
+
+/// Raster target derived from an editor viewport.
+///
+/// `semanticCanvasSizePx` is the canvas size used for SVG layout / render-tree
+/// preparation. `outputSizePx` is the bitmap or texture size actually rendered
+/// for presentation. At low zoom they are the same full-document raster. At
+/// high zoom, `outputSizePx` is capped to the pane plus margin and
+/// `outputFromDocument` maps the visible document window into that smaller
+/// surface.
+struct EditorRasterViewport {
+  /// Document-space rectangle covered by the output raster.
+  Box2d documentRect;
+  /// Output raster size in device pixels.
+  Vector2i outputSizePx = Vector2i::Zero();
+  /// Full-document canvas size in device pixels used for SVG layout semantics.
+  Vector2i semanticCanvasSizePx = Vector2i::Zero();
+  /// Transform from document/viewBox coordinates to output raster pixels.
+  Transform2d outputFromDocument;
+  /// True when the output raster covers only the pane window plus margin.
+  bool viewportBounded = false;
+};
 
 /// All viewport state for a single frame of the render pane. Plain
 /// data, side-effect-free, copyable, ~80 bytes.
@@ -42,9 +64,19 @@ struct ViewportState {
   static constexpr double kMaxZoom = 32.0;
   /// Hard cap on the rasterized canvas dimension on either axis. A
   /// 32x zoom on a 4K display would otherwise rasterize a multi-GB
-  /// bitmap; this clamp keeps us in a safe place at the cost of
-  /// transient pixelation when the user zooms very far in.
+  /// bitmap; this clamp keeps us in a safe place.
   static constexpr int kMaxCanvasDim = 8192;
+  /// Extra logical pixels around the pane that may be included in a
+  /// high-zoom raster target. This keeps small pans from immediately
+  /// needing a larger target while avoiding whole-document rasters at
+  /// extreme zoom.
+  static constexpr int kHighZoomRasterMarginScreenPx = 128;
+  /// Minimum logical-pixel overdraw margin for selected-layer prewarm rasters.
+  static constexpr int kSelectedPrewarmMinOverdrawScreenPx = 256;
+  /// Per-axis pane fraction added on each side for selected-layer prewarm overdraw.
+  static constexpr double kSelectedPrewarmOverdrawPaneFraction = 0.25;
+  /// Maximum output dimension for low-resolution full-document overview infill.
+  static constexpr int kOverviewInfillMaxCanvasDim = 1536;
 
   // ---------------------------------------------------------------------------
   // Inputs (set once per frame from user state).
@@ -104,10 +136,25 @@ struct ViewportState {
   /// regardless of texture resolution.
   [[nodiscard]] Box2d imageScreenRect() const { return documentToScreen(documentViewBox); }
 
-  /// Canvas size (in device pixels) the SVG renderer should produce
-  /// for the current zoom and DPR. Equal to
-  /// `documentViewBox.size() * zoom * devicePixelRatio`, clamped to
-  /// `[1, kMaxCanvasDim]` per axis.
+  /// Raster viewport the SVG renderer should produce for this editor view.
+  [[nodiscard]] EditorRasterViewport rasterViewport() const;
+
+  /// Raster viewport for idle selected-layer prewarms.
+  ///
+  /// This matches \ref rasterViewport at normal zooms. When the base raster is viewport-bounded,
+  /// the prewarm viewport adds conservative screen-space overdraw so short zoom-outs do not expose
+  /// unrendered edges before the settled crisp render lands.
+  [[nodiscard]] EditorRasterViewport selectedPrewarmRasterViewport() const;
+
+  /// Low-resolution full-document raster used underneath viewport-bounded tiles.
+  ///
+  /// This is intentionally not viewport-bounded: it trades crispness for full-document coverage so
+  /// zooming out does not expose transparent/checkerboard gaps while the crisp bounded render is
+  /// debounced.
+  [[nodiscard]] EditorRasterViewport overviewInfillRasterViewport() const;
+
+  /// Output canvas size (in device pixels) the SVG renderer should produce.
+  /// Equivalent to `rasterViewport().outputSizePx`.
   [[nodiscard]] Vector2i desiredCanvasSize() const;
 
   // ---------------------------------------------------------------------------

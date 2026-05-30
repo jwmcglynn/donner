@@ -90,16 +90,28 @@ protected:
     return *selection == elementById(id);
   }
 
+  void quickClick(const Vector2d& point) {
+    tool.onMouseDown(app, point, MouseModifiers{});
+    tool.onMouseUp(app, point);
+  }
+
+  void drag(const Vector2d& start, const Vector2d& end) {
+    tool.onMouseDown(app, start, MouseModifiers{});
+    tool.onMouseMove(app, end, /*buttonHeld=*/true);
+    tool.onMouseUp(app, end);
+  }
+
   EditorApp app;
   SelectTool tool;
 };
 
 TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
 
   EXPECT_TRUE(app.hasSelection());
   EXPECT_TRUE(selectionIs("#r1"));
-  EXPECT_TRUE(tool.isDragging());
+  EXPECT_FALSE(tool.isDragging());
 }
 
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
@@ -113,10 +125,11 @@ TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
 
 TEST_F(SelectToolTest, ClickOnDifferentElementSwitchesSelection) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(15.0, 15.0));
   ASSERT_TRUE(selectionIs("#r1"));
 
-  tool.onMouseUp(app, Vector2d(15.0, 15.0));
   tool.onMouseDown(app, Vector2d(110.0, 110.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(110.0, 110.0));
 
   EXPECT_TRUE(selectionIs("#r2"));
 }
@@ -130,14 +143,13 @@ TEST_F(SelectToolTest, ClickOnDifferentElementSwitchesSelection) {
 TEST_F(SelectToolTest, ClickInsideFilterGroupSelectsTheGroupNotSiblings) {
   loadSvg(kCompositeSiblingSvg);
 
-  tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
+  quickClick(Vector2d(12.0, 20.0));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
   EXPECT_EQ(app.selectedElements()[0].id(), "anchor")
       << "elevation lands on the filter-g, single-element selection";
 
-  tool.onMouseMove(app, Vector2d(42.0, 50.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(42.0, 50.0));
+  drag(Vector2d(12.0, 20.0), Vector2d(42.0, 50.0));
   ASSERT_TRUE(app.flushFrame());
 
   EXPECT_DOUBLE_EQ(transformOf("#anchor").data[4], 30.0);
@@ -152,14 +164,13 @@ TEST_F(SelectToolTest, ClickInsideFilterGroupSelectsTheGroupNotSiblings) {
 TEST_F(SelectToolTest, NonCompositingGroupSelectsLeafNotGroup) {
   loadSvg(kPlainGroupSiblingSvg);
 
-  tool.onMouseDown(app, Vector2d(12.0, 20.0), MouseModifiers{});
+  quickClick(Vector2d(12.0, 20.0));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
   EXPECT_EQ(app.selectedElements()[0].id(), "plain_leaf")
       << "plain `<g>` is not a compositing object — select the leaf path";
 
-  tool.onMouseMove(app, Vector2d(32.0, 40.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(32.0, 40.0));
+  drag(Vector2d(12.0, 20.0), Vector2d(32.0, 40.0));
   ASSERT_TRUE(app.flushFrame());
 
   EXPECT_DOUBLE_EQ(transformOf("#plain_leaf").data[4], 20.0);
@@ -169,9 +180,10 @@ TEST_F(SelectToolTest, NonCompositingGroupSelectsLeafNotGroup) {
 }
 
 TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  quickClick(Vector2d(15.0, 15.0));
+  ASSERT_TRUE(selectionIs("#r1"));
+
+  drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
 
   ASSERT_TRUE(app.flushFrame());
 
@@ -183,6 +195,7 @@ TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
 }
 
 TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
+  app.setSelection(elementById("#r1"));
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
 
@@ -199,6 +212,7 @@ TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
 }
 
 TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
+  app.setSelection(elementById("#r1"));
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(20.0, 15.0), /*buttonHeld=*/true);
   tool.onMouseMove(app, Vector2d(30.0, 20.0), /*buttonHeld=*/true);
@@ -239,6 +253,7 @@ TEST_F(SelectToolTest, MoveWithoutDownIsIgnored) {
 
 TEST_F(SelectToolTest, MissedClickEndsAnyPriorDragSilently) {
   // Drag in progress on r1...
+  app.setSelection(elementById("#r1"));
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   EXPECT_TRUE(tool.isDragging());
 
@@ -249,9 +264,8 @@ TEST_F(SelectToolTest, MissedClickEndsAnyPriorDragSilently) {
 }
 
 TEST_F(SelectToolTest, DragWithMoveRecordsUndoEntry) {
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  app.setSelection(elementById("#r1"));
+  drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
 
   EXPECT_EQ(app.undoTimeline().entryCount(), 1u);
   EXPECT_TRUE(app.canUndo());
@@ -269,9 +283,8 @@ TEST_F(SelectToolTest, ClickWithoutDragDoesNotRecordUndo) {
 
 TEST_F(SelectToolTest, UndoRestoresElementToPreDragPosition) {
   // Drag r1 by (25, 20) and flush.
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  app.setSelection(elementById("#r1"));
+  drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
   ASSERT_TRUE(app.flushFrame());
 
   // Undo through EditorApp (which routes through the command queue).
@@ -285,9 +298,8 @@ TEST_F(SelectToolTest, UndoRestoresElementToPreDragPosition) {
 }
 
 TEST_F(SelectToolTest, UndoOfUndoReappliesTheDrag) {
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  app.setSelection(elementById("#r1"));
+  drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
   ASSERT_TRUE(app.flushFrame());
 
   // Undo the drag.
@@ -306,6 +318,7 @@ TEST_F(SelectToolTest, UndoOfUndoReappliesTheDrag) {
 }
 
 TEST_F(SelectToolTest, MultiStepDragCollapsesToSingleUndoEntry) {
+  app.setSelection(elementById("#r1"));
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(20.0, 15.0), /*buttonHeld=*/true);
   tool.onMouseMove(app, Vector2d(30.0, 20.0), /*buttonHeld=*/true);
@@ -317,9 +330,8 @@ TEST_F(SelectToolTest, MultiStepDragCollapsesToSingleUndoEntry) {
 }
 
 TEST_F(SelectToolTest, RedoAfterUndoRestoresPostDragState) {
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  app.setSelection(elementById("#r1"));
+  drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
   ASSERT_TRUE(app.flushFrame());
 
   app.undo();
@@ -337,9 +349,8 @@ TEST_F(SelectToolTest, RedoAfterUndoRestoresPostDragState) {
 
 TEST_F(SelectToolTest, UndoRedoCyclesStayConsistent) {
   // Drag by (25, 20).
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  app.setSelection(elementById("#r1"));
+  drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
   ASSERT_TRUE(app.flushFrame());
 
   // Three undo/redo cycles — each pair should leave the element at its
@@ -362,9 +373,8 @@ TEST_F(SelectToolTest, RedoWithNothingToRedoIsNoOp) {
 }
 
 TEST_F(SelectToolTest, RedoWithoutPriorUndoDoesNotUndoCompletedDrag) {
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  app.setSelection(elementById("#r1"));
+  drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
   ASSERT_TRUE(app.flushFrame());
   ASSERT_FALSE(app.canRedo());
 
@@ -376,15 +386,13 @@ TEST_F(SelectToolTest, RedoWithoutPriorUndoDoesNotUndoCompletedDrag) {
 
 TEST_F(SelectToolTest, TwoDifferentDragsBothUndoableInOrder) {
   // Drag r1 by (25, 20).
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(40.0, 35.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(40.0, 35.0));
+  app.setSelection(elementById("#r1"));
+  drag(Vector2d(15.0, 15.0), Vector2d(40.0, 35.0));
   ASSERT_TRUE(app.flushFrame());
 
   // Drag r2 by (10, 5).
-  tool.onMouseDown(app, Vector2d(120.0, 120.0), MouseModifiers{});
-  tool.onMouseMove(app, Vector2d(130.0, 125.0), /*buttonHeld=*/true);
-  tool.onMouseUp(app, Vector2d(130.0, 125.0));
+  app.setSelection(elementById("#r2"));
+  drag(Vector2d(120.0, 120.0), Vector2d(130.0, 125.0));
   ASSERT_TRUE(app.flushFrame());
 
   EXPECT_EQ(app.undoTimeline().entryCount(), 2u);
@@ -465,6 +473,82 @@ TEST_F(SelectToolTest, ClickOnEmptySpaceStartsMarquee) {
   const Box2d initialRect = *tool.marqueeRect();
   EXPECT_DOUBLE_EQ(initialRect.width(), 0.0);
   EXPECT_DOUBLE_EQ(initialRect.height(), 0.0);
+}
+
+TEST_F(SelectToolTest, BeginMarqueeStartsDragSelectWithoutSelectingInitialHit) {
+  loadSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+                  <rect id="background" x="0" y="0" width="200" height="200" fill="white"/>
+                  <rect id="target" x="70" y="70" width="20" height="20" fill="red"/>
+                </svg>)svg");
+
+  tool.beginMarquee(app, Vector2d(75.0, 75.0), /*additive=*/false);
+  EXPECT_FALSE(app.hasSelection())
+      << "Hold-to-marquee starts from the shell without selecting the element under the press.";
+  EXPECT_FALSE(tool.isDragging());
+  EXPECT_TRUE(tool.isMarqueeing());
+
+  tool.onMouseMove(app, Vector2d(100.0, 100.0), /*buttonHeld=*/true);
+
+  EXPECT_TRUE(tool.isMarqueeing());
+  EXPECT_FALSE(tool.isDragging());
+  ASSERT_TRUE(tool.marqueeRect().has_value());
+  EXPECT_EQ(tool.marqueeRect()->topLeft, Vector2d(75.0, 75.0));
+  EXPECT_EQ(tool.marqueeRect()->bottomRight, Vector2d(100.0, 100.0));
+}
+
+TEST_F(SelectToolTest, ClickHitsCurrentSelectionIncludesSelectedDescendants) {
+  loadSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+                  <g id="group">
+                    <rect id="child" x="10" y="10" width="20" height="20" fill="red"/>
+                  </g>
+                  <rect id="other" x="70" y="70" width="20" height="20" fill="blue"/>
+                </svg>)svg");
+
+  app.setSelection(elementById("#group"));
+
+  EXPECT_TRUE(tool.clickHitsCurrentSelection(app, Vector2d(20.0, 20.0)))
+      << "The shell should dispatch selected-parent hits to the normal drag path, not marquee.";
+  EXPECT_FALSE(tool.clickHitsCurrentSelection(app, Vector2d(80.0, 80.0)))
+      << "Unselected element hits remain eligible for the delayed marquee path.";
+}
+
+TEST_F(SelectToolTest, QuickClickOnUnselectedBackgroundStillSelectsIt) {
+  loadSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+                  <rect id="background" x="0" y="0" width="200" height="200" fill="white"/>
+                </svg>)svg");
+
+  tool.onMouseDown(app, Vector2d(5.0, 5.0), MouseModifiers{});
+  tool.onMouseUp(app, Vector2d(5.0, 5.0));
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "background");
+}
+
+TEST_F(SelectToolTest, MarqueeUsesShapeIntersectionNotShapeBounds) {
+  loadSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+                  <path id="triangle" d="M 10 10 L 100 10 L 10 100 Z" fill="red"/>
+                </svg>)svg");
+
+  tool.onMouseDown(app, Vector2d(80.0, 80.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(90.0, 90.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(90.0, 90.0));
+
+  EXPECT_TRUE(app.selectedElements().empty())
+      << "The marquee overlaps the triangle AABB but not the filled triangle.";
+}
+
+TEST_F(SelectToolTest, MarqueeDoesNotSelectShapeThatContainsDragBox) {
+  loadSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+                  <rect id="background" x="0" y="0" width="200" height="200" fill="white"/>
+                  <rect id="target" x="70" y="70" width="20" height="20" fill="red"/>
+                </svg>)svg");
+
+  tool.beginMarquee(app, Vector2d(65.0, 65.0), /*additive=*/false);
+  tool.onMouseMove(app, Vector2d(95.0, 95.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(95.0, 95.0));
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "target");
 }
 
 TEST_F(SelectToolTest, MarqueeGrowsToCoverDraggedRect) {
@@ -717,20 +801,25 @@ TEST_F(SelectToolTest, MultiSelectDragProducesWritebackForAllElements) {
   EXPECT_EQ(writeback->extras.size(), 1u) << "one extra writeback for r2";
 }
 
-TEST_F(SelectToolTest, MultiSelectDragDoesNotUseCompositedPreview) {
-  // When compositing is enabled but the drag is multi-element, the preview
-  // path falls back to DOM mutation — the drag-preview transport models only
-  // a single moving layer.
+TEST_F(SelectToolTest, MultiSelectDragUsesGroupedCompositedPreview) {
+  // Multi-element drags still use one shared document-space transform. Exposing every selected
+  // entity in the preview lets the presenter offset cached tiles and overlay chrome in lockstep
+  // instead of forcing every pointer frame through a full DOM/render update.
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
 
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(45.0, 45.0), /*buttonHeld=*/true);
   app.flushFrame();
 
-  EXPECT_FALSE(tool.activeDragPreview().has_value())
-      << "multi-select drag must not emit a composited preview (would misrepresent the group)";
+  const auto preview = tool.activeDragPreview();
+  ASSERT_TRUE(preview.has_value());
+  EXPECT_EQ(preview->entity, elementById("#r1").unsafeEntityHandle().entity());
+  ASSERT_EQ(preview->extraEntities.size(), 1u);
+  EXPECT_EQ(preview->extraEntities.front(), elementById("#r2").unsafeEntityHandle().entity());
+  EXPECT_EQ(preview->translation, Vector2d(30.0, 30.0));
 
-  // Elements move via DOM mutation (not the composited preview path).
+  // The DOM write still lands; the preview exists so presentation can stay responsive while async
+  // renders catch up.
   EXPECT_NE(transformOf("#r1").data[4], 0.0) << "r1 moved via mutation path";
 
   tool.onMouseUp(app, Vector2d(45.0, 45.0));
@@ -766,6 +855,7 @@ TEST_F(SelectToolTest, SingleSelectDragWithCompositingUsesPreview) {
 // against that element, producing a stray undo entry they couldn't
 // correlate to any visible selection on screen.
 TEST_F(SelectToolTest, SelectionClearedDuringDragDoesNotCrashOrGhostWriteback) {
+  app.setSelection(elementById("#r1"));
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   ASSERT_TRUE(tool.isDragging());
   ASSERT_TRUE(selectionIs("#r1"));
@@ -811,6 +901,7 @@ TEST_F(SelectToolTest, SelectionClearedDuringDragDoesNotCrashOrGhostWriteback) {
 // that invariant: a resize-in-the-middle drag produces the same final
 // transform as a resize-at-the-start drag.
 TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
+  app.setSelection(elementById("#r1"));
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   // First few drag frames at the initial canvas size.
   tool.onMouseMove(app, Vector2d(25.0, 25.0), /*buttonHeld=*/true);
@@ -850,10 +941,8 @@ TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
 // can re-grab a selected element even while a render is in flight.
 TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBounds) {
   // Establish a single-element selection via the normal click path.
-  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  quickClick(Vector2d(15.0, 15.0));
   ASSERT_TRUE(selectionIs("#r1"));
-  ASSERT_TRUE(tool.isDragging());
-  tool.onMouseUp(app, Vector2d(15.0, 15.0));
   ASSERT_FALSE(tool.isDragging());
 
   // Click inside the same element's bounds (still selected). The
@@ -869,7 +958,21 @@ TEST_F(SelectToolTest, TryRedragOnSelectedStartsDragWhenClickIsInsideSelectedBou
   EXPECT_TRUE(selectionIs("#r1"));
 }
 
+TEST_F(SelectToolTest, TryRedragOnSelectedAllowsScreenPixelRoundingSlop) {
+  app.setSelection(elementById("#r1"));
+  const auto bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+
+  MouseModifiers modifiers;
+  modifiers.pixelsPerDocUnit = 10.0;
+
+  EXPECT_TRUE(tool.tryStartRedragOnSelected(app, Vector2d(20.0, 9.9), modifiers, bounds))
+      << "high-zoom screen-to-document rounding should not defer a selected-object re-drag";
+  EXPECT_TRUE(tool.isDragging());
+}
+
 TEST_F(SelectToolTest, DragPreviewGenerationChangesForRedragOnSameSelection) {
+  app.setSelection(elementById("#r1"));
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   ASSERT_TRUE(selectionIs("#r1"));
   ASSERT_TRUE(tool.activeDragPreview().has_value());
@@ -951,9 +1054,8 @@ TEST_F(SelectToolTest, TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup) 
   // Pick anchor via the normal hitTest path first to establish
   // selection. anchor_leaf is at (10,10)..(30,30); a click squarely
   // inside the rect selects #anchor.
-  tool.onMouseDown(app, Vector2d(15.0, 20.0), MouseModifiers{});
+  quickClick(Vector2d(15.0, 20.0));
   ASSERT_TRUE(selectionIs("#anchor"));
-  tool.onMouseUp(app, Vector2d(15.0, 20.0));
 
   // Click inside #anchor's snapshotted world bounds. The fast path
   // re-drags #anchor without consulting `editor.hitTest`. Without it,
@@ -998,6 +1100,7 @@ TEST_F(SelectToolTest, RedragFastPathDoesNotStealClickFromFrontOverlappingObject
   EXPECT_FALSE(tool.isDragging());
 
   tool.onMouseDown(app, overlapPoint, MouseModifiers{});
+  tool.onMouseUp(app, overlapPoint);
   EXPECT_TRUE(selectionIs("#front"));
 }
 

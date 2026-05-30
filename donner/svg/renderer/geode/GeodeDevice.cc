@@ -45,19 +45,19 @@ struct GeodeDevice::Impl {
   // comment block on `GeodeDevice::dummyPatternTexture()`. Created
   // once at `CreateHeadless` time so they never count against
   // per-frame `textureCreates` ceilings.
-  wgpu::Texture dummyPatternTexture;
-  wgpu::TextureView dummyPatternTextureView;
-  wgpu::Sampler dummyPatternSampler;
-  wgpu::Texture dummyClipMaskTexture;
-  wgpu::TextureView dummyClipMaskTextureView;
-  wgpu::Sampler dummyClipMaskSampler;
+  ScopedWgpuHandle<wgpu::Texture> dummyPatternTexture;
+  ScopedWgpuHandle<wgpu::TextureView> dummyPatternTextureView;
+  ScopedWgpuHandle<wgpu::Sampler> dummyPatternSampler;
+  ScopedWgpuHandle<wgpu::Texture> dummyClipMaskTexture;
+  ScopedWgpuHandle<wgpu::TextureView> dummyClipMaskTextureView;
+  ScopedWgpuHandle<wgpu::Sampler> dummyClipMaskSampler;
 
   // M6 Bullet 2: 1-element instance-transform buffer bound by every
   // non-instanced solid fill. Uploaded once at CreateHeadless time,
   // never modified. Layout matches the WGSL `InstanceTransform`
   // struct: two vec4f rows carrying the identity affine
   // `{(1,0,0,0), (0,1,0,0)}`.
-  wgpu::Buffer identityInstanceTransformBuffer;
+  ScopedWgpuHandle<wgpu::Buffer> identityInstanceTransformBuffer;
 
   // Shared render / compute pipelines. Constructed once per GeodeDevice
   // in `initSharedPipelines` — see the public `pipeline()` / … / `filterEngine()`
@@ -199,25 +199,25 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
 }
 
 const wgpu::Texture& GeodeDevice::dummyPatternTexture() const {
-  return impl_->dummyPatternTexture;
+  return impl_->dummyPatternTexture.get();
 }
 const wgpu::TextureView& GeodeDevice::dummyPatternTextureView() const {
-  return impl_->dummyPatternTextureView;
+  return impl_->dummyPatternTextureView.get();
 }
 const wgpu::Sampler& GeodeDevice::dummyPatternSampler() const {
-  return impl_->dummyPatternSampler;
+  return impl_->dummyPatternSampler.get();
 }
 const wgpu::Texture& GeodeDevice::dummyClipMaskTexture() const {
-  return impl_->dummyClipMaskTexture;
+  return impl_->dummyClipMaskTexture.get();
 }
 const wgpu::TextureView& GeodeDevice::dummyClipMaskTextureView() const {
-  return impl_->dummyClipMaskTextureView;
+  return impl_->dummyClipMaskTextureView.get();
 }
 const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
-  return impl_->dummyClipMaskSampler;
+  return impl_->dummyClipMaskSampler.get();
 }
 const wgpu::Buffer& GeodeDevice::identityInstanceTransformBuffer() const {
-  return impl_->identityInstanceTransformBuffer;
+  return impl_->identityInstanceTransformBuffer.get();
 }
 
 GeodePipeline& GeodeDevice::pipeline() const {
@@ -273,6 +273,9 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
       wgpuAdapterInfoFreeMembers(info);
     }
   }
+  if (config.forceSingleSampleAlphaCoverage) {
+    result->useAlphaCoverageAA_ = true;
+  }
 
   result->supportsTimestamps_ = config.device.hasFeature(wgpu::FeatureName::TimestampQuery);
 
@@ -296,17 +299,17 @@ void GeodeDevice::initSharedResources() {
     td.mipLevelCount = 1;
     td.sampleCount = 1;
     td.dimension = wgpu::TextureDimension::_2D;
-    impl_->dummyPatternTexture = device_.createTexture(td);
+    impl_->dummyPatternTexture.reset(device_.createTexture(td));
 
     const uint8_t pixel[4] = {0, 0, 0, 255};
     wgpu::TexelCopyTextureInfo dst = {};
-    dst.texture = impl_->dummyPatternTexture;
+    dst.texture = impl_->dummyPatternTexture.get();
     wgpu::TexelCopyBufferLayout layout = {};
     layout.bytesPerRow = 4;
     layout.rowsPerImage = 1;
     wgpu::Extent3D extent = {1u, 1u, 1u};
     queue_.writeTexture(dst, pixel, sizeof(pixel), layout, extent);
-    impl_->dummyPatternTextureView = impl_->dummyPatternTexture.createView();
+    impl_->dummyPatternTextureView.reset(impl_->dummyPatternTexture.get().createView());
 
     wgpu::SamplerDescriptor sd{wgpu::Default};
     sd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyPatternSampler"}};
@@ -315,7 +318,7 @@ void GeodeDevice::initSharedResources() {
     sd.minFilter = wgpu::FilterMode::Linear;
     sd.magFilter = wgpu::FilterMode::Linear;
     sd.maxAnisotropy = 1;
-    impl_->dummyPatternSampler = device_.createSampler(sd);
+    impl_->dummyPatternSampler.reset(device_.createSampler(sd));
   }
 
   {
@@ -327,17 +330,17 @@ void GeodeDevice::initSharedResources() {
     md.mipLevelCount = 1;
     md.sampleCount = 1;
     md.dimension = wgpu::TextureDimension::_2D;
-    impl_->dummyClipMaskTexture = device_.createTexture(md);
+    impl_->dummyClipMaskTexture.reset(device_.createTexture(md));
 
     const uint8_t mpixel[4] = {0xFF, 0xFF, 0xFF, 0xFF};
     wgpu::TexelCopyTextureInfo mdst = {};
-    mdst.texture = impl_->dummyClipMaskTexture;
+    mdst.texture = impl_->dummyClipMaskTexture.get();
     wgpu::TexelCopyBufferLayout mlayout = {};
     mlayout.bytesPerRow = 4;
     mlayout.rowsPerImage = 1;
     wgpu::Extent3D mextent = {1u, 1u, 1u};
     queue_.writeTexture(mdst, mpixel, sizeof(mpixel), mlayout, mextent);
-    impl_->dummyClipMaskTextureView = impl_->dummyClipMaskTexture.createView();
+    impl_->dummyClipMaskTextureView.reset(impl_->dummyClipMaskTexture.get().createView());
 
     wgpu::SamplerDescriptor msd{wgpu::Default};
     msd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyClipMaskSampler"}};
@@ -346,7 +349,7 @@ void GeodeDevice::initSharedResources() {
     msd.minFilter = wgpu::FilterMode::Linear;
     msd.magFilter = wgpu::FilterMode::Linear;
     msd.maxAnisotropy = 1;
-    impl_->dummyClipMaskSampler = device_.createSampler(msd);
+    impl_->dummyClipMaskSampler.reset(device_.createSampler(msd));
   }
 
   {
@@ -357,8 +360,8 @@ void GeodeDevice::initSharedResources() {
     bd.label = wgpu::StringView{std::string_view{"GeodeDeviceIdentityInstanceTransform"}};
     bd.size = sizeof(identity);
     bd.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-    impl_->identityInstanceTransformBuffer = device_.createBuffer(bd);
-    queue_.writeBuffer(impl_->identityInstanceTransformBuffer, 0, identity, sizeof(identity));
+    impl_->identityInstanceTransformBuffer.reset(device_.createBuffer(bd));
+    queue_.writeBuffer(impl_->identityInstanceTransformBuffer.get(), 0, identity, sizeof(identity));
   }
 }
 

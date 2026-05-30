@@ -153,12 +153,15 @@ void RenderPathOperationIcon(PathOperationKind operation, ImVec2 min, ImVec2 max
   const float strokeWidth = 1.6f;
 
   switch (operation) {
-    case PathOperationKind::Union:
-      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddLine(ImVec2(a0.x, b0.y), ImVec2(b0.x, b0.y), iconColor, strokeWidth);
-      drawList->AddLine(ImVec2(b0.x, a0.y), ImVec2(b0.x, b0.y), iconColor, strokeWidth);
+    case PathOperationKind::Union: {
+      const std::array<ImVec2, 8> unionOutline = {
+          a0, ImVec2(a1.x, a0.y), ImVec2(a1.x, b0.y), ImVec2(b1.x, b0.y),
+          b1, ImVec2(b0.x, b1.y), ImVec2(b0.x, a1.y), ImVec2(a0.x, a1.y),
+      };
+      drawList->AddPolyline(unionOutline.data(), static_cast<int>(unionOutline.size()), iconColor,
+                            ImDrawFlags_Closed, strokeWidth);
       break;
+    }
     case PathOperationKind::Intersect:
       drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
       drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);

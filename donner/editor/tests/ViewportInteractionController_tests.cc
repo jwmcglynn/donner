@@ -16,6 +16,113 @@ TEST(ViewportInteractionControllerTest, FrameHistoryTracksLatestAndMax) {
   EXPECT_FLOAT_EQ(controller.frameHistory().max(), 24.0f);
 }
 
+TEST(ViewportInteractionControllerTest, FrameHistoryTracksProfilerCostForLatestFrame) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  FrameCostBreakdown cost;
+  cost.overlay.captureMs = 1.25;
+  cost.overlay.drawMs = 2.5;
+  cost.overlay.snapshotMs = 0.75;
+  cost.overlay.uploadMs = 0.5;
+  cost.compositedUpload.uploadMs = 1.0;
+  cost.compositedRender.immediateMs = 1.75;
+  cost.compositedRender.cachedMs = 2.25;
+  cost.sourceRopes.layoutMs = 0.25;
+  cost.sourceRopes.updateMs = 0.125;
+  cost.sourceRopes.drawMs = 0.375;
+  controller.frameHistory().setLatestFrameCost(cost);
+
+  const std::size_t latestIdx =
+      (controller.frameHistory().writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  const FrameProfilerSample& profiler = controller.frameHistory().profiler[latestIdx];
+  EXPECT_FLOAT_EQ(profiler.overlayCaptureMs, 1.25f);
+  EXPECT_FLOAT_EQ(profiler.overlayDrawMs, 2.5f);
+  EXPECT_FLOAT_EQ(profiler.overlaySnapshotMs, 0.75f);
+  EXPECT_FLOAT_EQ(profiler.overlayUploadMs, 0.5f);
+  EXPECT_FLOAT_EQ(profiler.compositedUploadMs, 1.0f);
+  EXPECT_FLOAT_EQ(profiler.compositedRenderImmediateMs, 1.75f);
+  EXPECT_FLOAT_EQ(profiler.compositedRenderCachedMs, 2.25f);
+  EXPECT_FLOAT_EQ(profiler.sourceRopeLayoutMs, 0.25f);
+  EXPECT_FLOAT_EQ(profiler.sourceRopeUpdateMs, 0.125f);
+  EXPECT_FLOAT_EQ(profiler.sourceRopeDrawMs, 0.375f);
+  EXPECT_FLOAT_EQ(profiler.totalProfiledMs(), 10.75f);
+}
+
+TEST(ViewportInteractionControllerTest, NewFrameClearsProfilerCostSlot) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  FrameCostBreakdown cost;
+  cost.overlay.captureMs = 1.0;
+  controller.frameHistory().setLatestFrameCost(cost);
+  controller.noteFrameDelta(17.0f);
+
+  const std::size_t latestIdx =
+      (controller.frameHistory().writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  EXPECT_FLOAT_EQ(controller.frameHistory().profiler[latestIdx].totalProfiledMs(), 0.0f);
+}
+
+TEST(ViewportInteractionControllerTest, FrameHistoryTracksPresentationMemoryForLatestFrame) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  const FrameMemorySample sample{
+      .overlayBytes = 1u,
+      .activeTileBytes = 2u,
+      .overviewTileBytes = 3u,
+      .retiredBytes = 4u,
+      .totalTrackedBytes = 10u,
+      .peakTrackedBytes = 12u,
+      .wgpuLifetimeTextureCreates = 20u,
+      .wgpuLifetimeBufferCreates = 30u,
+  };
+  controller.frameHistory().setLatestMemorySample(sample);
+
+  const std::size_t latestIdx =
+      (controller.frameHistory().writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].overlayBytes, 1u);
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].activeTileBytes, 2u);
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].overviewTileBytes, 3u);
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].retiredBytes, 4u);
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].totalTrackedBytes, 10u);
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].peakTrackedBytes, 12u);
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].wgpuLifetimeTextureCreates, 20u);
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].wgpuLifetimeBufferCreates, 30u);
+}
+
+TEST(ViewportInteractionControllerTest, NewFrameClearsPresentationMemorySlot) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  controller.frameHistory().setLatestMemorySample(FrameMemorySample{
+      .totalTrackedBytes = 10u,
+      .peakTrackedBytes = 12u,
+  });
+  controller.noteFrameDelta(17.0f);
+
+  const std::size_t latestIdx =
+      (controller.frameHistory().writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].totalTrackedBytes, 0u);
+  EXPECT_EQ(controller.frameHistory().memory[latestIdx].peakTrackedBytes, 0u);
+}
+
+TEST(ViewportInteractionControllerTest, LatestNonZeroMemorySampleSkipsFreshlyClearedSlot) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  controller.frameHistory().setLatestMemorySample(FrameMemorySample{
+      .totalTrackedBytes = 10u,
+      .peakTrackedBytes = 12u,
+  });
+  controller.noteFrameDelta(17.0f);
+
+  const FrameMemorySample latest = controller.frameHistory().latestNonZeroMemorySample();
+
+  EXPECT_EQ(latest.totalTrackedBytes, 10u);
+  EXPECT_EQ(latest.peakTrackedBytes, 12u);
+}
+
 TEST(ViewportInteractionControllerTest, ApplyZoomUsesViewportCenterMath) {
   ViewportInteractionController controller;
   controller.viewport().paneOrigin = Vector2d::Zero();

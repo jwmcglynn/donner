@@ -8,12 +8,16 @@
 #include <vector>
 
 #include "donner/base/FormatNumber.h"
+#include "donner/base/PathOps.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/core/Stroke.h"
+#include "donner/svg/properties/PaintServer.h"
 
 namespace donner::editor {
 
@@ -27,6 +31,151 @@ bool BoxesIntersect(const Box2d& a, const Box2d& b) {
          a.topLeft.y <= b.bottomRight.y && a.bottomRight.y >= b.topLeft.y;
 }
 
+Path RectPath(const Box2d& box) {
+  return PathBuilder()
+      .moveTo(box.topLeft)
+      .lineTo(Vector2d(box.bottomRight.x, box.topLeft.y))
+      .lineTo(box.bottomRight)
+      .lineTo(Vector2d(box.topLeft.x, box.bottomRight.y))
+      .closePath()
+      .build();
+}
+
+std::array<Vector2d, 4> BoxCorners(const Box2d& box) {
+  return {
+      box.topLeft,
+      Vector2d(box.bottomRight.x, box.topLeft.y),
+      box.bottomRight,
+      Vector2d(box.topLeft.x, box.bottomRight.y),
+  };
+}
+
+LineCap ToLineCap(svg::StrokeLinecap cap) {
+  switch (cap) {
+    case svg::StrokeLinecap::Butt: return LineCap::Butt;
+    case svg::StrokeLinecap::Round: return LineCap::Round;
+    case svg::StrokeLinecap::Square: return LineCap::Square;
+  }
+  return LineCap::Butt;
+}
+
+LineJoin ToLineJoin(svg::StrokeLinejoin join) {
+  switch (join) {
+    case svg::StrokeLinejoin::Miter: return LineJoin::Miter;
+    case svg::StrokeLinejoin::MiterClip: return LineJoin::Miter;
+    case svg::StrokeLinejoin::Round: return LineJoin::Round;
+    case svg::StrokeLinejoin::Bevel: return LineJoin::Bevel;
+    case svg::StrokeLinejoin::Arcs: return LineJoin::Miter;
+  }
+  return LineJoin::Miter;
+}
+
+bool PathEndpointIntersectsRect(const Path& path, const Transform2d& documentFromPath,
+                                const Box2d& documentRect) {
+  bool intersects = false;
+  path.forEach([&](Path::Verb /*verb*/, std::span<const Vector2d> points) {
+    if (points.empty()) {
+      return;
+    }
+
+    if (documentRect.contains(documentFromPath.transformPosition(points.back()))) {
+      intersects = true;
+    }
+  });
+  return intersects;
+}
+
+int CountRectCornersInsidePath(const Path& path, FillRule fillRule,
+                               const Transform2d& documentFromPath, const Box2d& documentRect) {
+  if (std::abs(documentFromPath.determinant()) < 1e-12) {
+    return 0;
+  }
+
+  const Transform2d pathFromDocument = documentFromPath.inverse();
+  int insideCount = 0;
+  for (const Vector2d& corner : BoxCorners(documentRect)) {
+    if (path.isInside(pathFromDocument.transformPosition(corner), fillRule)) {
+      ++insideCount;
+    }
+  }
+  return insideCount;
+}
+
+bool FilledPathIntersectsRect(const Path& path, FillRule fillRule,
+                              const Transform2d& documentFromPath, const Box2d& documentRect) {
+  if (PathEndpointIntersectsRect(path, documentFromPath, documentRect)) {
+    return true;
+  }
+
+  const int insideCornerCount =
+      CountRectCornersInsidePath(path, fillRule, documentFromPath, documentRect);
+  if (insideCornerCount == 4) {
+    // The marquee is fully inside this filled shape. Do not select large containing geometry
+    // (backgrounds/glows) unless its own boundary or vertices enter the marquee.
+    return false;
+  }
+  if (insideCornerCount > 0) {
+    return true;
+  }
+
+  const std::array<PathBooleanInput, 2> inputs = {
+      PathBooleanInput{
+          .path = path,
+          .fillRule = fillRule,
+          .outputFromPath = documentFromPath,
+      },
+      PathBooleanInput{
+          .path = RectPath(documentRect),
+          .fillRule = FillRule::NonZero,
+          .outputFromPath = Transform2d(),
+      },
+  };
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Intersect, inputs);
+  return result.status == PathBooleanStatus::Ok;
+}
+
+bool GeometryIntersectsRect(const svg::SVGGeometryElement& geometry, const Box2d& documentRect) {
+  std::optional<Box2d> bounds = geometry.worldBounds();
+  if (!bounds.has_value()) {
+    return false;
+  }
+
+  const auto style = geometry.getComputedStyle();
+  const double strokeWidth = style.strokeWidth.get().value().value;
+  const bool hasStroke =
+      strokeWidth > 0.0 && !style.stroke.get().value().is<svg::PaintServer::None>();
+  const Box2d interactionBounds =
+      hasStroke ? bounds->inflatedBy(strokeWidth * style.strokeMiterlimit.get().value()) : *bounds;
+  if (!BoxesIntersect(interactionBounds, documentRect)) {
+    return false;
+  }
+
+  std::optional<Path> spline = geometry.computedSpline();
+  if (!spline.has_value() || spline->empty()) {
+    return false;
+  }
+
+  const Transform2d documentFromGeometry = geometry.elementFromWorld();
+  if (!style.fill.get().value().is<svg::PaintServer::None>() &&
+      FilledPathIntersectsRect(*spline, style.fillRule.get().value(), documentFromGeometry,
+                               documentRect)) {
+    return true;
+  }
+
+  if (hasStroke) {
+    StrokeStyle strokeStyle;
+    strokeStyle.width = strokeWidth;
+    strokeStyle.cap = ToLineCap(style.strokeLinecap.get().value());
+    strokeStyle.join = ToLineJoin(style.strokeLinejoin.get().value());
+    strokeStyle.miterLimit = style.strokeMiterlimit.get().value();
+    const Path strokePath = spline->strokeToFill(strokeStyle);
+    return FilledPathIntersectsRect(strokePath, FillRule::NonZero, documentFromGeometry,
+                                    documentRect);
+  }
+
+  return false;
+}
+
 /// Depth-first walk of the SVG tree rooted at `node`, invoking
 /// `visit(geometry)` on every `SVGGeometryElement` encountered. Used
 /// by `hitTestRect` so marquee selection lives entirely on top of
@@ -38,6 +187,15 @@ void ForEachGeometryElement(const svg::SVGElement& node, Visitor& visit) {
   }
   for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
     ForEachGeometryElement(*child, visit);
+  }
+}
+
+/// Depth-first SVG tree walk in paint order, including non-geometry containers.
+template <typename Visitor>
+void ForEachElement(const svg::SVGElement& node, Visitor& visit) {
+  visit(node);
+  for (auto child = node.firstChild(); child.has_value(); child = child->nextSibling()) {
+    ForEachElement(*child, visit);
   }
 }
 
@@ -56,81 +214,290 @@ std::optional<std::string> MergeStyleProperty(std::string_view existingStyle,
 }
 
 struct PathOperationSelection {
-  std::vector<Box2d> bounds;
+  std::vector<PathBooleanInput> inputs;
 };
 
-bool PathOperationPrototypeSupports(PathOperationKind operation) {
-  return operation == PathOperationKind::Union || operation == PathOperationKind::Intersect;
-}
+struct CompoundPathSplit {
+  std::vector<Path> components;
+};
 
-std::optional<Box2d> IntersectBoxes(const std::vector<Box2d>& bounds) {
-  if (bounds.empty()) {
-    return std::nullopt;
-  }
+std::vector<svg::SVGElement> SortSelectionByPaintOrder(const svg::SVGDocument& document,
+                                                       std::span<const svg::SVGElement> selection) {
+  std::vector<svg::SVGElement> result;
+  result.reserve(selection.size());
 
-  Box2d result = bounds.front();
-  for (std::size_t i = 1; i < bounds.size(); ++i) {
-    result.topLeft.x = std::max(result.topLeft.x, bounds[i].topLeft.x);
-    result.topLeft.y = std::max(result.topLeft.y, bounds[i].topLeft.y);
-    result.bottomRight.x = std::min(result.bottomRight.x, bounds[i].bottomRight.x);
-    result.bottomRight.y = std::min(result.bottomRight.y, bounds[i].bottomRight.y);
-  }
-
-  if (result.width() <= 0.0 || result.height() <= 0.0) {
-    return std::nullopt;
-  }
-
-  return result;
-}
-
-Box2d UnionBoxes(const std::vector<Box2d>& bounds) {
-  Box2d result = bounds.front();
-  for (std::size_t i = 1; i < bounds.size(); ++i) {
-    result.addBox(bounds[i]);
-  }
-  return result;
-}
-
-std::string FormatPathPoint(const Vector2d& point) {
-  return donner::detail::FormatNumberForSVG(point.x) + " " +
-         donner::detail::FormatNumberForSVG(point.y);
-}
-
-std::string RectanglePathData(const Box2d& box) {
-  const Vector2d topRight(box.bottomRight.x, box.topLeft.y);
-  const Vector2d bottomLeft(box.topLeft.x, box.bottomRight.y);
-
-  std::string result = "M ";
-  result += FormatPathPoint(box.topLeft);
-  result += " L ";
-  result += FormatPathPoint(topRight);
-  result += " L ";
-  result += FormatPathPoint(box.bottomRight);
-  result += " L ";
-  result += FormatPathPoint(bottomLeft);
-  result += " Z";
+  document.withReadAccess([&](svg::DocumentReadAccess&) {
+    auto visit = [&](const svg::SVGElement& element) {
+      if (std::find(selection.begin(), selection.end(), element) != selection.end()) {
+        result.push_back(element);
+      }
+    };
+    ForEachElement(document.svgElement(), visit);
+  });
   return result;
 }
 
 PathOperationSelection CollectPathOperationSelection(std::span<const svg::SVGElement> selection) {
   PathOperationSelection result;
-  result.bounds.reserve(selection.size());
+  result.inputs.reserve(selection.size());
 
   for (const svg::SVGElement& element : selection) {
-    if (!element.isa<svg::SVGGeometryElement>()) {
+    std::optional<svg::SVGGeometryElement> maybeGeometry =
+        element.withReadAccess([&element](svg::DocumentReadAccess&,
+                                          EntityHandle) -> std::optional<svg::SVGGeometryElement> {
+          if (!element.isa<svg::SVGGeometryElement>()) {
+            return std::nullopt;
+          }
+          return element.cast<svg::SVGGeometryElement>();
+        });
+    if (!maybeGeometry.has_value()) {
       continue;
     }
 
-    const svg::SVGGeometryElement geometry = element.cast<svg::SVGGeometryElement>();
-    std::optional<Box2d> bounds = geometry.worldBounds();
-    if (!bounds.has_value() || bounds->isEmpty()) {
+    const svg::SVGGeometryElement geometry = *maybeGeometry;
+    std::optional<Path> spline = geometry.computedSpline();
+    if (!spline.has_value() || spline->empty()) {
       continue;
     }
 
-    result.bounds.push_back(*bounds);
+    const Transform2d documentFromElement = geometry.elementFromWorld();
+    result.inputs.push_back(PathBooleanInput{
+        .path = std::move(*spline),
+        .fillRule = geometry.getComputedStyle().fillRule.get().value(),
+        .outputFromPath = documentFromElement,
+    });
   }
 
   return result;
+}
+
+PathBooleanOp BooleanOpForEditorOperation(PathOperationKind operation) {
+  switch (operation) {
+    case PathOperationKind::Union: return PathBooleanOp::Union;
+    case PathOperationKind::Intersect: return PathBooleanOp::Intersect;
+    case PathOperationKind::SubtractFront: return PathBooleanOp::Difference;
+    case PathOperationKind::SubtractBack: return PathBooleanOp::Difference;
+    case PathOperationKind::Exclude: return PathBooleanOp::Xor;
+  }
+  return PathBooleanOp::Union;
+}
+
+PathBooleanOptions EditorPathBooleanOptions() {
+  return PathBooleanOptions{
+      .geometricTolerance = 1e-3,
+      .maxCurveCount = 20000,
+      .maxIntersections = 20000,
+      .maxOutputCommands = 8192,
+  };
+}
+
+std::vector<PathBooleanInput> InputsForEditorOperation(PathOperationKind operation,
+                                                       const PathOperationSelection& selection) {
+  if (operation != PathOperationKind::SubtractBack || selection.inputs.empty()) {
+    return selection.inputs;
+  }
+
+  std::vector<PathBooleanInput> inputs;
+  inputs.reserve(selection.inputs.size());
+  inputs.push_back(selection.inputs.back());
+  inputs.insert(inputs.end(), selection.inputs.begin(), selection.inputs.end() - 1);
+  return inputs;
+}
+
+Path CombineBooleanPaths(std::span<const Path> paths) {
+  PathBuilder builder;
+  for (const Path& path : paths) {
+    builder.addPath(path);
+  }
+  return builder.build();
+}
+
+Path TransformPath(const Path& path, const Transform2d& outputFromPath) {
+  PathBuilder builder;
+  const std::span<const Vector2d> points = path.points();
+  for (const Path::Command& command : path.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        builder.moveTo(outputFromPath.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::LineTo:
+        builder.lineTo(outputFromPath.transformPosition(points[command.pointIndex]));
+        break;
+      case Path::Verb::QuadTo:
+        builder.quadTo(outputFromPath.transformPosition(points[command.pointIndex]),
+                       outputFromPath.transformPosition(points[command.pointIndex + 1]));
+        break;
+      case Path::Verb::CurveTo:
+        builder.curveTo(outputFromPath.transformPosition(points[command.pointIndex]),
+                        outputFromPath.transformPosition(points[command.pointIndex + 1]),
+                        outputFromPath.transformPosition(points[command.pointIndex + 2]));
+        break;
+      case Path::Verb::ClosePath: builder.closePath(); break;
+    }
+  }
+  return builder.build();
+}
+
+svg::SVGElement BaseElementForPathOperation(PathOperationKind operation,
+                                            std::span<const svg::SVGElement> selection) {
+  switch (operation) {
+    case PathOperationKind::SubtractFront: return selection.front();
+    case PathOperationKind::Union:
+    case PathOperationKind::Intersect:
+    case PathOperationKind::SubtractBack:
+    case PathOperationKind::Exclude: return selection.back();
+  }
+  return selection.front();
+}
+
+std::optional<Box2d> InputUnionBounds(const PathOperationSelection& selection) {
+  std::optional<Box2d> bounds;
+  for (const PathBooleanInput& input : selection.inputs) {
+    const Box2d inputBounds = input.path.transformedBounds(input.outputFromPath);
+    if (bounds.has_value()) {
+      bounds->addBox(inputBounds);
+    } else {
+      bounds = inputBounds;
+    }
+  }
+  return bounds;
+}
+
+std::optional<Box2d> InputIntersectionBounds(const PathOperationSelection& selection) {
+  std::optional<Box2d> bounds;
+  for (const PathBooleanInput& input : selection.inputs) {
+    const Box2d inputBounds = input.path.transformedBounds(input.outputFromPath);
+    if (!bounds.has_value()) {
+      bounds = inputBounds;
+      continue;
+    }
+
+    bounds->topLeft.x = std::max(bounds->topLeft.x, inputBounds.topLeft.x);
+    bounds->topLeft.y = std::max(bounds->topLeft.y, inputBounds.topLeft.y);
+    bounds->bottomRight.x = std::min(bounds->bottomRight.x, inputBounds.bottomRight.x);
+    bounds->bottomRight.y = std::min(bounds->bottomRight.y, inputBounds.bottomRight.y);
+    if (bounds->width() <= 0.0 || bounds->height() <= 0.0) {
+      return std::nullopt;
+    }
+  }
+  return bounds;
+}
+
+bool BoxContainsBox(const Box2d& outer, const Box2d& inner, double tolerance) {
+  return inner.topLeft.x >= outer.topLeft.x - tolerance &&
+         inner.topLeft.y >= outer.topLeft.y - tolerance &&
+         inner.bottomRight.x <= outer.bottomRight.x + tolerance &&
+         inner.bottomRight.y <= outer.bottomRight.y + tolerance;
+}
+
+bool IsCopiedUnbundleAttribute(const xml::XMLQualifiedNameRef& name) {
+  return name != xml::XMLQualifiedNameRef("d") && name != xml::XMLQualifiedNameRef("id");
+}
+
+std::vector<xml::XMLQualifiedName> CopiedAttributeNames(const svg::SVGElement& source) {
+  std::vector<xml::XMLQualifiedName> result;
+  source.withReadAccess([&source, &result](const svg::DocumentReadAccess&, EntityHandle) {
+    const SmallVector<xml::XMLQualifiedNameRef, 10> names = source.attributes();
+    result.reserve(names.size());
+    for (const xml::XMLQualifiedNameRef& name : names) {
+      if (!IsCopiedUnbundleAttribute(name)) {
+        continue;
+      }
+      result.emplace_back(RcString(name.namespacePrefix), RcString(name.name));
+    }
+  });
+  return result;
+}
+
+void CopyUnbundleAttributes(const svg::SVGElement& source, svg::SVGPathElement& target) {
+  for (const xml::XMLQualifiedName& name : CopiedAttributeNames(source)) {
+    const xml::XMLQualifiedNameRef nameRef(name);
+    std::optional<RcString> value = source.getAttribute(nameRef);
+    if (value.has_value()) {
+      target.setAttribute(nameRef, std::string_view(*value));
+    }
+  }
+}
+
+void AppendCommandToBuilder(PathBuilder& builder, Path::Verb verb,
+                            std::span<const Vector2d> points) {
+  switch (verb) {
+    case Path::Verb::MoveTo: builder.moveTo(points[0]); break;
+    case Path::Verb::LineTo: builder.lineTo(points[0]); break;
+    case Path::Verb::QuadTo: builder.quadTo(points[0], points[1]); break;
+    case Path::Verb::CurveTo: builder.curveTo(points[0], points[1], points[2]); break;
+    case Path::Verb::ClosePath: builder.closePath(); break;
+  }
+}
+
+std::vector<Path> ExtractCompoundPathContours(const Path& path) {
+  std::vector<Path> contours;
+  PathBuilder builder;
+  bool activeContour = false;
+  bool contourHasSegment = false;
+
+  const auto flushContour = [&]() {
+    if (!activeContour || !contourHasSegment) {
+      builder = PathBuilder();
+      activeContour = false;
+      contourHasSegment = false;
+      return;
+    }
+
+    contours.push_back(builder.build());
+    activeContour = false;
+    contourHasSegment = false;
+  };
+
+  path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
+    if (verb == Path::Verb::MoveTo) {
+      flushContour();
+      builder.moveTo(points[0]);
+      activeContour = true;
+      return;
+    }
+
+    if (!activeContour) {
+      return;
+    }
+
+    AppendCommandToBuilder(builder, verb, points);
+    if (verb != Path::Verb::ClosePath) {
+      contourHasSegment = true;
+    }
+  });
+  flushContour();
+
+  return contours;
+}
+
+CompoundPathSplit SplitCompoundPathIntoContours(const Path& path) {
+  return CompoundPathSplit{
+      .components = ExtractCompoundPathContours(path),
+  };
+}
+
+std::optional<svg::SVGElement> ResolveCompoundPathUnbundleTarget(
+    const EditorApp& app, std::optional<svg::SVGElement> target) {
+  if (target.has_value()) {
+    return target;
+  }
+
+  if (app.selectedElements().size() == 1u) {
+    return app.selectedElements().front();
+  }
+
+  return std::nullopt;
+}
+
+bool PathOperationResultFitsInputBounds(const Path& result,
+                                        const PathOperationSelection& selection) {
+  const std::optional<Box2d> inputBounds = InputUnionBounds(selection);
+  if (!inputBounds.has_value()) {
+    return false;
+  }
+  constexpr double kResultBoundsTolerance = 0.5;
+  return BoxContainsBox(*inputBounds, result.bounds(), kResultBoundsTolerance);
 }
 
 void CopyPathOperationStyle(const svg::SVGElement& source, svg::SVGPathElement& target) {
@@ -144,6 +511,19 @@ void CopyPathOperationStyle(const svg::SVGElement& source, svg::SVGPathElement& 
       target.setAttribute(name, std::string_view(*value));
     }
   }
+}
+
+std::vector<AttributeWritebackTarget> CaptureSelectionTargets(
+    std::span<const svg::SVGElement> selection) {
+  std::vector<AttributeWritebackTarget> targets;
+  targets.reserve(selection.size());
+  for (const svg::SVGElement& element : selection) {
+    if (std::optional<AttributeWritebackTarget> target = captureAttributeWritebackTarget(element);
+        target.has_value()) {
+      targets.push_back(std::move(*target));
+    }
+  }
+  return targets;
 }
 
 svg::SVGElement ResolveSnapshotElement(AsyncSVGDocument& document, const UndoSnapshot& snapshot) {
@@ -161,6 +541,7 @@ svg::SVGElement ResolveSnapshotElement(AsyncSVGDocument& document, const UndoSna
 void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
                            const UndoSnapshot& snapshot) {
   if (snapshot.kind == UndoSnapshot::Kind::DocumentSource) {
+    app.restoreSelectionAfterNextDocumentReplace(snapshot.selectionTargets);
     app.applyMutation(EditorCommand::ReplaceDocumentCommand(snapshot.documentSource,
                                                             /*preserveUndoOnReparse=*/true));
     return;
@@ -212,6 +593,8 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
   undoTimeline_.clear();
   pendingTransformWritebacks_.clear();
   pendingElementRemoveWritebacks_.clear();
+  pendingDocumentSourceUndo_.reset();
+  pendingSelectionRestoreTargets_.reset();
   const bool result = document_.loadFromString(svgBytes);
   // A successful load resets the dirty state — the in-memory document
   // now matches the last-loaded bytes. `setCurrentFilePath` should be
@@ -220,6 +603,11 @@ bool EditorApp::loadFromString(std::string_view svgBytes) {
     isDirty_ = false;
   }
   return result;
+}
+
+void EditorApp::restoreSelectionAfterNextDocumentReplace(
+    std::vector<AttributeWritebackTarget> targets) {
+  pendingSelectionRestoreTargets_ = std::move(targets);
 }
 
 bool EditorApp::revertToCleanSource() {
@@ -272,6 +660,37 @@ bool EditorApp::flushFrame() {
     if (!(documentFlush.replacedDocument && documentFlush.preserveUndoOnReparse)) {
       undoTimeline_.clear();
     }
+  }
+
+  if (pendingSelectionRestoreTargets_.has_value() && document_.hasDocument()) {
+    std::vector<svg::SVGElement> restoredSelection;
+    restoredSelection.reserve(pendingSelectionRestoreTargets_->size());
+    for (const AttributeWritebackTarget& target : *pendingSelectionRestoreTargets_) {
+      if (auto element = resolveAttributeWritebackTarget(document_.document(), target);
+          element.has_value()) {
+        restoredSelection.push_back(*element);
+      }
+    }
+
+    selection_ = std::move(restoredSelection);
+    refreshFirstSelectionCache();
+    controller_.reset();
+    controllerVersion_ = 0;
+    pendingSelectionRestoreTargets_.reset();
+  }
+
+  if (pendingDocumentSourceUndo_.has_value()) {
+    if (document_.hasDocument() && document_.document().hasSourceStore()) {
+      std::string sourceAfter(document_.document().source());
+      if (sourceAfter != pendingDocumentSourceUndo_->before.documentSource) {
+        UndoSnapshot after =
+            captureDocumentSourceSnapshot(pendingDocumentSourceUndo_->before.element, sourceAfter);
+        after.selectionTargets = CaptureSelectionTargets(selection_);
+        undoTimeline_.record(pendingDocumentSourceUndo_->label,
+                             std::move(pendingDocumentSourceUndo_->before), std::move(after));
+      }
+    }
+    pendingDocumentSourceUndo_.reset();
   }
 
   return true;
@@ -408,22 +827,28 @@ PathOperationAvailability EditorApp::pathOperationAvailability(PathOperationKind
     return {.canApply = false, .reason = "No SVG document is loaded"};
   }
 
-  if (!PathOperationPrototypeSupports(operation)) {
-    return {.canApply = false, .reason = "Prototype supports Union and Intersect first"};
+  if (document_.hasPendingMutations()) {
+    return {.canApply = false, .reason = "Document edits are still applying"};
   }
 
   if (selection_.size() < 2u) {
-    return {.canApply = false, .reason = "Select at least two bounded geometry elements"};
+    return {.canApply = false, .reason = "Select at least two path-convertible elements"};
   }
 
-  const PathOperationSelection pathSelection = CollectPathOperationSelection(selection_);
-  if (pathSelection.bounds.size() != selection_.size()) {
+  const std::vector<svg::SVGElement> selected =
+      SortSelectionByPaintOrder(document_.document(), selection_);
+  if (selected.size() != selection_.size()) {
+    return {.canApply = false, .reason = "Selection includes detached geometry"};
+  }
+
+  const PathOperationSelection pathSelection = CollectPathOperationSelection(selected);
+  if (pathSelection.inputs.size() != selection_.size()) {
     return {.canApply = false, .reason = "Selection includes unsupported or empty geometry"};
   }
 
   if (operation == PathOperationKind::Intersect &&
-      !IntersectBoxes(pathSelection.bounds).has_value()) {
-    return {.canApply = false, .reason = "Selected bounds do not overlap"};
+      !InputIntersectionBounds(pathSelection).has_value()) {
+    return {.canApply = false, .reason = "Selected path bounds do not overlap"};
   }
 
   return {.canApply = true};
@@ -435,31 +860,65 @@ bool EditorApp::applyPathOperation(PathOperationKind operation) {
     return false;
   }
 
-  const std::vector<svg::SVGElement> selected = selection_;
-  const PathOperationSelection pathSelection = CollectPathOperationSelection(selected);
-  std::optional<Box2d> resultBox;
-  switch (operation) {
-    case PathOperationKind::Union: resultBox = UnionBoxes(pathSelection.bounds); break;
-    case PathOperationKind::Intersect: resultBox = IntersectBoxes(pathSelection.bounds); break;
-    case PathOperationKind::SubtractFront:
-    case PathOperationKind::SubtractBack:
-    case PathOperationKind::Exclude: return false;
-  }
-
-  if (!resultBox.has_value()) {
+  svg::SVGDocument& document = document_.document();
+  const std::vector<svg::SVGElement> selected = SortSelectionByPaintOrder(document, selection_);
+  if (selected.size() != selection_.size()) {
     return false;
   }
 
-  svg::SVGDocument& document = document_.document();
-  svg::SVGPathElement resultPath = svg::SVGPathElement::Create(document);
-  resultPath.setAttribute("d", RectanglePathData(*resultBox));
-  CopyPathOperationStyle(selected.front(), resultPath);
+  const PathOperationSelection pathSelection = CollectPathOperationSelection(selected);
+  const std::vector<PathBooleanInput> booleanInputs =
+      InputsForEditorOperation(operation, pathSelection);
+  const PathBooleanResult booleanResult = ApplyPathBoolean(
+      BooleanOpForEditorOperation(operation), booleanInputs, EditorPathBooleanOptions());
+  if (booleanResult.status != PathBooleanStatus::Ok || booleanResult.paths.empty()) {
+    return false;
+  }
 
-  svg::SVGElement parent = selected.front().parentElement().value_or(document.svgElement());
+  const Path resultDocumentSpline = CombineBooleanPaths(booleanResult.paths);
+  if (resultDocumentSpline.empty()) {
+    return false;
+  }
+  if (!PathOperationResultFitsInputBounds(resultDocumentSpline, pathSelection)) {
+    return false;
+  }
+
+  const svg::SVGElement baseElement = BaseElementForPathOperation(operation, selected);
+  svg::SVGElement parent = document.withReadAccess([&](svg::DocumentReadAccess&) {
+    return baseElement.parentElement().value_or(document.svgElement());
+  });
+  Transform2d parentFromDocument;
+  std::optional<svg::SVGGraphicsElement> parentGraphics = parent.withReadAccess(
+      [&parent](svg::DocumentReadAccess&, EntityHandle) -> std::optional<svg::SVGGraphicsElement> {
+        if (!parent.isa<svg::SVGGraphicsElement>()) {
+          return std::nullopt;
+        }
+        return parent.cast<svg::SVGGraphicsElement>();
+      });
+  if (parentGraphics.has_value()) {
+    const Transform2d documentFromParent = parentGraphics->elementFromWorld();
+    parentFromDocument = documentFromParent.inverse();
+  }
+
+  const Path resultSpline = TransformPath(resultDocumentSpline, parentFromDocument);
+  const RcString resultPathData = resultSpline.toSVGPathData();
+  svg::SVGPathElement resultPath = svg::SVGPathElement::Create(document);
+  resultPath.setAttribute("d", std::string_view(resultPathData));
+  CopyPathOperationStyle(baseElement, resultPath);
+
+  if (document.hasSourceStore()) {
+    UndoSnapshot before = captureDocumentSourceSnapshot(baseElement, document.source());
+    before.selectionTargets = CaptureSelectionTargets(selected);
+    pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+        .label = "Path operation",
+        .before = std::move(before),
+    };
+  }
+
   std::optional<svg::SVGElement> referenceElement;
-  if (const std::optional<svg::SVGElement> selectedParent = selected.front().parentElement();
+  if (const std::optional<svg::SVGElement> selectedParent = baseElement.parentElement();
       selectedParent.has_value() && *selectedParent == parent) {
-    referenceElement = selected.front();
+    referenceElement = baseElement;
   }
 
   applyMutation(EditorCommand::InsertElementCommand(parent, resultPath, referenceElement));
@@ -467,6 +926,94 @@ bool EditorApp::applyPathOperation(PathOperationKind operation) {
     applyMutation(EditorCommand::DeleteElementCommand(element));
   }
   setSelection(resultPath);
+  return true;
+}
+
+PathOperationAvailability EditorApp::compoundPathUnbundleAvailability(
+    std::optional<svg::SVGElement> target) const {
+  if (!document_.hasDocument()) {
+    return {.canApply = false, .reason = "No SVG document is loaded"};
+  }
+
+  if (document_.hasPendingMutations()) {
+    return {.canApply = false, .reason = "Document edits are still applying"};
+  }
+
+  std::optional<svg::SVGElement> resolvedTarget = ResolveCompoundPathUnbundleTarget(*this, target);
+  if (!resolvedTarget.has_value()) {
+    return {.canApply = false, .reason = "Select one compound path"};
+  }
+
+  if (!resolvedTarget->isa<svg::SVGPathElement>()) {
+    return {.canApply = false, .reason = "Target is not a path"};
+  }
+
+  if (!resolvedTarget->parentElement().has_value()) {
+    return {.canApply = false, .reason = "Target path is detached"};
+  }
+
+  const svg::SVGPathElement pathElement = resolvedTarget->cast<svg::SVGPathElement>();
+  const std::optional<Path> spline = pathElement.computedSpline();
+  if (!spline.has_value() || spline->empty()) {
+    return {.canApply = false, .reason = "Path has no geometry"};
+  }
+
+  const CompoundPathSplit split = SplitCompoundPathIntoContours(*spline);
+  if (split.components.size() < 2u) {
+    return {.canApply = false, .reason = "Path has one contour"};
+  }
+
+  return {.canApply = true};
+}
+
+bool EditorApp::unbundleCompoundPath(std::optional<svg::SVGElement> target) {
+  const PathOperationAvailability availability = compoundPathUnbundleAvailability(target);
+  if (!availability.canApply) {
+    return false;
+  }
+
+  svg::SVGDocument& document = document_.document();
+  std::optional<svg::SVGElement> resolvedTarget = ResolveCompoundPathUnbundleTarget(*this, target);
+  if (!resolvedTarget.has_value() || !resolvedTarget->isa<svg::SVGPathElement>()) {
+    return false;
+  }
+
+  const svg::SVGPathElement sourcePath = resolvedTarget->cast<svg::SVGPathElement>();
+  const std::optional<Path> sourceSpline = sourcePath.computedSpline();
+  if (!sourceSpline.has_value()) {
+    return false;
+  }
+
+  const CompoundPathSplit split = SplitCompoundPathIntoContours(*sourceSpline);
+  if (split.components.size() < 2u) {
+    return false;
+  }
+
+  svg::SVGElement parent = sourcePath.parentElement().value_or(document.svgElement());
+  std::vector<svg::SVGElement> replacementSelection;
+  replacementSelection.reserve(split.components.size());
+
+  if (document.hasSourceStore()) {
+    UndoSnapshot before = captureDocumentSourceSnapshot(sourcePath, document.source());
+    const std::array<svg::SVGElement, 1> sourceSelection = {sourcePath};
+    before.selectionTargets = CaptureSelectionTargets(sourceSelection);
+    pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+        .label = "Unbundle compound path",
+        .before = std::move(before),
+    };
+  }
+
+  for (const Path& component : split.components) {
+    svg::SVGPathElement replacement = svg::SVGPathElement::Create(document);
+    const RcString pathData = component.toSVGPathData();
+    replacement.setAttribute("d", std::string_view(pathData));
+    CopyUnbundleAttributes(sourcePath, replacement);
+    replacementSelection.push_back(replacement);
+    applyMutation(EditorCommand::InsertElementCommand(parent, replacement, sourcePath));
+  }
+  applyMutation(EditorCommand::DeleteElementCommand(sourcePath));
+
+  setSelection(std::move(replacementSelection));
   return true;
 }
 
@@ -528,26 +1075,20 @@ std::vector<svg::SVGGeometryElement> EditorApp::hitTestRect(const Box2d& documen
     return hits;
   }
 
-  // Walk the live document and collect every geometry element whose
-  // world-space AABB intersects the marquee rect. We don't go through
-  // `DonnerController` because it's point-only; the linear walk is
-  // simple, allocation-light, and fine for documents up to a few
-  // thousand elements (the typical editor workload).
+  // Walk the live document and collect every geometry element whose filled or stroked path
+  // intersects the marquee rect. We don't go through `DonnerController` because it's point-only;
+  // the linear walk is simple and fine for typical editor workloads.
   //
-  // §concurrent-dom: the editor keeps the live document in ConcurrentDom, so
-  // this UI-thread walk needs a scoped access guard or its DOM reads (isa /
-  // firstChild / nextSibling) trip the `ElementAnchor` release assertion.
-  // `worldBounds()` lazily computes shape state under *write* access, so the
-  // whole traversal takes one coarse write guard — a read guard would deadlock
-  // on the read→write upgrade. Mirrors `SnapshotSelectionWorldBounds`.
+  // §concurrent-dom: the editor keeps the live document in ConcurrentDom, so this UI-thread walk
+  // needs a scoped access guard or its DOM reads (isa / firstChild / nextSibling) trip the
+  // `ElementAnchor` release assertion. GeometryIntersectsRect() calls worldBounds(), which lazily
+  // computes shape state under *write* access, so the whole traversal takes one coarse write guard.
   svg::SVGDocument doc = document_.document();
   doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
     const svg::SVGElement root = doc.svgElement();
     auto visit = [&](const svg::SVGGeometryElement& geometry) {
-      if (auto bounds = geometry.worldBounds(); bounds.has_value()) {
-        if (BoxesIntersect(*bounds, documentRect)) {
-          hits.push_back(geometry);
-        }
+      if (GeometryIntersectsRect(geometry, documentRect)) {
+        hits.push_back(geometry);
       }
     };
     ForEachGeometryElement(root, visit);

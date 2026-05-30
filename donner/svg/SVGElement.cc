@@ -491,6 +491,12 @@ SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
                                : SmallVector<xml::XMLQualifiedNameRef, 1>();
 }
 
+SmallVector<xml::XMLQualifiedNameRef, 10> SVGElement::attributes() const {
+  const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
+  return attributes != nullptr ? attributes->attributes()
+                               : SmallVector<xml::XMLQualifiedNameRef, 10>();
+}
+
 void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_view value) {
   SVGDocument document = ownerDocument();
   (void)document.setElementAttribute(*this, name, value);

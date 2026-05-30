@@ -149,6 +149,9 @@ public:
     isDirty_ = true;
   }
 
+  /// Restore these selection targets after the next source-backed document replacement.
+  void restoreSelectionAfterNextDocumentReplace(std::vector<AttributeWritebackTarget> targets);
+
   /// Drain and apply any pending mutations. Called once per frame at the
   /// start of the main loop. Returns true if any commands were applied.
   bool flushFrame();
@@ -266,15 +269,42 @@ public:
   /**
    * Queue a destructive path operation over the current selection.
    *
-   * The current prototype supports Union and Intersect by replacing the
-   * selected geometry with a source-backed rectangle path derived from the
-   * selected elements' document-space bounds. Full curve/path boolean math is
-   * scoped in `0041-path_authoring_and_boolean_operations.md`.
+   * Inputs are sorted by SVG paint order before dispatching to \ref PathOps so
+   * selection click order cannot change Subtract Front / Subtract Back
+   * semantics. The result is rejected if the operation is over the editor's
+   * complexity limits or produces geometry outside the selected inputs' union
+   * bounds.
    *
    * @param operation Operation to apply.
    * @return true if commands were queued.
    */
   bool applyPathOperation(PathOperationKind operation);
+
+  /**
+   * Return whether a compound path can be unbundled into separate path elements.
+   *
+   * If \p target is provided, availability is checked for that element. Otherwise the current
+   * single-element selection is used.
+   *
+   * @param target Optional explicit path element to inspect.
+   * @return Availability and a user-facing disabled reason.
+   */
+  [[nodiscard]] PathOperationAvailability compoundPathUnbundleAvailability(
+      std::optional<svg::SVGElement> target = std::nullopt) const;
+
+  /**
+   * Queue an unbundle operation for one compound path.
+   *
+   * The source path is split into one path per contour, including hole/counter contours such as the
+   * center of a letter D. New path elements inherit the original path's non-geometry attributes
+   * except `id`, and the original path is removed after the replacement paths are inserted at the
+   * same paint-order position.
+   *
+   * @param target Optional explicit path element to unbundle. If omitted, the current
+   *   single-element selection is used.
+   * @return true if commands were queued.
+   */
+  bool unbundleCompoundPath(std::optional<svg::SVGElement> target = std::nullopt);
 
   // ---------------------------------------------------------------------------
   // Hit testing
@@ -285,10 +315,9 @@ public:
   /// canvas space (the same space as the root `<svg>` viewBox).
   [[nodiscard]] std::optional<svg::SVGGeometryElement> hitTest(const Vector2d& documentPoint);
 
-  /// Find every geometry element whose world-space bounding box
-  /// intersects `documentRect`. Used by marquee selection. Returns
-  /// elements in document order (root-to-leaf depth-first), so
-  /// callers that care about z-order can rely on a stable sequence.
+  /// Find every geometry element whose painted shape intersects `documentRect`. Used by marquee
+  /// selection. Returns elements in document order (root-to-leaf depth-first), so callers that care
+  /// about z-order can rely on a stable sequence.
   [[nodiscard]] std::vector<svg::SVGGeometryElement> hitTestRect(const Box2d& documentRect);
 
   // ---------------------------------------------------------------------------
@@ -404,6 +433,11 @@ private:
   /// mutation path.
   void refreshFirstSelectionCache();
 
+  struct PendingDocumentSourceUndo {
+    std::string label;
+    UndoSnapshot before;
+  };
+
   AsyncSVGDocument document_;
   std::vector<svg::SVGElement> selection_;
   /// Mirrors `selection_.front()` (or `std::nullopt`) so the
@@ -420,6 +454,8 @@ private:
 
   std::vector<CompletedTransformWriteback> pendingTransformWritebacks_;
   std::vector<CompletedElementRemoveWriteback> pendingElementRemoveWritebacks_;
+  std::optional<PendingDocumentSourceUndo> pendingDocumentSourceUndo_;
+  std::optional<std::vector<AttributeWritebackTarget>> pendingSelectionRestoreTargets_;
 
   std::optional<std::string> currentFilePath_;
   std::string cleanSourceText_;

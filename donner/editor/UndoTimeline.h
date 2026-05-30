@@ -53,6 +53,9 @@ struct UndoSnapshot {
   /// Full SVG source text for `Kind::DocumentSource` snapshots.
   std::string documentSource;
 
+  /// Selection targets to restore after a `Kind::DocumentSource` snapshot reparses the document.
+  std::vector<AttributeWritebackTarget> selectionTargets;
+
   /// Additional element snapshots that belong to the same user operation.
   /// Multi-selection move/resize/rotate gestures use this so one UI undo
   /// restores the whole manipulation instead of stepping through elements

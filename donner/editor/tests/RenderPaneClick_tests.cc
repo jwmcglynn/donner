@@ -84,9 +84,9 @@ TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyDpr) {
   }
 }
 
-// `desiredCanvasSize` should grow with both zoom and DPR, capped at
-// `kMaxCanvasDim`. This is what the editor pipes into
-// `setCanvasSize` to drive the renderer's bitmap resolution.
+// `desiredCanvasSize` should grow with both zoom and DPR while the full
+// zoom-scaled document still fits near the pane. This is what the editor
+// pipes into `setCanvasSize` to drive the renderer's bitmap resolution.
 TEST(RenderPaneClickTest, DesiredCanvasSizeIsViewBoxScaledByZoomAndDpr) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));

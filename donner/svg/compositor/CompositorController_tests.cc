@@ -4,6 +4,8 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
@@ -15,6 +17,7 @@
 
 using ::testing::_;
 using ::testing::AtLeast;
+using ::testing::HasSubstr;
 using ::testing::NiceMock;
 
 namespace donner::svg::compositor {
@@ -45,15 +48,18 @@ protected:
     return instantiateSubtree(svg, parser::SVGParser::Options(), size);
   }
 
-  void configureMockForCaching() {
-    ON_CALL(renderer_, takeSnapshot()).WillByDefault([]() {
+  void configureMockForCaching(
+      std::chrono::milliseconds snapshotDelay = std::chrono::milliseconds(0)) {
+    const auto makeBitmap = [snapshotDelay]() {
+      if (snapshotDelay.count() > 0) {
+        std::this_thread::sleep_for(snapshotDelay);
+      }
       return MockRendererInterface::makeDummyBitmap();
-    });
-    ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([]() {
+    };
+    ON_CALL(renderer_, takeSnapshot()).WillByDefault(makeBitmap);
+    ON_CALL(renderer_, createOffscreenInstance()).WillByDefault([makeBitmap]() {
       auto offscreen = std::make_unique<NiceMock<MockRendererInterface>>();
-      ON_CALL(*offscreen, takeSnapshot()).WillByDefault([]() {
-        return MockRendererInterface::makeDummyBitmap();
-      });
+      ON_CALL(*offscreen, takeSnapshot()).WillByDefault(makeBitmap);
       ON_CALL(*offscreen, createOffscreenInstance()).WillByDefault([]() { return nullptr; });
       return offscreen;
     });
@@ -876,6 +882,81 @@ TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
   EXPECT_EQ(countersAfterDrag.slowPathFramesWithDirty, countersBeforeDrag.slowPathFramesWithDirty);
 }
 
+TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextureFastPath) {
+  SVGDocument document = makeDocument(R"svg(
+    <g id="Blue_center_burst">
+      <ellipse id="burst_child" cx="45" cy="30" rx="18" ry="21" fill="blue" opacity="0.75" />
+    </g>
+  )svg");
+
+  configureMockForTextureCaching();
+  auto target = document.querySelector("#Blue_center_burst");
+  auto child = document.querySelector("#burst_child");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(child.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+  const Entity childEntity = child->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+  const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
+  ASSERT_GT(rowsAfterFirst.size(), 1u)
+      << "The opacity child should remain a mandatory promoted descendant layer.";
+  const auto rowAfterFirst =
+      std::find_if(rowsAfterFirst.begin(), rowsAfterFirst.end(),
+                   [entity](const auto& row) { return row.entity == entity; });
+  const auto childRowAfterFirst =
+      std::find_if(rowsAfterFirst.begin(), rowsAfterFirst.end(),
+                   [childEntity](const auto& row) { return row.entity == childEntity; });
+  ASSERT_NE(rowAfterFirst, rowsAfterFirst.end());
+  ASSERT_NE(childRowAfterFirst, rowsAfterFirst.end());
+  ASSERT_TRUE(rowAfterFirst->hasValidBitmap);
+  ASSERT_TRUE(childRowAfterFirst->hasValidBitmap);
+  const uint64_t generationAfterFirst = rowAfterFirst->generation;
+  const uint32_t rasterizeCountAfterFirst = rowAfterFirst->rasterizeCount;
+  const uint64_t childGenerationAfterFirst = childRowAfterFirst->generation;
+  const uint32_t childRasterizeCountAfterFirst = childRowAfterFirst->rasterizeCount;
+
+  const auto countersBeforeDrag = compositor.fastPathCountersForTesting();
+  target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(7.0, 11.0));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto rowsAfterDrag = compositor.snapshotLayerInspectorRows();
+  const auto rowAfterDrag =
+      std::find_if(rowsAfterDrag.begin(), rowsAfterDrag.end(),
+                   [entity](const auto& row) { return row.entity == entity; });
+  const auto childRowAfterDrag =
+      std::find_if(rowsAfterDrag.begin(), rowsAfterDrag.end(),
+                   [childEntity](const auto& row) { return row.entity == childEntity; });
+  ASSERT_NE(rowAfterDrag, rowsAfterDrag.end());
+  ASSERT_NE(childRowAfterDrag, rowsAfterDrag.end());
+  EXPECT_EQ(rowAfterDrag->generation, generationAfterFirst)
+      << "A translation-only drag of a promoted group with a mandatory child layer must reuse the "
+         "cached texture.";
+  EXPECT_EQ(rowAfterDrag->rasterizeCount, rasterizeCountAfterFirst)
+      << "Re-rasterizing this subtree on every drag frame is the #Blue_center_burst lag.";
+  EXPECT_EQ(childRowAfterDrag->generation, childGenerationAfterFirst);
+  EXPECT_EQ(childRowAfterDrag->rasterizeCount, childRasterizeCountAfterFirst);
+
+  const auto countersAfterDrag = compositor.fastPathCountersForTesting();
+  EXPECT_EQ(countersAfterDrag.fastPathFrames, countersBeforeDrag.fastPathFrames + 1u);
+  EXPECT_EQ(countersAfterDrag.slowPathFramesWithDirty, countersBeforeDrag.slowPathFramesWithDirty);
+
+  const auto* layer = compositor.findLayerForTest(entity);
+  ASSERT_NE(layer, nullptr);
+  ASSERT_TRUE(layer->canvasFromBitmap().isTranslation());
+  EXPECT_NEAR(layer->canvasFromBitmap().translation().x, 7.0, 1e-10);
+  EXPECT_NEAR(layer->canvasFromBitmap().translation().y, 11.0, 1e-10);
+
+  const auto* childLayer = compositor.findLayerForTest(childEntity);
+  ASSERT_NE(childLayer, nullptr);
+  ASSERT_TRUE(childLayer->canvasFromBitmap().isTranslation());
+  EXPECT_NEAR(childLayer->canvasFromBitmap().translation().x, 7.0, 1e-10);
+  EXPECT_NEAR(childLayer->canvasFromBitmap().translation().y, 11.0, 1e-10);
+}
+
 TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsEmitsThumbnailWithMaxSideClamp) {
   SVGDocument document = makeDocument(R"svg(
     <rect id="target" x="0" y="0" width="10" height="10" fill="red" />
@@ -934,6 +1015,242 @@ TEST_F(CompositorControllerTest, SnapshotSegmentInspectorRowsEmitsOneRowPerSlot)
       EXPECT_GT(row.generation, 0u);
     }
   }
+}
+
+TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  EXPECT_TRUE(plans[1].visible);
+  EXPECT_FALSE(plans[1].hasExpensiveEffect);
+  EXPECT_EQ(plans[1].estimatedDrawOps, 1);
+  EXPECT_GT(plans[1].estimatedPathVerbs, 0);
+  EXPECT_GT(plans[1].estimatedRetainedBytes, 0u);
+  EXPECT_LE(plans[1].estimatedRedrawCost, plans[1].estimatedCacheOverheadCost);
+  EXPECT_TRUE(plans[1].staticHeuristicImmediate);
+  EXPECT_FALSE(plans[1].dynamicHeuristicImmediate);
+  EXPECT_THAT(plans[1].spanRangeLabel, HasSubstr("rect#cheap"));
+
+  const auto immediateTiles =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
+  const auto immediateTileIt =
+      std::find_if(immediateTiles.begin(), immediateTiles.end(),
+                   [](const CompositorTile& tile) { return tile.immediate; });
+  ASSERT_NE(immediateTileIt, immediateTiles.end());
+  EXPECT_FALSE(immediateTileIt->bitmap.empty());
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  const auto inspectorTileIt =
+      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
+        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
+               tile.immediate;
+      });
+  ASSERT_NE(inspectorTileIt, inspectorTiles.end());
+  EXPECT_TRUE(inspectorTileIt->staticHeuristicImmediate);
+  EXPECT_FALSE(inspectorTileIt->dynamicHeuristicImmediate);
+  EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#cheap"));
+}
+
+TEST_F(CompositorControllerTest, ImmediateStaticSpanComposesDirectlyIntoCurrentFrame) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  EXPECT_CALL(renderer_, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer_, endFrame()).Times(1);
+  EXPECT_CALL(renderer_, drawPath(_, _)).Times(AtLeast(1));
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+}
+
+TEST_F(CompositorControllerTest, GradientStaticSpanPlanCanChooseImmediate) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <linearGradient id="g" x1="0" y1="0" x2="8" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="blue" />
+        <stop offset="1" stop-color="white" />
+      </linearGradient>
+    </defs>
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="gradient" x="2" y="2" width="8" height="8" fill="url(#g)" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  EXPECT_TRUE(plans[1].visible);
+  EXPECT_FALSE(plans[1].hasExpensiveEffect)
+      << "Gradient fills are direct path paints; timing should decide immediate vs cached.";
+  EXPECT_EQ(plans[1].estimatedDrawOps, 1);
+  EXPECT_TRUE(plans[1].staticHeuristicImmediate || plans[1].dynamicHeuristicImmediate);
+  EXPECT_THAT(plans[1].spanRangeLabel, HasSubstr("rect#gradient"));
+}
+
+TEST_F(CompositorControllerTest, StaticImmediateHeuristicDoesNotDemoteAfterSlowMeasurement) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
+  )svg");
+
+  configureMockForCaching(std::chrono::milliseconds(5));
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_TRUE(plans[1].staticHeuristicImmediate);
+  EXPECT_GT(plans[1].measuredRasterizeMs, plans[1].immediateBudgetMs);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate)
+      << "Slow measured timing must not demote the static cheapness heuristic.";
+}
+
+TEST_F(CompositorControllerTest, FastMeasuredStaticSpanCanExpandToImmediate) {
+  SVGDocument document = makeDocument(
+      R"svg(
+        <rect id="target" x="300" y="0" width="10" height="10" fill="red" />
+        <rect id="medium" x="20" y="20" width="80" height="80" fill="blue" />
+      )svg",
+      Vector2i(512, 512));
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_FALSE(plans[1].staticHeuristicImmediate);
+  EXPECT_LT(plans[1].measuredRasterizeMs, plans[1].immediateBudgetMs);
+  EXPECT_TRUE(plans[1].dynamicHeuristicImmediate);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+
+  const auto stats = compositor.lastRenderFrameStats();
+  EXPECT_GE(stats.immediateTileCount, 1);
+  EXPECT_GE(stats.cachedTileCount, 1);
+}
+
+TEST_F(CompositorControllerTest, DynamicImmediateSpanDemotesToCachedAfterSlowRender) {
+  SVGDocument document = makeDocument(
+      R"svg(
+        <rect id="target" x="300" y="0" width="10" height="10" fill="red" />
+        <rect id="medium" x="20" y="20" width="80" height="80" fill="blue" />
+      )svg",
+      Vector2i(512, 512));
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
+
+  {
+    const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+    ASSERT_EQ(plans.size(), 2u);
+    ASSERT_FALSE(plans[1].staticHeuristicImmediate);
+    ASSERT_TRUE(plans[1].dynamicHeuristicImmediate);
+    ASSERT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  }
+
+  configureMockForCaching(std::chrono::milliseconds(5));
+  compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_FALSE(plans[1].staticHeuristicImmediate);
+  EXPECT_FALSE(plans[1].dynamicHeuristicImmediate);
+  EXPECT_TRUE(plans[1].demotedDynamicImmediate);
+  EXPECT_GT(plans[1].measuredRasterizeMs, plans[1].immediateBudgetMs);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::CachedTile);
+
+  const auto stats = compositor.lastRenderFrameStats();
+  EXPECT_GE(stats.immediateTileCount, 1)
+      << "The slow rerender is charged to rnd-imm because the span was immediate entering this "
+         "frame.";
+  EXPECT_EQ(stats.cachedTileCount, 0);
+  EXPECT_GT(stats.immediateRasterizeMs, plans[1].immediateBudgetMs);
+
+  const auto inspectorTiles = compositor.snapshotCompositeTiles();
+  const auto inspectorTileIt =
+      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
+        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
+               tile.demotedDynamicImmediate;
+      });
+  ASSERT_NE(inspectorTileIt, inspectorTiles.end());
+  EXPECT_FALSE(inspectorTileIt->immediate);
+  EXPECT_GT(inspectorTileIt->lastRasterizeMs, inspectorTileIt->immediateBudgetMs);
+  EXPECT_THAT(inspectorTileIt->spanRangeLabel, HasSubstr("rect#medium"));
+}
+
+TEST_F(CompositorControllerTest, PaintResourceStaticSpanPlanChoosesCachedTile) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <pattern id="p" x="0" y="0" width="4" height="4" patternUnits="userSpaceOnUse">
+        <rect width="4" height="4" fill="blue" />
+      </pattern>
+    </defs>
+    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
+    <rect id="patterned" x="2" y="2" width="8" height="8" fill="url(#p)" />
+  )svg");
+
+  configureMockForCaching();
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+  compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
+
+  const auto plans = compositor.snapshotStaticSpanPlansForTesting();
+  ASSERT_EQ(plans.size(), 2u);
+  EXPECT_EQ(plans[1].mode, StaticSpanMode::CachedTile);
+  EXPECT_TRUE(plans[1].hasExpensiveEffect);
+  EXPECT_GE(plans[1].estimatedDrawOps, 1);
+
+  const auto immediateTiles =
+      compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
+  EXPECT_TRUE(std::none_of(immediateTiles.begin(), immediateTiles.end(),
+                           [](const CompositorTile& tile) { return tile.immediate; }));
 }
 
 TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanvasOffset) {

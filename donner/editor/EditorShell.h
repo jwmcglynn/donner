@@ -14,6 +14,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorInputBridge.h"
 #include "donner/editor/EditorShellLayout.h"
+#include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
@@ -32,6 +33,12 @@
 namespace donner::editor::gui {
 class EditorWindow;
 }
+
+#ifdef DONNER_EDITOR_WGPU
+namespace donner::svg {
+class RendererGeode;
+}
+#endif
 
 namespace donner::editor::repro {
 class ReproRecorder;
@@ -95,10 +102,15 @@ struct LayerInspectorStatusReadback {
   int metadataOnlyMissCount = 0;
   /// Duplicate live texture handles found across different tile ids.
   int duplicateLiveTextureCount = 0;
-  /// Overlay texture dimensions in pixels.
+  /// Retained overlay texture dimensions in pixels. Zero when immediate overlay presentation is
+  /// active.
   Vector2i overlayDimsPx = Vector2i::Zero();
   /// Backend overlay texture/view handle, represented as an integer for diagnostics.
   std::uint64_t overlayTextureHandle = 0;
+  /// Presentation-cache resource counters captured after the frame.
+  PresentationResourceStats presentationResources;
+  /// Latest editor rendering cost counters.
+  FrameCostBreakdown frameCost;
   /// Paint-order texture state currently visible to the presenter.
   std::vector<Tile> tiles;
 };
@@ -169,6 +181,8 @@ private:
   void renderDockedLayerPanelDragHandle();
   void renderFloatingLayerPanel();
   void renderLayerPanelContents();
+  void maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost);
+  void maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost);
   [[nodiscard]] bool highlightSelectionSourceIfNeeded();
   [[nodiscard]] std::vector<svg::SVGElement> sourceHoverElements() const;
   [[nodiscard]] std::vector<SourceByteRange> sourceHoverRangesForElements(
@@ -193,6 +207,7 @@ private:
       const SelectionTransformHandleIntent& hoverTransformIntent,
       const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview);
   void renderReferenceHighlightChip();
+  bool flushQueuedMutationAndRefreshOverlay();
   void renderPenToolPreview();
   void openRenderPaneContextMenu(const Vector2d& documentPoint);
   void renderRenderPaneContextMenu();
@@ -237,6 +252,9 @@ private:
   LayerInspectorPanel layerInspectorPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
+#ifdef DONNER_EDITOR_WGPU
+  std::unique_ptr<svg::RendererGeode> directOverlayRenderer_;
+#endif
 
   std::string lastWindowTitle_;
   bool viewportInitialized_ = false;
@@ -264,6 +282,12 @@ private:
   std::optional<svg::SVGElement> lastTreeSelection_;
   std::optional<ImVec2> lastPostedScreenPoint_;
   bool treeviewPendingScroll_ = false;
+  std::uint64_t resourceDiagnosticsFrame_ = 0;
+  std::uint64_t frameTelemetryFrame_ = 0;
+  std::uint64_t lastLoggedPresentationPeakBytes_ = 0;
+  std::uint64_t lastLoggedWgpuTextureCreates_ = 0;
+  std::uint64_t lastLoggedWgpuBufferCreates_ = 0;
+  bool frameMissTelemetryWriteErrorLogged_ = false;
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
   bool sourceFocusOriginatedInStyle_ = false;
@@ -287,6 +311,7 @@ private:
   /// frame so re-drag hit testing catches up without posting a
   /// pre-move render ahead of the drag update.
   bool pendingClickFollowupAfterIdle_ = false;
+  std::optional<double> pendingSelectClickStartSeconds_;
   bool sourceFocusMode_ = true;
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;

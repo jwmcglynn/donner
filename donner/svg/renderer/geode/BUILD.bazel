@@ -148,6 +148,7 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = [
         "//donner/editor/gui:__pkg__",
+        "//donner/editor/tests:__pkg__",
         "//donner/svg/renderer:__subpackages__",
         "//examples:__pkg__",
     ],

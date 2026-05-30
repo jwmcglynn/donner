@@ -5,8 +5,10 @@
 #include <optional>
 #include <ostream>
 #include <variant>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/MathUtils.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/SelectTool.h"
 
@@ -135,18 +137,30 @@ public:
   /// Returns true when an active drag needs a fresh composited capture.
   [[nodiscard]] bool needsCompositedLayerCapture(
       const std::optional<SelectTool::ActiveDragPreview>& activePreview,
-      std::uint64_t /*currentVersion*/, const Vector2i& currentCanvasSize) const {
+      std::uint64_t /*currentVersion*/, const Vector2i& /*currentCanvasSize*/) const {
     if (!activePreview.has_value()) {
       return false;
     }
 
     const std::optional<CachedTextures> cache = currentCache();
-    // Drag transform writes bump the document version every mouse move, but
-    // the active preview already carries that affine delta for presenter-side
-    // texture placement. Recapture only when the cache cannot represent the
-    // selected entity in the current canvas epoch.
-    return !cache.has_value() || cache->entity != activePreview->entity ||
-           cache->canvasSize != currentCanvasSize;
+    // Drag transform writes bump the document version every mouse move. Pure
+    // translation stays crisp through presenter-side texture placement, but
+    // affine resize/rotate previews can blur a cached bitmap. Refresh those
+    // opportunistically only when the cached bitmap represents an older affine
+    // transform. Zoom-driven canvas-size changes still settle after the drag so
+    // we do not block pointer frames on a full cached-span reraster.
+    if (!cache.has_value() || cache->entity != activePreview->entity) {
+      return true;
+    }
+
+    const SelectTool::ActiveDragPreview representedPreview =
+        representedPreviewForActiveCache(*cache, *activePreview);
+    if (activePreview->documentFromCachedDocument.isTranslation() &&
+        representedPreview.documentFromCachedDocument.isTranslation()) {
+      return false;
+    }
+
+    return !SameDragPreviewTransform(representedPreview, *activePreview);
   }
 
   /// Returns true when a released drag should request a settled composited refresh.
@@ -158,16 +172,22 @@ public:
   }
 
   /// Returns true when selection should trigger an async prewarm capture.
-  [[nodiscard]] bool shouldPrewarm(Entity selectedEntity, std::uint64_t currentVersion,
-                                   const Vector2i& currentCanvasSize, bool dragActive) const {
+  [[nodiscard]] bool shouldPrewarm(Entity selectedEntity,
+                                   const std::vector<Entity>& selectedExtraEntities,
+                                   std::uint64_t currentVersion, const Vector2i& currentCanvasSize,
+                                   bool dragActive) const {
     if (selectedEntity == entt::null || dragActive || isWaitingForFullRender() ||
         isWaitingForChromeRefresh()) {
       return false;
     }
 
     const std::optional<CachedTextures> cache = currentCache();
-    return !cache.has_value() || cache->entity != selectedEntity ||
-           cache->version != currentVersion || cache->canvasSize != currentCanvasSize;
+    if (!cache.has_value() || cache->entity != selectedEntity || cache->version != currentVersion ||
+        cache->canvasSize != currentCanvasSize) {
+      return true;
+    }
+
+    return representedPreviewForCache(*cache).extraEntities != selectedExtraEntities;
   }
 
   /// Mark cached composited textures as available for the given entity/version/canvas size.
@@ -369,10 +389,33 @@ private:
 
     return SelectTool::ActiveDragPreview{
         .entity = cache.entity,
+        .extraEntities = activePreview.extraEntities,
         .translation = Vector2d::Zero(),
         .documentFromCachedDocument = Transform2d(),
         .dragGeneration = activePreview.dragGeneration,
     };
+  }
+
+  static bool SameVector(const Vector2d& lhs, const Vector2d& rhs) {
+    constexpr double kTolerance = 1e-6;
+    return NearEquals(lhs.x, rhs.x, kTolerance) && NearEquals(lhs.y, rhs.y, kTolerance);
+  }
+
+  static bool SameTransform(const Transform2d& lhs, const Transform2d& rhs) {
+    constexpr double kTolerance = 1e-6;
+    for (int i = 0; i < 6; ++i) {
+      if (!NearEquals(lhs.data[i], rhs.data[i], kTolerance)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  static bool SameDragPreviewTransform(const SelectTool::ActiveDragPreview& lhs,
+                                       const SelectTool::ActiveDragPreview& rhs) {
+    return lhs.entity == rhs.entity && lhs.dragGeneration == rhs.dragGeneration &&
+           lhs.extraEntities == rhs.extraEntities && SameVector(lhs.translation, rhs.translation) &&
+           SameTransform(lhs.documentFromCachedDocument, rhs.documentFromCachedDocument);
   }
 
   State state_ = NoCache{};

@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <span>
 #include <sstream>
@@ -22,6 +23,7 @@
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/FocusView.h"
+#include "donner/editor/FrameMissTelemetry.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/SourceSelection.h"
@@ -33,6 +35,10 @@
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/properties/PaintServer.h"
+#include "donner/svg/renderer/RendererInterface.h"
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/svg/renderer/RendererGeode.h"
+#endif
 #include "embed_resources/FiraCodeFont.h"
 #include "embed_resources/RobotoFont.h"
 
@@ -56,6 +62,7 @@ constexpr float kMinInspectorPaneHeight = 96.0f;
 constexpr float kMinLayerPanelHeight = 140.0f;
 constexpr double kTrackpadPanPixelsPerScrollUnit = 10.0;
 constexpr double kWheelZoomStep = 1.1;
+constexpr double kSelectMarqueeHoldDelaySeconds = 0.20;
 constexpr int kMaxSaveSyncFlushPasses = 4;
 constexpr float kSelectionSizeChipPaddingX = 6.0f;
 constexpr float kSelectionSizeChipPaddingY = 3.0f;
@@ -88,6 +95,57 @@ constexpr ImWchar kEditorSymbolGlyphRanges[] = {
     0x2731, 0x2731,  // Heavy asterisk.
     0,
 };
+
+bool ResourceDiagnosticsEnabled() {
+  return std::getenv("DONNER_EDITOR_RESOURCE_LOG") != nullptr;
+}
+
+bool FrameMissTelemetryEnabled() {
+  const char* value = std::getenv("DONNER_EDITOR_FRAME_MISS_LOG");
+  if (value == nullptr) {
+    return ResourceDiagnosticsEnabled();
+  }
+
+  const std::string_view valueView(value);
+  return valueView != "0" && valueView != "false";
+}
+
+bool FrameMissTelemetryTargetIsStderr(std::string_view target) {
+  return target.empty() || target == "1" || target == "true" || target == "stderr";
+}
+
+std::uint64_t MegabytesRoundedUp(std::uint64_t bytes) {
+  constexpr std::uint64_t kBytesPerMiB = 1024u * 1024u;
+  return (bytes + kBytesPerMiB - 1u) / kBytesPerMiB;
+}
+
+FrameMemorySample MemorySampleFromPresentationResources(
+    const PresentationResourceStats& resources) {
+  return FrameMemorySample{
+      .overlayBytes = resources.overlayBytes,
+      .activeTileBytes = resources.activeTileBytes,
+      .overviewTileBytes = resources.overviewTileBytes,
+      .retiredBytes = resources.pendingRetiredBytes + resources.agedRetiredBytes,
+      .totalTrackedBytes = resources.totalTrackedBytes,
+      .peakTrackedBytes = resources.peakTrackedBytes,
+      .wgpuLifetimeTextureCreates = resources.wgpuLifetimeTextureCreates,
+      .wgpuLifetimeBufferCreates = resources.wgpuLifetimeBufferCreates,
+  };
+}
+
+FrameMissResourceTelemetry FrameMissTelemetryFromPresentationResources(
+    const PresentationResourceStats& resources) {
+  return FrameMissResourceTelemetry{
+      .overlayBytes = resources.overlayBytes,
+      .activeTileBytes = resources.activeTileBytes,
+      .overviewTileBytes = resources.overviewTileBytes,
+      .retiredBytes = resources.pendingRetiredBytes + resources.agedRetiredBytes,
+      .totalTrackedBytes = resources.totalTrackedBytes,
+      .peakTrackedBytes = resources.peakTrackedBytes,
+      .wgpuLifetimeTextureCreates = resources.wgpuLifetimeTextureCreates,
+      .wgpuLifetimeBufferCreates = resources.wgpuLifetimeBufferCreates,
+  };
+}
 
 ImGuiMouseCursor CursorForTransformHandleIntent(const SelectionTransformHandleIntent& intent) {
   if (intent.kind == SelectionTransformHandleKind::Rotate) {
@@ -588,6 +646,57 @@ Box2d ResolveDocumentViewBox(svg::SVGDocument& document) {
   return Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
 }
 
+#ifdef DONNER_EDITOR_WGPU
+Box2d FramebufferBoxFromScreenBox(const Box2d& screenBox, double devicePixelRatio) {
+  return Box2d(screenBox.topLeft * devicePixelRatio, screenBox.bottomRight * devicePixelRatio);
+}
+
+Transform2d FramebufferFromDocumentTransform(const ViewportState& viewport) {
+  const double devicePixelsPerDocUnit = viewport.devicePixelsPerDocUnit();
+  const Vector2d framebufferOriginFromDocumentOrigin =
+      viewport.panScreenPoint * viewport.devicePixelRatio -
+      viewport.panDocPoint * devicePixelsPerDocUnit;
+
+  Transform2d framebufferFromDocument(Transform2d::uninitialized);
+  framebufferFromDocument.data[0] = devicePixelsPerDocUnit;
+  framebufferFromDocument.data[1] = 0.0;
+  framebufferFromDocument.data[2] = 0.0;
+  framebufferFromDocument.data[3] = devicePixelsPerDocUnit;
+  framebufferFromDocument.data[4] = framebufferOriginFromDocumentOrigin.x;
+  framebufferFromDocument.data[5] = framebufferOriginFromDocumentOrigin.y;
+  return framebufferFromDocument;
+}
+
+void DrawImmediateOverlaySnapshotToFramebuffer(svg::RendererGeode& renderer,
+                                               const gui::EditorWindowWgpuRenderTarget& target,
+                                               const ViewportState& viewport,
+                                               const Box2d& imageClipRect,
+                                               const SelectionChromeSnapshot& snapshot) {
+  if (!target.texture || target.framebufferSizePx.x <= 0 || target.framebufferSizePx.y <= 0) {
+    return;
+  }
+
+  SelectionChromeSnapshot framebufferSnapshot = snapshot;
+  framebufferSnapshot.canvasFromDoc = FramebufferFromDocumentTransform(viewport);
+
+  svg::RenderViewport renderViewport;
+  renderViewport.size = Vector2d(static_cast<double>(target.framebufferSizePx.x),
+                                 static_cast<double>(target.framebufferSizePx.y));
+  renderViewport.devicePixelRatio = 1.0;
+
+  renderer.setTargetTexture(target.texture);
+  renderer.setPreserveTargetOnBeginFrame(true);
+  renderer.beginFrame(renderViewport);
+  svg::ResolvedClip clip;
+  clip.clipRect = FramebufferBoxFromScreenBox(imageClipRect, viewport.devicePixelRatio);
+  renderer.pushClip(clip);
+  OverlayRenderer::drawChromeFromSnapshot(renderer, framebufferSnapshot);
+  renderer.popClip();
+  renderer.endFrame();
+  renderer.clearTargetTexture();
+}
+#endif
+
 }  // namespace
 
 EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
@@ -675,6 +784,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   app_.setCleanSourceText(textEditor_.getText());
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   textures_.initialize();
+#ifdef DONNER_EDITOR_WGPU
+  if (window_.geodeFramebufferDevice() != nullptr) {
+    directOverlayRenderer_ = std::make_unique<svg::RendererGeode>(window_.geodeFramebufferDevice());
+  }
+#endif
   if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
     std::fprintf(stderr, "[editor] custom rotate cursor unavailable; using fallback cursor\n");
   }
@@ -721,6 +835,9 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
 }
 
 EditorShell::~EditorShell() {
+#ifdef DONNER_EDITOR_WGPU
+  window_.setWgpuDirectRenderCallback({});
+#endif
   if (reproRecorder_) {
     if (!reproRecorder_->flush()) {
       std::fprintf(stderr, "[repro] flush failed — recording lost\n");
@@ -751,6 +868,8 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
   const Vector2i compositorCanvas = renderCoordinator_.asyncRenderer().compositorState().canvasSize;
   const CanvasFreshness freshness =
       ClassifyCanvasFreshness(viewportDesiredCanvas, documentCanvas, compositorCanvas);
+  FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
+  frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
   LayerInspectorStatusReadback readback{
       .canvasFreshness = freshness,
       .statusSuffix = std::string(CanvasFreshnessStatusSuffix(freshness)),
@@ -761,6 +880,8 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
       .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
       .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
+      .presentationResources = textures_.presentationResourceStats(),
+      .frameCost = frameCost,
   };
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
       selectTool_.activeDragPreview();
@@ -793,6 +914,88 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
     });
   }
   return readback;
+}
+
+void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCost) {
+  if (!ResourceDiagnosticsEnabled()) {
+    return;
+  }
+
+  ++resourceDiagnosticsFrame_;
+  const PresentationResourceStats resources = textures_.presentationResourceStats();
+  const bool firstFrame = resourceDiagnosticsFrame_ == 1;
+  const bool periodic = resourceDiagnosticsFrame_ % 60 == 0;
+  constexpr std::uint64_t kPeakLogStepBytes = 16u * 1024u * 1024u;
+  const bool peakAdvanced =
+      resources.peakTrackedBytes >= lastLoggedPresentationPeakBytes_ + kPeakLogStepBytes;
+  if (!firstFrame && !periodic && !peakAdvanced) {
+    return;
+  }
+
+  const std::uint64_t textureCreateDelta =
+      resources.wgpuLifetimeTextureCreates - lastLoggedWgpuTextureCreates_;
+  const std::uint64_t bufferCreateDelta =
+      resources.wgpuLifetimeBufferCreates - lastLoggedWgpuBufferCreates_;
+  lastLoggedWgpuTextureCreates_ = resources.wgpuLifetimeTextureCreates;
+  lastLoggedWgpuBufferCreates_ = resources.wgpuLifetimeBufferCreates;
+  lastLoggedPresentationPeakBytes_ =
+      std::max(lastLoggedPresentationPeakBytes_, resources.peakTrackedBytes);
+  std::cerr << "[DonnerResource] frame=" << resourceDiagnosticsFrame_
+            << " tracked_mib=" << MegabytesRoundedUp(resources.totalTrackedBytes)
+            << " peak_mib=" << MegabytesRoundedUp(resources.peakTrackedBytes)
+            << " overlay_mib=" << MegabytesRoundedUp(resources.overlayBytes)
+            << " active_tile_mib=" << MegabytesRoundedUp(resources.activeTileBytes)
+            << " overview_tile_mib=" << MegabytesRoundedUp(resources.overviewTileBytes)
+            << " retired_mib="
+            << MegabytesRoundedUp(resources.pendingRetiredBytes + resources.agedRetiredBytes)
+            << " active_tiles=" << resources.activeTileTextures
+            << " overview_tiles=" << resources.overviewTileTextures << " retired_textures="
+            << resources.pendingRetiredTextures + resources.agedRetiredTextures
+            << " largest_allocation_px=" << resources.largestAllocationPx.x << "x"
+            << resources.largestAllocationPx.y
+            << " wgpu_texture_creates=" << resources.wgpuLifetimeTextureCreates
+            << " wgpu_texture_creates_delta=" << textureCreateDelta
+            << " wgpu_buffer_creates=" << resources.wgpuLifetimeBufferCreates
+            << " wgpu_buffer_creates_delta=" << bufferCreateDelta
+            << " overlay_upload_bytes=" << frameCost.overlay.payloadBytes
+            << " tile_upload_bytes=" << frameCost.compositedUpload.payloadBytes << "\n";
+}
+
+void EditorShell::maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost) {
+  if (!FrameMissTelemetryEnabled()) {
+    return;
+  }
+
+  const PresentationResourceStats resources = textures_.presentationResourceStats();
+  const FrameMissTelemetryInput input{
+      .frameIndex = frameTelemetryFrame_,
+      .frameMs = interactionController_.frameHistory().latest(),
+      .backendMs = interactionController_.frameHistory().latestBackend(),
+      .frameCost = frameCost,
+      .resources = FrameMissTelemetryFromPresentationResources(resources),
+  };
+  const std::string json = BuildFrameMissTelemetryJson(input);
+  if (json.empty()) {
+    return;
+  }
+
+  const char* targetValue = std::getenv("DONNER_EDITOR_FRAME_MISS_LOG");
+  const std::string_view target =
+      targetValue != nullptr ? std::string_view(targetValue) : std::string_view();
+  if (targetValue != nullptr && !FrameMissTelemetryTargetIsStderr(target)) {
+    std::ofstream output(std::string(target), std::ios::app);
+    if (output.good()) {
+      output << json;
+      return;
+    }
+
+    if (!frameMissTelemetryWriteErrorLogged_) {
+      std::cerr << "[DonnerFrameMiss] failed to open telemetry path: " << target << "\n";
+      frameMissTelemetryWriteErrorLogged_ = true;
+    }
+  }
+
+  std::cerr << "[DonnerFrameMiss] " << json;
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
@@ -1413,7 +1616,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     if (boundsCache.lastSelection != app_.selectedElements()) {
       return SelectionTransformHandleIntent{};
     }
-    return HitTestSelectionTransformHandles(boundsCache.displayedBoundsDoc, documentPoint,
+    const std::vector<Box2d>& boundsDoc = !boundsCache.displayedBoundsDoc.empty()
+                                              ? boundsCache.displayedBoundsDoc
+                                              : boundsCache.pendingBoundsDoc;
+    return HitTestSelectionTransformHandles(boundsDoc, documentPoint,
                                             interactionController_.viewport().pixelsPerDocUnit());
   };
   SelectionTransformHandleIntent hoverTransformIntent;
@@ -1452,6 +1658,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     modifiers.option = ImGui::GetIO().KeyAlt;
     modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
+    pendingSelectClickStartSeconds_ = ImGui::GetTime();
   }
 
   // Design doc 0033 §M8 — click→drag handoff doesn't wait for raster.
@@ -1476,44 +1683,87 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     const auto& pendingClick = *interactionController_.pendingClick();
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     const bool cacheMatchesSelection = boundsCache.lastSelection == app_.selectedElements();
+    const std::vector<Box2d>& redragBoundsDoc = !boundsCache.displayedBoundsDoc.empty()
+                                                    ? boundsCache.displayedBoundsDoc
+                                                    : boundsCache.pendingBoundsDoc;
+    const std::vector<Box2d>& redragOccludingBoundsDoc =
+        !boundsCache.displayedOccludingBoundsDoc.empty() ? boundsCache.displayedOccludingBoundsDoc
+                                                         : boundsCache.pendingOccludingBoundsDoc;
     const SelectionTransformHandleIntent pendingHandleIntent =
         cacheMatchesSelection ? cachedHandleIntentAt(pendingClick.documentPoint)
                               : SelectionTransformHandleIntent{};
-    const bool tookFastRedrag =
-        selectToolActive && cacheMatchesSelection &&
-        pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-        selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
-                                             pendingClick.modifiers, boundsCache.displayedBoundsDoc,
-                                             boundsCache.displayedOccludingBoundsDoc);
+    bool tookFastRedrag = selectToolActive && cacheMatchesSelection &&
+                          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+                          selectTool_.tryStartRedragOnSelected(
+                              app_, pendingClick.documentPoint, pendingClick.modifiers,
+                              redragBoundsDoc, redragOccludingBoundsDoc);
+    if (!tookFastRedrag && renderCoordinator_.asyncRenderer().isBusy() && selectToolActive &&
+        cacheMatchesSelection && pendingHandleIntent.kind == SelectionTransformHandleKind::None) {
+      // The occlusion cache uses broad AABBs for later-painted elements. When the worker is busy,
+      // prefer an optimistic re-drag of the current selection over freezing behind a conservative
+      // false-positive overlap; the idle path above still uses full hit-testing for retargets.
+      tookFastRedrag = selectTool_.tryStartRedragOnSelected(app_, pendingClick.documentPoint,
+                                                            pendingClick.modifiers, redragBoundsDoc,
+                                                            std::span<const Box2d>());
+    }
     if (tookFastRedrag) {
       lastPostedScreenPoint_.reset();
       interactionController_.clearPendingClick();
       pendingClickFollowupAfterIdle_ = true;
     } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
-      // Slow path: full `onMouseDown` (hitTest + selection change +
-      // possible drag start). Race-safe only when the worker is idle.
-      lastPostedScreenPoint_.reset();
-      bool queuedMutationForNextFrame = false;
-      if (selectToolActive) {
-        selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-      } else if (penToolActive) {
-        penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
-        if (!ImGui::IsMouseDown(ImGuiMouseButton_Left) && penTool_.isDraggingAnchor()) {
-          penTool_.onMouseUp(app_, pendingClick.documentPoint);
-        }
-        queuedMutationForNextFrame = true;
-      }
-      if (queuedMutationForNextFrame) {
-        window_.wakeEventLoop();
-      } else {
+      const bool leftMouseDown = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+      const bool selectHoldElapsed =
+          pendingSelectClickStartSeconds_.has_value() &&
+          ImGui::GetTime() - *pendingSelectClickStartSeconds_ >= kSelectMarqueeHoldDelaySeconds;
+      const bool selectDragIntent = ImGui::IsMouseDragging(ImGuiMouseButton_Left, 2.0f);
+      const bool pendingClickHitsSelection =
+          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
+      if (selectToolActive && leftMouseDown &&
+          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          !pendingClickHitsSelection && (selectHoldElapsed || selectDragIntent)) {
+        lastPostedScreenPoint_.reset();
+        selectTool_.beginMarquee(app_, pendingClick.documentPoint, pendingClick.modifiers.shift);
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         requestRenderAtEndOfFrame_ = true;
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
             app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-            RenderCoordinator::OverlayUploadMode::MatchDisplayedVersion,
             selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+        interactionController_.clearPendingClick();
+      } else if (selectToolActive && leftMouseDown &&
+                 pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+                 !pendingClickHitsSelection) {
+        // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or the
+        // hold delay above starts marquee. This prevents full-canvas/background elements from being
+        // selected just because the user is preparing a marquee drag.
+      } else {
+        // Slow path: full `onMouseDown` (hitTest + selection change +
+        // possible drag start). Race-safe only when the worker is idle.
+        lastPostedScreenPoint_.reset();
+        bool queuedMutationForNextFrame = false;
+        if (selectToolActive) {
+          selectTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+          if (!leftMouseDown) {
+            selectTool_.onMouseUp(app_, pendingClick.documentPoint);
+          }
+        } else if (penToolActive) {
+          penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+          if (!leftMouseDown && penTool_.isDraggingAnchor()) {
+            penTool_.onMouseUp(app_, pendingClick.documentPoint);
+          }
+          queuedMutationForNextFrame = true;
+        }
+        if (queuedMutationForNextFrame) {
+          flushQueuedMutationAndRefreshOverlay();
+        } else {
+          renderCoordinator_.refreshSelectionBoundsCache(app_);
+          requestRenderAtEndOfFrame_ = true;
+          renderCoordinator_.rasterizeOverlayForCurrentSelection(
+              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+        }
+        interactionController_.clearPendingClick();
       }
-      interactionController_.clearPendingClick();
     } else {
       // Worker is busy with a (likely-stale) prewarm render at the
       // previous canvas size or zoom. Cancel it so the next idle frame
@@ -1539,8 +1789,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   if (selectTool_.isDragging() || selectTool_.isMarqueeing()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       const ImVec2 currentScreen = ImGui::GetMousePos();
+      // Local drag state is UI-thread owned and feeds composited presentation directly, so keep it
+      // moving while the async renderer is busy. DOM writes are queued and coalesced until the
+      // worker releases the document.
       if (ShouldPostDragMove<ImVec2>(currentScreen, lastPostedScreenPoint_,
-                                     renderCoordinator_.asyncRenderer().isBusy())) {
+                                     /*pendingFrameInFlight=*/false)) {
         MouseModifiers modifiers;
         modifiers.shift = ImGui::GetIO().KeyShift;
         modifiers.option = ImGui::GetIO().KeyAlt;
@@ -1552,8 +1805,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
               app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-              RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-              selectTool_.activeTransformBoundsPreview());
+              selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         }
       }
     }
@@ -1576,8 +1828,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
               previewBeforeRelease, app_.document().currentFrameVersion());
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-              RenderCoordinator::OverlayUploadMode::Immediate);
+              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
         }
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
@@ -1587,13 +1838,17 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
   }
 
+  if (!interactionController_.pendingClick().has_value()) {
+    pendingSelectClickStartSeconds_.reset();
+  }
+
   if (penToolActive && penTool_.isDraggingAnchor()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       penTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
-      window_.wakeEventLoop();
+      flushQueuedMutationAndRefreshOverlay();
     }
   }
 
@@ -1612,23 +1867,63 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           liveActiveDragPreview);
   const auto displayedDragPreview =
       renderCoordinator_.compositedPresentation().presentationPreview(activeDragPreview);
+  const Entity suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_);
+  const bool suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_);
+  const bool hasPresentableActiveDragTarget = HasPresentableDragTargetTile(
+      textures_, activeDragPreview, suppressedLayerEntity, suppressDragTargetTiles);
+  const auto representedDragPreview = OverlayRepresentedDragPreviewForPresentation(
+      activeDragPreview, displayedDragPreview, hasPresentableActiveDragTarget);
+  const auto representedGesturePreview = OverlayGesturePreviewForPresentation(
+      activeGesturePreview, liveActiveDragPreview, representedDragPreview);
+  if (!contentOnlyCaptureThisFrame_) {
+    renderCoordinator_.rasterizeOverlayForPresentation(app_, selectTool_,
+                                                       interactionController_.viewport(), textures_,
+                                                       activeDragPreview, representedDragPreview);
+  }
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
+  bool directFramebufferOverlay = false;
+#ifdef DONNER_EDITOR_WGPU
+  window_.setWgpuDirectRenderCallback({});
+  const std::optional<Box2d> directOverlayClipRect =
+      PresentedImageClipRect(paneRect, interactionController_.viewport().imageScreenRect());
+  if (!contentOnlyCaptureThisFrame_ && directOverlayRenderer_ != nullptr &&
+      renderCoordinator_.immediateOverlaySnapshot().has_value() &&
+      directOverlayClipRect.has_value()) {
+    SelectionChromeSnapshot overlaySnapshot = *renderCoordinator_.immediateOverlaySnapshot();
+    ViewportState overlayViewport = interactionController_.viewport();
+    const Box2d overlayClipRect = *directOverlayClipRect;
+    window_.setWgpuDirectRenderCallback(
+        [this, overlaySnapshot = std::move(overlaySnapshot), overlayViewport,
+         overlayClipRect](const gui::EditorWindowWgpuRenderTarget& target) {
+          if (directOverlayRenderer_ == nullptr) {
+            return;
+          }
+          DrawImmediateOverlaySnapshotToFramebuffer(
+              *directOverlayRenderer_, target, overlayViewport, overlayClipRect, overlaySnapshot);
+        });
+    directFramebufferOverlay = true;
+  }
+#endif
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .frameHistory = interactionController_.frameHistory(),
       .textures = textures_,
+      .immediateOverlaySnapshot = renderCoordinator_.immediateOverlaySnapshot(),
       .activeDragPreview = activeDragPreview,
       .displayedDragPreview = displayedDragPreview,
-      .overlayDragPreview = renderCoordinator_.presentedOverlayDragPreview(),
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
-      .suppressedLayerEntity = renderCoordinator_.suppressedCompositedLayerEntity(app_),
-      .suppressDragTargetTiles = renderCoordinator_.selectedElementIsDisplayNone(app_),
+      .suppressedLayerEntity = suppressedLayerEntity,
+      .suppressDragTargetTiles = suppressDragTargetTiles,
       .showOverlay = !contentOnlyCaptureThisFrame_,
+      .drawImmediateOverlay = !directFramebufferOverlay,
       .showFrameGraph = !contentOnlyCaptureThisFrame_,
   };
-  renderPanePresenter_.render(paneState);
+  const RenderPanePresenterCost paneCost = renderPanePresenter_.render(paneState);
+  renderCoordinator_.addImmediateOverlayDrawCost(paneCost.immediateOverlayDrawMs);
   if (!contentOnlyCaptureThisFrame_) {
     renderPenToolPreview();
-    renderSelectionSizeChip(hoverTransformIntent, activeGesturePreview);
+    renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
     renderToolPalette(paneOriginImGui, contentRegion);
     renderRenderPaneContextMenu();
@@ -1680,7 +1975,7 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
       sidebarPresenter_.renderInspector(liveAppForClicks, interactionController_.viewport());
   ImGui::End();
   if (inspectorQueuedMutation) {
-    window_.wakeEventLoop();
+    flushQueuedMutationAndRefreshOverlay();
   }
 
   if (layerPanelDetached_) {
@@ -1715,9 +2010,11 @@ void EditorShell::renderLayerPanelContents() {
                                       ? app_.document().document().canvasSize()
                                       : renderCoordinator_.asyncRenderer().lastDocumentCanvasSize();
   const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
+  const auto renderStats = renderCoordinator_.asyncRenderer().compositorRenderFrameStats();
+  const PresentationCoverageDiagnostics coverageDiagnostics = textures_.coverageDiagnostics();
   layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
                               viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
-                              documentCanvas, fastPath);
+                              documentCanvas, coverageDiagnostics, fastPath, renderStats);
 }
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -2089,8 +2386,7 @@ void EditorShell::applyReferenceHighlightPreview() {
   if (overlayChanged) {
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
         app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-        selectTool_.activeTransformBoundsPreview());
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
   if (overlayChanged || sourceChanged) {
     window_.wakeEventLoop();
@@ -2270,6 +2566,27 @@ void EditorShell::renderReferenceHighlightChip() {
                     IM_COL32(255, 255, 255, 255), label.c_str(), label.c_str() + label.size());
 }
 
+bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
+  if (renderCoordinator_.asyncRenderer().isBusy()) {
+    window_.wakeEventLoop();
+    return false;
+  }
+
+  if (!app_.flushFrame()) {
+    window_.wakeEventLoop();
+    return false;
+  }
+
+  documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
+  renderCoordinator_.refreshSelectionBoundsCache(app_);
+  renderCoordinator_.rasterizeOverlayForCurrentSelection(
+      app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+      selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+  requestRenderAtEndOfFrame_ = true;
+  window_.wakeEventLoop();
+  return true;
+}
+
 void EditorShell::renderPenToolPreview() {
   if (activeTool_ != ActiveTool::Pen || !penTool_.isDrafting()) {
     return;
@@ -2358,10 +2675,6 @@ void EditorShell::renderRenderPaneContextMenu() {
 
     const bool alreadySelected =
         ContainsElement(std::span<const svg::SVGElement>(app_.selectedElements()), hitElement);
-    if (ImGui::MenuItem("Select Element")) {
-      app_.setSelection(hitElement);
-      selectionChanged = true;
-    }
     if (ImGui::MenuItem("Add to Selection", nullptr, false, !alreadySelected)) {
       app_.addToSelection(hitElement);
       selectionChanged = true;
@@ -2379,6 +2692,15 @@ void EditorShell::renderRenderPaneContextMenu() {
   }
   if (ImGui::MenuItem("Delete Selection", nullptr, false, app_.hasSelection())) {
     selectionChanged = app_.deleteSelectionWithUndo(textEditor_.getText());
+  }
+  std::optional<svg::SVGElement> unbundleTarget;
+  if (renderContextMenuHitElement_.has_value()) {
+    unbundleTarget = *renderContextMenuHitElement_;
+  }
+  const PathOperationAvailability unbundleAvailability =
+      app_.compoundPathUnbundleAvailability(unbundleTarget);
+  if (ImGui::MenuItem("Unbundle Compound Path", nullptr, false, unbundleAvailability.canApply)) {
+    selectionChanged = app_.unbundleCompoundPath(unbundleTarget);
   }
   if (referenceHighlightSummary_.totalCount() > 1) {
     if (ImGui::MenuItem("Highlight Refs", nullptr, referenceHighlightActive_)) {
@@ -2405,8 +2727,7 @@ void EditorShell::renderRenderPaneContextMenu() {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
         app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-        selectTool_.activeTransformBoundsPreview());
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
     window_.wakeEventLoop();
   }
 
@@ -2596,8 +2917,7 @@ void EditorShell::applySourceStyleDecorationChipClick() {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
         app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-        RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-        selectTool_.activeTransformBoundsPreview());
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
 
   window_.wakeEventLoop();
@@ -2632,8 +2952,7 @@ void EditorShell::setSourcePaneVisible(bool visible) {
         !renderCoordinator_.asyncRenderer().isBusy()) {
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
           app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
-          RenderCoordinator::OverlayUploadMode::Immediate, selectTool_.activeDragPreview(),
-          selectTool_.activeTransformBoundsPreview());
+          selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
     }
   }
   window_.wakeEventLoop();
@@ -2649,6 +2968,8 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 
 void EditorShell::runFrame() {
   ZoneScopedN("EditorShell::runFrame");
+  ++frameTelemetryFrame_;
+  renderCoordinator_.beginFrameCostTracking();
   contentOnlyCaptureThisFrame_ = contentOnlyCaptureForNextFrame_;
   contentOnlyCaptureForNextFrame_ = false;
   requestRenderAtEndOfFrame_ = false;
@@ -2687,7 +3008,8 @@ void EditorShell::runFrame() {
     };
     reproRecorder_->snapshotFrame(frameContext);
   }
-  interactionController_.noteFrameDelta(ImGui::GetIO().DeltaTime * 1000.0f);
+  const float frameDeltaMs = ImGui::GetIO().DeltaTime * 1000.0f;
+  interactionController_.noteFrameDelta(frameDeltaMs);
   updateWindowTitle();
 
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
@@ -2695,6 +3017,8 @@ void EditorShell::runFrame() {
 
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
     if (app_.flushFrame()) {
+      renderCoordinator_.invalidatePresentationAfterDocumentFlush(
+          app_.document().lastFlushResult());
       renderCoordinator_.refreshSelectionBoundsCache(app_);
     }
   }
@@ -2827,8 +3151,18 @@ void EditorShell::runFrame() {
   if (requestRenderAtEndOfFrame_ && !renderCoordinator_.asyncRenderer().isBusy() &&
       app_.hasDocument()) {
     renderCoordinator_.maybeRequestRender(app_, selectTool_, interactionController_.viewport(),
-                                          textures_);
+                                          &textures_);
   }
+  FrameCostBreakdown frameCost = renderCoordinator_.lastFrameCostBreakdown();
+  if (sourcePaneVisible_) {
+    frameCost.sourceRopes = textEditor_.lastSourceRopeCost();
+  }
+  interactionController_.frameHistory().setLatestFrameCost(frameCost);
+  const PresentationResourceStats presentationResources = textures_.presentationResourceStats();
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(presentationResources));
+  maybeLogFrameMissTelemetry(frameCost);
+  maybeLogResourceDiagnostics(frameCost);
   requestRenderAtEndOfFrame_ = false;
   contentOnlyCaptureThisFrame_ = false;
 }

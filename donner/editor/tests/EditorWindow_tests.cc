@@ -286,6 +286,70 @@ TEST(EditorWindowTest, ComputeUiScaleConfigClampsToOne) {
 }
 
 #if defined(DONNER_EDITOR_WGPU)
+TEST(EditorWindowTest, WgpuDirectRenderCallbackAppendsToFramebuffer) {
+  EditorWindow window(EditorWindowOptions{
+      .title = "Direct WGPU Framebuffer Append Test",
+      .initialWidth = 96,
+      .initialHeight = 96,
+      .visible = false,
+      .clearColor = {0.0f, 0.0f, 0.0f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid() || window.geodeFramebufferDevice() == nullptr) {
+    GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
+  }
+
+  svg::RendererGeode directRenderer(window.geodeFramebufferDevice());
+  window.setWgpuDirectRenderCallback([&directRenderer](const EditorWindowWgpuRenderTarget& target) {
+    if (!target.texture) {
+      return;
+    }
+
+    svg::RenderViewport viewport;
+    viewport.size = Vector2d(static_cast<double>(target.framebufferSizePx.x),
+                             static_cast<double>(target.framebufferSizePx.y));
+    viewport.devicePixelRatio = 1.0;
+
+    const Vector2d framebufferFromLogical(static_cast<double>(target.framebufferSizePx.x) / 96.0,
+                                          static_cast<double>(target.framebufferSizePx.y) / 96.0);
+    directRenderer.setTargetTexture(target.texture);
+    directRenderer.setPreserveTargetOnBeginFrame(true);
+    directRenderer.beginFrame(viewport);
+
+    svg::PaintParams paint;
+    paint.fill = svg::PaintServer::Solid{css::Color(css::RGBA(255, 0, 0, 255))};
+    paint.stroke = svg::PaintServer::None{};
+    paint.opacity = 1.0;
+    paint.fillOpacity = 1.0;
+    directRenderer.setPaint(paint);
+    directRenderer.drawRect(Box2d(Vector2d(32.0, 32.0) * framebufferFromLogical,
+                                  Vector2d(64.0, 64.0) * framebufferFromLogical),
+                            svg::StrokeParams{});
+    directRenderer.endFrame();
+    directRenderer.clearTargetTexture();
+  });
+
+  window.beginFrame();
+  ImGui::GetBackgroundDrawList()->AddRectFilled(ImVec2(0.0f, 0.0f), ImVec2(96.0f, 96.0f),
+                                                IM_COL32(0, 0, 255, 255));
+  const svg::RendererBitmap actual = window.endFrameAndReadPixels();
+  ASSERT_FALSE(actual.empty());
+  const Vector2d readbackFromLogical = ReadbackScale(actual, 96, 96);
+
+  const std::array<std::uint8_t, 4> outside = PixelAtLogical(actual, readbackFromLogical, 16, 16);
+  EXPECT_LE(outside[0], 3);
+  EXPECT_LE(outside[1], 3);
+  EXPECT_NEAR(static_cast<int>(outside[2]), 255, 3)
+      << "The direct Geode pass must preserve earlier ImGui framebuffer pixels.";
+  EXPECT_EQ(outside[3], 255);
+
+  const std::array<std::uint8_t, 4> inside = PixelAtLogical(actual, readbackFromLogical, 48, 48);
+  EXPECT_NEAR(static_cast<int>(inside[0]), 255, 3);
+  EXPECT_LE(inside[1], 3);
+  EXPECT_LE(inside[2], 3);
+  EXPECT_EQ(inside[3], 255);
+}
+
 TEST(EditorWindowTest, WgpuPresentsGeodePremultipliedTextureWithoutDarkening) {
   EditorWindow window(EditorWindowOptions{
       .title = "Premultiplied WGPU Presentation Test",
@@ -555,8 +619,8 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
 
   std::optional<svg::SVGElement> target = document->querySelector("#Big_lightning_glow");
   ASSERT_TRUE(target.has_value());
-  std::optional<RenderResult::CompositedPreview> preview =
-      RenderCompositedPreview(window.geodeDevice(), *document, target->unsafeEntityHandle().entity());
+  std::optional<RenderResult::CompositedPreview> preview = RenderCompositedPreview(
+      window.geodeDevice(), *document, target->unsafeEntityHandle().entity());
   ASSERT_TRUE(preview.has_value());
   ASSERT_GE(preview->tiles.size(), 2u) << "Expected splash background plus selected filter layer";
 

@@ -170,15 +170,16 @@ Donner builds everything from source. The tiny-skia backend stays relatively fas
 
 ### How do I build the editor?
 
-The full native editor lives at `//donner/editor:editor`:
+The full native editor lives at `//donner/editor:editor` and uses Geode/WebGPU
+by default without requiring `--config=geode`:
 
 ```sh
 bazel run //donner/editor -- donner_splash.svg
 bazel run //donner/editor -- path/to/file.svg
 ```
 
-The browser build lives at `//donner/editor/wasm` and is toolchain-gated behind
-`--config=editor-wasm`:
+The browser editor build also uses Geode/WebGPU by default and is
+toolchain-gated behind `--config=editor-wasm`:
 
 ```sh
 bazel build --config=editor-wasm //donner/editor/wasm:wasm_web_package

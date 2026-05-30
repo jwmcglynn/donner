@@ -22,6 +22,10 @@
 ///    the mouse still.
 ///
 /// Both gates must pass for `ShouldPostDragMove` to return true.
+///
+/// Do not use async-renderer busy state as `pendingFrameInFlight` for local
+/// editor drags. Local drag previews are UI-thread state and must keep updating
+/// while the renderer is busy; queued DOM writes coalesce separately.
 
 #include <optional>
 #include <type_traits>

@@ -293,6 +293,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "frame_miss_telemetry_tests",
+    srcs = ["FrameMissTelemetry_tests.cc"],
+    deps = [
+        "//donner/editor:frame_miss_telemetry",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "composited_presentation_tests",
     srcs = ["CompositedPresentation_tests.cc"],
     deps = [
@@ -435,7 +444,13 @@ donner_cc_test(
     deps = [
         "//donner/editor:gl_texture_cache",
         "@com_google_gtest//:gtest_main",
-    ],
+    ] + select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+            "//donner/svg/renderer/geode:geode_device",
+        ],
+        "//conditions:default": [],
+    }),
 )
 
 donner_cc_test(
@@ -516,6 +531,7 @@ donner_perf_cc_test(
 donner_cc_test(
     name = "editor_app_tests",
     srcs = ["EditorApp_tests.cc"],
+    data = ["//:donner_splash.svg"],
     deps = [
         "//donner/editor:editor_app",
         "//donner/editor:viewport_geometry",
@@ -724,6 +740,7 @@ donner_cc_test(
         "//:zoom-out-drag-jump.rnr",
     ],
     target_compatible_with = select({
+        "@platforms//os:macos": [],
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),

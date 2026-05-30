@@ -197,6 +197,19 @@ public:
   /// targets allocated per-frame by `beginFrame()`.
   void clearTargetTexture();
 
+  /**
+   * Preserve the host-owned target contents when the next frame begins.
+   *
+   * This is for embedded append passes: the host has already rendered into the
+   * target texture, and Geode should draw additional renderer primitives on top
+   * instead of clearing the texture. Use this only with a single-sample
+   * alpha-coverage Geode device; preserving an existing single-sample
+   * swapchain image is incompatible with Geode's normal MSAA resolve target.
+   *
+   * @param preserve True to use `LoadOp::Load` for the first render pass.
+   */
+  void setPreserveTargetOnBeginFrame(bool preserve);
+
   // --- RendererInterface ---
 
   void draw(SVGDocument& document) override;

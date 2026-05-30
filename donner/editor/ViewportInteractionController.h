@@ -2,9 +2,11 @@
 /// @file
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <vector>
 
+#include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/RenderPaneGesture.h"
 #include "donner/editor/Tool.h"
@@ -13,6 +15,53 @@
 namespace donner::editor {
 
 constexpr std::size_t kFrameHistoryCapacity = 120;
+
+/// Render-pane profiler costs aligned with one UI frame-history sample.
+struct FrameProfilerSample {
+  /// Time spent collecting overlay chrome geometry.
+  float overlayCaptureMs = 0.0f;
+  /// Time spent drawing overlay chrome into a retained overlay payload.
+  float overlayDrawMs = 0.0f;
+  /// Time spent snapshotting overlay chrome from the renderer.
+  float overlaySnapshotMs = 0.0f;
+  /// Time spent uploading or registering retained overlay presentation payloads.
+  float overlayUploadMs = 0.0f;
+  /// Time spent uploading or registering composited content tiles.
+  float compositedUploadMs = 0.0f;
+  /// Worker time spent rendering transient immediate compositor spans.
+  float compositedRenderImmediateMs = 0.0f;
+  /// Worker time spent rendering retained cached compositor tiles.
+  float compositedRenderCachedMs = 0.0f;
+  /// Time spent laying out source-focus ropes.
+  float sourceRopeLayoutMs = 0.0f;
+  /// Time spent updating source-focus rope simulation/state.
+  float sourceRopeUpdateMs = 0.0f;
+  /// Time spent issuing source-focus rope draw commands.
+  float sourceRopeDrawMs = 0.0f;
+
+  /// Sum of known profiled costs.
+  [[nodiscard]] float totalProfiledMs() const;
+};
+
+/// Presentation memory retained by the editor texture cache for one UI frame.
+struct FrameMemorySample {
+  /// Bytes retained by the current overlay texture, if the retained overlay fallback is active.
+  std::uint64_t overlayBytes = 0;
+  /// Bytes retained by active composited tile textures.
+  std::uint64_t activeTileBytes = 0;
+  /// Bytes retained by zoom-out overview tile textures.
+  std::uint64_t overviewTileBytes = 0;
+  /// Bytes retained by retired textures waiting for presentation-frame aging.
+  std::uint64_t retiredBytes = 0;
+  /// Total bytes directly tracked by the presentation cache.
+  std::uint64_t totalTrackedBytes = 0;
+  /// Peak tracked bytes observed by the presentation cache.
+  std::uint64_t peakTrackedBytes = 0;
+  /// Process-lifetime WebGPU texture-create count from the shared Geode device.
+  std::uint64_t wgpuLifetimeTextureCreates = 0;
+  /// Process-lifetime WebGPU buffer-create count from the shared Geode device.
+  std::uint64_t wgpuLifetimeBufferCreates = 0;
+};
 
 struct FrameHistory {
   /// ImGui frame delta per UI-thread frame — populated from
@@ -24,6 +73,10 @@ struct FrameHistory {
   /// consumers skip zero entries so the graph doesn't drop to zero between
   /// drags.
   std::array<float, kFrameHistoryCapacity> backendMs{};
+  /// Known frame-cost divisions drawn as the color-bar profiler.
+  std::array<FrameProfilerSample, kFrameHistoryCapacity> profiler{};
+  /// Presentation memory retained by the editor texture cache.
+  std::array<FrameMemorySample, kFrameHistoryCapacity> memory{};
   std::size_t writeIndex = 0;
   std::size_t samples = 0;
   /// Most recent non-zero worker sample, so latched-worker-latency
@@ -41,7 +94,17 @@ struct FrameHistory {
   /// yet. Also updates `lastBackendMs` so UI elements that want to show the
   /// latest measured worker latency have a persistent value.
   void setLatestBackendMs(float ms);
+  /// Record the editor render-cost breakdown for the most recently pushed
+  /// frame. No-op if no frame has been pushed yet.
+  void setLatestFrameCost(const FrameCostBreakdown& cost);
+  /// Record presentation-memory counters for the most recently pushed frame.
+  /// No-op if no frame has been pushed yet.
+  void setLatestMemorySample(const FrameMemorySample& sample);
+  /// Return the newest non-zero presentation-memory sample, or zeroes if none exist.
+  [[nodiscard]] FrameMemorySample latestNonZeroMemorySample() const;
   [[nodiscard]] float latest() const;
+  /// Return the async worker timing that landed on the newest frame, or zero.
+  [[nodiscard]] float latestBackend() const;
   [[nodiscard]] float max() const;
 };
 

@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/svg/SVGDocument.h"
@@ -32,8 +33,20 @@ enum class CompositorTileBitmapPayload : uint8_t {
   All,
   /// Include only the active drag-target bitmap; keep non-drag tile metadata.
   DragTargetOnly,
+  /// Include only static spans that are planned for immediate presentation.
+  ImmediateOnly,
+  /// Include immediate static spans plus the active drag-target bitmap.
+  ImmediateAndDragTargetOnly,
   /// Include tile metadata only.
   MetadataOnly,
+};
+
+/// Presentation mode chosen for one non-promoted paint-order span.
+enum class StaticSpanMode : uint8_t {
+  /// Rasterize once into a cached compositor tile and reuse until dirty.
+  CachedTile,
+  /// Re-rasterize as a transient tile and do not publish metadata-only reuse.
+  Immediate,
 };
 
 /// A single bitmap cache unit the compositor exposes for GPU upload —
@@ -99,6 +112,10 @@ struct CompositorTile {
   /// route the live pre-commit DOM delta through `canvasFromBitmap`
   /// on the GPU side.
   bool isDragTarget = false;
+
+  /// True when this segment or promoted layer should be presented as a transient
+  /// immediate-mode tile instead of a persistent presentation texture.
+  bool immediate = false;
 };
 
 /// Design doc 0033 §M4 — cancellation handle for `CompositorController::
@@ -365,6 +382,15 @@ public:
    */
   void renderFrame(const RenderViewport& viewport);
 
+  /**
+   * Prepare and render a composited frame into @p viewport after applying
+   * @p surfaceFromCanvas to canvas-space content.
+   *
+   * @param viewport The output viewport for the render pass.
+   * @param surfaceFromCanvas Transform from document canvas coordinates to the output surface.
+   */
+  void renderFrame(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
+
   /// Design doc 0033 §M4 — cancellable variant. The @p token is polled
   /// at coarse safe points (between `rasterizeLayer` / segment
   /// rasterize calls) and `renderFrame` returns early when set. The
@@ -375,6 +401,10 @@ public:
   /// Returns true on full completion, false on early cancellation.
   /// The non-token overload above delegates with a no-op token.
   bool renderFrame(const RenderViewport& viewport, CancellationToken& token);
+
+  /// Cancellable variant of the camera-transform render path.
+  bool renderFrame(const RenderViewport& viewport, CancellationToken& token,
+                   const Transform2d& surfaceFromCanvas);
 
   /**
    * Returns the number of currently active layers (excluding the root layer).
@@ -439,6 +469,12 @@ public:
   /// while staying legible at the editor's right-pane width.
   static constexpr int kLayerThumbnailMaxSide = 64;
 
+  /// Whether diagnostic snapshots should synthesize CPU thumbnails.
+  enum class SnapshotThumbnails : uint8_t {
+    Include,
+    Omit,
+  };
+
   /// One row of diagnostic state per active compositor layer, intended
   /// for the editor's read-only layer-inspector panel (design doc 0033
   /// M1). Cheap to build, cheap to copy: a few ints and one short
@@ -487,7 +523,8 @@ public:
   /// Done-transition point as `fastPathCountersForTesting`). Allocates a
   /// `vector` and one short string per layer — fine for diagnostics, not
   /// hot-path-grade.
-  [[nodiscard]] std::vector<LayerInspectorRow> snapshotLayerInspectorRows() const;
+  [[nodiscard]] std::vector<LayerInspectorRow> snapshotLayerInspectorRows(
+      SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;
 
   /// One row of diagnostic state per static segment (the non-promoted
   /// content between promoted layers, plus the pre-first and post-last
@@ -519,6 +556,54 @@ public:
   /// per-frame rasterize cost on documents like the splash. Same
   /// invocation rules as `snapshotLayerInspectorRows`.
   [[nodiscard]] std::vector<SegmentInspectorRow> snapshotSegmentInspectorRows() const;
+
+  /// Conservative draw-cost plan for one static segment slot.
+  struct StaticSpanPlan {
+    /// Slot index in the static segment array.
+    size_t slotIndex = 0;
+    /// Presentation mode selected for this span.
+    StaticSpanMode mode = StaticSpanMode::CachedTile;
+    /// First render instance covered by the span, or null for an empty slot.
+    Entity firstEntity = entt::null;
+    /// Last render instance covered by the span, or null for an empty slot.
+    Entity lastEntity = entt::null;
+    /// Snapped canvas-space bounds used for immediate eligibility.
+    Box2d boundsCanvas;
+    /// Estimated number of direct geometry draws in the span.
+    int estimatedDrawOps = 0;
+    /// Estimated number of path verbs across direct geometry draws.
+    int estimatedPathVerbs = 0;
+    /// True when the span uses effects or resources that force cached-tile presentation.
+    bool hasExpensiveEffect = false;
+    /// True when the span has a visible, bounded contribution to the canvas.
+    bool visible = false;
+    /// Estimated presentation texture bytes retained by a cached tile.
+    uint64_t estimatedRetainedBytes = 0;
+    /// Relative redraw cost from tight area and geometry complexity.
+    double estimatedRedrawCost = 0.0;
+    /// Relative fixed/cache memory cost avoided by immediate presentation.
+    double estimatedCacheOverheadCost = 0.0;
+    /// Raster time from the most recent span render.
+    double measuredRasterizeMs = 0.0;
+    /// Total dynamic immediate-span frame budget for 120 Hz interaction.
+    double immediateBudgetMs = 0.0;
+    /// Budget charged by this span when it is immediate.
+    double immediateBudgetChargeMs = 0.0;
+    /// True when the static cost heuristic chose immediate presentation.
+    bool staticHeuristicImmediate = false;
+    /// True when timing expanded the span into immediate presentation.
+    bool dynamicHeuristicImmediate = false;
+    /// True when the span was dynamically immediate last frame but this render exceeded budget, so
+    /// the freshly-rendered payload is retained as a cached tile instead of staying immediate.
+    bool demotedDynamicImmediate = false;
+    /// Human-readable first/last element range covered by this span.
+    std::string spanRangeLabel;
+  };
+
+  /// Snapshot the most recent static span plans. Test-only diagnostics.
+  [[nodiscard]] std::vector<StaticSpanPlan> snapshotStaticSpanPlansForTesting() const {
+    return staticSpanPlans_;
+  }
 
   /// One row of the unified "everything composited together" view that
   /// the layer-inspector panel renders in paint order — design doc 0033
@@ -556,6 +641,38 @@ public:
     /// `Background` / `Foreground` (those are *composed*, not
     /// rasterized, by `recomposeSplitBitmaps`).
     double lastRasterizeMs = 0.0;
+    /// True when this segment or promoted layer is presented as a transient immediate tile instead
+    /// of a retained bitmap/texture cache entry.
+    bool immediate = false;
+    /// True when the static geometry-cost heuristic selected immediate presentation.
+    bool staticHeuristicImmediate = false;
+    /// True when measured raster time expanded the span into immediate presentation.
+    bool dynamicHeuristicImmediate = false;
+    /// True when this span just left dynamic immediate mode because the last immediate render was
+    /// over budget.
+    bool demotedDynamicImmediate = false;
+    /// Budget charged by this immediate tile against the 120 Hz immediate-span budget.
+    double immediateBudgetChargeMs = 0.0;
+    /// Total 120 Hz immediate-span budget for this frame.
+    double immediateBudgetMs = 0.0;
+    /// Estimated direct geometry draw count used by the immediate/cached heuristic.
+    int estimatedDrawOps = 0;
+    /// Estimated path verb count used by the immediate/cached heuristic.
+    int estimatedPathVerbs = 0;
+    /// True when this span contains effects/resources that force cached presentation.
+    bool hasExpensiveEffect = false;
+    /// True when this span has a visible, bounded contribution to the canvas.
+    bool visible = false;
+    /// Snapped canvas-space bounds used by the immediate/cached heuristic.
+    Box2d boundsCanvas;
+    /// Estimated retained texture bytes if this span is cached.
+    uint64_t estimatedRetainedBytes = 0;
+    /// Relative redraw cost estimated by the immediate/cached heuristic.
+    double estimatedRedrawCost = 0.0;
+    /// Relative cached-texture overhead estimated by the immediate/cached heuristic.
+    double estimatedCacheOverheadCost = 0.0;
+    /// Human-readable first/last element range covered by this static segment.
+    std::string spanRangeLabel;
     /// Whether the source bitmap has pixels.
     bool hasValidBitmap = false;
     /// Whether this tile is the active drag-target layer (highlighted
@@ -579,7 +696,26 @@ public:
   ///   - Otherwise: `Segment 0`, `Layer 0`, `Segment 1`, `Layer 1`,
   ///     …, `Segment N`. (Editor-facing bg/fg are inactive in this
   ///     mode.)
-  [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles() const;
+  [[nodiscard]] std::vector<CompositeTileSnapshot> snapshotCompositeTiles(
+      SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;
+
+  /// Worker render costs from the most recent `renderFrame` call, split by whether the work was
+  /// caused by immediate-mode transient spans or retained cached tiles.
+  struct RenderFrameStats {
+    /// Segment raster time caused by immediate-mode static spans.
+    double immediateRasterizeMs = 0.0;
+    /// Segment/layer raster time that produces retained cached bitmap/texture tiles.
+    double cachedRasterizeMs = 0.0;
+    /// Count of static spans charged to immediate raster work.
+    int immediateTileCount = 0;
+    /// Count of segment/layer tiles charged to cached raster work.
+    int cachedTileCount = 0;
+  };
+
+  /// Return the current render-frame raster cost split.
+  [[nodiscard]] const RenderFrameStats& lastRenderFrameStats() const {
+    return lastRenderFrameStats_;
+  }
 
   /// Compositor-wide state useful for diagnosing why the editor's
   /// expected drag fast path didn't engage. Lets the operator confirm
@@ -752,7 +888,8 @@ private:
   const CompositorLayer* findLayer(Entity entity) const;
 
   /// Rasterize a single promoted layer into its bitmap cache.
-  void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport);
+  void rasterizeLayer(CompositorLayer& layer, const RenderViewport& viewport,
+                      const Transform2d& surfaceFromCanvas);
 
   /// Rasterize any static segments whose `staticSegmentDirty_` flag is
   /// set. Each segment lives between two consecutive promoted layers in
@@ -760,7 +897,8 @@ private:
   /// with all promoted layers hidden + out-of-slot entities hidden. A
   /// mutation inside a segment only re-rasterizes that one segment —
   /// every other segment (and every promoted layer bitmap) stays cached.
-  void rasterizeDirtyStaticSegments(const RenderViewport& viewport);
+  void rasterizeDirtyStaticSegments(const RenderViewport& viewport,
+                                    const Transform2d& surfaceFromCanvas);
 
   /// Locate the paint-order segment that contains @p entity. Returns
   /// `layers_.size()` (post-last-layer slot) if the entity lies beyond
@@ -779,7 +917,8 @@ private:
   /// Returns true if the layer set or canvas changed enough that the
   /// editor-facing bg/fg cache must be dropped; the caller invalidates
   /// `backgroundBitmap_`/`foregroundBitmap_` accordingly.
-  bool resyncSegmentsToLayerSet(const Vector2i& currentCanvasSize);
+  bool resyncSegmentsToLayerSet(const Vector2i& currentCanvasSize,
+                                const Transform2d& surfaceFromCanvas);
 
   /// For each dirty entity that has a Transform/WorldTransform flag,
   /// walk its DOM subtree and mark every static segment that contains
@@ -804,7 +943,7 @@ private:
   void markAllSegmentsDirty();
 
   /// Compose all layers onto the main render target.
-  void composeLayers(const RenderViewport& viewport);
+  void composeLayers(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
   /// Check dirty flags on promoted entities and mark affected layers.
   /// Translate a pre-captured set of dirty entities (snapshotted before
@@ -845,6 +984,9 @@ private:
   /// segment caches describe the wrong paint range. Returns true when the layer
   /// assignment must be re-resolved and every static segment should be rebuilt.
   bool dropNonRenderableInteractionHints(Registry& registry);
+
+  /// Returns true when @p entity has a non-pending ActiveDrag interaction hint.
+  bool isActiveDragTarget(Entity entity) const;
 
   /// Returns true if the entity is currently within the layer's cached render range.
   bool layerContainsEntity(const CompositorLayer& layer, Entity entity) const;
@@ -938,6 +1080,9 @@ private:
   /// doc 0033 M1+). Zero for slots that have never rasterized in the
   /// current session.
   std::vector<double> staticSegmentLastRasterizeMs_;
+  /// Per-segment immediate-vs-cached presentation plan, parallel to
+  /// `staticSegments_` after the first segment raster pass.
+  std::vector<StaticSpanPlan> staticSpanPlans_;
   /// Process-monotonic counter that seeds the `generation` of any freshly
   /// rasterized tile — both static segments (`staticSegmentGeneration_[i]`)
   /// and promoted layers (`CompositorLayer::setGeneration`). Survives
@@ -947,6 +1092,8 @@ private:
   /// per-object counter would reset to 1 on replace and collide; see
   /// `CompositorLayer::setGeneration`.
   uint64_t nextTileGeneration_ = 1;
+  /// Raster work charged to the current/most recent render frame.
+  RenderFrameStats lastRenderFrameStats_;
   /// Boundary identity for each segment in `staticSegments_`. Segment
   /// `i`'s identity is `(left, right)` — the entity ids of the promoted
   /// layers immediately to its left and right in paint order.
@@ -1021,6 +1168,8 @@ private:
     return cancelToken_.has_value() && cancelToken_->get().isCancelled();
   }
 
+  void renderFrameImpl(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
+
   /// True after `composeLayers` has completed a full (non-skipped)
   /// main-renderer compose. Used to gate the skip-compose fast path:
   /// on the first renderFrame of a session the main renderer still
@@ -1036,6 +1185,10 @@ private:
   /// successful `promoteEntity`. Diagnostic only.
   PromoteRefusalReason lastPromoteRefusalReason_ = PromoteRefusalReason::None;
   Entity lastPromoteRefusalEntity_ = entt::null;
+  Transform2d lastSurfaceFromCanvas_;
+  bool hasLastSurfaceFromCanvas_ = false;
+  Transform2d staticSegmentsSurfaceFromCanvas_;
+  bool hasStaticSegmentsSurfaceFromCanvas_ = false;
 };
 
 }  // namespace donner::svg::compositor

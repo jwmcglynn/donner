@@ -336,12 +336,118 @@ TEST(ViewportStateTest, ScreenToDocumentIsDprInvariant) {
   }
 }
 
-TEST(ViewportStateTest, DesiredCanvasSizeClampsToMaxDim) {
+TEST(ViewportStateTest, DesiredCanvasSizeCapsHighZoomToPanePlusMargin) {
   ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(1280.0, 720.0),
                                    Box2d::FromXYWH(0.0, 0.0, 1000.0, 1000.0));
   v.zoomAround(ViewportState::kMaxZoom, Vector2d(640.0, 360.0));
   const Vector2i size = v.desiredCanvasSize();
-  // 1000 × 32 = 32000, well over the 8192 cap.
+  // The full zoomed document would be 32000x32000. At high zoom the raster
+  // target is the pane plus a 128px margin on each side, not an aspect-fit
+  // whole-document thumbnail.
+  EXPECT_EQ(size.x, 1536);
+  EXPECT_EQ(size.y, 976);
+}
+
+TEST(ViewportStateTest, DesiredCanvasSizeUsesPaneAspectWhenViewportBounded) {
+  ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
+                                   Box2d::FromXYWH(0.0, 0.0, 2000.0, 1000.0));
+  v.zoomAround(ViewportState::kMaxZoom, Vector2d(400.0, 300.0));
+  const Vector2i size = v.desiredCanvasSize();
+  // Cap box is 1056x856. The visible-viewport raster uses that output
+  // aspect instead of preserving the full document's 2:1 aspect.
+  EXPECT_EQ(size.x, 1056);
+  EXPECT_EQ(size.y, 856);
+}
+
+TEST(ViewportStateTest, RasterViewportSeparatesSemanticCanvasFromHighZoomOutput) {
+  ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
+                                   Box2d::FromXYWH(100.0, 200.0, 1000.0, 1000.0),
+                                   /*dpr=*/2.0);
+  v.zoomAround(8.0, Vector2d(400.0, 300.0));
+  v.panBy(Vector2d(80.0, -40.0));
+
+  const EditorRasterViewport raster = v.rasterViewport();
+  EXPECT_TRUE(raster.viewportBounded);
+  EXPECT_EQ(raster.outputSizePx, Vector2i(2112, 1712));
+  EXPECT_EQ(raster.semanticCanvasSizePx, Vector2i(8192, 8192));
+
+  const Vector2d outputTopLeft =
+      raster.outputFromDocument.transformPosition(raster.documentRect.topLeft);
+  EXPECT_NEAR_VEC(outputTopLeft, Vector2d::Zero(), 1e-9);
+  const Vector2d outputBottomRight =
+      raster.outputFromDocument.transformPosition(raster.documentRect.bottomRight);
+  EXPECT_NEAR_VEC(outputBottomRight, Vector2d(2112.0, 1712.0), 1e-9);
+}
+
+TEST(ViewportStateTest, SelectedPrewarmRasterViewportAddsBoundedOverdraw) {
+  ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
+                                   Box2d::FromXYWH(100.0, 200.0, 1000.0, 1000.0),
+                                   /*dpr=*/2.0);
+  v.zoomAround(8.0, Vector2d(400.0, 300.0));
+  v.panBy(Vector2d(80.0, -40.0));
+
+  const EditorRasterViewport base = v.rasterViewport();
+  const EditorRasterViewport padded = v.selectedPrewarmRasterViewport();
+
+  EXPECT_TRUE(base.viewportBounded);
+  EXPECT_TRUE(padded.viewportBounded);
+  EXPECT_EQ(base.outputSizePx, Vector2i(2112, 1712));
+  EXPECT_EQ(padded.outputSizePx, Vector2i(2624, 2224));
+  EXPECT_EQ(padded.semanticCanvasSizePx, base.semanticCanvasSizePx);
+  EXPECT_LT(padded.documentRect.topLeft.x, base.documentRect.topLeft.x);
+  EXPECT_LT(padded.documentRect.topLeft.y, base.documentRect.topLeft.y);
+  EXPECT_GT(padded.documentRect.bottomRight.x, base.documentRect.bottomRight.x);
+  EXPECT_GT(padded.documentRect.bottomRight.y, base.documentRect.bottomRight.y);
+
+  const Vector2d outputTopLeft =
+      padded.outputFromDocument.transformPosition(padded.documentRect.topLeft);
+  EXPECT_NEAR_VEC(outputTopLeft, Vector2d::Zero(), 1e-9);
+  const Vector2d outputBottomRight =
+      padded.outputFromDocument.transformPosition(padded.documentRect.bottomRight);
+  EXPECT_NEAR_VEC(outputBottomRight, Vector2d(2624.0, 2224.0), 1e-9);
+}
+
+TEST(ViewportStateTest, SelectedPrewarmRasterViewportDoesNotPadUnboundedOutput) {
+  ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
+                                   Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0),
+                                   /*dpr=*/2.0);
+
+  const EditorRasterViewport base = v.rasterViewport();
+  const EditorRasterViewport padded = v.selectedPrewarmRasterViewport();
+
+  EXPECT_FALSE(base.viewportBounded);
+  EXPECT_EQ(padded.documentRect, base.documentRect);
+  EXPECT_EQ(padded.outputSizePx, base.outputSizePx);
+  EXPECT_EQ(padded.semanticCanvasSizePx, base.semanticCanvasSizePx);
+}
+
+TEST(ViewportStateTest, OverviewInfillRasterViewportCoversFullDocumentAtLowResolution) {
+  ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 600.0),
+                                   Box2d::FromXYWH(100.0, 200.0, 2000.0, 1000.0),
+                                   /*dpr=*/2.0);
+  v.zoomAround(32.0, Vector2d(400.0, 300.0));
+  ASSERT_TRUE(v.rasterViewport().viewportBounded);
+
+  const EditorRasterViewport overview = v.overviewInfillRasterViewport();
+
+  EXPECT_FALSE(overview.viewportBounded);
+  EXPECT_EQ(overview.documentRect, v.documentViewBox);
+  EXPECT_EQ(overview.outputSizePx, Vector2i(1536, 768));
+  EXPECT_EQ(overview.semanticCanvasSizePx, v.rasterViewport().semanticCanvasSizePx);
+
+  const Vector2d outputTopLeft =
+      overview.outputFromDocument.transformPosition(overview.documentRect.topLeft);
+  EXPECT_NEAR_VEC(outputTopLeft, Vector2d::Zero(), 1e-9);
+  const Vector2d outputBottomRight =
+      overview.outputFromDocument.transformPosition(overview.documentRect.bottomRight);
+  EXPECT_NEAR_VEC(outputBottomRight, Vector2d(1536.0, 768.0), 1e-9);
+}
+
+TEST(ViewportStateTest, DesiredCanvasSizeFallsBackToMaxDimWhenPaneUnset) {
+  ViewportState v;
+  v.documentViewBox = Box2d::FromXYWH(0.0, 0.0, 1000.0, 1000.0);
+  v.zoomAround(ViewportState::kMaxZoom, Vector2d::Zero());
+  const Vector2i size = v.desiredCanvasSize();
   EXPECT_EQ(size.x, ViewportState::kMaxCanvasDim);
   EXPECT_EQ(size.y, ViewportState::kMaxCanvasDim);
 }

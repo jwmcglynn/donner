@@ -13,7 +13,7 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
 
 # Editor libraries are public so the //examples:svg_viewer target (in the
 # separate examples Bazel module) can depend on `:text_editor`. BCR
@@ -265,10 +265,28 @@ donner_cc_library(
     deps = [
         ":overlay_renderer",
         ":tracy_wrapper",
+        ":viewport_state",
         "//donner/base",
         "//donner/svg",
         "//donner/svg/compositor",
         "//donner/svg/renderer",
+    ],
+)
+
+donner_cc_library(
+    name = "frame_cost_breakdown",
+    hdrs = ["FrameCostBreakdown.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "frame_miss_telemetry",
+    srcs = ["FrameMissTelemetry.cc"],
+    hdrs = ["FrameMissTelemetry.h"],
+    deps = [
+        ":frame_cost_breakdown",
     ],
 )
 
@@ -283,6 +301,7 @@ donner_cc_library(
     }),
     deps = [
         ":async_renderer",
+        ":frame_cost_breakdown",
         ":imgui_headers",
         ":tracy_wrapper",
         "//donner/base",
@@ -407,6 +426,7 @@ donner_cc_library(
     srcs = ["ViewportInteractionController.cc"],
     hdrs = ["ViewportInteractionController.h"],
     deps = [
+        ":frame_cost_breakdown",
         ":imgui_headers",
         ":render_pane_gesture",
         ":tool",
@@ -447,6 +467,7 @@ donner_cc_library(
     hdrs = ["LayerInspectorDiagnostics.h"],
     deps = [
         "//donner/base",
+        "//donner/svg/compositor",
     ],
 )
 
@@ -460,6 +481,7 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":gl_texture_cache",
         ":imgui_headers",
         ":layer_inspector_diagnostics",
         "//donner/base",
@@ -539,6 +561,7 @@ donner_cc_library(
     deps = [
         ":async_renderer",
         ":composited_presentation",
+        ":frame_cost_breakdown",
         ":gl_texture_cache",
         ":overlay_renderer",
         ":presentation_render_scheduler",
@@ -562,6 +585,11 @@ donner_cc_library(
     name = "editor_shell",
     srcs = ["EditorShell.cc"],
     hdrs = ["EditorShell.h"],
+    defines = select({
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
     deps = [
         ":dialog_presenter",
         ":document_save",
@@ -571,6 +599,8 @@ donner_cc_library(
         ":editor_input_bridge",
         ":editor_shell_layout",
         ":focus_view",
+        ":frame_cost_breakdown",
+        ":frame_miss_telemetry",
         ":gl_texture_cache",
         ":imgui_headers",
         ":keyboard_shortcut_policy",
@@ -595,10 +625,19 @@ donner_cc_library(
         "//donner/editor/gui:editor_window",
         "//donner/editor/repro:repro_recorder",
         "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
         "//third_party/fira-code",
         "//third_party/roboto",
         "@imgui",
     ] + select({
+        ":wasm_geode_enabled": [
+            "//donner/svg/renderer:renderer_geode",
+        ],
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+        ],
+        "//conditions:default": [],
+    }) + select({
         "//donner/editor/wasm:wasm_enabled": [
             "//third_party/emscripten-glfw",
         ],
@@ -787,20 +826,19 @@ donner_cc_library(
     ],
 )
 
-# The full Donner editor binary. Wires EditorApp + SelectTool +
-# OverlayRenderer + TextEditor into an ImGui shell with a live source
-# pane and a click-and-drag render pane. The minimal viewer demo lives
-# at `//examples:svg_viewer`.
-#
-# bazel run //donner/editor -- donner_splash.svg
+# The full Donner editor implementation. The public `:editor` target below
+# applies the Geode transition so `bazel run //donner/editor` uses the same
+# backend that editor performance work targets without requiring `--config=geode`.
 donner_cc_binary(
-    name = "editor",
+    name = "editor_impl",
     srcs = ["main.cc"],
+    tags = ["manual"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
+    visibility = ["//visibility:private"],
     deps = [
         ":editor_icon",
         ":editor_shell",
@@ -810,6 +848,30 @@ donner_cc_binary(
         "//donner/base:failure_signal_handler",
         "//donner/editor/gui:editor_window",
     ],
+)
+
+test_suite(
+    name = "editor_lint",
+    tests = [":editor_impl_lint"],
+)
+
+# The full Donner editor binary. Wires EditorApp + SelectTool +
+# OverlayRenderer + TextEditor into an ImGui shell with a live source
+# pane and a click-and-drag render pane. The minimal viewer demo lives
+# at `//examples:svg_viewer`.
+#
+# bazel run //donner/editor -- donner_splash.svg
+donner_multi_transitioned_binary(
+    name = "editor",
+    dep = ":editor_impl",
+    renderer_backend = "geode",
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    text = "true",
+    text_full = "false",
 )
 
 donner_cc_library(
@@ -883,6 +945,7 @@ donner_cc_library(
     deps = [
         ":flash_decorations",
         ":focus_view",
+        ":frame_cost_breakdown",
         ":imgui_headers",
         ":rope_simulation",
         ":soft_wrap",

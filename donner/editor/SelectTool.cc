@@ -16,7 +16,6 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
-#include "donner/svg/SVGSVGElement.h"
 
 namespace donner::editor {
 
@@ -25,6 +24,7 @@ namespace {
 constexpr double kDragThresholdDocUnits = 1.0;
 constexpr double kDragThresholdSq = kDragThresholdDocUnits * kDragThresholdDocUnits;
 constexpr double kMinScaleDenominator = 1e-9;
+constexpr double kRedragHitSlopScreenPx = 2.0;
 
 bool IsFinite(double value) {
   return std::isfinite(value);
@@ -214,7 +214,15 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
   // `onMouseDown` passes a freshly-computed live snapshot (its caller has
   // already gated on `!isBusy()`).
-  if (selectionBoundsDoc.empty() || !selectionBoundsDoc.front().contains(documentPoint)) {
+  const svg::SVGElement element = currentSelection.front();
+  const bool isGraphics =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.isa<svg::SVGGraphicsElement>();
+      });
+  const double hitSlopDoc =
+      modifiers.pixelsPerDocUnit > 0.0 ? kRedragHitSlopScreenPx / modifiers.pixelsPerDocUnit : 0.0;
+  if (selectionBoundsDoc.empty() ||
+      !selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint) || !isGraphics) {
     return false;
   }
   for (const Box2d& occludingBounds : occludingBoundsDoc) {
@@ -224,14 +232,6 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   }
 
   // Reuse the currently-selected element as the drag target.
-  const svg::SVGElement element = currentSelection.front();
-  const bool isGraphics =
-      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
-        return element.isa<svg::SVGGraphicsElement>();
-      });
-  if (!isGraphics) {
-    return false;
-  }
   const svg::SVGGraphicsElement graphicsElement =
       element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
         return element.cast<svg::SVGGraphicsElement>();
@@ -265,6 +265,33 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
       .generation = nextDragGeneration_++,
   };
   return true;
+}
+
+bool SelectTool::clickHitsCurrentSelection(EditorApp& editor, const Vector2d& documentPoint) const {
+  const auto& currentSelection = editor.selectedElements();
+  if (currentSelection.empty()) {
+    return false;
+  }
+
+  const std::optional<svg::SVGGeometryElement> hit = editor.hitTest(documentPoint);
+  if (!hit.has_value()) {
+    return false;
+  }
+
+  const svg::SVGElement hitElement = *hit;
+  for (const svg::SVGElement& selected : currentSelection) {
+    if (selected == hitElement) {
+      return true;
+    }
+
+    for (const svg::SVGGeometryElement& geometry : CollectRenderableGeometry(selected)) {
+      if (geometry == hitElement) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
@@ -535,6 +562,19 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   }
 }
 
+void SelectTool::beginMarquee(EditorApp& editor, const Vector2d& documentPoint, bool additive) {
+  dragState_.reset();
+  marqueeState_.reset();
+  if (!additive) {
+    editor.clearSelection();
+  }
+  marqueeState_ = MarqueeState{
+      .startDocumentPoint = documentPoint,
+      .currentDocumentPoint = documentPoint,
+      .additive = additive,
+  };
+}
+
 void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/) {
   // Marquee resolution: convert the rect to a selection set. The tool
   // can only ever be in one of {drag, marquee} at a time, so both
@@ -644,15 +684,16 @@ std::optional<SelectTool::ActiveDragPreview> SelectTool::activeDragPreview() con
   if (!dragState_.has_value()) {
     return std::nullopt;
   }
-  // Multi-element drags run through the mutation path (not compositor)
-  // because the drag-preview transport only models a single moving layer.
-  // When we have extras, there's no composited preview to report.
-  if (!dragState_->extras.empty()) {
-    return std::nullopt;
+
+  std::vector<Entity> extraEntities;
+  extraEntities.reserve(dragState_->extras.size());
+  for (const PerElementDrag& extra : dragState_->extras) {
+    extraEntities.push_back(extra.element.unsafeEntityHandle().entity());
   }
 
   return ActiveDragPreview{
       .entity = dragState_->primary.element.unsafeEntityHandle().entity(),
+      .extraEntities = std::move(extraEntities),
       .translation = dragState_->currentDocumentDelta,
       .documentFromCachedDocument = dragState_->currentDocumentFromStartDocument,
       .dragGeneration = dragState_->generation};

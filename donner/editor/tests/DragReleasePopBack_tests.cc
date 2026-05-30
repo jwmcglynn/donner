@@ -320,7 +320,7 @@ TEST(DragReleasePopBackTest, StateTransitionsNeverShowPreDragImage) {
 
   // Verify prewarm is triggered for the new entity.
   EXPECT_TRUE(
-      state.shouldPrewarm(entityNew, /*currentVersion=*/3, canvasSize, /*dragActive=*/false))
+      state.shouldPrewarm(entityNew, {}, /*currentVersion=*/3, canvasSize, /*dragActive=*/false))
       << "Frame 4: prewarm should be dispatched for new entity";
 
   // ── Frame 5: Prewarm lands ────────────────────────────────────────────
@@ -604,7 +604,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   verifyDisplay(std::nullopt, "Frame 4 (CRITICAL: after ReplaceDocument)");
 
   // Prewarm should be triggered.
-  EXPECT_TRUE(state.shouldPrewarm(simulatedNewEntity, /*currentVersion=*/3, Vector2i(200, 100),
+  EXPECT_TRUE(state.shouldPrewarm(simulatedNewEntity, {}, /*currentVersion=*/3, Vector2i(200, 100),
                                   /*dragActive=*/false))
       << "Frame 4: prewarm for new entity expected";
 

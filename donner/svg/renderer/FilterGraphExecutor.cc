@@ -750,8 +750,8 @@ void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box
   const Box2d pixelRegion = deviceFromFilter.transformBox(*filterRegion);
   const int width = static_cast<int>(pixmap.width());
   const int height = static_cast<int>(pixmap.height());
-  const int x0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.x)));
-  const int y0 = std::max(0, static_cast<int>(std::floor(pixelRegion.topLeft.y)));
+  const int x0 = std::clamp(static_cast<int>(std::floor(pixelRegion.topLeft.x)), 0, width);
+  const int y0 = std::clamp(static_cast<int>(std::floor(pixelRegion.topLeft.y)), 0, height);
   const int x1 = std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.x)), 0, width);
   const int y1 = std::clamp(static_cast<int>(std::ceil(pixelRegion.bottomRight.y)), 0, height);
 

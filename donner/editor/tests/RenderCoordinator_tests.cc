@@ -126,30 +126,6 @@ TEST(RenderCoordinatorPolicyTest, SplitPreviewPresentableOnlyWhenTileCanvasMatch
   EXPECT_FALSE(ShouldPresentCompositedPreviewForViewport(preview, Vector2i(0, 0)));
 }
 
-TEST(RenderCoordinatorPolicyTest, ImmediateOverlayAllowedWhenNoTilesPresented) {
-  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles({}, Vector2i(64, 64)));
-}
-
-TEST(RenderCoordinatorPolicyTest, ImmediateOverlayAllowedForFullCanvasPresentedTile) {
-  std::vector<GlTextureCache::TileView> tiles;
-  GlTextureCache::TileView tile;
-  tile.id = "full-canvas";
-  tiles.push_back(tile);
-  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles(tiles, Vector2i(64, 64)));
-}
-
-TEST(RenderCoordinatorPolicyTest, ImmediateOverlayGatedOnCanvasMatchForSplitTiles) {
-  std::vector<GlTextureCache::TileView> tiles;
-  GlTextureCache::TileView tile;
-  tile.id = "layer-1";
-  tile.rasterCanvasSize = Vector2i(64, 64);
-  tiles.push_back(tile);
-
-  EXPECT_TRUE(ShouldUploadImmediateOverlayForPresentedTiles(tiles, Vector2i(64, 65)));
-  EXPECT_FALSE(ShouldUploadImmediateOverlayForPresentedTiles(tiles, Vector2i(128, 128)));
-  EXPECT_FALSE(ShouldUploadImmediateOverlayForPresentedTiles(tiles, Vector2i(0, 0)));
-}
-
 // ---------------------------------------------------------------------------
 // setSourceHoverElements — change detection.
 // ---------------------------------------------------------------------------
@@ -374,8 +350,7 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
   EXPECT_THAT(coordinator.selectionBoundsCache().lastSelection, IsEmpty());
   EXPECT_FALSE(coordinator.compositedPresentation().hasCachedTextures());
   EXPECT_EQ(coordinator.displayedDocVersion(), 0u);
-  EXPECT_FALSE(coordinator.hasPendingOverlayForTesting());
-  EXPECT_FALSE(coordinator.presentedOverlayDragPreview().has_value());
+  EXPECT_FALSE(coordinator.immediateOverlaySnapshot().has_value());
 
   // A hover set re-issued after reset reports a change (the cleared set differs
   // from the new one) — confirming the hover state was actually cleared.
@@ -383,8 +358,7 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
 }
 
 // ---------------------------------------------------------------------------
-// rasterizeOverlayForCurrentSelection — GL-free (MatchDisplayedVersion, no
-// upload because displayedDocVersion_ (0) != live version).
+// rasterizeOverlayForCurrentSelection — GL-free immediate overlay snapshotting.
 // ---------------------------------------------------------------------------
 
 TEST(RenderCoordinatorTest, RasterizeOverlayReturnsFalseWithoutDocument) {
@@ -398,7 +372,7 @@ TEST(RenderCoordinatorTest, RasterizeOverlayReturnsFalseWithoutDocument) {
                                                                /*marqueeRectDoc=*/std::nullopt));
 }
 
-TEST(RenderCoordinatorTest, RasterizeOverlayDefersUploadWhenVersionMismatchedWithDisplay) {
+TEST(RenderCoordinatorTest, RasterizeOverlayPublishesImmediateSnapshot) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
@@ -407,16 +381,13 @@ TEST(RenderCoordinatorTest, RasterizeOverlayDefersUploadWhenVersionMismatchedWit
 
   app.setSelection(QuerySelector(app, "#r1"));
 
-  // displayedDocVersion_ == 0 but the live document version is >= 1, so in the
-  // default MatchDisplayedVersion mode the overlay is rasterized and parked
-  // (pending) rather than uploaded — no GL touch.
   ASSERT_GT(app.document().currentFrameVersion(), coordinator.displayedDocVersion());
   EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
                                                               /*marqueeRectDoc=*/std::nullopt));
-  EXPECT_TRUE(coordinator.hasPendingOverlayForTesting())
-      << "A selection overlay rasterized against a not-yet-displayed version must be held pending.";
-  // Nothing uploaded → no overlay drag preview presented yet.
-  EXPECT_FALSE(coordinator.presentedOverlayDragPreview().has_value());
+  ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
+  EXPECT_EQ(textures.overlayWidth(), 0);
+  EXPECT_EQ(textures.overlayHeight(), 0);
 }
 
 TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
@@ -433,9 +404,7 @@ TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
 }
 
 // ---------------------------------------------------------------------------
-// maybeRequestRender — GL-free orchestration that posts an async render
-// request. With a plain (non-drag) selection the inner overlay rasterize uses
-// MatchDisplayedVersion mode and parks pending, so no GL upload happens.
+// maybeRequestRender — GL-free orchestration that posts an async render request.
 // ---------------------------------------------------------------------------
 
 TEST(RenderCoordinatorTest, MaybeRequestRenderNoOpWithoutDocument) {
@@ -447,7 +416,7 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderNoOpWithoutDocument) {
   viewport.paneSize = Vector2d(100.0, 100.0);
 
   // No document → early return, no async render dispatched.
-  coordinator.maybeRequestRender(app, selectTool, viewport, textures);
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
 }
 
@@ -459,7 +428,7 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderNoOpWithDegeneratePane) {
   SelectTool selectTool;
   ViewportState viewport;  // paneSize is zero.
 
-  coordinator.maybeRequestRender(app, selectTool, viewport, textures);
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
 }
 
@@ -473,7 +442,7 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesAsyncRenderForSelection)
 
   app.setSelection(QuerySelector(app, "#r1"));
 
-  coordinator.maybeRequestRender(app, selectTool, viewport, textures);
+  coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
 
   // A render request was posted to the async worker. We do NOT poll the result
   // here: presenting a composited preview calls GlTextureCache::uploadComposited

@@ -147,8 +147,9 @@ void WriteDiagnosticBitmap(const svg::RendererBitmap& bitmap, std::string_view f
   }
 }
 
-svg::RendererBitmap CapturePresenterFrame(gui::EditorWindow* window, GlTextureCache* textures,
-                                          Entity suppressedLayerEntity) {
+svg::RendererBitmap CapturePresenterFrame(
+    gui::EditorWindow* window, GlTextureCache* textures, Entity suppressedLayerEntity,
+    std::optional<SelectionChromeSnapshot> immediateOverlaySnapshot = std::nullopt) {
   ViewportState viewport;
   viewport.paneOrigin = Vector2d(0.0, 0.0);
   viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
@@ -175,13 +176,13 @@ svg::RendererBitmap CapturePresenterFrame(gui::EditorWindow* window, GlTextureCa
       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
       ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus;
   ImGui::Begin("display-none-suppression-repro", nullptr, kWindowFlags);
-  presenter.render(RenderPanePresenterState{
+  (void)presenter.render(RenderPanePresenterState{
       .viewport = viewport,
       .frameHistory = frameHistory,
       .textures = *textures,
+      .immediateOverlaySnapshot = immediateOverlaySnapshot,
       .activeDragPreview = noDragPreview,
       .displayedDragPreview = noDragPreview,
-      .overlayDragPreview = noDragPreview,
       .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
       .suppressedLayerEntity = suppressedLayerEntity,
   });
@@ -217,6 +218,61 @@ int CountVisibleDragPixels(const svg::RendererBitmap& bitmap) {
     }
   }
   return count;
+}
+
+int CountImmediateOverlayPixels(const svg::RendererBitmap& bitmap) {
+  if (bitmap.empty()) {
+    return 0;
+  }
+
+  int count = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+      const int red = bitmap.pixels[offset + 0u];
+      const int green = bitmap.pixels[offset + 1u];
+      const int blue = bitmap.pixels[offset + 2u];
+      if (red < 80 && green > 180 && blue > 180) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+TEST(RenderPanePresenterVisualReproTest, ImmediateOverlaySnapshotDrawsWithoutOverlayTexture) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Immediate Overlay UI Repro",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+      .clearColor = {0.08f, 0.09f, 0.10f, 1.0f},
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+  textures.uploadComposited(MakePreview(/*includeHiddenLayer=*/false));
+  ASSERT_EQ(textures.overlayWidth(), 0);
+  ASSERT_EQ(textures.overlayHeight(), 0);
+
+  SelectionChromeSnapshot overlaySnapshot;
+  overlaySnapshot.aabbsDoc.push_back(Box2d::FromXYWH(72.0, 56.0, 118.0, 88.0));
+  overlaySnapshot.selectionStrokeWidthWorld = 2.0;
+
+  const svg::RendererBitmap actual =
+      CapturePresenterFrame(&window, &textures, entt::null, overlaySnapshot);
+  WriteDiagnosticBitmap(actual, "actual_immediate_overlay_snapshot.png");
+
+  EXPECT_GT(CountImmediateOverlayPixels(actual), 200)
+      << "Immediate overlay chrome should be presented directly from the captured snapshot even "
+         "when the retained overlay texture cache is empty.";
 }
 
 TEST(RenderPanePresenterVisualReproTest, WritesDisplayNoneSuppressionScreenshots) {

@@ -294,6 +294,30 @@ donner_multi_transitioned_test = rule(
     },
 )
 
+donner_multi_transitioned_binary = rule(
+    implementation = _donner_transitioned_executable_impl,
+    executable = True,
+    attrs = {
+        "dep": attr.label(
+            mandatory = True,
+            executable = True,
+            cfg = _multi_transition,
+        ),
+        "renderer_backend": attr.string(
+            mandatory = True,
+            values = ["tiny_skia", "geode"],
+        ),
+        "text": attr.string(
+            default = "false",
+            values = ["true", "false"],
+        ),
+        "text_full": attr.string(
+            default = "false",
+            values = ["true", "false"],
+        ),
+    },
+)
+
 def donner_variant_cc_test(name, dep, variants = None, named_variants = None, **kwargs):
     """
     Generate test targets for variant configurations, plus a default alias

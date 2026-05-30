@@ -8,6 +8,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -453,6 +455,134 @@ bool IsRenderedStyleTarget(const svg::SVGElement& element) {
     case svg::ElementType::TSpan:
     case svg::ElementType::Use: return true;
     default: return false;
+  }
+}
+
+bool AddUniqueElement(const svg::SVGElement& element, std::vector<svg::SVGElement>* elements);
+
+bool ReferencesAnyFragmentId(std::span<const FragmentReference> references,
+                             const std::unordered_set<std::string>& fragmentIds) {
+  return std::ranges::any_of(references, [&fragmentIds](const FragmentReference& reference) {
+    return fragmentIds.contains(reference.fragmentId);
+  });
+}
+
+void AppendMatchedCssFragmentReferencesInSubtree(std::string_view source,
+                                                 const svg::SVGElement& root,
+                                                 std::vector<FragmentReference>* references) {
+  if (!HasLiveSvgTreeComponents(root)) {
+    return;
+  }
+
+  if (IsRenderedStyleTarget(root)) {
+    for (const svg::SVGMatchedStyleRule& matchedRule : svg::CollectMatchedStyleRules(root)) {
+      if (!matchedRule.ruleSourceRange.has_value()) {
+        continue;
+      }
+
+      const std::optional<ByteRange> ruleRange =
+          ResolveSourceRange(source, *matchedRule.ruleSourceRange);
+      if (ruleRange.has_value()) {
+        AppendCssFragmentReferences(source, *ruleRange, references);
+      }
+    }
+  }
+
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    AppendMatchedCssFragmentReferencesInSubtree(source, current, references);
+  }
+}
+
+void AppendDocumentElements(const svg::SVGElement& root, std::vector<svg::SVGElement>* elements) {
+  if (!HasLiveSvgTreeComponents(root)) {
+    return;
+  }
+
+  elements->push_back(root);
+  for (auto child = SafeFirstChild(root); child.has_value();) {
+    svg::SVGElement current = *child;
+    child = SafeNextSibling(current);
+    AppendDocumentElements(current, elements);
+  }
+}
+
+std::unordered_map<std::string, svg::SVGElement> BuildElementByIdIndex(
+    std::span<const svg::SVGElement> elements) {
+  std::unordered_map<std::string, svg::SVGElement> result;
+  result.reserve(elements.size());
+  for (const svg::SVGElement& element : elements) {
+    const RcString id = SafeId(element);
+    if (!id.empty()) {
+      result.emplace(std::string(std::string_view(id)), element);
+    }
+  }
+
+  return result;
+}
+
+bool ContainsEntity(std::span<const Entity> entities, Entity entity) {
+  return std::ranges::find(entities, entity) != entities.end();
+}
+
+bool HasSelectedAncestor(const svg::SVGElement& element, std::span<const Entity> selectedEntities) {
+  for (std::optional<svg::SVGElement> ancestor = SafeParentElement(element); ancestor.has_value();
+       ancestor = SafeParentElement(*ancestor)) {
+    if (ContainsEntity(selectedEntities, ancestor->unsafeEntityHandle().entity())) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+bool MatchedCssReferencesAnyFragmentId(std::string_view source, const svg::SVGElement& element,
+                                       const std::unordered_set<std::string>& fragmentIds) {
+  if (!IsRenderedStyleTarget(element)) {
+    return false;
+  }
+
+  for (const svg::SVGMatchedStyleRule& matchedRule : svg::CollectMatchedStyleRules(element)) {
+    if (!matchedRule.ruleSourceRange.has_value()) {
+      continue;
+    }
+
+    const std::optional<ByteRange> ruleRange =
+        ResolveSourceRange(source, *matchedRule.ruleSourceRange);
+    if (!ruleRange.has_value()) {
+      continue;
+    }
+
+    std::vector<FragmentReference> references;
+    AppendCssFragmentReferences(source, *ruleRange, &references);
+    if (ReferencesAnyFragmentId(references, fragmentIds)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+void AppendReverseReferenceElementsForSelectedIds(
+    std::string_view source, std::span<const svg::SVGElement> documentElements,
+    const std::unordered_set<std::string>& selectedIds, std::span<const Entity> selectedEntities,
+    std::vector<svg::SVGElement>* referencingElements) {
+  if (selectedIds.empty()) {
+    return;
+  }
+
+  for (const svg::SVGElement& element : documentElements) {
+    const Entity entity = element.unsafeEntityHandle().entity();
+    if (ContainsEntity(selectedEntities, entity)) {
+      continue;
+    }
+
+    const std::vector<FragmentReference> attributeReferences = ReferencedFragments(source, element);
+    if (ReferencesAnyFragmentId(attributeReferences, selectedIds) ||
+        MatchedCssReferencesAnyFragmentId(source, element, selectedIds)) {
+      AddUniqueElement(element, referencingElements);
+    }
   }
 }
 
@@ -982,27 +1112,22 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
   return result;
 }
 
-void AppendForwardReferenceElements(const svg::SVGDocument& document,
-                                    const std::vector<std::size_t>& lineStarts,
-                                    const svg::SVGElement& element,
-                                    std::vector<svg::SVGElement>* elements) {
+void AppendForwardReferenceElements(
+    std::string_view source, const svg::SVGElement& element,
+    const std::unordered_map<std::string, svg::SVGElement>& elementById,
+    std::vector<svg::SVGElement>* elements) {
   if (!HasLiveSvgTreeComponents(element)) {
     return;
   }
 
-  FocusElementCollection ignoredCollection;
-  std::vector<CssRuleKey> ignoredCssRules;
   std::vector<FragmentReference> references;
-  AppendMatchedCssRulesInSubtree(document.source(), lineStarts, element, &ignoredCollection,
-                                 &ignoredCssRules, FocusLinkSourceMode::All, &references);
-  AppendReferencedFragmentsInSubtree(document.source(), element, FocusLinkSourceMode::All,
-                                     &references);
+  AppendMatchedCssFragmentReferencesInSubtree(source, element, &references);
+  AppendReferencedFragmentsInSubtree(source, element, FocusLinkSourceMode::All, &references);
 
-  const svg::SVGElement root = document.svgElement();
   for (const FragmentReference& reference : references) {
-    std::optional<svg::SVGElement> referenced = FindElementById(root, reference.fragmentId);
-    if (referenced.has_value()) {
-      AddUniqueElement(*referenced, elements);
+    auto referenced = elementById.find(reference.fragmentId);
+    if (referenced != elementById.end()) {
+      AddUniqueElement(referenced->second, elements);
     }
   }
 }
@@ -1160,7 +1285,8 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   for (std::size_t i = 0; i < focusElements.elements.size(); ++i) {
     std::optional<ByteRange> elementRange = NodeRange(source, focusElements.elements[i]);
     const bool selectedElement =
-        std::ranges::find(selectedEntities, focusElements.elements[i].unsafeEntityHandle().entity()) !=
+        std::ranges::find(selectedEntities,
+                          focusElements.elements[i].unsafeEntityHandle().entity()) !=
         selectedEntities.end();
     if (elementRange.has_value()) {
       (selectedElement ? partition.fullColor : partition.referenceColor)
@@ -1311,31 +1437,45 @@ ReferenceHighlightSummary ComputeReferenceHighlightSummary(
     return summary;
   }
 
-  const std::string_view source = document.source();
-  const std::vector<std::size_t> lineStarts = BuildLineStarts(source);
   const svg::SVGElement root = document.svgElement();
+  std::vector<svg::SVGElement> documentElements;
+  AppendDocumentElements(root, &documentElements);
+  const std::unordered_map<std::string, svg::SVGElement> elementById =
+      BuildElementByIdIndex(documentElements);
+
+  std::vector<svg::SVGElement> liveSelectedElements;
+  std::vector<Entity> selectedEntities;
+  std::unordered_set<std::string> selectedIds;
   for (const svg::SVGElement& selected : selectedElements) {
     if (!HasLiveSvgTreeComponents(selected)) {
       continue;
     }
 
-    AppendForwardReferenceElements(document, lineStarts, selected, &summary.referencedElements);
+    liveSelectedElements.push_back(selected);
+    selectedEntities.push_back(selected.unsafeEntityHandle().entity());
 
     const RcString id = SafeId(selected);
-    if (id.empty()) {
-      continue;
+    if (!id.empty()) {
+      selectedIds.insert(std::string(std::string_view(id)));
     }
-
-    AppendReverseAttributeReferenceElements(source, root, std::string_view(id),
-                                            &summary.referencingElements,
-                                            std::numeric_limits<std::size_t>::max());
-    AppendReverseCssReferenceElements(source, root, std::string_view(id),
-                                      &summary.referencingElements,
-                                      std::numeric_limits<std::size_t>::max());
-    std::erase_if(summary.referencingElements, [&](const svg::SVGElement& element) {
-      return element.unsafeEntityHandle().entity() == selected.unsafeEntityHandle().entity();
-    });
   }
+
+  if (liveSelectedElements.empty()) {
+    return summary;
+  }
+
+  const std::string_view source = document.source();
+  for (const svg::SVGElement& selected : liveSelectedElements) {
+    if (!HasSelectedAncestor(selected, selectedEntities)) {
+      AppendForwardReferenceElements(source, selected, elementById, &summary.referencedElements);
+    }
+  }
+
+  AppendReverseReferenceElementsForSelectedIds(source, documentElements, selectedIds,
+                                               selectedEntities, &summary.referencingElements);
+  std::erase_if(summary.referencingElements, [&](const svg::SVGElement& element) {
+    return ContainsEntity(selectedEntities, element.unsafeEntityHandle().entity());
+  });
 
   return summary;
 }

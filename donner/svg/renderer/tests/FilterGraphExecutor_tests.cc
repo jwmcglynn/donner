@@ -127,6 +127,26 @@ TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenFilterRegion) {
   }
 }
 
+TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenRightFilterRegion) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(8, 8);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  for (int y = 0; y < 8; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      SetPixel(pixmap, x, y, Pixel{255, 255, 255, 255});
+    }
+  }
+
+  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(20.0, 2.0, 4.0, 4.0), Transform2d());
+
+  for (int y = 0; y < 8; ++y) {
+    for (int x = 0; x < 8; ++x) {
+      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0}));
+    }
+  }
+}
+
 TEST(FilterGraphExecutorTest, RotationDoesNotChangeBlurSigma) {
   const tiny_skia::Pixmap identityBlurred = CreateBlurredDotPixmap(Transform2d());
   const tiny_skia::Pixmap rotatedBlurred = CreateBlurredDotPixmap(Transform2d::Rotate(M_PI / 4.0));
@@ -161,6 +181,33 @@ TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseUserSpaceAndFilter
   EXPECT_EQ(GetPixel(pixmap, 8, 8), Pixel({255, 0, 0, 255}));
   EXPECT_EQ(GetPixel(pixmap, 19, 19), Pixel({255, 0, 0, 255}));
   EXPECT_EQ(GetPixel(pixmap, 20, 20), Pixel({0, 0, 0, 0}));
+}
+
+TEST(FilterGraphExecutorTest, PrimitiveSubregionOutsideRightEdgeClipsWithoutOverflow) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 8);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.inputs.push_back(components::FilterInput{});
+  node.primitive = components::filter_primitive::Flood{
+      .floodColor = css::Color(css::RGBA(255, 0, 0, 255)),
+      .floodOpacity = 1.0,
+  };
+  node.x = Lengthd(100.0);
+  node.y = Lengthd(2.0);
+  node.width = Lengthd(4.0);
+  node.height = Lengthd(2.0);
+  graph.nodes.push_back(std::move(node));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  for (int y = 0; y < 8; ++y) {
+    for (int x = 0; x < 16; ++x) {
+      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0}));
+    }
+  }
 }
 
 TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseElementBoundsInObjectBoundingBox) {

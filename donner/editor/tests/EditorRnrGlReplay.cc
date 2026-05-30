@@ -17,6 +17,8 @@ namespace {
 
 using donner::Vector2d;
 using donner::Vector2i;
+using donner::editor::FrameCostBreakdown;
+using donner::editor::PresentationResourceStats;
 using donner::editor::RenderResult;
 using donner::editor::repro::GlRnrReplayCapture;
 using donner::editor::repro::GlRnrReplayCropMode;
@@ -59,6 +61,9 @@ void PrintUsage(std::string_view argv0) {
             << " --rnr <path> [--out-dir <path>] [--capture-frame <n>]...\n"
                "       [--capture-left-mousedown <ordinal>] [--max-frame <n>]\n"
                "       [--crop full|render-pane|document-canvas]\n"
+               "       [--worker-delay-ms <n>]\n"
+               "       [--worker-scheduling realtime|drain-each-frame|hold-frames-behind]\n"
+               "       [--hold-frames-behind <n>]\n"
                "       [--visible] [--no-pace] [--print-diagnostics]\n";
 }
 
@@ -170,6 +175,50 @@ void PrintUsage(std::string_view argv0) {
       continue;
     }
 
+    if (arg == "--worker-delay-ms") {
+      const std::optional<std::string_view> value = requireValue(arg);
+      int delayMs = 0;
+      if (!value.has_value() || !ParseInt(*value, &delayMs)) {
+        std::cerr << "--worker-delay-ms expects a non-negative integer\n";
+        return false;
+      }
+      options->workerRenderDelayMsForTesting = delayMs;
+      continue;
+    }
+
+    if (arg == "--worker-scheduling") {
+      const std::optional<std::string_view> value = requireValue(arg);
+      if (!value.has_value()) {
+        return false;
+      }
+
+      if (*value == "realtime") {
+        options->workerScheduling = donner::editor::repro::GlRnrReplayWorkerScheduling::Realtime;
+      } else if (*value == "drain-each-frame") {
+        options->workerScheduling =
+            donner::editor::repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+      } else if (*value == "hold-frames-behind") {
+        options->workerScheduling =
+            donner::editor::repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+      } else {
+        std::cerr << "--worker-scheduling expects realtime, drain-each-frame, or "
+                     "hold-frames-behind\n";
+        return false;
+      }
+      continue;
+    }
+
+    if (arg == "--hold-frames-behind") {
+      const std::optional<std::string_view> value = requireValue(arg);
+      int frameCount = 0;
+      if (!value.has_value() || !ParseInt(*value, &frameCount)) {
+        std::cerr << "--hold-frames-behind expects a non-negative integer\n";
+        return false;
+      }
+      options->holdFramesBehind = frameCount;
+      continue;
+    }
+
     if (arg == "--print-diagnostics") {
       if (printDiagnostics == nullptr) {
         return false;
@@ -214,6 +263,7 @@ std::string_view TileKindName(RenderResult::CompositedTile::Kind kind) {
   switch (kind) {
     case RenderResult::CompositedTile::Kind::Segment: return "segment";
     case RenderResult::CompositedTile::Kind::Layer: return "layer";
+    case RenderResult::CompositedTile::Kind::Immediate: return "immediate";
   }
 
   return "unknown";
@@ -225,6 +275,80 @@ void PrintVector2i(const Vector2i& value) {
 
 void PrintVector2d(const Vector2d& value) {
   std::cout << "[" << value.x << "," << value.y << "]";
+}
+
+void PrintFrameCost(const FrameCostBreakdown& cost) {
+  std::cout << "{\"overlay\":{\"capture_ms\":" << cost.overlay.captureMs
+            << ",\"draw_ms\":" << cost.overlay.drawMs
+            << ",\"snapshot_ms\":" << cost.overlay.snapshotMs
+            << ",\"upload_ms\":" << cost.overlay.uploadMs
+            << ",\"payload_bytes\":" << cost.overlay.payloadBytes
+            << ",\"selected_elements\":" << cost.overlay.selectedElementCount
+            << ",\"source_hover_elements\":" << cost.overlay.sourceHoverElementCount
+            << ",\"paths\":" << cost.overlay.pathCount
+            << ",\"hover_paths\":" << cost.overlay.hoverPathCount
+            << ",\"aabbs\":" << cost.overlay.aabbCount
+            << ",\"hover_aabbs\":" << cost.overlay.hoverAabbCount
+            << ",\"handles\":" << cost.overlay.handleCount
+            << ",\"has_marquee\":" << (cost.overlay.hasMarquee ? "true" : "false")
+            << ",\"selection_bounds_only\":"
+            << (cost.overlay.selectionBoundsOnly ? "true" : "false")
+            << ",\"has_live_drag_preview\":" << (cost.overlay.hasLiveDragPreview ? "true" : "false")
+            << ",\"has_represented_drag_preview\":"
+            << (cost.overlay.hasRepresentedDragPreview ? "true" : "false")
+            << ",\"live_drag_translation_doc\":";
+  PrintVector2d(cost.overlay.liveDragTranslationDoc);
+  std::cout << ",\"represented_drag_translation_doc\":";
+  PrintVector2d(cost.overlay.representedDragTranslationDoc);
+  std::cout << ",\"canvas_size\":";
+  PrintVector2i(cost.overlay.canvasSize);
+  std::cout << "},\"composited_upload\":{\"upload_ms\":" << cost.compositedUpload.uploadMs
+            << ",\"payload_bytes\":" << cost.compositedUpload.payloadBytes
+            << ",\"payload_pixel_area\":" << cost.compositedUpload.payloadPixelArea
+            << ",\"tile_pixel_area\":" << cost.compositedUpload.tilePixelArea
+            << ",\"tiles\":" << cost.compositedUpload.tileCount
+            << ",\"payload_tiles\":" << cost.compositedUpload.payloadTileCount
+            << ",\"bitmap_payload_tiles\":" << cost.compositedUpload.bitmapPayloadTileCount
+            << ",\"texture_payload_tiles\":" << cost.compositedUpload.texturePayloadTileCount
+            << ",\"metadata_only_tiles\":" << cost.compositedUpload.metadataOnlyTileCount
+            << ",\"immediate_tiles\":" << cost.compositedUpload.immediateTileCount
+            << "},\"composited_render\":{\"immediate_ms\":"
+            << cost.compositedRender.immediateMs
+            << ",\"cached_ms\":" << cost.compositedRender.cachedMs
+            << ",\"immediate_tiles\":" << cost.compositedRender.immediateTileCount
+            << ",\"cached_tiles\":" << cost.compositedRender.cachedTileCount
+            << "},\"source_ropes\":{\"layout_ms\":" << cost.sourceRopes.layoutMs
+            << ",\"update_ms\":" << cost.sourceRopes.updateMs
+            << ",\"draw_ms\":" << cost.sourceRopes.drawMs
+            << ",\"candidates\":" << cost.sourceRopes.candidateCount
+            << ",\"laid_out\":" << cost.sourceRopes.laidOutCount
+            << ",\"culled\":" << cost.sourceRopes.culledCount
+            << ",\"drawn\":" << cost.sourceRopes.drawnCount
+            << ",\"static_drawn\":" << cost.sourceRopes.staticDrawnCount
+            << ",\"active_states\":" << cost.sourceRopes.activeStateCount
+            << "},\"document_canvas_commits\":" << cost.documentCanvasCommitCount
+            << ",\"last_committed_canvas_size\":";
+  PrintVector2i(cost.lastCommittedCanvasSize);
+  std::cout << "}";
+}
+
+void PrintPresentationResources(const PresentationResourceStats& resources) {
+  std::cout << "{\"overlay_bytes\":" << resources.overlayBytes
+            << ",\"active_tile_bytes\":" << resources.activeTileBytes
+            << ",\"overview_tile_bytes\":" << resources.overviewTileBytes
+            << ",\"pending_retired_bytes\":" << resources.pendingRetiredBytes
+            << ",\"aged_retired_bytes\":" << resources.agedRetiredBytes
+            << ",\"total_tracked_bytes\":" << resources.totalTrackedBytes
+            << ",\"peak_tracked_bytes\":" << resources.peakTrackedBytes
+            << ",\"active_tile_textures\":" << resources.activeTileTextures
+            << ",\"overview_tile_textures\":" << resources.overviewTileTextures
+            << ",\"pending_retired_textures\":" << resources.pendingRetiredTextures
+            << ",\"aged_retired_textures\":" << resources.agedRetiredTextures
+            << ",\"retired_frame_count\":" << resources.retiredFrameCount
+            << ",\"largest_allocation_px\":";
+  PrintVector2i(resources.largestAllocationPx);
+  std::cout << ",\"wgpu_lifetime_texture_creates\":" << resources.wgpuLifetimeTextureCreates
+            << ",\"wgpu_lifetime_buffer_creates\":" << resources.wgpuLifetimeBufferCreates << "}";
 }
 
 void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
@@ -266,7 +390,10 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
                 << ",\"duplicate_live_texture_count\":" << frame.duplicateLiveTextureCount
                 << ",\"overlay_dims_px\":";
       PrintVector2i(frame.overlayDimsPx);
-      std::cout << ",\"overlay_texture_handle\":" << frame.overlayTextureHandle << ",\"tiles\":[";
+      std::cout << ",\"overlay_texture_handle\":" << frame.overlayTextureHandle
+                << ",\"presentation_resources\":";
+      PrintPresentationResources(frame.presentationResources);
+      std::cout << ",\"tiles\":[";
       for (std::size_t tileIndex = 0; tileIndex < frame.tiles.size(); ++tileIndex) {
         const GlRnrReplayTileDiagnostics& tile = frame.tiles[tileIndex];
         if (tileIndex != 0) {
@@ -292,7 +419,9 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
                   << ",\"metadata_only\":" << (tile.metadataOnly ? "true" : "false")
                   << ",\"is_drag_target\":" << (tile.isDragTarget ? "true" : "false") << "}";
       }
-      std::cout << "]}";
+      std::cout << "],\"frame_cost\":";
+      PrintFrameCost(frame.frameCost);
+      std::cout << "}";
     }
     std::cout << "]";
   }

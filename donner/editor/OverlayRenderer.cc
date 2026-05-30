@@ -18,7 +18,6 @@
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/properties/PaintServer.h"
-#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/StrokeParams.h"
 
@@ -159,29 +158,29 @@ Path PathForCorners(const std::array<Vector2d, 4>& corners) {
   return builder.build();
 }
 
-Path TransformPathToDocument(const Path& path, const Transform2d& documentFromElement) {
+Path TransformPath(const Path& path, const Transform2d& destFromSource) {
   PathBuilder builder;
   path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
     switch (verb) {
-      case Path::Verb::MoveTo:
-        builder.moveTo(documentFromElement.transformPosition(points[0]));
-        break;
-      case Path::Verb::LineTo:
-        builder.lineTo(documentFromElement.transformPosition(points[0]));
-        break;
+      case Path::Verb::MoveTo: builder.moveTo(destFromSource.transformPosition(points[0])); break;
+      case Path::Verb::LineTo: builder.lineTo(destFromSource.transformPosition(points[0])); break;
       case Path::Verb::QuadTo:
-        builder.quadTo(documentFromElement.transformPosition(points[0]),
-                       documentFromElement.transformPosition(points[1]));
+        builder.quadTo(destFromSource.transformPosition(points[0]),
+                       destFromSource.transformPosition(points[1]));
         break;
       case Path::Verb::CurveTo:
-        builder.curveTo(documentFromElement.transformPosition(points[0]),
-                        documentFromElement.transformPosition(points[1]),
-                        documentFromElement.transformPosition(points[2]));
+        builder.curveTo(destFromSource.transformPosition(points[0]),
+                        destFromSource.transformPosition(points[1]),
+                        destFromSource.transformPosition(points[2]));
         break;
       case Path::Verb::ClosePath: builder.closePath(); break;
     }
   });
   return builder.build();
+}
+
+Path TransformPathToDocument(const Path& path, const Transform2d& documentFromElement) {
+  return TransformPath(path, documentFromElement);
 }
 
 bool ElementDisplayNone(const svg::SVGElement& element) {
@@ -203,26 +202,110 @@ bool HasDisplayNoneInAncestorChain(const svg::SVGElement& element) {
   }
 }
 
-void AppendPathItems(std::span<const svg::SVGElement> elements,
-                     std::vector<SelectionChromeSnapshot::PathItem>* out) {
+bool BoxesIntersect(const Box2d& lhs, const Box2d& rhs) {
+  return lhs.bottomRight.x >= rhs.topLeft.x && lhs.topLeft.x <= rhs.bottomRight.x &&
+         lhs.bottomRight.y >= rhs.topLeft.y && lhs.topLeft.y <= rhs.bottomRight.y;
+}
+
+bool BoxIntersectsCullRect(const Box2d& box, const std::optional<Box2d>& cullRectDoc) {
+  return !cullRectDoc.has_value() || BoxesIntersect(box, *cullRectDoc);
+}
+
+void AddBoxToOptional(std::optional<Box2d>* target, const Box2d& box) {
+  if (target->has_value()) {
+    (*target)->addBox(box);
+  } else {
+    *target = box;
+  }
+}
+
+struct AppendChromeItemsOptions {
+  bool includePaths = true;
+  bool includePerElementAabbs = true;
+  Transform2d representedDocumentFromLiveDocument = Transform2d();
+};
+
+std::optional<Box2d> AppendChromeItems(std::span<const svg::SVGElement> elements,
+                                       const std::optional<Box2d>& cullRectDoc,
+                                       std::vector<SelectionChromeSnapshot::PathItem>* outPaths,
+                                       std::vector<Box2d>* outAabbs,
+                                       AppendChromeItemsOptions options = {}) {
+  std::optional<Box2d> combinedBounds;
   for (const auto& element : elements) {
-    element.withWriteAccess([&element, out](svg::DocumentWriteAccess&, EntityHandle) {
+    element.withWriteAccess([&element, &cullRectDoc, outPaths, outAabbs, options, &combinedBounds](
+                                svg::DocumentWriteAccess&, EntityHandle) {
+      std::optional<Box2d> mergedBounds;
       for (const auto& geometry : CollectRenderableGeometry(element)) {
-        if (const auto spline = geometry.computedSpline(); spline.has_value()) {
+        const std::optional<Box2d> worldBoundsDoc = geometry.worldBounds();
+        const std::optional<Box2d> representedBoundsDoc =
+            worldBoundsDoc.has_value()
+                ? std::make_optional(
+                      options.representedDocumentFromLiveDocument.transformBox(*worldBoundsDoc))
+                : std::nullopt;
+        if (representedBoundsDoc.has_value()) {
+          AddBoxToOptional(&mergedBounds, *representedBoundsDoc);
+        }
+
+        if (representedBoundsDoc.has_value() &&
+            !BoxIntersectsCullRect(*representedBoundsDoc, cullRectDoc)) {
+          continue;
+        }
+
+        if (options.includePaths) {
+          const auto spline = geometry.computedSpline();
+          if (!spline.has_value()) {
+            continue;
+          }
+
           SelectionChromeSnapshot::PathItem item;
           const Transform2d documentFromElement = geometry.elementFromWorld();
-          item.pathDoc = TransformPathToDocument(*spline, documentFromElement);
+          item.pathDoc = TransformPath(TransformPathToDocument(*spline, documentFromElement),
+                                       options.representedDocumentFromLiveDocument);
           item.displayNone = HasDisplayNoneInAncestorChain(geometry);
-          out->push_back(std::move(item));
+          outPaths->push_back(std::move(item));
+        }
+      }
+
+      if (mergedBounds.has_value() && BoxIntersectsCullRect(*mergedBounds, cullRectDoc)) {
+        AddBoxToOptional(&combinedBounds, *mergedBounds);
+        if (options.includePerElementAabbs) {
+          outAabbs->push_back(*mergedBounds);
         }
       }
     });
   }
+  return combinedBounds;
+}
+
+void CullBoxesInPlace(std::vector<Box2d>* boxes, const std::optional<Box2d>& cullRectDoc) {
+  if (!cullRectDoc.has_value()) {
+    return;
+  }
+
+  std::erase_if(*boxes, [&](const Box2d& box) { return !BoxesIntersect(box, *cullRectDoc); });
+}
+
+std::optional<SelectionChromeSnapshot::OrientedBox> CullOrientedBox(
+    const SelectionChromeSnapshot::OrientedBox& orientedBox,
+    const std::optional<Box2d>& cullRectDoc) {
+  if (!cullRectDoc.has_value()) {
+    return orientedBox;
+  }
+
+  Box2d bounds = Box2d::CreateEmpty(orientedBox.cornersDoc.front());
+  for (const Vector2d& corner : orientedBox.cornersDoc) {
+    bounds.addPoint(corner);
+  }
+
+  if (!BoxesIntersect(bounds, *cullRectDoc)) {
+    return std::nullopt;
+  }
+  return orientedBox;
 }
 
 }  // namespace
 
-void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& editor) {
+void OverlayRenderer::drawChrome(svg::RendererInterface& renderer, const EditorApp& editor) {
   if (!editor.hasDocument()) {
     return;
   }
@@ -236,12 +319,12 @@ void OverlayRenderer::drawChrome(svg::Renderer& renderer, const EditorApp& edito
   drawChromeWithTransform(renderer, editor.selectedElements(), canvasFromDoc);
 }
 
-void OverlayRenderer::drawChrome(svg::Renderer& renderer,
+void OverlayRenderer::drawChrome(svg::RendererInterface& renderer,
                                  const std::optional<svg::SVGElement>& selection) {
   drawChromeWithTransform(renderer, selection, Transform2d());
 }
 
-void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
+void OverlayRenderer::drawChromeWithTransform(svg::RendererInterface& renderer,
                                               const std::optional<svg::SVGElement>& selection,
                                               const Transform2d& canvasFromDoc) {
   if (!selection.has_value()) {
@@ -251,7 +334,7 @@ void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
   drawChromeWithTransform(renderer, std::span<const svg::SVGElement>(single), canvasFromDoc);
 }
 
-void OverlayRenderer::drawChromeWithTransform(svg::Renderer& renderer,
+void OverlayRenderer::drawChromeWithTransform(svg::RendererInterface& renderer,
                                               std::span<const svg::SVGElement> selection,
                                               const Transform2d& canvasFromDoc) {
   drawChromeWithTransform(renderer, selection, /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
@@ -261,7 +344,8 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
     const Transform2d& canvasFromDoc,
     const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
-    std::span<const svg::SVGElement> sourceHover) {
+    std::span<const svg::SVGElement> sourceHover, const std::optional<Box2d>& cullRectDoc,
+    SelectionChromeDetail selectionDetail, const Transform2d& representedDocumentFromLiveDocument) {
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = canvasFromDoc;
   snapshot.marqueeDoc = marqueeRectDoc;
@@ -275,8 +359,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   snapshot.marqueeStrokeWidthWorld = pixelToWorld(kMarqueeStrokePixels);
 
   if (!sourceHover.empty()) {
-    AppendPathItems(sourceHover, &snapshot.hoverPaths);
-    snapshot.hoverAabbsDoc = SnapshotSelectionWorldBounds(sourceHover);
+    AppendChromeItems(sourceHover, cullRectDoc, &snapshot.hoverPaths, &snapshot.hoverAabbsDoc);
   }
 
   if (selection.empty()) {
@@ -286,7 +369,17 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   // Per-element path data + transforms. `computedSpline` and
   // `elementFromWorld` both read registry state — done here, before
   // returning, so the post-return snapshot is fully self-contained.
-  AppendPathItems(selection, &snapshot.paths);
+  const bool combinedBoundsOnly = selectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
+  const std::optional<Box2d> combinedSelectionBounds = AppendChromeItems(
+      selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc,
+      AppendChromeItemsOptions{
+          .includePaths = !combinedBoundsOnly,
+          .includePerElementAabbs = !combinedBoundsOnly,
+          .representedDocumentFromLiveDocument = representedDocumentFromLiveDocument,
+      });
+  if (combinedBoundsOnly && combinedSelectionBounds.has_value()) {
+    snapshot.aabbsDoc.push_back(*combinedSelectionBounds);
+  }
 
   // AABBs are computed inline from the selection's current DOM transforms
   // so they track the same frame as the per-element path outlines above.
@@ -296,13 +389,20 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   // the AABB (cached). Path outline + AABB are now sampled from the same
   // DOM snapshot. The cache is still useful for main-loop selection-
   // changed detection; it's just no longer gating the overlay's bounds.
-  snapshot.aabbsDoc = SnapshotSelectionWorldBounds(selection);
   if (activeBoundsPreview.has_value() && !snapshot.aabbsDoc.empty()) {
     const auto corners = TransformedBoxCorners(activeBoundsPreview->startBoundsDoc,
                                                activeBoundsPreview->documentFromStartDocument);
-    snapshot.orientedBoundsDoc = SelectionChromeSnapshot::OrientedBox{.cornersDoc = corners};
-    snapshot.handleBoxesDoc.reserve(corners.size());
-    for (const Vector2d& corner : corners) {
+    std::array<Vector2d, 4> representedCorners;
+    for (std::size_t i = 0; i < corners.size(); ++i) {
+      representedCorners[i] = representedDocumentFromLiveDocument.transformPosition(corners[i]);
+    }
+    snapshot.orientedBoundsDoc = CullOrientedBox(
+        SelectionChromeSnapshot::OrientedBox{.cornersDoc = representedCorners}, cullRectDoc);
+    if (!snapshot.orientedBoundsDoc.has_value()) {
+      snapshot.aabbsDoc.clear();
+    }
+    snapshot.handleBoxesDoc.reserve(representedCorners.size());
+    for (const Vector2d& corner : representedCorners) {
       snapshot.handleBoxesDoc.push_back(HandleBoxForCorner(corner, scale));
     }
   } else if (!snapshot.aabbsDoc.empty()) {
@@ -311,10 +411,11 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
         SelectionTransformHandleBoxesForBounds(combinedBounds, scale);
     snapshot.handleBoxesDoc.assign(handleBoxes.boxes.begin(), handleBoxes.boxes.end());
   }
+  CullBoxesInPlace(&snapshot.handleBoxesDoc, cullRectDoc);
   return snapshot;
 }
 
-void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
+void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
                                              const SelectionChromeSnapshot& snapshot) {
   ZoneScopedN("OverlayRenderer::drawChromeFromSnapshot");
   if (snapshot.paths.empty() && snapshot.hoverPaths.empty() && snapshot.aabbsDoc.empty() &&
@@ -412,17 +513,19 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::Renderer& renderer,
 }
 
 void OverlayRenderer::drawChromeWithTransform(
-    svg::Renderer& renderer, std::span<const svg::SVGElement> selection,
+    svg::RendererInterface& renderer, std::span<const svg::SVGElement> selection,
     const std::optional<Box2d>& marqueeRectDoc, const Transform2d& canvasFromDoc,
     const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
-    std::span<const svg::SVGElement> sourceHover) {
+    std::span<const svg::SVGElement> sourceHover, const std::optional<Box2d>& cullRectDoc,
+    SelectionChromeDetail selectionDetail, const Transform2d& representedDocumentFromLiveDocument) {
   ZoneScopedN("OverlayRenderer::drawChrome");
   // Route the live path through capture + draw so M7's snapshot
   // implementation is the single source of truth. Same output, same
   // performance characteristics (the capture is straight-line registry
   // reads + a small allocation).
   const SelectionChromeSnapshot snapshot = captureChromeSnapshot(
-      selection, marqueeRectDoc, canvasFromDoc, activeBoundsPreview, sourceHover);
+      selection, marqueeRectDoc, canvasFromDoc, activeBoundsPreview, sourceHover, cullRectDoc,
+      selectionDetail, representedDocumentFromLiveDocument);
   drawChromeFromSnapshot(renderer, snapshot);
 }
 

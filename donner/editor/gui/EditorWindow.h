@@ -22,10 +22,15 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#ifdef DONNER_EDITOR_WGPU
+#include <webgpu/webgpu.hpp>
+#endif
 
 #include "donner/base/Vector2.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -102,6 +107,19 @@ struct EditorWindowInputOverride {
   /// UTF-32 character input events queued during this frame.
   std::vector<std::uint32_t> inputCharacters;
 };
+
+#ifdef DONNER_EDITOR_WGPU
+/// Host framebuffer target exposed to direct Geode append passes after ImGui has rendered.
+struct EditorWindowWgpuRenderTarget {
+  /// Current swapchain texture. Valid only for the duration of the callback.
+  wgpu::Texture texture;
+  /// Framebuffer dimensions in physical pixels.
+  Vector2i framebufferSizePx = Vector2i::Zero();
+};
+
+/// Callback invoked after ImGui has submitted its draw data and before the surface is presented.
+using WgpuDirectRenderCallback = std::function<void(const EditorWindowWgpuRenderTarget& target)>;
+#endif
 
 /// Initializes GLFW + GL + ImGui when constructed, tears everything down
 /// in the destructor. One instance per process — ImGui's global state
@@ -207,6 +225,14 @@ public:
   /// Shared Geode/WebGPU device for renderer instances in Geode editor builds.
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeDevice() const;
 
+#ifdef DONNER_EDITOR_WGPU
+  /// Single-sample Geode device for direct append passes into the editor framebuffer.
+  [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeFramebufferDevice() const;
+
+  /// Set the direct framebuffer render callback for the next and subsequent frames.
+  void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
+#endif
+
 private:
   struct WgpuState;
 
@@ -216,6 +242,9 @@ private:
   EditorWindowOptions options_;
   GLFWwindow* window_ = nullptr;
   std::unique_ptr<WgpuState> wgpuState_;
+#ifdef DONNER_EDITOR_WGPU
+  WgpuDirectRenderCallback wgpuDirectRenderCallback_;
+#endif
   uint32_t textureId_ = 0;
   int textureWidth_ = 0;
   int textureHeight_ = 0;

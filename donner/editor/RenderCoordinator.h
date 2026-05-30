@@ -6,12 +6,13 @@
 #include <limits>
 #include <memory>
 #include <optional>
-#include <span>
 #include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/editor/AsyncRenderer.h"
+#include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/CompositedPresentation.h"
+#include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentationRenderScheduler.h"
@@ -40,31 +41,46 @@ class SelectTool;
     const RenderResult::CompositedPreview& preview, const Vector2i& viewportDesiredCanvas);
 
 /**
- * Return true when an active-drag overlay may bypass the displayed-version gate.
+ * Return the drag transform that overlay chrome should represent in the current presentation frame.
  *
- * Immediate overlay uploads keep drag chrome responsive, but they must not mix a
- * current-canvas overlay with stale split-tile content from a previous zoom epoch.
- * Full-canvas content is allowed to stretch across zoom/canvas changes; split
- * content must already match the current document canvas.
- *
- * @param tiles Currently presented content tiles.
- * @param currentCanvasSize Canvas size used to rasterize the pending overlay.
+ * @param activeDragPreview Active drag transform used by the presenter when a drag target tile is
+ *   available.
+ * @param displayedDragPreview Drag transform represented by the currently cached content.
+ * @param hasPresentableActiveDragTarget True when the presenter can draw a matching drag target
+ *   tile this frame.
  */
-[[nodiscard]] bool ShouldUploadImmediateOverlayForPresentedTiles(
-    std::span<const GlTextureCache::TileView> tiles, const Vector2i& currentCanvasSize);
+[[nodiscard]] std::optional<SelectTool::ActiveDragPreview>
+OverlayRepresentedDragPreviewForPresentation(
+    const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
+    bool hasPresentableActiveDragTarget);
+
+/**
+ * Return the document transform that projects live drag chrome onto the represented presentation.
+ *
+ * @param liveDragPreview Live drag transform currently applied to the DOM.
+ * @param representedDragPreview Drag transform the presented content represents.
+ */
+[[nodiscard]] Transform2d OverlayRepresentedDocumentFromLiveDocument(
+    const std::optional<SelectTool::ActiveDragPreview>& liveDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview);
+
+/**
+ * Project live gesture chrome, including the selection size/angle chip, to the overlay state.
+ *
+ * @param activeGesturePreview Live gesture preview from the select tool.
+ * @param liveDragPreview Live drag transform currently applied to the DOM.
+ * @param representedDragPreview Drag transform the overlay/content presentation represents.
+ */
+[[nodiscard]] std::optional<SelectTool::ActiveGesturePreview> OverlayGesturePreviewForPresentation(
+    const std::optional<SelectTool::ActiveGesturePreview>& activeGesturePreview,
+    const std::optional<SelectTool::ActiveDragPreview>& liveDragPreview,
+    const std::optional<SelectTool::ActiveDragPreview>& representedDragPreview);
 
 /// Owns the advanced editor's renderer-side orchestration: async rendering, overlay rasterization,
 /// composited drag presentation, and selection-bounds cache promotion.
 class RenderCoordinator {
 public:
-  /// Overlay upload policy for the freshly rasterized editor chrome.
-  enum class OverlayUploadMode {
-    /// Hold the chrome until it matches the displayed async render version.
-    MatchDisplayedVersion,
-    /// Upload immediately from the current UI-frame DOM state.
-    Immediate,
-  };
-
   explicit RenderCoordinator(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
 
   [[nodiscard]] AsyncRenderer& asyncRenderer() { return renderWorker_.asyncRenderer; }
@@ -77,15 +93,19 @@ public:
   [[nodiscard]] const CompositedPresentation& compositedPresentation() const {
     return compositedPresentation_;
   }
-  /// Drag preview state represented by the currently uploaded overlay texture.
-  [[nodiscard]] const std::optional<SelectTool::ActiveDragPreview>& presentedOverlayDragPreview()
-      const {
-    return presentedOverlayDragPreview_;
-  }
   [[nodiscard]] std::uint64_t displayedDocVersion() const { return displayedDocVersion_; }
-  /// Return true when freshly rasterized overlay chrome is waiting for a
-  /// matching async-render result before upload.
-  [[nodiscard]] bool hasPendingOverlayForTesting() const { return pendingOverlayVersion_ != 0; }
+  /// Latest editor rendering cost counters observed by this coordinator.
+  [[nodiscard]] const FrameCostBreakdown& lastFrameCostBreakdown() const {
+    return lastFrameCostBreakdown_;
+  }
+  /// Clear the per-frame cost accumulator before a new UI frame starts.
+  void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
+  /// Add immediate presenter-side overlay draw-list time to the current frame counters.
+  ///
+  /// @param drawMs Milliseconds spent issuing immediate overlay draw-list commands.
+  void addImmediateOverlayDrawCost(double drawMs) {
+    lastFrameCostBreakdown_.overlay.drawMs += drawMs;
+  }
   /// Replace transient source-hover chrome elements.
   ///
   /// @param elements Elements to highlight as source-hover preview chrome.
@@ -95,17 +115,26 @@ public:
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
-  /// Rasterize the editor chrome (path outlines, selection AABBs,
-  /// marquee) into the overlay texture. `marqueeRectDoc` is the active
-  /// marquee rectangle in document space (nullopt when the user isn't
-  /// marquee-dragging). All chrome is baked into this single overlay
-  /// texture — Geode will later own the whole layer end-to-end.
+  /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
+  /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
+  /// the user isn't marquee-dragging). The snapshot is drawn directly by \ref RenderPanePresenter
+  /// so selected chrome does not allocate, rasterize, snapshot, or upload an overlay texture.
   bool rasterizeOverlayForCurrentSelection(
       EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
       const std::optional<Box2d>& marqueeRectDoc,
-      OverlayUploadMode uploadMode = OverlayUploadMode::MatchDisplayedVersion,
       std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
-      std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt);
+      std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt,
+      std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,
+      std::optional<SelectTool::ActiveDragPreview> liveDragPreview = std::nullopt);
+  /// Rasterize the current UI-frame overlay immediately before presentation.
+  ///
+  /// Unlike content render scheduling, overlay chrome is intentionally not gated on worker
+  /// availability: drag, zoom, and marquee feedback must track the viewport used by the presented
+  /// frame.
+  bool rasterizeOverlayForPresentation(
+      EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
+      GlTextureCache& textures, std::optional<SelectTool::ActiveDragPreview> activeDragPreview,
+      std::optional<SelectTool::ActiveDragPreview> representedDragPreview);
   /// Drain the latest async-render result into the editor's UI state.
   /// If a `frameHistory` is supplied, its latest slot is stamped with
   /// the backend (worker) ms reported by `AsyncRenderer` so the frame
@@ -114,13 +143,19 @@ public:
   void pollRenderResult(EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
                         FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
-                          GlTextureCache& textures);
+                          GlTextureCache* textures = nullptr);
+  /// Record that a document mutation requires a current-version presentation handoff.
+  ///
+  /// @param flushResult Metadata from the just-flushed editor command batch.
+  void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult);
   /**
    * Return the selected layer whose cached pixels should be hidden while editor chrome remains
    * visible. This is used when the live selected element is `display:none`: hit-testing and the
    * next render already treat it as non-rendering, so the presenter must not keep drawing a stale
    * promoted texture for that entity. If a source reparse remapped the selected element to a new
    * entity, this returns the currently cached pre-reparse entity so that stale texture is hidden.
+   * Deleted selected layers are also suppressed while the next render catches up so detached cached
+   * tiles cannot remain visible.
    *
    * @param app Editor application state containing the live selection.
    * @return Entity whose cached layer should be suppressed, or entt::null if no suppression is
@@ -129,9 +164,15 @@ public:
   [[nodiscard]] Entity suppressedCompositedLayerEntity(EditorApp& app);
   /// Return true when the live selected graphics element is hidden by `display:none`.
   [[nodiscard]] bool selectedElementIsDisplayNone(EditorApp& app) const;
+  /// Latest race-free overlay chrome snapshot for immediate screen-space presentation.
+  [[nodiscard]] const std::optional<SelectionChromeSnapshot>& immediateOverlaySnapshot() const {
+    return immediateOverlaySnapshot_;
+  }
 
 private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
+  [[nodiscard]] std::vector<Entity> selectedCompositedExtraEntities(EditorApp& app,
+                                                                    Entity primaryEntity) const;
 
   struct RenderWorkerBundle {
     explicit RenderWorkerBundle(
@@ -144,28 +185,28 @@ private:
   };
 
   RenderWorkerBundle renderWorker_;
-  svg::Renderer overlayRenderer_;
   CompositedPresentation compositedPresentation_;
   SelectionBoundsCache selectionBoundsCache_;
+  std::optional<SelectionChromeSnapshot> immediateOverlaySnapshot_;
 
-  std::optional<svg::RendererBitmap> pendingOverlayBitmap_;
-  std::shared_ptr<const svg::RendererTextureSnapshot> pendingOverlayTexture_;
-  std::optional<SelectTool::ActiveDragPreview> pendingOverlayDragPreview_;
-  std::optional<SelectTool::ActiveDragPreview> presentedOverlayDragPreview_;
-  std::uint64_t pendingOverlayVersion_ = 0;
   std::uint64_t displayedDocVersion_ = 0;
 
   std::vector<svg::SVGElement> lastOverlaySelectionVec_;
   std::vector<svg::SVGElement> sourceHoverElements_;
   std::vector<svg::SVGElement> lastOverlaySourceHoverVec_;
-  Vector2i lastOverlayCanvasSize_ = Vector2i::Zero();
+  Vector2i lastOverlayRasterSize_ = Vector2i::Zero();
+  std::optional<Box2d> lastOverlayScreenRect_;
+  std::optional<Transform2d> lastOverlayCanvasFromDocument_;
+  SelectionChromeDetail lastOverlaySelectionDetail_ = SelectionChromeDetail::Full;
+  bool lastOverlayInteractionActive_ = false;
+  std::chrono::steady_clock::time_point overlayStableSince_{};
   std::uint64_t lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
-  /// Last marquee rect baked into the overlay texture, or nullopt if
-  /// the last overlay rasterize didn't include one. Used to invalidate
-  /// the cached overlay when the marquee geometry changes.
+  /// Last marquee rect captured into the immediate overlay snapshot, or nullopt if the last
+  /// overlay capture didn't include one. Used to invalidate cached chrome when marquee geometry
+  /// changes.
   std::optional<Box2d> lastOverlayMarqueeRectDoc_;
-  /// Active rotation bounds baked into the overlay texture, or nullopt
-  /// when the last overlay used normal axis-aligned selection bounds.
+  /// Active rotation bounds captured into the immediate overlay snapshot, or nullopt when the last
+  /// overlay used normal axis-aligned selection bounds.
   std::optional<SelectTool::ActiveTransformBoundsPreview> lastOverlayActiveBoundsPreview_;
 
   PresentationRenderScheduler renderScheduler_;
@@ -178,6 +219,15 @@ private:
   /// `SVGDocument::setCanvasSize`.
   Vector2i pendingCanvasSize_ = Vector2i::Zero();
   std::chrono::steady_clock::time_point pendingCanvasSizeSince_{};
+  /// Most recent raster viewport requested by `maybeRequestRender`.
+  /// Used to debounce high-zoom viewport refreshes while the presenter
+  /// transforms already-cached composited textures during live zoom/pan.
+  std::optional<EditorRasterViewport> pendingRasterViewport_;
+  std::chrono::steady_clock::time_point pendingRasterViewportSince_{};
+  /// True after a structural mutation whose existing overview/full-document cache may contain
+  /// deleted pixels. The old presentation remains visible until the replacement render lands.
+  bool pendingDocumentMutationOverviewRefresh_ = false;
+  FrameCostBreakdown lastFrameCostBreakdown_;
 };
 
 }  // namespace donner::editor

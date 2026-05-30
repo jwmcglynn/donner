@@ -1066,13 +1066,14 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
   checkClose(baselineGlowC, dragGlowC, "glow_foreground (further after drag target)");
 }
 
-// Translation-only drag must not re-rasterize the static segment / non-
-// drag-layer tiles between frames. Post §M2C the editor blits segments
-// and non-drag layers directly — if their generations bumped per frame,
-// the editor would re-upload N textures every pointer move (the
-// equivalent of the pre-M2C "bg/fg flatten on every frame" regression).
+// Translation-only drag must not re-rasterize retained static segment /
+// non-drag-layer tiles between frames. Post §M2C the editor blits segments
+// and non-drag layers directly — if retained generations bumped per frame,
+// the editor would re-upload N textures every pointer move (the equivalent of
+// the pre-M2C "bg/fg flatten on every frame" regression). Immediate tiles are
+// intentionally transient and may advance every frame.
 // We probe `snapshotTilesForUpload` and assert generations are stable
-// for non-drag tiles across translation-only drag frames.
+// for retained non-drag tiles across translation-only drag frames.
 TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) {
   SVGDocument document = parseDocument(R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
@@ -1092,14 +1093,14 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  // Capture per-tile generations after the first drag frame, keyed on the
-  // stable `tileId`. The drag-target layer's generation is allowed to bump
-  // (its `canvasFromBitmap` updates each fast-path frame); every other tile
-  // must stay stable.
+  // Capture per-tile generations after the first drag frame, keyed on the stable `tileId`. The
+  // drag-target layer's generation is allowed to bump (its `canvasFromBitmap` updates each
+  // fast-path frame), and immediate tiles are transient. Every retained non-drag tile must stay
+  // stable.
   auto tilesAfterFirstDrag = compositor.snapshotTilesForUpload();
   std::unordered_map<uint64_t, uint64_t> nonDragGenerations;
   for (const auto& tile : tilesAfterFirstDrag) {
-    if (!tile.isDragTarget) {
+    if (!tile.isDragTarget && !tile.immediate) {
       nonDragGenerations[tile.tileId] = tile.generation;
     }
   }
@@ -1113,7 +1114,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
 
   const auto tilesAfterFinalDrag = compositor.snapshotTilesForUpload();
   for (const auto& tile : tilesAfterFinalDrag) {
-    if (tile.isDragTarget) {
+    if (tile.isDragTarget || tile.immediate) {
       continue;
     }
     auto it = nonDragGenerations.find(tile.tileId);
@@ -1210,9 +1211,10 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
   }
   ASSERT_FALSE(preDragGenerations.empty());
 
-  // Starting an active drag on an already-elevated target changes only presentation
-  // geometry: the target's cached pixels are reused through canvasFromBitmap, and unrelated
-  // elevated/filter tiles plus static segments keep their existing textures.
+  // Starting an active drag on an already-elevated target changes only presentation geometry: the
+  // target's cached pixels are reused through canvasFromBitmap, and unrelated retained
+  // elevated/filter tiles plus static segments keep their existing textures. Immediate static
+  // tiles are transient and may legitimately advance.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
   ASSERT_TRUE(compositor.promoteEntity(targetEntity, InteractionHint::ActiveDrag).promotedLayer());
   compositor.renderFrame(viewport_);
@@ -1222,16 +1224,19 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
 
   bool sawTargetLayer = false;
   for (const CompositorTile& tile : activeDragTiles) {
+    if (tile.layerEntity == targetEntity) {
+      sawTargetLayer = true;
+      EXPECT_TRUE(tile.isDragTarget);
+    }
+    if (tile.immediate) {
+      continue;
+    }
     const auto it = preDragGenerations.find(tile.tileId);
     ASSERT_NE(it, preDragGenerations.end())
         << "new tile id appeared on drag start: " << tile.tileId;
     EXPECT_EQ(tile.generation, it->second)
         << "tile " << tile.tileId
         << " advanced generation even though drag start changed only presentation geometry";
-    if (tile.layerEntity == targetEntity) {
-      sawTargetLayer = true;
-      EXPECT_TRUE(tile.isDragTarget);
-    }
   }
   EXPECT_TRUE(sawTargetLayer);
 }
@@ -1545,12 +1550,15 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
       << "expected 2 segments (before/after the promoted layer) + 1 layer tile";
   std::uint64_t segment0GenBefore = 0;
   std::uint64_t segment1GenBefore = 0;
+  bool segment0ImmediateBefore = false;
   for (const auto& tile : tilesBefore) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0)
+      if (tile.paintOrderIndex == 0) {
         segment0GenBefore = tile.generation;
-      else
+        segment0ImmediateBefore = tile.immediate;
+      } else {
         segment1GenBefore = tile.generation;
+      }
     }
   }
 
@@ -1562,18 +1570,23 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   const auto tilesAfter = compositor.snapshotTilesForUpload();
   std::uint64_t segment0GenAfter = 0;
   std::uint64_t segment1GenAfter = 0;
+  bool segment0ImmediateAfter = false;
   for (const auto& tile : tilesAfter) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0)
+      if (tile.paintOrderIndex == 0) {
         segment0GenAfter = tile.generation;
-      else
+        segment0ImmediateAfter = tile.immediate;
+      } else {
         segment1GenAfter = tile.generation;
+      }
     }
   }
-  EXPECT_EQ(segment0GenBefore, segment0GenAfter)
-      << "segment[0] re-rasterized even though the mutation lived in segment[1] — "
-         "Phase B per-segment dirty tracking regressed. `rootDirty_` escalation "
-         "has crept back in somewhere in consumeDirtyFlags.";
+  if (!segment0ImmediateBefore && !segment0ImmediateAfter) {
+    EXPECT_EQ(segment0GenBefore, segment0GenAfter)
+        << "retained segment[0] re-rasterized even though the mutation lived in segment[1] — "
+           "Phase B per-segment dirty tracking regressed. `rootDirty_` escalation "
+           "has crept back in somewhere in consumeDirtyFlags.";
+  }
   EXPECT_NE(segment1GenBefore, segment1GenAfter)
       << "segment[1] did NOT re-rasterize even though `after` (the mutated entity) "
          "lives in it. The dirty cascade lost the segment-dirty flag somewhere "
@@ -2261,7 +2274,7 @@ TEST_F(CompositorGoldenTest, TightBoundsWithRotatingGradientNoDrift) {
 // Rotations don't commute, so the final CTM pushed rotated paths off
 // the tight bitmap entirely, leaving only the surrounding background.
 TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
-  auto makeDoc = [this]() {
+  auto makeDoc = []() {
     return parseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="900" height="400">
         <defs>
@@ -2562,6 +2575,50 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
                                "(only premul round-trip drift ≤ 3).";
 }
 
+TEST_F(CompositorGoldenTest, SplashDonnerLetterDragKeepsCheapGradientSpansImmediate) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+
+  SVGDocument document = parseDocument(splashBuf.str());
+  document.setCanvasSize(892, 512);
+  auto target = document.querySelector("#Donner_D");
+  ASSERT_TRUE(target.has_value());
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(892, 512);
+  viewport.devicePixelRatio = 1.0;
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(
+      compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag));
+  compositor.renderFrame(viewport);
+
+  int immediateSegments = 0;
+  int gradientEligibleSegments = 0;
+  for (const auto& tile : compositor.snapshotCompositeTiles()) {
+    using Kind = CompositorController::CompositeTileSnapshot::Kind;
+    if (tile.kind != Kind::Segment) {
+      continue;
+    }
+    if (tile.immediate) {
+      ++immediateSegments;
+    }
+    if (tile.visible && !tile.hasExpensiveEffect && tile.estimatedDrawOps > 0) {
+      ++gradientEligibleSegments;
+    }
+  }
+
+  EXPECT_GT(gradientEligibleSegments, 0)
+      << "Donner letter gradients should not be hard-blocked from immediate consideration.";
+  EXPECT_GT(immediateSegments, 0)
+      << "Dragging a Donner letter should leave at least one cheap static span in immediate mode.";
+}
+
 // Evolving minimal repro of the Clouds_with_gradients drag artifact.
 // Adds a mandatory-promoted sub-layer (clip-path group) as a sibling of
 // a radial-gradient-filled shape inside the dragged group. If this fails
@@ -2701,7 +2758,8 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
   // phase-1 snapshot.
 
   // Two-phase: Selection prewarm → demote → ActiveDrag re-promote.
-  ASSERT_TRUE(compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection));
+  ASSERT_TRUE(
+      compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection));
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->unsafeEntityHandle().entity());
   // §M9: flush the hysteresis so the demote+re-promote cycle this
@@ -3515,6 +3573,98 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
          "grew past pre-existing baseline";
 }
 
+TEST_F(CompositorGoldenTest, RealSplashBlueCenterBurstEllipseDragLatency) {
+  const char* kSplashPath = "donner_splash.svg";
+  std::ifstream splashStream(kSplashPath);
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles — skipping splash perf test";
+  }
+  std::ostringstream splashBuf;
+  splashBuf << splashStream.rdbuf();
+  const std::string splashSource = splashBuf.str();
+  ASSERT_FALSE(splashSource.empty()) << "donner_splash.svg is empty";
+
+  SVGDocument document = parseDocument(splashSource);
+  document.setCanvasSize(1784, 1024);
+
+  RenderViewport fullViewport;
+  fullViewport.size = Vector2d(1784, 1024);
+  fullViewport.devicePixelRatio = 1.0;
+
+  CompositorConfig config;
+  CompositorController compositor(document, renderer_, config);
+  compositor.setSkipMainComposeDuringSplit(true);
+
+  using Clock = std::chrono::steady_clock;
+  const auto elapsedMs = [](Clock::time_point start) {
+    return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+  };
+  const auto findLayerRow = [](const auto& rows, Entity entity) {
+    return std::find_if(rows.begin(), rows.end(),
+                        [entity](const auto& row) { return row.entity == entity; });
+  };
+
+  const auto t0 = Clock::now();
+  compositor.renderFrame(fullViewport);
+  const double coldRenderMs = elapsedMs(t0);
+
+  auto burstEllipse = document.querySelector("#Blue_center_burst ellipse");
+  ASSERT_TRUE(burstEllipse.has_value())
+      << "splash has no `#Blue_center_burst ellipse` — has the file structure changed?";
+  const Entity burstEntity = burstEllipse->unsafeEntityHandle().entity();
+
+  const auto rowsAfterCold = compositor.snapshotLayerInspectorRows();
+  const auto burstRowAfterCold = findLayerRow(rowsAfterCold, burstEntity);
+  ASSERT_NE(burstRowAfterCold, rowsAfterCold.end())
+      << "#Blue_center_burst ellipse should be mandatory-promoted by opacity.";
+  const uint64_t coldGeneration = burstRowAfterCold->generation;
+  const uint32_t coldRasterizeCount = burstRowAfterCold->rasterizeCount;
+
+  ASSERT_TRUE(compositor.promoteEntity(burstEntity, InteractionHint::ActiveDrag))
+      << "burst ellipse failed to promote — this drag should reuse its mandatory layer.";
+  burstEllipse->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
+  const auto t1 = Clock::now();
+  compositor.renderFrame(fullViewport);
+  const double firstDragFrameMs = elapsedMs(t1);
+
+  const auto rowsAfterFirstDrag = compositor.snapshotLayerInspectorRows();
+  const auto burstRowAfterFirstDrag = findLayerRow(rowsAfterFirstDrag, burstEntity);
+  ASSERT_NE(burstRowAfterFirstDrag, rowsAfterFirstDrag.end());
+  EXPECT_EQ(burstRowAfterFirstDrag->generation, coldGeneration)
+      << "Click-to-drag should not mint a new burst texture; the mandatory layer is already warm.";
+  EXPECT_EQ(burstRowAfterFirstDrag->rasterizeCount, coldRasterizeCount)
+      << "Click-to-drag should reuse the mandatory burst bitmap instead of rerasterizing it.";
+
+  double steadyMaxMs = 0.0;
+  double steadyTotalMs = 0.0;
+  constexpr int kSteadyFrames = 20;
+  for (int i = 2; i <= kSteadyFrames + 1; ++i) {
+    burstEllipse->cast<SVGGraphicsElement>().setTransform(
+        Transform2d::Translate(Vector2d(static_cast<double>(i) * 4.0, 0.0)));
+    const auto tFrame = Clock::now();
+    compositor.renderFrame(fullViewport);
+    const double frameMs = elapsedMs(tFrame);
+    steadyMaxMs = std::max(steadyMaxMs, frameMs);
+    steadyTotalMs += frameMs;
+  }
+  const double steadyAvgMs = steadyTotalMs / kSteadyFrames;
+
+  const auto rowsAfterSteady = compositor.snapshotLayerInspectorRows();
+  const auto burstRowAfterSteady = findLayerRow(rowsAfterSteady, burstEntity);
+  ASSERT_NE(burstRowAfterSteady, rowsAfterSteady.end());
+  EXPECT_EQ(burstRowAfterSteady->generation, coldGeneration);
+  EXPECT_EQ(burstRowAfterSteady->rasterizeCount, coldRasterizeCount);
+
+  std::cerr << "[PERF] RealSplashBlueCenterBurstEllipseDragLatency: cold=" << coldRenderMs
+            << " ms, firstDrag=" << firstDragFrameMs << " ms, steadyAvg=" << steadyAvgMs
+            << " ms, steadyMax=" << steadyMaxMs << " ms\n";
+
+  EXPECT_LT(firstDragFrameMs, 300.0)
+      << "burst ellipse click-to-drag should reuse its mandatory layer even at high zoom.";
+  EXPECT_LT(steadyAvgMs, 10.0) << "burst ellipse steady drag should stay comfortably interactive";
+  EXPECT_LT(steadyMaxMs, 30.0) << "burst ellipse steady drag frame spiked above budget";
+}
+
 // The editor's drag-end path: source-pane writeback fires a
 // `ReplaceDocumentCommand`, `AsyncSVGDocument::setDocument` replaces the
 // inner SVGDocument in place (bumping `documentGeneration`), and
@@ -3707,7 +3857,8 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
       << "identity remap must succeed — every required entity is present";
 
   // Cached bitmaps should be preserved (same `.pixels.data()` pointer).
-  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(), glowBitmapBefore)
+  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(),
+            glowBitmapBefore)
       << "glow filter-layer bitmap was reallocated during identity remap — cache lost";
   EXPECT_EQ(compositor.layerBitmapOf(target->unsafeEntityHandle().entity()).pixels.data(),
             targetBitmapBefore)
@@ -3717,7 +3868,8 @@ TEST_F(CompositorGoldenTest, RemapAfterStructuralReplaceIdentityPreservesCaches)
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(10.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(), glowBitmapBefore)
+  EXPECT_EQ(compositor.layerBitmapOf(glow->unsafeEntityHandle().entity()).pixels.data(),
+            glowBitmapBefore)
       << "glow bitmap was reallocated on the post-remap drag frame — fast path broke";
 }
 

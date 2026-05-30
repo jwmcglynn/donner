@@ -16,6 +16,7 @@
 #include "donner/base/RcString.h"
 #include "donner/editor/FlashDecorations.h"
 #include "donner/editor/FocusView.h"
+#include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/RopeSimulation.h"
 #include "donner/editor/SoftWrap.h"
 #include "donner/editor/TextBuffer.h"
@@ -633,6 +634,10 @@ public:
   [[nodiscard]] std::optional<float> nextFlashWakeSeconds() const;
   /// Return the next rope-animation wake interval, or nullopt if every rope is idle.
   [[nodiscard]] std::optional<float> nextRopeAnimationWakeSeconds() const;
+  /// Latest source-focus reference rope cost counters.
+  [[nodiscard]] const FrameCostBreakdown::SourceRopes& lastSourceRopeCost() const {
+    return lastSourceRopeCost_;
+  }
   /// Remove expired flashes using the current steady-clock time.
   void tickSourceFlashes();
 
@@ -1151,6 +1156,7 @@ private:
       focusReferenceRopes_;
   uint64_t focusReferenceRopeFrame_ = 0;
   float lastFocusReferenceRopeScrollY_ = 0.0f;
+  FrameCostBreakdown::SourceRopes lastSourceRopeCost_;
   [[nodiscard]] std::optional<FocusReferenceConnectorLayout> focusReferenceConnectorLayout(
       const FocusReferenceLink& link, int linkIndex) const;
   [[nodiscard]] std::optional<FocusReferenceSourceUnderline> focusReferenceSourceUnderline(

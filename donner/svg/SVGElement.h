@@ -421,6 +421,13 @@ public:
       const xml::XMLQualifiedNameRef& matcher) const;
 
   /**
+   * Get the list of attributes for this element.
+   *
+   * @return The qualified names of attributes present on this element.
+   */
+  SmallVector<xml::XMLQualifiedNameRef, 10> attributes() const;
+
+  /**
    * Set the value of a generic XML attribute, which may be either a presentation attribute or
    * custom user-provided attribute.
    *

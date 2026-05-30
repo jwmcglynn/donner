@@ -114,6 +114,16 @@ constexpr std::string_view kResourceReferrersSvg =
   <rect id="sibling"/>
 </svg>)svg";
 
+constexpr std::string_view kNestedSelectedReferencesSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="paint"><stop offset="1"/></linearGradient>
+  </defs>
+  <g id="group" fill="url(#paint)">
+    <rect id="child" fill="url(#paint)"/>
+  </g>
+</svg>)svg";
+
 constexpr std::string_view kFilterFanoutSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <style>
@@ -753,6 +763,47 @@ TEST(FocusViewTest, ReferenceHighlightSummaryCountsReverseReferences) {
   EXPECT_TRUE(ContainsElement(summary.referencingElements,
                               app.document().document().querySelector("#chained")));
   EXPECT_EQ(summary.totalCount(), 3u);
+}
+
+TEST(FocusViewTest, ReferenceHighlightSummaryHandlesNestedMultiSelectionOnce) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kNestedSelectedReferencesSvg));
+  std::optional<svg::SVGElement> group = app.document().document().querySelector("#group");
+  std::optional<svg::SVGElement> child = app.document().document().querySelector("#child");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(child.has_value());
+
+  const std::vector<svg::SVGElement> selection{*group, *child};
+  const ReferenceHighlightSummary summary =
+      ComputeReferenceHighlightSummary(app.document().document(), selection);
+
+  EXPECT_EQ(summary.referencedElements.size(), 1u);
+  EXPECT_TRUE(ContainsElement(summary.referencedElements,
+                              app.document().document().querySelector("#paint")));
+  EXPECT_TRUE(summary.referencingElements.empty());
+  EXPECT_EQ(summary.totalCount(), 1u);
+}
+
+TEST(FocusViewTest, ReferenceHighlightSummaryExcludesSelectedReverseReferences) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kResourceReferrersSvg));
+  std::optional<svg::SVGElement> paint = app.document().document().querySelector("#paint");
+  std::optional<svg::SVGElement> chained = app.document().document().querySelector("#chained");
+  ASSERT_TRUE(paint.has_value());
+  ASSERT_TRUE(chained.has_value());
+
+  const std::vector<svg::SVGElement> selection{*paint, *chained};
+  const ReferenceHighlightSummary summary =
+      ComputeReferenceHighlightSummary(app.document().document(), selection);
+
+  EXPECT_EQ(summary.referencingElements.size(), 3u);
+  EXPECT_TRUE(ContainsElement(summary.referencingElements,
+                              app.document().document().querySelector("#cssTarget")));
+  EXPECT_TRUE(ContainsElement(summary.referencingElements,
+                              app.document().document().querySelector("#attrTarget")));
+  EXPECT_TRUE(ContainsElement(summary.referencingElements,
+                              app.document().document().querySelector("#chainTarget")));
+  EXPECT_FALSE(ContainsElement(summary.referencingElements, chained));
 }
 
 TEST(FocusViewTest, SuppressesReverseReferenceExpansionAfterFiveRefs) {

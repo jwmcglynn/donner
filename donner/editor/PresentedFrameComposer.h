@@ -103,24 +103,6 @@ struct PresentedPixelRect {
     const std::optional<PresentedDragBaseline>& dragBaseline);
 
 /**
- * Resolve the screen-space-independent translation for a full-canvas overlay texture.
- *
- * @param dragBaseline Active drag baseline represented by the overlay texture.
- * @return Translation to add to the overlay texture's canvas-space placement.
- */
-[[nodiscard]] Vector2d ResolvePresentedOverlayDragTranslation(
-    const std::optional<PresentedDragBaseline>& dragBaseline);
-
-/**
- * Resolve the affine transform from displayed overlay placement to active overlay placement.
- *
- * @param dragBaseline Active drag baseline represented by the overlay texture.
- * @return Transform from displayed document placement to active document placement.
- */
-[[nodiscard]] Transform2d ResolvePresentedOverlayDocumentTransform(
-    const std::optional<PresentedDragBaseline>& dragBaseline);
-
-/**
  * Compute the output-space quad for a presented tile.
  *
  * @param tile Geometry for the tile being presented.

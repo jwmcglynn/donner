@@ -76,10 +76,19 @@ bool AsyncSVGDocument::flushFrame() {
     return false;
   }
 
+  bool removedElements = false;
+  for (const EditorCommand& command : queueFlush.effectiveCommands) {
+    if (command.kind == EditorCommand::Kind::DeleteElement) {
+      removedElements = true;
+      break;
+    }
+  }
+
   lastFlushResult_ = FlushResult{
       .appliedCommands = true,
       .replacedDocument = queueFlush.hadReplaceDocument,
       .preserveUndoOnReparse = queueFlush.preserveUndoOnReparse,
+      .removedElements = removedElements,
   };
 
   for (const auto& cmd : queueFlush.effectiveCommands) {

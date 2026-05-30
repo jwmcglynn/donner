@@ -38,6 +38,8 @@ public:
     bool appliedCommands = false;
     bool replacedDocument = false;
     bool preserveUndoOnReparse = false;
+    /// True when at least one flushed command removed an element from the live document.
+    bool removedElements = false;
     std::vector<xml::XMLSourceDelta> sourceDeltas;
   };
 

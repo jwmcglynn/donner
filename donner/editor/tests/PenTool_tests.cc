@@ -1,13 +1,16 @@
 #include "donner/editor/PenTool.h"
 
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
+#include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGPathElement.h"
@@ -134,6 +137,22 @@ TEST_F(PenToolTest, SubsequentClicksAppendLineSegments) {
 
   EXPECT_EQ(path().d(), "M 10 20 L 30 40");
   EXPECT_TRUE(tool.isDrafting());
+}
+
+TEST_F(PenToolTest, BoundsIncludeNewestPointAfterImmediateIdleFlush) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  tool.onMouseDown(app, Vector2d(80.0, 90.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(bounds.size(), 1u);
+  EXPECT_LE(bounds.front().topLeft.x, 10.0);
+  EXPECT_LE(bounds.front().topLeft.y, 20.0);
+  EXPECT_GE(bounds.front().bottomRight.x, 80.0);
+  EXPECT_GE(bounds.front().bottomRight.y, 90.0);
 }
 
 TEST_F(PenToolTest, ConsecutiveClicksBeforeFlushStayInsideSvgRoot) {
@@ -275,6 +294,34 @@ TEST_F(PenToolTest, FirstClickInDirtyTextPaneStaysInsideCurrentSvgRoot) {
   EXPECT_EQ(textEditor.getText(), app.document().document().source());
   EXPECT_FALSE(app.document().document().querySelector("#old").has_value());
   EXPECT_TRUE(app.document().document().querySelector("path").has_value());
+}
+
+TEST_F(PenToolTest, DirtyTextPaneWithTrailingRootLikeCommentKeepsPathInsideSvgRoot) {
+  constexpr std::string_view kSvgWithRectAndTail =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect id="old"/></svg>
+<!-- saved root close marker: </svg> -->)";
+  constexpr std::string_view kDirtySvgWithTail =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>
+<!-- saved root close marker: </svg> -->)";
+
+  ASSERT_TRUE(app.loadFromString(kSvgWithRectAndTail));
+  TextEditor textEditor;
+  textEditor.setText(kDirtySvgWithTail);
+  textEditor.resetTextChanged();
+  DocumentSyncController controller{std::string(kSvgWithRectAndTail)};
+  SelectTool selectTool;
+
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, selectTool, textEditor);
+
+  const std::string sourceText = textEditor.getText();
+  const std::size_t pathOffset = sourceText.find(R"(<path d="M 10 20")");
+  const std::size_t svgCloseOffset = sourceText.find("</svg>");
+  ASSERT_NE(pathOffset, std::string::npos);
+  ASSERT_NE(svgCloseOffset, std::string::npos);
+  EXPECT_LT(pathOffset, svgCloseOffset) << sourceText;
+  EXPECT_EQ(sourceText.find("<path", svgCloseOffset), std::string::npos) << sourceText;
 }
 
 }  // namespace

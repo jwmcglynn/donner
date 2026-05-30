@@ -593,6 +593,61 @@ TEST_F(RendererDriverTest, AccumulatesTransformsForNestedGroups) {
       << "setTransform should be called with translate(10, 0) for the outer group";
 }
 
+TEST_F(RendererDriverTest, AppliesSurfaceTransformAfterEntityTransform) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="4" height="4" fill="red" transform="translate(10, 0)" />
+  )svg",
+                                      Vector2i(40, 40));
+
+  std::vector<Transform2d> setTransformCalls;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setTransform(_))
+      .Times(AtLeast(1))
+      .WillRepeatedly(
+          [&](const Transform2d& transform) { setTransformCalls.push_back(transform); });
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(40, 40);
+  viewport.devicePixelRatio = 1.0;
+  driver.draw(document, viewport, Transform2d::Scale(2.0));
+
+  const Transform2d expectedTransform =
+      Transform2d::Translate(Vector2d(10.0, 0.0)) * Transform2d::Scale(2.0);
+  EXPECT_THAT(setTransformCalls, testing::Contains(TransformNear(expectedTransform, 1e-6)))
+      << "The editor output surface transform must be applied after entity-to-canvas transforms.";
+}
+
+TEST_F(RendererDriverTest, SurfaceTransformCullUsesEntityThenSurfaceOrder) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="4" height="4" fill="red" transform="translate(100, 0)" />
+  )svg",
+                                      Vector2i(200, 40));
+
+  int drawPathCount = 0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).WillRepeatedly([&](const PathShape&, const StrokeParams&) {
+    ++drawPathCount;
+  });
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(20, 20);
+  viewport.devicePixelRatio = 1.0;
+  driver.draw(document, viewport,
+              Transform2d::Translate(Vector2d(-100.0, 0.0)) * Transform2d::Scale(2.0));
+
+  EXPECT_EQ(drawPathCount, 1)
+      << "The translated rect lands inside the bounded output only if culling applies the entity "
+         "transform before the canvas-to-surface transform.";
+}
+
 TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacityWithBlendMode) {
   SVGDocument document = makeDocument(R"svg(
     <g opacity="0.7" style="mix-blend-mode: screen">
