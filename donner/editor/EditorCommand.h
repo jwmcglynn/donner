@@ -62,6 +62,22 @@ struct EditorCommand {
     /// in-flight references (stale selection, undo snapshots) stay
     /// valid. Not coalesced.
     DeleteElement,
+
+    /// Replace the entire document by reparsing the post-cut bytes for a
+    /// shape-clipboard Cut. Behaves like ReplaceDocument with
+    /// `preserveUndoOnReparse=true`, but tags the operation so undo /
+    /// telemetry can label it "Cut shapes" instead of a generic reparse.
+    /// Exclusive: drains the queue of every prior command. See
+    /// `donner/editor/ShapeClipboardCommands.h`.
+    CutShapes,
+
+    /// Replace the entire document by reparsing the post-paste bytes for
+    /// a shape-clipboard Paste / Paste in Front. Behaves like
+    /// ReplaceDocument with `preserveUndoOnReparse=true`, but tags the
+    /// operation so undo / telemetry can label it "Paste shapes".
+    /// Exclusive: drains the queue of every prior command. See
+    /// `donner/editor/ShapeClipboardCommands.h`.
+    PasteShapes,
   };
 
   Kind kind = Kind::SetTransform;
@@ -146,6 +162,26 @@ struct EditorCommand {
     EditorCommand cmd;
     cmd.kind = Kind::DeleteElement;
     cmd.element = std::move(element);
+    return cmd;
+  }
+
+  /// Builds a CutShapes command from the post-cut source bytes. The caller
+  /// is responsible for recording the matching undo entry on the timeline;
+  /// the command itself just swaps the document.
+  static EditorCommand CutShapesCommand(std::string bytes) {
+    EditorCommand cmd;
+    cmd.kind = Kind::CutShapes;
+    cmd.bytes = std::move(bytes);
+    cmd.preserveUndoOnReparse = true;
+    return cmd;
+  }
+
+  /// Builds a PasteShapes command from the post-paste source bytes.
+  static EditorCommand PasteShapesCommand(std::string bytes) {
+    EditorCommand cmd;
+    cmd.kind = Kind::PasteShapes;
+    cmd.bytes = std::move(bytes);
+    cmd.preserveUndoOnReparse = true;
     return cmd;
   }
 };

@@ -823,16 +823,15 @@ donner_cc_test(
     ],
 )
 
-# Milestone 6 viewport SVG export
-# (`docs/design_docs/0047-v0_8_showcase.md`).
+# Milestone 2 shape clipboard (`docs/design_docs/0047-v0_8_showcase.md`
+# §"Shape Clipboard"). Exercises the pure Copy/Paste/Paste-in-Front helpers and
+# the headered clipboard payload round-trip.
 donner_cc_test(
-    name = "viewport_svg_export_tests",
-    srcs = ["ViewportSvgExport_tests.cc"],
+    name = "shape_clipboard_tests",
+    srcs = ["ShapeClipboard_tests.cc"],
     deps = [
-        "//donner/base",
-        "//donner/editor:overlay_renderer",
-        "//donner/editor:viewport_state",
-        "//donner/editor:viewport_svg_export",
+        "//donner/editor:shape_clipboard_commands",
+        "//donner/editor:shape_clipboard_payload",
         "//donner/svg",
         "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",

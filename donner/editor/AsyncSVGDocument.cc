@@ -239,6 +239,24 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
                                            result.sourceDeltas.begin(), result.sourceDeltas.end());
       break;
     }
+
+    case EditorCommand::Kind::CutShapes:
+    case EditorCommand::Kind::PasteShapes: {
+      // Shape-clipboard structural replaces reparse `bytes` into a fresh
+      // document, exactly like ReplaceDocument(preserveUndoOnReparse=true).
+      // The kind discriminator is preserved at this layer purely for
+      // labelling — undo entries are recorded by the orchestrator
+      // (EditorShell), not here. On parse failure we leave the existing
+      // document in place and surface a diagnostic.
+      ParseWarningSink sink;
+      auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink);
+      if (result.hasError()) {
+        lastParseError_ = std::move(result.error());
+        return;
+      }
+      (void)setDocumentMaybeStructural(std::move(result).result());
+      break;
+    }
   }
 }
 

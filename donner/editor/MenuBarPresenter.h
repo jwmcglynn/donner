@@ -12,6 +12,12 @@ struct MenuBarState {
   bool canUndo = false;
   bool canRedo = false;
   bool sourceFocusMode = true;
+  /// True when the canvas has one or more selected shapes. Enables shape
+  /// Cut/Copy when the source pane is not focused.
+  bool hasShapeSelection = false;
+  /// True when the shape clipboard holds a paste-able payload. Enables shape
+  /// Paste / Paste in Front when the source pane is not focused.
+  bool hasShapeClipboard = false;
 };
 
 struct MenuBarActions {
@@ -28,6 +34,7 @@ struct MenuBarActions {
   bool cut = false;
   bool copy = false;
   bool paste = false;
+  bool pasteInFront = false;
   bool selectAll = false;
   bool zoomIn = false;
   bool zoomOut = false;

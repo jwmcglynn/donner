@@ -20,21 +20,26 @@
 
 #include "GLFW/glfw3.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
+#include "donner/editor/ImGuiClipboard.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SelectionTransformHandles.h"
+#include "donner/editor/ShapeClipboardCommands.h"
+#include "donner/editor/ShapeClipboardPayload.h"
 #include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TracyWrapper.h"
-#include "donner/editor/ViewportSvgExport.h"
+#include "donner/editor/UndoTimeline.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -727,6 +732,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   textEditor_.setText(*initialSource);
   textEditor_.resetTextChanged();
   textEditor_.setActiveAutocomplete(true);
+  shapeClipboard_ = std::make_unique<ImGuiClipboard>();
   textEditor_.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
                                           -> std::optional<TextEditor::AutocompleteResponse> {
     XmlAutocompleteContext context =
@@ -1317,12 +1323,125 @@ void EditorShell::handleGlobalShortcuts() {
     app_.setSelection(std::nullopt);
   }
 
+  // Shape clipboard shortcuts route through the canvas selection only when the
+  // source pane is not focused — the text editor owns Cmd+X/C/V while it has
+  // keyboard focus. Cmd+F is Paste in Front (exact-position duplication).
+  if (!sourcePaneFocused && !anyPopupOpen && cmd && !shift) {
+    if (ImGui::IsKeyPressed(ImGuiKey_X, /*repeat=*/false)) {
+      cutSelectedShapesToClipboard();
+    } else if (ImGui::IsKeyPressed(ImGuiKey_C, /*repeat=*/false)) {
+      copySelectedShapesToClipboard();
+    } else if (ImGui::IsKeyPressed(ImGuiKey_V, /*repeat=*/false)) {
+      pasteShapesFromClipboard(/*inFront=*/false);
+    } else if (ImGui::IsKeyPressed(ImGuiKey_F, /*repeat=*/false)) {
+      pasteShapesFromClipboard(/*inFront=*/true);
+    }
+  }
+
   const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
                          ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
   if (CanDeleteSelectedElementsFromShortcut(deleteKey, app_.hasSelection(), anyPopupOpen,
                                             sourcePaneFocused)) {
     std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
   }
+}
+
+void EditorShell::copySelectedShapesToClipboard() {
+  if (!app_.hasDocument() || !app_.hasSelection() || shapeClipboard_ == nullptr) {
+    return;
+  }
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(app_.document().document(), app_.selectedElements());
+  if (!payload.has_value()) {
+    return;
+  }
+  shapeClipboard_->setText(payload->toClipboardText());
+}
+
+void EditorShell::cutSelectedShapesToClipboard() {
+  if (!app_.hasDocument() || !app_.hasSelection() || shapeClipboard_ == nullptr) {
+    return;
+  }
+  // Copy first; only delete if the copy captured something serializable so a
+  // failed copy never silently destroys the selection.
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(app_.document().document(), app_.selectedElements());
+  if (!payload.has_value()) {
+    return;
+  }
+  shapeClipboard_->setText(payload->toClipboardText());
+  // `deleteSelectionWithUndo` records its own single source-level undo entry and
+  // clears the selection, which is exactly the Cut contract (Copy + Delete as
+  // one undoable step from the user's perspective).
+  std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
+}
+
+void EditorShell::pasteShapesFromClipboard(bool inFront) {
+  if (!app_.hasDocument() || shapeClipboard_ == nullptr) {
+    return;
+  }
+  const std::string clipboardText = shapeClipboard_->getText();
+  std::optional<ShapeClipboardPayload> payload = ShapeClipboardPayload::parse(clipboardText);
+  if (!payload.has_value()) {
+    return;
+  }
+
+  svg::SVGDocument& document = app_.document().document();
+  if (!document.hasSourceStore()) {
+    return;
+  }
+
+  // A single selected group/svg is the preferred default-paste parent.
+  std::optional<svg::SVGElement> selectedGroup;
+  if (!inFront && app_.selectedElements().size() == 1u) {
+    const svg::SVGElement& only = app_.selectedElements().front();
+    const xml::XMLQualifiedNameRef tag = only.tagName();
+    if (tag.name == "g" || tag.name == "svg") {
+      selectedGroup = only;
+    }
+  }
+
+  const PastePlacement placement =
+      inFront ? PastePlacement::InFrontNoOffset : PastePlacement::EndOfRootOffset;
+  PreparePasteResult prepared = preparePaste(document, *payload, placement, selectedGroup);
+  if (!prepared.ok) {
+    // Surface the user-visible error; the document is left untouched.
+    std::cerr << prepared.error << '\n';
+    return;
+  }
+
+  const std::string sourceBefore(document.source());
+
+  // Build selection-restore targets from a scratch parse of the merged source.
+  // The scratch tree is structurally identical to the post-reparse live tree,
+  // so path-based writeback targets captured here resolve after the live
+  // reparse — letting `restoreSelectionAfterNextDocumentReplace` select the
+  // pasted elements without a live handle that does not yet exist.
+  std::vector<AttributeWritebackTarget> selectionTargets;
+  {
+    ParseWarningSink sink;
+    auto scratch = svg::parser::SVGParser::ParseSVG(prepared.mergedSource, sink);
+    if (scratch.hasResult()) {
+      svg::SVGDocument scratchDoc = scratch.result();
+      for (const std::string& id : prepared.pastedElementIds) {
+        if (auto element = scratchDoc.querySelector("#" + id); element.has_value()) {
+          if (auto target = captureAttributeWritebackTarget(*element); target.has_value()) {
+            selectionTargets.push_back(std::move(*target));
+          }
+        }
+      }
+    }
+  }
+
+  // Record one undo entry spanning the whole paste, mirroring the structural
+  // source-edit undo used by delete / path operations.
+  const svg::SVGElement undoAnchor = document.svgElement();
+  app_.undoTimeline().record("Paste shapes",
+                             captureDocumentSourceSnapshot(undoAnchor, sourceBefore),
+                             captureDocumentSourceSnapshot(undoAnchor, prepared.mergedSource));
+
+  app_.restoreSelectionAfterNextDocumentReplace(std::move(selectionTargets));
+  app_.applyMutation(EditorCommand::PasteShapesCommand(std::move(prepared.mergedSource)));
 }
 
 void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float paneWidth,
@@ -3194,6 +3313,8 @@ void EditorShell::runFrame() {
       .canUndo = app_.canUndo(),
       .canRedo = app_.canRedo(),
       .sourceFocusMode = sourceFocusMode_,
+      .hasShapeSelection = app_.hasSelection(),
+      .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -3226,14 +3347,30 @@ void EditorShell::runFrame() {
   if (menuActions.redo && app_.canRedo()) {
     app_.redo();
   }
+  const bool sourcePaneFocusedForMenu = sourcePaneVisible_ && textEditor_.isFocused();
   if (menuActions.cut) {
-    textEditor_.cut();
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.cut();
+    } else {
+      cutSelectedShapesToClipboard();
+    }
   }
   if (menuActions.copy) {
-    textEditor_.copy();
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.copy();
+    } else {
+      copySelectedShapesToClipboard();
+    }
   }
   if (menuActions.paste) {
-    textEditor_.paste();
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.paste();
+    } else {
+      pasteShapesFromClipboard(/*inFront=*/false);
+    }
+  }
+  if (menuActions.pasteInFront) {
+    pasteShapesFromClipboard(/*inFront=*/true);
   }
   if (menuActions.selectAll) {
     textEditor_.selectAll();

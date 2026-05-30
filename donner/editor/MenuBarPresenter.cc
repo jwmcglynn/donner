@@ -65,23 +65,25 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     }
     ImGui::Separator();
 
-    if (!state.sourcePaneFocused) {
-      ImGui::BeginDisabled();
-    }
-    if (ImGui::MenuItem("Cut", "Cmd+X", false, state.sourcePaneFocused)) {
+    // Cut/Copy act on the source pane when it is focused, otherwise on the
+    // canvas shape selection. Paste / Paste in Front likewise fall back to the
+    // shape clipboard. Each item enables on the relevant precondition.
+    const bool canCutCopy = state.sourcePaneFocused || state.hasShapeSelection;
+    const bool canPaste = state.sourcePaneFocused || state.hasShapeClipboard;
+    if (ImGui::MenuItem("Cut", "Cmd+X", false, canCutCopy)) {
       actions.cut = true;
     }
-    if (ImGui::MenuItem("Copy", "Cmd+C", false, state.sourcePaneFocused)) {
+    if (ImGui::MenuItem("Copy", "Cmd+C", false, canCutCopy)) {
       actions.copy = true;
     }
-    if (ImGui::MenuItem("Paste", "Cmd+V", false, state.sourcePaneFocused)) {
+    if (ImGui::MenuItem("Paste", "Cmd+V", false, canPaste)) {
       actions.paste = true;
+    }
+    if (ImGui::MenuItem("Paste in Front", "Cmd+F", false, state.hasShapeClipboard)) {
+      actions.pasteInFront = true;
     }
     if (ImGui::MenuItem("Select All", "Cmd+A", false, state.sourcePaneFocused)) {
       actions.selectAll = true;
-    }
-    if (!state.sourcePaneFocused) {
-      ImGui::EndDisabled();
     }
     ImGui::EndMenu();
   }

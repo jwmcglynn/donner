@@ -2,7 +2,8 @@
 
 This package is the destination for the editor migration described in
 `docs/design_docs/0020-editor.md`. Milestone 1 landed the package skeleton,
-build-system foundation, and dependency wiring; subsequent milestones add
+build-system foundation, and dependency wiring;
+subsequent milestones add
 the actual editor source.
 
 The editor builds as part of default `bazel test //...` on supported hosts —
@@ -15,11 +16,11 @@ load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
 
-# Editor libraries are public so the //examples:svg_viewer target (in the
-# separate examples Bazel module) can depend on `:text_editor`. BCR
-# consumers cannot transitively use the editor libraries because
-# imgui/glfw/tracy are `dev_dependency = True` in MODULE.bazel and won't
-# resolve outside dev builds.
+#Editor libraries are public so the  // examples:svg_viewer target (in the
+#separate examples Bazel module) can depend on `: text_editor`.BCR
+#consumers cannot transitively use the editor libraries because
+#imgui / glfw / tracy are `dev_dependency = True` in MODULE.bazel and won't
+#resolve outside dev builds.
 package(default_visibility = ["//visibility:public"])
 
 config_setting(
@@ -52,9 +53,9 @@ donner_cc_library(
     ],
 )
 
-# Single source of truth for the editor render pane's screen↔document
-# coordinate mapping, including zoom, pan, DPR, and the focal-point-
-# preserving zoom math. See `docs/design_docs/0025-editor_ux.md`.
+#Single source of truth for the editor render pane's screen↔document
+#coordinate mapping, including zoom, pan, DPR, and the focal - point -
+#preserving zoom math.See `docs / design_docs / 0025 - editor_ux.md`.
 donner_cc_library(
     name = "viewport_state",
     srcs = ["ViewportState.cc"],
@@ -249,6 +250,28 @@ donner_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/compositor",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
+    name = "shape_clipboard_payload",
+    srcs = ["ShapeClipboardPayload.cc"],
+    hdrs = ["ShapeClipboardPayload.h"],
+    deps = [
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "shape_clipboard_commands",
+    srcs = ["ShapeClipboardCommands.cc"],
+    hdrs = ["ShapeClipboardCommands.h"],
+    deps = [
+        ":shape_clipboard_payload",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
         "//donner/svg/parser",
     ],
 )
@@ -607,6 +630,8 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":attribute_writeback",
+        ":clipboard_interface",
         ":dialog_presenter",
         ":document_save",
         ":document_sync_controller",
@@ -618,6 +643,7 @@ donner_cc_library(
         ":frame_cost_breakdown",
         ":frame_miss_telemetry",
         ":gl_texture_cache",
+        ":imgui_clipboard",
         ":imgui_headers",
         ":keyboard_shortcut_policy",
         ":layer_inspector_diagnostics",
@@ -629,11 +655,14 @@ donner_cc_library(
         ":rotate_cursor_set",
         ":select_tool",
         ":selection_transform_handles",
+        ":shape_clipboard_commands",
+        ":shape_clipboard_payload",
         ":sidebar_presenter",
         ":source_selection",
         ":style_source_annotations",
         ":text_editor",
         ":tracy_wrapper",
+        ":undo_timeline",
         ":viewport_interaction_controller",
         ":viewport_svg_export",
         ":xml_autocomplete",
@@ -761,19 +790,19 @@ donner_cc_library(
     ],
 )
 
-# Extracts the notice_editor.txt file from the license aggregation
-# rule so it can be embedded into the editor binary. The rule produces
-# both `.txt` and `.json`; we only want the text for the About dialog.
+#Extracts the notice_editor.txt file from the license aggregation
+#rule so it can be embedded into the editor binary.The rule produces
+#both `.txt` and `.json`; we only want the text for the About dialog.
 filegroup(
     name = "notice_editor_txt",
     srcs = ["//third_party/licenses:notice_editor"],
     output_group = "notice",
 )
 
-# Embed the NOTICE text into the editor binary. `//donner/editor:notice`
-# exposes `donner::embedded::kEditorNoticeText` as a
-# `std::span<const unsigned char>`. The editor's Help → About dialog
-# displays this.
+#Embed the NOTICE text into the editor binary. `  //donner/editor:notice`
+#exposes `donner::embedded::kEditorNoticeText` as a
+# `std::span<const unsigned char>`.The editor's Help → About dialog
+#displays this.
 embed_resources(
     name = "pan_closed_cursor_svg",
     header_output = "donner/editor/PanClosedCursorSvg.h",
@@ -843,9 +872,9 @@ donner_cc_library(
     ],
 )
 
-# The full Donner editor implementation. The public `:editor` target below
-# applies the Geode transition so `bazel run //donner/editor` uses the same
-# backend that editor performance work targets without requiring `--config=geode`.
+#The full Donner editor implementation.The public `: editor` target below
+#applies the Geode transition so `bazel run  // donner/editor` uses the same
+#backend that editor performance work targets without requiring `--config = geode`.
 donner_cc_binary(
     name = "editor_impl",
     srcs = ["main.cc"],
@@ -872,12 +901,12 @@ test_suite(
     tests = [":editor_impl_lint"],
 )
 
-# The full Donner editor binary. Wires EditorApp + SelectTool +
-# OverlayRenderer + TextEditor into an ImGui shell with a live source
-# pane and a click-and-drag render pane. The minimal viewer demo lives
-# at `//examples:svg_viewer`.
+#The full Donner editor binary.Wires EditorApp + SelectTool +
+#OverlayRenderer + TextEditor into an ImGui shell with a live source
+#pane and a click - and-drag render pane.The minimal viewer demo lives
+#at `  //examples:svg_viewer`.
 #
-# bazel run //donner/editor -- donner_splash.svg
+#bazel run  // donner/editor -- donner_splash.svg
 donner_multi_transitioned_binary(
     name = "editor",
     dep = ":editor_impl",
@@ -899,9 +928,9 @@ donner_cc_library(
     ],
 )
 
-# Abstract clipboard interface + header-only InMemoryClipboard. No
-# ImGui dependency — safe to link from headless unit tests. See
-# docs/design_docs/text_editor_refactor.md for the split rationale.
+#Abstract clipboard interface + header - only InMemoryClipboard.No
+#ImGui dependency — safe to link from headless unit tests.See
+#docs / design_docs / text_editor_refactor.md for the split rationale.
 donner_cc_library(
     name = "clipboard_interface",
     hdrs = [
@@ -911,9 +940,9 @@ donner_cc_library(
     deps = [],
 )
 
-# Production ClipboardInterface implementation backed by
-# ImGui::GetClipboardText / SetClipboardText. This is the only
-# editor target that touches ImGui clipboard APIs.
+#Production ClipboardInterface implementation backed by
+#ImGui::GetClipboardText / SetClipboardText.This is the only
+#editor target that touches ImGui clipboard APIs.
 donner_cc_library(
     name = "imgui_clipboard",
     srcs = ["ImGuiClipboard.cc"],
@@ -925,10 +954,10 @@ donner_cc_library(
     ],
 )
 
-# Conditional Tracy profiling macros. When `ENABLE_TRACY` is defined, the
-# library pulls in the real Tracy client; otherwise the macros are no-ops.
-# Tracy is linked into every editor build (including release + WASM), runtime-
-# gated by a UI toggle — see the Security section of docs/design_docs/0020-editor.md.
+#Conditional Tracy profiling macros.When `ENABLE_TRACY` is defined, the
+#library pulls in the real Tracy client; otherwise the macros are no - ops.
+#Tracy is linked into every editor build(including release + WASM), runtime -
+#gated by a UI toggle — see the Security section of docs / design_docs / 0020 - editor.md.
 donner_cc_library(
     name = "tracy_wrapper",
     hdrs = ["TracyWrapper.h"],

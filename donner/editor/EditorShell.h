@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/editor/ClipboardInterface.h"
 #include "donner/editor/DialogPresenter.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
@@ -157,6 +158,14 @@ public:
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
   bool trySavePath(std::string_view path, std::string* error);
+
+  // Shape clipboard (design doc 0047 §"Shape Clipboard"). These run when the
+  // canvas selection — not the source pane — owns Cut/Copy/Paste. Each routes a
+  // single CutShapes/PasteShapes reparse so the operation is one undo step and
+  // the source pane stays coherent.
+  void copySelectedShapesToClipboard();
+  void cutSelectedShapesToClipboard();
+  void pasteShapesFromClipboard(bool inFront);
   void resetPresentationForLoadedDocument(std::string_view canonicalSource);
   void requestRevert();
   void requestSave();
@@ -245,6 +254,12 @@ private:
   };
   ActiveTool activeTool_ = ActiveTool::Select;
   TextEditor textEditor_;
+  /// Backing store for shape Cut/Copy/Paste. Holds the headered
+  /// `# donner-shape-clipboard v1` payload (see `ShapeClipboardPayload`).
+  std::unique_ptr<ClipboardInterface> shapeClipboard_;
+  /// Ids of just-pasted elements to select once the PasteShapes reparse lands.
+  /// Resolved against the new document in the next `flushFrame()` and cleared.
+  std::vector<std::string> pendingPasteSelectionIds_;
   GlTextureCache textures_;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
