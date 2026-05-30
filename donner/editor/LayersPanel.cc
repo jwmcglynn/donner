@@ -315,6 +315,15 @@ bool LayersPanel::consumeSelectionChanged() {
   return changed;
 }
 
+void LayersPanel::noteRowHovered(std::optional<std::size_t> rowIndex) {
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (!rowIndex.has_value() || *rowIndex >= rows.size()) {
+    hoveredElement_.reset();
+    return;
+  }
+  hoveredElement_ = rows[*rowIndex].element;
+}
+
 void LayersPanel::handleRowClick(EditorApp& app, std::size_t rowIndex, ClickModifiers mods) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (rowIndex >= rows.size()) {
@@ -370,6 +379,7 @@ void LayersPanel::render(EditorApp* liveApp) {
   constexpr float kIndentStep = 14.0f;
   ImDrawList* drawList = ImGui::GetWindowDrawList();
 
+  std::optional<std::size_t> hoveredRowIndex;
   for (std::size_t i = 0; i < rows.size(); ++i) {
     const LayerTreeRow& row = rows[i];
     ImGui::PushID(static_cast<int>(static_cast<std::uint32_t>(row.stableId)));
@@ -456,6 +466,12 @@ void LayersPanel::render(EditorApp* liveApp) {
         handleRowClick(*liveApp, i, mods);
       }
     }
+    // Track the hovered row so the canvas/source panes can highlight the
+    // element under the cursor, mirroring source-pane hover. `IsItemHovered`
+    // here refers to the row's selectable just drawn.
+    if (ImGui::IsItemHovered()) {
+      hoveredRowIndex = i;
+    }
     if (row.isPartiallySelected && !row.isSelected) {
       ImGui::PopStyleColor();
     }
@@ -535,6 +551,8 @@ void LayersPanel::render(EditorApp* liveApp) {
 
     ImGui::PopID();
   }
+
+  noteRowHovered(hoveredRowIndex);
 
   // Keyboard navigation when the panel window is focused.
   if (ImGui::IsWindowFocused() && liveApp != nullptr && !rows.empty()) {

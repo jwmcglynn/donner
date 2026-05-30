@@ -252,16 +252,13 @@ void LayerTreeModel::appendRows(const svg::SVGElement& element, int depth,
     return;
   }
 
-  // Visual stack order: later-painted siblings appear above earlier-painted
-  // ones, so emit editor-visible children in reverse document order.
-  std::vector<svg::SVGElement> children;
+  // Stack order, back-to-front: emit editor-visible children in document order
+  // so the first-painted (bottom/back) child is listed first and the
+  // last-painted (top/front) child last, matching the source-pane order.
   for (auto child = element.firstChild(); child.has_value(); child = child->nextSibling()) {
     if (IsEditorVisible(*child)) {
-      children.push_back(*child);
+      appendRows(*child, depth + 1, selection);
     }
-  }
-  for (auto it = children.rbegin(); it != children.rend(); ++it) {
-    appendRows(*it, depth + 1, selection);
   }
 }
 
@@ -300,11 +297,12 @@ void LayerTreeModel::refresh(const EditorApp& app) {
     initialized_ = true;
   }
 
-  // Visual stack order: later-painted siblings appear above earlier-painted
-  // ones, so emit the top-level rows in reverse document order.
+  // Stack order, back-to-front: list the first-painted (bottom/back) element at
+  // the top and the last-painted (top/front) element at the bottom, so emit the
+  // top-level rows in document order (matching the source pane).
   const std::vector<svg::SVGElement> selection = app.selectedElements();
-  for (auto it = topLevel.rbegin(); it != topLevel.rend(); ++it) {
-    appendRows(*it, /*depth=*/0, selection);
+  for (const svg::SVGElement& child : topLevel) {
+    appendRows(child, /*depth=*/0, selection);
   }
 }
 

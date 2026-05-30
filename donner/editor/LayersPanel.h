@@ -97,6 +97,16 @@ public:
   /// canvas/source selection-sync plumbing when a Layers row drives selection.
   [[nodiscard]] bool consumeSelectionChanged();
 
+  /// Record which visible row (if any) is under the mouse cursor. Called from
+  /// `render` with the hovered row index, and directly by tests. Drives the
+  /// canvas hover-highlight chrome the same way the source pane does. Passing
+  /// `std::nullopt` (or an out-of-range index) clears the hover.
+  void noteRowHovered(std::optional<std::size_t> rowIndex);
+
+  /// The element under the mouse cursor as of the most recent `render` /
+  /// `noteRowHovered`, or `std::nullopt` when no row is hovered.
+  [[nodiscard]] std::optional<svg::SVGElement> hoveredElement() const { return hoveredElement_; }
+
   /// Access the underlying model (testing/diagnostics).
   [[nodiscard]] const LayerTreeModel& model() const { return model_; }
 
@@ -158,6 +168,8 @@ private:
   /// Set when render/handleRowClick changed selection; cleared by
   /// `consumeSelectionChanged`.
   bool selectionChanged_ = false;
+  /// Element under the mouse cursor as of the most recent render, or nullopt.
+  std::optional<svg::SVGElement> hoveredElement_;
 };
 
 }  // namespace donner::editor

@@ -87,9 +87,12 @@ TEST_F(PenToolTest, FirstClickUsesActivePaintStyle) {
   ASSERT_TRUE(app.flushFrame());
 
   svg::SVGPathElement inserted = path();
-  EXPECT_EQ(inserted.getAttribute("fill"), "#112233");
-  EXPECT_EQ(inserted.getAttribute("stroke"), "#445566");
-  EXPECT_EQ(inserted.getAttribute("stroke-width"), "2.5");
+  // Paint is seeded as a single inline `style` attribute (CSS), not as
+  // individual fill/stroke/stroke-width presentation attributes.
+  EXPECT_EQ(inserted.getAttribute("style"), "fill: #112233; stroke: #445566; stroke-width: 2.5");
+  EXPECT_FALSE(inserted.getAttribute("fill").has_value());
+  EXPECT_FALSE(inserted.getAttribute("stroke").has_value());
+  EXPECT_FALSE(inserted.getAttribute("stroke-width").has_value());
 }
 
 TEST_F(PenToolTest, FirstClickExpandsSelfClosingSvgRoot) {

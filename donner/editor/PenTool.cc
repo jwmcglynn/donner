@@ -381,9 +381,13 @@ void PenTool::startNewPath(EditorApp& editor, const Vector2d& documentPoint) {
   rebuildActivePathData();
   path.setAttribute("d", activePathData_);
   const ActivePaintStyle& paintStyle = editor.activePaintStyle();
-  path.setAttribute("fill", paintStyle.fill);
-  path.setAttribute("stroke", paintStyle.stroke);
-  path.setAttribute("stroke-width", donner::detail::FormatNumberForSVG(paintStyle.strokeWidth));
+  // Emit paint as a single inline `style` attribute (style="fill: …; stroke: …;
+  // stroke-width: …") rather than individual presentation attributes, so new
+  // geometry round-trips through the source pane as CSS style like the rest of
+  // the showcase content.
+  path.setAttribute(
+      "style", "fill: " + paintStyle.fill + "; stroke: " + paintStyle.stroke +
+                   "; stroke-width: " + donner::detail::FormatNumberForSVG(paintStyle.strokeWidth));
 
   startPoint_ = documentPoint;
   currentPoint_ = documentPoint;

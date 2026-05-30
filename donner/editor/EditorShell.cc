@@ -2354,6 +2354,11 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.treePaneHeight), ImGuiCond_Always);
   ImGui::Begin("Layers", nullptr, paneFlags);
   layersPanel_.render(liveAppForClicks);
+  // Feed the Layers-panel hover into the shared source-hover preview so the
+  // canvas (and source pane) highlight the hovered element, the same way
+  // hovering a source-pane token does.
+  layersPanelHoverElement_ = layersPanel_.hoveredElement();
+  updateSourceHoverPreview();
   if (layersPanel_.consumeSelectionChanged()) {
     // Reuse the existing tree-origin selection-sync plumbing so a Layers-row
     // selection change is reflected in the canvas and source panes the same way
@@ -2731,6 +2736,10 @@ std::vector<svg::SVGElement> EditorShell::referenceHighlightElements() const {
 std::vector<svg::SVGElement> EditorShell::combinedSourcePreviewElements() const {
   std::vector<svg::SVGElement> elements = sourceHoverElements();
   AddUniqueElements(&elements, referenceHighlightElements());
+  if (layersPanelHoverElement_.has_value()) {
+    const std::array<svg::SVGElement, 1> hovered{*layersPanelHoverElement_};
+    AddUniqueElements(&elements, hovered);
+  }
   return elements;
 }
 

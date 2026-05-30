@@ -180,7 +180,7 @@ TEST(LayerTreeModelTest, IdFirstNamingWithIndexedFallback) {
   EXPECT_TRUE(foundIndexedG) << "expected the unnamed subgroup to use an indexed fallback name";
 }
 
-TEST(LayerTreeModelTest, VisualStackOrderListsLaterSiblingsFirst) {
+TEST(LayerTreeModelTest, StackOrderListsBackToFrontInDocumentOrder) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
 
@@ -188,16 +188,17 @@ TEST(LayerTreeModelTest, VisualStackOrderListsLaterSiblingsFirst) {
   model.refresh(app);
 
   // groupA, comp, leaf are top-level siblings in document order
-  // (groupA -> comp -> leaf). Visual stack order paints later siblings on top,
-  // so the row list lists them in reverse: leaf, then comp, then groupA.
-  const int leafIdx = RowIndex(model, "leaf");
-  const int compIdx = RowIndex(model, "comp");
+  // (groupA -> comp -> leaf). The panel lists layers back-to-front: the
+  // first-painted (bottom/back) element at the top of the list and the
+  // last-painted (top/front) element at the bottom, matching document order.
   const int groupAIdx = RowIndex(model, "groupA");
-  ASSERT_GE(leafIdx, 0);
-  ASSERT_GE(compIdx, 0);
+  const int compIdx = RowIndex(model, "comp");
+  const int leafIdx = RowIndex(model, "leaf");
   ASSERT_GE(groupAIdx, 0);
-  EXPECT_LT(leafIdx, compIdx) << "leaf (document-last) should sort above comp";
-  EXPECT_LT(compIdx, groupAIdx) << "comp should sort above groupA (document-first)";
+  ASSERT_GE(compIdx, 0);
+  ASSERT_GE(leafIdx, 0);
+  EXPECT_LT(groupAIdx, compIdx) << "groupA (document-first/back) should list above comp";
+  EXPECT_LT(compIdx, leafIdx) << "comp should list above leaf (document-last/front)";
 }
 
 TEST(LayerTreeModelTest, ExpansionAndSelectionPersistAcrossRefresh) {

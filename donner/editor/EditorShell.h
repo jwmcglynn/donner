@@ -305,6 +305,11 @@ private:
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;
   LayersPanel layersPanel_;
+  /// Element hovered in the Layers panel as of the last frame, fed into the
+  /// source-hover preview so the canvas and source pane highlight the element
+  /// under the cursor — mirroring source-pane hover. Reset when no row is
+  /// hovered.
+  std::optional<svg::SVGElement> layersPanelHoverElement_;
   CompositorDebugPanel compositorDebugPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
