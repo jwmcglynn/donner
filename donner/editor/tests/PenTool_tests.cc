@@ -242,6 +242,51 @@ TEST_F(PenToolTest, DraggingPlacedPointCreatesCubicHandles) {
   EXPECT_EQ(path().d(), "M 10 10 C 20 10 40 -10 40 10");
 }
 
+// Hardening guard for the user-reported "pen path placed after </svg> so it
+// never renders" symptom. The existing tests only assert source-substring order
+// right after onMouseDown+flushFrame; this drives the FULL pen session through
+// finalize (commitOpenPath — the Enter / tool-switch commit path), flushes, and
+// then *re-parses* the serialized source to prove the new <path> is a direct
+// child of the root <svg> (i.e. it actually renders), not merely that its bytes
+// precede </svg>. The splice was already correct at the time this test was
+// added; the test locks in that the finalize path keeps the path inside the
+// root so the after-</svg> regression cannot silently return.
+TEST_F(PenToolTest, FinalizedPenPathStaysInsideSvgRootSource) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseDown(app, Vector2d(30.0, 40.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseDown(app, Vector2d(60.0, 70.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  // Finalize the open path exactly as Enter / a tool switch does.
+  ASSERT_TRUE(tool.commitOpenPath(app));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(tool.isDrafting());
+
+  const std::string source(app.document().document().source());
+  const std::size_t pathOffset = source.find("<path");
+  const std::size_t svgCloseOffset = source.rfind("</svg>");
+  ASSERT_NE(pathOffset, std::string::npos) << source;
+  ASSERT_NE(svgCloseOffset, std::string::npos) << source;
+  EXPECT_LT(pathOffset, svgCloseOffset)
+      << "finalized pen path must be spliced inside the root <svg>, not after </svg>:\n"
+      << source;
+  EXPECT_EQ(source.find("<path", svgCloseOffset), std::string::npos)
+      << "no <path> may appear after the root </svg>:\n"
+      << source;
+
+  // Re-parse the serialized source and confirm the path is a direct child of
+  // the root <svg> — proof it renders, not just that the bytes precede </svg>.
+  EditorApp reparsed;
+  ASSERT_TRUE(reparsed.loadFromString(source)) << source;
+  auto reparsedPath = reparsed.document().document().querySelector("path");
+  ASSERT_TRUE(reparsedPath.has_value()) << source;
+  const auto reparsedParent = reparsedPath->parentElement();
+  ASSERT_TRUE(reparsedParent.has_value()) << source;
+  EXPECT_EQ(*reparsedParent, reparsed.document().document().svgElement()) << source;
+}
+
 TEST_F(PenToolTest, ClickNearStartClosesPath) {
   tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());
