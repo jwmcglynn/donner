@@ -267,7 +267,48 @@ TEST_F(PenToolTest, SelectedOpenPathContinuesUnderConcurrentDom) {
   tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());
 
-  EXPECT_EQ(selected->cast<svg::SVGPathElement>().d(), "M 0 0 L 10 0 L 10 10");
+  // The test verifies the result the same way the live editor reads the selected
+  // element under ConcurrentDom — through a scoped read-access guard (the
+  // SelectTool / OverlayRenderer idiom). Reading `d()` raw here would itself trip
+  // the ConcurrentDom release assert; the production crash is in the tool's
+  // onMouseDown path above, which now runs to completion.
+  const std::string resolvedPathData =
+      selected->withReadAccess([&selected](svg::DocumentReadAccess&, EntityHandle) {
+        return std::string(std::string_view(selected->cast<svg::SVGPathElement>().d()));
+      });
+  EXPECT_EQ(resolvedPathData, "M 0 0 L 10 0 L 10 10");
+  EXPECT_TRUE(tool.isDrafting());
+}
+
+// Sibling of the regression above for the first-click-on-empty-canvas path.
+// With nothing selected, `onMouseDown` falls through to `startNewPath`, which
+// synchronously creates the `<path>`, writes its `d`/`fill`/`stroke`
+// attributes, resolves the root `<svg>`, and inserts — all raw ECS
+// reads/writes through SVGElement. Under ThreadingMode::ConcurrentDom (the
+// live editor's steady state) those accesses abort via SVGElement's
+// scoped-access release assert unless the tool holds a document write scope.
+// startNewPath wraps the whole create/setAttribute/insert sequence in
+// withWriteAccess to satisfy that guard.
+TEST_F(PenToolTest, FirstClickStartsNewPathUnderConcurrentDom) {
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  ASSERT_EQ(app.document().document().threadingMode(), svg::ThreadingMode::ConcurrentDom);
+
+  // At base 667cf509 this aborts via the release assert inside
+  // SVGPathElement::Create / setAttribute (raw ECS writes with no scope held).
+  // After the fix startNewPath's write-scope wrapper lets it run to completion.
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  // Verify the result through a scoped read guard, exactly as the live editor
+  // reads the selected element under ConcurrentDom (raw `d()` here would itself
+  // trip the release assert).
+  const svg::SVGElement inserted = app.selectedElements().front();
+  const std::string insertedPathData =
+      inserted.withReadAccess([&inserted](svg::DocumentReadAccess&, EntityHandle) {
+        return std::string(std::string_view(inserted.cast<svg::SVGPathElement>().d()));
+      });
+  EXPECT_EQ(insertedPathData, "M 10 20");
   EXPECT_TRUE(tool.isDrafting());
 }
 
