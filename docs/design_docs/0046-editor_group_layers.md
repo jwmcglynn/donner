@@ -57,6 +57,24 @@ exactly match a row, but its data model is DOM-shaped and stable across renderer
   and expansion state.
 - Add lazy per-row previews after the row model is stable.
 
+## v0.8 Showcase Scope
+
+The v0.8 showcase requires the complete user-facing Layers panel, not just the underlying group
+model or compositor diagnostics split. For the release, "complete" means:
+
+- The tree view is replaced by a Layers panel backed by `LayerTreeSnapshot`.
+- Document, group, subgroup, and shape rows are expandable and selectable.
+- Every tier shows a stable display name and a clipped preview of that row's own content.
+- Canvas selection, source selection, and Layers selection stay synchronized.
+- Keyboard navigation, context menu selection actions, partial-selection state, and row reveal are
+  polished enough for the showcase workflow.
+- Compositor Debug remains separate and hidden by default so render-cache tiles are not confused
+  with editable document layers.
+
+Structural group editing commands, such as Group, Ungroup, and drag-to-reorder, can remain a
+follow-up unless the showcase artwork workflow directly needs them. The panel itself is still
+showcase-gating.
+
 ## Implementation Plan
 
 - [ ] **Milestone 1: Layer tree model**

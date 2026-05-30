@@ -49,6 +49,8 @@ demo: it shows Donner editing Donner's own logo.
   result from the copied location so the new shapes are visible.
 - Tune the Pen tool enough for release-authoring use: reliable point placement, handle editing,
   closure, preview, undo, and same-frame bounds/overlay updates.
+- Complete the user-facing Layers panel so the showcase can navigate the splash by document,
+  groups, subgroups, and shapes with previews at every tier.
 - Produce a final showcase SVG where the outlined `SVG` letters are selected and the overlay UI is
   visible.
 - Keep the showcase reproducible enough that future releases can update it without guessing which
@@ -74,6 +76,7 @@ demo: it shows Donner editing Donner's own logo.
 
 - Update public copy and release metadata for the **Donner SVG Editor & Toolkit** rebrand.
 - Add shape clipboard and Pen tool polish to the editor implementation plan.
+- Make the group-aware Layers panel a showcase-gating editor deliverable.
 - Add the text authoring and text-to-outline design slice to the editor plan.
 - Implement viewport SVG export with an overlay inclusion option.
 - Use the editor to create and export the v0.8 showcase asset, then check in the final SVG and its
@@ -104,21 +107,32 @@ demo: it shows Donner editing Donner's own logo.
         path, cancel/commit, live preview, immediate selection bounds, and overlay lockstep.
   - [ ] Ensure Pen-created paths enter the document inside the root `<svg>` and participate in
         undo/source sync like other editor commands.
-- [ ] **Milestone 3: Text authoring UI**
+- [ ] **Milestone 3: Complete Layers panel**
+  - [ ] Replace the user-facing tree view with the Layers panel from
+        [0046-editor_group_layers](0046-editor_group_layers.md).
+  - [ ] Show the document root, groups, subgroups, and leaf shapes as an expandable hierarchy.
+  - [ ] Show a preview thumbnail and stable display name for every visible layer row.
+  - [ ] Keep Layers selection, canvas selection, and source selection synchronized.
+  - [ ] Support group-row selection for manipulating a group as one object, while expansion exposes
+        child shapes for direct editing.
+  - [ ] Include keyboard navigation, context-menu selection actions, and partial-selection state.
+  - [ ] Keep render diagnostics separate as Compositor Debug so the showcase UI exposes editable
+        layers, not compositor cache tiles.
+- [ ] **Milestone 4: Text authoring UI**
   - [ ] Add a Text tool or Insert Text command that creates a `<text>` element at the current
         viewport/click position.
   - [ ] Add inspector controls for text content, font family, font size, fill, stroke, and basic
         transform.
   - [ ] Route text creation and edits through `EditorCommand` and undo snapshots.
   - [ ] Keep text source insertion rooted inside the current `<svg>` element.
-- [ ] **Milestone 4: Convert Text to Outlines**
+- [ ] **Milestone 5: Convert Text to Outlines**
   - [ ] Add a `ConvertTextToOutlinesCommand` for selected text elements.
   - [ ] Reuse `TextEngine` placed glyph geometry so conversion matches Donner rendering.
   - [ ] Emit deterministic `<path>` elements or a grouped outline subtree in document space.
   - [ ] Preserve visual style, transforms, fill rule, opacity, and paint order.
   - [ ] Delete or replace the original `<text>` only after outline generation succeeds.
   - [ ] Select the new outline group/paths and restore the original selection on undo.
-- [ ] **Milestone 5: Viewport SVG export**
+- [ ] **Milestone 6: Viewport SVG export**
   - [ ] Add File -> Export Viewport as SVG.
   - [ ] Compute the export crop from `ViewportState` and the render pane content rect.
   - [ ] Save an SVG whose `viewBox` is the visible document rect and whose viewport dimensions match
@@ -128,22 +142,24 @@ demo: it shows Donner editing Donner's own logo.
         handling.
   - [ ] Ensure export does not trigger a full document reparse or cache clear in the active editor
         session.
-- [ ] **Milestone 6: Overlay-to-SVG serialization**
+- [ ] **Milestone 7: Overlay-to-SVG serialization**
   - [ ] Factor overlay chrome into backend-neutral vector primitives or add an SVG serialization
         target for `OverlayRenderer`.
   - [ ] Serialize selected path outlines, selection AABBs, handles, and optional labels/chips as an
         `id="donner-editor-overlay"` group.
   - [ ] Keep overlay styling deterministic and independent of ImGui theme drift.
   - [ ] Clip overlay primitives to the exported viewport.
-- [ ] **Milestone 7: Produce the v0.8 showcase**
+- [ ] **Milestone 8: Produce the v0.8 showcase**
   - [ ] Open the base splash in Donner Editor.
+  - [ ] Use the complete Layers panel to navigate and select document groups and shapes while
+        authoring the showcase.
   - [ ] Use Pen tool and shape clipboard operations where needed instead of external SVG edits.
   - [ ] Add and style the `SVG` text using the new text UI.
   - [ ] Convert the `SVG` text to outlines.
   - [ ] Select the outlined `SVG` letters and frame the viewport.
   - [ ] Export the viewport SVG with overlay enabled.
   - [ ] Check in the final asset and provenance notes.
-- [ ] **Milestone 8: Rebrand and release packaging**
+- [ ] **Milestone 9: Rebrand and release packaging**
   - [ ] Update public docs, README text, release notes, and app labels to use
         `Donner SVG Editor & Toolkit`.
   - [ ] Audit places that describe Donner only as a rendering library and update them to reflect
@@ -159,6 +175,8 @@ demo: it shows Donner editing Donner's own logo.
   another editor.
 - As a designer, I can create and refine path geometry with the Pen tool without fighting stale
   bounds, lagging overlays, or source insertion bugs.
+- As a designer, I can navigate the splash structure through a complete Layers panel with previews
+  for the document, groups, subgroups, and shapes.
 - As a designer, I can add text to an SVG, tune its placement, and convert it to normal editable
   paths.
 - As a release author, I can export the exact current canvas view as SVG without using a browser or
@@ -192,7 +210,7 @@ additional work needed to make the showcase honest and reproducible:
 - Direct/immediate rendering paths needed by the editor.
 - In-tree path operations and editor pathfinder fixes.
 - Compound path unbundle support.
-- Group-aware editing and layer-panel groundwork where it supports the showcase workflow.
+- Complete user-facing Layers panel with group/shape hierarchy, previews, and selection sync.
 - Shape cut/copy/paste for authoring and duplicating artwork in the editor.
 - A tuned Pen tool suitable for authoring release artwork.
 - Text authoring UI for placing `SVG`.
@@ -214,6 +232,8 @@ milestone.
   preserves the copied geometry's document-space placement exactly.
 - Pen tool point placement updates the live path, selection bounds, and overlay in the same visible
   frame.
+- The Layers panel is complete enough for the showcase workflow: expandable groups, row previews,
+  stable names, canvas/source selection sync, and visible distinction from Compositor Debug.
 - The final asset is an SVG file, not a raster image embedded in SVG.
 - The final `SVG` lettering is path geometry, not live `<text>`.
 - Text-to-outline output is deterministic for the same text, font, style, and transform.
@@ -453,6 +473,14 @@ CI targets for core invariants:
   - Inserts new paths inside the root `<svg>`.
   - Updates bounds and overlay state as soon as each point is placed.
   - Supports close, cancel, undo, and redo without stale selection chrome.
+- `//donner/editor/tests:layer_tree_model_tests`
+  - Builds rows for document root, groups, subgroups, compound paths, and leaf shapes.
+  - Produces stable display names and visual stack ordering for the splash structure.
+  - Preserves expansion and selection state across snapshot refreshes.
+- `//donner/editor/tests:layers_panel_tests`
+  - Syncs row clicks with canvas/source selection and multi-selection state.
+  - Shows row previews for root, group, subgroup, and shape tiers.
+  - Separates the editable Layers panel from Compositor Debug diagnostics.
 - `//donner/editor/tests:text_outline_tests`
   - Converts `SVG` to path geometry with no live `<text>` in the result.
   - Pixel-compares text rendering before conversion and outlined rendering after conversion.
@@ -478,6 +506,8 @@ Manual validation:
   stay in sync.
 - Author a small path with the Pen tool, close it, edit the viewport, and verify bounds/overlay
   stay locked to the rendered geometry.
+- Navigate the splash from the Layers panel, expanding from document to groups to shapes, and verify
+  each tier has a useful preview and selection syncs with canvas/source.
 - Select the outlined `SVG` letters and export the viewport with overlay enabled.
 - Open the exported showcase in Donner and a browser to verify the crop, overlay, and transparency.
 - Confirm the final asset still looks correct when system fonts are unavailable.
@@ -488,6 +518,7 @@ Manual validation:
 - Existing editor command, undo, and source-sync infrastructure.
 - Existing clipboard abstraction used by the text editor, extended for SVG shape payloads.
 - Existing Pen tool path creation and source insertion flow from the path authoring workstream.
+- Existing group-layer design in [0046-editor_group_layers](0046-editor_group_layers.md).
 - Existing `OverlayRenderer` path outline and selection bounds logic.
 - Existing `ViewportState` coordinate conversion.
 - Existing file save/export UI in `MenuBarPresenter`.
@@ -497,12 +528,13 @@ Manual validation:
 
 1. Land shape cut/copy/paste with source-sync and undo coverage.
 2. Land Pen tool polish needed for release artwork.
-3. Land text insertion and inspector editing.
-4. Land text-to-outline conversion with tests.
-5. Land viewport SVG export content-only.
-6. Land overlay SVG export.
-7. Create the v0.8 showcase asset in the editor and check it in with provenance.
-8. Update docs and release notes to use the new splash.
+3. Land the complete Layers panel with previews and selection sync.
+4. Land text insertion and inspector editing.
+5. Land text-to-outline conversion with tests.
+6. Land viewport SVG export content-only.
+7. Land overlay SVG export.
+8. Create the v0.8 showcase asset in the editor and check it in with provenance.
+9. Update docs and release notes to use the new splash.
 
 ## Alternatives Considered
 
