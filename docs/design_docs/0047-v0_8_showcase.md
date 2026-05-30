@@ -4,9 +4,9 @@
 **Author:** Codex
 **Created:** 2026-05-30
 **Related:** [0010-text_rendering](0010-text_rendering.md),
-[0033-editor_design_tool_responsiveness](0033-editor_design_tool_responsiveness.md),
+[0033-2-editor_design_tool_responsiveness](0033-2-editor_design_tool_responsiveness.md),
 [0041-2-path_authoring_and_boolean_operations](0041-2-path_authoring_and_boolean_operations.md),
-[0044-editor_fluid_canvas_rendering](0044-editor_fluid_canvas_rendering.md)
+[0044-2-editor_fluid_canvas_rendering](0044-2-editor_fluid_canvas_rendering.md)
 
 ## Summary
 

@@ -337,13 +337,13 @@ flowchart TD
 
 ## Design Documents
 
-| Document                                                                           | Status                                   |
-| ---------------------------------------------------------------------------------- | ---------------------------------------- |
-| [Renderer Interface](design_docs/0003-renderer_interface_design.md)                | Shipped (Phases 1–2a)                    |
-| [Text Rendering](design_docs/0010-text_rendering.md)                               | Shipped (Phases 1–6)                     |
-| [Filter Performance](design_docs/0014-filter_performance.md)                       | Shipped (all 17 primitives, within 1.5×) |
-| [v0.5 Release](design_docs/0011-v0_5_release.md)                                   | Shipped                                  |
-| [Editor Fluid Canvas Rendering](design_docs/0044-editor_fluid_canvas_rendering.md) | v0.8 scope                               |
-| [Editor Group Layers](design_docs/0046-editor_group_layers.md)                     | v0.8 / post-v0.8 editor scope            |
-| [v0.8 Showcase](design_docs/0047-v0_8_showcase.md)                                 | Next release                             |
-| [External SVG References](design_docs/0004-external_svg_references.md)             | Design                                   |
+| Document                                                                             | Status                                   |
+| ------------------------------------------------------------------------------------ | ---------------------------------------- |
+| [Renderer Interface](design_docs/0003-renderer_interface_design.md)                  | Shipped (Phases 1–2a)                    |
+| [Text Rendering](design_docs/0010-text_rendering.md)                                 | Shipped (Phases 1–6)                     |
+| [Filter Performance](design_docs/0014-filter_performance.md)                         | Shipped (all 17 primitives, within 1.5×) |
+| [v0.5 Release](design_docs/0011-v0_5_release.md)                                     | Shipped                                  |
+| [Editor Fluid Canvas Rendering](design_docs/0044-2-editor_fluid_canvas_rendering.md) | v0.8 scope                               |
+| [Editor Group Layers](design_docs/0046-editor_group_layers.md)                       | v0.8 / post-v0.8 editor scope            |
+| [v0.8 Showcase](design_docs/0047-v0_8_showcase.md)                                   | Next release                             |
+| [External SVG References](design_docs/0004-external_svg_references.md)               | Design                                   |
