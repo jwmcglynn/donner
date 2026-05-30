@@ -2515,7 +2515,7 @@ void EditorShell::renderDockedLayerPanelDragHandle() {
   ImDrawList* drawList = ImGui::GetWindowDrawList();
   drawList->AddRectFilled(start, end, background);
   drawList->AddText(ImVec2(start.x + style.FramePadding.x, start.y + style.FramePadding.y),
-                    textColor, "Layers");
+                    textColor, "Compositor Debug");
 
   const char* handleText = "::";
   const ImVec2 handleTextSize = ImGui::CalcTextSize(handleText);
