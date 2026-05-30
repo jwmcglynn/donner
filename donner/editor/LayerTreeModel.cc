@@ -275,14 +275,35 @@ void LayerTreeModel::refresh(const EditorApp& app) {
       app.document().document().writeAccess();
 
   const svg::SVGElement root = app.document().document().svgElement();
+
+  // The Layers panel omits the document root `<svg>` row entirely and shows its
+  // editor-visible children (top-level groups and shapes) as the tree's roots.
+  std::vector<svg::SVGElement> topLevel;
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (IsEditorVisible(*child)) {
+      topLevel.push_back(*child);
+    }
+  }
+
   if (!initialized_) {
-    // Default-expand the root exactly once so the document's top-level layers
-    // are visible on first open without re-expanding after a user collapse.
-    expanded_.insert(StableIdFor(root));
+    // Default-expand the top-level groups exactly once so the first tier of
+    // group contents is visible on open, without re-expanding after a user
+    // collapse.
+    for (const svg::SVGElement& child : topLevel) {
+      if (child.tryType() == svg::ElementType::G && HasRenderableDescendant(child)) {
+        expanded_.insert(StableIdFor(child));
+      }
+    }
     initialized_ = true;
   }
 
-  appendRows(root, /*depth=*/0, app.selectedElements());
+  // Visual stack order: later-painted siblings appear above earlier-painted
+  // ones, so emit the top-level rows in reverse document order.
+  const std::vector<svg::SVGElement> selection = app.selectedElements();
+  for (auto it = topLevel.rbegin(); it != topLevel.rend(); ++it) {
+    appendRows(*it, /*depth=*/0, selection);
+  }
 }
 
 }  // namespace donner::editor

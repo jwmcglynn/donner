@@ -82,10 +82,12 @@ public:
   /// Access the underlying model (testing/diagnostics).
   [[nodiscard]] const LayerTreeModel& model() const { return model_; }
 
-  /// A real per-element geometry thumbnail: the element's computed outline
-  /// sampled into a polyline and normalized into the unit square `[0,1]^2`,
-  /// alongside its computed fill/stroke. Drawn into the row's 24×24 preview cell.
-  struct RowThumbnail {
+  /// One silhouette within a row thumbnail: a single element's computed outline
+  /// sampled into a polyline, with its computed fill/stroke. A leaf shape's
+  /// thumbnail has one of these; a `<g>` thumbnail has one per renderable
+  /// descendant, all normalized into the group's shared bounding box so the
+  /// preview shows the group's composed shape.
+  struct ThumbnailShape {
     /// Outline points in normalized `[0,1]` coordinates (y-down, matching ImGui).
     std::vector<Vector2d> normalizedPoints;
     /// Whether the outline encloses an area (drawn filled) vs. an open stroke.
@@ -94,6 +96,14 @@ public:
     css::RGBA fill = css::RGBA(0, 0, 0, 0);
     /// Computed stroke color for the outline.
     css::RGBA stroke = css::RGBA(0, 0, 0, 255);
+  };
+
+  /// A real per-row geometry thumbnail: one or more element silhouettes
+  /// (one for a leaf shape, several for a `<g>` group) normalized into a shared
+  /// unit square `[0,1]^2`. Drawn into the row's 24×24 preview cell.
+  struct RowThumbnail {
+    /// The silhouettes composing this preview, in paint order.
+    std::vector<ThumbnailShape> shapes;
   };
 
   /// The geometry thumbnail for the row identified by @p stableId, or
