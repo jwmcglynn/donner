@@ -1723,9 +1723,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const bool pendingClickHitsSelection =
           selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
           selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
+      const bool pendingClickCanStartMarquee = pendingClick.modifiers.shift || !app_.hasSelection();
       if (selectToolActive && leftMouseDown &&
           pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-          !pendingClickHitsSelection && (selectHoldElapsed || selectDragIntent)) {
+          pendingClickCanStartMarquee && !pendingClickHitsSelection &&
+          (selectHoldElapsed || selectDragIntent)) {
         lastPostedScreenPoint_.reset();
         selectTool_.beginMarquee(app_, pendingClick.documentPoint, pendingClick.modifiers.shift);
         renderCoordinator_.refreshSelectionBoundsCache(app_);
@@ -1736,7 +1738,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         interactionController_.clearPendingClick();
       } else if (selectToolActive && leftMouseDown &&
                  pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-                 !pendingClickHitsSelection) {
+                 pendingClickCanStartMarquee && !pendingClickHitsSelection) {
         // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or the
         // hold delay above starts marquee. This prevents full-canvas/background elements from being
         // selected just because the user is preparing a marquee drag.
