@@ -15,10 +15,10 @@ development.
 
 The next release target is **v0.8: Donner SVG Editor & Toolkit**. Its scope is everything completed
 since v0.5, plus the editor showcase work needed to honestly demonstrate Donner authoring its own
-new splash: shape cut/copy/paste, a tuned Pen tool, text creation, text-to-outline conversion,
-viewport SVG export, and optional editor overlay export. The broader production-quality v1.0
-milestone remains the follow-up release for animation, scripting, conformance completion, parser
-hardening, and ecosystem integration.
+new splash: a complete Layers panel, shape cut/copy/paste, a tuned Pen tool, text creation,
+text-to-outline conversion, viewport SVG export, and optional editor overlay export. The broader
+production-quality v1.0 milestone remains the follow-up release for animation, scripting,
+conformance completion, parser hardening, and ecosystem integration.
 
 ---
 
@@ -109,6 +109,8 @@ These items remain required before the v0.8 release can be cut:
       handling.
 - [ ] **Tuned Pen tool** — path creation that supports line/curve anchors, close/cancel, live
       preview, immediate bounds/overlay updates, root-contained source insertion, and undo/redo.
+- [ ] **Complete Layers panel** — replace the tree view with an editable group/shape hierarchy.
+      Show previews and stable names at each tier and sync selection with canvas/source.
 - [ ] **Text authoring UI** — create and edit short SVG text from the editor.
 - [ ] **Convert Text to Outlines** — convert selected `<text>` into deterministic path geometry
       using Donner text layout and glyph outlines.
@@ -129,6 +131,8 @@ These items remain required before the v0.8 release can be cut:
   selection/undo state.
 - The Pen tool can author and close a path for the showcase with bounds and overlay matching the
   rendered path in the same visible frame.
+- The complete Layers panel can navigate the splash from document to groups to individual shapes
+  with previews, names, expansion state, and synchronized canvas/source selection.
 - The visible `SVG` lettering in the final showcase is path geometry, not live `<text>`.
 - The showcase export includes the selected outlined `SVG` letters and editor overlay chrome when
   the overlay variant is requested.
@@ -356,6 +360,6 @@ flowchart TD
 | [Filter Performance](design_docs/0014-filter_performance.md)                         | Shipped (all 17 primitives, within 1.5×) |
 | [v0.5 Release](design_docs/0011-v0_5_release.md)                                     | Shipped                                  |
 | [Editor Fluid Canvas Rendering](design_docs/0044-2-editor_fluid_canvas_rendering.md) | v0.8 scope                               |
-| [Editor Group Layers](design_docs/0046-editor_group_layers.md)                       | v0.8 / post-v0.8 editor scope            |
+| [Editor Group Layers](design_docs/0046-editor_group_layers.md)                       | v0.8 showcase scope                       |
 | [v0.8 Showcase](design_docs/0047-v0_8_showcase.md)                                   | Next release                             |
 | [External SVG References](design_docs/0004-external_svg_references.md)               | Design                                   |
