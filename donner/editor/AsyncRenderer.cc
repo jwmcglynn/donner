@@ -10,7 +10,6 @@
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
-#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -72,8 +71,7 @@ EditorRasterViewport EffectiveRasterViewportForRequest(svg::SVGDocument& documen
     fallback.documentRect = Box2d::FromXYWH(0.0, 0.0, static_cast<double>(fallback.outputSizePx.x),
                                             static_cast<double>(fallback.outputSizePx.y));
   }
-  fallback.outputFromDocument =
-      svg::components::LayoutSystem().getCanvasFromDocumentTransform(document.registry());
+  fallback.outputFromDocument = document.canvasFromDocumentTransform();
   return fallback;
 }
 
@@ -560,8 +558,7 @@ void AsyncRenderer::workerLoop() {
     const Vector2i outputCanvasSize = rasterViewport.outputSizePx;
     viewport.size = Vector2d(outputCanvasSize.x, outputCanvasSize.y);
     viewport.devicePixelRatio = 1.0;
-    const Transform2d semanticCanvasFromDocument =
-        svg::components::LayoutSystem().getCanvasFromDocumentTransform(requestDocument.registry());
+    const Transform2d semanticCanvasFromDocument = requestDocument.canvasFromDocumentTransform();
     const Transform2d surfaceFromCanvas =
         semanticCanvasFromDocument.inverse() * rasterViewport.outputFromDocument;
     // Push the current UI-thread setting for tight-bounded segments

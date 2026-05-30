@@ -9,7 +9,6 @@
 
 #include "donner/base/FormatNumber.h"
 #include "donner/base/PathOps.h"
-#include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -387,13 +386,8 @@ bool IsCopiedUnbundleAttribute(const xml::XMLQualifiedNameRef& name) {
 
 std::vector<xml::XMLQualifiedName> CopiedAttributeNames(const svg::SVGElement& source) {
   std::vector<xml::XMLQualifiedName> result;
-  source.withReadAccess([&](const svg::DocumentReadAccess&, EntityHandle handle) {
-    const auto* attributes = handle.try_get<components::AttributesComponent>();
-    if (attributes == nullptr) {
-      return;
-    }
-
-    const SmallVector<xml::XMLQualifiedNameRef, 10> names = attributes->attributes();
+  source.withReadAccess([&source, &result](const svg::DocumentReadAccess&, EntityHandle) {
+    const SmallVector<xml::XMLQualifiedNameRef, 10> names = source.attributes();
     result.reserve(names.size());
     for (const xml::XMLQualifiedNameRef& name : names) {
       if (!IsCopiedUnbundleAttribute(name)) {
