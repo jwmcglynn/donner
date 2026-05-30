@@ -100,6 +100,14 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
 - **Editor path overlays must match the presented shapes below them in the same frame.** During
   pan, zoom, drag, or worker stalls, never show a newer overlay transform over stale document
   pixels; either keep both on the presented transform or move both together.
+- **Do not fix editor presentation bugs by clearing broad render caches.** Avoid
+  `resetComposited()`, `resetForLoadedDocument()`, full compositor resets, whole presentation-cache
+  clears, or forced full reparses for incremental editor mutations such as delete, pathfinder,
+  drag, transform, attribute, or source-writeback changes. Those create one-frame checkerboard
+  flashes and hide the real invalidation bug. Use targeted entity/tile/region invalidation,
+  structural remap, dirty flags, or an explicit render handoff instead. A broad clear is allowed
+  only for true document/file replacement or renderer teardown, and the reason must be covered by a
+  regression test or design note.
 
 ## Building
 

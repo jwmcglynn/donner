@@ -144,12 +144,10 @@ public:
                         FrameHistory* frameHistory = nullptr);
   void maybeRequestRender(EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
                           GlTextureCache* textures = nullptr);
-  /// Immediately drop stale presented document pixels after a structural delete flush.
+  /// Record that a document mutation requires a current-version presentation handoff.
   ///
   /// @param flushResult Metadata from the just-flushed editor command batch.
-  /// @param textures Presentation texture cache to clear when old document pixels are invalid.
-  void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult,
-                                                GlTextureCache& textures);
+  void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult);
   /**
    * Return the selected layer whose cached pixels should be hidden while editor chrome remains
    * visible. This is used when the live selected element is `display:none`: hit-testing and the
@@ -226,6 +224,9 @@ private:
   /// transforms already-cached composited textures during live zoom/pan.
   std::optional<EditorRasterViewport> pendingRasterViewport_;
   std::chrono::steady_clock::time_point pendingRasterViewportSince_{};
+  /// True after a structural mutation whose existing overview/full-document cache may contain
+  /// deleted pixels. The old presentation remains visible until the replacement render lands.
+  bool pendingDocumentMutationOverviewRefresh_ = false;
   FrameCostBreakdown lastFrameCostBreakdown_;
 };
 

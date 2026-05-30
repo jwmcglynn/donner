@@ -345,6 +345,7 @@ void RenderCoordinator::resetForLoadedDocument() {
   pendingCanvasSizeSince_ = std::chrono::steady_clock::time_point{};
   pendingRasterViewport_.reset();
   pendingRasterViewportSince_ = std::chrono::steady_clock::time_point{};
+  pendingDocumentMutationOverviewRefresh_ = false;
   lastFrameCostBreakdown_ = FrameCostBreakdown{};
 }
 
@@ -534,6 +535,7 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   if (overviewInfillResult && rasterViewport.viewportBounded) {
     textures.uploadCompositedOverview(*result.compositedPreview, result.rasterViewport);
     lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+    pendingDocumentMutationOverviewRefresh_ = false;
     displayedDocVersion_ = result.version;
     return;
   }
@@ -556,6 +558,9 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
 
     textures.uploadComposited(*result.compositedPreview, result.rasterViewport);
     lastFrameCostBreakdown_.compositedUpload = textures.lastCompositedUploadCost();
+    if (!result.rasterViewport.viewportBounded) {
+      pendingDocumentMutationOverviewRefresh_ = false;
+    }
     if (displayNoneSuppressedLayerEntity_ != entt::null) {
       const bool stillCarriesSuppressedLayer = std::ranges::any_of(
           result.compositedPreview->tiles, [&](const RenderResult::CompositedTile& tile) {
@@ -596,9 +601,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
     return;
   }
 
-  if (textures != nullptr) {
-    invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult(), *textures);
-  }
+  invalidatePresentationAfterDocumentFlush(app.document().lastFlushResult());
 
   const EditorRasterViewport rasterViewport = viewport.rasterViewport();
   const Vector2i desiredCanvasSize = rasterViewport.semanticCanvasSizePx;
@@ -633,9 +636,9 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const Entity prewarmEntity = selectedCompositedEntity(app);
   const PresentationCoverageDiagnostics coverageDiagnostics =
       textures != nullptr ? textures->coverageDiagnostics() : PresentationCoverageDiagnostics{};
-  const bool needsOverviewInfill = rasterViewport.viewportBounded && !dragPreview.has_value() &&
-                                   textures != nullptr &&
-                                   !coverageDiagnostics.overviewInfillAvailable;
+  const bool needsOverviewInfill =
+      rasterViewport.viewportBounded && !dragPreview.has_value() && textures != nullptr &&
+      (!coverageDiagnostics.overviewInfillAvailable || pendingDocumentMutationOverviewRefresh_);
   const bool canDeferSelectedViewportRefresh = prewarmEntity != entt::null &&
                                                !dragPreview.has_value() &&
                                                currentVersion == displayedDocVersion_;
@@ -721,15 +724,12 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
 }
 
 void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
-    const AsyncSVGDocument::FlushResult& flushResult, GlTextureCache& textures) {
+    const AsyncSVGDocument::FlushResult& flushResult) {
   if (!flushResult.removedElements) {
     return;
   }
 
-  compositedPresentation_ = CompositedPresentation{};
-  textures.resetComposited();
-  displayNoneSuppressedSelectionEntity_ = entt::null;
-  displayNoneSuppressedLayerEntity_ = entt::null;
+  pendingDocumentMutationOverviewRefresh_ = true;
 }
 
 Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
