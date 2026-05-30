@@ -860,6 +860,32 @@ TEST_F(TextEditorTests, SelectAllSelectsEntireBuffer) {
       << "selectAll should select entire buffer content";
 }
 
+TEST_F(TextEditorTests, ClearSelectionCollapsesActiveSelection) {
+  editor.setText("Hello world");
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
+  editor.setCursorPosition(Coordinates(0, 5));
+  ASSERT_TRUE(editor.hasSelection()) << "precondition: a selection exists";
+
+  editor.clearSelection();
+
+  EXPECT_FALSE(editor.hasSelection())
+      << "clearSelection should collapse the active text selection to the caret";
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 5))
+      << "clearSelection should leave the cursor where it was";
+}
+
+TEST_F(TextEditorTests, ClearSelectionIsNoOpWhenEmpty) {
+  editor.setText("Hello world");
+  editor.setCursorPosition(Coordinates(0, 3));
+  ASSERT_FALSE(editor.hasSelection()) << "precondition: no selection";
+
+  editor.clearSelection();
+
+  EXPECT_FALSE(editor.hasSelection()) << "clearSelection should be a no-op with no selection";
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 3))
+      << "clearSelection should not move the cursor when there is nothing to clear";
+}
+
 TEST_F(TextEditorTests, ShiftRightExpandsSelection) {
   editor.setText("Hello");
   editor.setCursorPosition(Coordinates(0, 0));

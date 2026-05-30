@@ -97,10 +97,17 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
         actions.selectAllCanvas = true;
       }
     }
-    // Deselect All clears the canvas selection; enabled only when something is
-    // selected. Cmd+Shift+A mirrors the shortcut handled in EditorShell.
-    if (ImGui::MenuItem("Deselect All", "Cmd+Shift+A", false, state.hasShapeSelection)) {
-      actions.deselectAll = true;
+    // "Deselect All" routes to the source/XML pane's text deselect (collapse selection to caret)
+    // while it owns keyboard focus, and otherwise clears the canvas selection. Enabled when either
+    // path can act: the source pane can always collapse its caret, and the canvas needs a
+    // selection. Cmd+Shift+A mirrors the focus-aware shortcut handled in EditorShell.
+    if (ImGui::MenuItem("Deselect All", "Cmd+Shift+A", false,
+                        state.sourcePaneFocused || state.hasShapeSelection)) {
+      if (state.sourcePaneFocused) {
+        actions.deselectAll = true;
+      } else {
+        actions.deselectAllCanvas = true;
+      }
     }
     ImGui::EndMenu();
   }

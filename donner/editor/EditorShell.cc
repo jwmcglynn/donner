@@ -1339,24 +1339,29 @@ void EditorShell::handleGlobalShortcuts() {
     app_.setSelection(std::nullopt);
   }
 
-  // Plain Cmd+A ("Select All") selects every selectable element via the same setSelection() path
-  // normal canvas selection uses, so the canvas highlight, source-pane sync, and overlay all
-  // update together. It is gated to the canvas (not while the source pane owns keyboard focus,
-  // where Cmd+A is text Select-All), and the absence of Shift keeps it distinct from the
+  // Cmd+A ("Select All") is focus-aware. When the source pane owns keyboard focus it selects all
+  // text in the XML editor; otherwise it selects every selectable canvas element via the same
+  // setSelection() path normal canvas selection uses (so the canvas highlight, source-pane sync,
+  // and overlay all update together). The absence of Shift keeps both branches distinct from the
   // Cmd+Shift+A "Deselect All" chord below.
-  if (CanSelectAllFromCanvasShortcut(
-          ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false), cmd, shift, anyPopupOpen,
-          sourcePaneFocused,
-          /*canvasHasSelectableElements=*/canvasHasSelectableElements())) {
+  const bool pressedA = ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false);
+  if (CanSelectAllFromSourcePaneShortcut(pressedA, cmd, shift, anyPopupOpen, sourcePaneFocused)) {
+    textEditor_.selectAll();
+  } else if (CanSelectAllFromCanvasShortcut(
+                 pressedA, cmd, shift, anyPopupOpen, sourcePaneFocused,
+                 /*canvasHasSelectableElements=*/canvasHasSelectableElements())) {
     selectAllCanvasElements();
   }
 
-  // Cmd+Shift+A ("Deselect All") clears the canvas selection through the same
-  // canonical clear path Escape uses (clearSelection() == setSelection(nullopt))
-  // so the canvas highlight, source-pane sync, and overlay all update together.
-  // The Shift requirement keeps it distinct from a plain Cmd+A.
-  if (CanDeselectAllFromShortcut(ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false), cmd, shift,
-                                 app_.hasSelection(), anyPopupOpen, sourcePaneFocused)) {
+  // Cmd+Shift+A ("Deselect All") is focus-aware too. When the source pane owns keyboard focus it
+  // collapses the text selection to the caret; otherwise it clears the canvas selection through the
+  // same canonical clear path Escape uses (clearSelection() == setSelection(nullopt)) so the canvas
+  // highlight, source-pane sync, and overlay all update together. The Shift requirement keeps both
+  // branches distinct from a plain Cmd+A.
+  if (CanDeselectAllFromSourcePaneShortcut(pressedA, cmd, shift, anyPopupOpen, sourcePaneFocused)) {
+    textEditor_.clearSelection();
+  } else if (CanDeselectAllFromCanvasShortcut(pressedA, cmd, shift, app_.hasSelection(),
+                                              anyPopupOpen, sourcePaneFocused)) {
     app_.clearSelection();
   }
 
@@ -3571,6 +3576,11 @@ void EditorShell::runFrame() {
     selectAllCanvasElements();
   }
   if (menuActions.deselectAll) {
+    // Source/XML pane focused: collapse the text selection to the caret, mirroring the
+    // focus-aware Cmd+Shift+A shortcut.
+    textEditor_.clearSelection();
+  }
+  if (menuActions.deselectAllCanvas) {
     // Same canonical clear path as the Cmd+Shift+A shortcut and Escape.
     app_.clearSelection();
   }
