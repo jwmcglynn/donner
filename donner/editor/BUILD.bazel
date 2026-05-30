@@ -74,6 +74,21 @@ donner_cc_library(
     ],
 )
 
+# Viewport SVG export (Milestone 6 of
+# `docs/design_docs/0047-v0_8_showcase.md`). Content-only: copies source SVG
+# children into a clipped group cropped to the viewport, with an empty overlay
+# placeholder group reserved for Milestone 7.
+donner_cc_library(
+    name = "viewport_svg_export",
+    srcs = ["ViewportSvgExport.cc"],
+    hdrs = ["ViewportSvgExport.h"],
+    deps = [
+        ":viewport_state",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
 donner_cc_library(
     name = "selection_transform_handles",
     srcs = ["SelectionTransformHandles.cc"],
@@ -619,6 +634,7 @@ donner_cc_library(
         ":text_editor",
         ":tracy_wrapper",
         ":viewport_interaction_controller",
+        ":viewport_svg_export",
         ":xml_autocomplete",
         "//donner/base",
         "//donner/base/xml",

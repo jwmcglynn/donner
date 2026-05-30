@@ -30,6 +30,7 @@
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/ViewportSvgExport.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"
@@ -1102,7 +1103,66 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error) {
 }
 
 void EditorShell::requestSaveAs(std::string error) {
+  pendingViewportExport_ = false;
   dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
+}
+
+void EditorShell::requestExportViewportSvg(std::string error) {
+  pendingViewportExport_ = true;
+  // Default export filename: "<stem>_viewport.svg" beside the source document,
+  // or "untitled_viewport.svg" for documents with no path.
+  std::string defaultPath;
+  if (app_.currentFilePath().has_value()) {
+    const std::filesystem::path sourcePath(*app_.currentFilePath());
+    std::filesystem::path exportPath = sourcePath;
+    exportPath.replace_filename(sourcePath.stem().string() + "_viewport.svg");
+    defaultPath = exportPath.string();
+  } else {
+    defaultPath = "untitled_viewport.svg";
+  }
+  dialogPresenter_.requestSaveFile(std::make_optional(defaultPath), std::move(error));
+}
+
+bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error) {
+  if (!app_.hasDocument()) {
+    *error = "No document is open to export.";
+    return false;
+  }
+  if (!synchronizeSourceBeforeSave(error)) {
+    return false;
+  }
+
+  const ViewportState& viewport = interactionController_.viewport();
+  // The render pane content rect in screen (CSS) pixels, derived from the
+  // viewport's pane origin/size. ViewportState is the sole crop/scale source.
+  const Vector2d paneOrigin = viewport.paneOrigin;
+  const Vector2d paneSize = viewport.paneSize;
+  const Recti renderPaneRect(Vector2i(static_cast<int>(std::lround(paneOrigin.x)),
+                                      static_cast<int>(std::lround(paneOrigin.y))),
+                             Vector2i(static_cast<int>(std::lround(paneOrigin.x + paneSize.x)),
+                                      static_cast<int>(std::lround(paneOrigin.y + paneSize.y))));
+
+  ViewportExportOptions options;
+  options.transparentBackground = true;
+  options.includeSelectionOverlay = false;  // M6: content only. Overlay is M7.
+
+  Result<std::string, std::string> exportResult =
+      ExportViewportAsSvg(app_.document().document(), viewport, renderPaneRect, options);
+  if (!exportResult.ok()) {
+    *error = exportResult.error;
+    return false;
+  }
+
+  const DocumentSaveResult saveResult =
+      SaveSourceToPath(std::filesystem::path(std::string(path)), exportResult.value);
+  if (!saveResult.ok()) {
+    *error = saveResult.message;
+    return false;
+  }
+
+  dialogPresenter_.clearSaveFileError();
+  pendingViewportExport_ = false;
+  return true;
 }
 
 void EditorShell::requestSave() {
@@ -3134,6 +3194,9 @@ void EditorShell::runFrame() {
   if (menuActions.saveFileAs) {
     requestSaveAs();
   }
+  if (menuActions.exportViewportSvg) {
+    requestExportViewportSvg();
+  }
   if (menuActions.revertFile) {
     requestRevert();
   }
@@ -3175,7 +3238,10 @@ void EditorShell::runFrame() {
 
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
-      [this](std::string_view path, std::string* error) { return trySavePath(path, error); });
+      [this](std::string_view path, std::string* error) {
+        return pendingViewportExport_ ? tryExportViewportSvgToPath(path, error)
+                                      : trySavePath(path, error);
+      });
 
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;

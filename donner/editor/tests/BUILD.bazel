@@ -822,3 +822,18 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ],
 )
+
+# Milestone 6 viewport SVG export
+# (`docs/design_docs/0047-v0_8_showcase.md`).
+donner_cc_test(
+    name = "viewport_svg_export_tests",
+    srcs = ["ViewportSvgExport_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:viewport_state",
+        "//donner/editor:viewport_svg_export",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)

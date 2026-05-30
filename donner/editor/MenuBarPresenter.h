@@ -19,6 +19,7 @@ struct MenuBarActions {
   bool openFile = false;
   bool saveFile = false;
   bool saveFileAs = false;
+  bool exportViewportSvg = false;
   bool revertFile = false;
   bool quit = false;
   bool undo = false;

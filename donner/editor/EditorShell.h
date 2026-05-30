@@ -161,6 +161,12 @@ private:
   void requestRevert();
   void requestSave();
   void requestSaveAs(std::string error = std::string());
+  /// Open the save dialog to export the current viewport as a cropped SVG.
+  /// See `docs/design_docs/0047-v0_8_showcase.md` Milestone 6.
+  void requestExportViewportSvg(std::string error = std::string());
+  /// Generate the viewport SVG content and write it to \p path. Returns false
+  /// and sets \p error on failure (mirrors \ref trySavePath's contract).
+  bool tryExportViewportSvgToPath(std::string_view path, std::string* error);
   bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
   void handleGlobalShortcuts();
@@ -243,6 +249,10 @@ private:
   DocumentSyncController documentSyncController_;
   ViewportInteractionController interactionController_;
   std::optional<ViewportState> pendingViewportReplayOverride_;
+  /// True while the save modal is being used for File → Export Viewport as SVG
+  /// rather than an ordinary document save. Routes the dialog's write callback
+  /// to \ref tryExportViewportSvgToPath.
+  bool pendingViewportExport_ = false;
   bool contentOnlyCaptureForNextFrame_ = false;
   bool contentOnlyCaptureThisFrame_ = false;
   bool requestRenderAtEndOfFrame_ = false;
