@@ -995,21 +995,10 @@ INSTANTIATE_TEST_SUITE_P(ShapesRect, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureA, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/a",
-                {
-                    // `<a>` parses as SVGUnknownElement, so it lacks the TextComponent/
-                    // TextPositioningComponent the text layout descends into — its text
-                    // children are dropped. Needs a real SVGAElement that acts as a text-content
-                    // grouping element (like <tspan>); larger than a renderer-side change.
-                    {"inside-text.svg", Params::Skip("Not impl: <a> as text-content element")},
-                    {"inside-tspan.svg", Params::Skip("Not impl: <a> as text-content element")},
-                    {"on-tspan.svg", Params::Skip("Not impl: <a> as text-content element")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureA, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/a")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureDefs, ImageComparisonTestFixture,
