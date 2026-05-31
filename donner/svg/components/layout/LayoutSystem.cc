@@ -358,8 +358,17 @@ Transform2d LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entit
                                                                  viewBox);
 
       if (const auto* symbolComponent = lightEntity.try_get<SymbolComponent>()) {
+        // refX/refY resolve against the symbol's viewBox; percentages (and the
+        // left/center/right / top/center/bottom keywords, which the parser maps to percentages)
+        // use the viewBox width/height as the basis.
+        // TODO: Plumb FontMetrics so font-relative refX/refY units resolve correctly.
+        const FontMetrics fontMetrics;
+        const double refXPixels =
+            symbolComponent->refX.toPixels(viewBox, fontMetrics, Lengthd::Extent::X);
+        const double refYPixels =
+            symbolComponent->refY.toPixels(viewBox, fontMetrics, Lengthd::Extent::Y);
         const Transform2d symbolContentFromElementContent =
-            Transform2d::Translate(-symbolComponent->refX, -symbolComponent->refY);
+            Transform2d::Translate(-refXPixels, -refYPixels);
 
         return symbolContentFromElementContent * elementContentFromViewBox;
       } else {

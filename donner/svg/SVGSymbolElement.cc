@@ -113,26 +113,26 @@ std::optional<Lengthd> SVGSymbolElement::height() const {
   return component ? component->properties.height.get() : std::nullopt;
 }
 
-void SVGSymbolElement::setRefX(double value) {
+void SVGSymbolElement::setRefX(Lengthd value) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SymbolComponent>(access).refX = value;
   InvalidateSymbol(handle_);
 }
 
-double SVGSymbolElement::refX() const {
+Lengthd SVGSymbolElement::refX() const {
   const auto* component = handle_.try_get<components::SymbolComponent>();
   return component ? component->refX : components::SymbolComponent().refX;
 }
 
-void SVGSymbolElement::setRefY(double value) {
+void SVGSymbolElement::setRefY(Lengthd value) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::SymbolComponent>(access).refY = value;
   InvalidateSymbol(handle_);
 }
 
-double SVGSymbolElement::refY() const {
+Lengthd SVGSymbolElement::refY() const {
   const auto* component = handle_.try_get<components::SymbolComponent>();
   return component ? component->refY : components::SymbolComponent().refY;
 }

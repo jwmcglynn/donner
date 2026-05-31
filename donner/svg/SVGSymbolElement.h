@@ -191,32 +191,36 @@ public:
   std::optional<Lengthd> height() const;
 
   /**
-   * Set the reference x coordinate.
+   * Set the reference x coordinate. Accepts a `<length>` (including percentages, which resolve
+   * against the symbol's viewBox at layout time). The `left`/`center`/`right` keywords are mapped
+   * to `0%`/`50%`/`100%` by the parser before reaching this setter.
    *
    * @param value The reference x coordinate.
    */
-  void setRefX(double value);
+  void setRefX(Lengthd value);
 
   /**
    * Get the reference x coordinate.
    *
    * @return The reference x coordinate.
    */
-  double refX() const;
+  Lengthd refX() const;
 
   /**
-   * Set the reference y coordinate.
+   * Set the reference y coordinate. Accepts a `<length>` (including percentages, which resolve
+   * against the symbol's viewBox at layout time). The `top`/`center`/`bottom` keywords are mapped
+   * to `0%`/`50%`/`100%` by the parser before reaching this setter.
    *
    * @param value The reference y coordinate.
    */
-  void setRefY(double value);
+  void setRefY(Lengthd value);
 
   /**
    * Get the reference y coordinate.
    *
    * @return The reference y coordinate.
    */
-  double refY() const;
+  Lengthd refY() const;
 };
 
 }  // namespace donner::svg
