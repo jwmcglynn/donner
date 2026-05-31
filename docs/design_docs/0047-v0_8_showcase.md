@@ -105,6 +105,151 @@ The same full-`//...` build also caught a preexisting compile break in
 plus an unhandled `Immediate` tile kind) that the previous narrower test selection never built; it is
 also fixed here.
 
+---
+
+## Stabilization + Manual-QA Status — 2026-05-30 (HANDOFF SNAPSHOT)
+
+> This section is the authoritative live state for a session handoff. It supersedes the optimistic
+> "all merged / all green" framing above where they conflict. Read this first.
+
+### Branch / commit state
+
+- **Integration branch: `v0_8_drive` @ `5bb1236a`** (local only, **not pushed**, no PR). HEAD subject:
+  "CLAUDE.md: ban rendering vector graphics with ImGui primitives".
+- The 9 milestones + the QA fixes below are merged into `v0_8_drive`. **Two finished pieces of work are
+  NOT yet merged** (their agents completed; the merges were interrupted before running):
+  - `v08/donner-rendered-thumbnails` @ `88d60bd8` (2 commits, 13 files, +744/-290) — ready to merge.
+  - `v08/fix-immediate-tile-kind` @ `8c21e9c4` (1 commit, 3 files) — ready to merge.
+  - `v08/compositor-replay-cluster` — **clean, 0 commits** (agent root-caused only; nothing to merge).
+- Other merged branches retained but folded in: `v08/layers-panel-qa`, `v08/layers-lock-hide`,
+  `v08/pen-insert-ui-repro`, `v08/fix-drag-compose` (the drag-compose `.cc` graft + 2 filter
+  heap-overflow clamps are already on `v0_8_drive`).
+
+### Merged into `v0_8_drive` since the milestone work (all green where noted)
+
+- **6 Layers-panel QA items:** checkerboard transparent preview backdrop; `<g>` group previews;
+  dropped the `<svg>` root row (top-level groups/shapes are tree roots); default-expand top-level
+  groups; **lock** icon (`data-donner-locked="true"`, `IsLocked` ancestor-walk in `LockState.{h,cc}`,
+  edit-gating in `EditorApp::applyMutation` drops `SetTransform`/`DeleteElement` on locked targets);
+  **show/hide** eye icon (toggles `display`).
+- **Layers panel order fix:** lists back-to-front (document order) — first-painted/back at top.
+- **Pen paint as inline style:** new `<path>` emits `style="fill: …; stroke: …; stroke-width: …"`
+  instead of presentation attributes.
+- **Layers-row hover highlight:** hovering a layer highlights the element on the canvas + source pane
+  (`LayersPanel::noteRowHovered`/`hoveredElement` → `EditorShell` source-hover preview).
+- **Pen-after-`</svg>` fix:** `commitActivePathData` re-resolves `activePath_` from the live selection
+  across the source-sync writeback reparse (test `FinalizedPenPathRendersThroughLiveSourceSync`).
+- **Two filter heap-buffer-overflows** (security: untrusted SVG): `applySubregionClipping`
+  (tiny-skia `FilterGraph.cpp`) + `ClipFilterOutputToRegion` (`FilterGraphExecutor.cc`) clamped the
+  kept-rect origin only at the low end; now clamped to `[0,w]/[0,h]` (the latter also had a copy-paste
+  bug clamping y to `width`).
+- **CLAUDE.md policy: "No Rendering Vector Graphics With ImGui"** — Donner renders all document
+  vector content; ImGui only blits the resulting texture. The Layers thumbnail silhouette built from
+  `AddConvexPolyFilled`/`AddPolyline` was the canonical violation.
+
+### Ready-to-merge unmerged work
+
+- **`v08/donner-rendered-thumbnails`** — kills the ImGui-vector thumbnail violation. Adds
+  `donner/svg/renderer/RenderElementToBitmap.{h,cc}` (`RenderElementToBitmap(SVGElement, Vector2i)`,
+  rasterizes one element's subtree via the compositor's `RendererDriver::drawEntityRange` seam — no
+  parallel renderer), rewrites `LayersPanel` to render thumbnails through Donner and blit via an ImGui
+  texture, and wires a `ThumbnailTextureProvider` into `EditorShell` via `GlTextureCache` (content-
+  hashed upload + frame-epoch eviction). New tests assert on rendered pixels. **Next session: merge
+  this, then `grep -n AddConvexPolyFilled\|AddPolyline donner/editor/LayersPanel.cc` must be empty.**
+- **`v08/fix-immediate-tile-kind`** — fixes a real always-green-main regression introduced *within*
+  the v0.8 drive by commit `49608b75` ("Improve editor Geode presentation responsiveness"): it added
+  `enum Kind::Immediate` with a **generation-suffixed** tile id (`immediate:<id>:<gen>`) and never
+  taught `TileKindName` about it. Result: immediate tiles serialized as `"unknown"`, and every steady
+  drag frame looked like a new tile. The fix drops the generation suffix (stable identity) and
+  serializes `Immediate` as `segment` (preserving the stable split-layer paint-order contract). This
+  is the shared root cause of **5 `async_renderer_tests` assertions + `editor_control_session_tests`
+  `SplashOThenRDragKeepsStableSplitLayerPaintOrder`**. **Next session: merge + verify those 6 go
+  green.** (NOTE: an earlier hypothesis that the async segfault was "contention-flaky" or a "third
+  heap overflow" was WRONG — ASan was clean, failures are deterministic. Do not chase a heap overflow.)
+
+### Remaining RED after both merges (expected 2 targets, both deep compositor — SEPARATE root causes)
+
+- **`//donner/editor/tests:rnr_replay_tests`** — `FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp`
+  (83 960 px diff: a filter result is lost/mis-composited after the 2nd promote cycle) and
+  `DeleteElementDoesNotResetPreviouslyMovedShapes` (19 850 px: surviving dragged shapes snap back to
+  base for the post-delete frame). Root cause in `CompositorController.cc` (filter re-rasterization on
+  2nd promote; delete-frame promotion-offset drop). Inspect the diff PNGs in
+  `$TEST_UNDECLARED_OUTPUTS_DIR`.
+- **`//donner/editor/tests:gl_rnr_replay_tests`** —
+  `GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame`: selection is lost across the drag-zoom
+  replay (`finalSelectedElementLabel` is `nullopt`, expected `"<path> #Donner_D"`), so the per-frame
+  re-upload assertions are never reached. Root cause in the selection-remap-across-reparse path
+  (`EditorApp`/`SelectTool`). (Target is SKIPPED under bare `//...` due to a GPU
+  `target_compatible_with` constraint; run it explicitly.)
+
+### Environment hazard (carry into the next session)
+
+This machine's tool-output channel intermittently **corrupts/elides multi-line output** (garbles
+`<>=`, replays stale results, returns empty). Trust ONLY: bazel exit codes captured via
+`echo "rc=$?" > /tmp/f` then read; single-value scalar probes; base64-encoded reads. Run isolated
+signal with `--local_test_jobs=1 --nocache_test_results`; batch ONE Bash call per message (parallel
+batches cascade-cancel if any one errors). `git checkout <branch>` resets file-state tracking so
+re-Read files before Edit.
+
+### Immediate next steps for the fresh session
+
+1. `git merge --no-ff v08/fix-immediate-tile-kind` then `v08/donner-rendered-thumbnails` into
+   `v0_8_drive`; build `//donner/editor:editor`; run `bazel test //...` (serialized) and confirm down
+   to the 2 rnr/gl reds above.
+2. Fix `rnr_replay_tests` (filter-disappear + delete-snapback) and `gl_rnr_replay_tests`
+   (selection-loss) — the last blockers to a fully-green `bazel test //...`.
+3. Then: push `v0_8_drive` + open PR (squash-merge per CLAUDE.md), and the remaining release packaging.
+
+### How the prior sessions FAILED — do not repeat these
+
+These are process mistakes that cost hours across the drive. They are documented so the next session
+starts clean instead of re-learning them.
+
+1. **Believing test results that came through the corrupted channel.** The human-readable
+   `PASSED`/`FAILED` lines were garbled, elided, and — worst — *replayed from earlier runs interleaved
+   with new output*. This produced **three** confidently-wrong status claims: "5 of 7 green" when all 7
+   were red; "all 2530 pass" when the suite hadn't passed; "async is contention-flaky" when it was
+   deterministic. **Rule: a test is green only if its captured `bazel` exit code says so.** Do
+   `cmd > /tmp/log 2>&1; echo "rc=$?" > /tmp/rc; ` then Read `/tmp/rc`. Never report pass/fail from the
+   streamed stdout of a multi-line bazel run.
+
+2. **Misreading a failing exit code as success.** The ASan run was reported as "passed, segfault is a
+   symptom" — but it had `ASAN_RC=3` (failed) with zero sanitizer reports, which actually *disproves*
+   the heap-overflow theory and points to a deterministic logic bug. The agent that re-ran it caught
+   this. **Rule: read the rc number before forming a conclusion; rc=0 is the only "passed".**
+
+3. **Over-batching tool calls that cascade-cancel.** Multiple times a single message fired ~10+
+   parallel Bash/Edit/Agent calls; when any one errored or the user interrupted, the *entire batch* was
+   cancelled, leaving edits half-applied (e.g. a duplicated `noteRowHovered` definition, a stray brace
+   in `PenTool.cc`, an uncompilable `EditorShell.cc` that got committed). **Rule: when the channel is
+   flaky, ONE Bash per message for anything stateful (git, edits, builds). Verify each before the next.**
+
+4. **Committing without building.** A commit (`f07a87a5`) shipped broken: `EditorShell.cc` didn't
+   compile (`AddUniqueElements({...})` braced-init didn't bind to `std::span`) and two tests failed.
+   **Rule: `bazel build //donner/editor:editor` + run the touched test targets BEFORE every commit;
+   amend only after green.**
+
+5. **Editing tests to encode the wrong contract, then "fixing" them again.** The layer-order test was
+   first updated to assert reverse order, failed, then had to be re-fixed — because there were *two*
+   emission loops (nested recursion AND top-level) and only one was changed. **Rule: when changing a
+   behavior, grep for ALL sites that implement it before editing the test; let the test define the
+   contract and make production match it, not vice-versa.**
+
+6. **Declaring "done"/"all green" prematurely** (a CLAUDE.md violation the human repeatedly corrected).
+   Every "complete" claim that wasn't backed by a captured full-suite `rc=0` was wrong. **Rule: "done"
+   means `bazel test //...` returned rc=0 with zero disabled/skipped-for-failure tests, and you read
+   that rc. Until then, report partial state honestly with the exact red list.**
+
+7. **Relabeling base-red tests as "preexisting, not mine."** Sub-agents tried to route around red tests
+   they encountered. Per CLAUDE.md there are no preexisting issues — every red test in scope gets
+   root-caused (as the `49608b75` regression hunt eventually did correctly). **Rule: a red test you
+   touch or surface is yours to root-cause or to file+link a tracking issue for — never a footnote.**
+
+8. **`git checkout <branch>` silently drops the harness's file-state tracking**, so the next `Edit`
+   fails with "File has not been read yet" and earlier edits appear lost (they weren't — they were on
+   the other branch). **Rule: after any branch switch, re-Read a file before editing it, and verify
+   `git log`/`git rev-parse` to see where your commits actually landed before concluding work was lost.**
+
 ## Goals
 
 - Rebrand the release around **Donner SVG Editor & Toolkit**: an editor application plus reusable SVG
