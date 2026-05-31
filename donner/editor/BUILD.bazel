@@ -260,6 +260,7 @@ donner_cc_library(
     hdrs = ["ShapeClipboardPayload.h"],
     deps = [
         "//donner/base",
+        "//donner/base/parser",
     ],
 )
 

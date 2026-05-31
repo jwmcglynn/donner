@@ -4,6 +4,8 @@
 #include <sstream>
 #include <string>
 
+#include "donner/base/parser/NumberParser.h"
+
 namespace donner::editor {
 
 namespace {
@@ -77,12 +79,18 @@ std::string formatDouble(double value) {
 /// Parse a double, returning std::nullopt on failure.
 std::optional<double> parseDouble(std::string_view text) {
   text = trim(text);
-  double value = 0.0;
-  auto [ptr, ec] = std::from_chars(text.data(), text.data() + text.size(), value);
-  if (ec != std::errc() || ptr != text.data() + text.size()) {
+  if (text.empty()) {
     return std::nullopt;
   }
-  return value;
+  // `std::from_chars` for floating point is availability-gated on Apple libc++
+  // (unavailable before macOS 26.0), so use Donner's locale-independent SVG
+  // number parser. Require the whole trimmed token to be consumed, matching the
+  // previous strict-parse semantics.
+  const auto result = ::donner::parser::NumberParser::Parse(text);
+  if (result.hasError() || result.result().consumedChars != text.size()) {
+    return std::nullopt;
+  }
+  return result.result().number;
 }
 
 }  // namespace
