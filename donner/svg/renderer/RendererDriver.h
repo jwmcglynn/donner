@@ -248,6 +248,17 @@ private:
   /// instances via pointer.
   std::unordered_set<entt::id_type>* feImageFragmentGuard_ = nullptr;
 
+  /// Nesting depth of the current feImage fragment pre-render. The visited-set above stops a
+  /// *cyclic* reference (A→A, A→B→A) because it keys on the light-tree entity, but a sufficiently
+  /// long *acyclic* chain (filter1→rect3→filter2→rect4→…) still recurses once per link and could
+  /// exhaust the native stack — observed as a segfault on macOS/Metal CI (issue #552), where every
+  /// nested fragment pre-render also stands up a GPU offscreen instance and amplifies per-frame
+  /// stack usage. This counter caps the chain length so an over-deep fragment renders as empty
+  /// (transparent) rather than crashing, matching Donner's never-crash-on-untrusted-input
+  /// invariant. Shared across nested `RendererDriver` instances by copying the parent's value into
+  /// the sub-driver (see `preRenderFeImageFragments`).
+  int feImageFragmentDepth_ = 0;
+
   /// Filter graphs resolved and pre-rendered by \ref prepareFilterGraphs. Keyed by the entity
   /// whose filter produced the graph. Populated in a pre-pass before \ref traverse so the main
   /// traversal never mutates \ref components::RenderingInstanceComponent storage mid-iteration.
