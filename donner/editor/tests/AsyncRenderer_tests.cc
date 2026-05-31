@@ -4522,6 +4522,10 @@ TEST(RenderCoordinatorTest, DeletedBackgroundKeepsPresentationUntilReplacementRe
   SelectTool selectTool;
   GlTextureCache textures;
   RenderCoordinator coordinator;
+  if (!coordinator.renderer().requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Geode-only presentation regression: TinySkia test path lacks a GL context "
+                    "for composited texture upload.";
+  }
   const std::uint64_t cachedVersion = app.document().currentFrameVersion();
   coordinator.compositedPresentation().noteCachedTextures(entt::null, cachedVersion,
                                                           Vector2i(64, 64));
