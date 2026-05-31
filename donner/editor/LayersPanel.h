@@ -134,6 +134,19 @@ public:
   /// @return True if a move was applied; false on out-of-range/no-op/rejected.
   bool handleRowReorder(EditorApp& app, std::size_t fromIndex, std::size_t toIndex);
 
+  /// Reorder the element at @p rowIndex in paint order (z-order) via the shared
+  /// `EditorApp::reorderSelectedElement` engine — the same path as the canvas
+  /// Arrange menu and the Cmd+[ / Cmd+] shortcuts. The row's element is selected
+  /// first, then the move runs. Factored out so the Layers context-menu Arrange
+  /// items are unit-testable without an ImGui frame.
+  ///
+  /// @param app Live editor app the mutation is applied to.
+  /// @param rowIndex Index into `rows()`.
+  /// @param direction Which way to move the element in paint order.
+  /// @return True if the element moved; false on out-of-range index or when the
+  ///   engine rejects it (root element, locked, or already at the extreme).
+  bool handleRowZOrder(EditorApp& app, std::size_t rowIndex, EditorApp::ZOrder direction);
+
   /// Begin an inline rename of the row identified by @p stableId (the render
   /// loop draws an edit field in place of the row label). No-op if the row is
   /// not present. Exposed so the context-menu "Rename" item and tests can start

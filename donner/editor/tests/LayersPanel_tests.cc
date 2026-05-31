@@ -296,6 +296,44 @@ TEST(LayersPanelTest, RowReorderSameIndexIsNoOp) {
   EXPECT_FALSE(app.document().flushFrame());
 }
 
+TEST(LayersPanelTest, RowZOrderBringsElementForward) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g">
+      <rect id="a" x="0" y="0" width="10" height="10"/>
+      <rect id="b" x="0" y="20" width="10" height="10"/>
+    </g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  ASSERT_GE(aIndex, 0);
+
+  // "a" paints first (back). Bring it to front -> it moves after "b".
+  EXPECT_TRUE(panel.handleRowZOrder(app, static_cast<std::size_t>(aIndex),
+                                    EditorApp::ZOrder::BringToFront));
+  EXPECT_TRUE(app.document().flushFrame());
+
+  panel.refreshSnapshot(app);
+  EXPECT_LT(RowIndex(panel, "b"), RowIndex(panel, "a"));
+  // The reorder selected the acted-on row.
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front().id(), RcString("a"));
+}
+
+TEST(LayersPanelTest, RowZOrderOutOfRangeIsNoOp) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  EXPECT_FALSE(
+      panel.handleRowZOrder(app, panel.rows().size() + 5u, EditorApp::ZOrder::BringForward));
+  EXPECT_FALSE(app.document().flushFrame());
+}
+
 // ---------------------------------------------------------------------------
 // Feature 1: show/hide eye button
 // ---------------------------------------------------------------------------

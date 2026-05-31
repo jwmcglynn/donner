@@ -236,6 +236,19 @@ bool LayersPanel::handleRowReorder(EditorApp& app, std::size_t fromIndex, std::s
   return false;
 }
 
+bool LayersPanel::handleRowZOrder(EditorApp& app, std::size_t rowIndex,
+                                  EditorApp::ZOrder direction) {
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (rowIndex >= rows.size()) {
+    return false;
+  }
+  // Select the row's element, then run the shared paint-order engine (same path
+  // as the canvas Arrange menu and the Cmd+[ / Cmd+] shortcuts).
+  app.setSelection(rows[rowIndex].element);
+  selectionChanged_ = true;
+  return app.reorderSelectedElement(direction);
+}
+
 void LayersPanel::beginRename(std::uint64_t stableId) {
   if (const auto rowIndex = rowIndexForStableId(stableId); rowIndex.has_value()) {
     renamingStableId_ = stableId;
@@ -459,6 +472,23 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       // matching the engine's own refusal.
       if (ImGui::MenuItem("Rename", nullptr, false, !row.isLocked) && liveApp != nullptr) {
         beginRename(row.stableId);
+      }
+      // Arrange (paint/z-order) — routes through the shared reorderSelectedElement
+      // engine, same as the canvas Arrange menu and the Cmd+[ / Cmd+] shortcuts.
+      if (ImGui::BeginMenu("Arrange", !row.isLocked)) {
+        if (ImGui::MenuItem("Bring to Front", "Cmd+Shift+]") && liveApp != nullptr) {
+          handleRowZOrder(*liveApp, i, EditorApp::ZOrder::BringToFront);
+        }
+        if (ImGui::MenuItem("Bring Forward", "Cmd+]") && liveApp != nullptr) {
+          handleRowZOrder(*liveApp, i, EditorApp::ZOrder::BringForward);
+        }
+        if (ImGui::MenuItem("Send Backward", "Cmd+[") && liveApp != nullptr) {
+          handleRowZOrder(*liveApp, i, EditorApp::ZOrder::SendBackward);
+        }
+        if (ImGui::MenuItem("Send to Back", "Cmd+Shift+[") && liveApp != nullptr) {
+          handleRowZOrder(*liveApp, i, EditorApp::ZOrder::SendToBack);
+        }
+        ImGui::EndMenu();
       }
       // TODO(v0.8): Delete from the Layers panel — needs the in-sync source
       // text that lives in EditorShell, so it is wired at the shell level
