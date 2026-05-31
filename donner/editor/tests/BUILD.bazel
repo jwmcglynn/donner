@@ -854,6 +854,18 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "render_element_to_bitmap_tests",
+    srcs = ["RenderElementToBitmap_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:layer_tree_model",
+        "//donner/svg",
+        "//donner/svg/renderer:render_element_to_bitmap",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "layers_panel_tests",
     srcs = ["LayersPanel_tests.cc"],
     deps = [
@@ -864,6 +876,7 @@ donner_cc_test(
         "//donner/editor:layers_panel",
         "//donner/editor:lock_state",
         "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",
     ],
 )

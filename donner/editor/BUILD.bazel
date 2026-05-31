@@ -1095,6 +1095,8 @@ donner_cc_library(
         ":lock_state",
         "//donner/base",
         "//donner/svg",
+        "//donner/svg/renderer:render_element_to_bitmap",
+        "//donner/svg/renderer:renderer_interface",
         "@imgui",
     ],
 )

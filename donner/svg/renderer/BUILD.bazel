@@ -371,6 +371,26 @@ donner_cc_library(
     }),
 )
 
+# Isolated single-element rasterization (Layers-panel thumbnails). Renders one
+# element + its descendant subtree through the real RendererDriver to an RGBA
+# bitmap fitted into a target box, reusing the same drawEntityRange path the
+# compositor uses for per-layer rasterization. See CLAUDE.md "No Rendering
+# Vector Graphics With ImGui".
+donner_cc_library(
+    name = "render_element_to_bitmap",
+    srcs = ["RenderElementToBitmap.cc"],
+    hdrs = ["RenderElementToBitmap.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":renderer_driver",
+        ":renderer_interface",
+        ":renderer_tiny_skia",
+        ":renderer_utils",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
 donner_perf_sensitive_cc_library(
     name = "renderer_tiny_skia",
     srcs = ["RendererTinySkia.cc"],

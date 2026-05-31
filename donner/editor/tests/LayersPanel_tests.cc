@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+#include <cmath>
+#include <cstddef>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -11,6 +14,7 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/LayerTreeModel.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
 namespace {
@@ -332,6 +336,77 @@ TEST(LayersPanelTest, LockedElementDeleteIsNoOp) {
   app.applyMutation(EditorCommand::DeleteElementCommand(freeElement));
   EXPECT_TRUE(app.document().flushFrame());
   EXPECT_FALSE(freeElement.parentElement().has_value());
+}
+
+// ---------------------------------------------------------------------------
+// Rendered thumbnails (Layers-panel previews are real Donner rasters, not
+// ImGui-synthesized vector silhouettes -- CLAUDE.md "No Rendering Vector
+// Graphics With ImGui").
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Read the RGBA pixel at (x, y) from a renderer bitmap (row-bytes aware).
+std::array<int, 4> ThumbnailPixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
+  const std::size_t index =
+      static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+  return {bitmap.pixels[index + 0], bitmap.pixels[index + 1], bitmap.pixels[index + 2],
+          bitmap.pixels[index + 3]};
+}
+
+}  // namespace
+
+TEST(LayersPanelTest, RowThumbnailIsRealRender) {
+  // A red rect row yields a thumbnail whose center pixel is red -- proving the
+  // preview is a Donner raster of the element, not a normalized point list.
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <rect id="solidRed" x="10" y="10" width="80" height="80" fill="rgb(220,0,0)"/>
+  </svg>)SVG"));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  const std::optional<LayerTreeRow> row = FindRow(panel, "solidRed");
+  ASSERT_TRUE(row.has_value());
+
+  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(row->stableId);
+  ASSERT_NE(thumbnail, nullptr) << "geometry row must have a rendered thumbnail bitmap";
+  ASSERT_FALSE(thumbnail->empty());
+
+  const std::array<int, 4> center = ThumbnailPixelAt(*thumbnail, 12, 12);
+  EXPECT_NEAR(center[0], 220, 6) << "thumbnail center red channel";
+  EXPECT_NEAR(center[1], 0, 6) << "thumbnail center green channel";
+  EXPECT_NEAR(center[2], 0, 6) << "thumbnail center blue channel";
+  EXPECT_NEAR(center[3], 255, 6) << "thumbnail center alpha";
+}
+
+TEST(LayersPanelTest, GroupThumbnailComposesChildren) {
+  EditorApp app;
+  ASSERT_TRUE(
+      app.loadFromString(R"SVG(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+    <g id="halves">
+      <rect x="0" y="0" width="50" height="100" fill="rgb(0,0,210)"/>
+      <rect x="50" y="0" width="50" height="100" fill="rgb(210,210,0)"/>
+    </g>
+  </svg>)SVG"));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  const std::optional<LayerTreeRow> group = FindRow(panel, "halves");
+  ASSERT_TRUE(group.has_value());
+
+  const svg::RendererBitmap* thumbnail = panel.rowThumbnail(group->stableId);
+  ASSERT_NE(thumbnail, nullptr) << "a group row composes its descendants into one thumbnail";
+  ASSERT_FALSE(thumbnail->empty());
+
+  const std::array<int, 4> leftPixel = ThumbnailPixelAt(*thumbnail, 6, 12);
+  const std::array<int, 4> rightPixel = ThumbnailPixelAt(*thumbnail, 17, 12);
+  EXPECT_NEAR(leftPixel[2], 210, 8) << "left half is blue";
+  EXPECT_NEAR(rightPixel[0], 210, 8) << "right half is yellow (red channel)";
+  EXPECT_NEAR(rightPixel[1], 210, 8) << "right half is yellow (green channel)";
 }
 
 }  // namespace

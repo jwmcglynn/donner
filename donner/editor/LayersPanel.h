@@ -4,7 +4,7 @@
 /// `LayersPanel` is the user-facing Layers panel UI (design docs 0046 "Editor
 /// Group Layers" and 0047 "v0.8 Showcase" Milestone 3). It renders the flat
 /// `LayerTreeModel` row list as an ImGui tree with disclosure chevrons, per-row
-/// preview swatches, and selection that stays synchronized with the canvas and
+/// preview thumbnails, and selection that stays synchronized with the canvas and
 /// source panes.
 ///
 /// Selection requests flow out through the live `EditorApp` (`setSelection`,
@@ -13,11 +13,12 @@
 /// worker.
 ///
 /// The panel deliberately exposes non-ImGui testing seams (`rows`,
-/// `handleRowClick`, `hasThumbnailOrSwatch`, `rowFallbackSwatch`) so the
-/// selection logic and preview guarantees can be exercised without an ImGui
-/// frame.
+/// `handleRowClick`, `hasThumbnailOrSwatch`, `rowFallbackSwatch`,
+/// `rowThumbnail`) so the selection logic and preview guarantees can be
+/// exercised without an ImGui frame.
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -25,7 +26,9 @@
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerTreeModel.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
 
@@ -34,6 +37,20 @@ class LayersPanel {
 public:
   LayersPanel() = default;
 
+  /// Maps a per-row rendered thumbnail bitmap to an ImGui texture handle for
+  /// display. The editor shell supplies an implementation backed by
+  /// `GlTextureCache` (the same Donner-bitmap -> GL/WGPU texture path the render
+  /// pane uses); when null (e.g. in headless unit tests) the panel falls back to
+  /// the deterministic swatch. Donner renders the thumbnail pixels; ImGui only
+  /// blits the resulting texture — see CLAUDE.md "No Rendering Vector Graphics
+  /// With ImGui".
+  ///
+  /// @param stableId Stable id of the row whose thumbnail is being uploaded.
+  /// @param bitmap The Donner-rendered RGBA thumbnail bitmap.
+  /// @return An ImGui texture handle, or 0 if the texture could not be created.
+  using ThumbnailTextureProvider =
+      std::function<ImTextureID(std::uint64_t stableId, const svg::RendererBitmap& bitmap)>;
+
   /// Modifier state for a row click. Mirrors the ImGui click path so tests can
   /// drive selection without a live ImGui frame.
   struct ClickModifiers {
@@ -41,15 +58,21 @@ public:
     bool ctrl = false;   ///< Ctrl/Cmd toggles the clicked row in the selection.
   };
 
-  /// Rebuild the row snapshot and per-row preview swatches from live editor
-  /// state. Safe to call only when the async renderer is idle (delegates to
-  /// `LayerTreeModel::refresh`).
+  /// Rebuild the row snapshot, per-row preview swatches, and per-row rendered
+  /// thumbnail bitmaps from live editor state. Safe to call only when the async
+  /// renderer is idle (delegates to `LayerTreeModel::refresh` and renders each
+  /// row's element subtree through `svg::RenderElementToBitmap`, which takes
+  /// document write access).
   void refreshSnapshot(const EditorApp& app);
 
   /// Render the panel into the current ImGui window. Must be called inside an
   /// `ImGui::Begin(...) / End()` pair. When @p liveApp is null (the worker owns
   /// the document) mutating clicks are dropped.
-  void render(EditorApp* liveApp);
+  ///
+  /// @param liveApp Live editor app for selection/mutation, or null.
+  /// @param textureProvider Uploads a row's rendered thumbnail bitmap to an
+  ///   ImGui texture for display, or null to fall back to the swatch.
+  void render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider = {});
 
   /// The current flat row list (testing/diagnostics accessor).
   [[nodiscard]] const std::vector<LayerTreeRow>& rows() const { return model_.rows(); }
@@ -92,6 +115,14 @@ public:
   /// or `std::nullopt` if the row is not present.
   [[nodiscard]] std::optional<css::RGBA> rowFallbackSwatch(std::uint64_t stableId) const;
 
+  /// The Donner-rendered preview thumbnail bitmap for the row identified by
+  /// @p stableId, or `nullptr` when the row has no real raster preview (it then
+  /// uses the fallback swatch). This is the non-ImGui data seam: tests assert on
+  /// the rendered pixels here without needing a GL context or an ImGui frame.
+  ///
+  /// @param stableId Stable id of the row.
+  [[nodiscard]] const svg::RendererBitmap* rowThumbnail(std::uint64_t stableId) const;
+
   /// Whether the most recent `render` / `handleRowClick` changed the editor
   /// selection. Consumes the flag. Used by `EditorShell` to fire the existing
   /// canvas/source selection-sync plumbing when a Layers row drives selection.
@@ -110,35 +141,6 @@ public:
   /// Access the underlying model (testing/diagnostics).
   [[nodiscard]] const LayerTreeModel& model() const { return model_; }
 
-  /// One silhouette within a row thumbnail: a single element's computed outline
-  /// sampled into a polyline, with its computed fill/stroke. A leaf shape's
-  /// thumbnail has one of these; a `<g>` thumbnail has one per renderable
-  /// descendant, all normalized into the group's shared bounding box so the
-  /// preview shows the group's composed shape.
-  struct ThumbnailShape {
-    /// Outline points in normalized `[0,1]` coordinates (y-down, matching ImGui).
-    std::vector<Vector2d> normalizedPoints;
-    /// Whether the outline encloses an area (drawn filled) vs. an open stroke.
-    bool closed = false;
-    /// Computed fill color (used when `closed`); falls back to transparent.
-    css::RGBA fill = css::RGBA(0, 0, 0, 0);
-    /// Computed stroke color for the outline.
-    css::RGBA stroke = css::RGBA(0, 0, 0, 255);
-  };
-
-  /// A real per-row geometry thumbnail: one or more element silhouettes
-  /// (one for a leaf shape, several for a `<g>` group) normalized into a shared
-  /// unit square `[0,1]^2`. Drawn into the row's 24×24 preview cell.
-  struct RowThumbnail {
-    /// The silhouettes composing this preview, in paint order.
-    std::vector<ThumbnailShape> shapes;
-  };
-
-  /// The geometry thumbnail for the row identified by @p stableId, or
-  /// `std::nullopt` when the row has no real geometry preview (it then uses the
-  /// fallback swatch). Testing/diagnostics accessor.
-  [[nodiscard]] std::optional<RowThumbnail> rowThumbnail(std::uint64_t stableId) const;
-
 private:
   /// Find the model index of the row with @p stableId, or std::nullopt.
   [[nodiscard]] std::optional<std::size_t> rowIndexForStableId(std::uint64_t stableId) const;
@@ -147,19 +149,12 @@ private:
   /// Per-row fallback swatch colors keyed by stable id. Rebuilt on every
   /// refresh so it tracks the current document and styles.
   std::unordered_map<std::uint64_t, css::RGBA> swatchByStableId_;
-  /// Per-row geometry thumbnails keyed by stable id. For geometry rows
-  /// (path/rect/circle/…) this holds the element's computed outline normalized
-  /// into the unit square plus its computed fill/stroke, so the row icon is a
-  /// real per-shape silhouette rather than a flat color block. Non-geometry rows
-  /// (groups, text, image, use) have no entry and fall back to the swatch.
-  ///
-  /// A full offscreen subtree *raster* (rendering each layer's pixels through the
-  /// SVG renderer) is deferred: `RendererTinySkia` only renders a whole
-  /// `SVGDocument`, and there is no subtree-render entrypoint reachable from this
-  /// panel, so a faithful raster would require a cross-module renderer change.
-  /// The vector silhouette below is the real per-element preview achievable
-  /// in-panel (design doc 0046 Milestone 3 follow-up).
-  std::unordered_map<std::uint64_t, RowThumbnail> thumbnailByStableId_;
+  /// Per-row Donner-rendered preview thumbnails keyed by stable id. Each entry
+  /// is the element's subtree rasterized through `svg::RenderElementToBitmap`
+  /// into the preview cell size — a real render of the user's artwork, not an
+  /// ImGui-synthesized silhouette. Rows whose subtree has no boundable geometry
+  /// (empty groups, text, image, use) have no entry and fall back to the swatch.
+  std::unordered_map<std::uint64_t, svg::RendererBitmap> thumbnailBitmapByStableId_;
   /// Visible-row index of the most recent plain/ctrl click; the anchor for
   /// shift-range selection.
   std::optional<std::size_t> anchorRowIndex_;
