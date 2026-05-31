@@ -1130,9 +1130,11 @@ TEST(AttributeParserTest, ExperimentalWarningAndFallbackBranches) {
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(
                   &ParseDiagnostic::reason, testing::HasSubstr("Invalid <style> element type"))));
+  // <symbol refX="bad"> is neither a keyword (left/center/right) nor a valid <length>, so the
+  // length subparser reports the error.
   EXPECT_THAT(warningSink.warnings(),
-              testing::Contains(testing::Field(&ParseDiagnostic::reason,
-                                               testing::HasSubstr("Invalid refX value"))));
+              testing::Contains(testing::Field(
+                  &ParseDiagnostic::reason, testing::HasSubstr("Invalid length or percentage"))));
 }
 
 }  // namespace donner::svg::parser
