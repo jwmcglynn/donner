@@ -905,21 +905,32 @@ incrementally reparsed and applied to the *live DOM tree in place*, preserving
 entity identity so selection, compositor caches, and references survive the
 keystroke.
 
-**What's actually implemented:** `ChangeClassifier::classifyTextChange` is a
-conservative gate:
-- An **attribute-value** edit (typing inside a `name="…"` value on one element)
-  is classified → `SetAttributeCommand` → targeted DOM update, no reparse,
-  identity preserved. ✅ matches intent.
-- **Everything else** (structural edits — adding/removing/moving tags, or any
-  change the classifier can't conclusively pin to a single attribute value)
-  falls through to `ReplaceDocumentCommand` → **full-document re-parse**. It uses
-  `BuildStructuralEntityRemap` to carry entity identity *across* the reparse when
-  the tree shape still matches, but it is a whole-document reparse, **not** an
-  incremental in-place update of the touched region. ⚠️
+**What's actually implemented (updated 2026-05):** the incremental structural
+reparser exists and is the live path. `XMLDocument::applySourceEdit` selects the
+narrowest of five `ReparseScope`s for an edit — `AttributeValue`, `OpeningTag`,
+`TextNode`, `ElementSubtree`, or (fallback) `Document` — and `ElementSubtree`
+reparses just the touched element's subtree, reusing existing children by `id`
+(`FindReusableChild`) so untouched siblings keep their entity identity. The editor
+drives this through `DocumentSyncController::handleTextEdits` →
+`SourceSync::DispatchSourceEditIntents` → `SVGDocument::applySourceEdit`, with
+`structuredEditingEnabled_` defaulting to `true`. Inserting and deleting whole
+child elements by typing therefore updates the live DOM **in place** — no
+full-document `ReplaceDocument`, identity preserved. ✅ Regression coverage:
+`EditorSyncTest.StructuredSourceEdit{Inserts,Deletes}ChildElementIncrementally`.
 
-**The gap:** there is no incremental structural reparser (reparse only the edited
-span and splice it into the live tree). Structural typing therefore pays a
-full-document reparse and only preserves identity opportunistically via the
-structural remap. Closing this means extending the classifier (or adding an
-incremental structural-edit path) so more edit classes update the live tree in
-place. Tracked as **GitHub issue #634**.
+The original `ChangeClassifier::classifyTextChange` gate this section used to
+describe has been **superseded** by `applySourceEdit` and is no longer on any live
+path (only its own unit test consumes it) — it is dead code pending removal.
+
+**Remaining gap (narrow):** the whole-text *diff fallback*
+(`DispatchSourceTextChange` → `BuildSingleSourceTextEdit`) is only reached when an
+edit arrives without precise `SourceEditIntent`s (e.g. a programmatic `setText`
+that bypasses the text editor's intent recording — normal typing/undo/paste all
+record intents and take the correct precise path). For that fallback, inserting an
+element *textually similar to an adjacent sibling* collapses under minimal
+prefix/suffix diffing into what looks like a single-character attribute-value edit,
+so the structured apply renames the existing sibling and never materializes the new
+element in the DOM even though the source bytes are correct — a silent DOM/source
+desync. Tracked as **GitHub issue #634** (now scoped to hardening the diff
+fallback: detect the desync and fall back to `ReplaceDocument`, or stop using the
+ambiguous single-diff for structural changes).
