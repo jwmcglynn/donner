@@ -2143,9 +2143,12 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   Transform2d patternTransform;
   if (maybeTransformComponent) {
     const Vector2d origin = maybeTransformComponent->transformOrigin;
-    patternTransform = Transform2d::Translate(origin) *
+    // Pivot order matches shapes (LayoutSystem::getEntityFromParentTransform, #609):
+    // `Translate(-origin)·M·Translate(origin)` (left-first `operator*`). The reversed order
+    // offsets the pattern tile away from its `transform-origin` pivot (#621).
+    patternTransform = Transform2d::Translate(-origin) *
                        maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics()) *
-                       Transform2d::Translate(-origin);
+                       Transform2d::Translate(origin);
   }
 
   const Transform2d patternTileFromTarget = Transform2d::Translate(rect.topLeft) * patternTransform;
