@@ -10,6 +10,7 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/UndoTimeline.h"
@@ -413,6 +414,12 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // so the user can add/remove individual paths from a set — no
   // compositing-group elevation.
   if (modifiers.shift) {
+    // Locked elements (or elements inside a locked group) can't be added to the
+    // selection. Reject and flash the outline red as feedback.
+    if (IsLocked(*hit)) {
+      requestLockedRejectionFlash(*hit);
+      return;
+    }
     editor.toggleInSelection(*hit);
     return;
   }
@@ -451,6 +458,14 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     return HasCompositingAttribute(topLevel) ? topLevel : *hit;
   });
 
+  // Locked elements (or elements inside a locked group) can't be selected or
+  // dragged. Reject the click, leave the current selection untouched, and flash
+  // the rejected element's outline red as feedback.
+  if (IsLocked(element)) {
+    requestLockedRejectionFlash(element);
+    return;
+  }
+
   // If the element is already in the current multi-selection, preserve
   // the selection and drag ALL selected elements in lockstep — classic
   // design-tool behavior (grab any item in the group, the group moves).
@@ -485,6 +500,32 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       .startDocumentPoint = documentPoint,
       .startBoundsDoc = CombinedSelectionBounds(dragStartBoundsDoc),
       .generation = nextDragGeneration_++,
+  };
+}
+
+void SelectTool::requestLockedRejectionFlash(const svg::SVGElement& element) {
+  lockedFlashElement_ = element;
+  lockedFlashRemainingSeconds_ = kLockedRejectionFlashSeconds;
+}
+
+void SelectTool::tickLockedRejectionFlash(float deltaSeconds) {
+  if (lockedFlashRemainingSeconds_ <= 0.0f) {
+    return;
+  }
+  lockedFlashRemainingSeconds_ -= deltaSeconds;
+  if (lockedFlashRemainingSeconds_ <= 0.0f) {
+    lockedFlashRemainingSeconds_ = 0.0f;
+    lockedFlashElement_.reset();
+  }
+}
+
+std::optional<SelectTool::LockedRejectionFlash> SelectTool::lockedRejectionFlash() const {
+  if (!lockedFlashElement_.has_value() || lockedFlashRemainingSeconds_ <= 0.0f) {
+    return std::nullopt;
+  }
+  return LockedRejectionFlash{
+      .element = *lockedFlashElement_,
+      .intensity = lockedFlashRemainingSeconds_ / kLockedRejectionFlashSeconds,
   };
 }
 

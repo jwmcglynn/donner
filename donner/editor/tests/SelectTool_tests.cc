@@ -129,6 +129,36 @@ TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   EXPECT_FALSE(tool.isDragging());
 }
 
+TEST_F(SelectToolTest, LockedElementCannotBeSelectedAndFlashesRejection) {
+  loadSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+    <rect id="locked" data-donner-locked="true" x="10" y="10" width="40" height="40" fill="red"/>
+  </svg>)");
+
+  EXPECT_FALSE(tool.lockedRejectionFlash().has_value());
+  quickClick(Vector2d(20.0, 20.0));
+
+  EXPECT_FALSE(app.hasSelection()) << "a locked element must not be selectable";
+  ASSERT_TRUE(tool.lockedRejectionFlash().has_value()) << "rejected click should flash red";
+  EXPECT_EQ(tool.lockedRejectionFlash()->element.id(), "locked");
+  EXPECT_GT(tool.lockedRejectionFlash()->intensity, 0.0f);
+
+  // The flash fades out and clears after its duration.
+  tool.tickLockedRejectionFlash(1.0f);
+  EXPECT_FALSE(tool.lockedRejectionFlash().has_value());
+}
+
+TEST_F(SelectToolTest, ElementInLockedGroupCannotBeSelected) {
+  loadSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+    <g id="grp" data-donner-locked="true">
+      <rect id="child" x="10" y="10" width="40" height="40" fill="red"/>
+    </g>
+  </svg>)");
+
+  quickClick(Vector2d(20.0, 20.0));
+  EXPECT_FALSE(app.hasSelection()) << "a child of a locked group must not be selectable";
+  EXPECT_TRUE(tool.lockedRejectionFlash().has_value());
+}
+
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
   app.setSelection(elementById("#r1"));
   EXPECT_TRUE(app.hasSelection());

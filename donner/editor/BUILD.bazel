@@ -763,6 +763,7 @@ donner_cc_library(
         ":command_queue",
         ":editor_app",
         ":imgui_headers",
+        ":lock_state",
         ":selection_aabb",
         ":selection_transform_handles",
         ":tool",
