@@ -2105,9 +2105,19 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const bool pendingClickHitsSelection =
           selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
           selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
+      // A press that lands on an element implicitly selects-and-drags it; a
+      // marquee only starts when the first click is on empty space (no element
+      // underneath). Without this, a press-drag whose mouse-down was deferred
+      // (worker busy) misclassifies as a marquee and the element is never
+      // selected (gl_rnr GeodeDragZoomRerasterizes... selection-loss). We are in
+      // the `!isBusy()` branch here, so `hitTest` is race-safe (same gate
+      // `onMouseDown` uses).
+      const bool pendingClickHitsElement =
+          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          !pendingClickHitsSelection && app_.hitTest(pendingClick.documentPoint).has_value();
       const bool pendingClickCanStartMarquee =
           selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-          !pendingClickHitsSelection;
+          !pendingClickHitsSelection && !pendingClickHitsElement;
       if (leftMouseDown && pendingClickCanStartMarquee && (selectHoldElapsed || selectDragIntent)) {
         lastPostedScreenPoint_.reset();
         selectTool_.beginMarquee(app_, pendingClick.documentPoint, pendingClick.modifiers.shift);

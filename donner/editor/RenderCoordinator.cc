@@ -474,6 +474,23 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.hoverAabbCount = static_cast<int>(chromeSnapshot.hoverAabbsDoc.size());
   overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleBoxesDoc.size());
   overlayCost.hasMarquee = chromeSnapshot.marqueeDoc.has_value();
+  // Report the overlay payload this frame so the metric is non-zero whenever the
+  // overlay was re-rasterized with content — independent of presentation
+  // backend. The TinySkia path uploads the overlay raster texture (its
+  // `payloadBytes` is that texture's bytes); the Geode/WGPU path renders the
+  // snapshot direct to the framebuffer with no upload, so without this the
+  // metric would read 0 even though the overlay was rebuilt every frame
+  // (gl_rnr GeodeDragZoomRerasterizes...). Mirror the upload metric: the overlay
+  // raster bytes, gated on the snapshot actually having something to draw.
+  const bool overlayHasContent =
+      !chromeSnapshot.paths.empty() || !chromeSnapshot.hoverPaths.empty() ||
+      !chromeSnapshot.handleBoxesDoc.empty() || !chromeSnapshot.aabbsDoc.empty() ||
+      chromeSnapshot.marqueeDoc.has_value() || chromeSnapshot.orientedBoundsDoc.has_value();
+  overlayCost.payloadBytes =
+      overlayHasContent
+          ? static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.x)) *
+                static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.y)) * 4u
+          : 0u;
   immediateOverlaySnapshot_ = chromeSnapshot;
   textures.clearOverlay();
 
