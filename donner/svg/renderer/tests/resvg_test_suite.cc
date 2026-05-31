@@ -281,20 +281,32 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeFlood, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeGaussianBlur, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feGaussianBlur",
-                {
-                    {"complex-transform.svg",
-                     Params::WithThreshold(0.03f, kDefaultMismatchedPixels, "Minor AA differences")
-                         .disableBackend(RendererBackend::Geode,
-                                         "Geode analytic dual-ray Slug coverage (0041 §6) on the "
-                                         "rotated/skewed rect edges diverges from the resvg "
-                                         "finite-sample reference by a ~1px edge band (259px), "
-                                         "amplified by the blur kernel")},
-                    {"huge-stdDeviation.svg",
-                     Params::RenderOnly("Extreme sigma=1000; output is implementation-defined")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/feGaussianBlur",
+            {
+                {"complex-transform.svg",
+                 Params::WithThreshold(0.03f, kDefaultMismatchedPixels, "Minor AA differences")
+                     .withGeodeGoldenOverride(
+                         "donner/svg/renderer/testdata/golden/geode/"
+                         "filters_feGaussianBlur_complex-transform.png",
+                         "Geode renders this rotated rect's analytic dual-ray Slug coverage "
+                         "(0041 §1, §6) geometrically exactly: the per-pixel coverage is a "
+                         "correctly-centered 1px box-filter ramp (0.5 at the boundary) and the "
+                         "filled area matches a 16x scan-conversion to <0.3px. The resvg "
+                         "reference is a finite-sample (~16-sample) scan-converter, so its edge "
+                         "reconstruction differs from the analytic ideal; the directional "
+                         "stdDeviation=\"12 0\" blur amplifies that sub-pixel edge difference "
+                         "into a thin ~1px band along the two blur-axis edges (259px; verified "
+                         "as 700x 1px-runs + 224x 2px-runs, max 4px, mean 1.30px). Geode never "
+                         "misses content (0 resvg-only pixels) and the unblurred rotated stroke "
+                         "matches resvg; only the analytic-vs-finite-sample edge differs. This "
+                         "is 0041 §6 by construction, not a coverage bug. The TinyGolden mode "
+                         "still strictly checks tiny-skia vs resvg.")},
+                {"huge-stdDeviation.svg",
+                 Params::RenderOnly("Extreme sigma=1000; output is implementation-defined")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
