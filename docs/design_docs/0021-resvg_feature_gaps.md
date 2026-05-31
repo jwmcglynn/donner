@@ -290,7 +290,7 @@ image/text content transforms (the shape path is now correct after #609 — mirr
 
 | Category | Tests | Gap |
 |---|---:|---|
-| structure/a | 3 | `<a>` hyperlink rendering |
+| ~~structure/a~~ | ~~3~~ | ✅ Fixed (#622): `<a>` now parses as `SVGAElement`, a transparent grouping/text-content element. |
 | structure/svg | 2 | nested-svg `overflow` |
 | structure/style | 1 | CSS `@import` / external CSS |
 | structure/symbol | 1 | `transform` on `<symbol>` (SVG2) |
