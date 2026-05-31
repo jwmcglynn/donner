@@ -79,6 +79,7 @@ Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is s
 - [ ] `.github/workflows/release.yml` references a real `bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@vX.Y.Z` tag (Publish-to-BCR does not publish floating major tags; pin exact versions)
 
 ### Ship
+- [ ] **Root-cause the previous BCR attempt before retrying** — pull up the last release's BCR PR on `bazelbuild/bazel-central-registry` (`modules/donner/<prev>/`) and its `publish-to-bcr` workflow run, identify exactly why it failed, and confirm the fix is already in the tree (`.bcr/`, `release.yml` publish pin, `presubmit.yml` `build_targets`). Do not re-run the publish blind. Cross-check the common-failures table below.
 - [ ] Merge release PR → push tag `vX.Y.Z` → GitHub Release auto-created
 - [ ] Watch Actions tab: `linux` + `macos` CLI binary jobs run, then `publish-to-bcr` reusable workflow
 - [ ] Watch `bazelbuild/bazel-central-registry` → `modules/donner/X.Y.Z/` for the new PR
