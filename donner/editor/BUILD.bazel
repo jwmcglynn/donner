@@ -405,19 +405,6 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "change_classifier",
-    srcs = ["ChangeClassifier.cc"],
-    hdrs = ["ChangeClassifier.h"],
-    deps = [
-        ":command_queue",
-        "//donner/base",
-        "//donner/base/xml",
-        "//donner/svg",
-        "//donner/svg/properties:property_parsing",
-    ],
-)
-
-donner_cc_library(
     name = "imgui_headers",
     hdrs = [
         "ImGuiBackendIncludes.h",
@@ -725,7 +712,6 @@ donner_cc_library(
     srcs = ["SourceSync.cc"],
     hdrs = ["SourceSync.h"],
     deps = [
-        ":change_classifier",
         ":editor_app",
         ":source_edit_intent",
         "//donner/base",

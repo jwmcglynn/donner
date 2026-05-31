@@ -919,8 +919,8 @@ full-document `ReplaceDocument`, identity preserved. ✅ Regression coverage:
 `EditorSyncTest.StructuredSourceEdit{Inserts,Deletes}ChildElementIncrementally`.
 
 The original `ChangeClassifier::classifyTextChange` gate this section used to
-describe has been **superseded** by `applySourceEdit` and is no longer on any live
-path (only its own unit test consumes it) — it is dead code pending removal.
+describe was **superseded** by `applySourceEdit` and had been off every live path
+(only its own unit test consumed it); it has now been **deleted**.
 
 **Remaining gap (narrow):** the whole-text *diff fallback*
 (`DispatchSourceTextChange` → `BuildSingleSourceTextEdit`) is only reached when an
