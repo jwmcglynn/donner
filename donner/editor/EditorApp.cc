@@ -581,6 +581,56 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
   }
 }
 
+/// Characters allowed in an SVG id (matches the clipboard id scanner).
+bool IsIdChar(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
+         c == '_' || c == ':' || c == '.';
+}
+
+/// If @p value references @p oldId via `url(#oldId)` or a whole-value `#oldId`
+/// (an `href` target), return the value with every such reference repointed to
+/// @p newId; otherwise return `std::nullopt` (no reference, no change).
+std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std::string_view oldId,
+                                                     std::string_view newId) {
+  // Whole-value local reference, e.g. href="#oldId".
+  if (value.size() == oldId.size() + 1u && value.front() == '#' && value.substr(1) == oldId) {
+    return "#" + std::string(newId);
+  }
+
+  // url(#oldId) occurrences anywhere in the value (covers presentation
+  // attributes and inline `style="fill:url(#oldId)"`).
+  std::string out;
+  bool changed = false;
+  std::size_t i = 0;
+  while (i < value.size()) {
+    if (value.compare(i, 5, "url(#") == 0) {
+      const std::size_t start = i + 5;
+      std::size_t end = start;
+      while (end < value.size() && IsIdChar(value[end])) {
+        ++end;
+      }
+      if (value.substr(start, end - start) == oldId) {
+        out.append("url(#").append(newId);
+        i = end;
+        changed = true;
+        continue;
+      }
+    }
+    out.push_back(value[i]);
+    ++i;
+  }
+  return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
+}
+
+/// Depth-first list of every element in the document tree rooted at @p root.
+void CollectElements(const svg::SVGElement& root, std::vector<svg::SVGElement>& out) {
+  out.push_back(root);
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    CollectElements(*child, out);
+  }
+}
+
 }  // namespace
 
 EditorApp::EditorApp() = default;
@@ -800,6 +850,84 @@ bool EditorApp::reorderSelectedElement(ZOrder direction) {
   // element, and the structured-editing reflection rewrites the source from the
   // DOM change. No source-text surgery (CLAUDE.md "DOM-Level Editing Only").
   applyMutation(EditorCommand::InsertElementCommand(parent, element, referenceElement));
+  return true;
+}
+
+bool EditorApp::renameSelectedElement(std::string_view newId) {
+  if (selection_.size() != 1u) {
+    return false;
+  }
+  svg::SVGElement element = selection_.front();
+  if (IsLocked(element)) {
+    return false;
+  }
+  const std::string oldId(element.id().str());
+  const std::string newIdStr(newId);
+  if (newIdStr.empty() || newIdStr == oldId) {
+    return false;
+  }
+
+  svg::SVGDocument& doc = document_.document();
+  // Reject a collision with a DIFFERENT element (renaming to your own id is the
+  // no-op above; an empty oldId means nothing references it yet, which is fine).
+  if (const std::optional<svg::SVGElement> existing = doc.querySelector("#" + newIdStr);
+      existing.has_value() && *existing != element) {
+    return false;
+  }
+
+  // Collect every reference that must be repointed, DOM-level: walk all elements
+  // and every attribute value, rewriting `url(#oldId)` / `href="#oldId"`. Only
+  // meaningful when the element already had an id for things to reference.
+  struct PendingAttr {
+    svg::SVGElement element;
+    std::string name;
+    std::string value;
+  };
+  std::vector<PendingAttr> referenceUpdates;
+  if (!oldId.empty()) {
+    std::vector<svg::SVGElement> all;
+    CollectElements(doc.svgElement(), all);
+    for (const svg::SVGElement& candidate : all) {
+      for (const xml::XMLQualifiedNameRef& attrName : candidate.attributes()) {
+        // We round-trip the rewritten attribute through SetAttributeCommand,
+        // which only carries an unprefixed local name. The references we care
+        // about (url(#…) in presentation/style attributes, SVG2 `href`) are all
+        // in the default namespace; skip prefixed attributes (e.g. legacy
+        // `xlink:href`) rather than risk dropping their prefix.
+        if (!attrName.namespacePrefix.empty()) {
+          continue;
+        }
+        const std::optional<RcString> attrValue = candidate.getAttribute(attrName);
+        if (!attrValue.has_value()) {
+          continue;
+        }
+        if (std::optional<std::string> rewritten =
+                RewriteIdReferenceInValue(attrValue->str(), oldId, newIdStr);
+            rewritten.has_value()) {
+          referenceUpdates.push_back(PendingAttr{
+              .element = candidate,
+              .name = std::string(attrName.name.str()),
+              .value = std::move(*rewritten),
+          });
+        }
+      }
+    }
+  }
+
+  if (doc.hasSourceStore()) {
+    UndoSnapshot before = captureDocumentSourceSnapshot(element, doc.source());
+    before.selectionTargets = CaptureSelectionTargets(selection_);
+    pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+        .label = "Rename element",
+        .before = std::move(before),
+    };
+  }
+
+  applyMutation(EditorCommand::SetAttributeCommand(element, "id", newIdStr));
+  for (PendingAttr& update : referenceUpdates) {
+    applyMutation(EditorCommand::SetAttributeCommand(update.element, std::move(update.name),
+                                                     std::move(update.value)));
+  }
   return true;
 }
 

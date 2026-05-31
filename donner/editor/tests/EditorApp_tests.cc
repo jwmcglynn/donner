@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "donner/base/Path.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/ViewportGeometry.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -1507,6 +1508,77 @@ TEST(EditorAppReorderTest, NoOpWhenElementLocked) {
   EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront))
       << "a locked element must not reorder";
   EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2", "r3"));
+}
+
+std::optional<std::string> AttrOf(EditorApp& app, std::string_view id, const char* attr) {
+  const std::optional<svg::SVGElement> el =
+      app.document().document().querySelector("#" + std::string(id));
+  if (!el.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<RcString> value = el->getAttribute(attr);
+  return value.has_value() ? std::optional<std::string>(std::string(value->str())) : std::nullopt;
+}
+
+constexpr std::string_view kGradientDoc =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"><stop offset="0" stop-color="red"/></linearGradient></defs>
+         <rect id="r" x="0" y="0" width="50" height="50" fill="url(#grad)"
+               style="stroke:url(#grad)"/>
+         <use id="u" href="#r"/>
+       </svg>)svg";
+
+TEST(EditorAppRenameTest, RenameRepointsUrlAndStyleReferences) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGradientDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.document().document().querySelector("#g2").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#grad").has_value());
+  // Both the presentation attribute and the inline style reference are repointed.
+  EXPECT_EQ(AttrOf(app, "r", "fill"), "url(#g2)");
+  EXPECT_EQ(AttrOf(app, "r", "style"), "stroke:url(#g2)");
+}
+
+TEST(EditorAppRenameTest, RenameRepointsHrefReference) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGradientDoc)));
+  SelectById(app, "r");
+  EXPECT_TRUE(app.renameSelectedElement("rect2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.document().document().querySelector("#rect2").has_value());
+  EXPECT_EQ(AttrOf(app, "u", "href"), "#rect2");
+}
+
+TEST(EditorAppRenameTest, RefusesEmptySameAndDuplicateIds) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGradientDoc)));
+  SelectById(app, "r");
+  EXPECT_FALSE(app.renameSelectedElement("")) << "empty id";
+  EXPECT_FALSE(app.renameSelectedElement("r")) << "same id";
+  EXPECT_FALSE(app.renameSelectedElement("grad")) << "id already used by another element";
+  // None of the refusals mutated the document.
+  EXPECT_EQ(AttrOf(app, "r", "fill"), "url(#grad)");
+}
+
+TEST(EditorAppRenameTest, RefusesWithoutSingleSelectionOrWhenLocked) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGradientDoc)));
+  app.setSelection(std::nullopt);
+  EXPECT_FALSE(app.renameSelectedElement("x"));
+
+  {
+    const std::optional<svg::SVGElement> r = app.document().document().querySelector("#r");
+    ASSERT_TRUE(r.has_value());
+    app.setElementLocked(*r, true);
+  }
+  ASSERT_TRUE(app.flushFrame());
+  SelectById(app, "r");
+  EXPECT_FALSE(app.renameSelectedElement("rect2")) << "a locked element must not rename";
+  EXPECT_TRUE(app.document().document().querySelector("#r").has_value());
 }
 
 }  // namespace

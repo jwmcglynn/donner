@@ -221,6 +221,29 @@ public:
    */
   bool reorderSelectedElement(ZOrder direction);
 
+  /**
+   * Rename the single selected element's `id` to @p newId, updating every
+   * internal reference so the document keeps rendering the same — one undoable
+   * structural edit.
+   *
+   * All work is DOM-level (per CLAUDE.md "DOM-Level Editing Only"): the element's
+   * `id` and every referencing attribute value (`url(#oldId)` in fill / stroke /
+   * clip-path / mask / filter / markers / inline `style`, and `href` /
+   * `xlink:href="#oldId"`) are changed via `SetAttributeCommand`, and the
+   * structured-editing reflection rewrites the source. No source-text surgery.
+   *
+   * Refuses (returns false) when there is no single selection, the element is
+   * locked, @p newId is empty or already used by another element, or @p newId
+   * equals the current id.
+   *
+   * Known limitation: CSS `#oldId` selectors inside a `<style>` block are not yet
+   * rewritten (rare in editor-authored content); tracked as follow-up.
+   *
+   * @param newId The new element id.
+   * @return true if the rename was applied.
+   */
+  bool renameSelectedElement(std::string_view newId);
+
   // ---------------------------------------------------------------------------
   // Selection
   // ---------------------------------------------------------------------------
