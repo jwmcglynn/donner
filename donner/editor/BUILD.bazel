@@ -716,6 +716,7 @@ donner_cc_library(
         ":source_edit_intent",
         "//donner/base",
         "//donner/svg",
+        "//donner/svg/parser",
     ],
 )
 
