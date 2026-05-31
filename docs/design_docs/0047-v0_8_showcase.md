@@ -349,7 +349,9 @@ starts clean instead of re-learning them.
   - [x] Keep render diagnostics separate as Compositor Debug so the showcase UI exposes editable
         layers, not compositor cache tiles. (Old `LayerInspectorPanel` renamed to
         `CompositorDebugPanel`.)
-- [x] **Milestone 4: Text authoring UI**
+- [x] **Milestone 4: Text authoring UI** — ⚠️ **`[x]` not trustworthy:** the plumbing + tests
+      exist but there is no toolbar button and the authoring UX is not reachable in the live editor.
+      See "Open Items / QA-Polish Backlog → Re-evaluate: Text tool" below.
   - [x] Add a Text tool or Insert Text command that creates a `<text>` element at the current
         viewport/click position.
   - [x] Add inspector controls for text content, font family, font size, fill, stroke, and basic
@@ -814,3 +816,69 @@ Manual validation:
 - [ ] Export viewport to PNG and PDF in addition to SVG.
 - [ ] Export full editor chrome as SVG/HTML for documentation screenshots.
 - [ ] Non-destructive "convert copy to outlines" command.
+
+## Open Items / QA-Polish Backlog (2026-05-31)
+
+Captured after the stabilization pass that took `v0_8_drive` green (segfault, gl_rnr
+selection-loss, the #633 paint-leak compose bug, and the deterministic immediate
+heuristic all landed). The v0.8 *functional* milestones shipped, but the following
+UX/polish gaps remain before the showcase feels finished — plus one milestone that
+was marked done but is not actually usable.
+
+### ⚠️ Re-evaluate: Text tool (M4) marked done but the UX is missing
+
+Milestone 4 ("Text authoring UI") is checked `[x]` in the Implementation Plan, but
+**there is no toolbar button for the text tool** and the authoring UX is not
+reachable in the running editor. The `TextTool` / `Kind::InsertText` plumbing and
+`text_tool_tests` exist, but the surface area a user would actually click is absent.
+
+- [ ] Re-audit what M4 actually delivers end-to-end in the live editor vs. what the
+      tests cover; the `[x]` is not trustworthy.
+- [ ] Add a Text tool toolbar button (and/or Insert Text menu item) so the tool is
+      reachable; finish the text authoring flow so it's usable, not just tested.
+
+### Iconography + toolbar
+
+- [ ] Icons for the new layer functionality (**lock** / **hide** layers), with a QA
+      polish pass on them (alignment, hit targets, hover/active states).
+- [ ] Better toolbar icons overall — the current set needs a design refresh.
+
+### Viewport SVG export — bugs + File-menu consolidation
+
+- [ ] Export does **not clamp to the viewport** — content outside the visible rect
+      leaks into the output instead of being cropped to the viewBox.
+- [ ] The exported **overlay does not render consistently in other SVG viewers** —
+      something in the overlay serialization is wonky (cross-viewer correctness, not
+      just Donner round-trip). Investigate the `donner-editor-overlay` group output
+      against external renderers.
+- [ ] Replace the **two separate File-menu export options** with a **single export
+      dialog** that exposes the settings (content only / + overlay / background) and
+      shows a **preview** before saving.
+
+### Z-order: move shapes forward / backward
+
+- [ ] Add "bring forward / send backward" (and front/back) for selected shapes,
+      driven from **both the canvas and the source/text editor**.
+- [ ] In the source editor, give each text block a **drag handle on its left edge**
+      so the user can mouse-drag to reorder elements (which is a paint-order change).
+
+### Multiselect chip revision
+
+- [ ] The on-canvas **multiselect chip is glitchy**: it does not follow drags the way
+      the size/position chip does. Its **purpose is also unclear** (even to the
+      author). Do a revision pass to (a) make it track the selection/drag like the
+      size-pos chip, and (b) clarify or redesign what it represents.
+
+### Layers panel — polish + structural editing
+
+- [ ] UI polish pass on the Layers panel.
+- [ ] Add UI to **add / remove layers**.
+- [ ] Add **rename** for layers — and be smart about it: renaming an element's `id`
+      (or class) must **not break the style cascade** (update CSS selector references
+      / `url(#…)` references, or refuse/warn rather than silently breaking paint).
+
+### Source formatting for added / rearranged shapes
+
+- [ ] When shapes are added or reordered, the **serialized source formatting** (indent
+      depth, placement) must match the surrounding tree so the document text stays
+      clean instead of mis-indented.
