@@ -573,6 +573,9 @@ public:
     int estimatedDrawOps = 0;
     /// Estimated number of path verbs across direct geometry draws.
     int estimatedPathVerbs = 0;
+    /// True when the span fills with a gradient, whose rasterize cost scales with
+    /// covered area; feeds the area term of `estimatedRasterizeMs`.
+    bool estimatedUsesAreaCostlyPaint = false;
     /// True when the span uses effects or resources that force cached-tile presentation.
     bool hasExpensiveEffect = false;
     /// True when the span has a visible, bounded contribution to the canvas.
@@ -583,8 +586,14 @@ public:
     double estimatedRedrawCost = 0.0;
     /// Relative fixed/cache memory cost avoided by immediate presentation.
     double estimatedCacheOverheadCost = 0.0;
-    /// Raster time from the most recent span render.
+    /// Raster time from the most recent span render. Telemetry only — recorded
+    /// so the geometry cost model behind `estimatedRasterizeMs` can be
+    /// recalibrated against real timings. NOT used in the immediate decision.
     double measuredRasterizeMs = 0.0;
+    /// Deterministic geometry estimate (ms) of this span's re-rasterize cost.
+    /// Drives the immediate-vs-cached decision in place of `measuredRasterizeMs`
+    /// so the choice is timing-independent. See `EstimateStaticSpanRasterizeMs`.
+    double estimatedRasterizeMs = 0.0;
     /// Total dynamic immediate-span frame budget for 120 Hz interaction.
     double immediateBudgetMs = 0.0;
     /// Budget charged by this span when it is immediate.

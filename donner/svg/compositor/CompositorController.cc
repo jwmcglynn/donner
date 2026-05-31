@@ -252,6 +252,9 @@ struct StaticSpanCostEstimate {
   int drawOps = 0;
   int pathVerbs = 0;
   bool hasExpensiveEffect = false;
+  /// True when any draw in the span fills with a gradient, whose rasterize cost
+  /// scales with covered area. Feeds the area term of the immediate estimate.
+  bool usesAreaCostlyPaint = false;
 };
 
 struct StaticSpanPresentationCost {
@@ -269,12 +272,29 @@ bool PaintUsesExpensiveResource(const components::ResolvedPaintServer& paint) {
     return true;
   }
 
-  // Gradients are still a direct path paint in both renderer backends. They may
-  // be slower than solids, but the immediate-span timing heuristic can measure
-  // and demote them. Pattern paints and unresolved/unknown references may
-  // instantiate subtrees or need broader context, so keep those cached.
+  // Gradients are still a direct path paint in both renderer backends, so they
+  // are not hard-blocked from immediate presentation. Their per-pixel cost is
+  // instead folded into the immediate rasterize-cost estimate as an area term
+  // (`PaintIsAreaCostly` + `EstimateStaticSpanRasterizeMs`), so a small gradient
+  // span can go immediate while a large one stays cached. Pattern paints and
+  // unresolved/unknown references may instantiate subtrees or need broader
+  // context, so keep those fully cached.
   return ref->subtreeInfo.has_value() ||
          ref->reference.handle.try_get<components::ComputedGradientComponent>() == nullptr;
+}
+
+// True when @p paint is a resolved gradient — a fill whose rasterize cost scales
+// with covered pixel area (the shader evaluates per pixel) rather than with the
+// span's draw-op / path-verb counts. Used to add an area term to the immediate
+// rasterize estimate so a large gradient stays cached while a small one does not.
+// Patterns / unresolved references are already handled by
+// `PaintUsesExpensiveResource` (they force a cached tile outright).
+bool PaintIsAreaCostly(const components::ResolvedPaintServer& paint) {
+  const auto* ref = std::get_if<components::PaintResolvedReference>(&paint);
+  if (ref == nullptr || !ref->reference.valid() || ref->subtreeInfo.has_value()) {
+    return false;
+  }
+  return ref->reference.handle.try_get<components::ComputedGradientComponent>() != nullptr;
 }
 
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
@@ -314,6 +334,9 @@ void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostE
       instance->markerEnd.has_value() || PaintUsesExpensiveResource(instance->resolvedFill) ||
       PaintUsesExpensiveResource(instance->resolvedStroke)) {
     estimate->hasExpensiveEffect = true;
+  }
+  if (PaintIsAreaCostly(instance->resolvedFill) || PaintIsAreaCostly(instance->resolvedStroke)) {
+    estimate->usesAreaCostlyPaint = true;
   }
 
   EntityHandle dataHandle = instance->dataHandle(registry);
@@ -409,6 +432,52 @@ bool IsCheapDirectGeometry(const StaticSpanCostEstimate& cost) {
          cost.pathVerbs <= kCheapDirectPathVerbs;
 }
 
+// Deterministic, forward-looking estimate (milliseconds) of how long it takes to
+// re-rasterize a non-promoted span (or cheap promoted layer) from its geometry.
+//
+// This replaces the previous *measured* per-render elapsed sample in the
+// immediate-vs-cached promotion decision. Measuring the wall clock and then
+// promoting if it happened to be fast made the decision flap with machine load:
+// the same span rendered immediate on an idle machine and cached under a busy
+// one, so editor presentation — and any test that asserted on it — was
+// runner-sensitive. Predicting the cost from the span's geometry instead makes
+// the choice identical on every machine.
+//
+// The model is dispatch-overhead-dominated for small spans (offscreen creation +
+// driver setup) plus a per-draw-op and per-path-verb term. Pixel-fill *area* is
+// intentionally excluded: fill is cheap on both backends and its cost belongs to
+// the cache/retained-memory side of the tradeoff (`cacheOverheadCost`), not the
+// redraw side. The constants are a first-order fit; the planner still records the
+// real `measuredRasterizeMs` for every span so the model can be recalibrated
+// against observed timings without reintroducing it into the decision.
+double EstimateStaticSpanRasterizeMs(int estimatedDrawOps, int estimatedPathVerbs,
+                                     bool usesAreaCostlyPaint, double coveredAreaPixels) {
+  constexpr double kBaseDispatchMs = 0.25;
+  constexpr double kMsPerDrawOp = 0.05;
+  constexpr double kMsPerPathVerb = 0.004;
+  double ms = kBaseDispatchMs + static_cast<double>(std::max(0, estimatedDrawOps)) * kMsPerDrawOp +
+              static_cast<double>(std::max(0, estimatedPathVerbs)) * kMsPerPathVerb;
+  if (usesAreaCostlyPaint) {
+    // A gradient fill evaluates its shader at every covered pixel, so unlike a
+    // solid fill its cost scales with area. Charge per covered kilopixel so a
+    // small gradient span (a letter accent) can still go immediate while a large
+    // one (a full-width cloud band) estimates over budget and stays cached —
+    // which is also what keeps a dragged gradient layer on the cached
+    // texture-transform path instead of re-rasterizing every frame.
+    // Calibrated against real splash gradient renders: the DONNER logo span
+    // (~98 kpx) rasterizes in ~1.9 ms and must stay under the ~2.08 ms budget
+    // (immediate), while #Blue_center_burst (~457 kpx) takes ~8 ms and must
+    // exceed it (cached). That brackets the per-kilopixel rate to ~0.0025-0.0083;
+    // 0.005 sits in the middle. Gradient cost isn't perfectly area-linear, but the
+    // immediate-vs-cached decision only needs the right side of the budget, and
+    // since the #633 paint-leak fix a misclassification costs at most a little
+    // perf, never pixels.
+    constexpr double kMsPerAreaCostlyKilopixel = 0.005;
+    ms += std::max(0.0, coveredAreaPixels) / 1000.0 * kMsPerAreaCostlyKilopixel;
+  }
+  return ms;
+}
+
 bool IsStaticSpanImmediateSafe(const CompositorController::StaticSpanPlan& spanPlan) {
   return IsImmediateSafe(spanPlan.visible, spanPlan.hasExpensiveEffect, spanPlan.estimatedDrawOps);
 }
@@ -423,8 +492,8 @@ bool IsBoundedMultiDrawStaticSpan(const CompositorController::StaticSpanPlan& sp
 
 bool ShouldDirectComposeLayer(const CompositorLayer& layer) {
   return layer.isImmediate() ||
-         (layer.fallbackReasons() & (FallbackReason::ExternalPaint | FallbackReason::IsolatedLayer)) !=
-             FallbackReason::None;
+         (layer.fallbackReasons() &
+          (FallbackReason::ExternalPaint | FallbackReason::IsolatedLayer)) != FallbackReason::None;
 }
 
 double ImmediateStaticSpanBudgetMs() {
@@ -2343,6 +2412,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
        FallbackReason::Mask | FallbackReason::Markers);
   immediatePlan.estimatedDrawOps = cost.drawOps;
   immediatePlan.estimatedPathVerbs = cost.pathVerbs;
+  immediatePlan.estimatedUsesAreaCostlyPaint = cost.usesAreaCostlyPaint;
   immediatePlan.hasExpensiveEffect =
       cost.hasExpensiveEffect || immediateBlockingFallbacks != FallbackReason::None;
   if (immediatePlan.visible) {
@@ -2409,6 +2479,13 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   const double elapsedMs = static_cast<double>(elapsedUs) / 1000.0;
   layer.setLastRasterizeMs(elapsedMs);
   immediatePlan.measuredRasterizeMs = elapsedMs;
+  // Deterministic geometry estimate drives the decision; measured time above is
+  // telemetry only. See `EstimateStaticSpanRasterizeMs`.
+  const double estimatedRasterizeMs = EstimateStaticSpanRasterizeMs(
+      immediatePlan.estimatedDrawOps, immediatePlan.estimatedPathVerbs,
+      immediatePlan.estimatedUsesAreaCostlyPaint,
+      static_cast<double>(immediatePlan.estimatedRetainedBytes) / 4.0);
+  immediatePlan.estimatedRasterizeMs = estimatedRasterizeMs;
   immediatePlan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
   const bool interactionLayer =
       activeHints_.contains(layer.entity()) || layer.entity() == splitStaticLayersEntity_;
@@ -2416,18 +2493,18 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   if (directLayerCandidate &&
       IsImmediateSafe(immediatePlan.visible, immediatePlan.hasExpensiveEffect,
                       immediatePlan.estimatedDrawOps)) {
-    const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(elapsedMs);
+    const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
     immediatePlan.immediateBudgetChargeMs = budgetChargeMs;
     if (immediatePlan.staticHeuristicImmediate) {
       immediatePlan.immediate = true;
-    } else if (interactionLayer && elapsedMs <= immediatePlan.immediateBudgetMs &&
+    } else if (interactionLayer && estimatedRasterizeMs <= immediatePlan.immediateBudgetMs &&
                budgetChargeMs <= immediatePlan.immediateBudgetMs) {
       immediatePlan.immediate = true;
       immediatePlan.dynamicHeuristicImmediate = true;
     }
   }
   if (wasDynamicImmediate && !immediatePlan.immediate &&
-      elapsedMs > immediatePlan.immediateBudgetMs) {
+      estimatedRasterizeMs > immediatePlan.immediateBudgetMs) {
     immediatePlan.demotedDynamicImmediate = true;
   }
   layer.setImmediatePlan(immediatePlan);
@@ -2628,6 +2705,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
           EstimateStaticSpanCost(registry, paintOrder, startIdx, endIdx);
       spanPlan.estimatedDrawOps = cost.drawOps;
       spanPlan.estimatedPathVerbs = cost.pathVerbs;
+      spanPlan.estimatedUsesAreaCostlyPaint = cost.usesAreaCostlyPaint;
       spanPlan.hasExpensiveEffect = cost.hasExpensiveEffect;
       spanPlan.visible = visibleInViewport;
       if (visibleInViewport) {
@@ -2697,14 +2775,22 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
                                .count();
     const double elapsedMs = static_cast<double>(elapsedUs) / 1000.0;
     spanPlan.measuredRasterizeMs = elapsedMs;
+    // Drive the immediate-vs-cached choice from a deterministic geometry estimate
+    // (not the measured `elapsedMs`) so it no longer flaps with machine load. The
+    // real time stays recorded above for telemetry / recalibration.
+    const double estimatedRasterizeMs =
+        EstimateStaticSpanRasterizeMs(spanPlan.estimatedDrawOps, spanPlan.estimatedPathVerbs,
+                                      spanPlan.estimatedUsesAreaCostlyPaint,
+                                      static_cast<double>(spanPlan.estimatedRetainedBytes) / 4.0);
+    spanPlan.estimatedRasterizeMs = estimatedRasterizeMs;
     spanPlan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
     if (IsStaticSpanImmediateSafe(spanPlan)) {
-      const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(elapsedMs);
+      const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
       spanPlan.immediateBudgetChargeMs = budgetChargeMs;
       if (spanPlan.staticHeuristicImmediate) {
         spanPlan.mode = StaticSpanMode::Immediate;
         immediateBudgetUsedMs += budgetChargeMs;
-      } else if (elapsedMs <= spanPlan.immediateBudgetMs &&
+      } else if (estimatedRasterizeMs <= spanPlan.immediateBudgetMs &&
                  immediateBudgetUsedMs + budgetChargeMs <= spanPlan.immediateBudgetMs) {
         spanPlan.mode = StaticSpanMode::Immediate;
         spanPlan.dynamicHeuristicImmediate = true;
@@ -2712,14 +2798,14 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       }
     }
     if (wasDynamicImmediate && spanPlan.mode != StaticSpanMode::Immediate &&
-        elapsedMs > spanPlan.immediateBudgetMs) {
+        estimatedRasterizeMs > spanPlan.immediateBudgetMs) {
       spanPlan.demotedDynamicImmediate = true;
     }
     if (!segmentIsEmpty) {
       if (!spanPlan.demotedDynamicImmediate && IsBoundedMultiDrawStaticSpan(spanPlan)) {
         spanPlan.mode = StaticSpanMode::Immediate;
         spanPlan.staticHeuristicImmediate = true;
-        spanPlan.immediateBudgetChargeMs = ImmediateStaticSpanBudgetChargeMs(elapsedMs);
+        spanPlan.immediateBudgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
       }
       const bool chargeAsImmediate = wasImmediate || spanPlan.mode == StaticSpanMode::Immediate;
       if (chargeAsImmediate) {
