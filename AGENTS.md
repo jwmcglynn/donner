@@ -65,7 +65,7 @@ Stages transform components through the ECS:
 
 - **All editor operations mutate the DOM (or above), never the source text directly.** Edits go DOM-first; the structured-editing infrastructure reflects the change back into the source (`SVGDocument::insertElement` / `removeElement` / attribute setters return `ApplySourceEditResult` source deltas the reflection layer applies). The source is a *projection* of the DOM, not what edits operate on.
 - **Source-string surgery is banned for structural edits** (reorder/z-order, rename, insert/delete/move element, group/ungroup, attribute change). Reorder = `removeElement` + `insertElement` on the DOM, not a text-span move. Rename = a DOM attribute change with reference updates on the DOM, not find/replace over source.
-- **One exception:** user-generated *text* operations — the source/text-editor pane where the user types/edits characters; there a reparse-from-text path is correct. It does NOT license structural ops to take a source shortcut.
+- **Even text typing is DOM-aware:** the source/text-editor pane is where the user authors raw characters, but typing should **incrementally reparse and update the live DOM tree in place** (preserving entity identity where possible), not full-replace-and-reparse the document. It never licenses a destructive source-replace, nor structural ops skipping the DOM.
 - Actions issued *from* the text view (e.g. drag-handle reorder) are still DOM operations whose result is reflected back into the text — the text view is just another surface for DOM edits.
 - See the project `CLAUDE.md` § "DOM-Level Editing Only" for the full rule.
 
