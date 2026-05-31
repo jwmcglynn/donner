@@ -11,6 +11,7 @@
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SelectionAabb.h"
+#include "donner/editor/SourceEditIntent.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/UndoTimeline.h"
@@ -625,6 +626,93 @@ TEST(EditorSyncTest, StructuredSourceEditAppliesThroughXMLDocumentWithoutCommand
   std::optional<RcString> fill = rect->getAttribute("fill");
   ASSERT_TRUE(fill.has_value());
   EXPECT_EQ(*fill, RcString("blue"));
+}
+
+TEST(EditorSyncTest, StructuredSourceEditInsertsChildElementIncrementally) {
+  // Inserting a brand-new child element by typing in the source pane is a
+  // *structural* edit. Per #634 ("DOM-aware typing"), it must apply through the
+  // incremental XMLDocument path — NOT a full-document ReplaceDocument — and must
+  // preserve the entity identity of the untouched sibling, so selection,
+  // compositor caches, and references survive the keystroke.
+  EditorApp app;
+  ASSERT_TRUE(app.structuredEditingEnabled());
+  ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
+
+  const svg::SVGElement firstRect = GetElementByIdOrDie(app.document().document(), "#a");
+  const auto firstRectEntity = firstRect.entityHandle().entity();
+  const auto secondRectEntity =
+      GetElementByIdOrDie(app.document().document(), "#b").entityHandle().entity();
+
+  std::string previousSourceText(kTwoRectsSvg);
+  std::optional<std::string> lastWritebackSourceText;
+  std::string editedSource(kTwoRectsSvg);
+  const std::size_t pos = editedSource.find(R"(<rect id="b")");
+  ASSERT_NE(pos, std::string::npos);
+  constexpr std::string_view kInserted = R"(<rect id="c" x="70" y="10" width="10" height="10"/>
+         )";
+  editedSource.insert(pos, kInserted);
+
+  // Drive the precise-offset intent path the live editor uses on a cursor insert.
+  std::vector<SourceEditIntent> intents;
+  intents.push_back(
+      SourceEditIntent{.offset = pos, .removedLength = 0, .replacement = std::string(kInserted)});
+  const auto dispatch = DispatchSourceEditIntents(app, intents, editedSource, &previousSourceText,
+                                                  &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  // Incremental: a fallback would queue a ReplaceDocumentCommand, which would make
+  // flushFrame() return true. An incremental apply queues nothing.
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+
+  EXPECT_EQ(app.document().document().source(), editedSource);
+  EXPECT_TRUE(app.document().document().querySelector("#c").has_value());
+  EXPECT_TRUE(app.document().document().querySelector("#b").has_value());
+
+  // Untouched siblings kept their entities (incremental child-reuse, not regen).
+  EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#a").entityHandle().entity(),
+            firstRectEntity);
+  EXPECT_EQ(GetElementByIdOrDie(app.document().document(), "#b").entityHandle().entity(),
+            secondRectEntity);
+}
+
+TEST(EditorSyncTest, StructuredSourceEditDeletesChildElementIncrementally) {
+  // Deleting a whole element by selecting its source span and pressing delete is a
+  // structural edit; same incremental + identity-preserving contract as the insert.
+  EditorApp app;
+  ASSERT_TRUE(app.structuredEditingEnabled());
+  ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
+
+  const svg::SVGElement secondRect = GetElementByIdOrDie(app.document().document(), "#b");
+  const auto secondRectEntity = secondRect.entityHandle().entity();
+
+  std::string previousSourceText(kTwoRectsSvg);
+  std::optional<std::string> lastWritebackSourceText;
+  std::string editedSource(kTwoRectsSvg);
+  constexpr std::string_view kRectA = R"(<rect id="a" x="10" y="10" width="10" height="10"/>)";
+  const std::size_t pos = editedSource.find(kRectA);
+  ASSERT_NE(pos, std::string::npos);
+  editedSource.erase(pos, kRectA.size());
+
+  // Drive the precise-offset intent path the live editor uses on a cursor delete.
+  std::vector<SourceEditIntent> intents;
+  intents.push_back(SourceEditIntent{
+      .offset = pos, .removedLength = kRectA.size(), .replacement = std::string()});
+  const auto dispatch = DispatchSourceEditIntents(app, intents, editedSource, &previousSourceText,
+                                                  &lastWritebackSourceText);
+
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  EXPECT_FALSE(dispatch.skippedSelfWriteback);
+  EXPECT_TRUE(app.document().queue().empty());
+  EXPECT_FALSE(app.flushFrame());
+
+  EXPECT_EQ(app.document().document().source(), editedSource);
+  EXPECT_FALSE(app.document().document().querySelector("#a").has_value());
+
+  // The surviving sibling kept its entity.
+  const svg::SVGElement reloadedSecondRect = GetElementByIdOrDie(app.document().document(), "#b");
+  EXPECT_EQ(reloadedSecondRect.entityHandle().entity(), secondRectEntity);
 }
 
 TEST(EditorSyncTest, StructuredSourceEditingIsDefaultForNewEditorApps) {
