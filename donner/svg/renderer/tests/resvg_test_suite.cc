@@ -1256,22 +1256,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "structure/transform-origin",
                 {
-                    // gradient/pattern transform-origin needs the paint-server coordinate
-                    // transform to compose the pivot; the radial gradient does not even render
-                    // with a scaled gradientTransform here, so this is a deeper paint-server
-                    // transform gap than the shape pivot fix (#609).
-                    {"on-gradient-object-bounding-box.svg",
-                     Params::Skip("transform-origin on gradientTransform: paint-server transform "
-                                  "gap")},
-                    {"on-gradient-user-space-on-use.svg",
-                     Params::Skip("transform-origin on gradientTransform: paint-server transform "
-                                  "gap")},
-                    {"on-pattern-object-bounding-box.svg",
-                     Params::Skip("transform-origin on patternTransform: paint-server transform "
-                                  "gap")},
-                    {"on-pattern-user-space-on-use.svg",
-                     Params::Skip("transform-origin on patternTransform: paint-server transform "
-                                  "gap")},
                     // transform-origin pivot composes for plain text/image now; textPath layout
                     // still drifts (entangled with the textPath SVG2 attribute gap, F10).
                     {"on-text-path.svg",
