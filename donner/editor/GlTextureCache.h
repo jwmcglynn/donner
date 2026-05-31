@@ -191,6 +191,32 @@ public:
   void clearOverlay();
   void resetComposited();
 
+  /// Upload a Layers-panel preview thumbnail bitmap into a per-row GL/WGPU
+  /// texture and return its ImGui texture handle.
+  ///
+  /// Reuses the same Donner-bitmap -> texture path as the render pane
+  /// (`UploadBitmap` / `uploadBitmapToWgpu`). One texture is owned per @p key
+  /// (the Layers row stable id); it is reuploaded only when the bitmap's
+  /// dimensions or a cheap content fingerprint change, so calling this every
+  /// frame with an unchanged thumbnail does not re-upload. Donner renders the
+  /// thumbnail pixels; this only blits them to a texture -- see CLAUDE.md "No
+  /// Rendering Vector Graphics With ImGui".
+  ///
+  /// @param key Stable id of the Layers row the thumbnail belongs to.
+  /// @param bitmap Donner-rendered RGBA thumbnail bitmap.
+  /// @return ImGui texture handle, or 0 if the texture could not be created.
+  ImTextureID uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap);
+
+  /// Evict every cached thumbnail texture whose key is not in @p liveKeys,
+  /// freeing the backing GL/WGPU texture. Called after each Layers-panel render
+  /// so thumbnails for removed rows do not leak across refreshes.
+  ///
+  /// @param liveKeys Stable ids of the rows currently shown by the panel.
+  void retainThumbnailsOnly(const std::vector<std::uint64_t>& liveKeys);
+
+  /// Number of thumbnail textures currently retained (testing/diagnostics).
+  [[nodiscard]] std::size_t thumbnailTextureCount() const { return thumbnailTextures_.size(); }
+
   [[nodiscard]] ImTextureID overlayTexture() const;
 
   [[nodiscard]] int overlayWidth() const { return overlayWidth_; }
@@ -331,6 +357,13 @@ private:
   /// high-zoom uploads may reuse the same tile ids at a smaller raster
   /// size, so overview textures cannot share the active cache entries.
   std::unordered_map<std::string, CachedTextureEntry> overviewTileTextures_;
+
+  /// Layers-panel thumbnail texture cache keyed on the row stable id. Each
+  /// entry owns one GL/WGPU texture, reuploaded only when the row's thumbnail
+  /// bitmap changes (tracked via `CachedTextureEntry::uploadedGeneration`
+  /// holding a content fingerprint plus the cached width/height). Evicted by
+  /// `retainThumbnailsOnly` when a row leaves the panel.
+  std::unordered_map<std::uint64_t, CachedTextureEntry> thumbnailTextures_;
 
   /// Paint-order view of the most recent `uploadComposited` call.
   /// Rebuilt every upload (cheap — N tiles, plain values).

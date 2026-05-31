@@ -724,6 +724,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       penTool_(),
       textEditor_(),
       textures_(window.geodeDevice()),
+      thumbnailTextures_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
       documentSyncController_(InitialDocumentSyncSource(options_)),
@@ -2353,7 +2354,14 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.treePaneHeight), ImGuiCond_Always);
   ImGui::Begin("Layers", nullptr, paneFlags);
-  layersPanel_.render(liveAppForClicks);
+  // Donner renders each row's preview to a bitmap during refreshSnapshot; here
+  // we only upload that bitmap to a GL/WGPU texture and hand the handle back so
+  // ImGui can blit it via ImGui::Image. ImGui never draws the vector artwork.
+  const LayersPanel::ThumbnailTextureProvider thumbnailTextureProvider =
+      [this](std::uint64_t stableId, const svg::RendererBitmap& bitmap) -> ImTextureID {
+    return thumbnailTextures_.uploadThumbnail(stableId, bitmap);
+  };
+  layersPanel_.render(liveAppForClicks, thumbnailTextureProvider);
   // Feed the Layers-panel hover into the shared source-hover preview so the
   // canvas (and source pane) highlight the hovered element, the same way
   // hovering a source-pane token does.
@@ -2367,6 +2375,14 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
     treeSelectionOriginatedInTree_ = true;
     treeviewPendingScroll_ = false;
   }
+  // Release thumbnail textures for rows that are no longer visible so the GPU
+  // texture set does not grow across refreshes.
+  std::vector<std::uint64_t> liveThumbnailKeys;
+  liveThumbnailKeys.reserve(layersPanel_.rows().size());
+  for (const LayerTreeRow& row : layersPanel_.rows()) {
+    liveThumbnailKeys.push_back(row.stableId);
+  }
+  thumbnailTextures_.retainThumbnailsOnly(liveThumbnailKeys);
   ImGui::End();
   lastTreeSelection_ = app_.selectedElement();
 

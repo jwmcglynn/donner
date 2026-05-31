@@ -284,6 +284,10 @@ private:
   /// element rather than partially mutating).
   std::string lastConvertTextError_;
   GlTextureCache textures_;
+  /// Layers-panel thumbnail texture cache. Uploads each row's Donner-rendered
+  /// preview bitmap to a GL/WGPU texture (same path as the render pane) keyed by
+  /// row stable id, so ImGui can blit the real thumbnail instead of a swatch.
+  GlTextureCache thumbnailTextures_;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;

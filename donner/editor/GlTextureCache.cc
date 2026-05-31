@@ -58,6 +58,36 @@ double MillisecondsSince(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
+// Cheap content fingerprint for a thumbnail bitmap, used to decide whether a
+// per-row thumbnail texture must be re-uploaded. FNV-1a over the valid pixel
+// rows (honoring rowBytes) plus the dimensions. A collision only costs a missed
+// re-upload of a same-size thumbnail, acceptable for a preview cell.
+std::uint64_t ThumbnailBitmapFingerprint(const svg::RendererBitmap& bitmap) {
+  std::uint64_t hash = 1469598103934665603ull;
+  const auto mix = [&hash](std::uint64_t value) {
+    hash ^= value;
+    hash *= 1099511628211ull;
+  };
+  mix(static_cast<std::uint64_t>(bitmap.dimensions.x));
+  mix(static_cast<std::uint64_t>(bitmap.dimensions.y));
+  if (bitmap.empty() || bitmap.rowBytes == 0u || bitmap.dimensions.y <= 0) {
+    return hash;
+  }
+  const std::size_t rowValidBytes =
+      std::min<std::size_t>(bitmap.rowBytes, static_cast<std::size_t>(bitmap.dimensions.x) * 4u);
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    const std::size_t rowStart = static_cast<std::size_t>(y) * bitmap.rowBytes;
+    if (rowStart + rowValidBytes > bitmap.pixels.size()) {
+      break;
+    }
+    const std::uint8_t* row = bitmap.pixels.data() + rowStart;
+    for (std::size_t i = 0; i < rowValidBytes; ++i) {
+      mix(row[i]);
+    }
+  }
+  return hash;
+}
+
 }  // namespace
 
 #ifdef DONNER_EDITOR_WGPU
@@ -176,6 +206,9 @@ GlTextureCache::~GlTextureCache() {
   for (const auto& [_, entry] : overviewTileTextures_) {
     releaseImGuiTexture(entry.texture);
   }
+  for (const auto& [_, entry] : thumbnailTextures_) {
+    releaseImGuiTexture(entry.texture);
+  }
   for (const RetiredSnapshot& retired : pendingRetiredSnapshots_) {
     releaseImGuiTexture(retired.texture);
   }
@@ -194,6 +227,11 @@ GlTextureCache::~GlTextureCache() {
     }
   }
   for (auto& [_, entry] : overviewTileTextures_) {
+    if (entry.texture != 0) {
+      glDeleteTextures(1, &entry.texture);
+    }
+  }
+  for (auto& [_, entry] : thumbnailTextures_) {
     if (entry.texture != 0) {
       glDeleteTextures(1, &entry.texture);
     }
@@ -817,6 +855,99 @@ void GlTextureCache::resetComposited() {
   metadataOnlyMissCount_ = 0;
   duplicateLiveTextureCount_ = 0;
   lastCompositedUploadCost_ = FrameCostBreakdown::CompositedUpload{};
+}
+
+ImTextureID GlTextureCache::uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap) {
+  ZoneScopedN("GlTextureCache::uploadThumbnail");
+  if (bitmap.empty()) {
+    return 0;
+  }
+
+  // Reuse `CachedTextureEntry::uploadedGeneration` as the cached content
+  // fingerprint and `width`/`height` as the cached payload dimensions so an
+  // unchanged thumbnail short-circuits without touching GL/WGPU.
+  const std::uint64_t fingerprint = ThumbnailBitmapFingerprint(bitmap);
+  CachedTextureEntry& entry = thumbnailTextures_[key];
+  const bool unchanged = entry.texture != 0 && entry.uploadedGeneration == fingerprint &&
+                         entry.width == bitmap.dimensions.x && entry.height == bitmap.dimensions.y;
+  if (unchanged) {
+    return ToImTextureId(entry.texture);
+  }
+
+#ifdef DONNER_EDITOR_WGPU
+  const std::shared_ptr<WgpuUploadedTexture> reusableTexture =
+      entry.textureSnapshot == nullptr ? entry.uploadedTexture : nullptr;
+  std::shared_ptr<WgpuUploadedTexture> uploadedTexture =
+      uploadBitmapToWgpu(bitmap, reusableTexture);
+  if (uploadedTexture == nullptr) {
+    return ToImTextureId(entry.texture);
+  }
+  const NativeTextureHandle textureId = TextureViewToImTextureId(uploadedTexture->view.get());
+  const bool reusedTexture = textureId == entry.texture &&
+                             uploadedTexture == entry.uploadedTexture &&
+                             entry.textureSnapshot == nullptr;
+  if (entry.texture != 0 && !reusedTexture) {
+    RetiredSnapshotBatch retiredSnapshots;
+    retiredSnapshots.push_back(RetiredSnapshot{
+        .texture = entry.texture,
+        .snapshot = std::move(entry.textureSnapshot),
+        .uploadedTexture = std::move(entry.uploadedTexture),
+    });
+    retireSnapshots(std::move(retiredSnapshots));
+  }
+  entry.textureSnapshot.reset();
+  entry.uploadedTexture = std::move(uploadedTexture);
+  entry.texture = textureId;
+  entry.width = bitmap.dimensions.x;
+  entry.height = bitmap.dimensions.y;
+  entry.allocatedWidth = entry.uploadedTexture->allocationDimensions.x;
+  entry.allocatedHeight = entry.uploadedTexture->allocationDimensions.y;
+  entry.uvBottomRight = TextureUvBottomRightForPayload(bitmap.dimensions,
+                                                       entry.uploadedTexture->allocationDimensions);
+#else
+  if (entry.texture == 0) {
+    glGenTextures(1, &entry.texture);
+    InitializeTexture(entry.texture);
+  }
+  UploadBitmap(entry.texture, bitmap, &entry.width, &entry.height, &entry.allocatedWidth,
+               &entry.allocatedHeight, &entry.uvBottomRight);
+#endif
+  entry.identity = CompositedTileTextureIdentity{};
+  entry.uploadedGeneration = fingerprint;
+  return ToImTextureId(entry.texture);
+}
+
+void GlTextureCache::retainThumbnailsOnly(const std::vector<std::uint64_t>& liveKeys) {
+  if (thumbnailTextures_.empty()) {
+    return;
+  }
+  const std::unordered_set<std::uint64_t> liveKeySet(liveKeys.begin(), liveKeys.end());
+#ifdef DONNER_EDITOR_WGPU
+  RetiredSnapshotBatch retiredSnapshots;
+#endif
+  for (auto it = thumbnailTextures_.begin(); it != thumbnailTextures_.end();) {
+    if (liveKeySet.find(it->first) == liveKeySet.end()) {
+#ifndef DONNER_EDITOR_WGPU
+      if (it->second.texture != 0) {
+        glDeleteTextures(1, &it->second.texture);
+      }
+#else
+      if (it->second.texture != 0) {
+        retiredSnapshots.push_back(RetiredSnapshot{
+            .texture = it->second.texture,
+            .snapshot = std::move(it->second.textureSnapshot),
+            .uploadedTexture = std::move(it->second.uploadedTexture),
+        });
+      }
+#endif
+      it = thumbnailTextures_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+#ifdef DONNER_EDITOR_WGPU
+  retireSnapshots(std::move(retiredSnapshots));
+#endif
 }
 
 PresentationResourceStats GlTextureCache::presentationResourceStats() const {
