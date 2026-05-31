@@ -670,12 +670,6 @@ void AsyncRenderer::workerLoop() {
                                                                 ct.bitmapDims, outputCanvasSize);
           continue;
         }
-        if (currentActiveDragLayer) {
-          ++activeDragTilesAvailable;
-          activeDragTileNeedsPayload = !publishedTextureMatches(
-              std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims, outputCanvasSize);
-          continue;
-        }
         if (ct.isDragTarget && activeDragRequest) continue;
         if (!publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims,
                                      outputCanvasSize)) {

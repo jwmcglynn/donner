@@ -63,12 +63,13 @@ struct EditorCommand {
     /// valid. Not coalesced.
     DeleteElement,
 
-    /// Insert a `<text>` element carrying `textContent` as a child of
-    /// `parentElement`, optionally before `referenceElement`. Used by the
-    /// Text authoring tool (`TextTool`). The element's text content is set
-    /// from `textContent` and the element is then attached exactly like
-    /// InsertElement. Not coalesced.
-    InsertText,
+    /// Replace the entire document by reparsing the post-cut bytes for a
+    /// shape-clipboard Cut. Behaves like ReplaceDocument with
+    /// `preserveUndoOnReparse=true`, but tags the operation so undo /
+    /// telemetry can label it "Cut shapes" instead of a generic reparse.
+    /// Exclusive: drains the queue of every prior command. See
+    /// `donner/editor/ShapeClipboardCommands.h`.
+    CutShapes,
 
     /// Replace the entire document by reparsing the post-paste bytes for
     /// a shape-clipboard Paste / Paste in Front. Behaves like
@@ -77,6 +78,20 @@ struct EditorCommand {
     /// Exclusive: drains the queue of every prior command. See
     /// `donner/editor/ShapeClipboardCommands.h`.
     PasteShapes,
+
+    /// Insert a `<text>` element carrying `textContent` as a child of
+    /// `parentElement`, optionally before `referenceElement`. Used by the
+    /// Text authoring tool (`TextTool`). The element's text content is set
+    /// from `textContent` and the element is then attached exactly like
+    /// InsertElement. Not coalesced.
+    InsertText,
+
+    /// Replace the element's text content with `textContent` (the element is
+    /// a `<text>` or `<tspan>`). Used by the text-property inspector's
+    /// content field. Coalesces by element identity at flush time —
+    /// successive SetTextContent commands targeting the same element collapse
+    /// to the most-recently-queued value, like SetTransform.
+    SetTextContent,
 
     /// Replace the entire document by reparsing the post-conversion bytes for a
     /// "Convert Text to Outlines" operation. Behaves like ReplaceDocument with
@@ -175,6 +190,26 @@ struct EditorCommand {
     EditorCommand cmd;
     cmd.kind = Kind::DeleteElement;
     cmd.element = std::move(element);
+    return cmd;
+  }
+
+  /// Builds a CutShapes command from the post-cut source bytes. The caller
+  /// is responsible for recording the matching undo entry on the timeline;
+  /// the command itself just swaps the document.
+  static EditorCommand CutShapesCommand(std::string bytes) {
+    EditorCommand cmd;
+    cmd.kind = Kind::CutShapes;
+    cmd.bytes = std::move(bytes);
+    cmd.preserveUndoOnReparse = true;
+    return cmd;
+  }
+
+  /// Builds a PasteShapes command from the post-paste source bytes.
+  static EditorCommand PasteShapesCommand(std::string bytes) {
+    EditorCommand cmd;
+    cmd.kind = Kind::PasteShapes;
+    cmd.bytes = std::move(bytes);
+    cmd.preserveUndoOnReparse = true;
     return cmd;
   }
 

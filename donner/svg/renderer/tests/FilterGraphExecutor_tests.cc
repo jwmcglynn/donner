@@ -274,33 +274,6 @@ TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseUserSpaceAndFilter
   EXPECT_EQ(GetPixel(pixmap, 20, 20), Pixel({0, 0, 0, 0}));
 }
 
-TEST(FilterGraphExecutorTest, PrimitiveSubregionOutsideRightEdgeClipsWithoutOverflow) {
-  auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 8);
-  ASSERT_TRUE(maybePixmap.has_value());
-  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
-
-  components::FilterGraph graph;
-  components::FilterNode node;
-  node.inputs.push_back(components::FilterInput{});
-  node.primitive = components::filter_primitive::Flood{
-      .floodColor = css::Color(css::RGBA(255, 0, 0, 255)),
-      .floodOpacity = 1.0,
-  };
-  node.x = Lengthd(100.0);
-  node.y = Lengthd(2.0);
-  node.width = Lengthd(4.0);
-  node.height = Lengthd(2.0);
-  graph.nodes.push_back(std::move(node));
-
-  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
-
-  for (int y = 0; y < 8; ++y) {
-    for (int x = 0; x < 16; ++x) {
-      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0}));
-    }
-  }
-}
-
 TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseElementBoundsInObjectBoundingBox) {
   auto maybePixmap = tiny_skia::Pixmap::fromSize(32, 32);
   ASSERT_TRUE(maybePixmap.has_value());

@@ -837,26 +837,15 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
   mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
   mouseUp.mouseButton = 0;
   pushFrame(2, 30.0, 70.0, 0, 0, {mouseUp});
-  pushFrame(3, 30.0, 70.0, 0, 0);
-  repro::ReproEvent ctrlDown;
-  ctrlDown.kind = repro::ReproEvent::Kind::KeyDown;
-  ctrlDown.key = static_cast<int>(ImGuiKey_LeftCtrl);
-  ctrlDown.modifiers = 1 << 0;
-  pushFrame(4, 30.0, 70.0, 0, 1 << 0, {ctrlDown});
   repro::ReproEvent selectAllDown;
   selectAllDown.kind = repro::ReproEvent::Kind::KeyDown;
   selectAllDown.key = static_cast<int>(ImGuiKey_A);
   selectAllDown.modifiers = 1 << 0;
-  pushFrame(5, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
+  pushFrame(3, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
   repro::ReproEvent selectAllUp;
   selectAllUp.kind = repro::ReproEvent::Kind::KeyUp;
   selectAllUp.key = static_cast<int>(ImGuiKey_A);
-  selectAllUp.modifiers = 1 << 0;
-  pushFrame(6, 30.0, 70.0, 0, 1 << 0, {selectAllUp});
-  repro::ReproEvent ctrlUp;
-  ctrlUp.kind = repro::ReproEvent::Kind::KeyUp;
-  ctrlUp.key = static_cast<int>(ImGuiKey_LeftCtrl);
-  pushFrame(7, 30.0, 70.0, 0, 0, {ctrlUp});
+  pushFrame(4, 30.0, 70.0, 0, 0, {selectAllUp});
 
   std::vector<repro::ReproEvent> characterEvents;
   for (const unsigned char c : kEditedSource) {
@@ -865,8 +854,8 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
     event.codepoint = c;
     characterEvents.push_back(event);
   }
-  pushFrame(8, 30.0, 70.0, 0, 0, std::move(characterEvents));
-  for (std::uint64_t index = 9; index <= 60; ++index) {
+  pushFrame(5, 30.0, 70.0, 0, 0, std::move(characterEvents));
+  for (std::uint64_t index = 6; index <= 60; ++index) {
     pushFrame(index, 30.0, 70.0, 0, 0);
   }
 

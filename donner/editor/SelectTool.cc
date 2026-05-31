@@ -228,6 +228,14 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   }
 
   // Reuse the currently-selected element as the drag target.
+  const svg::SVGElement element = currentSelection.front();
+  const bool isGraphics =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.isa<svg::SVGGraphicsElement>();
+      });
+  if (!isGraphics) {
+    return false;
+  }
   const svg::SVGGraphicsElement graphicsElement =
       element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
         return element.cast<svg::SVGGraphicsElement>();

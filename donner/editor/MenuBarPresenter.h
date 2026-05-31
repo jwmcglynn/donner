@@ -24,6 +24,12 @@ struct MenuBarState {
   /// True when the document has at least one selectable element. Enables the canvas "Select All"
   /// when the source pane is not focused.
   bool hasSelectableElements = false;
+  /// Current visibility of the Compositor Debug panel (drives the View-menu
+  /// checkmark). Off by default.
+  bool showCompositorDebugPanel = false;
+  /// Current visibility of the render-pane performance overlay (drives the
+  /// View-menu checkmark). On by default.
+  bool showPerfOverlay = true;
 };
 
 struct MenuBarActions {

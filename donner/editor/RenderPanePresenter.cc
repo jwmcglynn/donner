@@ -815,50 +815,6 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
       paneDrawList->PopClipRect();
     }
   }
-  paneDrawList->PopClipRect();
-
-  if (state.showOverlay && state.drawImmediateOverlay && hasImmediateOverlay &&
-      imageClipRect.has_value()) {
-    const auto overlayDrawStart = std::chrono::steady_clock::now();
-    paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
-                               ToImVec2(imageClipRect->bottomRight),
-                               /*intersect_with_current_clip_rect=*/true);
-    DrawImmediateSelectionChrome(paneDrawList, state);
-    paneDrawList->PopClipRect();
-    cost.immediateOverlayDrawMs = MillisecondsSince(overlayDrawStart);
-  } else if (state.showOverlay && hasTextureOverlay && imageClipRect.has_value()) {
-    if (state.textures.overlayScreenRect().has_value()) {
-      const Box2d& overlayScreenRect = *state.textures.overlayScreenRect();
-      paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
-                                 ToImVec2(imageClipRect->bottomRight),
-                                 /*intersect_with_current_clip_rect=*/true);
-      paneDrawList->AddImage(state.textures.overlayTexture(), ToImVec2(overlayScreenRect.topLeft),
-                             ToImVec2(overlayScreenRect.bottomRight), ImVec2(0.0f, 0.0f),
-                             ToImVec2(state.textures.overlayUvBottomRight()));
-      paneDrawList->PopClipRect();
-    } else {
-      const Vector2d docTopLeft = state.viewport.documentViewBox.topLeft;
-      const Vector2d docTopRight(state.viewport.documentViewBox.bottomRight.x,
-                                 state.viewport.documentViewBox.topLeft.y);
-      const Vector2d docBottomRight = state.viewport.documentViewBox.bottomRight;
-      const Vector2d docBottomLeft(state.viewport.documentViewBox.topLeft.x,
-                                   state.viewport.documentViewBox.bottomRight.y);
-      const auto overlayPoint = [&](const Vector2d& documentPoint) {
-        return state.viewport.documentToScreen(documentPoint);
-      };
-      paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
-                                 ToImVec2(imageClipRect->bottomRight),
-                                 /*intersect_with_current_clip_rect=*/true);
-      const Vector2d overlayUvBottomRight = state.textures.overlayUvBottomRight();
-      paneDrawList->AddImageQuad(
-          state.textures.overlayTexture(), ToImVec2(overlayPoint(docTopLeft)),
-          ToImVec2(overlayPoint(docTopRight)), ToImVec2(overlayPoint(docBottomRight)),
-          ToImVec2(overlayPoint(docBottomLeft)), ImVec2(0.0f, 0.0f),
-          ImVec2(static_cast<float>(overlayUvBottomRight.x), 0.0f), ToImVec2(overlayUvBottomRight),
-          ImVec2(0.0f, static_cast<float>(overlayUvBottomRight.y)));
-      paneDrawList->PopClipRect();
-    }
-  }
 
   if (state.showFrameGraph) {
     constexpr float kFramePadding = 8.0f;

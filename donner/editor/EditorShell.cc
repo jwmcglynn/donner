@@ -37,6 +37,7 @@
 #include "donner/editor/ToolKeybinding.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/editor/UndoTimeline.h"
+#include "donner/editor/ViewportSvgExport.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"
@@ -1319,13 +1320,21 @@ void EditorShell::handleGlobalShortcuts() {
     penTool_.commitOpenPath(app_);
     flushQueuedMutationAndRefreshOverlay();
     activeTool_ = ActiveTool::Select;
-    penTool_.cancel();
     textTool_.cancel();
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_P, /*repeat=*/false)) {
     activeTool_ = ActiveTool::Pen;
+  }
+
+  if (!anyPopupOpen && !cmd && activeTool_ == ActiveTool::Pen && penTool_.isDrafting() &&
+      (ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/false) ||
+       ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false))) {
+    // Enter commits the in-progress open path without closing it.
+    penTool_.commitOpenPath(app_);
+    flushQueuedMutationAndRefreshOverlay();
+    return;
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&

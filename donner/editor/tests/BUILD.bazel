@@ -860,6 +860,21 @@ donner_cc_test(
     ],
 )
 
+# Milestone 2 shape clipboard (`docs/design_docs/0047-v0_8_showcase.md`
+# §"Shape Clipboard"). Exercises the pure Copy/Paste/Paste-in-Front helpers and
+# the headered clipboard payload round-trip.
+donner_cc_test(
+    name = "shape_clipboard_tests",
+    srcs = ["ShapeClipboard_tests.cc"],
+    deps = [
+        "//donner/editor:shape_clipboard_commands",
+        "//donner/editor:shape_clipboard_payload",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "render_element_to_bitmap_tests",
     srcs = ["RenderElementToBitmap_tests.cc"],

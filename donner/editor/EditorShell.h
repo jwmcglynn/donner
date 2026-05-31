@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/editor/ClipboardInterface.h"
 #include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DialogPresenter.h"
 #include "donner/editor/DocumentSyncController.h"
@@ -308,6 +309,7 @@ private:
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;
+  TextInspectorPanel textInspectorPanel_;
   LayersPanel layersPanel_;
   /// Element hovered in the Layers panel as of the last frame, fed into the
   /// source-hover preview so the canvas and source pane highlight the element

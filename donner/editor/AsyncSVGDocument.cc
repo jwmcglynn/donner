@@ -273,6 +273,14 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
         lastParseError_ = std::move(result.error());
         return;
       }
+      (void)setDocumentMaybeStructural(std::move(result).result());
+      break;
+    }
+
+    case EditorCommand::Kind::InsertText: {
+      if (!command.parentElement.has_value() || !command.element.has_value()) {
+        return;
+      }
       // Insert the element first, then set its text content. `insertElement`
       // re-projects the element's XML subtree (which has no data child yet),
       // so setting the text before insertion would be overwritten by the

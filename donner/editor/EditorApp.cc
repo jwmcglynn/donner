@@ -242,15 +242,7 @@ PathOperationSelection CollectPathOperationSelection(std::span<const svg::SVGEle
   result.inputs.reserve(selection.size());
 
   for (const svg::SVGElement& element : selection) {
-    std::optional<svg::SVGGeometryElement> maybeGeometry =
-        element.withReadAccess([&element](svg::DocumentReadAccess&,
-                                          EntityHandle) -> std::optional<svg::SVGGeometryElement> {
-          if (!element.isa<svg::SVGGeometryElement>()) {
-            return std::nullopt;
-          }
-          return element.cast<svg::SVGGeometryElement>();
-        });
-    if (!maybeGeometry.has_value()) {
+    if (!element.isa<svg::SVGGeometryElement>()) {
       continue;
     }
 
