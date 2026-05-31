@@ -447,7 +447,11 @@ std::string InteractionKindName(svg::compositor::InteractionHint kind) {
 
 std::string TileKindName(RenderResult::CompositedTile::Kind kind) {
   switch (kind) {
-    case RenderResult::CompositedTile::Kind::Segment: return "segment";
+    case RenderResult::CompositedTile::Kind::Segment:
+    // Immediate (direct-rendered) tiles are still static segments in the paint
+    // stack, so they serialize as "segment" to preserve the stable split-layer
+    // paint order.
+    case RenderResult::CompositedTile::Kind::Immediate: return "segment";
     case RenderResult::CompositedTile::Kind::Layer: return "layer";
     case RenderResult::CompositedTile::Kind::Immediate: return "immediate";
   }

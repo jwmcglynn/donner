@@ -608,18 +608,21 @@ void AsyncRenderer::workerLoop() {
                                                   std::uint64_t generation,
                                                   const Vector2i& bitmapDims,
                                                   const Vector2i& rasterCanvasSize) {
-      const auto publishedIt = publishedCompositedTiles_.find(tileId);
-      return publishedIt != publishedCompositedTiles_.end() && publishedIt->second.kind == kind &&
-             publishedIt->second.generation == generation &&
-             publishedIt->second.bitmapDims.x == bitmapDims.x &&
-             publishedIt->second.bitmapDims.y == bitmapDims.y &&
-             publishedIt->second.rasterCanvasSize.x == rasterCanvasSize.x &&
-             publishedIt->second.rasterCanvasSize.y == rasterCanvasSize.y;
+        const auto publishedIt = publishedCompositedTiles_.find(tileId);
+        return publishedIt != publishedCompositedTiles_.end() && publishedIt->second.kind == kind &&
+               publishedIt->second.generation == generation &&
+               publishedIt->second.bitmapDims.x == bitmapDims.x &&
+               publishedIt->second.bitmapDims.y == bitmapDims.y &&
+               publishedIt->second.rasterCanvasSize.x == rasterCanvasSize.x &&
+               publishedIt->second.rasterCanvasSize.y == rasterCanvasSize.y;
       };
       const auto outputTileId = [](const svg::compositor::CompositorTile& ct) {
-        if (ct.immediate && ct.layerEntity == entt::null) {
-          return "immediate:" + std::to_string(ct.tileId) + ":" + std::to_string(ct.generation);
-        }
+        // Immediate (direct-rendered) static segments share the same stable tile
+        // identity as composited static segments. The identity must NOT encode
+        // the generation: a steady drag frame leaves the underlying segment
+        // unchanged, so a generation-suffixed id would make every frame look
+        // like a brand-new tile and defeat texture/metadata reuse. Generation
+        // is tracked separately on the output tile.
         return std::to_string(ct.tileId);
       };
       const auto outputTileKind = [](const svg::compositor::CompositorTile& ct) {
@@ -651,9 +654,8 @@ void AsyncRenderer::workerLoop() {
         const std::string tileId = outputTileId(ct);
         if (kind == OutKind::Immediate) {
           hasImmediateTile = true;
-          if (metadataReuseRequest &&
-              !publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims,
-                                       outputCanvasSize)) {
+          if (metadataReuseRequest && !publishedTextureMatches(tileId, kind, ct.generation,
+                                                               ct.bitmapDims, outputCanvasSize)) {
             canReuseNonDragTextures = false;
             break;
           }
@@ -664,8 +666,8 @@ void AsyncRenderer::workerLoop() {
         }
         if (currentActiveDragLayer) {
           ++activeDragTilesAvailable;
-          activeDragTileNeedsPayload = !publishedTextureMatches(
-              tileId, kind, ct.generation, ct.bitmapDims, outputCanvasSize);
+          activeDragTileNeedsPayload = !publishedTextureMatches(tileId, kind, ct.generation,
+                                                                ct.bitmapDims, outputCanvasSize);
           continue;
         }
         if (currentActiveDragLayer) {
