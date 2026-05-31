@@ -739,6 +739,70 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
   return true;
 }
 
+bool EditorApp::reorderSelectedElement(ZOrder direction) {
+  if (selection_.size() != 1u) {
+    return false;
+  }
+  svg::SVGElement element = selection_.front();
+  if (IsLocked(element)) {
+    return false;  // Locked elements (or descendants of a locked group) don't move.
+  }
+  const std::optional<svg::SVGElement> parentOpt = element.parentElement();
+  if (!parentOpt.has_value()) {
+    return false;  // The document root has no siblings to reorder among.
+  }
+  const svg::SVGElement parent = *parentOpt;
+
+  // Compute the insert-before reference sibling for the requested move.
+  // `std::nullopt` reference means "append" (move to the last sibling). SVG
+  // paints in document order, so the last sibling is on top.
+  std::optional<svg::SVGElement> referenceElement;
+  bool moves = false;
+  switch (direction) {
+    case ZOrder::BringToFront:
+      moves = element.nextSibling().has_value();  // no-op if already last.
+      referenceElement = std::nullopt;
+      break;
+    case ZOrder::SendToBack: {
+      const std::optional<svg::SVGElement> first = parent.firstChild();
+      moves = first.has_value() && *first != element;  // no-op if already first.
+      referenceElement = first;
+      break;
+    }
+    case ZOrder::BringForward:
+      if (const std::optional<svg::SVGElement> next = element.nextSibling(); next.has_value()) {
+        referenceElement = next->nextSibling();  // move after `next` (nullopt -> append).
+        moves = true;
+      }
+      break;
+    case ZOrder::SendBackward:
+      if (const std::optional<svg::SVGElement> prev = element.previousSibling(); prev.has_value()) {
+        referenceElement = prev;  // move before the previous sibling.
+        moves = true;
+      }
+      break;
+  }
+  if (!moves) {
+    return false;
+  }
+
+  svg::SVGDocument& doc = document_.document();
+  if (doc.hasSourceStore()) {
+    UndoSnapshot before = captureDocumentSourceSnapshot(element, doc.source());
+    before.selectionTargets = CaptureSelectionTargets(selection_);
+    pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+        .label = "Reorder element",
+        .before = std::move(before),
+    };
+  }
+
+  // A pure DOM move: `insertElement` re-parents/repositions the already-attached
+  // element, and the structured-editing reflection rewrites the source from the
+  // DOM change. No source-text surgery (CLAUDE.md "DOM-Level Editing Only").
+  applyMutation(EditorCommand::InsertElementCommand(parent, element, referenceElement));
+  return true;
+}
+
 void EditorApp::setSelection(std::optional<svg::SVGElement> element) {
   selection_.clear();
   if (element.has_value()) {

@@ -1294,6 +1294,20 @@ void EditorShell::handleGlobalShortcuts() {
     interactionController_.resetToActualSize();
   }
 
+  // Paint-order (z-order) shortcuts on the selected element: Cmd+] forward,
+  // Cmd+[ backward, Cmd+Shift+] to front, Cmd+Shift+[ to back. The reorder is a
+  // DOM move; the structured-editing reflection rewrites the source, and the
+  // main-loop flush records the undo entry.
+  if (!sourcePaneFocused && !anyPopupOpen && cmd) {
+    if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, /*repeat=*/false)) {
+      std::ignore = app_.reorderSelectedElement(shift ? EditorApp::ZOrder::BringToFront
+                                                      : EditorApp::ZOrder::BringForward);
+    } else if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, /*repeat=*/false)) {
+      std::ignore = app_.reorderSelectedElement(shift ? EditorApp::ZOrder::SendToBack
+                                                      : EditorApp::ZOrder::SendBackward);
+    }
+  }
+
   if (CanToggleSourceFocusModeFromShortcut(pressedEnter, cmd, anyPopupOpen)) {
     toggleSourceFocusMode();
   }

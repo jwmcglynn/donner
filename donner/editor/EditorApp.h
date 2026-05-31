@@ -196,6 +196,31 @@ public:
    */
   bool deleteSelectionWithUndo(std::string_view currentSourceText);
 
+  /// Paint-order ("z-order") move direction for \ref reorderSelectedElement.
+  /// SVG paints in document order — later siblings paint on top — so
+  /// "forward"/"front" move the element later among its siblings.
+  enum class ZOrder : std::uint8_t {
+    BringToFront,  ///< Move to the last sibling (paints on top of all siblings).
+    SendToBack,    ///< Move to the first sibling (paints behind all siblings).
+    BringForward,  ///< Move one position later (up one in paint order).
+    SendBackward,  ///< Move one position earlier (down one in paint order).
+  };
+
+  /**
+   * Reorder the single selected element among its siblings (paint/z-order),
+   * recording one undoable structural edit.
+   *
+   * This is a pure DOM move — a single `SVGDocument::insertElement` of the
+   * already-attached element to a new position before a computed reference
+   * sibling — and the structured-editing reflection rewrites the source from the
+   * DOM change. No source-text surgery (see CLAUDE.md "DOM-Level Editing Only").
+   *
+   * @param direction Which way to move the element in paint order.
+   * @return true if the element moved; false if there is no single selection, the
+   *   selection is the document root, or it is already at the requested extreme.
+   */
+  bool reorderSelectedElement(ZOrder direction);
+
   // ---------------------------------------------------------------------------
   // Selection
   // ---------------------------------------------------------------------------

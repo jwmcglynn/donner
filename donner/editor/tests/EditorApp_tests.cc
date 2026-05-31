@@ -2,12 +2,16 @@
 
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include "donner/base/Path.h"
 #include "donner/editor/ViewportGeometry.h"
+#include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -1385,6 +1389,124 @@ TEST(EditorAppTest, CenterClickOnPaneHitsCenterOfDocumentViewBox) {
   auto hit = app.hitTest(*center);
   ASSERT_TRUE(hit.has_value());
   EXPECT_EQ(hit->id(), "target");
+}
+
+constexpr std::string_view kThreeRects =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="0" y="0" width="10" height="10" fill="red"/>
+         <rect id="r2" x="10" y="0" width="10" height="10" fill="green"/>
+         <rect id="r3" x="20" y="0" width="10" height="10" fill="blue"/>
+       </svg>)";
+
+std::vector<std::string> ChildIds(EditorApp& app) {
+  std::vector<std::string> ids;
+  const svg::SVGElement root = app.document().document().svgElement();
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (const std::optional<RcString> id = child->getAttribute("id"); id.has_value()) {
+      ids.push_back(std::string(id->str()));
+    }
+  }
+  return ids;
+}
+
+void SelectById(EditorApp& app, std::string_view id) {
+  const std::optional<svg::SVGElement> element =
+      app.document().document().querySelector("#" + std::string(id));
+  ASSERT_TRUE(element.has_value()) << "missing #" << id;
+  app.setSelection(*element);
+}
+
+TEST(EditorAppReorderTest, BringForwardMovesElementOneLater) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringForward));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r2", "r1", "r3"));
+}
+
+TEST(EditorAppReorderTest, SendBackwardMovesElementOneEarlier) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r3");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::SendBackward));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r3", "r2"));
+}
+
+TEST(EditorAppReorderTest, BringToFrontMovesElementToLast) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r2", "r3", "r1"));
+}
+
+TEST(EditorAppReorderTest, SendToBackMovesElementToFirst) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r3");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::SendToBack));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r3", "r1", "r2"));
+}
+
+TEST(EditorAppReorderTest, ReflectsTheMoveIntoTheSourceText) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+  // The DOM move is reflected back into the source by structured editing — the
+  // source order must match the new DOM order (no source-string surgery).
+  const std::string source(app.document().document().source());
+  const std::size_t r1 = source.find("id=\"r1\"");
+  const std::size_t r2 = source.find("id=\"r2\"");
+  const std::size_t r3 = source.find("id=\"r3\"");
+  ASSERT_NE(r1, std::string::npos) << source;
+  ASSERT_NE(r2, std::string::npos) << source;
+  ASSERT_NE(r3, std::string::npos) << source;
+  EXPECT_LT(r2, r3) << source;
+  EXPECT_LT(r3, r1) << source;
+}
+
+TEST(EditorAppReorderTest, NoOpWhenAlreadyAtExtreme) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r3");
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringForward));
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  SelectById(app, "r1");
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::SendBackward));
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::SendToBack));
+  // No command was queued by the no-op reorders, so the DOM is untouched (and
+  // there is nothing to flush).
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2", "r3"));
+}
+
+TEST(EditorAppReorderTest, NoOpWithoutSingleSelection) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  app.setSelection(std::nullopt);
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringForward));
+}
+
+TEST(EditorAppReorderTest, NoOpWhenElementLocked) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  {
+    const std::optional<svg::SVGElement> r1 = app.document().document().querySelector("#r1");
+    ASSERT_TRUE(r1.has_value());
+    app.setElementLocked(*r1, true);
+  }
+  ASSERT_TRUE(app.flushFrame());
+
+  SelectById(app, "r1");
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront))
+      << "a locked element must not reorder";
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2", "r3"));
 }
 
 }  // namespace

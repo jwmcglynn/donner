@@ -857,10 +857,24 @@ reachable in the running editor. The `TextTool` / `Kind::InsertText` plumbing an
 
 ### Z-order: move shapes forward / backward
 
-- [ ] Add "bring forward / send backward" (and front/back) for selected shapes,
-      driven from **both the canvas and the source/text editor**.
-- [ ] In the source editor, give each text block a **drag handle on its left edge**
-      so the user can mouse-drag to reorder elements (which is a paint-order change).
+The shared reorder primitive — **`EditorApp::reorderSelectedElement(ZOrder)`** —
+is a pure DOM move (`SVGDocument::insertElement` of the already-attached element
+before a computed sibling) with the source rewritten by structured-editing
+reflection (no source-text surgery; see CLAUDE.md "DOM-Level Editing Only").
+Every reorder surface below routes through this one primitive.
+
+- [x] **Canvas / keyboard:** bring forward / send backward / to front / to back on
+      the selected element, via `Cmd+]` / `Cmd+[` / `Cmd+Shift+]` / `Cmd+Shift+[`.
+      Covered by `EditorAppReorderTest.*` (order + source-reflection + no-op).
+- [ ] **Layers panel:** reorder layers directly in the Layers panel (drag a row,
+      and/or context-menu front/back/forward/backward), routing through the SAME
+      `reorderSelectedElement` infra so the DOM is the source of truth and the
+      source text reflects the change. The panel is just another reorder surface;
+      it must not move rows by manipulating source text.
+- [ ] **Source/text editor:** give each element block a **drag handle on its left
+      edge** so the user can mouse-drag to reorder. This is DOM-aware — the drag
+      issues the same DOM reorder and the reflection rewrites the text; it is NOT
+      a move of source-text spans.
 
 ### Multiselect chip revision
 
