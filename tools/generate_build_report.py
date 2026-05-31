@@ -921,7 +921,11 @@ _BAZEL_TEST_LINE_RE = re.compile(
     # Bazel inserts a right-aligned "(cached)" marker between the target and
     # the status for cached results; capture it as part of the detail.
     r"(?P<cached>\(cached\)\s+)?"
-    r"(?P<status>" + "|".join(re.escape(s) for s in _BAZEL_TEST_STATUSES) + r")"
+    # Sort longest-first so multi-word statuses ("FAILED TO BUILD") win over a
+    # prefix that is itself a status ("FAILED").
+    r"(?P<status>"
+    + "|".join(re.escape(s) for s in sorted(_BAZEL_TEST_STATUSES, key=len, reverse=True))
+    + r")"
     r"(?P<detail>.*)$"
 )
 
