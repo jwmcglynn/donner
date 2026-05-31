@@ -511,6 +511,14 @@ class GenerateBuildReportTests(unittest.TestCase):
         # The "Executed ... tests" trailer and INFO lines are not targets.
         self.assertEqual(len(results), 4)
 
+    def test_parse_bazel_test_results_prefers_multiword_status(self):
+        # "FAILED TO BUILD" must not be parsed as "FAILED" + detail "TO BUILD".
+        stdout = "//donner/x:y                          FAILED TO BUILD"
+        results = generate_build_report.parse_bazel_test_results(stdout)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, "FAILED TO BUILD")
+        self.assertEqual(results[0].detail, "")
+
     def test_tests_section_renders_structured_table_and_raw_block(self):
         stdout = "\n".join(
             [
