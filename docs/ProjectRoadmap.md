@@ -102,26 +102,27 @@ The release collects all completed editor/toolkit work since v0.5, including:
 
 ### Showcase-Gating Scope
 
-These items remain required before the v0.8 release can be cut:
+These items were required before the v0.8 release can be cut. All are implemented in the editor-
+showcase branch `v0_8_drive` (PR #635, pending a manual QA pass + merge):
 
-- [ ] **Shape cut/copy/paste** — duplicate, cut, and paste selected SVG shapes/groups with source
+- [x] **Shape cut/copy/paste** — duplicate, cut, and paste selected SVG shapes/groups with source
       sync, undo, selection restoration, default paste offset, Paste in Front, and deterministic ID
       handling.
-- [ ] **Tuned Pen tool** — path creation that supports line/curve anchors, close/cancel, live
+- [x] **Tuned Pen tool** — path creation that supports line/curve anchors, close/cancel, live
       preview, immediate bounds/overlay updates, root-contained source insertion, and undo/redo.
-- [ ] **Complete Layers panel** — replace the tree view with an editable group/shape hierarchy.
+- [x] **Complete Layers panel** — replace the tree view with an editable group/shape hierarchy.
       Show previews and stable names at each tier and sync selection with canvas/source.
-- [ ] **Text authoring UI** — create and edit short SVG text from the editor.
-- [ ] **Convert Text to Outlines** — convert selected `<text>` into deterministic path geometry
+- [x] **Text authoring UI** — create and edit short SVG text from the editor.
+- [x] **Convert Text to Outlines** — convert selected `<text>` into deterministic path geometry
       using Donner text layout and glyph outlines.
-- [ ] **Viewport SVG export** — export the current editor viewport as cropped SVG.
-- [ ] **Overlay SVG export** — optional export of selected path outlines, bounds, and handles as
+- [x] **Viewport SVG export** — export the current editor viewport as cropped SVG.
+- [x] **Overlay SVG export** — optional export of selected path outlines, bounds, and handles as
       vector editor chrome.
-- [ ] **v0.8 splash asset** — create the new Donner splash in the editor, add `SVG`, convert it to
+- [x] **v0.8 splash asset** — create the new Donner splash in the editor, add `SVG`, convert it to
       outlines, select the outlined letters, and export the viewport with overlay enabled.
-- [ ] **Provenance** — include a concise record of the editor operations used to create the final
+- [x] **Provenance** — include a concise record of the editor operations used to create the final
       showcase asset.
-- [ ] **Rebrand updates** — update public docs, release notes, and user-facing labels to
+- [x] **Rebrand updates** — update public docs, release notes, and user-facing labels to
       **Donner SVG Editor & Toolkit**.
 
 ### v0.8 Release Criteria

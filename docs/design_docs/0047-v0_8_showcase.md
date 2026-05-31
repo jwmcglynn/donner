@@ -107,98 +107,26 @@ also fixed here.
 
 ---
 
-## Stabilization + Manual-QA Status — 2026-05-30 (HANDOFF SNAPSHOT)
+## Implementation Status — 2026-05-31
 
-> This section is the authoritative live state for a session handoff. It supersedes the optimistic
-> "all merged / all green" framing above where they conflict. Read this first.
+All nine milestones plus the manual-QA polish are implemented and merged into the integration
+branch **`v0_8_drive`**, which has been rebased onto `main` and pushed; the editor-showcase changes
+are up for review in **PR #635** (draft — pending a manual QA pass before merge). Note this branch is
+the **editor showcase for v0.8, not the full v0.8 release**: `MODULE.bazel` stays on the `0.8.0-pre`
+line and the final version stamp, build-report commit, and BCR publish are cut separately.
 
-### Branch / commit state
+Full `bazel test //...` is green (659 pass / 58 skipped / 0 fail), including the compositor
+`rnr_replay` / `gl_rnr_replay` cases that were the last red targets during the drive.
 
-- **Integration branch: `v0_8_drive` @ `5bb1236a`** (local only, **not pushed**, no PR). HEAD subject:
-  "CLAUDE.md: ban rendering vector graphics with ImGui primitives".
-- The 9 milestones + the QA fixes below are merged into `v0_8_drive`. **Two finished pieces of work are
-  NOT yet merged** (their agents completed; the merges were interrupted before running):
-  - `v08/donner-rendered-thumbnails` @ `88d60bd8` (2 commits, 13 files, +744/-290) — ready to merge.
-  - `v08/fix-immediate-tile-kind` @ `8c21e9c4` (1 commit, 3 files) — ready to merge.
-  - `v08/compositor-replay-cluster` — **clean, 0 commits** (agent root-caused only; nothing to merge).
-- Other merged branches retained but folded in: `v08/layers-panel-qa`, `v08/layers-lock-hide`,
-  `v08/pen-insert-ui-repro`, `v08/fix-drag-compose` (the drag-compose `.cc` graft + 2 filter
-  heap-overflow clamps are already on `v0_8_drive`).
-
-### Merged into `v0_8_drive` since the milestone work (all green where noted)
-
-- **6 Layers-panel QA items:** checkerboard transparent preview backdrop; `<g>` group previews;
-  dropped the `<svg>` root row (top-level groups/shapes are tree roots); default-expand top-level
-  groups; **lock** icon (`data-donner-locked="true"`, `IsLocked` ancestor-walk in `LockState.{h,cc}`,
-  edit-gating in `EditorApp::applyMutation` drops `SetTransform`/`DeleteElement` on locked targets);
-  **show/hide** eye icon (toggles `display`).
-- **Layers panel order fix:** lists back-to-front (document order) — first-painted/back at top.
-- **Pen paint as inline style:** new `<path>` emits `style="fill: …; stroke: …; stroke-width: …"`
-  instead of presentation attributes.
-- **Layers-row hover highlight:** hovering a layer highlights the element on the canvas + source pane
-  (`LayersPanel::noteRowHovered`/`hoveredElement` → `EditorShell` source-hover preview).
-- **Pen-after-`</svg>` fix:** `commitActivePathData` re-resolves `activePath_` from the live selection
-  across the source-sync writeback reparse (test `FinalizedPenPathRendersThroughLiveSourceSync`).
-- **Two filter heap-buffer-overflows** (security: untrusted SVG): `applySubregionClipping`
-  (tiny-skia `FilterGraph.cpp`) + `ClipFilterOutputToRegion` (`FilterGraphExecutor.cc`) clamped the
-  kept-rect origin only at the low end; now clamped to `[0,w]/[0,h]` (the latter also had a copy-paste
-  bug clamping y to `width`).
-- **CLAUDE.md policy: "No Rendering Vector Graphics With ImGui"** — Donner renders all document
-  vector content; ImGui only blits the resulting texture. The Layers thumbnail silhouette built from
-  `AddConvexPolyFilled`/`AddPolyline` was the canonical violation.
-
-### Ready-to-merge unmerged work
-
-- **`v08/donner-rendered-thumbnails`** — kills the ImGui-vector thumbnail violation. Adds
-  `donner/svg/renderer/RenderElementToBitmap.{h,cc}` (`RenderElementToBitmap(SVGElement, Vector2i)`,
-  rasterizes one element's subtree via the compositor's `RendererDriver::drawEntityRange` seam — no
-  parallel renderer), rewrites `LayersPanel` to render thumbnails through Donner and blit via an ImGui
-  texture, and wires a `ThumbnailTextureProvider` into `EditorShell` via `GlTextureCache` (content-
-  hashed upload + frame-epoch eviction). New tests assert on rendered pixels. **Next session: merge
-  this, then `grep -n AddConvexPolyFilled\|AddPolyline donner/editor/LayersPanel.cc` must be empty.**
-- **`v08/fix-immediate-tile-kind`** — fixes a real always-green-main regression introduced *within*
-  the v0.8 drive by commit `49608b75` ("Improve editor Geode presentation responsiveness"): it added
-  `enum Kind::Immediate` with a **generation-suffixed** tile id (`immediate:<id>:<gen>`) and never
-  taught `TileKindName` about it. Result: immediate tiles serialized as `"unknown"`, and every steady
-  drag frame looked like a new tile. The fix drops the generation suffix (stable identity) and
-  serializes `Immediate` as `segment` (preserving the stable split-layer paint-order contract). This
-  is the shared root cause of **5 `async_renderer_tests` assertions + `editor_control_session_tests`
-  `SplashOThenRDragKeepsStableSplitLayerPaintOrder`**. **Next session: merge + verify those 6 go
-  green.** (NOTE: an earlier hypothesis that the async segfault was "contention-flaky" or a "third
-  heap overflow" was WRONG — ASan was clean, failures are deterministic. Do not chase a heap overflow.)
-
-### Remaining RED after both merges (expected 2 targets, both deep compositor — SEPARATE root causes)
-
-- **`//donner/editor/tests:rnr_replay_tests`** — `FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp`
-  (83 960 px diff: a filter result is lost/mis-composited after the 2nd promote cycle) and
-  `DeleteElementDoesNotResetPreviouslyMovedShapes` (19 850 px: surviving dragged shapes snap back to
-  base for the post-delete frame). Root cause in `CompositorController.cc` (filter re-rasterization on
-  2nd promote; delete-frame promotion-offset drop). Inspect the diff PNGs in
-  `$TEST_UNDECLARED_OUTPUTS_DIR`.
-- **`//donner/editor/tests:gl_rnr_replay_tests`** —
-  `GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame`: selection is lost across the drag-zoom
-  replay (`finalSelectedElementLabel` is `nullopt`, expected `"<path> #Donner_D"`), so the per-frame
-  re-upload assertions are never reached. Root cause in the selection-remap-across-reparse path
-  (`EditorApp`/`SelectTool`). (Target is SKIPPED under bare `//...` due to a GPU
-  `target_compatible_with` constraint; run it explicitly.)
-
-### Environment hazard (carry into the next session)
-
-This machine's tool-output channel intermittently **corrupts/elides multi-line output** (garbles
-`<>=`, replays stale results, returns empty). Trust ONLY: bazel exit codes captured via
-`echo "rc=$?" > /tmp/f` then read; single-value scalar probes; base64-encoded reads. Run isolated
-signal with `--local_test_jobs=1 --nocache_test_results`; batch ONE Bash call per message (parallel
-batches cascade-cancel if any one errors). `git checkout <branch>` resets file-state tracking so
-re-Read files before Edit.
-
-### Immediate next steps for the fresh session
-
-1. `git merge --no-ff v08/fix-immediate-tile-kind` then `v08/donner-rendered-thumbnails` into
-   `v0_8_drive`; build `//donner/editor:editor`; run `bazel test //...` (serialized) and confirm down
-   to the 2 rnr/gl reds above.
-2. Fix `rnr_replay_tests` (filter-disappear + delete-snapback) and `gl_rnr_replay_tests`
-   (selection-loss) — the last blockers to a fully-green `bazel test //...`.
-3. Then: push `v0_8_drive` + open PR (squash-merge per CLAUDE.md), and the remaining release packaging.
+Shipped on the branch since the milestone work: the six Layers-panel QA items (checkerboard preview
+backdrop, `<g>` group previews, back-to-front order, default-expanded top-level groups, **lock** +
+**show/hide** icons); Donner-rendered Layers thumbnails (replacing the ImGui-vector silhouette — the
+"No Rendering Vector Graphics With ImGui" rule); Pen-as-inline-style; layer-row hover highlight; the
+Pen-after-`</svg>` source-sync fix; the stable `Immediate` tile-kind fix; and two filter
+heap-buffer-overflow security clamps. Post-milestone editor work added cascade-safe element rename
+(incl. `<style>` selectors), z-order reordering, element locks surviving source load, DOM-first
+incremental structured source editing (with a structural-fingerprint guard on the diff fallback),
+Layers-panel inline rename + drag-to-reorder, and removal of the dead `ChangeClassifier`.
 
 ### How the prior sessions FAILED — do not repeat these
 
