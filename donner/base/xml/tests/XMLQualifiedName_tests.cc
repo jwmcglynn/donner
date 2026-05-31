@@ -376,4 +376,33 @@ TEST(XMLQualifiedNameRefTest, OutputOperators) {
   EXPECT_EQ(stream.str(), "testName");
 }
 
+// Regression coverage for issue #603. `SVGElement::tagName()` / `XMLNode::tagName()` return an
+// XMLQualifiedNameRef by value; editor code cached `tagName().name` as a std::string_view across
+// statements, dereferencing the (SSO) bytes of the destroyed temporary Ref (ASAN
+// stack-use-after-scope via SidebarPresenter::BuildTreeNodeLabel).
+//
+// XMLQualifiedNameRef holds RcStringOrRef members. Constructing one from an owning XMLQualifiedName
+// copies the RcString into the RcStringOrRef variant (refcount retained), so the Ref keeps the
+// bytes alive — that path is *safe*. The footgun is narrowing a member of a temporary Ref to a
+// std::string_view. RcStringOrRef::operator std::string_view() is now [[clang::lifetimebound]], so
+// `std::string_view sv = makeTemporaryRef().name;` is a compile-time -Wdangling error (and a
+// clang-tidy clang-diagnostic-dangling error under WarningsAsErrors). This test pins the safe
+// contract: a Ref built from an XMLQualifiedName owns its bytes, so its view stays valid even after
+// the source name is gone.
+TEST(XMLQualifiedNameRefTest, OwnsBytesFromQualifiedName) {
+  XMLQualifiedNameRef ref = [] {
+    // `name` is destroyed when this lambda returns; the Ref must not depend on it.
+    XMLQualifiedName name("ns", "rect");
+    return XMLQualifiedNameRef(name);
+  }();
+
+  // The Ref retained the strings via RcStringOrRef's RcString refcount, so reading them is safe.
+  EXPECT_EQ(ref.name, "rect");
+  EXPECT_EQ(ref.namespacePrefix, "ns");
+
+  // Converting the *live* Ref's member to a view is fine because `ref` is the stable owner here.
+  const std::string_view nameView = ref.name;
+  EXPECT_EQ(nameView, "rect");
+}
+
 }  // namespace donner::xml
