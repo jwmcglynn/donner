@@ -18,6 +18,7 @@ donner_cc_library(
     name = "svg_core",
     srcs = [
         "DonnerController.cc",
+        "SVGAElement.cc",
         "SVGCircleElement.cc",
         "SVGClipPathElement.cc",
         "SVGDefsElement.cc",
@@ -84,6 +85,7 @@ donner_cc_library(
         "AllSVGElements.h",
         "DocumentState.h",
         "DonnerController.h",
+        "SVGAElement.h",
         "SVGCircleElement.h",
         "SVGClipPathElement.h",
         "SVGDefsElement.h",

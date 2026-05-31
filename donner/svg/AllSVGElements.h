@@ -8,6 +8,7 @@
 
 #include <entt/entity/fwd.hpp>  // entt::type_list
 
+#include "donner/svg/SVGAElement.h"                    // IWYU pragma: export
 #include "donner/svg/SVGCircleElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGClipPathElement.h"             // IWYU pragma: export
 #include "donner/svg/SVGDefsElement.h"                 // IWYU pragma: export
@@ -70,6 +71,7 @@ namespace donner::svg {
  * donner::svg::parser::SVGParser.
  */
 using AllSVGElements = entt::type_list<  //
+    SVGAElement,                         //
     SVGCircleElement,                    //
     SVGClipPathElement,                  //
     SVGDefsElement,                      //
