@@ -842,6 +842,24 @@ donner_cc_test(
     ],
 )
 
+# Milestone 6 viewport SVG export
+# (`docs/design_docs/0047-v0_8_showcase.md`).
+donner_cc_test(
+    name = "viewport_svg_export_tests",
+    srcs = ["ViewportSvgExport_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base",
+        "//donner/editor:overlay_renderer",
+        "//donner/editor:viewport_state",
+        "//donner/editor:viewport_svg_export",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "layer_tree_model_tests",
     srcs = ["LayerTreeModel_tests.cc"],

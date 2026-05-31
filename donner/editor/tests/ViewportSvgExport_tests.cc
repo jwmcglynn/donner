@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -13,8 +14,10 @@
 #include "donner/base/Vector2.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor {
 namespace {
@@ -392,6 +395,89 @@ TEST(ViewportSvgExportTest, OverlayExportDoesNotMutateSourceDocument) {
 
   const std::string sourceAfter(doc.source());
   EXPECT_EQ(sourceBefore, sourceAfter);
+}
+
+/// Parse and render an SVG string to a bitmap at its intrinsic size.
+svg::RendererBitmap RenderSvg(std::string_view svgSource) {
+  SVGDocument doc = ParseOrDie(svgSource);
+  svg::Renderer renderer;
+  renderer.draw(doc);
+  return renderer.takeSnapshot();
+}
+
+/// Count pixels in @p bmp satisfying @p pred (called with r, g, b, a in 0-255).
+int CountPixels(const svg::RendererBitmap& bmp,
+                const std::function<bool(int, int, int, int)>& pred) {
+  int count = 0;
+  for (int y = 0; y < bmp.dimensions.y; ++y) {
+    for (int x = 0; x < bmp.dimensions.x; ++x) {
+      const std::size_t o =
+          static_cast<std::size_t>(y) * bmp.rowBytes + static_cast<std::size_t>(x) * 4u;
+      if (pred(bmp.pixels[o], bmp.pixels[o + 1], bmp.pixels[o + 2], bmp.pixels[o + 3])) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+// The exported SVG, when rendered, must be pixel-identical to the same document
+// content shown under the export's viewBox at the export's output size — i.e.
+// the export is a faithful screenshot of the viewport crop. The export's
+// clip-group wrapper and injected clipPath must not distort the visible region.
+TEST(ViewportSvgExportTest, ExportRenderMatchesViewportCrop) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;  // transparentBackground = true by default.
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  const svg::RendererBitmap actual = RenderSvg(result.value);
+
+  // Independent reference: kSelfContainedSvg's children under the crop viewBox at
+  // the export output size, with no export machinery.
+  const svg::RendererBitmap expected = RenderSvg(
+      "<svg width=\"400\" height=\"300\" viewBox=\"0 0 400 300\" "
+      "xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect x=\"10\" y=\"20\" width=\"100\" height=\"50\" fill=\"red\"/>"
+      "<circle cx=\"300\" cy=\"300\" r=\"40\" fill=\"blue\"/></svg>");
+
+  tests::CompareBitmapToBitmap(actual, expected, "viewport_export_matches_crop");
+}
+
+// Content that lies outside the exported viewport crop must not appear in the
+// rendered export, while content inside the crop must.
+TEST(ViewportSvgExportTest, ExportRenderClampsContentOutsideViewport) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"600\" height=\"400\" viewBox=\"0 0 600 400\" "
+      "xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect x=\"50\" y=\"50\" width=\"60\" height=\"60\" fill=\"#ff0000\"/>"
+      "<rect x=\"460\" y=\"50\" width=\"60\" height=\"60\" fill=\"#00ff00\"/></svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  const svg::RendererBitmap rendered = RenderSvg(result.value);
+  ASSERT_EQ(rendered.dimensions.x, 400);
+  ASSERT_EQ(rendered.dimensions.y, 300);
+
+  const auto isRed = [](int r, int g, int b, int a) {
+    return a > 200 && r > 200 && g < 60 && b < 60;
+  };
+  const auto isGreen = [](int r, int g, int b, int a) {
+    return a > 200 && g > 200 && r < 60 && b < 60;
+  };
+  EXPECT_GT(CountPixels(rendered, isRed), 0)
+      << "the red shape inside the viewport crop must be present in the export";
+  EXPECT_EQ(CountPixels(rendered, isGreen), 0)
+      << "the green shape outside the viewport crop must be clamped out of the export";
 }
 
 }  // namespace
