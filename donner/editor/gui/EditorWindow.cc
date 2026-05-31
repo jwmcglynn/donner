@@ -53,6 +53,14 @@ namespace donner::editor::gui {
 namespace {
 
 void GlfwErrorCallback(int error, const char* description) {
+  // macOS: reading the clipboard when it holds no UTF-8 string (empty, or
+  // non-text content like an image) makes Cocoa's `glfwGetClipboardString` fail
+  // with a benign "Failed to retrieve string from pasteboard". ImGui polls the
+  // clipboard, so this would otherwise spam the console every frame. Drop it.
+  if (description != nullptr && std::string_view(description).find(
+                                    "retrieve string from pasteboard") != std::string_view::npos) {
+    return;
+  }
 #ifdef __EMSCRIPTEN__
   // emscripten-glfw surfaces benign shim-limitation messages through the
   // error callback with a `[Warning]` prefix — e.g. ImGui's backend calls
