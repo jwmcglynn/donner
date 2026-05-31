@@ -1864,9 +1864,15 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
     }
   };
 
-  renderButton(ActiveTool::Select, "##select_tool", ToolButtonIcon::SelectPointer, "Select");
+  const std::string selectTooltip = ToolTooltipText(ToolId::Select);
+  const std::string penTooltip = ToolTooltipText(ToolId::Pen);
+  const std::string textTooltip = ToolTooltipText(ToolId::Text);
+  renderButton(ActiveTool::Select, "##select_tool", ToolButtonIcon::SelectPointer,
+               selectTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
-  renderButton(ActiveTool::Pen, "##pen_tool", ToolButtonIcon::PenTool, "Pen");
+  renderButton(ActiveTool::Pen, "##pen_tool", ToolButtonIcon::PenTool, penTooltip.c_str());
+  ImGui::SameLine(0.0f, kToolPaletteGap);
+  renderButton(ActiveTool::Text, "##text_tool", ToolButtonIcon::Text, textTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
   ImGui::BeginDisabled(true);
   (void)ImGui::Button("△", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
