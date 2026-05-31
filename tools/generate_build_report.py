@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import re
 import shlex
 import shutil
 import subprocess
@@ -48,6 +49,7 @@ class LinkTargets:
     coverage_index: str
     binary_size_report: str
     binary_size_bargraph: str
+    doxygen_index: str
 
 
 def _resolve_link_targets(link_mode: str) -> LinkTargets:
@@ -57,12 +59,16 @@ def _resolve_link_targets(link_mode: str) -> LinkTargets:
             coverage_index="coverage-report/index.html",
             binary_size_report="build-binary-size/binary_size_report.html",
             binary_size_bargraph="build-binary-size/binary_size_bargraph.svg",
+            # The local Doxygen output (built by `tools/build_docs.sh`) lands
+            # in generated-doxygen/html/ at the repo root.
+            doxygen_index="generated-doxygen/html/index.html",
         )
     if link_mode == LINK_MODE_SITE:
         return LinkTargets(
             coverage_index=f"{base}/reports/coverage/index.html",
             binary_size_report=f"{base}/reports/binary-size/binary_size_report.html",
             binary_size_bargraph=f"{base}/reports/binary-size/binary_size_bargraph.svg",
+            doxygen_index=f"{base}/index.html",
         )
     if link_mode == LINK_MODE_DOCS:
         # Coverage is shipped as a zip and only exists as a browsable tree
@@ -71,6 +77,9 @@ def _resolve_link_targets(link_mode: str) -> LinkTargets:
             coverage_index=f"{base}/reports/coverage/index.html",
             binary_size_report="reports/binary-size/binary_size_report.html",
             binary_size_bargraph="reports/binary-size/binary_size_bargraph.svg",
+            # The checked-in build_report.md is itself rendered by Doxygen, so
+            # the API docs root is one level up from this page on the site.
+            doxygen_index=f"{base}/index.html",
         )
     raise ValueError(f"Unknown link_mode: {link_mode!r} (expected one of {LINK_MODES})")
 
@@ -81,6 +90,7 @@ class ReportOptions:
     binary_size: bool = False
     coverage: bool = False
     tests: bool = False
+    documentation: bool = False
     public_targets: bool = False
     external_dependencies: bool = False
 
@@ -680,18 +690,357 @@ def make_code_coverage_section(
     )
 
 
-def make_tests_section(runner: CommandRunner) -> SectionResult:
+# Directory under ``docs/reports/`` that receives copies of the
+# SVG-vs-golden image artifacts from failed image-comparison tests, so they
+# render on the docs site and from GitHub's web view of the report.
+_TEST_FAILURE_IMAGE_DIR = "test-failures"
+
+# Image-comparison fixtures drop these per-case PNGs into a failing test's
+# ``$TEST_UNDECLARED_OUTPUTS_DIR`` (see
+# donner/svg/renderer/tests/ImageComparisonTestFixture.cc): ``expected_*`` is
+# the golden, ``actual_*`` is what the renderer produced, ``diff_*`` is the
+# pixelmatch diff. The ``parity_*`` trio is the Geode-vs-tiny variant.
+_FAILURE_IMAGE_PREFIXES = (
+    "diff_",
+    "actual_",
+    "expected_",
+    "parity_diff_",
+    "parity_geode_",
+    "parity_tiny_",
+)
+
+
+def _target_to_testlogs_subpath(target: str) -> str:
+    """Map a Bazel label to its ``bazel-testlogs`` relative directory.
+
+    ``//donner/svg/renderer/tests:renderer_geode_golden_tests`` →
+    ``donner/svg/renderer/tests/renderer_geode_golden_tests``.
+    """
+    package, _, name = target.lstrip("/").partition(":")
+    return f"{package}/{name}" if name else package
+
+
+def _collect_failure_images_for_target(test_outputs_dir: Path) -> typing.List[Path]:
+    """Return the image-comparison PNGs a failed target left behind.
+
+    A target's undeclared outputs live under ``<testlogs>/<path>/test.outputs``
+    either as loose files or (when there is more than one) inside
+    ``outputs.zip``. We surface the loose-file case directly; callers extract
+    the zip case first.
+    """
+    images: typing.List[Path] = []
+    if not test_outputs_dir.is_dir():
+        return images
+    for path in sorted(test_outputs_dir.rglob("*.png")):
+        if path.name.startswith(_FAILURE_IMAGE_PREFIXES):
+            images.append(path)
+    return images
+
+
+def _harvest_failed_image_artifacts(
+    failed_targets: typing.Sequence[str],
+    destination: Path,
+    bazel_testlogs: Path,
+) -> dict[str, typing.List[str]]:
+    """Copy SVG-vs-golden PNGs from failed targets into ``destination``.
+
+    Returns ``{target: [relative_png_path, ...]}`` for every failed target
+    that produced image-comparison artifacts. Paths are relative to
+    ``destination`` so the report can build links from its ``reports/`` root.
+    Targets that produced no such PNGs (non-image failures) are omitted.
+    """
+    harvested: dict[str, typing.List[str]] = {}
+    for target in failed_targets:
+        subpath = _target_to_testlogs_subpath(target)
+        outputs_dir = bazel_testlogs / subpath / "test.outputs"
+        if not outputs_dir.exists():
+            continue
+
+        # Materialize a flat working copy: loose PNGs plus anything inside a
+        # bundled outputs.zip.
+        staged: typing.List[tuple[str, Path]] = []
+        for path in _collect_failure_images_for_target(outputs_dir):
+            staged.append((path.name, path))
+
+        zip_path = outputs_dir / "outputs.zip"
+        extracted_dir: typing.Optional[Path] = None
+        if zip_path.is_file():
+            extracted_dir = destination / subpath / "_unzip"
+            try:
+                with zipfile.ZipFile(zip_path) as zf:
+                    for member in zf.namelist():
+                        base = Path(member).name
+                        if base.startswith(_FAILURE_IMAGE_PREFIXES) and base.endswith(
+                            ".png"
+                        ):
+                            zf.extract(member, extracted_dir)
+                            staged.append((base, extracted_dir / member))
+            except (OSError, zipfile.BadZipFile):
+                pass
+
+        if not staged:
+            if extracted_dir is not None and extracted_dir.exists():
+                shutil.rmtree(extracted_dir, ignore_errors=True)
+            continue
+
+        target_dir = destination / subpath
+        target_dir.mkdir(parents=True, exist_ok=True)
+        rel_paths: typing.List[str] = []
+        for name, source in staged:
+            dest_file = target_dir / name
+            shutil.copyfile(source, dest_file)
+            rel_paths.append(dest_file.relative_to(destination).as_posix())
+
+        if extracted_dir is not None and extracted_dir.exists():
+            shutil.rmtree(extracted_dir, ignore_errors=True)
+
+        if rel_paths:
+            harvested[target] = sorted(set(rel_paths))
+    return harvested
+
+
+def _resolve_bazel_testlogs() -> typing.Optional[Path]:
+    try:
+        out = subprocess.check_output(["bazel", "info", "bazel-testlogs"], text=True).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+    path = Path(out)
+    return path if path.exists() else None
+
+
+def _render_failed_image_comparisons(
+    failed_targets: typing.Sequence[str],
+    reports_root: typing.Optional[Path],
+    *,
+    bazel_testlogs: typing.Optional[Path] = None,
+) -> str:
+    """Render the SVG-vs-golden block for failed image-comparison tests.
+
+    When ``reports_root`` is set (docs-link mode) the PNGs are copied into
+    ``reports/test-failures/`` and the report embeds them. Returns an empty
+    string when there are no failed targets, no artifacts, or no place to
+    stage them.
+    """
+    if not failed_targets:
+        return ""
+    if reports_root is None:
+        # Without a checked-in reports tree we have nowhere to publish the
+        # PNGs, so just name the failing targets.
+        listed = "\n".join(f"- `{t}`" for t in failed_targets)
+        return (
+            "### Failed image comparisons\n\n"
+            "The following targets failed; regenerate with `--save "
+            "docs/build_report.md` to embed their SVG-vs-golden diffs.\n\n"
+            f"{listed}"
+        )
+
+    if bazel_testlogs is None:
+        bazel_testlogs = _resolve_bazel_testlogs()
+    if bazel_testlogs is None:
+        return ""
+
+    destination = reports_root / _TEST_FAILURE_IMAGE_DIR
+    if destination.exists():
+        shutil.rmtree(destination)
+
+    harvested = _harvest_failed_image_artifacts(failed_targets, destination, bazel_testlogs)
+    if not harvested:
+        # No image-comparison artifacts (the failures were non-visual). Leave
+        # the staging dir clean and emit nothing.
+        if destination.exists() and not any(destination.iterdir()):
+            destination.rmdir()
+        return ""
+
+    lines = [
+        "### Failed image comparisons",
+        "",
+        "SVG-vs-golden artifacts for image-comparison tests that failed. "
+        "`expected_*` is the golden, `actual_*` is the rendered output, and "
+        "`diff_*` is the pixelmatch difference.",
+        "",
+    ]
+    for target in sorted(harvested):
+        lines.append(f"#### `{target}`")
+        lines.append("")
+        for rel in harvested[target]:
+            # Build the link relative to docs/ (the report lives at
+            # docs/build_report.md, reports_root is docs/reports).
+            href = f"reports/{_TEST_FAILURE_IMAGE_DIR}/{Path(rel).as_posix()}"
+            caption = Path(rel).name
+            lines.append(f"![{caption}]({href})")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+def make_documentation_section(links: LinkTargets) -> SectionResult:
+    """A static section linking the Doxygen-generated API documentation.
+
+    The API docs are produced by `tools/build_docs.sh` (which runs
+    `doxygen Doxyfile`) and published to the docs site; there is no command to
+    run here, so this section is informational and always reports success.
+    """
+    content = "\n".join(
+        [
+            "Doxygen-generated API documentation for the Donner SVG library.",
+            "",
+            f"Browse: [API documentation]({links.doxygen_index})",
+            "",
+            "Regenerate locally with `tools/build_docs.sh` "
+            "(output: `generated-doxygen/html/`).",
+        ]
+    )
+    return SectionResult("Documentation", "success", 0.0, content)
+
+
+@dataclass(frozen=True)
+class TestCaseResult:
+    """One target's pass/fail/skip status as parsed from `bazel test` output."""
+
+    target: str
+    status: str  # PASSED / FAILED / FLAKY / TIMEOUT / SKIPPED / NO STATUS / ...
+    detail: str  # e.g. "in 1.2s", "(cached)", or "" when absent.
+
+
+# `bazel test` summary lines look like:
+#   //pkg:target                                       PASSED in 1.2s
+#   //pkg:target                                       FAILED in 0.3s
+#   //pkg:target                                       SKIPPED
+#   //pkg:target                              (cached) PASSED in 0.0s
+# Statuses bazel emits in the per-target summary block.
+_BAZEL_TEST_STATUSES = (
+    "PASSED",
+    "FAILED",
+    "FLAKY",
+    "TIMEOUT",
+    "SKIPPED",
+    "NO STATUS",
+    "FAILED TO BUILD",
+)
+_BAZEL_TEST_LINE_RE = re.compile(
+    r"^(?P<target>//\S+)\s+"
+    # Bazel inserts a right-aligned "(cached)" marker between the target and
+    # the status for cached results; capture it as part of the detail.
+    r"(?P<cached>\(cached\)\s+)?"
+    r"(?P<status>" + "|".join(re.escape(s) for s in _BAZEL_TEST_STATUSES) + r")"
+    r"(?P<detail>.*)$"
+)
+
+
+def parse_bazel_test_results(stdout: str) -> typing.List[TestCaseResult]:
+    """Extract per-target pass/fail results from `bazel test` summary output.
+
+    Bazel prints one line per test target in its end-of-run summary; parse
+    those into structured records. Lines that don't match the target/status
+    shape (build progress, the trailing "Executed N out of M tests" line) are
+    ignored. The result is de-duplicated by target (last status wins) so a
+    target that appears in both a per-shard line and the summary isn't double
+    counted.
+    """
+    by_target: dict[str, TestCaseResult] = {}
+    for line in stdout.splitlines():
+        match = _BAZEL_TEST_LINE_RE.match(line.strip())
+        if match is None:
+            continue
+        detail = match.group("detail").strip()
+        if match.group("cached"):
+            detail = f"(cached) {detail}".strip()
+        by_target[match.group("target")] = TestCaseResult(
+            target=match.group("target"),
+            status=match.group("status"),
+            detail=detail,
+        )
+    return sorted(by_target.values(), key=lambda r: (r.status != "FAILED", r.target))
+
+
+# Order test-status groups so failures/flakes surface at the top of the table.
+_TEST_STATUS_ORDER = (
+    "FAILED",
+    "FAILED TO BUILD",
+    "TIMEOUT",
+    "FLAKY",
+    "NO STATUS",
+    "PASSED",
+    "SKIPPED",
+)
+
+
+def _render_test_results_table(results: typing.Sequence[TestCaseResult]) -> str:
+    if not results:
+        return "(no per-target test results parsed from output)"
+
+    counts: dict[str, int] = {}
+    for record in results:
+        counts[record.status] = counts.get(record.status, 0) + 1
+
+    order = {status: index for index, status in enumerate(_TEST_STATUS_ORDER)}
+
+    def status_key(status: str) -> tuple[int, str]:
+        return (order.get(status, len(order)), status)
+
+    summary = ", ".join(
+        f"{count} {status.lower()}"
+        for status, count in sorted(counts.items(), key=lambda kv: status_key(kv[0]))
+    )
+
+    lines = [
+        f"{len(results)} targets: {summary}.",
+        "",
+        "| Target | Result |",
+        "| --- | --- |",
+    ]
+    for record in sorted(results, key=lambda r: (status_key(r.status), r.target)):
+        detail = f" {record.detail}" if record.detail else ""
+        lines.append(f"| `{record.target}` | {record.status}{detail} |")
+    return "\n".join(lines)
+
+
+def make_tests_section(
+    runner: CommandRunner,
+    reports_root: typing.Optional[Path] = None,
+    *,
+    bazel_testlogs: typing.Optional[Path] = None,
+) -> SectionResult:
     args = ["bazel", "test", "//donner/..."]
     result = runner.run("tests", args)
+
+    parsed = parse_bazel_test_results(result.stdout)
+    failed_targets = [r.target for r in parsed if r.status in ("FAILED", "TIMEOUT")]
+
+    lines = [
+        f"Generated with: `{format_command(args)}`",
+        "",
+        "### Test results",
+        "",
+        _render_test_results_table(parsed),
+    ]
+
+    failure_section = _render_failed_image_comparisons(
+        failed_targets, reports_root, bazel_testlogs=bazel_testlogs
+    )
+    if failure_section:
+        lines.extend(["", failure_section])
+
+    # Preserve the raw bazel output for anyone who needs the full log.
+    lines.extend(
+        [
+            "",
+            "<details><summary>Raw <code>bazel test</code> output</summary>",
+            "",
+            _render_command_block(
+                format_command(args),
+                result,
+                empty_output_message="(test command produced no output)",
+            ),
+            "",
+            "</details>",
+        ]
+    )
+
     return SectionResult(
         "Tests",
         _result_status(result),
         result.duration_sec,
-        _render_command_block(
-            format_command(args),
-            result,
-            empty_output_message="(test command produced no output)",
-        ),
+        "\n".join(lines),
     )
 
 
@@ -856,7 +1205,9 @@ def create_build_report(
     if options.all or options.coverage:
         sections.append(make_code_coverage_section(runner, reports_root, links))
     if options.all or options.tests:
-        sections.append(make_tests_section(runner))
+        sections.append(make_tests_section(runner, reports_root))
+    if options.all or options.documentation:
+        sections.append(make_documentation_section(links))
     if options.all or options.public_targets:
         sections.append(make_public_targets_section(runner))
     if options.all or options.external_dependencies:
@@ -895,6 +1246,11 @@ def parse_args(argv: typing.Optional[typing.Sequence[str]] = None) -> argparse.N
         "--coverage", action="store_true", help="Generate the code coverage section"
     )
     parser.add_argument("--tests", action="store_true", help="Generate the tests section")
+    parser.add_argument(
+        "--documentation",
+        action="store_true",
+        help="Generate the documentation (Doxygen link) section",
+    )
     parser.add_argument(
         "--public-targets", action="store_true", help="Generate the public targets section"
     )
@@ -973,6 +1329,7 @@ def main(argv: typing.Optional[typing.Sequence[str]] = None) -> int:
         binary_size=args.binary_size,
         coverage=args.coverage,
         tests=args.tests,
+        documentation=args.documentation,
         public_targets=args.public_targets,
         external_dependencies=args.external_dependencies,
     )
