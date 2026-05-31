@@ -688,6 +688,18 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_inspector_panel_tests",
+    srcs = ["TextInspectorPanel_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:text_inspector_panel",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
     name = "drag_release_pop_back_tests",
     srcs = ["DragReleasePopBack_tests.cc"],
     deps = [
@@ -900,6 +912,7 @@ donner_cc_test(
         "//donner/svg",
         "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 

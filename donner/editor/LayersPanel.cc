@@ -358,8 +358,13 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         renamingStableId_.reset();  // Focus lost or Escape: abandon the edit.
       }
     } else {
-      if (ImGui::Selectable(row.displayName.c_str(), selected,
-                            ImGuiSelectableFlags_SpanAllColumns)) {
+      // AllowOverlap so the right-aligned eye/lock buttons (drawn after this
+      // full-width Selectable) actually receive clicks — without it the
+      // SpanAllColumns Selectable claims the whole row's hit area and the
+      // buttons are dead.
+      if (ImGui::Selectable(
+              row.displayName.c_str(), selected,
+              ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
         if (liveApp != nullptr) {
           ClickModifiers mods{
               .shift = ImGui::GetIO().KeyShift,

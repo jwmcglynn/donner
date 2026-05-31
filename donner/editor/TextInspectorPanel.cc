@@ -60,29 +60,35 @@ std::optional<svg::SVGElement> SingleSelectedText(EditorApp& app) {
 }  // namespace
 
 void TextInspectorPanel::syncBuffersFromSelection(const svg::SVGElement& text) {
-  if (text.isa<svg::SVGTextElement>()) {
-    AssignBuffer(contentBuffer_, std::string_view(text.cast<svg::SVGTextElement>().textContent()));
-  } else {
-    AssignBuffer(contentBuffer_, "");
-  }
+  // §concurrent-dom: the live editor keeps the document in ThreadingMode::ConcurrentDom, so reading
+  // textContent()/attributes (raw ECS access) from this UI-thread render path needs a scoped read
+  // access — without it `SVGTextContentElement::textContent()` trips the access assert and aborts.
+  text.withReadAccess([&](svg::DocumentReadAccess&, EntityHandle) {
+    if (text.isa<svg::SVGTextElement>()) {
+      AssignBuffer(contentBuffer_,
+                   std::string_view(text.cast<svg::SVGTextElement>().textContent()));
+    } else {
+      AssignBuffer(contentBuffer_, "");
+    }
 
-  if (auto family = text.getAttribute(xml::XMLQualifiedNameRef("font-family"))) {
-    AssignBuffer(fontFamilyBuffer_, std::string_view(*family));
-  } else {
-    AssignBuffer(fontFamilyBuffer_, "");
-  }
+    if (auto family = text.getAttribute(xml::XMLQualifiedNameRef("font-family"))) {
+      AssignBuffer(fontFamilyBuffer_, std::string_view(*family));
+    } else {
+      AssignBuffer(fontFamilyBuffer_, "");
+    }
 
-  if (auto size = text.getAttribute(xml::XMLQualifiedNameRef("font-size"))) {
-    AssignBuffer(fontSizeBuffer_, std::string_view(*size));
-  } else {
-    AssignBuffer(fontSizeBuffer_, "");
-  }
+    if (auto size = text.getAttribute(xml::XMLQualifiedNameRef("font-size"))) {
+      AssignBuffer(fontSizeBuffer_, std::string_view(*size));
+    } else {
+      AssignBuffer(fontSizeBuffer_, "");
+    }
 
-  if (auto strokeWidth = text.getAttribute(xml::XMLQualifiedNameRef("stroke-width"))) {
-    AssignBuffer(strokeWidthBuffer_, std::string_view(*strokeWidth));
-  } else {
-    AssignBuffer(strokeWidthBuffer_, "");
-  }
+    if (auto strokeWidth = text.getAttribute(xml::XMLQualifiedNameRef("stroke-width"))) {
+      AssignBuffer(strokeWidthBuffer_, std::string_view(*strokeWidth));
+    } else {
+      AssignBuffer(strokeWidthBuffer_, "");
+    }
+  });
 
   contentDirty_ = false;
 }

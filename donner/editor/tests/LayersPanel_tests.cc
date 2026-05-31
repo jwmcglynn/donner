@@ -12,6 +12,7 @@
 
 #include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerTreeModel.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -605,6 +606,75 @@ TEST(LayersPanelTest, GroupThumbnailComposesChildren) {
   EXPECT_NEAR(leftPixel[2], 210, 8) << "left half is blue";
   EXPECT_NEAR(rightPixel[0], 210, 8) << "right half is yellow (red channel)";
   EXPECT_NEAR(rightPixel[1], 210, 8) << "right half is yellow (green channel)";
+}
+
+// ---------------------------------------------------------------------------
+// Render-path: the right-aligned eye/lock buttons must actually receive clicks.
+// Regression for a QA-found "lock/hide buttons don't respond" — the full-width
+// SpanAllColumns row Selectable needs AllowOverlap or it eats the buttons' clicks.
+// ---------------------------------------------------------------------------
+
+class LayersPanelImGuiTest : public ::testing::Test {
+protected:
+  void SetUp() override {
+    IMGUI_CHECKVERSION();
+    ctx_ = ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(400, 300);
+    io.ConfigMacOSXBehaviors = false;
+    io.Fonts->Build();
+  }
+
+  void TearDown() override {
+    if (ctx_ != nullptr) {
+      ImGui::DestroyContext(ctx_);
+      ctx_ = nullptr;
+    }
+  }
+
+  // Render one Layers-panel frame in a fixed window with the given mouse state.
+  void Frame(LayersPanel& panel, EditorApp& app, const ImVec2& mouse, bool down) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(400, 300);
+    io.AddMousePosEvent(mouse.x, mouse.y);
+    io.AddMouseButtonEvent(0, down);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(300, 250), ImGuiCond_Always);
+    ImGui::Begin("##layers_test", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    panel.render(&app);
+    ImGui::End();
+    ImGui::Render();
+  }
+
+  ImGuiContext* ctx_ = nullptr;
+};
+
+TEST_F(LayersPanelImGuiTest, LockButtonReceivesClick) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  ASSERT_TRUE(FindRow(panel, "rect1").has_value());
+  ASSERT_FALSE(FindRow(panel, "rect1")->isLocked);
+
+  // The lock button is the right-most affordance on row 0. With the window at
+  // (0,0) sized 300×250 (no title bar), the content right edge is ~292px and the
+  // lock button sits just inside it on the first row's line (~16px down).
+  const ImVec2 lockButton(284.0f, 16.0f);
+  Frame(panel, app, lockButton, /*down=*/false);  // hover / settle layout
+  Frame(panel, app, lockButton, /*down=*/true);   // press
+  Frame(panel, app, lockButton, /*down=*/false);  // release → SmallButton fires
+
+  EXPECT_TRUE(app.document().flushFrame()) << "clicking the lock button should queue a mutation";
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> locked = FindRow(panel, "rect1");
+  ASSERT_TRUE(locked.has_value());
+  EXPECT_TRUE(locked->isLocked) << "lock button click was eaten by the row Selectable";
 }
 
 }  // namespace
