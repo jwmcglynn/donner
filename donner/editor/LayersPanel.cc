@@ -1,6 +1,8 @@
 #include "donner/editor/LayersPanel.h"
 
 #include <algorithm>
+#include <cfloat>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <utility>
@@ -11,6 +13,7 @@
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/PropertyRegistry.h"
 #include "donner/svg/renderer/RenderElementToBitmap.h"
+#include "misc/cpp/imgui_stdlib.h"
 
 namespace donner::editor {
 
@@ -194,6 +197,53 @@ void LayersPanel::handleLockClick(EditorApp& app, std::size_t rowIndex) {
   app.setElementLocked(rows[rowIndex].element, !rows[rowIndex].isLocked);
 }
 
+bool LayersPanel::handleRowRename(EditorApp& app, std::size_t rowIndex, std::string_view newId) {
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (rowIndex >= rows.size()) {
+    return false;
+  }
+  // Select the row's element (you rename the thing you double-clicked), then run
+  // the shared DOM-level rename engine, which also repoints references.
+  app.setSelection(rows[rowIndex].element);
+  selectionChanged_ = true;
+  return app.renameSelectedElement(newId);
+}
+
+bool LayersPanel::handleRowReorder(EditorApp& app, std::size_t fromIndex, std::size_t toIndex) {
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  if (fromIndex >= rows.size() || toIndex >= rows.size() || fromIndex == toIndex) {
+    return false;
+  }
+  const svg::SVGElement moved = rows[fromIndex].element;
+  const svg::SVGElement target = rows[toIndex].element;
+
+  // Drop semantics on the flat row list: place `moved` at the target row's slot.
+  // Dragging up (toIndex < fromIndex) inserts `moved` immediately before the
+  // target; dragging down inserts it immediately after (i.e. before the target's
+  // next sibling, or appends). reorderElementBeforeSibling rejects the move when
+  // the two rows are not siblings of the same parent.
+  std::optional<svg::SVGElement> referenceSibling;
+  if (toIndex < fromIndex) {
+    referenceSibling = target;
+  } else {
+    referenceSibling = target.nextSibling();
+  }
+  if (app.reorderElementBeforeSibling(moved, referenceSibling)) {
+    app.setSelection(moved);
+    selectionChanged_ = true;
+    return true;
+  }
+  return false;
+}
+
+void LayersPanel::beginRename(std::uint64_t stableId) {
+  if (const auto rowIndex = rowIndexForStableId(stableId); rowIndex.has_value()) {
+    renamingStableId_ = stableId;
+    renameBuffer_ = model_.rows()[*rowIndex].displayName;
+    renameFocusPending_ = true;
+  }
+}
+
 void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (rows.empty()) {
@@ -273,20 +323,66 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       ImGui::PushStyleColor(ImGuiCol_Header, ImGui::GetColorU32(ImGuiCol_HeaderHovered, 0.35f));
     }
     bool selected = row.isSelected || row.isPartiallySelected;
-    if (ImGui::Selectable(row.displayName.c_str(), selected, ImGuiSelectableFlags_SpanAllColumns)) {
-      if (liveApp != nullptr) {
-        ClickModifiers mods{
-            .shift = ImGui::GetIO().KeyShift,
-            .ctrl = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper,
-        };
-        handleRowClick(*liveApp, i, mods);
+    const bool isRenamingThisRow =
+        renamingStableId_.has_value() && *renamingStableId_ == row.stableId;
+    if (isRenamingThisRow) {
+      // Inline rename: draw an edit field in place of the row label. Commit on
+      // Enter (DOM-level rename via the shared engine), cancel on focus loss or
+      // Escape. Donner owns the id change; ImGui only hosts the text field.
+      if (renameFocusPending_) {
+        ImGui::SetKeyboardFocusHere();
+        renameFocusPending_ = false;
       }
-    }
-    // Track the hovered row so the canvas/source panes can highlight the
-    // element under the cursor, mirroring source-pane hover. `IsItemHovered`
-    // here refers to the row's selectable just drawn.
-    if (ImGui::IsItemHovered()) {
-      hoveredRowIndex = i;
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      const bool committed = ImGui::InputText(
+          "##layer_row_rename", &renameBuffer_,
+          ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll);
+      const bool deactivated = ImGui::IsItemDeactivated();
+      if (committed && liveApp != nullptr) {
+        handleRowRename(*liveApp, i, renameBuffer_);
+        renamingStableId_.reset();
+      } else if (deactivated) {
+        renamingStableId_.reset();  // Focus lost or Escape: abandon the edit.
+      }
+    } else {
+      if (ImGui::Selectable(row.displayName.c_str(), selected,
+                            ImGuiSelectableFlags_SpanAllColumns)) {
+        if (liveApp != nullptr) {
+          ClickModifiers mods{
+              .shift = ImGui::GetIO().KeyShift,
+              .ctrl = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper,
+          };
+          handleRowClick(*liveApp, i, mods);
+        }
+      }
+      // Track the hovered row so the canvas/source panes can highlight the
+      // element under the cursor, mirroring source-pane hover. `IsItemHovered`
+      // here refers to the row's selectable just drawn.
+      if (ImGui::IsItemHovered()) {
+        hoveredRowIndex = i;
+        if (ImGui::IsMouseDoubleClicked(0) && liveApp != nullptr) {
+          beginRename(row.stableId);  // Double-click to rename inline.
+        }
+      }
+
+      // Drag-to-reorder: the row is a drag source carrying its visible index and
+      // a drop target that issues a DOM move via the shared reorder engine.
+      if (ImGui::BeginDragDropSource(ImGuiDragDropFlags_None)) {
+        const std::size_t payloadIndex = i;
+        ImGui::SetDragDropPayload("DND_LAYER_ROW", &payloadIndex, sizeof(payloadIndex));
+        ImGui::TextUnformatted(row.displayName.c_str());
+        ImGui::EndDragDropSource();
+      }
+      if (ImGui::BeginDragDropTarget()) {
+        if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("DND_LAYER_ROW")) {
+          std::size_t fromIndex = 0;
+          std::memcpy(&fromIndex, payload->Data, sizeof(fromIndex));
+          if (liveApp != nullptr) {
+            handleRowReorder(*liveApp, fromIndex, i);
+          }
+        }
+        ImGui::EndDragDropTarget();
+      }
     }
     if (row.isPartiallySelected && !row.isSelected) {
       ImGui::PopStyleColor();
@@ -357,6 +453,12 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
         if (ImGui::MenuItem("Lock") && liveApp != nullptr) {
           handleLockClick(*liveApp, i);
         }
+      }
+      // Rename starts the inline edit field on this row (Enter commits a
+      // DOM-level id change through the shared engine). Disabled for locked rows,
+      // matching the engine's own refusal.
+      if (ImGui::MenuItem("Rename", nullptr, false, !row.isLocked) && liveApp != nullptr) {
+        beginRename(row.stableId);
       }
       // TODO(v0.8): Delete from the Layers panel — needs the in-sync source
       // text that lives in EditorShell, so it is wired at the shell level

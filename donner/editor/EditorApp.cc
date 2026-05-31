@@ -865,12 +865,47 @@ bool EditorApp::reorderSelectedElement(ZOrder direction) {
     return false;
   }
 
+  return applyElementMove(element, parent, referenceElement, "Reorder element");
+}
+
+bool EditorApp::reorderElementBeforeSibling(svg::SVGElement element,
+                                            std::optional<svg::SVGElement> referenceSibling) {
+  if (IsLocked(element)) {
+    return false;  // Locked elements (or descendants of a locked group) don't move.
+  }
+  const std::optional<svg::SVGElement> parentOpt = element.parentElement();
+  if (!parentOpt.has_value()) {
+    return false;  // The document root has no siblings to reorder among.
+  }
+  const svg::SVGElement parent = *parentOpt;
+
+  if (referenceSibling.has_value()) {
+    if (*referenceSibling == element) {
+      return false;  // Inserting before yourself is a no-op.
+    }
+    const std::optional<svg::SVGElement> refParent = referenceSibling->parentElement();
+    if (!refParent.has_value() || *refParent != parent) {
+      return false;  // Cross-parent moves are unsupported here.
+    }
+  }
+  // No-op when the element already sits immediately before the reference (or is
+  // already the last child when appending).
+  if (element.nextSibling() == referenceSibling) {
+    return false;
+  }
+
+  return applyElementMove(element, parent, referenceSibling, "Reorder element");
+}
+
+bool EditorApp::applyElementMove(svg::SVGElement element, svg::SVGElement parent,
+                                 std::optional<svg::SVGElement> referenceElement,
+                                 std::string_view undoLabel) {
   svg::SVGDocument& doc = document_.document();
   if (doc.hasSourceStore()) {
     UndoSnapshot before = captureDocumentSourceSnapshot(element, doc.source());
     before.selectionTargets = CaptureSelectionTargets(selection_);
     pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
-        .label = "Reorder element",
+        .label = std::string(undoLabel),
         .before = std::move(before),
     };
   }

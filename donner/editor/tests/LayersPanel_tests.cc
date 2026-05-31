@@ -154,6 +154,149 @@ std::optional<LayerTreeRow> FindRow(const LayersPanel& panel, std::string_view n
 }
 
 // ---------------------------------------------------------------------------
+// Inline rename + drag-to-reorder (wires the DOM-level rename/reorder engines)
+// ---------------------------------------------------------------------------
+
+TEST(LayersPanelTest, RowRenameChangesIdAndSelectsRow) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int index = RowIndex(panel, "rect1");
+  ASSERT_GE(index, 0);
+  const svg::SVGElement element = panel.rows()[static_cast<std::size_t>(index)].element;
+
+  EXPECT_TRUE(panel.handleRowRename(app, static_cast<std::size_t>(index), "renamed"));
+  EXPECT_TRUE(app.document().flushFrame());
+
+  // The element kept its identity but took the new id, and the rename selected it.
+  EXPECT_EQ(element.id(), RcString("renamed"));
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front(), element);
+  EXPECT_TRUE(panel.consumeSelectionChanged());
+
+  panel.refreshSnapshot(app);
+  EXPECT_EQ(RowIndex(panel, "rect1"), -1);
+  EXPECT_GE(RowIndex(panel, "renamed"), 0);
+}
+
+TEST(LayersPanelTest, RowRenameRepointsReferences) {
+  EditorApp app;
+  LoadDocument(app, R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="r" x="0" y="0" width="10" height="10"/>
+    <use id="u" href="#r"/>
+  </svg>)svg");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int rIndex = RowIndex(panel, "r");
+  ASSERT_GE(rIndex, 0);
+
+  // Rename the rect via its Layers row; the engine repoints the <use href>.
+  EXPECT_TRUE(panel.handleRowRename(app, static_cast<std::size_t>(rIndex), "r2"));
+  EXPECT_TRUE(app.document().flushFrame());
+
+  const std::optional<svg::SVGElement> use = app.document().document().querySelector("#u");
+  ASSERT_TRUE(use.has_value());
+  EXPECT_EQ(use->getAttribute("href"), std::optional(RcString("#r2")));
+}
+
+TEST(LayersPanelTest, RowRenameRejectsDuplicateId) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" x="0" y="0" width="10" height="10"/>
+    <rect id="b" x="0" y="20" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  ASSERT_GE(aIndex, 0);
+
+  // Renaming "a" to the already-used "b" is refused by the engine.
+  EXPECT_FALSE(panel.handleRowRename(app, static_cast<std::size_t>(aIndex), "b"));
+  EXPECT_FALSE(app.document().flushFrame());
+}
+
+TEST(LayersPanelTest, RowRenameOutOfRangeIsNoOp) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  EXPECT_FALSE(panel.handleRowRename(app, panel.rows().size() + 5u, "x"));
+  EXPECT_FALSE(app.document().flushFrame());
+}
+
+TEST(LayersPanelTest, RowReorderMovesElementAmongSiblings) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g">
+      <rect id="a" x="0" y="0" width="10" height="10"/>
+      <rect id="b" x="0" y="20" width="10" height="10"/>
+    </g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  const int bIndex = RowIndex(panel, "b");
+  ASSERT_GE(aIndex, 0);
+  ASSERT_GE(bIndex, 0);
+  const svg::SVGElement a = panel.rows()[static_cast<std::size_t>(aIndex)].element;
+
+  // Drag "a" onto "b" (downward): "a" moves to after "b". Now "b" precedes "a".
+  EXPECT_TRUE(panel.handleRowReorder(app, static_cast<std::size_t>(aIndex),
+                                     static_cast<std::size_t>(bIndex)));
+  EXPECT_TRUE(app.document().flushFrame());
+
+  panel.refreshSnapshot(app);
+  EXPECT_LT(RowIndex(panel, "b"), RowIndex(panel, "a"));
+  EXPECT_FALSE(a.nextSibling().has_value()) << "a should now be the last child of g";
+}
+
+TEST(LayersPanelTest, RowReorderRejectsCrossParent) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g1"><rect id="a" x="0" y="0" width="10" height="10"/></g>
+    <g id="g2"><rect id="b" x="0" y="20" width="10" height="10"/></g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  const int bIndex = RowIndex(panel, "b");
+  ASSERT_GE(aIndex, 0);
+  ASSERT_GE(bIndex, 0);
+
+  // "a" and "b" live under different groups; the move is rejected.
+  EXPECT_FALSE(panel.handleRowReorder(app, static_cast<std::size_t>(aIndex),
+                                      static_cast<std::size_t>(bIndex)));
+  EXPECT_FALSE(app.document().flushFrame());
+}
+
+TEST(LayersPanelTest, RowReorderSameIndexIsNoOp) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" x="0" y="0" width="10" height="10"/>
+    <rect id="b" x="0" y="20" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  ASSERT_GE(aIndex, 0);
+  EXPECT_FALSE(panel.handleRowReorder(app, static_cast<std::size_t>(aIndex),
+                                      static_cast<std::size_t>(aIndex)));
+  EXPECT_FALSE(app.document().flushFrame());
+}
+
+// ---------------------------------------------------------------------------
 // Feature 1: show/hide eye button
 // ---------------------------------------------------------------------------
 

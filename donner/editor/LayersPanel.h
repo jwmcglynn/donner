@@ -20,6 +20,7 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -107,6 +108,41 @@ public:
   /// @param rowIndex Index into `rows()`.
   void handleLockClick(EditorApp& app, std::size_t rowIndex);
 
+  /// Rename the element at @p rowIndex to @p newId via the shared
+  /// `EditorApp::renameSelectedElement` path — a DOM-level id change that also
+  /// repoints `url(#…)` / `href` references and `<style>` selectors. The row's
+  /// element is selected first (renaming the thing you double-clicked), then the
+  /// engine runs. Factored out so the inline-edit affordance is unit-testable
+  /// without an ImGui frame.
+  ///
+  /// @param app Live editor app the mutation is applied to.
+  /// @param rowIndex Index into `rows()`.
+  /// @param newId The requested new element id.
+  /// @return True if the rename was applied; false on out-of-range index or when
+  ///   the engine rejects it (locked, empty, unchanged, or duplicate id).
+  bool handleRowRename(EditorApp& app, std::size_t rowIndex, std::string_view newId);
+
+  /// Move the element at @p fromIndex so it sits at the @p toIndex row's
+  /// position, among the same parent's children, via the shared
+  /// `EditorApp::reorderElementBeforeSibling` DOM move. Cross-parent drops and
+  /// locked elements are rejected. Factored out so drag-to-reorder is
+  /// unit-testable without an ImGui frame.
+  ///
+  /// @param app Live editor app the mutation is applied to.
+  /// @param fromIndex Index of the dragged row.
+  /// @param toIndex Index of the drop-target row.
+  /// @return True if a move was applied; false on out-of-range/no-op/rejected.
+  bool handleRowReorder(EditorApp& app, std::size_t fromIndex, std::size_t toIndex);
+
+  /// Begin an inline rename of the row identified by @p stableId (the render
+  /// loop draws an edit field in place of the row label). No-op if the row is
+  /// not present. Exposed so the context-menu "Rename" item and tests can start
+  /// an edit; the double-click path calls it internally.
+  void beginRename(std::uint64_t stableId);
+
+  /// The stable id of the row currently being inline-renamed, or `std::nullopt`.
+  [[nodiscard]] std::optional<std::uint64_t> renamingStableId() const { return renamingStableId_; }
+
   /// Whether the row identified by @p stableId has a non-null thumbnail handle
   /// or a deterministic fallback swatch. Always true for every visible row.
   [[nodiscard]] bool hasThumbnailOrSwatch(std::uint64_t stableId) const;
@@ -165,6 +201,15 @@ private:
   bool selectionChanged_ = false;
   /// Element under the mouse cursor as of the most recent render, or nullopt.
   std::optional<svg::SVGElement> hoveredElement_;
+  /// Stable id of the row currently being inline-renamed, or nullopt when no
+  /// edit is in progress. The render loop draws an `InputText` for this row.
+  std::optional<std::uint64_t> renamingStableId_;
+  /// Edit buffer backing the inline rename `InputText`. Seeded from the row's
+  /// current display name when the edit begins.
+  std::string renameBuffer_;
+  /// One-shot: request keyboard focus on the rename `InputText` the next frame
+  /// it is drawn (set when an edit begins, cleared once focus is taken).
+  bool renameFocusPending_ = false;
 };
 
 }  // namespace donner::editor

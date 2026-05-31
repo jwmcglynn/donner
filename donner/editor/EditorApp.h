@@ -222,6 +222,29 @@ public:
   bool reorderSelectedElement(ZOrder direction);
 
   /**
+   * Move @p element so it sits immediately before @p referenceSibling among its
+   * current parent's children (or to the end when @p referenceSibling is
+   * `std::nullopt`), recording one undoable structural edit. This is the
+   * arbitrary-position generalization of \ref reorderSelectedElement used by the
+   * Layers-panel drag-to-reorder affordance.
+   *
+   * Like the z-order moves it is a pure DOM `SVGDocument::insertElement` and the
+   * structured-editing reflection rewrites the source (no source-text surgery).
+   *
+   * Refuses (returns false) when @p element is locked or the document root, when
+   * @p referenceSibling is not a child of the same parent (cross-parent moves are
+   * unsupported here), when @p referenceSibling *is* @p element, or when the
+   * element is already in the requested position.
+   *
+   * @param element The element to move (selection is left to the caller).
+   * @param referenceSibling Insert @p element before this sibling, or append when
+   *   `std::nullopt`.
+   * @return true if the element moved.
+   */
+  bool reorderElementBeforeSibling(svg::SVGElement element,
+                                   std::optional<svg::SVGElement> referenceSibling);
+
+  /**
    * Rename the single selected element's `id` to @p newId, updating every
    * internal reference so the document keeps rendering the same — one undoable
    * structural edit.
@@ -536,6 +559,14 @@ private:
   /// `const optional&`. Centralized so we can't forget it on a new
   /// mutation path.
   void refreshFirstSelectionCache();
+
+  /// Shared tail of the structural-move paths (\ref reorderSelectedElement and
+  /// \ref reorderElementBeforeSibling): records an undo snapshot labelled
+  /// @p undoLabel and issues the DOM `InsertElementCommand` that repositions
+  /// @p element before @p referenceElement within @p parent. Always returns true.
+  bool applyElementMove(svg::SVGElement element, svg::SVGElement parent,
+                        std::optional<svg::SVGElement> referenceElement,
+                        std::string_view undoLabel);
 
   struct PendingDocumentSourceUndo {
     std::string label;
