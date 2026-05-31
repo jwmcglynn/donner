@@ -3189,6 +3189,38 @@ void EditorShell::renderRenderPaneContextMenu() {
   if (ImGui::MenuItem("Delete Selection", nullptr, false, app_.hasSelection())) {
     selectionChanged = app_.deleteSelectionWithUndo(textEditor_.getText());
   }
+
+  // Arrange (paint/z-order). Acts on the right-clicked element, or on the single
+  // selection when the menu was opened over empty canvas. Reuses the shared
+  // DOM-level reorderSelectedElement engine — the same path as the Cmd+[ / Cmd+]
+  // shortcuts — so the move is undoable and reflected back into the source.
+  std::optional<svg::SVGElement> arrangeTarget;
+  if (renderContextMenuHitElement_.has_value()) {
+    arrangeTarget = *renderContextMenuHitElement_;
+  } else if (app_.selectedElements().size() == 1u) {
+    arrangeTarget = app_.selectedElements().front();
+  }
+  if (ImGui::BeginMenu("Arrange", arrangeTarget.has_value())) {
+    const auto arrange = [&](EditorApp::ZOrder direction) {
+      app_.setSelection(*arrangeTarget);
+      selectionChanged = true;
+      std::ignore = app_.reorderSelectedElement(direction);
+    };
+    if (ImGui::MenuItem("Bring to Front", "Cmd+Shift+]")) {
+      arrange(EditorApp::ZOrder::BringToFront);
+    }
+    if (ImGui::MenuItem("Bring Forward", "Cmd+]")) {
+      arrange(EditorApp::ZOrder::BringForward);
+    }
+    if (ImGui::MenuItem("Send Backward", "Cmd+[")) {
+      arrange(EditorApp::ZOrder::SendBackward);
+    }
+    if (ImGui::MenuItem("Send to Back", "Cmd+Shift+[")) {
+      arrange(EditorApp::ZOrder::SendToBack);
+    }
+    ImGui::EndMenu();
+  }
+
   std::optional<svg::SVGElement> unbundleTarget;
   if (renderContextMenuHitElement_.has_value()) {
     unbundleTarget = *renderContextMenuHitElement_;
