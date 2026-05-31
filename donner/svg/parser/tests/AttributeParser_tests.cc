@@ -496,6 +496,32 @@ TEST(AttributeParserTest, MarkerLengthAttributesWithUnits) {
   EXPECT_THAT(marker.refY(), LengthIs(DoubleNear(10.0, 0.001), Lengthd::Unit::Px));
 }
 
+TEST(AttributeParserTest, MarkerRefKeywords) {
+  // SVG2: refX accepts left/center/right and refY accepts top/center/bottom, each
+  // resolving to a percentage of the marker viewport (0%/50%/100%).
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <marker id="lt" refX="left" refY="top"><path d="M0,0Z"/></marker>
+        <marker id="cc" refX="center" refY="center"><path d="M0,0Z"/></marker>
+        <marker id="rb" refX="right" refY="bottom"><path d="M0,0Z"/></marker>
+      </defs>
+    </svg>
+  )");
+
+  auto lt = QueryElement<SVGMarkerElement>(document, "#lt");
+  EXPECT_THAT(lt.refX(), LengthIs(DoubleNear(0.0, 0.001), Lengthd::Unit::Percent));
+  EXPECT_THAT(lt.refY(), LengthIs(DoubleNear(0.0, 0.001), Lengthd::Unit::Percent));
+
+  auto cc = QueryElement<SVGMarkerElement>(document, "#cc");
+  EXPECT_THAT(cc.refX(), LengthIs(DoubleNear(50.0, 0.001), Lengthd::Unit::Percent));
+  EXPECT_THAT(cc.refY(), LengthIs(DoubleNear(50.0, 0.001), Lengthd::Unit::Percent));
+
+  auto rb = QueryElement<SVGMarkerElement>(document, "#rb");
+  EXPECT_THAT(rb.refX(), LengthIs(DoubleNear(100.0, 0.001), Lengthd::Unit::Percent));
+  EXPECT_THAT(rb.refY(), LengthIs(DoubleNear(100.0, 0.001), Lengthd::Unit::Percent));
+}
+
 TEST(AttributeParserTest, MarkerCommonAttributes) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg">
