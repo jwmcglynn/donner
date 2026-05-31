@@ -227,6 +227,20 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       break;
     }
 
+    case EditorCommand::Kind::RemoveAttribute: {
+      if (!command.element.has_value()) {
+        return;
+      }
+      // DOM-level attribute removal via the same structured-editing path as
+      // SetAttribute, so the source reflection drops the attribute too.
+      svg::SVGElement element = *command.element;
+      xml::ApplySourceEditResult result = document_->removeElementAttribute(
+          element, xml::XMLQualifiedNameRef(command.attributeName));
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
+      break;
+    }
+
     case EditorCommand::Kind::InsertElement: {
       if (!command.parentElement.has_value() || !command.element.has_value()) {
         return;

@@ -1048,14 +1048,18 @@ void EditorApp::setElementVisible(const svg::SVGElement& element, bool visible) 
 }
 
 void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
-  // Toggle the `data-donner-locked` marker. Unlocking writes `"false"` rather
-  // than relying on attribute-removal semantics: `IsLocked` only treats
-  // `"true"` as locked, so `"false"` reads as unlocked and round-trips through
-  // SVG serialization. This mutation is never lock-gated (see
-  // `IsLockGatedCommand`) so a locked layer can always be unlocked.
-  applyMutation(EditorCommand::SetAttributeCommand(
-      element, std::string(kLockedAttributeName),
-      locked ? std::string(kLockedAttributeValue) : std::string("false")));
+  // Toggle the `data-donner-locked` marker. Locking writes `"true"`; unlocking
+  // *removes* the attribute entirely (rather than leaving `data-donner-locked
+  // ="false"` behind), so an unlocked element looks the same as one that was
+  // never locked. This mutation is never lock-gated (see `IsLockGatedCommand`)
+  // so a locked layer can always be unlocked.
+  if (locked) {
+    applyMutation(EditorCommand::SetAttributeCommand(element, std::string(kLockedAttributeName),
+                                                     std::string(kLockedAttributeValue)));
+  } else {
+    applyMutation(
+        EditorCommand::RemoveAttributeCommand(element, std::string(kLockedAttributeName)));
+  }
 }
 
 void EditorApp::toggleInSelection(const svg::SVGElement& element) {

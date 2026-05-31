@@ -412,7 +412,8 @@ TEST(LayersPanelTest, LockClickSetsLockedAttribute) {
   EXPECT_TRUE(IsLocked(locked->element));
   EXPECT_TRUE(locked->isLocked);
 
-  // Unlock: toggling again clears the locked state.
+  // Unlock: toggling again clears the locked state by REMOVING the attribute
+  // (not by writing data-donner-locked="false").
   panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "rect1")));
   EXPECT_TRUE(app.document().flushFrame());
   panel.refreshSnapshot(app);
@@ -420,6 +421,8 @@ TEST(LayersPanelTest, LockClickSetsLockedAttribute) {
   ASSERT_TRUE(unlocked.has_value());
   EXPECT_FALSE(IsLocked(unlocked->element));
   EXPECT_FALSE(unlocked->isLocked);
+  EXPECT_FALSE(unlocked->element.getAttribute("data-donner-locked").has_value())
+      << "unlock should remove data-donner-locked, not set it to \"false\"";
 }
 
 TEST(LayersPanelTest, LockSurvivesLoadFromSource) {

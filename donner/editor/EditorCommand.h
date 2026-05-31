@@ -51,6 +51,12 @@ struct EditorCommand {
     /// to the most-recently-queued value.
     SetAttribute,
 
+    /// Remove a single attribute from the element (DOM-level). Used to clear a
+    /// marker attribute rather than leaving a falsy value behind — e.g. unlocking
+    /// a layer removes `data-donner-locked` instead of writing `="false"`. No-op
+    /// if the attribute is absent. Not coalesced.
+    RemoveAttribute,
+
     /// Insert `element` as a child of `parentElement`, optionally before
     /// `referenceElement`. Used by authoring tools that create new DOM
     /// nodes. Not coalesced.
@@ -170,6 +176,15 @@ struct EditorCommand {
     cmd.element = std::move(element);
     cmd.attributeName = std::move(name);
     cmd.attributeValue = std::move(value);
+    return cmd;
+  }
+
+  /// Builds a RemoveAttribute command (DOM-level attribute removal).
+  static EditorCommand RemoveAttributeCommand(svg::SVGElement element, std::string name) {
+    EditorCommand cmd;
+    cmd.kind = Kind::RemoveAttribute;
+    cmd.element = std::move(element);
+    cmd.attributeName = std::move(name);
     return cmd;
   }
 
