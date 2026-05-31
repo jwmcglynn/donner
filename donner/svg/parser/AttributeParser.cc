@@ -1697,6 +1697,27 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGUseElement>(SVGParserContext& c
   return std::nullopt;
 }
 
+/// SVG2 allows `<marker>`/`<symbol>` `refX`/`refY` to be a keyword that resolves
+/// to a percentage of the reference viewport: `refX` accepts `left`/`center`/
+/// `right` (→ 0%/50%/100% of the width) and `refY` accepts `top`/`center`/
+/// `bottom` (→ 0%/50%/100% of the height). Percentages already resolve against
+/// the viewport extent at render time, so the keyword just maps to a percentage
+/// `Lengthd`. Returns `std::nullopt` when @p value is not one of these keywords
+/// (the caller then falls back to the normal length/number grammar).
+std::optional<Lengthd> ParseRefKeyword(std::string_view value, bool isX) {
+  if (value == "center") {
+    return Lengthd(50.0, Lengthd::Unit::Percent);
+  }
+  if (isX) {
+    if (value == "left") return Lengthd(0.0, Lengthd::Unit::Percent);
+    if (value == "right") return Lengthd(100.0, Lengthd::Unit::Percent);
+  } else {
+    if (value == "top") return Lengthd(0.0, Lengthd::Unit::Percent);
+    if (value == "bottom") return Lengthd(100.0, Lengthd::Unit::Percent);
+  }
+  return std::nullopt;
+}
+
 template <>
 std::optional<ParseDiagnostic> ParseAttribute<SVGMarkerElement>(SVGParserContext& context,
                                                                 SVGMarkerElement element,
@@ -1715,11 +1736,15 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGMarkerElement>(SVGParserContext
       element.setMarkerHeight(maybeLength.value());
     }
   } else if (name == XMLQualifiedNameRef("refX")) {
-    if (auto maybeLength = ParseLengthAttribute(context, value)) {
+    if (auto keyword = ParseRefKeyword(value, /*isX=*/true)) {
+      element.setRefX(*keyword);
+    } else if (auto maybeLength = ParseLengthAttribute(context, value)) {
       element.setRefX(maybeLength.value());
     }
   } else if (name == XMLQualifiedNameRef("refY")) {
-    if (auto maybeLength = ParseLengthAttribute(context, value)) {
+    if (auto keyword = ParseRefKeyword(value, /*isX=*/false)) {
+      element.setRefY(*keyword);
+    } else if (auto maybeLength = ParseLengthAttribute(context, value)) {
       element.setRefY(maybeLength.value());
     }
   } else if (name == XMLQualifiedNameRef("orient")) {
