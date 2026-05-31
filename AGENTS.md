@@ -154,7 +154,7 @@ Flag: `--//donner/svg/renderer:renderer_backend` (default: `tiny_skia`)
 | Config | Backend | Notes |
 |--------|---------|-------|
 | (default) | TinySkia (`RendererTinySkia`) | Lightweight software rasterizer, no external deps |
-| `--config=geode` | Geode (`RendererGeode`) | Experimental WebGPU + Slug backend |
+| `--config=geode` | Geode (`RendererGeode`) | GPU backend (WebGPU + Slug); default in the editor |
 
 ### Text Rendering
 
