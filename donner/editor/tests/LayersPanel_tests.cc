@@ -240,6 +240,23 @@ TEST(LayersPanelTest, LockClickSetsLockedAttribute) {
   EXPECT_FALSE(unlocked->isLocked);
 }
 
+TEST(LayersPanelTest, LockSurvivesLoadFromSource) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" data-donner-locked="true" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> row = FindRow(panel, "rect1");
+  ASSERT_TRUE(row.has_value());
+  // A `data-donner-locked` attribute present in the loaded source must be
+  // detected — otherwise locks do not survive save/reload (or any full reparse).
+  EXPECT_TRUE(IsLocked(row->element))
+      << "data-donner-locked loaded from source was not detected by IsLocked";
+  EXPECT_TRUE(row->isLocked);
+}
+
 TEST(LayersPanelTest, IsLockedReportsDescendantsLocked) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">

@@ -9,6 +9,22 @@
 
 namespace donner::editor {
 
+namespace {
+
+/// Parse options for editor documents. The editor round-trips user content, so
+/// the parser must PRESERVE user / `data-*` attributes in the DOM rather than
+/// dropping them — editor features read them back via `getAttribute` (e.g.
+/// `IsLocked` reads `data-donner-locked`), and a save must not silently lose the
+/// user's own attributes. The library default `disableUserAttributes = true` is
+/// correct for a strict renderer, not for an authoring tool.
+svg::parser::SVGParser::Options EditorParseOptions() {
+  svg::parser::SVGParser::Options options;
+  options.disableUserAttributes = false;
+  return options;
+}
+
+}  // namespace
+
 AsyncSVGDocument::AsyncSVGDocument() = default;
 
 void AsyncSVGDocument::setDocument(svg::SVGDocument document) {
@@ -125,7 +141,7 @@ xml::ApplySourceEditResult AsyncSVGDocument::applySourceEdit(const xml::XMLEditI
 
 bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
   ParseWarningSink sink;
-  auto result = svg::parser::SVGParser::ParseSVG(svgBytes, sink);
+  auto result = svg::parser::SVGParser::ParseSVG(svgBytes, sink, EditorParseOptions());
   if (result.hasError()) {
     // Stash the diagnostic so the source pane can show a line marker.
     // Leave the existing document in place — the user can keep editing
@@ -179,7 +195,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // `loadFromString` path — they genuinely replace the entity space.
       if (command.preserveUndoOnReparse) {
         ParseWarningSink sink;
-        auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink);
+        auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
         if (result.hasError()) {
           lastParseError_ = std::move(result.error());
           return;
@@ -251,7 +267,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // recorded by the orchestrator (EditorShell), not here. On parse failure
       // we leave the existing document in place and surface a diagnostic.
       ParseWarningSink sink;
-      auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink);
+      auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
       if (result.hasError()) {
         lastParseError_ = std::move(result.error());
         return;
