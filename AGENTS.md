@@ -61,6 +61,14 @@ Stages transform components through the ECS:
 3. **Rendering Instantiation** (`RenderingContext`): Traverses computed tree, creates `RenderingInstanceComponent` per visible element with resolved references (paint, clip, mask, marker, filter), offscreen subtrees, layer isolation (opacity < 1, filters, masks), and `drawOrder`.
 4. **Backend** (TinySkia or Geode): `RendererDriver` iterates `RenderingInstanceComponent`s in draw order, emitting commands to a `RendererInterface` implementation — sets canvas state, handles layers, draws shapes, configures paint (including offscreen subtree rendering for patterns/markers).
 
+## Editor: DOM-Level Editing Only
+
+- **All editor operations mutate the DOM (or above), never the source text directly.** Edits go DOM-first; the structured-editing infrastructure reflects the change back into the source (`SVGDocument::insertElement` / `removeElement` / attribute setters return `ApplySourceEditResult` source deltas the reflection layer applies). The source is a *projection* of the DOM, not what edits operate on.
+- **Source-string surgery is banned for structural edits** (reorder/z-order, rename, insert/delete/move element, group/ungroup, attribute change). Reorder = `removeElement` + `insertElement` on the DOM, not a text-span move. Rename = a DOM attribute change with reference updates on the DOM, not find/replace over source.
+- **One exception:** user-generated *text* operations — the source/text-editor pane where the user types/edits characters; there a reparse-from-text path is correct. It does NOT license structural ops to take a source shortcut.
+- Actions issued *from* the text view (e.g. drag-handle reorder) are still DOM operations whose result is reflected back into the text — the text view is just another surface for DOM edits.
+- See the project `CLAUDE.md` § "DOM-Level Editing Only" for the full rule.
+
 ## Pull Request Workflow
 
 When creating a pull request:
