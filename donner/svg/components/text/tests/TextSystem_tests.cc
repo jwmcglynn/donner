@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/base/MathUtils.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/tests/BaseTestUtils.h"
@@ -346,6 +347,48 @@ TEST_F(TextSystemTest, TextPathWithAbsoluteStartOffsetAndTransform) {
   EXPECT_EQ(computed->spans[1].pathSpline->points()[0], Vector2d(5, 7));
   EXPECT_EQ(computed->spans[1].pathSpline->points()[1], Vector2d(105, 7));
   EXPECT_DOUBLE_EQ(computed->spans[1].pathStartOffset, 10.0);
+}
+
+// Issue #624: the textPath baseline geometry must include the referenced path's
+// `transform-origin` pivot, so it lands in the same place the path element renders.
+// A rotate about a non-zero origin must pivot about that origin, not (0,0).
+TEST_F(TextSystemTest, TextPathTransformIncludesTransformOriginPivot) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink parseSink;
+  auto maybeResult = parser::SVGParser::ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <path id="p" d="M 0 0 L 100 0"/>
+      </defs>
+      <text id="t"><textPath href="#p">Pivoted</textPath></text>
+    </svg>
+  )svg",
+                                                 parseSink, options);
+  ASSERT_THAT(maybeResult, NoParseError());
+  auto document = std::move(maybeResult).result();
+
+  Registry& registry = document.registry();
+  auto pathEntity = document.querySelector("#p")->unsafeEntityHandle().entity();
+
+  // rotate(90deg) about the pivot (50, 0): maps (0,0)->(50,-50) and (100,0)->(50,50).
+  // Without the pivot, the same rotation about (0,0) would map (0,0)->(0,0), (100,0)->(0,100).
+  const Transform2d rotate90 = Transform2d::Rotate(MathConstants<double>::kHalfPi);
+  registry.emplace_or_replace<ComputedLocalTransformComponent>(
+      pathEntity, rotate90, CssTransform(rotate90), Vector2d(50, 0));
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(registry, warningSink);
+  TextSystem().instantiateAllComputedComponents(registry, warningSink);
+
+  auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
+  auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
+  ASSERT_NE(computed, nullptr);
+  ASSERT_THAT(computed->spans, SizeIs(2));
+  ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
+
+  // Pivoted result: T(-origin) * rotate90 * T(origin).
+  EXPECT_THAT(computed->spans[1].pathSpline->points()[0], Vector2Near(50.0, -50.0));
+  EXPECT_THAT(computed->spans[1].pathSpline->points()[1], Vector2Near(50.0, 50.0));
 }
 
 TEST_F(TextSystemTest, TextPathUsesSplineOverrideWhenComputedPathMissing) {

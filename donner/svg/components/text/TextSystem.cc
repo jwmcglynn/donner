@@ -136,10 +136,23 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
 
   // Apply the referenced path element's local transform to the path geometry.
   // Per SVG §10.12.2, textPath uses the path in the referenced element's user coordinate space.
+  //
+  // The transform must include the `transform-origin` pivot so the path the text follows lands
+  // in the same place as the path element renders.
+  // `ComputedLocalTransformComponent::parentFromEntity` is the *raw* transform (pivot not applied);
+  // compose the pivot here exactly as LayoutSystem::getEntityFromParentTransform does — `T(-origin)
+  // * M * T(origin)` in Donner's left-first multiplication order. Without this,
+  // `transform="rotate(90)" transform-origin="center"` rotated the baseline path about the origin
+  // instead of its center, sampling glyphs off-screen (issue #624:
+  // structure/transform-origin/on-text-path).
   const auto* localTransform =
       registry.try_get<ComputedLocalTransformComponent>(resolved->handle.entity());
-  if (localTransform && !localTransform->parentFromEntity.isIdentity()) {
-    const Transform2d& parentFromEntity = localTransform->parentFromEntity;
+  const Transform2d parentFromEntity =
+      localTransform ? Transform2d::Translate(-localTransform->transformOrigin) *
+                           localTransform->parentFromEntity *
+                           Transform2d::Translate(localTransform->transformOrigin)
+                     : Transform2d();
+  if (localTransform && !parentFromEntity.isIdentity()) {
     const auto& srcPoints = computedPath->spline.points();
     const auto& srcCommands = computedPath->spline.commands();
     PathBuilder builder;
