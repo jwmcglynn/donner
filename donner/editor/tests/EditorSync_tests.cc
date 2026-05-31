@@ -715,6 +715,42 @@ TEST(EditorSyncTest, StructuredSourceEditDeletesChildElementIncrementally) {
   EXPECT_EQ(reloadedSecondRect.entityHandle().entity(), secondRectEntity);
 }
 
+TEST(EditorSyncTest, WholeTextDiffFallbackDoesNotDesyncDomFromSourceOnSimilarSiblingInsert) {
+  // When a source change arrives WITHOUT precise SourceEditIntents (e.g. a
+  // programmatic setText), DispatchSourceTextChange diffs the whole buffer with
+  // BuildSingleSourceTextEdit. Inserting an element textually similar to an
+  // adjacent sibling collapses under minimal prefix/suffix diffing into what
+  // looks like a single-character `id="b"`->`id="c"` attribute edit. The
+  // structured apply must NOT silently rename the existing sibling and drop the
+  // new element: the DOM must stay consistent with the (correct) source bytes,
+  // falling back to a full reparse if the incremental apply would desync.
+  EditorApp app;
+  ASSERT_TRUE(app.structuredEditingEnabled());
+  ASSERT_TRUE(app.loadFromString(kTwoRectsSvg));
+
+  std::string previousSourceText(kTwoRectsSvg);
+  std::optional<std::string> lastWritebackSourceText;
+  std::string editedSource(kTwoRectsSvg);
+  const std::size_t pos = editedSource.find(R"(<rect id="b")");
+  ASSERT_NE(pos, std::string::npos);
+  editedSource.insert(pos, R"(<rect id="c" x="70" y="10" width="10" height="10"/>
+         )");
+
+  const auto dispatch =
+      DispatchSourceTextChange(app, editedSource, &previousSourceText, &lastWritebackSourceText);
+  EXPECT_TRUE(dispatch.dispatchedMutation);
+  // A desync-detecting fallback may queue a ReplaceDocument; flush it so the DOM
+  // reflects the final source either way.
+  app.flushFrame();
+
+  EXPECT_EQ(app.document().document().source(), editedSource);
+  // All three elements must exist in the live DOM, matching the source bytes.
+  EXPECT_TRUE(app.document().document().querySelector("#a").has_value());
+  EXPECT_TRUE(app.document().document().querySelector("#b").has_value())
+      << "the trailing sibling was dropped from the DOM (renamed to #c by the ambiguous diff)";
+  EXPECT_TRUE(app.document().document().querySelector("#c").has_value());
+}
+
 TEST(EditorSyncTest, StructuredSourceEditingIsDefaultForNewEditorApps) {
   constexpr std::string_view kSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" fill="red"/></svg>)";
