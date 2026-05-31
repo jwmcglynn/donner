@@ -113,6 +113,7 @@ SKIPPED_PACKAGES = {
     "donner/editor/sandbox",
     "donner/editor/sandbox/tests",
     "donner/editor/tests",
+    "donner/editor/tools",  # Editor showcase-asset generator — depends on the Bazel-only editor libs
     "donner/editor/wasm",
     "third_party/emscripten-glfw",
     "third_party/stb",
