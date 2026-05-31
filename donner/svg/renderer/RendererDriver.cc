@@ -60,6 +60,17 @@ namespace {
 /// the bounds before this check.
 inline constexpr double kMinCullableExtentDevicePx = 0.25;
 
+/// Maximum nesting depth for chained `<feImage>` fragment references
+/// (filter1→rect3→filter2→rect4→…). The visited-set guard already stops a true
+/// *cycle*, but an arbitrarily long *acyclic* chain would otherwise recurse once
+/// per link — each level standing up a GPU offscreen instance — and can exhaust
+/// the native stack (issue #552, segfault on macOS/Metal). Past this depth the
+/// over-deep fragment is rendered as empty/transparent instead of recursing
+/// further. Real documents nest at most a couple of levels (resvg's
+/// `chained-feImage` is depth 2); 32 is far above any legitimate use while still
+/// safely bounding stack growth.
+inline constexpr int kMaxFeImageFragmentDepth = 32;
+
 /// Slack margin (in device pixels) applied when intersecting the viewport for
 /// culling. Keeps fractional-pixel strokes at the viewport edge safely on-screen
 /// — we'd rather do a little extra work than cull content the user should see.
@@ -2570,6 +2581,28 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     feImageFragmentGuard_ = &localGuard;
   }
 
+  // Depth cap: a long acyclic chain of feImage fragment references would recurse once per link
+  // (each level standing up a GPU offscreen instance) and can exhaust the native stack on some
+  // drivers (issue #552). Beyond the cap, leave each unresolved fragment as empty (its `imageData`
+  // stays empty and `applyImage` paints transparent) rather than recursing further. We still clear
+  // `fragmentId` so the renderer treats it as a resolved-but-empty image instead of retrying.
+  if (feImageFragmentDepth_ >= kMaxFeImageFragmentDepth) {
+    if (verbose_) {
+      std::cerr << "[preRenderFeImageFragments] feImage fragment nesting exceeded "
+                << kMaxFeImageFragmentDepth << "; rendering deeper fragments as empty\n";
+    }
+    for (auto& node : filterGraph.nodes) {
+      if (auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
+          imageNode && !imageNode->fragmentId.empty() && imageNode->imageData.empty()) {
+        imageNode->fragmentId = RcString();
+      }
+    }
+    if (ownsGuard) {
+      feImageFragmentGuard_ = nullptr;
+    }
+    return;
+  }
+
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
     if (!imageNode || imageNode->fragmentId.empty() || !imageNode->imageData.empty()) {
@@ -2647,10 +2680,13 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     viewport.devicePixelRatio = 1.0;
     offscreen->beginFrame(viewport);
 
-    // Create a sub-driver for offscreen rendering and share the recursion guard.
+    // Create a sub-driver for offscreen rendering and share the recursion guard. The depth is
+    // carried into the sub-driver (one level deeper) so the chain-length cap above accumulates
+    // across the whole nested-fragment recursion, not just within a single driver instance.
     RendererDriver subDriver(*offscreen, verbose_);
     subDriver.renderingSize_ = renderingSize_;
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
+    subDriver.feImageFragmentDepth_ = feImageFragmentDepth_ + 1;
 
     // The fragment is rendered at its natural position in the document coordinate system
     // (no surfaceFromCanvasTransform_ offset). The filter pipeline applies a device-space
