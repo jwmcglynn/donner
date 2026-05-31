@@ -882,3 +882,30 @@ reachable in the running editor. The `TextTool` / `Kind::InsertText` plumbing an
 - [ ] When shapes are added or reordered, the **serialized source formatting** (indent
       depth, placement) must match the surrounding tree so the document text stays
       clean instead of mis-indented.
+
+### Known gap: incremental reparse for structural text edits
+
+The intended model (see `CLAUDE.md` / `AGENTS.md` § "DOM-Level Editing Only") is
+that **even typing in the source pane is DOM-aware**: an edit should be
+incrementally reparsed and applied to the *live DOM tree in place*, preserving
+entity identity so selection, compositor caches, and references survive the
+keystroke.
+
+**What's actually implemented:** `ChangeClassifier::classifyTextChange` is a
+conservative gate:
+- An **attribute-value** edit (typing inside a `name="…"` value on one element)
+  is classified → `SetAttributeCommand` → targeted DOM update, no reparse,
+  identity preserved. ✅ matches intent.
+- **Everything else** (structural edits — adding/removing/moving tags, or any
+  change the classifier can't conclusively pin to a single attribute value)
+  falls through to `ReplaceDocumentCommand` → **full-document re-parse**. It uses
+  `BuildStructuralEntityRemap` to carry entity identity *across* the reparse when
+  the tree shape still matches, but it is a whole-document reparse, **not** an
+  incremental in-place update of the touched region. ⚠️
+
+**The gap:** there is no incremental structural reparser (reparse only the edited
+span and splice it into the live tree). Structural typing therefore pays a
+full-document reparse and only preserves identity opportunistically via the
+structural remap. Closing this means extending the classifier (or adding an
+incremental structural-edit path) so more edit classes update the live tree in
+place. Tracked as **GitHub issue #634**.
