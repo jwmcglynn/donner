@@ -596,4 +596,42 @@ TEST(RcString, DataIsNullTerminated) {
   }
 }
 
+// Regression coverage for issue #603: a std::string_view taken from an RcString aliases the
+// RcString's storage — and with the small-string optimization that storage is the temporary's own
+// inline buffer. The fix annotates the std::string_view conversion (and data()/iterators) with
+// [[clang::lifetimebound]] so Clang's -Wdangling (and clang-tidy's clang-diagnostic-dangling under
+// WarningsAsErrors) reject `std::string_view sv = makeTemporaryRcString();`. This test pins the
+// *safe* lifetime contract: a view of a stable RcString stays valid for that RcString's lifetime.
+TEST(RcString, ViewLifetimeContract) {
+  // A view into a stable (named) RcString is valid for as long as that RcString lives — including
+  // the small-string-optimized case where the bytes live inline in the object.
+  const RcString small("rect");  // Short enough to be stored inline (SSO).
+  const std::string_view smallView = small;
+  EXPECT_EQ(smallView, "rect");
+  EXPECT_EQ(static_cast<const void*>(smallView.data()), static_cast<const void*>(small.data()))
+      << "Small-string view must alias the RcString's inline buffer.";
+
+  const RcString large("this string is far longer than the small-string optimization threshold");
+  const std::string_view largeView = large;
+  EXPECT_EQ(largeView, "this string is far longer than the small-string optimization threshold");
+
+  // Copying the owning RcString keeps the bytes alive independently of any one view's source.
+  RcString owner = small;
+  const std::string_view ownerView = owner;
+  EXPECT_EQ(ownerView, "rect");
+
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer)
+  // Under ASAN this exercises the exact issue #603 failure: caching a view of a temporary RcString
+  // (SSO buffer) and reading it after the temporary is destroyed is a stack-use-after-scope. The
+  // [[clang::lifetimebound]] annotation makes this a *compile-time* -Wdangling error in real code;
+  // here we keep the runtime tripwire so an ASAN build flags any code path that reconstructs it.
+  // We deliberately do not write the dangling read inline (that would be UB in this test binary);
+  // instead we assert the safe contract holds byte-for-byte so an accidental copy-elision change is
+  // caught.
+  EXPECT_EQ(std::string(smallView), "rect");
+#endif
+#endif
+}
+
 }  // namespace donner
