@@ -3,6 +3,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -295,13 +296,16 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
         return;
       }
       svg::SVGElement textElement = *command.element;
-      if (!textElement.isa<svg::SVGTextContentElement>()) {
-        return;
-      }
       // Replace the live DOM text content so the renderer and inspector reflect
       // the new content immediately. The source pane re-syncs through the
-      // editor's normal DOM->source path.
-      textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
+      // editor's normal DOM->source path. `<style>` text lives in the element's
+      // Data child nodes / parsed stylesheet rather than a TextComponent, so it
+      // takes the SVGStyleElement path.
+      if (textElement.isa<svg::SVGTextContentElement>()) {
+        textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
+      } else if (textElement.isa<svg::SVGStyleElement>()) {
+        textElement.cast<svg::SVGStyleElement>().setTextContent(command.textContent);
+      }
       break;
     }
   }

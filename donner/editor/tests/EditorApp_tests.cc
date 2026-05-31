@@ -12,6 +12,7 @@
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -1551,6 +1552,42 @@ TEST(EditorAppRenameTest, RenameRepointsHrefReference) {
 
   EXPECT_TRUE(app.document().document().querySelector("#rect2").has_value());
   EXPECT_EQ(AttrOf(app, "u", "href"), "#rect2");
+}
+
+// `#grad` appears both as a standalone id selector (must repoint) and as the
+// prefix of `#gradient` (must NOT repoint — different, longer token).
+constexpr std::string_view kStyleSelectorDoc =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#grad { fill: red }
+#gradient { fill: blue }</style>
+         <rect id="grad" x="0" y="0" width="50" height="50"/>
+       </svg>)svg";
+
+std::optional<std::string> StyleTextOf(EditorApp& app) {
+  const std::optional<svg::SVGElement> styleElement =
+      app.document().document().querySelector("style");
+  if (!styleElement.has_value() || !styleElement->isa<svg::SVGStyleElement>()) {
+    return std::nullopt;
+  }
+  return std::string(styleElement->cast<svg::SVGStyleElement>().textContent().str());
+}
+
+TEST(EditorAppRenameTest, RenameRepointsStyleBlockIdSelector) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kStyleSelectorDoc)));
+  // Sanity: the original stylesheet text is readable before the rename.
+  EXPECT_THAT(StyleTextOf(app),
+              ::testing::Optional(std::string("#grad { fill: red }\n#gradient { fill: blue }")));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.document().document().querySelector("#g2").has_value());
+  // The `#grad` id selector inside <style> is repointed to `#g2`, while the
+  // longer `#gradient` token is left untouched (boundary-correct rewrite). The
+  // whole text is asserted exactly so any stale `#grad` selector trips.
+  EXPECT_THAT(StyleTextOf(app),
+              ::testing::Optional(std::string("#g2 { fill: red }\n#gradient { fill: blue }")));
 }
 
 TEST(EditorAppRenameTest, RefusesEmptySameAndDuplicateIds) {

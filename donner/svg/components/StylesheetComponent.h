@@ -74,6 +74,7 @@ private:
  */
 struct StylesheetComponent {
   css::Stylesheet stylesheet;     ///< The parsed stylesheet from the \ref xml_style element.
+  RcString text;                  ///< The raw CSS text the \ref stylesheet was parsed from.
   RcString type;                  ///< The type attribute of the \ref xml_style element.
   StylesheetSourceMap sourceMap;  ///< Optional mapping from CSS offsets to SVG document source.
 

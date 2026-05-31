@@ -17,6 +17,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
 
@@ -622,6 +623,34 @@ std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std
   return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
 }
 
+/// Rewrite `#oldId` CSS id-selector tokens to `#newId` inside a `<style>`
+/// element's text content. A match is a literal `#` immediately followed by
+/// exactly @p oldId and then either end-of-string or a non-id character; the
+/// leading `#` and the trailing boundary leave `#oldIdSuffix` (longer token)
+/// and a bare `oldId` substring (no `#`) untouched. Returns the rewritten text
+/// if anything changed, otherwise `std::nullopt`.
+std::optional<std::string> RewriteIdSelectorInStyle(std::string_view value, std::string_view oldId,
+                                                    std::string_view newId) {
+  std::string out;
+  bool changed = false;
+  std::size_t i = 0;
+  while (i < value.size()) {
+    if (value[i] == '#' && value.compare(i + 1, oldId.size(), oldId) == 0) {
+      const std::size_t after = i + 1 + oldId.size();
+      if (after >= value.size() || !IsIdChar(value[after])) {
+        out.push_back('#');
+        out.append(newId);
+        i = after;
+        changed = true;
+        continue;
+      }
+    }
+    out.push_back(value[i]);
+    ++i;
+  }
+  return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
+}
+
 /// Depth-first list of every element in the document tree rooted at @p root.
 void CollectElements(const svg::SVGElement& root, std::vector<svg::SVGElement>& out) {
   out.push_back(root);
@@ -883,7 +912,12 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
     std::string name;
     std::string value;
   };
+  struct PendingStyle {
+    svg::SVGStyleElement element;
+    std::string text;
+  };
   std::vector<PendingAttr> referenceUpdates;
+  std::vector<PendingStyle> styleUpdates;
   if (!oldId.empty()) {
     std::vector<svg::SVGElement> all;
     CollectElements(doc.svgElement(), all);
@@ -911,6 +945,21 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
           });
         }
       }
+
+      // Repoint `#oldId` CSS id selectors inside any `<style>` element's text
+      // content (DOM-level: read the live stylesheet text, rewrite the selector
+      // tokens, and write it back via a SetTextContent command).
+      if (candidate.isa<svg::SVGStyleElement>()) {
+        svg::SVGStyleElement style = candidate.cast<svg::SVGStyleElement>();
+        if (std::optional<std::string> rewritten =
+                RewriteIdSelectorInStyle(style.textContent().str(), oldId, newIdStr);
+            rewritten.has_value()) {
+          styleUpdates.push_back(PendingStyle{
+              .element = style,
+              .text = std::move(*rewritten),
+          });
+        }
+      }
     }
   }
 
@@ -927,6 +976,9 @@ bool EditorApp::renameSelectedElement(std::string_view newId) {
   for (PendingAttr& update : referenceUpdates) {
     applyMutation(EditorCommand::SetAttributeCommand(update.element, std::move(update.name),
                                                      std::move(update.value)));
+  }
+  for (PendingStyle& update : styleUpdates) {
+    applyMutation(EditorCommand::SetTextContentCommand(update.element, std::move(update.text)));
   }
   return true;
 }
