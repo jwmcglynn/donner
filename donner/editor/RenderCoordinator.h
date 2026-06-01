@@ -100,12 +100,6 @@ public:
   }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
-  /// Add immediate presenter-side overlay draw-list time to the current frame counters.
-  ///
-  /// @param drawMs Milliseconds spent issuing immediate overlay draw-list commands.
-  void addImmediateOverlayDrawCost(double drawMs) {
-    lastFrameCostBreakdown_.overlay.drawMs += drawMs;
-  }
   /// Replace transient source-hover chrome elements.
   ///
   /// @param elements Elements to highlight as source-hover preview chrome.

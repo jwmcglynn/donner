@@ -1,8 +1,6 @@
 #include "donner/editor/RenderPanePresenter.h"
 
 #include <algorithm>
-#include <array>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -54,14 +52,6 @@ constexpr ImU32 kMemoryOverviewTileColor = IM_COL32(78, 170, 116, 255);
 constexpr ImU32 kMemoryRetiredColor = IM_COL32(215, 110, 64, 255);
 constexpr ImU32 kMemoryOverlayColor = IM_COL32(212, 92, 255, 255);
 constexpr ImU32 kMemoryPeakColor = IM_COL32(255, 255, 255, 90);
-constexpr ImU32 kOverlaySelectionColor = IM_COL32(0x00, 0xc8, 0xff, 0xff);
-constexpr ImU32 kOverlayDisplayNoneColor = IM_COL32(0x5f, 0x9a, 0xb2, 0xff);
-constexpr ImU32 kOverlayHandleFillColor = IM_COL32(0xff, 0xff, 0xff, 0xff);
-constexpr ImU32 kOverlaySourceHoverStrokeColor = IM_COL32(0xff, 0xff, 0xff, 0xd0);
-constexpr ImU32 kOverlaySourceHoverBoundsColor = IM_COL32(0x00, 0xc8, 0xff, 0xc8);
-constexpr ImU32 kOverlayMarqueeFillColor = IM_COL32(0x00, 0xc8, 0xff, 0x33);
-constexpr ImU32 kOverlayMarqueeStrokeColor = IM_COL32(0xff, 0xff, 0xff, 0xff);
-
 ImVec4 ImU32ToImVec4(ImU32 color) {
   return ImGui::ColorConvertU32ToFloat4(color);
 }
@@ -431,11 +421,6 @@ bool IsFinite(const Vector2d& value) {
   return std::isfinite(value.x) && std::isfinite(value.y);
 }
 
-double MillisecondsSince(std::chrono::steady_clock::time_point start) {
-  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
-      .count();
-}
-
 Box2d PresentedTileQuadBounds(const PresentedTileQuad& tileQuad) {
   Box2d bounds = Box2d::CreateEmpty(tileQuad.topLeft);
   bounds.addPoint(tileQuad.topRight);
@@ -444,330 +429,7 @@ Box2d PresentedTileQuadBounds(const PresentedTileQuad& tileQuad) {
   return bounds;
 }
 
-bool SelectionChromeSnapshotHasContent(const SelectionChromeSnapshot& snapshot) {
-  return !snapshot.paths.empty() || !snapshot.hoverPaths.empty() || !snapshot.aabbsDoc.empty() ||
-         !snapshot.hoverAabbsDoc.empty() || snapshot.marqueeDoc.has_value() ||
-         snapshot.orientedBoundsDoc.has_value() || !snapshot.handleBoxesDoc.empty();
-}
-
-float OverlayStrokeWidth(double strokeWidthDoc, const ViewportState& viewport) {
-  const float screenWidth =
-      static_cast<float>(std::abs(strokeWidthDoc * viewport.pixelsPerDocUnit()));
-  return std::max(0.5f, screenWidth);
-}
-
-std::array<ImVec2, 4> ScreenBoxCorners(const ViewportState& viewport, const Box2d& docBox) {
-  return {
-      ToImVec2(viewport.documentToScreen(docBox.topLeft)),
-      ToImVec2(viewport.documentToScreen(Vector2d(docBox.bottomRight.x, docBox.topLeft.y))),
-      ToImVec2(viewport.documentToScreen(docBox.bottomRight)),
-      ToImVec2(viewport.documentToScreen(Vector2d(docBox.topLeft.x, docBox.bottomRight.y))),
-  };
-}
-
-Box2d CombinedSelectionBounds(std::span<const Box2d> boxes) {
-  Box2d combined = boxes.front();
-  for (const Box2d& box : boxes.subspan(1)) {
-    combined.addPoint(box.topLeft);
-    combined.addPoint(box.bottomRight);
-  }
-  return combined;
-}
-
-void StrokeDocumentPath(ImDrawList* drawList, const ViewportState& viewport, const Path& path,
-                        ImU32 color, float thickness) {
-  for (const OverlayStrokePolyline& subpath : OverlayScreenPolylinesForPath(viewport, path)) {
-    const std::vector<Vector2d>& pts = subpath.points;
-    if (pts.size() < 2) {
-      continue;
-    }
-
-    // Beveling under the miter limit means breaking the ImGui stroke run at any
-    // joint sharper than the limit. ImGui miters within a single PathStroke run
-    // (and only caps the normal at IM_FIXNORMAL2F=100, which still lets a sharp
-    // cusp grow a ~5x-half-width spur — the QA "flare"). Splitting the run into
-    // butt-capped sub-runs at sharp joints produces the bevel the Donner
-    // renderer draws, with no spike.
-    const std::vector<std::size_t> breaks =
-        OverlayMiterBreakIndices(pts, subpath.closed, kOverlayStrokeMiterLimit);
-
-    const auto strokeOpenRun = [&](std::size_t first, std::size_t last) {
-      if (last <= first) {
-        return;
-      }
-      drawList->PathClear();
-      for (std::size_t i = first; i <= last; ++i) {
-        drawList->PathLineTo(ToImVec2(pts[i]));
-      }
-      drawList->PathStroke(color, ImDrawFlags_None, thickness);
-      drawList->PathClear();
-    };
-
-    if (breaks.empty()) {
-      // No sharp joints: stroke the whole subpath as one mitered run.
-      drawList->PathClear();
-      for (const Vector2d& point : pts) {
-        drawList->PathLineTo(ToImVec2(point));
-      }
-      drawList->PathStroke(color, subpath.closed ? ImDrawFlags_Closed : ImDrawFlags_None,
-                           thickness);
-      drawList->PathClear();
-      continue;
-    }
-
-    // Emit each beveled segment as its own butt-capped run. For a closed
-    // polyline the break list rotates the loop so the first run starts at the
-    // first break; the wrap-around segment is stitched by appending the head
-    // run's points after the tail.
-    if (subpath.closed) {
-      const std::size_t n = pts.size();
-      for (std::size_t b = 0; b < breaks.size(); ++b) {
-        const std::size_t start = breaks[b];
-        const std::size_t end = breaks[(b + 1) % breaks.size()];
-        drawList->PathClear();
-        std::size_t i = start;
-        while (true) {
-          drawList->PathLineTo(ToImVec2(pts[i]));
-          if (i == end) {
-            break;
-          }
-          i = (i + 1) % n;
-        }
-        drawList->PathStroke(color, ImDrawFlags_None, thickness);
-        drawList->PathClear();
-      }
-    } else {
-      std::size_t runStart = 0;
-      for (const std::size_t breakIdx : breaks) {
-        strokeOpenRun(runStart, breakIdx);
-        runStart = breakIdx;
-      }
-      strokeOpenRun(runStart, pts.size() - 1);
-    }
-  }
-}
-
-void StrokeDocumentBox(ImDrawList* drawList, const ViewportState& viewport, const Box2d& docBox,
-                       ImU32 color, float thickness) {
-  const std::array<ImVec2, 4> corners = ScreenBoxCorners(viewport, docBox);
-  drawList->AddPolyline(corners.data(), static_cast<int>(corners.size()), color, ImDrawFlags_Closed,
-                        thickness);
-}
-
-void FillDocumentBox(ImDrawList* drawList, const ViewportState& viewport, const Box2d& docBox,
-                     ImU32 color) {
-  const Box2d screenBox = viewport.documentToScreen(docBox);
-  drawList->AddRectFilled(ToImVec2(screenBox.topLeft), ToImVec2(screenBox.bottomRight), color);
-}
-
-void DrawImmediateSelectionChrome(ImDrawList* drawList, const RenderPanePresenterState& state) {
-  if (!state.immediateOverlaySnapshot.has_value() ||
-      !SelectionChromeSnapshotHasContent(*state.immediateOverlaySnapshot)) {
-    return;
-  }
-
-  const SelectionChromeSnapshot& snapshot = *state.immediateOverlaySnapshot;
-  const float selectionStrokeWidth =
-      OverlayStrokeWidth(snapshot.selectionStrokeWidthWorld, state.viewport);
-  const float hoverStrokeWidth = OverlayStrokeWidth(snapshot.hoverStrokeWidthWorld, state.viewport);
-  const float marqueeStrokeWidth =
-      OverlayStrokeWidth(snapshot.marqueeStrokeWidthWorld, state.viewport);
-
-  if (!snapshot.hoverPaths.empty()) {
-    for (const SelectionChromeSnapshot::PathItem& item : snapshot.hoverPaths) {
-      StrokeDocumentPath(drawList, state.viewport, item.pathDoc, kOverlaySourceHoverStrokeColor,
-                         hoverStrokeWidth);
-    }
-  } else {
-    for (const Box2d& hoverAabb : snapshot.hoverAabbsDoc) {
-      StrokeDocumentBox(drawList, state.viewport, hoverAabb, kOverlaySourceHoverBoundsColor,
-                        hoverStrokeWidth);
-    }
-  }
-
-  for (const SelectionChromeSnapshot::PathItem& item : snapshot.paths) {
-    StrokeDocumentPath(drawList, state.viewport, item.pathDoc,
-                       item.displayNone ? kOverlayDisplayNoneColor : kOverlaySelectionColor,
-                       selectionStrokeWidth);
-  }
-
-  if (snapshot.orientedBoundsDoc.has_value()) {
-    std::array<ImVec2, 4> corners;
-    std::ranges::transform(
-        snapshot.orientedBoundsDoc->cornersDoc, corners.begin(),
-        [&](const Vector2d& corner) { return ToImVec2(state.viewport.documentToScreen(corner)); });
-    drawList->AddPolyline(corners.data(), static_cast<int>(corners.size()), kOverlaySelectionColor,
-                          ImDrawFlags_Closed, selectionStrokeWidth);
-  } else if (!snapshot.aabbsDoc.empty()) {
-    const Box2d combinedBounds = CombinedSelectionBounds(snapshot.aabbsDoc);
-    for (const Box2d& aabb : snapshot.aabbsDoc) {
-      StrokeDocumentBox(drawList, state.viewport, aabb, kOverlaySelectionColor,
-                        selectionStrokeWidth);
-    }
-    if (snapshot.aabbsDoc.size() > 1) {
-      StrokeDocumentBox(drawList, state.viewport, combinedBounds, kOverlaySelectionColor,
-                        selectionStrokeWidth);
-    }
-  }
-
-  for (const Box2d& handleBox : snapshot.handleBoxesDoc) {
-    FillDocumentBox(drawList, state.viewport, handleBox, kOverlayHandleFillColor);
-    StrokeDocumentBox(drawList, state.viewport, handleBox, kOverlaySelectionColor,
-                      selectionStrokeWidth);
-  }
-
-  if (snapshot.marqueeDoc.has_value()) {
-    FillDocumentBox(drawList, state.viewport, *snapshot.marqueeDoc, kOverlayMarqueeFillColor);
-    StrokeDocumentBox(drawList, state.viewport, *snapshot.marqueeDoc, kOverlayMarqueeStrokeColor,
-                      marqueeStrokeWidth);
-  }
-}
-
 }  // namespace
-
-std::vector<OverlayStrokePolyline> OverlayScreenPolylinesForPath(const ViewportState& viewport,
-                                                                 const Path& pathDoc) {
-  std::vector<OverlayStrokePolyline> subpaths;
-  if (pathDoc.empty()) {
-    return subpaths;
-  }
-
-  // ImGui's `PathBezier*CurveTo` tessellate into `_Path` using the current pen
-  // position (`_Path.back()`) as the curve's first on-curve point. We use a
-  // local draw list purely as that tessellator and harvest `_Path` per subpath,
-  // so the polylines we return are byte-for-byte what the on-screen overlay
-  // would have stroked.
-  ImDrawListSharedData sharedData;
-  sharedData.CurveTessellationTol = 1.25f;
-  ImDrawList tessellator(&sharedData);
-
-  bool subpathOpen = false;
-  bool pendingClosed = false;
-  const auto flush = [&](bool closed) {
-    if (subpathOpen && tessellator._Path.Size >= 1) {
-      OverlayStrokePolyline polyline;
-      polyline.closed = closed;
-      polyline.points.reserve(static_cast<std::size_t>(tessellator._Path.Size));
-      for (int i = 0; i < tessellator._Path.Size; ++i) {
-        polyline.points.emplace_back(tessellator._Path[i].x, tessellator._Path[i].y);
-      }
-      subpaths.push_back(std::move(polyline));
-    }
-    tessellator.PathClear();
-    subpathOpen = false;
-  };
-
-  const auto screen = [&](const Vector2d& docPoint) {
-    const Vector2d s = viewport.documentToScreen(docPoint);
-    return ImVec2(static_cast<float>(s.x), static_cast<float>(s.y));
-  };
-
-  // Every Donner subpath opens with a MoveTo (the path builder inserts an
-  // implicit one after a ClosePath), so the pen is always seeded before any
-  // curve consumes `_Path.back()`. Guard anyway: a curve before a MoveTo would
-  // read a stale/out-of-bounds `_Path.back()`.
-  constexpr int kOverlayBezierSegments = 8;
-  pathDoc.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
-    switch (verb) {
-      case Path::Verb::MoveTo:
-        flush(pendingClosed);
-        pendingClosed = false;
-        tessellator.PathLineTo(screen(points[0]));
-        subpathOpen = true;
-        break;
-      case Path::Verb::LineTo:
-        if (subpathOpen) {
-          tessellator.PathLineTo(screen(points[0]));
-        }
-        break;
-      case Path::Verb::QuadTo:
-        if (subpathOpen) {
-          tessellator.PathBezierQuadraticCurveTo(screen(points[0]), screen(points[1]),
-                                                 kOverlayBezierSegments);
-        }
-        break;
-      case Path::Verb::CurveTo:
-        if (subpathOpen) {
-          tessellator.PathBezierCubicCurveTo(screen(points[0]), screen(points[1]),
-                                             screen(points[2]), kOverlayBezierSegments);
-        }
-        break;
-      case Path::Verb::ClosePath:
-        pendingClosed = true;
-        flush(/*closed=*/true);
-        pendingClosed = false;
-        break;
-    }
-  });
-  flush(pendingClosed);
-
-  return subpaths;
-}
-
-std::vector<std::size_t> OverlayMiterBreakIndices(const std::vector<Vector2d>& points, bool closed,
-                                                  double miterLimit) {
-  std::vector<std::size_t> breaks;
-  const std::size_t n = points.size();
-  if (n < 3 || miterLimit <= 0.0) {
-    return breaks;
-  }
-
-  // We break exactly the joints where ImGui's thick-line stroker would draw a
-  // miter offset longer than `miterLimit` half-widths. ImGui averages the two
-  // adjacent edge normals and rescales by IM_FIXNORMAL2F (inverse-length capped
-  // at 100); the resulting offset is the visible spike. Computing that exact
-  // quantity here — rather than the textbook 1/sin(theta/2) miter ratio — keeps
-  // the break decision faithful to what the user actually sees, including the
-  // fact that a near-180° cusp produces a *small* ImGui offset (no flare) while
-  // a moderately sharp turn produces the largest one.
-  const auto leftNormal = [](const Vector2d& a, const Vector2d& b) -> std::optional<Vector2d> {
-    const Vector2d d = b - a;
-    const double len = d.length();
-    if (len < 1e-9) {
-      return std::nullopt;
-    }
-    return Vector2d(d.y / len, -d.x / len);  // ImGui's left-normal convention.
-  };
-
-  const auto isSharp = [&](std::size_t prev, std::size_t cur, std::size_t next) {
-    const std::optional<Vector2d> n1 = leftNormal(points[prev], points[cur]);
-    const std::optional<Vector2d> n2 = leftNormal(points[cur], points[next]);
-    if (!n1 || !n2) {
-      return false;
-    }
-    double dmx = (n1->x + n2->x) * 0.5;
-    double dmy = (n1->y + n2->y) * 0.5;
-    double d2 = dmx * dmx + dmy * dmy;
-    if (d2 > 0.000001) {
-      double invLen2 = 1.0 / d2;
-      if (invLen2 > 100.0) {  // IM_FIXNORMAL2F_MAX_INVLEN2
-        invLen2 = 100.0;
-      }
-      dmx *= invLen2;
-      dmy *= invLen2;
-    }
-    // |dm| is the outward miter offset in half-widths (1.0 == flat edge).
-    return std::sqrt(dmx * dmx + dmy * dmy) > miterLimit;
-  };
-
-  if (closed) {
-    for (std::size_t i = 0; i < n; ++i) {
-      const std::size_t prev = (i + n - 1) % n;
-      const std::size_t next = (i + 1) % n;
-      if (isSharp(prev, i, next)) {
-        breaks.push_back(i);
-      }
-    }
-  } else {
-    for (std::size_t i = 1; i + 1 < n; ++i) {
-      if (isSharp(i - 1, i, i + 1)) {
-        breaks.push_back(i);
-      }
-    }
-  }
-
-  return breaks;
-}
 
 bool ShouldPresentCompositedTile(const GlTextureCache::TileView& tile, Entity suppressedLayerEntity,
                                  bool suppressDragTargetTiles) {
@@ -860,8 +522,7 @@ std::optional<Box2d> PresentedImageClipRect(const Box2d& paneRect, const Box2d& 
   return clipRect;
 }
 
-RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterState& state) const {
-  RenderPanePresenterCost cost;
+void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
   const bool hasVisibleTiles =
       std::ranges::any_of(state.textures.tiles(), [&](const GlTextureCache::TileView& tile) {
         return ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
@@ -875,19 +536,18 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
                             return ShouldPresentCompositedTile(tile, state.suppressedLayerEntity,
                                                                state.suppressDragTargetTiles);
                           });
-  const bool hasImmediateOverlay =
-      state.immediateOverlaySnapshot.has_value() &&
-      SelectionChromeSnapshotHasContent(*state.immediateOverlaySnapshot);
-  const bool hasTextureOverlay =
-      state.textures.overlayWidth() > 0 && state.textures.overlayHeight() > 0;
-  const bool hasOverlay = hasImmediateOverlay || hasTextureOverlay;
-  const bool hasPresentedContent = hasVisibleTiles || hasVisibleOverviewTiles || hasOverlay;
+  // Selection chrome (path outlines, hover, AABBs, oriented bounds, handles,
+  // marquee) is rendered exclusively by Donner's OverlayRenderer straight onto
+  // the Geode framebuffer (see EditorShell::DrawImmediateOverlaySnapshotToFramebuffer).
+  // The presenter only blits composited document tiles plus UI furniture, so
+  // presentable content here is purely tile-driven.
+  const bool hasPresentedContent = hasVisibleTiles || hasVisibleOverviewTiles;
 
   const Box2d paneRect = Box2d::FromXYWH(state.viewport.paneOrigin.x, state.viewport.paneOrigin.y,
                                          state.viewport.paneSize.x, state.viewport.paneSize.y);
   if (paneRect.bottomRight.x <= paneRect.topLeft.x ||
       paneRect.bottomRight.y <= paneRect.topLeft.y) {
-    return cost;
+    return;
   }
   const Box2d screenRect = state.viewport.imageScreenRect();
   const std::optional<Box2d> imageClipRect = PresentedImageClipRect(paneRect, screenRect);
@@ -901,7 +561,7 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
   DrawCheckerboard(paneDrawList, imageOrigin, imageBottomRight);
   if (!hasPresentedContent) {
     paneDrawList->PopClipRect();
-    return cost;
+    return;
   }
 
   const double pxPerDoc = state.viewport.pixelsPerDocUnit();
@@ -955,49 +615,6 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
   }
   paneDrawList->PopClipRect();
 
-  if (state.showOverlay && state.drawImmediateOverlay && hasImmediateOverlay &&
-      imageClipRect.has_value()) {
-    const auto overlayDrawStart = std::chrono::steady_clock::now();
-    paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
-                               ToImVec2(imageClipRect->bottomRight),
-                               /*intersect_with_current_clip_rect=*/true);
-    DrawImmediateSelectionChrome(paneDrawList, state);
-    paneDrawList->PopClipRect();
-    cost.immediateOverlayDrawMs = MillisecondsSince(overlayDrawStart);
-  } else if (state.showOverlay && hasTextureOverlay && imageClipRect.has_value()) {
-    if (state.textures.overlayScreenRect().has_value()) {
-      const Box2d& overlayScreenRect = *state.textures.overlayScreenRect();
-      paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
-                                 ToImVec2(imageClipRect->bottomRight),
-                                 /*intersect_with_current_clip_rect=*/true);
-      paneDrawList->AddImage(state.textures.overlayTexture(), ToImVec2(overlayScreenRect.topLeft),
-                             ToImVec2(overlayScreenRect.bottomRight), ImVec2(0.0f, 0.0f),
-                             ToImVec2(state.textures.overlayUvBottomRight()));
-      paneDrawList->PopClipRect();
-    } else {
-      const Vector2d docTopLeft = state.viewport.documentViewBox.topLeft;
-      const Vector2d docTopRight(state.viewport.documentViewBox.bottomRight.x,
-                                 state.viewport.documentViewBox.topLeft.y);
-      const Vector2d docBottomRight = state.viewport.documentViewBox.bottomRight;
-      const Vector2d docBottomLeft(state.viewport.documentViewBox.topLeft.x,
-                                   state.viewport.documentViewBox.bottomRight.y);
-      const auto overlayPoint = [&](const Vector2d& documentPoint) {
-        return state.viewport.documentToScreen(documentPoint);
-      };
-      paneDrawList->PushClipRect(ToImVec2(imageClipRect->topLeft),
-                                 ToImVec2(imageClipRect->bottomRight),
-                                 /*intersect_with_current_clip_rect=*/true);
-      const Vector2d overlayUvBottomRight = state.textures.overlayUvBottomRight();
-      paneDrawList->AddImageQuad(
-          state.textures.overlayTexture(), ToImVec2(overlayPoint(docTopLeft)),
-          ToImVec2(overlayPoint(docTopRight)), ToImVec2(overlayPoint(docBottomRight)),
-          ToImVec2(overlayPoint(docBottomLeft)), ImVec2(0.0f, 0.0f),
-          ImVec2(static_cast<float>(overlayUvBottomRight.x), 0.0f), ToImVec2(overlayUvBottomRight),
-          ImVec2(0.0f, static_cast<float>(overlayUvBottomRight.y)));
-      paneDrawList->PopClipRect();
-    }
-  }
-
   if (state.showFrameGraph) {
     constexpr float kFramePadding = 8.0f;
     const float graphHeight = kFrameGraphHeight + kMemoryGraphHeight +
@@ -1008,8 +625,6 @@ RenderPanePresenterCost RenderPanePresenter::render(const RenderPanePresenterSta
     ImGui::Dummy(ImVec2(0.0f, 4.0f));
     RenderMemoryGraph(state.frameHistory);
   }
-
-  return cost;
 }
 
 }  // namespace donner::editor

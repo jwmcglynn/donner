@@ -2316,7 +2316,13 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
-  bool directFramebufferOverlay = false;
+  // Selection chrome is rendered exclusively by Donner's OverlayRenderer drawn
+  // straight onto the Geode framebuffer via this direct-render callback. There
+  // is no ImGui-vector or texture-blit fallback: edge frames that can't take
+  // this path (a content-only capture, which intentionally carries no chrome,
+  // or a viewport with no presentable clip rect, which has nowhere to draw)
+  // simply skip the overlay — clearing the callback leaves the framebuffer
+  // chrome-free for that frame.
 #ifdef DONNER_EDITOR_WGPU
   window_.setWgpuDirectRenderCallback({});
   const std::optional<Box2d> directOverlayClipRect =
@@ -2336,7 +2342,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           DrawImmediateOverlaySnapshotToFramebuffer(
               *directOverlayRenderer_, target, overlayViewport, overlayClipRect, overlaySnapshot);
         });
-    directFramebufferOverlay = true;
   }
 #endif
   RenderPanePresenterState paneState{
@@ -2349,12 +2354,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
       .suppressedLayerEntity = suppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
-      .showOverlay = !contentOnlyCaptureThisFrame_,
-      .drawImmediateOverlay = !directFramebufferOverlay,
       .showFrameGraph = !contentOnlyCaptureThisFrame_,
   };
-  const RenderPanePresenterCost paneCost = renderPanePresenter_.render(paneState);
-  renderCoordinator_.addImmediateOverlayDrawCost(paneCost.immediateOverlayDrawMs);
+  renderPanePresenter_.render(paneState);
   if (!contentOnlyCaptureThisFrame_) {
     renderPenToolPreview();
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
