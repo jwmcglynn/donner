@@ -750,10 +750,22 @@ std::vector<std::size_t> OverlayMiterBreakIndices(const std::vector<Vector2d>& p
     return std::sqrt(dmx * dmx + dmy * dmy) > miterLimit;
   };
 
-  // NOTE: This commit intentionally leaves the bevel-break detection unimplemented
-  // so the regression tests capture the flare (red). The next commit fills it in.
-  (void)isSharp;
-  (void)n;
+  if (closed) {
+    for (std::size_t i = 0; i < n; ++i) {
+      const std::size_t prev = (i + n - 1) % n;
+      const std::size_t next = (i + 1) % n;
+      if (isSharp(prev, i, next)) {
+        breaks.push_back(i);
+      }
+    }
+  } else {
+    for (std::size_t i = 1; i + 1 < n; ++i) {
+      if (isSharp(i - 1, i, i + 1)) {
+        breaks.push_back(i);
+      }
+    }
+  }
+
   return breaks;
 }
 
