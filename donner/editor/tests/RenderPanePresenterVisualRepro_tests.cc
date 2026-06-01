@@ -126,6 +126,12 @@ std::filesystem::path StableOutputDir() {
   return tempDir / "donner-display-none-ui-repro";
 }
 
+// Best-effort write of a human-inspectable diagnostic PNG. This must NOT assert
+// on failure: under sandboxed / remote test execution the OS temp dir (and even
+// `TEST_UNDECLARED_OUTPUTS_DIR` on some workers) may be read-only, and a debug
+// artifact that can't be written is not a test failure — the real assertions are
+// the pixel-count checks in each test. (Asserting here made the whole target red
+// under remote execution.)
 void WriteBitmap(const svg::RendererBitmap& bitmap, const std::filesystem::path& outputPath) {
   if (bitmap.empty()) {
     return;
@@ -133,10 +139,12 @@ void WriteBitmap(const svg::RendererBitmap& bitmap, const std::filesystem::path&
 
   std::error_code error;
   std::filesystem::create_directories(outputPath.parent_path(), error);
-  ASSERT_FALSE(error) << error.message();
-  ASSERT_TRUE(svg::RendererImageIO::writeRgbaPixelsToPngFile(
-      outputPath.string().c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-      bitmap.rowBytes / 4u));
+  if (error) {
+    return;
+  }
+  svg::RendererImageIO::writeRgbaPixelsToPngFile(outputPath.string().c_str(), bitmap.pixels,
+                                                 bitmap.dimensions.x, bitmap.dimensions.y,
+                                                 bitmap.rowBytes / 4u);
 }
 
 void WriteDiagnosticBitmap(const svg::RendererBitmap& bitmap, std::string_view filename) {
