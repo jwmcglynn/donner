@@ -2365,6 +2365,111 @@ TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache)
          "for the next worker result.";
 }
 
+// FAITHFUL editor-level repro for the rotate/scale lockstep regression. Drives a
+// REAL resize (scale) drag through SelectTool (onMouseDown on the selection's
+// corner handle + onMouseMove), posts the worker request the editor would
+// (capture), then advances the drag one more LIVE frame WITHOUT a new worker
+// render and checks the presented drag-target tile tracks the live affine in
+// lockstep — exactly what the editor does between async captures. Compositor-unit
+// repros pass; this exercises the async presentation telescoping that those
+// can't see. Diagnostic for now: prints the telescoped transforms.
+TEST(AsyncRendererE2ETest, AffineScaleDragTileTracksLiveTransformInLockstep) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect id="target" x="8" y="8" width="16" height="16" fill="red"/>
+    </svg>
+  )svg"));
+  app.document().document().setCanvasSize(64, 64);
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+  app.setSelection(*target);
+
+  SelectTool selectTool;
+  // Grab the selection's bottom-right corner handle to start a resize/scale.
+  selectTool.onMouseDown(app, Vector2d(24.0, 24.0), MouseModifiers{});
+  selectTool.onMouseMove(app, Vector2d(40.0, 40.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(app.flushFrame());
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  const SelectTool::ActiveDragPreview capturedDrag = *selectTool.activeDragPreview();
+  ASSERT_FALSE(capturedDrag.documentFromCachedDocument.isTranslation())
+      << "corner-handle drag should be a genuine affine, not a translation";
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  RenderRequest request(renderer, app.document().document());
+  request.version = app.document().documentGeneration();
+  request.documentGeneration = app.document().documentGeneration();
+  request.selectedEntity = targetEntity;
+  request.dragPreview = RenderRequest::DragPreview{
+      .entity = targetEntity,
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+      .translation = capturedDrag.translation,
+      .documentFromCachedDocument = capturedDrag.documentFromCachedDocument,
+      .dragGeneration = capturedDrag.dragGeneration,
+  };
+  asyncRenderer.requestRender(request);
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
+
+  const auto& represented = *result->compositedPreview->representedDragPreview;
+  CompositedPresentation presentation;
+  presentation.noteCachedTextures(
+      result->compositedPreview->entity, result->version, app.document().document().canvasSize(),
+      SelectTool::ActiveDragPreview{
+          .entity = represented.entity,
+          .translation = represented.translation,
+          .documentFromCachedDocument = represented.documentFromCachedDocument,
+          .dragGeneration = represented.dragGeneration,
+      });
+
+  // Advance the drag one more LIVE frame, with NO new worker render.
+  selectTool.onMouseMove(app, Vector2d(48.0, 48.0), /*buttonHeld=*/true);
+  ASSERT_TRUE(selectTool.activeDragPreview().has_value());
+  const SelectTool::ActiveDragPreview activeDrag = *selectTool.activeDragPreview();
+  const std::optional<SelectTool::ActiveDragPreview> displayedDrag =
+      presentation.presentationPreview(activeDrag);
+  ASSERT_TRUE(displayedDrag.has_value());
+
+  const auto dragTileIt =
+      std::find_if(result->compositedPreview->tiles.begin(), result->compositedPreview->tiles.end(),
+                   [](const RenderResult::CompositedTile& tile) { return tile.isDragTarget; });
+  ASSERT_NE(dragTileIt, result->compositedPreview->tiles.end());
+
+  const PresentedFrameTileGeometry tile{
+      .canvasOffsetDoc = dragTileIt->canvasOffsetDoc,
+      .bitmapDimsDoc = dragTileIt->bitmapDimsDoc,
+      .dragTranslationDoc = dragTileIt->dragTranslationDoc,
+      .documentFromCachedDocument = dragTileIt->documentFromCachedDocument,
+      .isDragTarget = true,
+  };
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = activeDrag.entity,
+      .representedTranslationDoc = displayedDrag->translation,
+      .activeTranslationDoc = activeDrag.translation,
+      .representedDocumentFromCachedDocument = displayedDrag->documentFromCachedDocument,
+      .activeDocumentFromCachedDocument = activeDrag.documentFromCachedDocument,
+  };
+  // The drag bitmap was rasterized at the REPRESENTED transform, so a shape
+  // point lands in the bitmap at `represented(p)`. Presenting it applies
+  // `effective`, so on screen it lands at `effective(represented(p))`. Lockstep
+  // means that equals the LIVE position `active(p)` for every shape point — i.e.
+  // `effective * represented == active`. (Comparing the padded bitmap *box* to
+  // the unpadded shape box is wrong: the box carries rasterize padding.)
+  const Transform2d effective = ResolvePresentedTileDocumentTransform(tile, baseline);
+  const Transform2d presentedShapeFromCached =
+      effective * displayedDrag->documentFromCachedDocument;
+  for (const Vector2d p : {Vector2d(8.0, 8.0), Vector2d(24.0, 24.0), Vector2d(16.0, 16.0)}) {
+    const Vector2d presented = presentedShapeFromCached.transformPosition(p);
+    const Vector2d live = activeDrag.documentFromCachedDocument.transformPosition(p);
+    EXPECT_NEAR(presented.x, live.x, 1e-6) << "presented shape lags live scale at " << p << " (x)";
+    EXPECT_NEAR(presented.y, live.y, 1e-6) << "presented shape lags live scale at " << p << " (y)";
+  }
+}
+
 // Regression: bumping `version` every drag frame (as `AsyncSVGDocument::
 // flushFrame` does) must NOT trigger `CompositorController::resetAllLayers()`.
 // Before the fix that introduced `documentGeneration_`, the worker compared
