@@ -4,8 +4,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
-#include <cstdlib>
 #include <optional>
 #include <span>
 #include <vector>
@@ -586,23 +584,6 @@ void RenderPanePresenter::render(const RenderPanePresenterState& state) const {
         screenFromCanvasTransform, dragBaseline);
     if (!tileQuad.has_value()) {
       return;
-    }
-    // Opt-in drag diagnostics (DONNER_DRAG_DIAG=1): print the presentation
-    // baseline transforms for the drag-target tile each frame so the live
-    // rotate/scale lag can be diagnosed against ground truth. "Canceling out" =
-    // effective ~= identity (sx~=1, t~=0) while active != identity.
-    if (tile.isDragTarget && dragBaseline.has_value() &&
-        std::getenv("DONNER_DRAG_DIAG") != nullptr) {
-      const Transform2d& rep = dragBaseline->representedDocumentFromCachedDocument;
-      const Transform2d& act = dragBaseline->activeDocumentFromCachedDocument;
-      const Transform2d& eff = tileQuad->effectiveDocumentFromCachedDocument;
-      std::fprintf(
-          stderr,
-          "[dragdiag] tile.dfc sx=%.3f t=(%.1f,%.1f) | represented sx=%.3f t=(%.1f,%.1f) | "
-          "active sx=%.3f t=(%.1f,%.1f) | effective sx=%.3f t=(%.1f,%.1f)\n",
-          tile.documentFromCachedDocument.data[0], tile.documentFromCachedDocument.data[4],
-          tile.documentFromCachedDocument.data[5], rep.data[0], rep.data[4], rep.data[5],
-          act.data[0], act.data[4], act.data[5], eff.data[0], eff.data[4], eff.data[5]);
     }
     if (!imageClipRect.has_value() ||
         !PresentedTileQuadIntersectsScreenRect(*tileQuad, *imageClipRect)) {

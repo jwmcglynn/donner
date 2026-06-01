@@ -1,7 +1,9 @@
 #pragma once
 /// @file
 
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <ostream>
 #include <variant>
@@ -155,12 +157,39 @@ public:
 
     const SelectTool::ActiveDragPreview representedPreview =
         representedPreviewForActiveCache(*cache, *activePreview);
-    if (activePreview->documentFromCachedDocument.isTranslation() &&
-        representedPreview.documentFromCachedDocument.isTranslation()) {
-      return false;
+    if (activePreview->documentFromCachedDocument.isTranslation()) {
+      // A pure translation tracks via the cached bitmap's translation offset with
+      // no re-capture — UNLESS the cached bitmap is still an affine (we just
+      // returned from a resize/rotate to a translation), in which case re-capture
+      // a clean, crisply-translated layer instead of carrying the stale affine.
+      return !representedPreview.documentFromCachedDocument.isTranslation();
     }
 
-    return !SameDragPreviewTransform(representedPreview, *activePreview);
+    // Affine (rotate/scale) drag: DON'T re-capture every frame. Re-capturing
+    // every frame re-renders the layer and republishes `representedPreview` at
+    // the live transform, so `represented` catches up to `active` and the
+    // presentation delta (`represented^-1 * active`) collapses to identity — the
+    // shape freezes at the cached position while the overlay tracks the gesture
+    // (the "rotate/scale transforms cancel out" lag). The high-frequency
+    // presentation quad already tracks the live affine against the cached
+    // bitmap, so keep the cached bitmap and only re-capture (an async, crisp
+    // refresh) when the bitmap has been SCALED past a threshold and would look
+    // blurry. Pure rotation is area-preserving so it never trips this (a rotated
+    // bitmap doesn't lose resolution); scaling down downsamples and stays sharp,
+    // so only upscaling past the threshold re-captures. After a capture the
+    // cached transform advances, so a continuous scale-up re-captures in
+    // ~threshold steps. Pinned by the rnr-replay lockstep coverage.
+    constexpr double kAffineRecaptureScaleThreshold = 1.5;
+    const double activeScale =
+        std::sqrt(std::abs(activePreview->documentFromCachedDocument.determinant()));
+    const double representedScale =
+        std::sqrt(std::abs(representedPreview.documentFromCachedDocument.determinant()));
+    if (representedScale < 1e-9) {
+      return true;
+    }
+    const double scaleDrift = activeScale / representedScale;
+    return scaleDrift > kAffineRecaptureScaleThreshold ||
+           scaleDrift < 1.0 / kAffineRecaptureScaleThreshold;
   }
 
   /// Returns true when a released drag should request a settled composited refresh.

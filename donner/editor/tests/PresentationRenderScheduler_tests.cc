@@ -174,7 +174,7 @@ TEST(PresentationRenderSchedulerTest, AffineActiveDragWithMatchingCacheRequestsL
       .entity = Entity(7),
       .translation = Vector2d(9.0, 2.0),
       .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(9.0, 2.0)) * Transform2d::Scale(1.5),
+          Transform2d::Translate(Vector2d(9.0, 2.0)) * Transform2d::Scale(2.0),
       .dragGeneration = 14,
   };
   const PresentationRenderScheduleDecision decision =
@@ -228,7 +228,7 @@ TEST(PresentationRenderSchedulerTest, ChangedAffineDragRequestsNextLayerCapture)
       .entity = Entity(7),
       .translation = Vector2d(11.0, 2.0),
       .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(11.0, 2.0)) * Transform2d::Scale(1.75),
+          Transform2d::Translate(Vector2d(11.0, 2.0)) * Transform2d::Scale(2.5),
       .dragGeneration = 14,
   };
   scheduler.noteRenderCompleted(/*completedVersion=*/8, kCanvasSize, RasterViewport());

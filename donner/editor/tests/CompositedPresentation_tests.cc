@@ -109,7 +109,7 @@ TEST(CompositedPresentationTest, PureTranslationActiveDragWithMatchingCacheSuppr
          "canvas refresh happens after drag settles.";
 }
 
-TEST(CompositedPresentationTest, AffineActiveDragWithUnrepresentedCacheRequestsCapture) {
+TEST(CompositedPresentationTest, LargeAffineScaleDriftRequestsCrispRecapture) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
 
@@ -117,13 +117,61 @@ TEST(CompositedPresentationTest, AffineActiveDragWithUnrepresentedCacheRequestsC
       .entity = Entity(7),
       .translation = Vector2d(6.0, 2.0),
       .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
+          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(2.0),
       .dragGeneration = 8,
   };
 
   EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100)))
-      << "Affine resize/rotate previews should opportunistically refresh the drag bitmap instead "
-         "of stretching the original elevated layer for the whole gesture.";
+      << "Scaling the cached bitmap past the crisp-recapture threshold (here 2x from drag-start) "
+         "should request a fresh, sharper drag bitmap — the async crisp half of the hybrid.";
+}
+
+// Regression: a SMALL affine change must NOT re-capture every frame. Re-capturing
+// each frame republishes `represented` at the live transform, so `represented`
+// catches up to `active`, the presentation delta (`represented^-1 * active`)
+// collapses to identity, and the shape freezes at the cached position while the
+// overlay tracks the gesture — the rotate/scale "transforms cancel out" lag the
+// owner reported on #Donner_D. Below the scale threshold the presentation quad
+// tracks the live affine against the cached bitmap with no re-capture.
+TEST(CompositedPresentationTest, SmallAffineScaleDriftTracksWithoutRecapture) {
+  const SelectTool::ActiveDragPreview represented{
+      .entity = Entity(7),
+      .translation = Vector2d(6.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
+      .dragGeneration = 8,
+  };
+  const SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(7.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(7.0, 2.0)) * Transform2d::Scale(1.45),
+      .dragGeneration = 8,
+  };
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
+
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
+      << "A small affine scale change (1.25x -> 1.45x, < 1.5x threshold) must NOT re-capture — "
+         "re-capturing every frame is what froze the shape (transforms cancel out).";
+}
+
+// Pure rotation preserves the bitmap's scale (a rotated bitmap doesn't lose
+// resolution), so it must track via the presentation quad without ever
+// re-capturing.
+TEST(CompositedPresentationTest, PureRotationTracksWithoutRecapture) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100));
+
+  const SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .documentFromCachedDocument = Transform2d::Rotate(0.6),
+      .dragGeneration = 8,
+  };
+
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
+      << "Pure rotation is area-preserving, so it never trips the scale-drift recapture and tracks "
+         "purely through the presentation quad.";
 }
 
 TEST(CompositedPresentationTest, MatchingAffineRepresentedPreviewSuppressesCaptureLoop) {
@@ -155,15 +203,15 @@ TEST(CompositedPresentationTest, ChangedAffineActiveDragRequestsNextCapture) {
       .entity = Entity(7),
       .translation = Vector2d(7.0, 2.0),
       .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(7.0, 2.0)) * Transform2d::Scale(1.35),
+          Transform2d::Translate(Vector2d(7.0, 2.0)) * Transform2d::Scale(2.0),
       .dragGeneration = 8,
   };
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
 
   EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
-      << "Continuing an affine manipulation after a previous opportunistic capture should request "
-         "the next sharper bitmap when the worker is free.";
+      << "Continuing an affine manipulation past the scale-drift threshold (1.25x -> 2.0x) should "
+         "request the next sharper bitmap when the worker is free.";
 }
 
 TEST(CompositedPresentationTest, PureTranslationAfterAffineCaptureRequestsCrispReset) {
