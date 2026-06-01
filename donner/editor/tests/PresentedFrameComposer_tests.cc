@@ -139,6 +139,67 @@ TEST(PresentedFrameComposerTest, RepresentedAffineTransformDoesNotDoubleApply) {
   EXPECT_EQ(quad->bottomRight, Vector2d(20.0, 20.0));
 }
 
+// Rotate/scale "lag then reset" QA regression. Once the compositor has
+// re-rasterized the drag bitmap at an affine (non-translation) transform, the
+// bitmap bakes the rotation about the shape center and reports
+// `canvasFromBitmap ~= identity` (so `tile.documentFromCachedDocument` is
+// identity). The represented/active baseline correction — designed for the
+// translation-reuse fast path, where the cached bitmap's compose transform
+// equals `represented` — must NOT be re-applied here: doing so rotates the
+// already-correct bitmap about the canvas origin, swinging the shape off-center
+// and snapping it back when the next capture lands. The authoritative
+// re-rasterized bitmap must be presented as-is (effective == the tile's own
+// transform).
+TEST(PresentedFrameComposerTest, AffineRepresentedPreviewPresentsReRasterizedBitmapAsIs) {
+  PresentedFrameTileGeometry tile;
+  tile.canvasOffsetDoc = Vector2d(70.0, 30.0);
+  tile.bitmapDimsDoc = Vector2d(60.0, 40.0);
+  tile.isDragTarget = true;
+  // Re-rasterized affine bitmap: the rotation is baked into the pixels and
+  // `canvasFromBitmap` collapsed back to identity.
+  tile.documentFromCachedDocument = Transform2d();
+
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedDocumentFromCachedDocument = Transform2d::Rotate(0.30),
+      .activeDocumentFromCachedDocument = Transform2d::Rotate(0.55),
+  };
+
+  const std::optional<PresentedTileQuad> quad =
+      ComputePresentedTileQuad(tile, Transform2d(), baseline);
+  ASSERT_TRUE(quad.has_value());
+  // Presented as-is: the cached canvas box, with no about-origin rotation.
+  EXPECT_EQ(quad->topLeft, Vector2d(70.0, 30.0));
+  EXPECT_EQ(quad->topRight, Vector2d(130.0, 30.0));
+  EXPECT_EQ(quad->bottomRight, Vector2d(130.0, 70.0));
+  EXPECT_EQ(quad->bottomLeft, Vector2d(70.0, 70.0));
+}
+
+// The prewarm-stretch behavior must survive the fix above: when the published
+// bitmap was captured at `represented == identity` (a selection prewarm, not yet
+// re-rasterized at any affine), applying the live affine to stretch/rotate the
+// cached identity bitmap is the intended instant preview. Discriminating on
+// `represented.isTranslation()` keeps this path applying the correction.
+TEST(PresentedFrameComposerTest, IdentityRepresentedAffineActiveStillStretchesPrewarmBitmap) {
+  PresentedFrameTileGeometry tile;
+  tile.canvasOffsetDoc = Vector2d(0.0, 0.0);
+  tile.bitmapDimsDoc = Vector2d(10.0, 10.0);
+  tile.isDragTarget = true;
+  tile.documentFromCachedDocument = Transform2d();
+
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedDocumentFromCachedDocument = Transform2d(),
+      .activeDocumentFromCachedDocument = Transform2d::Scale(2.0),
+  };
+
+  const std::optional<PresentedTileQuad> quad =
+      ComputePresentedTileQuad(tile, Transform2d(), baseline);
+  ASSERT_TRUE(quad.has_value());
+  // Prewarm bitmap stretched 2x by the live affine.
+  EXPECT_EQ(quad->bottomRight, Vector2d(20.0, 20.0));
+}
+
 TEST(PresentedFrameComposerTest, ComputesTileRectFromNonZeroCanvasOrigin) {
   PresentedFrameTileGeometry tile;
   tile.canvasOffsetDoc = Vector2d(12.25, 24.75);

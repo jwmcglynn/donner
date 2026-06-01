@@ -68,6 +68,27 @@ Transform2d ResolvePresentedTileDocumentTransform(
             dragBaseline->representedTranslationDoc);
     const Transform2d activeDocumentFromCachedDocument = DocumentFromCachedWithTranslationFallback(
         dragBaseline->activeDocumentFromCachedDocument, dragBaseline->activeTranslationDoc);
+    // The represented→active baseline correction slides the cached drag bitmap
+    // from the published drag transform to the live one. It is only
+    // geometrically valid when the published bitmap is a translation of the
+    // cached pixels — i.e. `represented` is a pure translation. That covers the
+    // translation-reuse fast path (cheap `canvasFromBitmap` offset) and the
+    // selection-prewarm preview (identity `represented`, where the live affine
+    // stretches the cached identity bitmap as an instant preview).
+    //
+    // For an affine (rotate/scale) drag the compositor RE-RASTERIZES the bitmap
+    // at the represented transform: the rotation is baked into the pixels about
+    // the shape center and `canvasFromBitmap` collapses to ~identity. Composing
+    // `represented⁻¹ * active` onto that already-correct bitmap re-rotates it
+    // about the canvas origin — swinging the shape off-center, then snapping it
+    // back as the next capture lands (the rotate/scale "lag then reset" QA
+    // regression). The re-rasterized bitmap is authoritative, so present it
+    // as-is; the capture scheduler keeps it within a frame of the live
+    // transform. Pinned by `AffineRepresentedPreviewPresentsReRasterizedBitmapAsIs`
+    // and `IdentityRepresentedAffineActiveStillStretchesPrewarmBitmap`.
+    if (!representedDocumentFromCachedDocument.isTranslation()) {
+      return tileDocumentFromCachedDocument;
+    }
     return tileDocumentFromCachedDocument * representedDocumentFromCachedDocument.inverse() *
            activeDocumentFromCachedDocument;
   }
