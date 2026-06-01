@@ -261,9 +261,16 @@ donner_cc_test(
 donner_cc_test(
     name = "render_pane_presenter_tests",
     srcs = ["RenderPanePresenter_tests.cc"],
+    data = ["//:donner_splash_v0_8_editable.svg"],
     deps = [
+        "//donner/base",
+        "//donner/editor:editor_app",
+        "//donner/editor:overlay_renderer",
         "//donner/editor:render_pane_presenter",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
