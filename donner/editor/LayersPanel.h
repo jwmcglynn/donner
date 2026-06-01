@@ -33,6 +33,18 @@
 
 namespace donner::editor {
 
+/// Current "this element is locked, you can't select it" flash fed into the
+/// Layers panel so the rejected element's row flashes red in sync with the
+/// canvas outline flash. Mirrors `OverlayRenderer.h`'s `LockedRejectionFlashInput`
+/// but is kept local so `LayersPanel` stays decoupled from `SelectTool` /
+/// `OverlayRenderer`; `EditorShell` maps the tool's flash into this struct.
+struct LayersLockedRejectionFlash {
+  /// The element whose selection was rejected because it (or an ancestor group) is locked.
+  svg::SVGElement element;
+  /// Fade intensity in (0, 1]; scales the red row-highlight alpha at draw time.
+  float intensity = 0.0f;
+};
+
 /// ImGui Layers panel backed by a `LayerTreeModel` snapshot.
 class LayersPanel {
 public:
@@ -74,6 +86,26 @@ public:
   /// @param textureProvider Uploads a row's rendered thumbnail bitmap to an
   ///   ImGui texture for display, or null to fall back to the swatch.
   void render(EditorApp* liveApp, const ThumbnailTextureProvider& textureProvider = {});
+
+  /// Set the current locked-rejection flash (or clear it with `std::nullopt`).
+  /// When set with a positive intensity and the flashed element matches a
+  /// visible row, `render` paints that row's background red with alpha scaled by
+  /// `intensity`, in sync with the canvas outline flash. `EditorShell` calls this
+  /// each frame with `SelectTool::lockedRejectionFlash()` mapped into the input
+  /// struct, before `render`.
+  void setLockedRejectionFlash(std::optional<LayersLockedRejectionFlash> flash);
+
+  /// The visible row index that the active locked-rejection flash maps to (an
+  /// exact element match against a visible row), or `std::nullopt` when no flash
+  /// is active, its intensity is non-positive, or its element is not a visible
+  /// row. The non-ImGui seam the row-flash test asserts on.
+  [[nodiscard]] std::optional<std::size_t> flashedRowIndex() const;
+
+  /// The fade intensity of the active locked-rejection flash, or 0 when none is
+  /// set. Testing/diagnostics accessor paired with `flashedRowIndex`.
+  [[nodiscard]] float lockedRejectionFlashIntensity() const {
+    return lockedRejectionFlash_.has_value() ? lockedRejectionFlash_->intensity : 0.0f;
+  }
 
   /// The current flat row list (testing/diagnostics accessor).
   [[nodiscard]] const std::vector<LayerTreeRow>& rows() const { return model_.rows(); }
@@ -224,6 +256,10 @@ private:
   bool mutationQueued_ = false;
   /// Element under the mouse cursor as of the most recent render, or nullopt.
   std::optional<svg::SVGElement> hoveredElement_;
+  /// Active locked-rejection flash (the rejected element + fade intensity), or
+  /// nullopt when no locked click is being rejected. `render` paints a red
+  /// background behind the matching row with alpha scaled by `intensity`.
+  std::optional<LayersLockedRejectionFlash> lockedRejectionFlash_;
   /// Stable id of the row currently being inline-renamed, or nullopt when no
   /// edit is in progress. The render loop draws an `InputText` for this row.
   std::optional<std::uint64_t> renamingStableId_;
