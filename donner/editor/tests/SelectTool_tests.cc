@@ -156,7 +156,34 @@ TEST_F(SelectToolTest, ElementInLockedGroupCannotBeSelected) {
 
   quickClick(Vector2d(20.0, 20.0));
   EXPECT_FALSE(app.hasSelection()) << "a child of a locked group must not be selectable";
-  EXPECT_TRUE(tool.lockedRejectionFlash().has_value());
+  ASSERT_TRUE(tool.lockedRejectionFlash().has_value());
+  // The flash targets the entire locked layer (the `<g>` that carries the lock
+  // marker), not the clicked leaf — so the overlay outline and the Layers-panel
+  // row both highlight the whole group.
+  EXPECT_EQ(tool.lockedRejectionFlash()->element.id(), "grp")
+      << "clicking a leaf inside a locked group must flash the locked group, not the leaf";
+}
+
+TEST_F(SelectToolTest, ShiftClickInLockedGroupFlashesLockedAncestor) {
+  loadSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+    <g id="grp" data-donner-locked="true">
+      <g id="inner">
+        <rect id="child" x="10" y="10" width="40" height="40" fill="red"/>
+      </g>
+    </g>
+  </svg>)");
+
+  MouseModifiers shift;
+  shift.shift = true;
+  tool.onMouseDown(app, Vector2d(20.0, 20.0), shift);
+  tool.onMouseUp(app, Vector2d(20.0, 20.0));
+
+  EXPECT_FALSE(app.hasSelection()) << "shift+click on a locked descendant must be rejected";
+  ASSERT_TRUE(tool.lockedRejectionFlash().has_value());
+  // Resolve past the un-marked intermediate `<g id="inner">` to the marked
+  // `<g id="grp">`.
+  EXPECT_EQ(tool.lockedRejectionFlash()->element.id(), "grp")
+      << "flash must walk to the nearest locked ancestor, skipping unmarked groups";
 }
 
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
