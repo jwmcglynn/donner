@@ -1,6 +1,7 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -15,6 +16,18 @@
 
 namespace donner::editor::mcp {
 namespace {
+
+// Writable scratch directory for tests that round-trip a file. Prefer bazel's
+// `TEST_TMPDIR` (always writable, including under sandboxed / remote execution)
+// over `std::filesystem::temp_directory_path()`, which resolves to a read-only
+// `/tmp` on remote-execution workers and fails the file rename.
+std::filesystem::path TestScratchDir() {
+  if (const char* testTmpDir = std::getenv("TEST_TMPDIR");
+      testTmpDir != nullptr && testTmpDir[0] != '\0') {
+    return std::filesystem::path(testTmpDir);
+  }
+  return std::filesystem::temp_directory_path();
+}
 
 using nlohmann::json;
 using ::testing::ElementsAreArray;
@@ -636,7 +649,7 @@ TEST(EditorControlSessionTest,
 }
 
 TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path tempDir = TestScratchDir();
   const std::filesystem::path svgPath = tempDir / "donner_editor_control_rnr_roundtrip.svg";
   const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_roundtrip.rnr";
   {
@@ -744,7 +757,7 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
 }
 
 TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path tempDir = TestScratchDir();
   const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_memory.rnr";
 
   EditorControlSession session;
