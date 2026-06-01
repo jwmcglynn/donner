@@ -4,10 +4,22 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <vector>
 
 #include "donner/editor/ImGuiIncludes.h"
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnontrivial-memcall"
+#endif
+#include "imgui_internal.h"
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
+
 #include "donner/editor/PresentedFrameComposer.h"
 
 namespace donner::editor {
@@ -464,49 +476,75 @@ Box2d CombinedSelectionBounds(std::span<const Box2d> boxes) {
 
 void StrokeDocumentPath(ImDrawList* drawList, const ViewportState& viewport, const Path& path,
                         ImU32 color, float thickness) {
-  if (path.empty()) {
-    return;
-  }
+  for (const OverlayStrokePolyline& subpath : OverlayScreenPolylinesForPath(viewport, path)) {
+    const std::vector<Vector2d>& pts = subpath.points;
+    if (pts.size() < 2) {
+      continue;
+    }
 
-  bool subpathActive = false;
-  const auto flushSubpath = [&](ImDrawFlags flags) {
-    if (!subpathActive) {
+    // Beveling under the miter limit means breaking the ImGui stroke run at any
+    // joint sharper than the limit. ImGui miters within a single PathStroke run
+    // (and only caps the normal at IM_FIXNORMAL2F=100, which still lets a sharp
+    // cusp grow a ~5x-half-width spur — the QA "flare"). Splitting the run into
+    // butt-capped sub-runs at sharp joints produces the bevel the Donner
+    // renderer draws, with no spike.
+    const std::vector<std::size_t> breaks =
+        OverlayMiterBreakIndices(pts, subpath.closed, kOverlayStrokeMiterLimit);
+
+    const auto strokeOpenRun = [&](std::size_t first, std::size_t last) {
+      if (last <= first) {
+        return;
+      }
       drawList->PathClear();
-      return;
+      for (std::size_t i = first; i <= last; ++i) {
+        drawList->PathLineTo(ToImVec2(pts[i]));
+      }
+      drawList->PathStroke(color, ImDrawFlags_None, thickness);
+      drawList->PathClear();
+    };
+
+    if (breaks.empty()) {
+      // No sharp joints: stroke the whole subpath as one mitered run.
+      drawList->PathClear();
+      for (const Vector2d& point : pts) {
+        drawList->PathLineTo(ToImVec2(point));
+      }
+      drawList->PathStroke(color, subpath.closed ? ImDrawFlags_Closed : ImDrawFlags_None,
+                           thickness);
+      drawList->PathClear();
+      continue;
     }
 
-    drawList->PathStroke(color, flags, thickness);
-    drawList->PathClear();
-    subpathActive = false;
-  };
-
-  drawList->PathClear();
-  path.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
-    switch (verb) {
-      case Path::Verb::MoveTo:
-        flushSubpath(ImDrawFlags_None);
-        drawList->PathLineTo(ToImVec2(viewport.documentToScreen(points[0])));
-        subpathActive = true;
-        break;
-      case Path::Verb::LineTo:
-        drawList->PathLineTo(ToImVec2(viewport.documentToScreen(points[0])));
-        subpathActive = true;
-        break;
-      case Path::Verb::QuadTo:
-        drawList->PathBezierQuadraticCurveTo(ToImVec2(viewport.documentToScreen(points[0])),
-                                             ToImVec2(viewport.documentToScreen(points[1])), 8);
-        subpathActive = true;
-        break;
-      case Path::Verb::CurveTo:
-        drawList->PathBezierCubicCurveTo(ToImVec2(viewport.documentToScreen(points[0])),
-                                         ToImVec2(viewport.documentToScreen(points[1])),
-                                         ToImVec2(viewport.documentToScreen(points[2])), 8);
-        subpathActive = true;
-        break;
-      case Path::Verb::ClosePath: flushSubpath(ImDrawFlags_Closed); break;
+    // Emit each beveled segment as its own butt-capped run. For a closed
+    // polyline the break list rotates the loop so the first run starts at the
+    // first break; the wrap-around segment is stitched by appending the head
+    // run's points after the tail.
+    if (subpath.closed) {
+      const std::size_t n = pts.size();
+      for (std::size_t b = 0; b < breaks.size(); ++b) {
+        const std::size_t start = breaks[b];
+        const std::size_t end = breaks[(b + 1) % breaks.size()];
+        drawList->PathClear();
+        std::size_t i = start;
+        while (true) {
+          drawList->PathLineTo(ToImVec2(pts[i]));
+          if (i == end) {
+            break;
+          }
+          i = (i + 1) % n;
+        }
+        drawList->PathStroke(color, ImDrawFlags_None, thickness);
+        drawList->PathClear();
+      }
+    } else {
+      std::size_t runStart = 0;
+      for (const std::size_t breakIdx : breaks) {
+        strokeOpenRun(runStart, breakIdx);
+        runStart = breakIdx;
+      }
+      strokeOpenRun(runStart, pts.size() - 1);
     }
-  });
-  flushSubpath(ImDrawFlags_None);
+  }
 }
 
 void StrokeDocumentBox(ImDrawList* drawList, const ViewportState& viewport, const Box2d& docBox,
@@ -586,6 +624,138 @@ void DrawImmediateSelectionChrome(ImDrawList* drawList, const RenderPanePresente
 }
 
 }  // namespace
+
+std::vector<OverlayStrokePolyline> OverlayScreenPolylinesForPath(const ViewportState& viewport,
+                                                                 const Path& pathDoc) {
+  std::vector<OverlayStrokePolyline> subpaths;
+  if (pathDoc.empty()) {
+    return subpaths;
+  }
+
+  // ImGui's `PathBezier*CurveTo` tessellate into `_Path` using the current pen
+  // position (`_Path.back()`) as the curve's first on-curve point. We use a
+  // local draw list purely as that tessellator and harvest `_Path` per subpath,
+  // so the polylines we return are byte-for-byte what the on-screen overlay
+  // would have stroked.
+  ImDrawListSharedData sharedData;
+  sharedData.CurveTessellationTol = 1.25f;
+  ImDrawList tessellator(&sharedData);
+
+  bool subpathOpen = false;
+  bool pendingClosed = false;
+  const auto flush = [&](bool closed) {
+    if (subpathOpen && tessellator._Path.Size >= 1) {
+      OverlayStrokePolyline polyline;
+      polyline.closed = closed;
+      polyline.points.reserve(static_cast<std::size_t>(tessellator._Path.Size));
+      for (int i = 0; i < tessellator._Path.Size; ++i) {
+        polyline.points.emplace_back(tessellator._Path[i].x, tessellator._Path[i].y);
+      }
+      subpaths.push_back(std::move(polyline));
+    }
+    tessellator.PathClear();
+    subpathOpen = false;
+  };
+
+  const auto screen = [&](const Vector2d& docPoint) {
+    const Vector2d s = viewport.documentToScreen(docPoint);
+    return ImVec2(static_cast<float>(s.x), static_cast<float>(s.y));
+  };
+
+  // Every Donner subpath opens with a MoveTo (the path builder inserts an
+  // implicit one after a ClosePath), so the pen is always seeded before any
+  // curve consumes `_Path.back()`. Guard anyway: a curve before a MoveTo would
+  // read a stale/out-of-bounds `_Path.back()`.
+  constexpr int kOverlayBezierSegments = 8;
+  pathDoc.forEach([&](Path::Verb verb, std::span<const Vector2d> points) {
+    switch (verb) {
+      case Path::Verb::MoveTo:
+        flush(pendingClosed);
+        pendingClosed = false;
+        tessellator.PathLineTo(screen(points[0]));
+        subpathOpen = true;
+        break;
+      case Path::Verb::LineTo:
+        if (subpathOpen) {
+          tessellator.PathLineTo(screen(points[0]));
+        }
+        break;
+      case Path::Verb::QuadTo:
+        if (subpathOpen) {
+          tessellator.PathBezierQuadraticCurveTo(screen(points[0]), screen(points[1]),
+                                                 kOverlayBezierSegments);
+        }
+        break;
+      case Path::Verb::CurveTo:
+        if (subpathOpen) {
+          tessellator.PathBezierCubicCurveTo(screen(points[0]), screen(points[1]),
+                                             screen(points[2]), kOverlayBezierSegments);
+        }
+        break;
+      case Path::Verb::ClosePath:
+        pendingClosed = true;
+        flush(/*closed=*/true);
+        pendingClosed = false;
+        break;
+    }
+  });
+  flush(pendingClosed);
+
+  return subpaths;
+}
+
+std::vector<std::size_t> OverlayMiterBreakIndices(const std::vector<Vector2d>& points, bool closed,
+                                                  double miterLimit) {
+  std::vector<std::size_t> breaks;
+  const std::size_t n = points.size();
+  if (n < 3 || miterLimit <= 0.0) {
+    return breaks;
+  }
+
+  // We break exactly the joints where ImGui's thick-line stroker would draw a
+  // miter offset longer than `miterLimit` half-widths. ImGui averages the two
+  // adjacent edge normals and rescales by IM_FIXNORMAL2F (inverse-length capped
+  // at 100); the resulting offset is the visible spike. Computing that exact
+  // quantity here — rather than the textbook 1/sin(theta/2) miter ratio — keeps
+  // the break decision faithful to what the user actually sees, including the
+  // fact that a near-180° cusp produces a *small* ImGui offset (no flare) while
+  // a moderately sharp turn produces the largest one.
+  const auto leftNormal = [](const Vector2d& a, const Vector2d& b) -> std::optional<Vector2d> {
+    const Vector2d d = b - a;
+    const double len = d.length();
+    if (len < 1e-9) {
+      return std::nullopt;
+    }
+    return Vector2d(d.y / len, -d.x / len);  // ImGui's left-normal convention.
+  };
+
+  const auto isSharp = [&](std::size_t prev, std::size_t cur, std::size_t next) {
+    const std::optional<Vector2d> n1 = leftNormal(points[prev], points[cur]);
+    const std::optional<Vector2d> n2 = leftNormal(points[cur], points[next]);
+    if (!n1 || !n2) {
+      return false;
+    }
+    double dmx = (n1->x + n2->x) * 0.5;
+    double dmy = (n1->y + n2->y) * 0.5;
+    double d2 = dmx * dmx + dmy * dmy;
+    if (d2 > 0.000001) {
+      double invLen2 = 1.0 / d2;
+      if (invLen2 > 100.0) {  // IM_FIXNORMAL2F_MAX_INVLEN2
+        invLen2 = 100.0;
+      }
+      dmx *= invLen2;
+      dmy *= invLen2;
+    }
+    // |dm| is the outward miter offset in half-widths (1.0 == flat edge).
+    return std::sqrt(dmx * dmx + dmy * dmy) > miterLimit;
+  };
+
+  // NOTE: This commit intentionally leaves the bevel-break detection unimplemented
+  // so the regression tests capture the flare (red). The next commit fills it in.
+  (void)isSharp;
+  (void)n;
+  return breaks;
+}
 
 bool ShouldPresentCompositedTile(const GlTextureCache::TileView& tile, Entity suppressedLayerEntity,
                                  bool suppressDragTargetTiles) {
