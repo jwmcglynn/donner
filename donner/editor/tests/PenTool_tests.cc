@@ -1,5 +1,6 @@
 #include "donner/editor/PenTool.h"
 
+#include <chrono>
 #include <fstream>
 #include <span>
 #include <sstream>
@@ -14,10 +15,21 @@
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
 namespace {
+
+// gmock matcher: a Box2d encloses the given document-space point. On failure it
+// prints the full box (topLeft => bottomRight) and the point so the off-by-one
+// stale-bounds failure is diagnosable without a rerun.
+MATCHER_P(EnclosesPoint, point, "") {
+  const bool ok = arg.contains(point);
+  *result_listener << "box " << arg.topLeft << " => " << arg.bottomRight
+                   << (ok ? " contains " : " does NOT contain ") << point;
+  return ok;
+}
 
 constexpr std::string_view kEmptySvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>)";
@@ -75,9 +87,12 @@ TEST_F(PenToolTest, FirstClickUsesActivePaintStyle) {
   ASSERT_TRUE(app.flushFrame());
 
   svg::SVGPathElement inserted = path();
-  EXPECT_EQ(inserted.getAttribute("fill"), "#112233");
-  EXPECT_EQ(inserted.getAttribute("stroke"), "#445566");
-  EXPECT_EQ(inserted.getAttribute("stroke-width"), "2.5");
+  // Paint is seeded as a single inline `style` attribute (CSS), not as
+  // individual fill/stroke/stroke-width presentation attributes.
+  EXPECT_EQ(inserted.getAttribute("style"), "fill: #112233; stroke: #445566; stroke-width: 2.5");
+  EXPECT_FALSE(inserted.getAttribute("fill").has_value());
+  EXPECT_FALSE(inserted.getAttribute("stroke").has_value());
+  EXPECT_FALSE(inserted.getAttribute("stroke-width").has_value());
 }
 
 TEST_F(PenToolTest, FirstClickExpandsSelfClosingSvgRoot) {
@@ -175,6 +190,42 @@ TEST_F(PenToolTest, ConsecutiveClicksBeforeFlushStayInsideSvgRoot) {
   EXPECT_LT(pathOffset, svgCloseOffset);
 }
 
+// Regression for the user-reported "AABB overlay for the pen tool's drawn path
+// is one point out of date" bug. The selection-bounds overlay drew the pen
+// path's AABB from `SnapshotSelectionWorldBounds`, which reads the LIVE DOM `d`
+// attribute. But `PenTool::appendLine` only *queues* a `SetAttribute("d")`
+// command — the live DOM does not reflect the just-placed point until the NEXT
+// `flushFrame()`. So in the same click frame the AABB excluded point N, lagging
+// one click behind. This test places point N WITHOUT an intervening flush and
+// proves: (a) the stale live-DOM snapshot the overlay used does NOT enclose N
+// (the bug), and (b) the synchronous `PenTool::draftBounds()` the overlay now
+// uses DOES enclose N in the same frame.
+TEST_F(PenToolTest, PenDraftBoundsEncloseJustPlacedPointSameFrame) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  // Place point N (80, 90) but do NOT flush — this is the same click frame the
+  // overlay renders in.
+  tool.onMouseDown(app, Vector2d(80.0, 90.0), MouseModifiers{});
+
+  const Vector2d justPlaced(80.0, 90.0);
+
+  // The stale path the overlay used before the fix: the live-DOM snapshot still
+  // has only the first point because the SetAttribute("d") is still queued.
+  const std::vector<Box2d> staleBounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(staleBounds.size(), 1u);
+  EXPECT_THAT(staleBounds.front(), ::testing::Not(EnclosesPoint(justPlaced)))
+      << "live-DOM snapshot should still lag the queued point (demonstrates the bug)";
+
+  // The fix: the synchronous draft bounds reflect the just-placed point in the
+  // same frame, with no extra flush.
+  const std::optional<Box2d> draftBounds = tool.draftBounds();
+  ASSERT_TRUE(draftBounds.has_value());
+  EXPECT_THAT(*draftBounds, EnclosesPoint(justPlaced));
+  EXPECT_THAT(*draftBounds, EnclosesPoint(Vector2d(10.0, 20.0)));
+}
+
 TEST_F(PenToolTest, DraggingPlacedPointCreatesCubicHandles) {
   tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(20.0, 10.0), /*buttonHeld=*/true);
@@ -192,6 +243,51 @@ TEST_F(PenToolTest, DraggingPlacedPointCreatesCubicHandles) {
   ASSERT_TRUE(app.flushFrame());
 
   EXPECT_EQ(path().d(), "M 10 10 C 20 10 40 -10 40 10");
+}
+
+// Hardening guard for the user-reported "pen path placed after </svg> so it
+// never renders" symptom. The existing tests only assert source-substring order
+// right after onMouseDown+flushFrame; this drives the FULL pen session through
+// finalize (commitOpenPath — the Enter / tool-switch commit path), flushes, and
+// then *re-parses* the serialized source to prove the new <path> is a direct
+// child of the root <svg> (i.e. it actually renders), not merely that its bytes
+// precede </svg>. The splice was already correct at the time this test was
+// added; the test locks in that the finalize path keeps the path inside the
+// root so the after-</svg> regression cannot silently return.
+TEST_F(PenToolTest, FinalizedPenPathStaysInsideSvgRootSource) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseDown(app, Vector2d(30.0, 40.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+  tool.onMouseDown(app, Vector2d(60.0, 70.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  // Finalize the open path exactly as Enter / a tool switch does.
+  ASSERT_TRUE(tool.commitOpenPath(app));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_FALSE(tool.isDrafting());
+
+  const std::string source(app.document().document().source());
+  const std::size_t pathOffset = source.find("<path");
+  const std::size_t svgCloseOffset = source.rfind("</svg>");
+  ASSERT_NE(pathOffset, std::string::npos) << source;
+  ASSERT_NE(svgCloseOffset, std::string::npos) << source;
+  EXPECT_LT(pathOffset, svgCloseOffset)
+      << "finalized pen path must be spliced inside the root <svg>, not after </svg>:\n"
+      << source;
+  EXPECT_EQ(source.find("<path", svgCloseOffset), std::string::npos)
+      << "no <path> may appear after the root </svg>:\n"
+      << source;
+
+  // Re-parse the serialized source and confirm the path is a direct child of
+  // the root <svg> — proof it renders, not just that the bytes precede </svg>.
+  EditorApp reparsed;
+  ASSERT_TRUE(reparsed.loadFromString(source)) << source;
+  auto reparsedPath = reparsed.document().document().querySelector("path");
+  ASSERT_TRUE(reparsedPath.has_value()) << source;
+  const auto reparsedParent = reparsedPath->parentElement();
+  ASSERT_TRUE(reparsedParent.has_value()) << source;
+  EXPECT_EQ(*reparsedParent, reparsed.document().document().svgElement()) << source;
 }
 
 TEST_F(PenToolTest, ClickNearStartClosesPath) {
@@ -233,6 +329,81 @@ TEST_F(PenToolTest, SelectedOpenPathCanBeContinued) {
   ASSERT_TRUE(app.flushFrame());
 
   EXPECT_EQ(selected->cast<svg::SVGPathElement>().d(), "M 0 0 L 10 0 L 10 10");
+  EXPECT_TRUE(tool.isDrafting());
+}
+
+// Regression for the live-editor Pen crash: clicking the Pen tool while a
+// `<path>` is selected aborted with
+//   UTILS_RELEASE_ASSERT failed: documentHandle_->currentThreadHasAccess()
+// because `PenTool::openStateForSelectedPath` read `SVGPathElement::d()` (raw
+// ECS access through an SVGElement) without holding a ConcurrentDom read-access
+// scope. The unit tests above never tripped it because a freshly loaded
+// document is `ThreadingMode::SingleThreaded`, where `currentThreadHasAccess()`
+// is always true. The live editor flips the document to
+// `ThreadingMode::ConcurrentDom` on its first async render (see
+// AsyncRenderer.cc), which is the state the user was in. This test reproduces
+// the user's exact sequence — select a path, enter ConcurrentDom, Pen
+// onMouseDown — so the guarded read is actually exercised.
+TEST_F(PenToolTest, SelectedOpenPathContinuesUnderConcurrentDom) {
+  ASSERT_TRUE(app.loadFromString(kOpenPathSvg));
+  auto selected = app.document().document().querySelector("#p");
+  ASSERT_TRUE(selected.has_value());
+  app.setSelection(*selected);
+
+  // Mirror the live editor: the document is in ConcurrentDom mode by the time
+  // the user clicks (the async renderer flips it on first render). The UI
+  // thread holds no read/write access scope when a tool's onMouseDown fires.
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  ASSERT_EQ(app.document().document().threadingMode(), svg::ThreadingMode::ConcurrentDom);
+
+  // At c0e8c53f this aborts via the release assert inside SVGPathElement::d().
+  // After the fix the selected-path read is wrapped in a read-access scope and
+  // the path continues normally.
+  tool.onMouseDown(app, Vector2d(10.0, 10.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  // The test verifies the result the same way the live editor reads the selected
+  // element under ConcurrentDom — through a scoped read-access guard (the
+  // SelectTool / OverlayRenderer idiom). Reading `d()` raw here would itself trip
+  // the ConcurrentDom release assert; the production crash is in the tool's
+  // onMouseDown path above, which now runs to completion.
+  const std::string resolvedPathData =
+      selected->withReadAccess([&selected](svg::DocumentReadAccess&, EntityHandle) {
+        return std::string(std::string_view(selected->cast<svg::SVGPathElement>().d()));
+      });
+  EXPECT_EQ(resolvedPathData, "M 0 0 L 10 0 L 10 10");
+  EXPECT_TRUE(tool.isDrafting());
+}
+
+// Sibling of the regression above for the first-click-on-empty-canvas path.
+// With nothing selected, `onMouseDown` falls through to `startNewPath`, which
+// synchronously creates the `<path>`, writes its `d`/`fill`/`stroke`
+// attributes, resolves the root `<svg>`, and inserts — all raw ECS
+// reads/writes through SVGElement. Under ThreadingMode::ConcurrentDom (the
+// live editor's steady state) those accesses abort via SVGElement's
+// scoped-access release assert unless the tool holds a document write scope.
+// startNewPath wraps the whole create/setAttribute/insert sequence in
+// withWriteAccess to satisfy that guard.
+TEST_F(PenToolTest, FirstClickStartsNewPathUnderConcurrentDom) {
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  ASSERT_EQ(app.document().document().threadingMode(), svg::ThreadingMode::ConcurrentDom);
+
+  // At base 667cf509 this aborts via the release assert inside
+  // SVGPathElement::Create / setAttribute (raw ECS writes with no scope held).
+  // After the fix startNewPath's write-scope wrapper lets it run to completion.
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  ASSERT_TRUE(app.flushFrame());
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  // Verify the result through a scoped read guard, exactly as the live editor
+  // reads the selected element under ConcurrentDom (raw `d()` here would itself
+  // trip the release assert).
+  const svg::SVGElement inserted = app.selectedElements().front();
+  const std::string insertedPathData =
+      inserted.withReadAccess([&inserted](svg::DocumentReadAccess&, EntityHandle) {
+        return std::string(std::string_view(inserted.cast<svg::SVGPathElement>().d()));
+      });
+  EXPECT_EQ(insertedPathData, "M 10 20");
   EXPECT_TRUE(tool.isDrafting());
 }
 
@@ -322,6 +493,102 @@ TEST_F(PenToolTest, DirtyTextPaneWithTrailingRootLikeCommentKeepsPathInsideSvgRo
   ASSERT_NE(svgCloseOffset, std::string::npos);
   EXPECT_LT(pathOffset, svgCloseOffset) << sourceText;
   EXPECT_EQ(sourceText.find("<path", svgCloseOffset), std::string::npos) << sourceText;
+}
+
+// =============================================================================
+// Faithful live-backend repro for the user-reported "Pen path inserted after
+// </svg> so it never renders" GUI bug.
+//
+// The bare-EditorApp FinalizedPenPathStaysInsideSvgRootSource test above passes,
+// yet the user re-confirmed the bug is live in the GUI. The difference is the
+// per-frame source-pane mirror + writeback reparse the real editor runs every
+// frame (EditorShell), which the bare-app test skips:
+//
+//   per frame: app.flushFrame()
+//              controller.syncParseErrorMarkers(app, textEditor)
+//              controller.applyPendingWritebacks(app, selectTool, textEditor)
+//              controller.handleTextEdits(app, textEditor, deltaSeconds)
+//
+// applyPendingWritebacks mirrors the DOM's source deltas into the text-pane
+// buffer; handleTextEdits then dispatches any divergence as a writeback reparse
+// that swaps the document on the next flush. This harness mirrors that exact
+// frame loop through a multi-click pen session + commitOpenPath finalize, then
+// asserts the new <path> stays before the root </svg> AND is a renderable child
+// of the root <svg>.
+// =============================================================================
+class PenToolLiveSyncTest : public ::testing::Test {
+protected:
+  void Load(std::string_view svg) {
+    ASSERT_TRUE(app.loadFromString(svg));
+    textEditor.setText(svg);
+    textEditor.resetTextChanged();
+    controller.emplace(std::string(svg));
+  }
+
+  // One faithful editor frame: drain the command queue, then run the source-sync
+  // controller in the same order EditorShell does. A large deltaSeconds drains
+  // the text-change debounce so any queued writeback reparse is dispatched
+  // promptly (the GUI reaches the same state after the debounce idle window).
+  void Frame() {
+    app.flushFrame();
+    controller->syncParseErrorMarkers(app, textEditor);
+    controller->applyPendingWritebacks(app, selectTool, textEditor);
+    controller->handleTextEdits(app, textEditor, /*deltaSeconds=*/1.0f);
+  }
+
+  // Run frames until the editor would be idle (bounded so a bug can't spin).
+  void Settle() {
+    for (int i = 0; i < 8; ++i) {
+      Frame();
+    }
+  }
+
+  EditorApp app;
+  PenTool tool;
+  TextEditor textEditor;
+  SelectTool selectTool;
+  std::optional<DocumentSyncController> controller;
+};
+
+TEST_F(PenToolLiveSyncTest, FinalizedPenPathRendersThroughLiveSourceSync) {
+  Load(R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>)");
+
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  Frame();
+  tool.onMouseDown(app, Vector2d(30.0, 40.0), MouseModifiers{});
+  Frame();
+  tool.onMouseDown(app, Vector2d(60.0, 70.0), MouseModifiers{});
+  Frame();
+
+  ASSERT_TRUE(tool.commitOpenPath(app));
+  Settle();
+
+  const std::string source(app.document().document().source());
+  const std::size_t pathOffset = source.find("<path");
+  const std::size_t svgCloseOffset = source.rfind("</svg>");
+  ASSERT_NE(pathOffset, std::string::npos)
+      << "the finalized pen path vanished from the document source:\n"
+      << source;
+  ASSERT_NE(svgCloseOffset, std::string::npos) << source;
+  EXPECT_LT(pathOffset, svgCloseOffset)
+      << "<path> was placed AFTER the root </svg> by the live source-sync path, "
+         "so the shape never renders:\n"
+      << source;
+  EXPECT_EQ(source.find("<path", svgCloseOffset), std::string::npos)
+      << "no <path> may appear after the root </svg>:\n"
+      << source;
+
+  auto livePath = app.document().document().querySelector("path");
+  ASSERT_TRUE(livePath.has_value())
+      << "the finalized pen path is missing from the live DOM (never renders):\n"
+      << source;
+  const auto liveParent = livePath->parentElement();
+  ASSERT_TRUE(liveParent.has_value()) << source;
+  EXPECT_EQ(*liveParent, app.document().document().svgElement())
+      << "the pen path is not a child of the root <svg>, so it never renders:\n"
+      << source;
+
+  EXPECT_EQ(textEditor.getText(), source);
 }
 
 }  // namespace

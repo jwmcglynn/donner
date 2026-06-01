@@ -1,6 +1,7 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -15,6 +16,18 @@
 
 namespace donner::editor::mcp {
 namespace {
+
+// Writable scratch directory for tests that round-trip a file. Prefer bazel's
+// `TEST_TMPDIR` (always writable, including under sandboxed / remote execution)
+// over `std::filesystem::temp_directory_path()`, which resolves to a read-only
+// `/tmp` on remote-execution workers and fails the file rename.
+std::filesystem::path TestScratchDir() {
+  if (const char* testTmpDir = std::getenv("TEST_TMPDIR");
+      testTmpDir != nullptr && testTmpDir[0] != '\0') {
+    return std::filesystem::path(testTmpDir);
+  }
+  return std::filesystem::temp_directory_path();
+}
 
 using nlohmann::json;
 using ::testing::ElementsAreArray;
@@ -35,19 +48,9 @@ constexpr std::string_view kFilteredScene = R"svg(
 )svg";
 
 std::string TileSignature(const json& tile) {
-  std::string result = tile.value("id", "");
-  if (tile.value("kind", "") == "immediate") {
-    // Immediate tile ids include a per-frame generation suffix; paint-order assertions only need
-    // the stable compositor tile id.
-    constexpr std::string_view kImmediatePrefix = "immediate:";
-    if (result.starts_with(kImmediatePrefix)) {
-      result.erase(0, kImmediatePrefix.size());
-      const size_t generationSeparator = result.rfind(':');
-      if (generationSeparator != std::string::npos) {
-        result.erase(generationSeparator);
-      }
-    }
-  }
+  std::string result = tile.value("kind", "");
+  result += ":";
+  result += tile.value("id", "");
   if (tile.value("is_drag_target", false)) {
     result += "*";
   }
@@ -513,38 +516,38 @@ TEST(EditorControlSessionTest, SplashOThenRDragKeepsStableSplitLayerPaintOrder) 
   ASSERT_TRUE(rDrag.body.value("ok", false));
 
   const std::vector<std::string> expectedODragOrder = {
-      "640",
-      "9223372036854776448",
-      "2748779070096",
-      "9223372036854776464*",
-      "2817498546848",
-      "9223372036854776480",
-      "9223372036854776485",
-      "2907692860200",
-      "9223372036854776616",
-      "9223372036854776618",
-      "9223372036854776623",
-      "3500398347071",
-      "9223372036854776639",
-      "3569117822976",
+      "segment:640",
+      "layer:9223372036854776448",
+      "segment:2748779070096",
+      "layer:9223372036854776464*",
+      "segment:2817498546848",
+      "layer:9223372036854776480",
+      "layer:9223372036854776485",
+      "segment:2907692860200",
+      "layer:9223372036854776616",
+      "layer:9223372036854776618",
+      "layer:9223372036854776623",
+      "segment:3500398347071",
+      "layer:9223372036854776639",
+      "segment:3569117822976",
   };
   const std::vector<std::string> expectedRDragOrder = {
-      "640",
-      "9223372036854776448",
-      "2748779070096",
-      "9223372036854776464",
-      "2817498546840",
-      "9223372036854776472*",
-      "2851858285216",
-      "9223372036854776480",
-      "9223372036854776485",
-      "2907692860200",
-      "9223372036854776616",
-      "9223372036854776618",
-      "9223372036854776623",
-      "3500398347071",
-      "9223372036854776639",
-      "3569117822976",
+      "segment:640",
+      "layer:9223372036854776448",
+      "segment:2748779070096",
+      "layer:9223372036854776464",
+      "segment:2817498546840",
+      "layer:9223372036854776472*",
+      "segment:2851858285216",
+      "layer:9223372036854776480",
+      "layer:9223372036854776485",
+      "segment:2907692860200",
+      "layer:9223372036854776616",
+      "layer:9223372036854776618",
+      "layer:9223372036854776623",
+      "segment:3500398347071",
+      "layer:9223372036854776639",
+      "segment:3569117822976",
   };
 
   ExpectEveryStageHasTileOrder("O drag worker", oDrag, "composited_preview",
@@ -646,7 +649,7 @@ TEST(EditorControlSessionTest,
 }
 
 TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path tempDir = TestScratchDir();
   const std::filesystem::path svgPath = tempDir / "donner_editor_control_rnr_roundtrip.svg";
   const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_roundtrip.rnr";
   {
@@ -754,7 +757,7 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
 }
 
 TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path tempDir = TestScratchDir();
   const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_memory.rnr";
 
   EditorControlSession session;

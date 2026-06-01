@@ -10,6 +10,7 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/UndoTimeline.h"
@@ -214,15 +215,11 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
   // `onMouseDown` passes a freshly-computed live snapshot (its caller has
   // already gated on `!isBusy()`).
-  const svg::SVGElement element = currentSelection.front();
-  const bool isGraphics =
-      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
-        return element.isa<svg::SVGGraphicsElement>();
-      });
   const double hitSlopDoc =
       modifiers.pixelsPerDocUnit > 0.0 ? kRedragHitSlopScreenPx / modifiers.pixelsPerDocUnit : 0.0;
   if (selectionBoundsDoc.empty() ||
-      !selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint) || !isGraphics) {
+      !selectionBoundsDoc.front().inflatedBy(hitSlopDoc).contains(documentPoint) ||
+      !currentSelection.front().isa<svg::SVGGraphicsElement>()) {
     return false;
   }
   for (const Box2d& occludingBounds : occludingBoundsDoc) {
@@ -232,6 +229,14 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   }
 
   // Reuse the currently-selected element as the drag target.
+  const svg::SVGElement element = currentSelection.front();
+  const bool isGraphics =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.isa<svg::SVGGraphicsElement>();
+      });
+  if (!isGraphics) {
+    return false;
+  }
   const svg::SVGGraphicsElement graphicsElement =
       element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
         return element.cast<svg::SVGGraphicsElement>();
@@ -331,7 +336,8 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(editor.selectedElements()));
   if (!selectedBoundsDoc.empty() && !editor.selectedElements().empty()) {
     const SelectionTransformHandleIntent handleIntent = HitTestSelectionTransformHandles(
-        selectedBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit);
+        selectedBoundsDoc, documentPoint, modifiers.pixelsPerDocUnit,
+        /*includeRotate=*/!modifiers.shift);
     if (handleIntent.kind != SelectionTransformHandleKind::None) {
       const auto& selection = editor.selectedElements();
       const bool allGraphics = std::all_of(selection.begin(), selection.end(), isGraphicsElement);
@@ -384,9 +390,9 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     }
   }
 
-  // Click on empty space → start a marquee. The marquee resolves to a
-  // selection set on `onMouseUp`. While dragging it shows up as
-  // overlay chrome via `marqueeRect()`.
+  // Click on empty space → start a marquee. Presses that start on the
+  // selected shape are handled by the drag paths above; starting away
+  // from the selection should still allow a fresh non-additive marquee.
   if (!hit.has_value()) {
     if (!modifiers.shift) {
       // Plain click on empty space clears the selection up-front so
@@ -408,6 +414,12 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // so the user can add/remove individual paths from a set — no
   // compositing-group elevation.
   if (modifiers.shift) {
+    // Locked elements (or elements inside a locked group) can't be added to the
+    // selection. Reject and flash the outline red as feedback.
+    if (IsLocked(*hit)) {
+      requestLockedRejectionFlash(*hit);
+      return;
+    }
     editor.toggleInSelection(*hit);
     return;
   }
@@ -446,6 +458,14 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
     return HasCompositingAttribute(topLevel) ? topLevel : *hit;
   });
 
+  // Locked elements (or elements inside a locked group) can't be selected or
+  // dragged. Reject the click, leave the current selection untouched, and flash
+  // the rejected element's outline red as feedback.
+  if (IsLocked(element)) {
+    requestLockedRejectionFlash(element);
+    return;
+  }
+
   // If the element is already in the current multi-selection, preserve
   // the selection and drag ALL selected elements in lockstep — classic
   // design-tool behavior (grab any item in the group, the group moves).
@@ -480,6 +500,38 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       .startDocumentPoint = documentPoint,
       .startBoundsDoc = CombinedSelectionBounds(dragStartBoundsDoc),
       .generation = nextDragGeneration_++,
+  };
+}
+
+void SelectTool::requestLockedRejectionFlash(const svg::SVGElement& element) {
+  // Flash the entire locked layer, not just the clicked leaf: clicking a
+  // `<rect>` inside a locked `<g>` should outline (and highlight in the Layers
+  // panel) the whole `<g>` that actually carries the lock. Resolve to the
+  // locked ancestor; fall back to the clicked element if — somehow — it isn't
+  // locked (both call sites gate on `IsLocked` first, so this is belt-and-
+  // suspenders).
+  lockedFlashElement_ = LockedAncestor(element).value_or(element);
+  lockedFlashRemainingSeconds_ = kLockedRejectionFlashSeconds;
+}
+
+void SelectTool::tickLockedRejectionFlash(float deltaSeconds) {
+  if (lockedFlashRemainingSeconds_ <= 0.0f) {
+    return;
+  }
+  lockedFlashRemainingSeconds_ -= deltaSeconds;
+  if (lockedFlashRemainingSeconds_ <= 0.0f) {
+    lockedFlashRemainingSeconds_ = 0.0f;
+    lockedFlashElement_.reset();
+  }
+}
+
+std::optional<SelectTool::LockedRejectionFlash> SelectTool::lockedRejectionFlash() const {
+  if (!lockedFlashElement_.has_value() || lockedFlashRemainingSeconds_ <= 0.0f) {
+    return std::nullopt;
+  }
+  return LockedRejectionFlash{
+      .element = *lockedFlashElement_,
+      .intensity = lockedFlashRemainingSeconds_ / kLockedRejectionFlashSeconds,
   };
 }
 

@@ -7,8 +7,11 @@
 #include <vector>
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/ParseResult.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {
 
@@ -23,6 +26,7 @@ struct SourceTextEdit {
 struct StructuredApplyResult {
   bool applied = false;
   bool needsDocumentReplace = false;
+  bool hadDiagnostic = false;
 };
 
 struct SelectionRemapTarget {
@@ -194,7 +198,35 @@ StructuredApplyResult TryApplyStructuredSourceEdit(EditorApp& app, std::string_v
   return StructuredApplyResult{
       .applied = true,
       .needsDocumentReplace = result.scope == xml::ReparseScope::Document,
+      .hadDiagnostic = result.diagnostic.has_value(),
   };
+}
+
+/// Append a structural fingerprint of \p element to \p out: a pre-order
+/// `tag#id(children)` string. It is intentionally robust to formatting,
+/// whitespace, and attribute *values* but sensitive to element
+/// insert/delete/reorder/rename — exactly the desync an ambiguous whole-text
+/// diff can introduce when it misclassifies a structural change as an attribute
+/// edit.
+void AppendStructuralFingerprint(const svg::SVGElement& element, std::string* out) {
+  out->append(std::string(std::string_view(element.tagName().name)));
+  out->push_back('#');
+  if (std::optional<RcString> id = element.getAttribute(xml::XMLQualifiedNameRef("id"));
+      id.has_value()) {
+    out->append(id->str());
+  }
+  out->push_back('(');
+  for (std::optional<svg::SVGElement> child = element.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    AppendStructuralFingerprint(*child, out);
+  }
+  out->push_back(')');
+}
+
+std::string StructuralFingerprint(const svg::SVGElement& root) {
+  std::string fingerprint;
+  AppendStructuralFingerprint(root, &fingerprint);
+  return fingerprint;
 }
 
 bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSource,
@@ -211,6 +243,26 @@ bool TryApplyStructuredSourceChange(EditorApp& app, std::string_view previousSou
 
   if (result.needsDocumentReplace || app.document().document().source() != newSource) {
     app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+    return true;
+  }
+
+  // Guard against a lossy incremental apply. `BuildSingleSourceTextEdit` produces
+  // a minimal whole-text diff, which is ambiguous: inserting an element textually
+  // similar to a sibling can collapse into what looks like a single-character
+  // attribute edit, so the structured apply renames the existing sibling and
+  // never materializes the new element even though the source bytes are correct.
+  // Skip the check when the apply carried a diagnostic — the source is then
+  // intentionally mid-error and the editor keeps the last-good DOM. Otherwise
+  // compare a structural fingerprint of the live DOM against a fresh parse of the
+  // new source; on mismatch the DOM desynced, so fall back to a full reparse.
+  if (!result.hadDiagnostic) {
+    ParseWarningSink warningSink;
+    ParseResult<svg::SVGDocument> freshParse =
+        svg::parser::SVGParser::ParseSVG(newSource, warningSink);
+    if (freshParse.hasResult() && StructuralFingerprint(app.document().document().svgElement()) !=
+                                      StructuralFingerprint(freshParse.result().svgElement())) {
+      app.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(newSource)));
+    }
   }
 
   return true;

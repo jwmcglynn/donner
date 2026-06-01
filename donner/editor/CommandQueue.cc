@@ -13,14 +13,23 @@ CommandQueue::FlushResult CommandQueue::flush() {
     return {};
   }
 
-  // Find the latest ReplaceDocument and drop everything queued before it.
-  // Commands queued after the latest ReplaceDocument survive coalescing
+  // Find the latest structural-replace and drop everything queued before it.
+  // Commands queued after the latest structural-replace survive coalescing
   // against each other, but anything before it is logically wiped out.
+  // ReplaceDocument, CutShapes, and PasteShapes are all "swap the whole
+  // document" commands — they invalidate any element handles that earlier
+  // commands hold, so prior commands must be discarded.
+  auto isStructuralReplace = [](EditorCommand::Kind kind) {
+    return kind == EditorCommand::Kind::ReplaceDocument || kind == EditorCommand::Kind::CutShapes ||
+           kind == EditorCommand::Kind::PasteShapes ||
+           kind == EditorCommand::Kind::ConvertTextToOutlines;
+  };
+
   std::size_t startIndex = 0;
   bool hadReplaceDocument = false;
   bool allReplaceDocumentPreserveUndo = true;
   for (std::size_t i = 0; i < pending_.size(); ++i) {
-    if (pending_[i].kind == EditorCommand::Kind::ReplaceDocument) {
+    if (isStructuralReplace(pending_[i].kind)) {
       hadReplaceDocument = true;
       allReplaceDocumentPreserveUndo =
           allReplaceDocumentPreserveUndo && pending_[i].preserveUndoOnReparse;

@@ -175,6 +175,22 @@ public:
   /// Returns active oriented-bounds chrome for in-progress rotation.
   [[nodiscard]] std::optional<ActiveTransformBoundsPreview> activeTransformBoundsPreview() const;
 
+  /// A transient "this element is locked, you can't select it" flash on the
+  /// rejected element's outline. `intensity` fades from 1 → 0 over the flash
+  /// duration.
+  struct LockedRejectionFlash {
+    svg::SVGElement element;  ///< The element whose selection was rejected.
+    float intensity = 0.0f;   ///< Fade intensity in (0, 1].
+  };
+
+  /// The active locked-selection rejection flash, or `std::nullopt`. The overlay
+  /// renderer draws this as a red outline on the rejected (locked) element.
+  [[nodiscard]] std::optional<LockedRejectionFlash> lockedRejectionFlash() const;
+
+  /// Advance the locked-rejection flash fade by @p deltaSeconds, clearing it
+  /// once fully faded. Called once per frame by the editor shell.
+  void tickLockedRejectionFlash(float deltaSeconds);
+
 private:
   /// Per-element bookkeeping for one participant in a drag. Carries the
   /// start transform (for computing `startTransform * translate(delta)`
@@ -243,10 +259,20 @@ private:
     bool additive = false;
   };
 
+  /// Begin a locked-selection rejection flash on @p element.
+  void requestLockedRejectionFlash(const svg::SVGElement& element);
+
+  /// Duration of the locked-selection rejection flash.
+  static constexpr float kLockedRejectionFlashSeconds = 0.5f;
+
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
   std::uint64_t nextDragGeneration_ = 1;
+  /// Element whose selection was rejected for being locked, flashed red.
+  std::optional<svg::SVGElement> lockedFlashElement_;
+  /// Remaining flash time in seconds; counts down to 0 then clears.
+  float lockedFlashRemainingSeconds_ = 0.0f;
 };
 
 }  // namespace donner::editor

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include "donner/base/RcString.h"
 #include "donner/base/RcStringOrRef.h"
 #include "donner/svg/SVGElement.h"
 
@@ -175,6 +176,21 @@ public:
    * @param style Stylesheet contents (CSS text).
    */
   void setContents(std::string_view style);
+
+  /**
+   * Return the raw CSS text the stylesheet was parsed from. This is the authoritative text
+   * representation of the `<style>` element's content, as opposed to the parsed rules, and is
+   * retained even though the SVG element tree does not keep the source `Data` child nodes.
+   */
+  RcString textContent() const;
+
+  /**
+   * Replace the text content of the `<style>` element with @p text and reparse the stylesheet, so
+   * the parsed rules and \ref textContent stay coherent. Equivalent to \ref setContents.
+   *
+   * @param text New stylesheet text (CSS).
+   */
+  void setTextContent(std::string_view text);
 
   /// Return true if the stylesheet is of type `text/css`.
   bool isCssType() const;

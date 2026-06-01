@@ -52,6 +52,17 @@ struct SelectionChromeBoundsPreview {
   Transform2d documentFromStartDocument = Transform2d();
 };
 
+/// Locked-rejection flash input for `OverlayRenderer::captureChromeSnapshot`. Carries the rejected
+/// (locked) element whose outline should flash red plus the current fade intensity. Kept as a
+/// dedicated struct (rather than a dependency on `SelectTool::LockedRejectionFlash`) so the overlay
+/// renderer stays decoupled from the tool layer.
+struct LockedRejectionFlashInput {
+  /// The element whose selection was rejected because it (or an ancestor group) is locked.
+  svg::SVGElement element;
+  /// Fade intensity in (0, 1]; scales the red stroke's alpha at draw time.
+  float intensity = 0.0f;
+};
+
 /// Detail level used when capturing selection chrome.
 enum class SelectionChromeDetail {
   /// Capture visible path outlines plus selection bounds.
@@ -94,6 +105,19 @@ struct SelectionChromeSnapshot {
   std::vector<PathItem> paths;
   /// Transient source-hover path outlines. Drawn as soft hover chrome before selection chrome.
   std::vector<PathItem> hoverPaths;
+
+  /// Transient "this element is locked, you can't select it" feedback. When present, the rejected
+  /// (locked) element's outline is stroked in red with alpha scaled by `intensity` (1 → 0 as the
+  /// flash fades). Captured from `SelectTool::lockedRejectionFlash()`.
+  struct LockedFlash {
+    /// Document-space path of the rejected (locked) element, sampled at capture time — same
+    /// document-space convention as `PathItem::pathDoc`.
+    Path pathDoc;
+    /// Fade intensity in (0, 1]; scales the red stroke's alpha.
+    float intensity = 0.0f;
+  };
+  /// The active locked-rejection flash, or nullopt when no element is being rejected.
+  std::optional<LockedFlash> lockedFlash;
 
   /// Per-element AABBs in document space (from
   /// `SnapshotSelectionWorldBounds`). Drawn with `canvasFromDoc`
@@ -208,7 +232,8 @@ public:
       std::span<const svg::SVGElement> sourceHover = {},
       const std::optional<Box2d>& cullRectDoc = std::nullopt,
       SelectionChromeDetail selectionDetail = SelectionChromeDetail::Full,
-      const Transform2d& representedDocumentFromLiveDocument = Transform2d());
+      const Transform2d& representedDocumentFromLiveDocument = Transform2d(),
+      const std::optional<LockedRejectionFlashInput>& lockedFlash = std::nullopt);
 
   /// Race-free chrome rasterize: reads only the snapshot, never the
   /// registry. Safe to call while the async-renderer worker is

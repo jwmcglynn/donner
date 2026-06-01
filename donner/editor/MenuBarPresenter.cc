@@ -42,6 +42,14 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
       actions.saveFileAs = true;
     }
     ImGui::Separator();
+    if (ImGui::MenuItem("Export Viewport as SVG...", nullptr, false, state.canSave)) {
+      actions.exportViewportSvg = true;
+    }
+    if (ImGui::MenuItem("Export Viewport as SVG (with overlay)...", nullptr, false,
+                        state.canSave)) {
+      actions.exportViewportSvgWithOverlay = true;
+    }
+    ImGui::Separator();
     if (ImGui::MenuItem("Revert", nullptr, false, state.canRevert)) {
       actions.revertFile = true;
     }
@@ -57,23 +65,49 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     }
     ImGui::Separator();
 
-    if (!state.sourcePaneFocused) {
-      ImGui::BeginDisabled();
-    }
-    if (ImGui::MenuItem("Cut", "Cmd+X", false, state.sourcePaneFocused)) {
+    // Cut/Copy act on the source pane when it is focused, otherwise on the
+    // canvas shape selection. Paste / Paste in Front likewise fall back to the
+    // shape clipboard. Each item enables on the relevant precondition.
+    const bool canCutCopy = state.sourcePaneFocused || state.hasShapeSelection;
+    const bool canPaste = state.sourcePaneFocused || state.hasShapeClipboard;
+    if (ImGui::MenuItem("Cut", "Cmd+X", false, canCutCopy)) {
       actions.cut = true;
     }
-    if (ImGui::MenuItem("Copy", "Cmd+C", false, state.sourcePaneFocused)) {
+    if (ImGui::MenuItem("Copy", "Cmd+C", false, canCutCopy)) {
       actions.copy = true;
     }
-    if (ImGui::MenuItem("Paste", "Cmd+V", false, state.sourcePaneFocused)) {
+    if (ImGui::MenuItem("Paste", "Cmd+V", false, canPaste)) {
       actions.paste = true;
     }
-    if (ImGui::MenuItem("Select All", "Cmd+A", false, state.sourcePaneFocused)) {
-      actions.selectAll = true;
+    if (ImGui::MenuItem("Paste in Front", "Cmd+F", false, state.hasShapeClipboard)) {
+      actions.pasteInFront = true;
     }
-    if (!state.sourcePaneFocused) {
-      ImGui::EndDisabled();
+    ImGui::Separator();
+    if (ImGui::MenuItem("Convert Text to Outlines", nullptr, false, state.hasTextSelection)) {
+      actions.convertTextToOutlines = true;
+    }
+    // "Select All" routes to the source/XML pane's text Select-All while it owns keyboard focus,
+    // and otherwise to the canvas Select-All (every selectable element). Enabled when either path
+    // can act.
+    if (ImGui::MenuItem("Select All", "Cmd+A", false,
+                        state.sourcePaneFocused || state.hasSelectableElements)) {
+      if (state.sourcePaneFocused) {
+        actions.selectAll = true;
+      } else {
+        actions.selectAllCanvas = true;
+      }
+    }
+    // "Deselect All" routes to the source/XML pane's text deselect (collapse selection to caret)
+    // while it owns keyboard focus, and otherwise clears the canvas selection. Enabled when either
+    // path can act: the source pane can always collapse its caret, and the canvas needs a
+    // selection. Cmd+Shift+A mirrors the focus-aware shortcut handled in EditorShell.
+    if (ImGui::MenuItem("Deselect All", "Cmd+Shift+A", false,
+                        state.sourcePaneFocused || state.hasShapeSelection)) {
+      if (state.sourcePaneFocused) {
+        actions.deselectAll = true;
+      } else {
+        actions.deselectAllCanvas = true;
+      }
     }
     ImGui::EndMenu();
   }
@@ -91,6 +125,13 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
     }
     if (ImGui::MenuItem("Actual Size", "Cmd+0")) {
       actions.actualSize = true;
+    }
+    ImGui::Separator();
+    if (ImGui::MenuItem("Compositor Debug", nullptr, state.showCompositorDebugPanel)) {
+      actions.toggleCompositorDebugPanel = true;
+    }
+    if (ImGui::MenuItem("Performance Overlay", nullptr, state.showPerfOverlay)) {
+      actions.togglePerfOverlay = true;
     }
     ImGui::EndMenu();
   }

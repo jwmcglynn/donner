@@ -27,6 +27,7 @@
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/UndoTimeline.h"
 #include "donner/svg/DonnerController.h"
 #include "donner/svg/SVGElement.h"
@@ -48,6 +49,15 @@ struct PathOperationAvailability {
   bool canApply = false;  ///< True when the operation button should be enabled.
   std::string reason;     ///< Short disabled-state reason for tooltips and tests.
 };
+
+/// Whether @p command is a geometry-changing or destructive mutation targeting
+/// a locked element and must be dropped by the edit-gating path. Returns true
+/// only for `SetTransform` / `DeleteElement` whose target `IsLocked` (which
+/// also covers descendants of a locked group). Everything else — attribute and
+/// visibility/lock toggles, inserts, text edits, document replacement — is
+/// allowed, so a locked layer can still be shown/hidden, selected, and
+/// unlocked.
+[[nodiscard]] bool IsLockGatedCommand(const EditorCommand& command);
 
 /// Active paint settings used by authoring tools when creating new geometry.
 struct ActivePaintStyle {
@@ -145,9 +155,30 @@ public:
   /// text pane both flow through here. Pushes the command onto the
   /// document's command queue; nothing is applied until `flushFrame()`.
   void applyMutation(EditorCommand command) {
+    // Edit-gating: locked layers (`data-donner-locked="true"` on the element or
+    // an ancestor) are protected from geometry-changing edits and deletion.
+    // Visibility/lock metadata toggles and selection are NOT gated, so a locked
+    // layer can still be shown/hidden and unlocked. See `IsLockGatedCommand`.
+    if (IsLockGatedCommand(command)) {
+      return;
+    }
     document_.applyMutation(std::move(command));
     isDirty_ = true;
   }
+
+  /// Set the visibility of @p element by toggling its `display` presentation
+  /// attribute: hiding writes `display="none"`, showing writes
+  /// `display="inline"` (a definitively visible value, observable through the
+  /// computed-style visibility check). Routes through `applyMutation` so the
+  /// Layers panel eye button and context menu share one code path. Visibility
+  /// toggles are intentionally NOT lock-gated.
+  void setElementVisible(const svg::SVGElement& element, bool visible);
+
+  /// Lock or unlock @p element by toggling the `data-donner-locked` marker
+  /// attribute (`"true"` to lock, `"false"` to unlock). Routes through
+  /// `applyMutation`. The lock toggle itself is NOT lock-gated, so a locked
+  /// layer can always be unlocked.
+  void setElementLocked(const svg::SVGElement& element, bool locked);
 
   /// Restore these selection targets after the next source-backed document replacement.
   void restoreSelectionAfterNextDocumentReplace(std::vector<AttributeWritebackTarget> targets);
@@ -164,6 +195,77 @@ public:
    * @return true if there was a selection to delete.
    */
   bool deleteSelectionWithUndo(std::string_view currentSourceText);
+
+  /// Paint-order ("z-order") move direction for \ref reorderSelectedElement.
+  /// SVG paints in document order — later siblings paint on top — so
+  /// "forward"/"front" move the element later among its siblings.
+  enum class ZOrder : std::uint8_t {
+    BringToFront,  ///< Move to the last sibling (paints on top of all siblings).
+    SendToBack,    ///< Move to the first sibling (paints behind all siblings).
+    BringForward,  ///< Move one position later (up one in paint order).
+    SendBackward,  ///< Move one position earlier (down one in paint order).
+  };
+
+  /**
+   * Reorder the single selected element among its siblings (paint/z-order),
+   * recording one undoable structural edit.
+   *
+   * This is a pure DOM move — a single `SVGDocument::insertElement` of the
+   * already-attached element to a new position before a computed reference
+   * sibling — and the structured-editing reflection rewrites the source from the
+   * DOM change. No source-text surgery (see CLAUDE.md "DOM-Level Editing Only").
+   *
+   * @param direction Which way to move the element in paint order.
+   * @return true if the element moved; false if there is no single selection, the
+   *   selection is the document root, or it is already at the requested extreme.
+   */
+  bool reorderSelectedElement(ZOrder direction);
+
+  /**
+   * Move @p element so it sits immediately before @p referenceSibling among its
+   * current parent's children (or to the end when @p referenceSibling is
+   * `std::nullopt`), recording one undoable structural edit. This is the
+   * arbitrary-position generalization of \ref reorderSelectedElement used by the
+   * Layers-panel drag-to-reorder affordance.
+   *
+   * Like the z-order moves it is a pure DOM `SVGDocument::insertElement` and the
+   * structured-editing reflection rewrites the source (no source-text surgery).
+   *
+   * Refuses (returns false) when @p element is locked or the document root, when
+   * @p referenceSibling is not a child of the same parent (cross-parent moves are
+   * unsupported here), when @p referenceSibling *is* @p element, or when the
+   * element is already in the requested position.
+   *
+   * @param element The element to move (selection is left to the caller).
+   * @param referenceSibling Insert @p element before this sibling, or append when
+   *   `std::nullopt`.
+   * @return true if the element moved.
+   */
+  bool reorderElementBeforeSibling(svg::SVGElement element,
+                                   std::optional<svg::SVGElement> referenceSibling);
+
+  /**
+   * Rename the single selected element's `id` to @p newId, updating every
+   * internal reference so the document keeps rendering the same — one undoable
+   * structural edit.
+   *
+   * All work is DOM-level (per CLAUDE.md "DOM-Level Editing Only"): the element's
+   * `id` and every referencing attribute value (`url(#oldId)` in fill / stroke /
+   * clip-path / mask / filter / markers / inline `style`, and `href` /
+   * `xlink:href="#oldId"`) are changed via `SetAttributeCommand`, and the
+   * structured-editing reflection rewrites the source. No source-text surgery.
+   *
+   * Refuses (returns false) when there is no single selection, the element is
+   * locked, @p newId is empty or already used by another element, or @p newId
+   * equals the current id.
+   *
+   * Known limitation: CSS `#oldId` selectors inside a `<style>` block are not yet
+   * rewritten (rare in editor-authored content); tracked as follow-up.
+   *
+   * @param newId The new element id.
+   * @return true if the rename was applied.
+   */
+  bool renameSelectedElement(std::string_view newId);
 
   // ---------------------------------------------------------------------------
   // Selection
@@ -320,6 +422,13 @@ public:
   /// about z-order can rely on a stable sequence.
   [[nodiscard]] std::vector<svg::SVGGeometryElement> hitTestRect(const Box2d& documentRect);
 
+  /// Return every selectable geometry element in the document, in document order (root-to-leaf
+  /// depth-first). This is the canonical "Select All" set: the same elements `hitTestRect` would
+  /// return for a marquee covering the whole canvas, minus the rectangle filter. Non-geometry
+  /// nodes (`<defs>`, gradients, plain containers, XML text nodes) are excluded, so it matches what
+  /// marquee selection treats as selectable. Empty when there is no document.
+  [[nodiscard]] std::vector<svg::SVGElement> selectableElements();
+
   // ---------------------------------------------------------------------------
   // Undo
   // ---------------------------------------------------------------------------
@@ -330,6 +439,24 @@ public:
   /// through the command queue so the mutation seam is preserved.
   [[nodiscard]] UndoTimeline& undoTimeline() { return undoTimeline_; }
   [[nodiscard]] const UndoTimeline& undoTimeline() const { return undoTimeline_; }
+
+  /**
+   * Defer a single document-source undo entry to the next `flushFrame()`.
+   *
+   * The "before" source is captured now (by the caller, while the document is
+   * still in sync); the "after" source is captured during the next
+   * `flushFrame()` once queued geometry has been applied, and one undo entry is
+   * recorded only if the source actually changed. This lets a multi-step
+   * authoring gesture (e.g. a whole Pen-tool session) collapse into one
+   * undoable command without the tool having to flush the frame itself, so the
+   * normal per-frame source-sync path stays intact.
+   *
+   * @param label Human-readable undo label.
+   * @param anchorElement Element used to anchor the source snapshot.
+   * @param beforeSource Document source captured before the gesture began.
+   */
+  void recordDocumentSourceUndoOnNextFlush(std::string label, svg::SVGElement anchorElement,
+                                           std::string beforeSource);
 
   /// Whether there is an entry to undo.
   [[nodiscard]] bool canUndo() const { return undoTimeline_.canUndo(); }
@@ -432,6 +559,14 @@ private:
   /// `const optional&`. Centralized so we can't forget it on a new
   /// mutation path.
   void refreshFirstSelectionCache();
+
+  /// Shared tail of the structural-move paths (\ref reorderSelectedElement and
+  /// \ref reorderElementBeforeSibling): records an undo snapshot labelled
+  /// @p undoLabel and issues the DOM `InsertElementCommand` that repositions
+  /// @p element before @p referenceElement within @p parent. Always returns true.
+  bool applyElementMove(svg::SVGElement element, svg::SVGElement parent,
+                        std::optional<svg::SVGElement> referenceElement,
+                        std::string_view undoLabel);
 
   struct PendingDocumentSourceUndo {
     std::string label;

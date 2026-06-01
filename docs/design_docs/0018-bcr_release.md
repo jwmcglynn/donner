@@ -26,7 +26,7 @@ Donner's BCR-published surface is a deliberate subset of the full library. The d
 | Filter effects (all 17 primitives) | ✅ | built-in |
 | Removed full-Skia backend (legacy) | ❌ | Historical note only; power users previously needed `git_override` |
 | text-full (HarfBuzz + WOFF2) | ❌ | Power users via `git_override`; also tracked as a future follow-up BCR module |
-| Geode (WebGPU + Slug) backend | ❌ | Experimental; `git_override` only; revisit post-v0.5 |
+| Geode (WebGPU + Slug) backend | ❌ | Not BCR-published: its `wgpu-native` / WebGPU deps are non-BCR (`dev_dependency` overrides). Geode itself is a supported backend (the editor's default), just not a BCR-consumable config |
 
 The mechanism that keeps the non-BCR features invisible to BCR consumers is the `dev_dependency = True` module extension at `third_party/bazel/non_bcr_deps.bzl`. BCR strips dev-only extensions when Donner is consumed as a `bazel_dep`, so downstream users simply never see the former full-Skia repo, `@harfbuzz`, `@woff2`, or `@wgpu_native_*`.
 
@@ -79,6 +79,7 @@ Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is s
 - [ ] `.github/workflows/release.yml` references a real `bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@vX.Y.Z` tag (Publish-to-BCR does not publish floating major tags; pin exact versions)
 
 ### Ship
+- [ ] **Root-cause the previous BCR attempt before retrying** — pull up the last release's BCR PR on `bazelbuild/bazel-central-registry` (`modules/donner/<prev>/`) and its `publish-to-bcr` workflow run, identify exactly why it failed, and confirm the fix is already in the tree (`.bcr/`, `release.yml` publish pin, `presubmit.yml` `build_targets`). Do not re-run the publish blind. Cross-check the common-failures table below.
 - [ ] Merge release PR → push tag `vX.Y.Z` → GitHub Release auto-created
 - [ ] Watch Actions tab: `linux` + `macos` CLI binary jobs run, then `publish-to-bcr` reusable workflow
 - [ ] Watch `bazelbuild/bazel-central-registry` → `modules/donner/X.Y.Z/` for the new PR

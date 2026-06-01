@@ -1,10 +1,65 @@
 # Donner
 
-## Unreleased
+## v0.8 — Donner SVG Editor & Toolkit
+
+*Date: <unreleased>*
+
+v0.8 rebrands Donner as **Donner SVG Editor & Toolkit**: an editor application plus reusable SVG
+rendering, geometry, and toolkit libraries. It releases the accumulated editor, Geode, and path work
+and ships a showcase asset authored in the editor itself.
+
+### Highlights
+
+- **Geode default editor rendering** — the editor renders through the Geode GPU backend by default.
+- **Fluid canvas rendering** — zoom, drag, overlay, and large selections stay responsive.
+- **In-tree path operations + editor pathfinder fixes** — boolean path operations backed by in-tree
+  PathOps, with Pen/pathfinder stability fixes.
+- **Compound path unbundle** — split a compound path into its component subpaths.
+- **Complete Layers panel** — editable document/group/subgroup/shape hierarchy with Donner-rendered
+  thumbnails, stable names, per-row show/hide and lock toggles, inline rename, drag-to-reorder, and
+  canvas/source selection sync. All reordering and renaming is performed as DOM mutations, not source-
+  text edits.
+- **Shape clipboard** — cut/copy/paste of selected shapes and groups with source sync, undo, default
+  paste offset, Paste in Front, and deterministic ID handling.
+- **Tuned Pen tool** — line/curve anchors, close/cancel, live preview, immediate bounds/overlay
+  updates, and root-contained source insertion.
+- **Text authoring UI** — create and edit short SVG text from the editor.
+- **Convert Text to Outlines** — convert selected `<text>` into deterministic path geometry using
+  Donner's text layout and glyph outlines.
+- **Viewport SVG export** — export the current editor viewport as cropped SVG, with an optional
+  selection-overlay variant.
+- **Cascade-safe element rename** — rename an element's id from the editor as a DOM-level operation
+  that repoints references and rewrites matching `#id` selectors inside `<style>` blocks, so the
+  cascade stays intact.
+- **Z-order reordering** — bring selected elements forward/backward/to-front/to-back via DOM moves,
+  keeping document order, paint order, and the source projection in sync.
+- **Element locks persist across load** — user/`data-*` attributes (including
+  `data-donner-locked`) are preserved when an SVG is parsed, so layer locks set in the editor survive
+  saving and reloading.
+- **DOM-first structured source editing** — typing in the source pane performs incremental reparse
+  that updates the live DOM tree in place, preserving entity identity, selection, and references
+  across the keystroke. A structural-fingerprint guard prevents the whole-document diff fallback from
+  desyncing the DOM and source on similar-sibling edits.
+- **v0.8 showcase asset** — the new Donner splash, authored and exported in Donner Editor and checked
+  in as SVG.
+
+See the [Project Roadmap](ProjectRoadmap.md) and
+[v0.8 Showcase design doc](design_docs/0047-v0_8_showcase.md) for details.
+
+### Fixes and Internals
+
+- **Filter subregion clipping hardening (security)** — fixed two heap-buffer-overflows in the
+  tiny-skia filter pipeline (`applySubregionClipping` and `ClipFilterOutputToRegion`) where the
+  kept-rect origin was clamped only at the low end; both axes are now clamped to the output bounds.
+  Affects rendering of untrusted SVG filter regions.
+- **Layers thumbnails render through Donner** — layer previews are rasterized by the Donner renderer
+  and blitted as textures, replacing the prior hand-drawn ImGui silhouette so previews match real
+  render output.
 
 ### Removed
 
-- Full-Skia renderer backend removed. `tiny-skia` remains the default backend and Geode remains available.
+- Full-Skia renderer backend removed. `tiny-skia` remains the default backend and Geode remains
+  available.
 
 ## v0.5.0
 

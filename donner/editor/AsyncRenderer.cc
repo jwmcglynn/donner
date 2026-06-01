@@ -162,9 +162,6 @@ void AsyncRenderer::notePublishedCompositedPreview(
   std::unordered_map<std::string, PublishedCompositedTile> nextPublished;
   nextPublished.reserve(compositedPreview->tiles.size());
   for (const RenderResult::CompositedTile& tile : compositedPreview->tiles) {
-    if (tile.kind == RenderResult::CompositedTile::Kind::Immediate) {
-      continue;
-    }
     if (!tile.bitmap.empty() || tile.textureSnapshot != nullptr) {
       const Vector2i bitmapDims =
           !tile.bitmap.empty() ? tile.bitmap.dimensions : tile.textureSnapshot->dimensions();
@@ -619,10 +616,29 @@ void AsyncRenderer::workerLoop() {
                publishedIt->second.rasterCanvasSize.x == rasterCanvasSize.x &&
                publishedIt->second.rasterCanvasSize.y == rasterCanvasSize.y;
       };
+      const auto outputTileId = [](const svg::compositor::CompositorTile& ct) {
+        // Immediate (direct-rendered) static segments share the same stable tile
+        // identity as composited static segments. The identity must NOT encode
+        // the generation: a steady drag frame leaves the underlying segment
+        // unchanged, so a generation-suffixed id would make every frame look
+        // like a brand-new tile and defeat texture/metadata reuse. Generation
+        // is tracked separately on the output tile.
+        return std::to_string(ct.tileId);
+      };
+      const auto outputTileKind = [](const svg::compositor::CompositorTile& ct) {
+        using OutKind = RenderResult::CompositedTile::Kind;
+        if (ct.layerEntity != entt::null) {
+          return OutKind::Layer;
+        }
+        return ct.immediate ? OutKind::Immediate : OutKind::Segment;
+      };
 
       using svg::compositor::CompositorTileBitmapPayload;
       auto compositorTiles =
           compositor_->snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
+      const bool metadataReuseRequest =
+          activeDragRequest ||
+          compositorInteractionKind_ == svg::compositor::InteractionHint::ActiveDrag;
       bool canReuseNonDragTextures = !publishedCompositedTiles_.empty();
       std::size_t activeDragTilesAvailable = 0u;
       bool activeDragTileNeedsPayload = false;
@@ -632,13 +648,17 @@ void AsyncRenderer::workerLoop() {
           continue;
         }
         using OutKind = RenderResult::CompositedTile::Kind;
-        const OutKind kind =
-            ct.immediate ? OutKind::Immediate
-                         : (ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer);
+        const OutKind kind = outputTileKind(ct);
         const bool currentActiveDragLayer =
             activeDragRequest && ContainsEntity(dragPreviewEntities, ct.layerEntity);
-        if (ct.immediate) {
+        const std::string tileId = outputTileId(ct);
+        if (kind == OutKind::Immediate) {
           hasImmediateTile = true;
+          if (metadataReuseRequest && !publishedTextureMatches(tileId, kind, ct.generation,
+                                                               ct.bitmapDims, outputCanvasSize)) {
+            canReuseNonDragTextures = false;
+            break;
+          }
           if (currentActiveDragLayer) {
             ++activeDragTilesAvailable;
           }
@@ -646,12 +666,12 @@ void AsyncRenderer::workerLoop() {
         }
         if (currentActiveDragLayer) {
           ++activeDragTilesAvailable;
-          activeDragTileNeedsPayload = !publishedTextureMatches(
-              std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims, outputCanvasSize);
+          activeDragTileNeedsPayload = !publishedTextureMatches(tileId, kind, ct.generation,
+                                                                ct.bitmapDims, outputCanvasSize);
           continue;
         }
         if (ct.isDragTarget && activeDragRequest) continue;
-        if (!publishedTextureMatches(std::to_string(ct.tileId), kind, ct.generation, ct.bitmapDims,
+        if (!publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims,
                                      outputCanvasSize)) {
           canReuseNonDragTextures = false;
           break;
@@ -662,8 +682,10 @@ void AsyncRenderer::workerLoop() {
       }
       CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All;
       if (canReuseNonDragTextures) {
-        if (hasImmediateTile && activeDragTileNeedsPayload) {
-          payload = CompositorTileBitmapPayload::ImmediateAndDragTargetOnly;
+        if (metadataReuseRequest && activeDragTileNeedsPayload) {
+          payload = CompositorTileBitmapPayload::DragTargetOnly;
+        } else if (metadataReuseRequest) {
+          payload = CompositorTileBitmapPayload::MetadataOnly;
         } else if (hasImmediateTile) {
           payload = CompositorTileBitmapPayload::ImmediateOnly;
         } else if (activeDragTileNeedsPayload) {
@@ -680,17 +702,13 @@ void AsyncRenderer::workerLoop() {
       for (auto& ct : compositorTiles) {
         if (ct.bitmapDims.x <= 0 || ct.bitmapDims.y <= 0) continue;
         using OutKind = RenderResult::CompositedTile::Kind;
-        const std::string tileId =
-            ct.immediate
-                ? ("immediate:" + std::to_string(ct.tileId) + ":" + std::to_string(ct.generation))
-                : std::to_string(ct.tileId);
-        const OutKind kind =
-            ct.immediate ? OutKind::Immediate
-                         : (ct.layerEntity == entt::null ? OutKind::Segment : OutKind::Layer);
+        const std::string tileId = outputTileId(ct);
+        const OutKind kind = outputTileKind(ct);
+        const bool hasPayload = !ct.bitmap.empty() || ct.textureSnapshot != nullptr;
         const bool metadataOnly =
-            !ct.immediate &&
+            !hasPayload &&
             publishedTextureMatches(tileId, kind, ct.generation, ct.bitmapDims, outputCanvasSize);
-        if (!metadataOnly && ct.bitmap.empty() && ct.textureSnapshot == nullptr) continue;
+        if (!metadataOnly && !hasPayload) continue;
         RenderResult::CompositedTile tile;
         tile.kind = kind;
         tile.id = tileId;

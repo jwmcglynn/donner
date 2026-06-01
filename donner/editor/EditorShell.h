@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/editor/ClipboardInterface.h"
+#include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DialogPresenter.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
@@ -18,7 +20,7 @@
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
-#include "donner/editor/LayerInspectorPanel.h"
+#include "donner/editor/LayersPanel.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/PenTool.h"
 #include "donner/editor/RenderCoordinator.h"
@@ -28,6 +30,8 @@
 #include "donner/editor/SidebarPresenter.h"
 #include "donner/editor/StyleSourceAnnotations.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/editor/TextInspectorPanel.h"
+#include "donner/editor/TextTool.h"
 #include "donner/editor/ViewportInteractionController.h"
 
 namespace donner::editor::gui {
@@ -102,11 +106,6 @@ struct LayerInspectorStatusReadback {
   int metadataOnlyMissCount = 0;
   /// Duplicate live texture handles found across different tile ids.
   int duplicateLiveTextureCount = 0;
-  /// Retained overlay texture dimensions in pixels. Zero when immediate overlay presentation is
-  /// active.
-  Vector2i overlayDimsPx = Vector2i::Zero();
-  /// Backend overlay texture/view handle, represented as an integer for diagnostics.
-  std::uint64_t overlayTextureHandle = 0;
   /// Presentation-cache resource counters captured after the frame.
   PresentationResourceStats presentationResources;
   /// Latest editor rendering cost counters.
@@ -157,13 +156,44 @@ public:
 private:
   bool tryOpenPath(std::string_view path, std::string* error);
   bool trySavePath(std::string_view path, std::string* error);
+
+  // Shape clipboard (design doc 0047 §"Shape Clipboard"). These run when the
+  // canvas selection — not the source pane — owns Cut/Copy/Paste. Each routes a
+  // single CutShapes/PasteShapes reparse so the operation is one undo step and
+  // the source pane stays coherent.
+  void copySelectedShapesToClipboard();
+  void cutSelectedShapesToClipboard();
+  void pasteShapesFromClipboard(bool inFront);
+  // Convert Text to Outlines (design doc 0047 §"Convert Text to Outlines"). Runs
+  // when the selection is exactly one or more `<text>` elements. Builds the
+  // outlined source via `convertTextToOutlines`, records one undo step, and
+  // selects the new outline group(s). Abandoned without mutating if any selected
+  // `<text>` fails outline generation (§"Error Handling").
+  void convertSelectedTextToOutlines();
+  // True when the canvas selection is non-empty and every selected element is a
+  // `<text>` element — the precondition for "Convert Text to Outlines".
+  [[nodiscard]] bool selectionIsAllText() const;
   void resetPresentationForLoadedDocument(std::string_view canonicalSource);
   void requestRevert();
   void requestSave();
   void requestSaveAs(std::string error = std::string());
+  /// Open the save dialog to export the current viewport as a cropped SVG.
+  /// When \p includeOverlay is true, the export also serializes the current
+  /// editor selection overlay (Milestone 7); otherwise it is content-only
+  /// (Milestone 6). See `docs/design_docs/0047-v0_8_showcase.md`.
+  void requestExportViewportSvg(bool includeOverlay = false, std::string error = std::string());
+  /// Generate the viewport SVG content and write it to \p path. Returns false
+  /// and sets \p error on failure (mirrors \ref trySavePath's contract).
+  bool tryExportViewportSvgToPath(std::string_view path, std::string* error);
   bool synchronizeSourceBeforeSave(std::string* error);
   void updateWindowTitle();
   void handleGlobalShortcuts();
+  /// True when the document has at least one selectable element (the canonical marquee/Select-All
+  /// set). Gates whether Cmd+A / the Edit menu's "Select All" act on the canvas.
+  [[nodiscard]] bool canvasHasSelectableElements();
+  /// Selects every selectable element on the canvas via the shared `setSelection()` path, so the
+  /// canvas highlight, source-pane sync, and overlay all update together. No-op without a document.
+  void selectAllCanvasElements();
   void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
   void renderRenderPane(const Vector2d& renderPaneOrigin, const Vector2d& renderPaneSize,
                         ImGuiWindowFlags paneFlags);
@@ -231,25 +261,57 @@ private:
   EditorApp app_;
   SelectTool selectTool_;
   PenTool penTool_;
+  TextTool textTool_;
   enum class ActiveTool : std::uint8_t {
     Select,
     Pen,
+    Text,
   };
   ActiveTool activeTool_ = ActiveTool::Select;
   TextEditor textEditor_;
+  /// Backing store for shape Cut/Copy/Paste. Holds the headered
+  /// `# donner-shape-clipboard v1` payload (see `ShapeClipboardPayload`).
+  std::unique_ptr<ClipboardInterface> shapeClipboard_;
+  /// Ids of just-pasted elements to select once the PasteShapes reparse lands.
+  /// Resolved against the new document in the next `flushFrame()` and cleared.
+  std::vector<std::string> pendingPasteSelectionIds_;
+  /// Most recent "Convert Text to Outlines" failure reason, surfaced to the user
+  /// (design doc 0047 §"Error Handling": the command reports the blocking
+  /// element rather than partially mutating).
+  std::string lastConvertTextError_;
   GlTextureCache textures_;
+  /// Layers-panel thumbnail texture cache. Uploads each row's Donner-rendered
+  /// preview bitmap to a GL/WGPU texture (same path as the render pane) keyed by
+  /// row stable id, so ImGui can blit the real thumbnail instead of a swatch.
+  GlTextureCache thumbnailTextures_;
   RenderCoordinator renderCoordinator_;
   RotateCursorSet rotateCursorSet_;
   DocumentSyncController documentSyncController_;
   ViewportInteractionController interactionController_;
   std::optional<ViewportState> pendingViewportReplayOverride_;
+  /// True while the save modal is being used for File → Export Viewport as SVG
+  /// rather than an ordinary document save. Routes the dialog's write callback
+  /// to \ref tryExportViewportSvgToPath.
+  bool pendingViewportExport_ = false;
+  /// True when the pending viewport export should include the editor selection
+  /// overlay (File → Export Viewport as SVG (with overlay)). Drives
+  /// \ref ViewportExportOptions::includeSelectionOverlay and the
+  /// capture-at-export-time overlay snapshot in \ref tryExportViewportSvgToPath.
+  bool pendingViewportExportOverlay_ = false;
   bool contentOnlyCaptureForNextFrame_ = false;
   bool contentOnlyCaptureThisFrame_ = false;
   bool requestRenderAtEndOfFrame_ = false;
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
   SidebarPresenter sidebarPresenter_;
-  LayerInspectorPanel layerInspectorPanel_;
+  TextInspectorPanel textInspectorPanel_;
+  LayersPanel layersPanel_;
+  /// Element hovered in the Layers panel as of the last frame, fed into the
+  /// source-hover preview so the canvas and source pane highlight the element
+  /// under the cursor — mirroring source-pane hover. Reset when no row is
+  /// hovered.
+  std::optional<svg::SVGElement> layersPanelHoverElement_;
+  CompositorDebugPanel compositorDebugPanel_;
   RenderPanePresenter renderPanePresenter_;
   DialogPresenter dialogPresenter_;
 #ifdef DONNER_EDITOR_WGPU
@@ -316,6 +378,13 @@ private:
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;
   bool sourcePaneVisible_ = true;
+  /// Whether the Compositor Debug panel window renders. Off by default: it is a
+  /// developer-facing composite-tile diagnostics view, toggled on via the View
+  /// menu. The user-facing Layers panel is unrelated and always visible.
+  bool showCompositorDebugPanel_ = false;
+  /// Whether the render-pane frame-timing/perf overlay renders. On by default;
+  /// toggled via the View menu.
+  bool showPerfOverlay_ = true;
 
   ImFont* uiFontBold_ = nullptr;
   ImFont* codeFont_ = nullptr;

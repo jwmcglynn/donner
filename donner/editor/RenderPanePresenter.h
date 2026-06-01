@@ -2,13 +2,17 @@
 /// @file
 
 #include <optional>
+#include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Path.h"
+#include "donner/base/Vector2.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportInteractionController.h"
+#include "donner/editor/ViewportState.h"
 
 namespace donner::editor {
 
@@ -22,15 +26,7 @@ struct RenderPanePresenterState {
   Vector2d contentRegion = Vector2d::Zero();
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
-  bool showOverlay = true;
-  bool drawImmediateOverlay = true;
   bool showFrameGraph = true;
-};
-
-/// CPU cost counters produced while presenting the render pane.
-struct RenderPanePresenterCost {
-  /// Milliseconds spent issuing immediate overlay draw-list commands.
-  double immediateOverlayDrawMs = 0.0;
 };
 
 /**
@@ -94,12 +90,15 @@ struct RenderPanePresenterCost {
 class RenderPanePresenter {
 public:
   /**
-   * Draw the advanced editor render pane's image, overlay chrome, and frame graph.
+   * Draw the advanced editor render pane's composited document tiles and frame graph.
+   *
+   * Selection chrome is not drawn here: it is rendered by Donner's OverlayRenderer
+   * straight onto the Geode framebuffer (see
+   * EditorShell::DrawImmediateOverlaySnapshotToFramebuffer).
    *
    * @param state Presentation inputs for the current UI frame.
-   * @return CPU cost counters for work issued by the presenter.
    */
-  [[nodiscard]] RenderPanePresenterCost render(const RenderPanePresenterState& state) const;
+  void render(const RenderPanePresenterState& state) const;
 };
 
 }  // namespace donner::editor

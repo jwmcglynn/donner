@@ -213,7 +213,7 @@ bool HandleKeyDown(EditorApp& app, const repro::ReproEvent& event) {
 }
 
 bool SyncCanvasSize(EditorApp& app, const ViewportState& viewport) {
-  const Vector2i desired = viewport.desiredCanvasSize();
+  const Vector2i desired = viewport.rasterViewport().semanticCanvasSizePx;
   const Vector2i current = app.document().document().canvasSize();
   if (desired == current) {
     return false;
@@ -232,7 +232,7 @@ constexpr double kCanvasSizeCommitDelayMs = 120.0;
 
 bool SyncCanvasSizeDebounced(EditorApp& app, const ViewportState& viewport,
                              double frameTimestampSeconds, double* lastCommitTimestampSeconds) {
-  const Vector2i desired = viewport.desiredCanvasSize();
+  const Vector2i desired = viewport.rasterViewport().semanticCanvasSizePx;
   const Vector2i current = app.document().document().canvasSize();
   if (desired == current) {
     return false;
@@ -595,11 +595,26 @@ protected:
         pendingClick.reset();
       }
       // Update prewarm-cache state on landed result so future frames
-      // don't re-fire the same render.
+      // don't re-fire the same render. Mirror production
+      // (`RenderCoordinator`): pass the represented drag preview the worker
+      // baked into the published tiles, so the presentation can compensate for
+      // the swapped-in bitmap. Omitting it leaves `represented` empty and the
+      // harness diverges from the live editor.
       if (result->compositedPreview.has_value()) {
-        compositedPresentation.noteCachedTextures(result->compositedPreview->entity,
-                                                  result->version,
-                                                  app.document().document().canvasSize());
+        std::optional<SelectTool::ActiveDragPreview> represented;
+        const auto& rep = result->compositedPreview->representedDragPreview;
+        if (rep.has_value() && rep->entity != entt::null) {
+          represented = SelectTool::ActiveDragPreview{
+              .entity = rep->entity,
+              .extraEntities = rep->extraEntities,
+              .translation = rep->translation,
+              .documentFromCachedDocument = rep->documentFromCachedDocument,
+              .dragGeneration = rep->dragGeneration,
+          };
+        }
+        compositedPresentation.noteCachedTextures(
+            result->compositedPreview->entity, result->version,
+            app.document().document().canvasSize(), represented);
       }
     };
 

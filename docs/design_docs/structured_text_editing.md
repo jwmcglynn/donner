@@ -31,6 +31,18 @@
 > approach with an XML-owned source-store design: all manipulations land
 > on the XML DOM, source text is updated inside `donner/base/xml`, and
 > XML source ranges move with edits automatically.
+>
+> **2026-05-30 status.** The XML-owned design described here is implemented
+> and live: `XMLDocument::applySourceEdit` selects the narrowest
+> `ReparseScope` (`AttributeValue`/`OpeningTag`/`TextNode`/`ElementSubtree`/
+> `Document`), and the editor drives it via
+> `SourceSync::DispatchSourceEditIntents`. `ChangeClassifier` has been
+> **deleted** — it was off every live path. The remaining residual is the
+> no-intent whole-text diff fallback (`DispatchSourceTextChange`), which can
+> silently desync the DOM when inserting an element textually similar to an
+> adjacent sibling; tracked in #634 / its hardening follow-up. All
+> `ChangeClassifier` references below are retained only as historical
+> "superseded approach" context.
 
 ## Summary
 

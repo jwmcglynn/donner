@@ -61,6 +61,14 @@ Stages transform components through the ECS:
 3. **Rendering Instantiation** (`RenderingContext`): Traverses computed tree, creates `RenderingInstanceComponent` per visible element with resolved references (paint, clip, mask, marker, filter), offscreen subtrees, layer isolation (opacity < 1, filters, masks), and `drawOrder`.
 4. **Backend** (TinySkia or Geode): `RendererDriver` iterates `RenderingInstanceComponent`s in draw order, emitting commands to a `RendererInterface` implementation — sets canvas state, handles layers, draws shapes, configures paint (including offscreen subtree rendering for patterns/markers).
 
+## Editor: DOM-Level Editing Only
+
+- **All editor operations mutate the DOM (or above), never the source text directly.** Edits go DOM-first; the structured-editing infrastructure reflects the change back into the source (`SVGDocument::insertElement` / `removeElement` / attribute setters return `ApplySourceEditResult` source deltas the reflection layer applies). The source is a *projection* of the DOM, not what edits operate on.
+- **Source-string surgery is banned for structural edits** (reorder/z-order, rename, insert/delete/move element, group/ungroup, attribute change). Reorder = `removeElement` + `insertElement` on the DOM, not a text-span move. Rename = a DOM attribute change with reference updates on the DOM, not find/replace over source.
+- **Even text typing is DOM-aware:** the source/text-editor pane is where the user authors raw characters, but typing should **incrementally reparse and update the live DOM tree in place** (preserving entity identity where possible), not full-replace-and-reparse the document. It never licenses a destructive source-replace, nor structural ops skipping the DOM.
+- Actions issued *from* the text view (e.g. drag-handle reorder) are still DOM operations whose result is reflected back into the text — the text view is just another surface for DOM edits.
+- See the project `CLAUDE.md` § "DOM-Level Editing Only" for the full rule.
+
 ## Pull Request Workflow
 
 When creating a pull request:
@@ -146,7 +154,7 @@ Flag: `--//donner/svg/renderer:renderer_backend` (default: `tiny_skia`)
 | Config | Backend | Notes |
 |--------|---------|-------|
 | (default) | TinySkia (`RendererTinySkia`) | Lightweight software rasterizer, no external deps |
-| `--config=geode` | Geode (`RendererGeode`) | Experimental WebGPU + Slug backend |
+| `--config=geode` | Geode (`RendererGeode`) | GPU backend (WebGPU + Slug); default in the editor |
 
 ### Text Rendering
 

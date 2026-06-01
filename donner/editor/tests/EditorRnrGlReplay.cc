@@ -312,8 +312,7 @@ void PrintFrameCost(const FrameCostBreakdown& cost) {
             << ",\"texture_payload_tiles\":" << cost.compositedUpload.texturePayloadTileCount
             << ",\"metadata_only_tiles\":" << cost.compositedUpload.metadataOnlyTileCount
             << ",\"immediate_tiles\":" << cost.compositedUpload.immediateTileCount
-            << "},\"composited_render\":{\"immediate_ms\":"
-            << cost.compositedRender.immediateMs
+            << "},\"composited_render\":{\"immediate_ms\":" << cost.compositedRender.immediateMs
             << ",\"cached_ms\":" << cost.compositedRender.cachedMs
             << ",\"immediate_tiles\":" << cost.compositedRender.immediateTileCount
             << ",\"cached_tiles\":" << cost.compositedRender.cachedTileCount
@@ -388,9 +387,6 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
       PrintVector2i(frame.compositorCanvas);
       std::cout << ",\"metadata_only_miss_count\":" << frame.metadataOnlyMissCount
                 << ",\"duplicate_live_texture_count\":" << frame.duplicateLiveTextureCount
-                << ",\"overlay_dims_px\":";
-      PrintVector2i(frame.overlayDimsPx);
-      std::cout << ",\"overlay_texture_handle\":" << frame.overlayTextureHandle
                 << ",\"presentation_resources\":";
       PrintPresentationResources(frame.presentationResources);
       std::cout << ",\"tiles\":[";

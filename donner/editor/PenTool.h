@@ -1,14 +1,23 @@
 #pragma once
 /// @file
 ///
-/// Prototype path authoring tool. `PenTool` creates source-backed `<path>`
-/// elements and appends straight line segments from document-space clicks.
+/// Release-quality path authoring tool. `PenTool` creates source-backed
+/// `<path>` elements from document-space clicks: a plain click places a line
+/// anchor (`M`/`L`), a click-drag places a smooth Bezier anchor (`C`) whose
+/// outgoing handle follows the mouse while the incoming handle mirrors it
+/// through the anchor, and Alt/Option during the drag breaks that symmetry to
+/// author a corner with mismatched handles. Shift constrains the next anchor
+/// to 0/45/90 degrees from the previous one, clicking near the first anchor
+/// closes the contour with `Z`, and the whole pen session collapses into a
+/// single undoable command on finalize (close, Enter/double-click commit,
+/// Escape cancel, or a tool switch).
 
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGPathElement.h"
@@ -17,9 +26,11 @@ namespace donner::editor {
 
 /// Click-to-place path authoring tool.
 ///
-/// The prototype supports polyline creation, shift-constrained points,
-/// continuing a selected open `<path>`, and closing an active path by
-/// clicking near its first point.
+/// Supports polyline creation, click-drag smooth Bezier anchors with
+/// Alt/Option corner-break, shift-constrained points, continuing a selected
+/// open `<path>`, closing an active path by clicking near its first point,
+/// and committing an open path with Enter / double-click. Every finalized pen
+/// session records exactly one undoable command.
 class PenTool final : public Tool {
 public:
   /// Preview segment for immediate pen-tool chrome.
@@ -45,21 +56,48 @@ public:
   void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                    MouseModifiers modifiers) override;
 
-  /// Handle pointer movement; currently unused by the prototype.
+  /// Handle pointer movement. While dragging the most recently placed anchor
+  /// this shapes its Bezier handles; otherwise it is a no-op.
   ///
   /// @param editor Editor state and mutation queue.
   /// @param documentPoint Pointer location in SVG document coordinates.
   /// @param buttonHeld Whether the left mouse button is down.
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
 
-  /// Handle mouse release; currently unused by the prototype.
+  /// Modifier-aware pointer movement. Alt/Option breaks handle symmetry so the
+  /// dragged anchor becomes a corner whose incoming handle stays put while the
+  /// outgoing handle follows the mouse.
+  ///
+  /// @param editor Editor state and mutation queue.
+  /// @param documentPoint Pointer location in SVG document coordinates.
+  /// @param buttonHeld Whether the left mouse button is down.
+  /// @param modifiers Modifier-key state for the drag.
+  void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld,
+                   MouseModifiers modifiers);
+
+  /// Handle mouse release. Commits the dragged anchor's handles if it moved.
   ///
   /// @param editor Editor state and mutation queue.
   /// @param documentPoint Release location in SVG document coordinates.
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
-  /// Cancel the in-progress path without modifying the current document.
+  /// Cancel the in-progress path. Restores the document and undo stack to the
+  /// state before the pen session began — Escape / cancel never leaves a
+  /// partial path behind.
+  void cancel(EditorApp& editor);
+
+  /// Cancel the in-progress path without touching the document. Used when no
+  /// editor is available (e.g. tool destruction); does not roll back the DOM.
   void cancel();
+
+  /// Commit the in-progress open path without closing it (no trailing `Z`).
+  /// Triggered by Enter / double-click and by tool switches. Finalizes the
+  /// path as one undoable command and clears the draft. No-op when not
+  /// drafting or when the path has fewer than two anchors.
+  ///
+  /// @param editor Editor state and mutation queue.
+  /// @return true if an open path was committed.
+  bool commitOpenPath(EditorApp& editor);
 
   /// Whether the tool is currently appending to a path.
   [[nodiscard]] bool isDrafting() const { return activePath_.has_value(); }
@@ -78,6 +116,31 @@ public:
 
   /// Handle guide lines for immediate render-pane chrome.
   [[nodiscard]] std::vector<PreviewHandleLine> previewHandleLines() const;
+
+  /**
+   * Synchronous axis-aligned bounds of the in-progress draft, in document
+   * space, or `std::nullopt` when nothing is being drafted.
+   *
+   * Unlike `SnapshotSelectionWorldBounds`, which reads the live DOM `d`
+   * attribute (one `flushFrame()` behind, because `appendLine()` only *queues*
+   * the `SetAttribute("d")` write), this is computed straight from the tool's
+   * draft anchors and so includes the just-placed point the instant it is
+   * placed. The selection-bounds overlay uses it while drafting so the AABB
+   * encloses the newest point in the same click frame instead of lagging one
+   * click behind.
+   */
+  [[nodiscard]] std::optional<Box2d> draftBounds() const;
+
+  /// First anchor of the active contour, used to draw the close-path hover
+  /// marker. `std::nullopt` when not drafting.
+  [[nodiscard]] std::optional<Vector2d> firstAnchor() const;
+
+  /// Whether a click at @p documentPoint would close the active path. Drives
+  /// the first-anchor hover affordance.
+  ///
+  /// @param documentPoint Pointer location in SVG document coordinates.
+  /// @param modifiers Modifier-key state (for the viewport scale).
+  [[nodiscard]] bool wouldCloseAt(const Vector2d& documentPoint, MouseModifiers modifiers) const;
 
 private:
   struct Anchor {
@@ -103,10 +166,20 @@ private:
                             const MouseModifiers& modifiers);
   void rebuildActivePathData();
   void beginDragLastAnchor();
-  void updateDraggedAnchor(const Vector2d& documentPoint);
+  void updateDraggedAnchor(const Vector2d& documentPoint, bool breakSymmetry);
   void commitActivePathData(EditorApp& editor);
   void appendLine(EditorApp& editor, const Vector2d& documentPoint);
   void closePath(EditorApp& editor);
+
+  /// Capture the document source baseline so the whole pen session can later
+  /// collapse into one undoable command. Called once when a session begins.
+  void beginPenSession(EditorApp& editor);
+
+  /// Record one `DocumentSource` undo entry spanning the entire pen session,
+  /// then reset the draft. `editor.flushFrame()` is invoked so the recorded
+  /// "after" source includes the just-committed geometry. No-op when source
+  /// tracking is unavailable or nothing changed.
+  void finalize(EditorApp& editor);
 
   std::optional<svg::SVGPathElement> activePath_;
   std::vector<Anchor> anchors_;
@@ -117,6 +190,16 @@ private:
   bool draggingAnchor_ = false;
   bool draggedAnchorChanged_ = false;
   std::size_t draggingAnchorIndex_ = 0;
+  double pixelsPerDocUnit_ = 1.0;
+
+  /// Document source captured before the first pen mutation of this session,
+  /// used as the "before" side of the single finalize undo entry.
+  std::optional<std::string> sessionBeforeSource_;
+  /// Anchor element for the session undo snapshot (the active path).
+  std::optional<svg::SVGElement> sessionUndoAnchor_;
+  /// True when this session created `activePath_` from scratch (vs. continuing
+  /// a pre-existing selected path). Escape only deletes paths we created.
+  bool sessionCreatedPath_ = false;
 };
 
 }  // namespace donner::editor

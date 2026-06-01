@@ -1,7 +1,9 @@
 #include "donner/editor/OverlayRenderer.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <span>
 
 #include "donner/base/Transform.h"
 #include "donner/editor/EditorApp.h"
@@ -1129,6 +1131,147 @@ TEST(OverlayRendererTest, SnapshotSurvivesDocumentMutationBetweenCaptureAndDraw)
   ASSERT_EQ(baselineBitmap.pixels.size(), postMutationBitmap.pixels.size());
   EXPECT_EQ(baselineBitmap.pixels, postMutationBitmap.pixels)
       << "Snapshot draw must be unaffected by post-capture registry mutations.";
+}
+
+// Without a locked-rejection flash the snapshot carries no flash payload — the
+// red outline must only appear when the user clicks a locked element.
+TEST(OverlayRendererTest, CaptureSnapshotHasNoLockedFlashByDefault) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+  app.setSelection(*rect);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d());
+
+  EXPECT_FALSE(snapshot.lockedFlash.has_value());
+}
+
+// An active locked-rejection flash captures the rejected element's outline plus
+// its fade intensity, even when that element is NOT part of the selection (a
+// locked click never selects).
+TEST(OverlayRendererTest, CaptureSnapshotIncludesLockedFlashOutlineAndIntensity) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+
+  // No selection — the locked element is flashed, not selected.
+  const LockedRejectionFlashInput flashInput{.element = *rect, .intensity = 0.6f};
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(), std::nullopt, Transform2d(), std::nullopt,
+      std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full, Transform2d(),
+      flashInput);
+
+  EXPECT_TRUE(snapshot.paths.empty()) << "Locked element must not be drawn as a selection.";
+  ASSERT_TRUE(snapshot.lockedFlash.has_value());
+  EXPECT_FALSE(snapshot.lockedFlash->pathDoc.empty())
+      << "Locked flash must carry the rejected element's outline.";
+  EXPECT_FLOAT_EQ(snapshot.lockedFlash->intensity, 0.6f);
+}
+
+// A fully-faded flash (intensity 0) carries no payload — the outline must vanish
+// at the end of the fade.
+TEST(OverlayRendererTest, CaptureSnapshotDropsFullyFadedLockedFlash) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+
+  const LockedRejectionFlashInput flashInput{.element = *rect, .intensity = 0.0f};
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(), std::nullopt, Transform2d(), std::nullopt,
+      std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full, Transform2d(),
+      flashInput);
+
+  EXPECT_FALSE(snapshot.lockedFlash.has_value());
+}
+
+// Render-level proof: drawing a snapshot with a locked flash paints a red
+// outline (high red, low green/blue) around the flashed element, and the flash's
+// alpha scales with intensity (brighter at 1.0 than at a lower intensity).
+TEST(OverlayRendererTest, LockedFlashDrawsRedOutlineScaledByIntensity) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+  app.document().document().setCanvasSize(200, 200);
+
+  auto rect = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(rect.has_value());
+
+  const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
+
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(200.0, 200.0);
+  viewport.devicePixelRatio = 1.0;
+
+  const auto drawFlashAtIntensity = [&](float intensity) {
+    const LockedRejectionFlashInput flashInput{.element = *rect, .intensity = intensity};
+    const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+        std::span<const svg::SVGElement>(), std::nullopt, canvasFromDoc, std::nullopt,
+        std::span<const svg::SVGElement>(), std::nullopt, SelectionChromeDetail::Full,
+        Transform2d(), flashInput);
+    svg::Renderer overlayRenderer;
+    overlayRenderer.beginFrame(viewport);
+    OverlayRenderer::drawChromeFromSnapshot(overlayRenderer, snapshot);
+    overlayRenderer.endFrame();
+    return overlayRenderer.takeSnapshot();
+  };
+
+  const auto fullBitmap = drawFlashAtIntensity(1.0f);
+  ASSERT_FALSE(fullBitmap.empty());
+
+  const auto pixelAt = [](const auto& bitmap, int x, int y, int channel) -> std::uint8_t {
+    const std::uint8_t* row = bitmap.pixels.data() + y * bitmap.rowBytes;
+    return row[x * 4 + channel];
+  };
+
+  // The r1 rect spans doc x=[20,60], y=[30,80]; at 1:1 canvas scale its outline
+  // runs along those edges. Scan the rectangle's outline band for a red flash
+  // pixel: red channel high, green and blue low, alpha present.
+  int maxRedAlphaFull = 0;
+  for (int y = 28; y <= 82; ++y) {
+    for (int x = 18; x <= 62; ++x) {
+      const bool onOutline = x <= 22 || x >= 58 || y <= 32 || y >= 78;
+      if (!onOutline) {
+        continue;
+      }
+      const std::uint8_t r = pixelAt(fullBitmap, x, y, 0);
+      const std::uint8_t g = pixelAt(fullBitmap, x, y, 1);
+      const std::uint8_t b = pixelAt(fullBitmap, x, y, 2);
+      const std::uint8_t a = pixelAt(fullBitmap, x, y, 3);
+      if (r > 180 && g < 90 && b < 90 && a > 0) {
+        maxRedAlphaFull = std::max<int>(maxRedAlphaFull, a);
+      }
+    }
+  }
+  EXPECT_GT(maxRedAlphaFull, 0) << "No red flash outline pixel found at intensity 1.0.";
+
+  // A dimmer flash should produce a lower peak alpha on the same outline band.
+  const auto dimBitmap = drawFlashAtIntensity(0.3f);
+  ASSERT_FALSE(dimBitmap.empty());
+  int maxRedAlphaDim = 0;
+  for (int y = 28; y <= 82; ++y) {
+    for (int x = 18; x <= 62; ++x) {
+      const bool onOutline = x <= 22 || x >= 58 || y <= 32 || y >= 78;
+      if (!onOutline) {
+        continue;
+      }
+      const std::uint8_t r = pixelAt(dimBitmap, x, y, 0);
+      const std::uint8_t g = pixelAt(dimBitmap, x, y, 1);
+      const std::uint8_t b = pixelAt(dimBitmap, x, y, 2);
+      const std::uint8_t a = pixelAt(dimBitmap, x, y, 3);
+      if (r > 120 && g < 90 && b < 90 && a > 0) {
+        maxRedAlphaDim = std::max<int>(maxRedAlphaDim, a);
+      }
+    }
+  }
+  EXPECT_GT(maxRedAlphaDim, 0) << "No red flash outline pixel found at intensity 0.3.";
+  EXPECT_LT(maxRedAlphaDim, maxRedAlphaFull)
+      << "Dimmer flash (0.3) should paint a lower peak alpha than a full flash (1.0).";
 }
 
 }  // namespace

@@ -254,8 +254,8 @@ std::optional<std::filesystem::path> WriteDonnerDDragZoomReplay(
   file.metadata.displayScale = 2.0;
   file.metadata.expect = repro::ReproExpectation{
       .proofKind = repro::ReproExpectationProofKind::Selection,
-      .leftMouseDownOrdinal = 2,
-      .frameOffsetAfterLeftMouseDown = 19,
+      .leftMouseDownOrdinal = 1,
+      .frameOffsetAfterLeftMouseDown = 18,
       .minFrameIndex = 40,
       .maxFrameIndex = 40,
       .targetSelector = "#Donner_D",
@@ -264,28 +264,7 @@ std::optional<std::filesystem::path> WriteDonnerDDragZoomReplay(
   };
 
   const Vector2d kDonnerDLeftStemDoc(282.0, 390.0);
-  for (std::uint64_t frame = 0; frame <= 4; ++frame) {
-    PushDonnerDReplayFrame(file, frame, DonnerDViewport(2.0), kDonnerDLeftStemDoc, 0);
-  }
-
-  repro::ReproEvent selectMouseDown;
-  selectMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
-  selectMouseDown.mouseButton = 0;
-  selectMouseDown.hit = repro::ReproHit{
-      .id = "Donner_D",
-      .tag = "path",
-  };
-  PushDonnerDReplayFrame(file, 5, DonnerDViewport(2.0), kDonnerDLeftStemDoc, 1, {selectMouseDown});
-  repro::ReproEvent selectMouseUp;
-  selectMouseUp.kind = repro::ReproEvent::Kind::MouseUp;
-  selectMouseUp.mouseButton = 0;
-  selectMouseUp.hit = repro::ReproHit{
-      .id = "Donner_D",
-      .tag = "path",
-  };
-  PushDonnerDReplayFrame(file, 6, DonnerDViewport(2.0), kDonnerDLeftStemDoc, 0, {selectMouseUp});
-
-  for (std::uint64_t frame = 7; frame <= 20; ++frame) {
+  for (std::uint64_t frame = 0; frame <= 20; ++frame) {
     PushDonnerDReplayFrame(file, frame, DonnerDViewport(2.0), kDonnerDLeftStemDoc, 0);
   }
 
@@ -526,8 +505,7 @@ std::string CanonicalReplayDiagnostics(const repro::GlRnrReplayResult& result,
     out << ";compositor=";
     writeVec(frame.compositorCanvas);
     out << ";metadata_miss=" << frame.metadataOnlyMissCount
-        << ";duplicate_textures=" << frame.duplicateLiveTextureCount << ";overlay_dims=";
-    writeVec(frame.overlayDimsPx);
+        << ";duplicate_textures=" << frame.duplicateLiveTextureCount;
     out << ";scheduling=" << static_cast<int>(frame.replayWorkerScheduling)
         << ";hold=" << frame.replayHoldFramesBehind
         << ";withheld=" << frame.replayResultHoldPollsThisFrame << ";tiles=" << frame.tiles.size();
@@ -858,26 +836,15 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
   mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
   mouseUp.mouseButton = 0;
   pushFrame(2, 30.0, 70.0, 0, 0, {mouseUp});
-  pushFrame(3, 30.0, 70.0, 0, 0);
-  repro::ReproEvent ctrlDown;
-  ctrlDown.kind = repro::ReproEvent::Kind::KeyDown;
-  ctrlDown.key = static_cast<int>(ImGuiKey_LeftCtrl);
-  ctrlDown.modifiers = 1 << 0;
-  pushFrame(4, 30.0, 70.0, 0, 1 << 0, {ctrlDown});
   repro::ReproEvent selectAllDown;
   selectAllDown.kind = repro::ReproEvent::Kind::KeyDown;
   selectAllDown.key = static_cast<int>(ImGuiKey_A);
   selectAllDown.modifiers = 1 << 0;
-  pushFrame(5, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
+  pushFrame(3, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
   repro::ReproEvent selectAllUp;
   selectAllUp.kind = repro::ReproEvent::Kind::KeyUp;
   selectAllUp.key = static_cast<int>(ImGuiKey_A);
-  selectAllUp.modifiers = 1 << 0;
-  pushFrame(6, 30.0, 70.0, 0, 1 << 0, {selectAllUp});
-  repro::ReproEvent ctrlUp;
-  ctrlUp.kind = repro::ReproEvent::Kind::KeyUp;
-  ctrlUp.key = static_cast<int>(ImGuiKey_LeftCtrl);
-  pushFrame(7, 30.0, 70.0, 0, 0, {ctrlUp});
+  pushFrame(4, 30.0, 70.0, 0, 0, {selectAllUp});
 
   std::vector<repro::ReproEvent> characterEvents;
   for (const unsigned char c : kEditedSource) {
@@ -886,8 +853,8 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
     event.codepoint = c;
     characterEvents.push_back(event);
   }
-  pushFrame(8, 30.0, 70.0, 0, 0, std::move(characterEvents));
-  for (std::uint64_t index = 9; index <= 60; ++index) {
+  pushFrame(5, 30.0, 70.0, 0, 0, std::move(characterEvents));
+  for (std::uint64_t index = 6; index <= 60; ++index) {
     pushFrame(index, 30.0, 70.0, 0, 0);
   }
 
@@ -1066,6 +1033,8 @@ TEST(GlRnrReplayTest, GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame
         << "Selection path overlay was not rebuilt for presented zoom frame " << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.handleCount, 4)
         << "Selection transform handles were not rebuilt for presented zoom frame " << frame;
+    EXPECT_GT(diagnostics->frameCost.overlay.payloadBytes, 0u)
+        << "Overlay payload did not refresh for presented zoom frame " << frame;
   }
 }
 

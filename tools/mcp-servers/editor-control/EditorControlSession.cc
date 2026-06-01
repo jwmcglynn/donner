@@ -447,9 +447,12 @@ std::string InteractionKindName(svg::compositor::InteractionHint kind) {
 
 std::string TileKindName(RenderResult::CompositedTile::Kind kind) {
   switch (kind) {
-    case RenderResult::CompositedTile::Kind::Segment: return "segment";
+    case RenderResult::CompositedTile::Kind::Segment:
+    // Immediate (direct-rendered) tiles are still static segments in the paint
+    // stack, so they serialize as "segment" to preserve the stable split-layer
+    // paint order.
+    case RenderResult::CompositedTile::Kind::Immediate: return "segment";
     case RenderResult::CompositedTile::Kind::Layer: return "layer";
-    case RenderResult::CompositedTile::Kind::Immediate: return "immediate";
   }
   return "unknown";
 }
@@ -2248,7 +2251,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       }
 
       recordDisplayFrame(*result);
-      renderScheduler.noteRenderCompleted(result->version, result->rasterViewport.outputSizePx,
+      renderScheduler.noteRenderCompleted(result->version, asyncRenderer_.lastDocumentCanvasSize(),
                                           result->rasterViewport);
       ++renderedFrameCount;
       return true;
@@ -2278,20 +2281,18 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       (void)syncCanvasSize(viewport);
       (void)app_.flushFrame();
 
-      const EditorRasterViewport currentRasterViewport = viewport.rasterViewport();
-      const Vector2i currentCanvasSize = currentRasterViewport.outputSizePx;
+      const Vector2i currentCanvasSize = app_.document().document().canvasSize();
       const std::uint64_t currentVersion = app_.document().currentFrameVersion();
       const std::optional<SelectTool::ActiveDragPreview> dragPreview =
           selectTool_->activeDragPreview();
       const Entity selectedEntity = SelectedGraphicsEntity(app_);
-      const PresentationRenderScheduleDecision schedule = renderScheduler.evaluate(
-          displayPresentation_, PresentationRenderScheduleInput{
-                                    .selectedEntity = selectedEntity,
-                                    .activeDragPreview = dragPreview,
-                                    .currentVersion = currentVersion,
-                                    .currentCanvasSize = currentCanvasSize,
-                                    .currentRasterViewport = currentRasterViewport,
-                                });
+      const PresentationRenderScheduleDecision schedule =
+          renderScheduler.evaluate(displayPresentation_, PresentationRenderScheduleInput{
+                                                             .selectedEntity = selectedEntity,
+                                                             .activeDragPreview = dragPreview,
+                                                             .currentVersion = currentVersion,
+                                                             .currentCanvasSize = currentCanvasSize,
+                                                         });
       if (!schedule.shouldRequestRender()) {
         return false;
       }
@@ -2300,7 +2301,6 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       request.version = currentVersion;
       request.documentGeneration = app_.document().documentGeneration();
       request.structuralRemap = app_.document().consumePendingStructuralRemap();
-      request.rasterViewport = currentRasterViewport;
       if (app_.selectedElement().has_value()) {
         request.selection = *app_.selectedElement();
       }

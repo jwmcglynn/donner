@@ -53,6 +53,14 @@ namespace donner::editor::gui {
 namespace {
 
 void GlfwErrorCallback(int error, const char* description) {
+  // macOS: reading the clipboard when it holds no UTF-8 string (empty, or
+  // non-text content like an image) makes Cocoa's `glfwGetClipboardString` fail
+  // with a benign "Failed to retrieve string from pasteboard". ImGui polls the
+  // clipboard, so this would otherwise spam the console every frame. Drop it.
+  if (description != nullptr && std::string_view(description).find(
+                                    "retrieve string from pasteboard") != std::string_view::npos) {
+    return;
+  }
 #ifdef __EMSCRIPTEN__
   // emscripten-glfw surfaces benign shim-limitation messages through the
   // error callback with a `[Warning]` prefix — e.g. ImGui's backend calls
@@ -248,10 +256,10 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   io.AddKeyEvent(ImGuiKey_LeftShift, inputOverride.keyShift);
   io.AddKeyEvent(ImGuiKey_LeftAlt, inputOverride.keyAlt);
   io.AddKeyEvent(ImGuiKey_LeftSuper, inputOverride.keySuper);
-  // ImGui derives modifier state from the dedicated ImGuiMod_* reserved key
-  // slots, which are distinct from ImGuiKey_LeftCtrl/etc. The real GLFW backend
-  // populates them via ImGui_ImplGlfw_UpdateKeyModifiers(); mirror that here so
-  // synthesized shortcuts have the same queued input edges as live input.
+  // ImGui derives io.KeyCtrl/io.KeyMods from the dedicated ImGuiMod_* reserved
+  // key slots, which are distinct from ImGuiKey_LeftCtrl/etc. The real GLFW
+  // backend populates them via ImGui_ImplGlfw_UpdateKeyModifiers(); mirror that
+  // here so synthesized shortcuts (Ctrl+A, Ctrl+C, ...) match in headless replay.
   io.AddKeyEvent(ImGuiMod_Ctrl, inputOverride.keyCtrl);
   io.AddKeyEvent(ImGuiMod_Shift, inputOverride.keyShift);
   io.AddKeyEvent(ImGuiMod_Alt, inputOverride.keyAlt);
@@ -270,18 +278,6 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   for (const std::uint32_t codepoint : inputOverride.inputCharacters) {
     io.AddInputCharacter(codepoint);
   }
-}
-
-void RestoreInputOverrideModifierSnapshot(const EditorWindowInputOverride& inputOverride) {
-  ImGuiIO& io = ImGui::GetIO();
-  // In the null-window replay path, NewFrame can leave these legacy fields stale
-  // even when the queued ImGuiMod_* events are present. Donner shortcut code reads
-  // io.KeyCtrl/io.KeyShift/etc.; restore only those fields and leave io.KeyMods to
-  // ImGui's processed key state so EndFrame sanity checks remain valid.
-  io.KeyCtrl = inputOverride.keyCtrl;
-  io.KeyShift = inputOverride.keyShift;
-  io.KeyAlt = inputOverride.keyAlt;
-  io.KeySuper = inputOverride.keySuper;
 }
 
 #ifdef __EMSCRIPTEN__
@@ -939,9 +935,6 @@ void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride
     ApplyInputOverride(*inputOverride);
   }
   ImGui::NewFrame();
-  if (inputOverride != nullptr) {
-    RestoreInputOverrideModifierSnapshot(*inputOverride);
-  }
 }
 
 void EditorWindow::endFrame() {

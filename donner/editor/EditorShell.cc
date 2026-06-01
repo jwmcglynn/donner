@@ -20,20 +20,30 @@
 
 #include "GLFW/glfw3.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/FocusView.h"
 #include "donner/editor/FrameMissTelemetry.h"
+#include "donner/editor/ImGuiClipboard.h"
 #include "donner/editor/KeyboardShortcutPolicy.h"
 #include "donner/editor/SelectionTransformHandles.h"
+#include "donner/editor/ShapeClipboardCommands.h"
+#include "donner/editor/ShapeClipboardPayload.h"
 #include "donner/editor/SourceSelection.h"
 #include "donner/editor/SourceSync.h"
 #include "donner/editor/StyleSourceAnnotations.h"
+#include "donner/editor/TextToOutlines.h"
+#include "donner/editor/ToolKeybinding.h"
 #include "donner/editor/TracyWrapper.h"
+#include "donner/editor/UndoTimeline.h"
+#include "donner/editor/ViewportSvgExport.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGTextElement.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #ifdef DONNER_EDITOR_WGPU
@@ -258,6 +268,14 @@ void DrawSelectToolButtonIcon(ImDrawList* drawList, const ImVec2& min, const ImV
                         IM_COL32(255, 255, 255, 255), ImDrawFlags_Closed, 3.2f);
   drawList->AddPolyline(points.data(), static_cast<int>(points.size()), IM_COL32(0, 0, 0, 255),
                         ImDrawFlags_Closed, 1.7f);
+}
+
+// Build the "<label> (<key>)" tooltip string for a tool button from the shared
+// Illustrator-compatible keybinding table, so the tooltip and the keyboard
+// shortcut handler can never disagree about which key activates the tool.
+std::string ToolTooltipText(ToolId tool) {
+  const ToolKeybinding binding = KeybindingForTool(tool);
+  return std::string(binding.label) + " (" + binding.key + ")";
 }
 
 float ColorChannelToFloat(std::uint8_t value) {
@@ -707,12 +725,13 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       penTool_(),
       textEditor_(),
       textures_(window.geodeDevice()),
+      thumbnailTextures_(window.geodeDevice()),
       renderCoordinator_(window.geodeDevice()),
       rotateCursorSet_(),
       documentSyncController_(InitialDocumentSyncSource(options_)),
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
-      layerInspectorPanel_(window.geodeDevice()),
+      compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText) {
   std::optional<std::string> initialSource = options_.initialSource;
   if (!initialSource.has_value() && !options_.svgPath.empty()) {
@@ -726,6 +745,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   textEditor_.setText(*initialSource);
   textEditor_.resetTextChanged();
   textEditor_.setActiveAutocomplete(true);
+  shapeClipboard_ = std::make_unique<ImGuiClipboard>();
   textEditor_.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
                                           -> std::optional<TextEditor::AutocompleteResponse> {
     XmlAutocompleteContext context =
@@ -878,8 +898,6 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .compositorCanvas = compositorCanvas,
       .metadataOnlyMissCount = textures_.metadataOnlyMissCount(),
       .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
-      .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
-      .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
       .presentationResources = textures_.presentationResourceStats(),
       .frameCost = frameCost,
   };
@@ -1038,7 +1056,6 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   treeviewPendingScroll_ = false;
   renderCoordinator_.resetForLoadedDocument();
   textures_.resetComposited();
-  textures_.clearOverlay();
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   dialogPresenter_.clearOpenFileError();
   dialogPresenter_.clearSaveFileError();
@@ -1102,7 +1119,80 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error) {
 }
 
 void EditorShell::requestSaveAs(std::string error) {
+  pendingViewportExport_ = false;
   dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
+}
+
+void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string error) {
+  pendingViewportExport_ = true;
+  pendingViewportExportOverlay_ = includeOverlay;
+  // Default export filename: "<stem>_viewport.svg" beside the source document,
+  // or "untitled_viewport.svg" for documents with no path.
+  std::string defaultPath;
+  if (app_.currentFilePath().has_value()) {
+    const std::filesystem::path sourcePath(*app_.currentFilePath());
+    std::filesystem::path exportPath = sourcePath;
+    exportPath.replace_filename(sourcePath.stem().string() + "_viewport.svg");
+    defaultPath = exportPath.string();
+  } else {
+    defaultPath = "untitled_viewport.svg";
+  }
+  dialogPresenter_.requestSaveFile(std::make_optional(defaultPath), std::move(error));
+}
+
+bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error) {
+  if (!app_.hasDocument()) {
+    *error = "No document is open to export.";
+    return false;
+  }
+  if (!synchronizeSourceBeforeSave(error)) {
+    return false;
+  }
+
+  const ViewportState& viewport = interactionController_.viewport();
+  // The render pane content rect in screen (CSS) pixels, derived from the
+  // viewport's pane origin/size. ViewportState is the sole crop/scale source.
+  const Vector2d paneOrigin = viewport.paneOrigin;
+  const Vector2d paneSize = viewport.paneSize;
+  const Recti renderPaneRect(Vector2i(static_cast<int>(std::lround(paneOrigin.x)),
+                                      static_cast<int>(std::lround(paneOrigin.y))),
+                             Vector2i(static_cast<int>(std::lround(paneOrigin.x + paneSize.x)),
+                                      static_cast<int>(std::lround(paneOrigin.y + paneSize.y))));
+
+  ViewportExportOptions options;
+  options.transparentBackground = true;
+  options.includeSelectionOverlay = pendingViewportExportOverlay_;
+
+  // Capture the overlay snapshot at export time so the serialized chrome samples
+  // the same selection state the editor currently displays — it cannot be a
+  // frame behind. Mirrors how `OverlayRenderer::drawChrome(renderer, editor)`
+  // derives the transform + selection for the live chrome.
+  std::optional<SelectionChromeSnapshot> overlaySnapshot;
+  if (pendingViewportExportOverlay_) {
+    const Transform2d canvasFromDocument = app_.document().document().canvasFromDocumentTransform();
+    overlaySnapshot = OverlayRenderer::captureChromeSnapshot(
+        app_.selectedElements(), /*marqueeRectDoc=*/std::nullopt, canvasFromDocument);
+  }
+
+  Result<std::string, std::string> exportResult =
+      ExportViewportAsSvg(app_.document().document(), viewport, renderPaneRect, options,
+                          overlaySnapshot.has_value() ? &*overlaySnapshot : nullptr);
+  if (!exportResult.ok()) {
+    *error = exportResult.error;
+    return false;
+  }
+
+  const DocumentSaveResult saveResult =
+      SaveSourceToPath(std::filesystem::path(std::string(path)), exportResult.value);
+  if (!saveResult.ok()) {
+    *error = saveResult.message;
+    return false;
+  }
+
+  dialogPresenter_.clearSaveFileError();
+  pendingViewportExport_ = false;
+  pendingViewportExportOverlay_ = false;
+  return true;
 }
 
 void EditorShell::requestSave() {
@@ -1202,14 +1292,32 @@ void EditorShell::handleGlobalShortcuts() {
     interactionController_.resetToActualSize();
   }
 
+  // Paint-order (z-order) shortcuts on the selected element: Cmd+] forward,
+  // Cmd+[ backward, Cmd+Shift+] to front, Cmd+Shift+[ to back. The reorder is a
+  // DOM move; the structured-editing reflection rewrites the source, and the
+  // main-loop flush records the undo entry.
+  if (!sourcePaneFocused && !anyPopupOpen && cmd) {
+    if (ImGui::IsKeyPressed(ImGuiKey_RightBracket, /*repeat=*/false)) {
+      std::ignore = app_.reorderSelectedElement(shift ? EditorApp::ZOrder::BringToFront
+                                                      : EditorApp::ZOrder::BringForward);
+    } else if (ImGui::IsKeyPressed(ImGuiKey_LeftBracket, /*repeat=*/false)) {
+      std::ignore = app_.reorderSelectedElement(shift ? EditorApp::ZOrder::SendToBack
+                                                      : EditorApp::ZOrder::SendBackward);
+    }
+  }
+
   if (CanToggleSourceFocusModeFromShortcut(pressedEnter, cmd, anyPopupOpen)) {
     toggleSourceFocusMode();
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_V, /*repeat=*/false)) {
+    // Switching to Select commits any in-progress pen path as one undoable
+    // command instead of discarding it.
+    penTool_.commitOpenPath(app_);
+    flushQueuedMutationAndRefreshOverlay();
     activeTool_ = ActiveTool::Select;
-    penTool_.cancel();
+    textTool_.cancel();
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
@@ -1217,9 +1325,33 @@ void EditorShell::handleGlobalShortcuts() {
     activeTool_ = ActiveTool::Pen;
   }
 
+  if (!anyPopupOpen && !cmd && activeTool_ == ActiveTool::Pen && penTool_.isDrafting() &&
+      (ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/false) ||
+       ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false))) {
+    // Enter commits the in-progress open path without closing it.
+    penTool_.commitOpenPath(app_);
+    flushQueuedMutationAndRefreshOverlay();
+    return;
+  }
+
+  if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
+      ImGui::IsKeyPressed(ImGuiKey_T, /*repeat=*/false)) {
+    activeTool_ = ActiveTool::Text;
+  }
+
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
       penTool_.isDrafting()) {
-    penTool_.cancel();
+    // Escape discards the in-progress path, restoring the document and undo
+    // stack to the pre-pen baseline.
+    penTool_.cancel(app_);
+    flushQueuedMutationAndRefreshOverlay();
+    return;
+  }
+
+  if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
+      activeTool_ == ActiveTool::Text) {
+    textTool_.cancel();
+    activeTool_ = ActiveTool::Select;
     return;
   }
 
@@ -1228,12 +1360,261 @@ void EditorShell::handleGlobalShortcuts() {
     app_.setSelection(std::nullopt);
   }
 
+  // Cmd+A ("Select All") is focus-aware. When the source pane owns keyboard focus it selects all
+  // text in the XML editor; otherwise it selects every selectable canvas element via the same
+  // setSelection() path normal canvas selection uses (so the canvas highlight, source-pane sync,
+  // and overlay all update together). The absence of Shift keeps both branches distinct from the
+  // Cmd+Shift+A "Deselect All" chord below.
+  const bool pressedA = ImGui::IsKeyPressed(ImGuiKey_A, /*repeat=*/false);
+  if (CanSelectAllFromSourcePaneShortcut(pressedA, cmd, shift, anyPopupOpen, sourcePaneFocused)) {
+    textEditor_.selectAll();
+  } else if (CanSelectAllFromCanvasShortcut(
+                 pressedA, cmd, shift, anyPopupOpen, sourcePaneFocused,
+                 /*canvasHasSelectableElements=*/canvasHasSelectableElements())) {
+    selectAllCanvasElements();
+  }
+
+  // Cmd+Shift+A ("Deselect All") is focus-aware too. When the source pane owns keyboard focus it
+  // collapses the text selection to the caret; otherwise it clears the canvas selection through the
+  // same canonical clear path Escape uses (clearSelection() == setSelection(nullopt)) so the canvas
+  // highlight, source-pane sync, and overlay all update together. The Shift requirement keeps both
+  // branches distinct from a plain Cmd+A.
+  if (CanDeselectAllFromSourcePaneShortcut(pressedA, cmd, shift, anyPopupOpen, sourcePaneFocused)) {
+    textEditor_.clearSelection();
+  } else if (CanDeselectAllFromCanvasShortcut(pressedA, cmd, shift, app_.hasSelection(),
+                                              anyPopupOpen, sourcePaneFocused)) {
+    app_.clearSelection();
+  }
+
+  // Shape clipboard shortcuts route through the canvas selection only when the
+  // source pane is not focused — the text editor owns Cmd+X/C/V while it has
+  // keyboard focus. Cmd+F is Paste in Front (exact-position duplication).
+  if (!sourcePaneFocused && !anyPopupOpen && cmd && !shift) {
+    if (ImGui::IsKeyPressed(ImGuiKey_X, /*repeat=*/false)) {
+      cutSelectedShapesToClipboard();
+    } else if (ImGui::IsKeyPressed(ImGuiKey_C, /*repeat=*/false)) {
+      copySelectedShapesToClipboard();
+    } else if (ImGui::IsKeyPressed(ImGuiKey_V, /*repeat=*/false)) {
+      pasteShapesFromClipboard(/*inFront=*/false);
+    } else if (ImGui::IsKeyPressed(ImGuiKey_F, /*repeat=*/false)) {
+      pasteShapesFromClipboard(/*inFront=*/true);
+    }
+  }
+
   const bool deleteKey = ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/false) ||
                          ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/false);
   if (CanDeleteSelectedElementsFromShortcut(deleteKey, app_.hasSelection(), anyPopupOpen,
                                             sourcePaneFocused)) {
     std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
   }
+}
+
+bool EditorShell::canvasHasSelectableElements() {
+  if (!app_.hasDocument()) {
+    return false;
+  }
+  return !app_.selectableElements().empty();
+}
+
+void EditorShell::selectAllCanvasElements() {
+  if (!app_.hasDocument()) {
+    return;
+  }
+  // Route through the same setSelection() path normal selection uses so the canvas highlight,
+  // source-pane sync, and overlay all update together. The selectable set is the canonical
+  // marquee/Select-All set (every selectable geometry element in the document).
+  app_.setSelection(app_.selectableElements());
+}
+
+void EditorShell::copySelectedShapesToClipboard() {
+  if (!app_.hasDocument() || !app_.hasSelection() || shapeClipboard_ == nullptr) {
+    return;
+  }
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(app_.document().document(), app_.selectedElements());
+  if (!payload.has_value()) {
+    return;
+  }
+  shapeClipboard_->setText(payload->toClipboardText());
+}
+
+void EditorShell::cutSelectedShapesToClipboard() {
+  if (!app_.hasDocument() || !app_.hasSelection() || shapeClipboard_ == nullptr) {
+    return;
+  }
+  // Copy first; only delete if the copy captured something serializable so a
+  // failed copy never silently destroys the selection.
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(app_.document().document(), app_.selectedElements());
+  if (!payload.has_value()) {
+    return;
+  }
+  shapeClipboard_->setText(payload->toClipboardText());
+  // `deleteSelectionWithUndo` records its own single source-level undo entry and
+  // clears the selection, which is exactly the Cut contract (Copy + Delete as
+  // one undoable step from the user's perspective).
+  std::ignore = app_.deleteSelectionWithUndo(textEditor_.getText());
+}
+
+void EditorShell::pasteShapesFromClipboard(bool inFront) {
+  if (!app_.hasDocument() || shapeClipboard_ == nullptr) {
+    return;
+  }
+  const std::string clipboardText = shapeClipboard_->getText();
+  std::optional<ShapeClipboardPayload> payload = ShapeClipboardPayload::parse(clipboardText);
+  if (!payload.has_value()) {
+    return;
+  }
+
+  svg::SVGDocument& document = app_.document().document();
+  if (!document.hasSourceStore()) {
+    return;
+  }
+
+  // A single selected group/svg is the preferred default-paste parent.
+  std::optional<svg::SVGElement> selectedGroup;
+  if (!inFront && app_.selectedElements().size() == 1u) {
+    const svg::SVGElement& only = app_.selectedElements().front();
+    const xml::XMLQualifiedNameRef tag = only.tagName();
+    if (tag.name == "g" || tag.name == "svg") {
+      selectedGroup = only;
+    }
+  }
+
+  const PastePlacement placement =
+      inFront ? PastePlacement::InFrontNoOffset : PastePlacement::EndOfRootOffset;
+  PreparePasteResult prepared = preparePaste(document, *payload, placement, selectedGroup);
+  if (!prepared.ok) {
+    // Surface the user-visible error; the document is left untouched.
+    std::cerr << prepared.error << '\n';
+    return;
+  }
+
+  const std::string sourceBefore(document.source());
+
+  // Build selection-restore targets from a scratch parse of the merged source.
+  // The scratch tree is structurally identical to the post-reparse live tree,
+  // so path-based writeback targets captured here resolve after the live
+  // reparse — letting `restoreSelectionAfterNextDocumentReplace` select the
+  // pasted elements without a live handle that does not yet exist.
+  std::vector<AttributeWritebackTarget> selectionTargets;
+  {
+    ParseWarningSink sink;
+    auto scratch = svg::parser::SVGParser::ParseSVG(prepared.mergedSource, sink);
+    if (scratch.hasResult()) {
+      svg::SVGDocument scratchDoc = scratch.result();
+      for (const std::string& id : prepared.pastedElementIds) {
+        if (auto element = scratchDoc.querySelector("#" + id); element.has_value()) {
+          if (auto target = captureAttributeWritebackTarget(*element); target.has_value()) {
+            selectionTargets.push_back(std::move(*target));
+          }
+        }
+      }
+    }
+  }
+
+  // Record one undo entry spanning the whole paste, mirroring the structural
+  // source-edit undo used by delete / path operations.
+  const svg::SVGElement undoAnchor = document.svgElement();
+  app_.undoTimeline().record("Paste shapes",
+                             captureDocumentSourceSnapshot(undoAnchor, sourceBefore),
+                             captureDocumentSourceSnapshot(undoAnchor, prepared.mergedSource));
+
+  app_.restoreSelectionAfterNextDocumentReplace(std::move(selectionTargets));
+  app_.applyMutation(EditorCommand::PasteShapesCommand(std::move(prepared.mergedSource)));
+}
+
+bool EditorShell::selectionIsAllText() const {
+  if (!app_.hasSelection()) {
+    return false;
+  }
+  for (const svg::SVGElement& element : app_.selectedElements()) {
+    if (element.tagName().name != svg::SVGTextElement::Tag) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void EditorShell::convertSelectedTextToOutlines() {
+  if (!app_.hasDocument() || !selectionIsAllText()) {
+    return;
+  }
+
+  svg::SVGDocument& document = app_.document().document();
+  if (!document.hasSourceStore()) {
+    return;
+  }
+  const std::string sourceBefore(document.source());
+
+  // Convert each selected `<text>` against the running merged source so the
+  // whole selection collapses into one undoable structural replace. Per design
+  // doc 0047 § "Error Handling", any failure abandons the command without
+  // mutating the document.
+  std::string mergedSource = sourceBefore;
+  std::vector<std::string> outlineGroupIds;
+  for (const svg::SVGElement& element : app_.selectedElements()) {
+    ParseWarningSink stageSink;
+    auto staged = svg::parser::SVGParser::ParseSVG(mergedSource, stageSink);
+    if (!staged.hasResult()) {
+      lastConvertTextError_ = "Convert to outlines failed: intermediate source did not parse.";
+      return;
+    }
+    svg::SVGDocument stagedDoc = staged.result();
+
+    // Re-resolve the element in the staged document so the source range matches
+    // `mergedSource`. Multi-select requires ids; a lone unidentified `<text>`
+    // resolves by tag.
+    std::optional<svg::SVGElement> stagedElement;
+    const RcString id = element.id();
+    if (!id.empty()) {
+      stagedElement = stagedDoc.querySelector("#" + id.str());
+    } else if (app_.selectedElements().size() == 1u) {
+      stagedElement = stagedDoc.querySelector("text");
+    }
+    if (!stagedElement.has_value()) {
+      lastConvertTextError_ =
+          "Convert to outlines failed: could not locate the <text> element to convert.";
+      return;
+    }
+
+    ConvertTextToOutlinesResult result = convertTextToOutlines(stagedDoc, *stagedElement);
+    if (!result.ok) {
+      lastConvertTextError_ = result.error;
+      return;
+    }
+    mergedSource = std::move(result.mergedSource);
+    outlineGroupIds.push_back(std::move(result.outlineGroupId));
+  }
+
+  // Build selection-restore targets for the new outline groups from a scratch
+  // parse, mirroring the shape-paste flow so the converted geometry is selected
+  // after the reparse.
+  std::vector<AttributeWritebackTarget> selectionTargets;
+  {
+    ParseWarningSink sink;
+    auto scratch = svg::parser::SVGParser::ParseSVG(mergedSource, sink);
+    if (scratch.hasResult()) {
+      svg::SVGDocument scratchDoc = scratch.result();
+      for (const std::string& groupId : outlineGroupIds) {
+        if (auto element = scratchDoc.querySelector("#" + groupId); element.has_value()) {
+          if (auto target = captureAttributeWritebackTarget(*element); target.has_value()) {
+            selectionTargets.push_back(std::move(*target));
+          }
+        }
+      }
+    }
+  }
+
+  // Record one undo entry spanning the whole conversion, mirroring the
+  // structural source-edit undo used by paste / delete.
+  const svg::SVGElement undoAnchor = document.svgElement();
+  app_.undoTimeline().record("Convert text to outlines",
+                             captureDocumentSourceSnapshot(undoAnchor, sourceBefore),
+                             captureDocumentSourceSnapshot(undoAnchor, mergedSource));
+
+  app_.restoreSelectionAfterNextDocumentReplace(std::move(selectionTargets));
+  app_.applyMutation(EditorCommand::ConvertTextToOutlinesCommand(std::move(mergedSource)));
 }
 
 void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float paneWidth,
@@ -1462,6 +1843,7 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
     None,
     SelectPointer,
     PenTool,
+    Text,
   };
   const auto renderButton = [&](ActiveTool tool, const char* label, ToolButtonIcon icon,
                                 const char* tooltip) {
@@ -1472,15 +1854,27 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.35f, 0.78f, 1.0f));
     }
     if (ImGui::Button(label, ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize))) {
-      activeTool_ = tool;
       if (tool == ActiveTool::Select) {
-        penTool_.cancel();
+        // Leaving the Pen tool commits any in-progress path as one undoable
+        // command rather than dropping it.
+        if (penTool_.commitOpenPath(app_)) {
+          flushQueuedMutationAndRefreshOverlay();
+        }
       }
+      activeTool_ = tool;
     }
     if (icon == ToolButtonIcon::SelectPointer) {
       DrawSelectToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
     } else if (icon == ToolButtonIcon::PenTool) {
       DrawPenToolButtonIcon(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
+    } else if (icon == ToolButtonIcon::Text) {
+      const ImVec2 buttonMin = ImGui::GetItemRectMin();
+      const ImVec2 buttonMax = ImGui::GetItemRectMax();
+      const char* glyph = "T";
+      const ImVec2 textSize = ImGui::CalcTextSize(glyph);
+      drawList->AddText(ImVec2((buttonMin.x + buttonMax.x - textSize.x) * 0.5f,
+                               (buttonMin.y + buttonMax.y - textSize.y) * 0.5f),
+                        IM_COL32(230, 230, 230, 255), glyph);
     }
     if (ImGui::IsItemHovered()) {
       ImGui::SetTooltip("%s", tooltip);
@@ -1490,9 +1884,15 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
     }
   };
 
-  renderButton(ActiveTool::Select, "##select_tool", ToolButtonIcon::SelectPointer, "Select");
+  const std::string selectTooltip = ToolTooltipText(ToolId::Select);
+  const std::string penTooltip = ToolTooltipText(ToolId::Pen);
+  const std::string textTooltip = ToolTooltipText(ToolId::Text);
+  renderButton(ActiveTool::Select, "##select_tool", ToolButtonIcon::SelectPointer,
+               selectTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
-  renderButton(ActiveTool::Pen, "##pen_tool", ToolButtonIcon::PenTool, "Pen");
+  renderButton(ActiveTool::Pen, "##pen_tool", ToolButtonIcon::PenTool, penTooltip.c_str());
+  ImGui::SameLine(0.0f, kToolPaletteGap);
+  renderButton(ActiveTool::Text, "##text_tool", ToolButtonIcon::Text, textTooltip.c_str());
   ImGui::SameLine(0.0f, kToolPaletteGap);
   ImGui::BeginDisabled(true);
   (void)ImGui::Button("△", ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize));
@@ -1611,7 +2011,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   const bool toolEligible = canvasHovered && !interactionController_.panning() && !spaceHeld;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
-  const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint) {
+  const bool textToolActive = activeTool_ == ActiveTool::Text;
+  const auto cachedHandleIntentAt = [&](const Vector2d& documentPoint, bool includeRotate) {
     const auto& boundsCache = renderCoordinator_.selectionBoundsCache();
     if (boundsCache.lastSelection != app_.selectedElements()) {
       return SelectionTransformHandleIntent{};
@@ -1620,7 +2021,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                               ? boundsCache.displayedBoundsDoc
                                               : boundsCache.pendingBoundsDoc;
     return HitTestSelectionTransformHandles(boundsDoc, documentPoint,
-                                            interactionController_.viewport().pixelsPerDocUnit());
+                                            interactionController_.viewport().pixelsPerDocUnit(),
+                                            includeRotate);
   };
   SelectionTransformHandleIntent hoverTransformIntent;
   if (penToolActive && !rotateCursorLocked && toolEligible) {
@@ -1633,7 +2035,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     }
   } else if (selectToolActive && !rotateCursorLocked && toolEligible &&
              !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-    hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()));
+    hoverTransformIntent = cachedHandleIntentAt(screenToDocument(ImGui::GetMousePos()),
+                                                /*includeRotate=*/!ImGui::GetIO().KeyShift);
     if (hoverTransformIntent.kind != SelectionTransformHandleKind::None) {
       if (hoverTransformIntent.kind == SelectionTransformHandleKind::Rotate &&
           rotateCursorSet_.setRotateCursor(hoverTransformIntent.corner)) {
@@ -1651,7 +2054,14 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     rotateCursorSet_.clearIfActive();
     SetImGuiOsCursorManagementEnabled(true);
   }
-  if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+  // Double-click while drafting commits the in-progress open path (no trailing
+  // Z) as one undoable command, matching Enter. Checked before the click is
+  // buffered so the double-click doesn't also place a stray anchor.
+  if (penToolActive && toolEligible && penTool_.isDrafting() &&
+      ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    penTool_.commitOpenPath(app_);
+    flushQueuedMutationAndRefreshOverlay();
+  } else if (toolEligible && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
     preserveSourceEditFocusCursor_ = false;
     MouseModifiers modifiers;
     modifiers.shift = ImGui::GetIO().KeyShift;
@@ -1690,8 +2100,10 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         !boundsCache.displayedOccludingBoundsDoc.empty() ? boundsCache.displayedOccludingBoundsDoc
                                                          : boundsCache.pendingOccludingBoundsDoc;
     const SelectionTransformHandleIntent pendingHandleIntent =
-        cacheMatchesSelection ? cachedHandleIntentAt(pendingClick.documentPoint)
-                              : SelectionTransformHandleIntent{};
+        cacheMatchesSelection
+            ? cachedHandleIntentAt(pendingClick.documentPoint,
+                                   /*includeRotate=*/!pendingClick.modifiers.shift)
+            : SelectionTransformHandleIntent{};
     bool tookFastRedrag = selectToolActive && cacheMatchesSelection &&
                           pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
                           selectTool_.tryStartRedragOnSelected(
@@ -1719,20 +2131,29 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       const bool pendingClickHitsSelection =
           selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
           selectTool_.clickHitsCurrentSelection(app_, pendingClick.documentPoint);
-      if (selectToolActive && leftMouseDown &&
-          pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-          !pendingClickHitsSelection && (selectHoldElapsed || selectDragIntent)) {
+      // A press that lands on an element implicitly selects-and-drags it; a
+      // marquee only starts when the first click is on empty space (no element
+      // underneath). Without this, a press-drag whose mouse-down was deferred
+      // (worker busy) misclassifies as a marquee and the element is never
+      // selected (gl_rnr GeodeDragZoomRerasterizes... selection-loss). We are in
+      // the `!isBusy()` branch here, so `hitTest` is race-safe (same gate
+      // `onMouseDown` uses).
+      const bool pendingClickHitsElement =
+          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          !pendingClickHitsSelection && app_.hitTest(pendingClick.documentPoint).has_value();
+      const bool pendingClickCanStartMarquee =
+          selectToolActive && pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
+          !pendingClickHitsSelection && !pendingClickHitsElement;
+      if (leftMouseDown && pendingClickCanStartMarquee && (selectHoldElapsed || selectDragIntent)) {
         lastPostedScreenPoint_.reset();
         selectTool_.beginMarquee(app_, pendingClick.documentPoint, pendingClick.modifiers.shift);
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         requestRenderAtEndOfFrame_ = true;
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
-            app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+            app_, interactionController_.viewport(), selectTool_.marqueeRect(),
             selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         interactionController_.clearPendingClick();
-      } else if (selectToolActive && leftMouseDown &&
-                 pendingHandleIntent.kind == SelectionTransformHandleKind::None &&
-                 !pendingClickHitsSelection) {
+      } else if (leftMouseDown && pendingClickCanStartMarquee) {
         // Keep the click buffered until mouse-up selects, pointer movement starts marquee, or the
         // hold delay above starts marquee. This prevents full-canvas/background elements from being
         // selected just because the user is preparing a marquee drag.
@@ -1752,6 +2173,12 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
             penTool_.onMouseUp(app_, pendingClick.documentPoint);
           }
           queuedMutationForNextFrame = true;
+        } else if (textToolActive) {
+          // Text placement is a single click: insert the new `<text>` and
+          // switch back to the Select tool so it can be moved and edited.
+          textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+          activeTool_ = ActiveTool::Select;
+          queuedMutationForNextFrame = true;
         }
         if (queuedMutationForNextFrame) {
           flushQueuedMutationAndRefreshOverlay();
@@ -1759,7 +2186,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           requestRenderAtEndOfFrame_ = true;
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              app_, interactionController_.viewport(), selectTool_.marqueeRect(),
               selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         }
         interactionController_.clearPendingClick();
@@ -1804,7 +2231,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              app_, interactionController_.viewport(), selectTool_.marqueeRect(),
               selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         }
       }
@@ -1828,12 +2255,12 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
               previewBeforeRelease, app_.document().currentFrameVersion());
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
+              app_, interactionController_.viewport(), selectTool_.marqueeRect());
         }
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
-            app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
+            app_, interactionController_.viewport(), selectTool_.marqueeRect());
       }
     }
   }
@@ -1844,7 +2271,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
 
   if (penToolActive && penTool_.isDraggingAnchor()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
-      penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+      MouseModifiers dragModifiers;
+      dragModifiers.option = ImGui::GetIO().KeyAlt;
+      dragModifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
+      penTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true,
+                           dragModifiers);
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       penTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
@@ -1882,7 +2313,13 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
   interactionController_.frameHistory().setLatestMemorySample(
       MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
-  bool directFramebufferOverlay = false;
+  // Selection chrome is rendered exclusively by Donner's OverlayRenderer drawn
+  // straight onto the Geode framebuffer via this direct-render callback. There
+  // is no ImGui-vector or texture-blit fallback: edge frames that can't take
+  // this path (a content-only capture, which intentionally carries no chrome,
+  // or a viewport with no presentable clip rect, which has nowhere to draw)
+  // simply skip the overlay — clearing the callback leaves the framebuffer
+  // chrome-free for that frame.
 #ifdef DONNER_EDITOR_WGPU
   window_.setWgpuDirectRenderCallback({});
   const std::optional<Box2d> directOverlayClipRect =
@@ -1902,7 +2339,6 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           DrawImmediateOverlaySnapshotToFramebuffer(
               *directOverlayRenderer_, target, overlayViewport, overlayClipRect, overlaySnapshot);
         });
-    directFramebufferOverlay = true;
   }
 #endif
   RenderPanePresenterState paneState{
@@ -1915,12 +2351,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       .contentRegion = Vector2d(contentRegion.x, contentRegion.y),
       .suppressedLayerEntity = suppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
-      .showOverlay = !contentOnlyCaptureThisFrame_,
-      .drawImmediateOverlay = !directFramebufferOverlay,
       .showFrameGraph = !contentOnlyCaptureThisFrame_,
   };
-  const RenderPanePresenterCost paneCost = renderPanePresenter_.render(paneState);
-  renderCoordinator_.addImmediateOverlayDrawCost(paneCost.immediateOverlayDrawMs);
+  renderPanePresenter_.render(paneState);
   if (!contentOnlyCaptureThisFrame_) {
     renderPenToolPreview();
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
@@ -1948,23 +2381,67 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   if (!rendererBusy) {
     sidebarPresenter_.refreshSnapshot(app_);
+    layersPanel_.refreshSnapshot(app_);
   }
   EditorApp* liveAppForClicks = rendererBusy ? nullptr : &app_;
 
+  // The user-facing Layers panel (design docs 0046/0047 M3) replaces the old
+  // XML tree view in this sidebar window. `SidebarPresenter` is still the
+  // Inspector backend below (`renderInspector`), and its `renderTreeView` /
+  // tests remain; it is simply no longer the user-facing outline.
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, paneOriginY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.treePaneHeight), ImGuiCond_Always);
-  ImGui::Begin("Tree View", nullptr, paneFlags);
-  TreeViewState treeState{
-      .scrollTarget = selectionBeforeTree,
-      .pendingScroll = treeviewPendingScroll_,
+  ImGui::Begin("Layers", nullptr, paneFlags);
+  // Donner renders each row's preview to a bitmap during refreshSnapshot; here
+  // we only upload that bitmap to a GL/WGPU texture and hand the handle back so
+  // ImGui can blit it via ImGui::Image. ImGui never draws the vector artwork.
+  const LayersPanel::ThumbnailTextureProvider thumbnailTextureProvider =
+      [this](std::uint64_t stableId, const svg::RendererBitmap& bitmap) -> ImTextureID {
+    return thumbnailTextures_.uploadThumbnail(stableId, bitmap);
   };
-  sidebarPresenter_.renderTreeView(liveAppForClicks, treeState);
-  treeviewPendingScroll_ = treeState.pendingScroll;
-  if (treeState.selectionChangedInTree) {
+  // Feed the current locked-rejection flash into the Layers panel so the rejected
+  // (locked) element's row flashes red in sync with the canvas outline flash. The
+  // flash was already ticked earlier this frame (see runFrame's
+  // tickLockedRejectionFlash), and the shell keeps the event loop awake while it
+  // fades, so the row fade animates for free. `std::nullopt` clears it.
+  if (const std::optional<SelectTool::LockedRejectionFlash> flash =
+          selectTool_.lockedRejectionFlash();
+      flash.has_value()) {
+    layersPanel_.setLockedRejectionFlash(
+        LayersLockedRejectionFlash{.element = flash->element, .intensity = flash->intensity});
+  } else {
+    layersPanel_.setLockedRejectionFlash(std::nullopt);
+  }
+  layersPanel_.render(liveAppForClicks, thumbnailTextureProvider);
+  // Feed the Layers-panel hover into the shared source-hover preview so the
+  // canvas (and source pane) highlight the hovered element, the same way
+  // hovering a source-pane token does.
+  layersPanelHoverElement_ = layersPanel_.hoveredElement();
+  updateSourceHoverPreview();
+  if (layersPanel_.consumeSelectionChanged()) {
+    // Reuse the existing tree-origin selection-sync plumbing so a Layers-row
+    // selection change is reflected in the canvas and source panes the same way
+    // the old tree view's selection was.
     preserveSourceEditFocusCursor_ = false;
     treeSelectionOriginatedInTree_ = true;
     treeviewPendingScroll_ = false;
   }
+  // A Layers-panel show/hide, lock, rename, reorder, or z-order click queues a
+  // DOM mutation. Flush it and refresh the overlay the same way the Inspector
+  // panels do (above) — otherwise the queued mutation never reaches the worker
+  // and the canvas keeps presenting the pre-mutation frame (the hidden-layer
+  // "ghost").
+  if (layersPanel_.consumeQueuedMutation()) {
+    flushQueuedMutationAndRefreshOverlay();
+  }
+  // Release thumbnail textures for rows that are no longer visible so the GPU
+  // texture set does not grow across refreshes.
+  std::vector<std::uint64_t> liveThumbnailKeys;
+  liveThumbnailKeys.reserve(layersPanel_.rows().size());
+  for (const LayerTreeRow& row : layersPanel_.rows()) {
+    liveThumbnailKeys.push_back(row.stableId);
+  }
+  thumbnailTextures_.retainThumbnailsOnly(liveThumbnailKeys);
   ImGui::End();
   lastTreeSelection_ = app_.selectedElement();
 
@@ -1973,18 +2450,25 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
   ImGui::Begin("Inspector", nullptr, paneFlags);
   const bool inspectorQueuedMutation =
       sidebarPresenter_.renderInspector(liveAppForClicks, interactionController_.viewport());
+  // Text-property inspector: shown only when the selection is exactly one
+  // `<text>` element. Content/style edits route through the mutation seam.
+  const bool textInspectorQueuedMutation =
+      textInspectorPanel_.render(liveAppForClicks, ImGui::GetTime());
   ImGui::End();
-  if (inspectorQueuedMutation) {
+  if (inspectorQueuedMutation || textInspectorQueuedMutation) {
     flushQueuedMutationAndRefreshOverlay();
   }
 
-  if (layerPanelDetached_) {
+  // The Compositor Debug panel is a developer diagnostics view, hidden unless
+  // toggled on from the View menu. The user-facing Layers/Inspector panes above
+  // are unaffected.
+  if (!showCompositorDebugPanel_ || layerPanelDetached_) {
     return;
   }
 
   ImGui::SetNextWindowPos(ImVec2(rightPaneX, layout.layerPanelPaneY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(rightPaneWidth, layout.layerPanelHeight), ImGuiCond_Always);
-  ImGui::Begin("Layers##docked_layers", nullptr, paneFlags);
+  ImGui::Begin("Compositor Debug##docked_compositor_debug", nullptr, paneFlags);
   renderDockedLayerPanelDragHandle();
   if (!layerPanelDetached_) {
     renderLayerPanelContents();
@@ -2012,9 +2496,9 @@ void EditorShell::renderLayerPanelContents() {
   const auto fastPath = renderCoordinator_.asyncRenderer().compositorFastPathCountersForTesting();
   const auto renderStats = renderCoordinator_.asyncRenderer().compositorRenderFrameStats();
   const PresentationCoverageDiagnostics coverageDiagnostics = textures_.coverageDiagnostics();
-  layerInspectorPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
-                              viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
-                              documentCanvas, coverageDiagnostics, fastPath, renderStats);
+  compositorDebugPanel_.render(compositeTiles, compositorState, workerCompositorEntity,
+                               viewport.zoom, viewport.devicePixelRatio, viewportDesiredCanvas,
+                               documentCanvas, coverageDiagnostics, fastPath, renderStats);
 }
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
@@ -2157,7 +2641,7 @@ void EditorShell::renderDockedLayerPanelDragHandle() {
   ImDrawList* drawList = ImGui::GetWindowDrawList();
   drawList->AddRectFilled(start, end, background);
   drawList->AddText(ImVec2(start.x + style.FramePadding.x, start.y + style.FramePadding.y),
-                    textColor, "Layers");
+                    textColor, "Compositor Debug");
 
   const char* handleText = "::";
   const ImVec2 handleTextSize = ImGui::CalcTextSize(handleText);
@@ -2175,7 +2659,7 @@ void EditorShell::renderDockedLayerPanelDragHandle() {
 }
 
 void EditorShell::renderFloatingLayerPanel() {
-  if (!layerPanelDetached_) {
+  if (!showCompositorDebugPanel_ || !layerPanelDetached_) {
     return;
   }
 
@@ -2197,7 +2681,7 @@ void EditorShell::renderFloatingLayerPanel() {
 
   bool layerPanelOpen = true;
   constexpr ImGuiWindowFlags kFloatingFlags = ImGuiWindowFlags_NoCollapse;
-  ImGui::Begin("Layers##floating_layers", &layerPanelOpen, kFloatingFlags);
+  ImGui::Begin("Compositor Debug##floating_compositor_debug", &layerPanelOpen, kFloatingFlags);
   layerPanelFloatingNeedsPlacement_ = false;
   layerPanelFloatingPos_ = ImGui::GetWindowPos();
   layerPanelFloatingSize_ = ImGui::GetWindowSize();
@@ -2327,6 +2811,10 @@ std::vector<svg::SVGElement> EditorShell::referenceHighlightElements() const {
 std::vector<svg::SVGElement> EditorShell::combinedSourcePreviewElements() const {
   std::vector<svg::SVGElement> elements = sourceHoverElements();
   AddUniqueElements(&elements, referenceHighlightElements());
+  if (layersPanelHoverElement_.has_value()) {
+    const std::array<svg::SVGElement, 1> hovered{*layersPanelHoverElement_};
+    AddUniqueElements(&elements, hovered);
+  }
   return elements;
 }
 
@@ -2385,7 +2873,7 @@ void EditorShell::applyReferenceHighlightPreview() {
       textEditor_.setHoverSourceRanges(sourceHoverRangesForElements(previewElements));
   if (overlayChanged) {
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
-        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
         selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
   if (overlayChanged || sourceChanged) {
@@ -2580,7 +3068,7 @@ bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
   documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   renderCoordinator_.rasterizeOverlayForCurrentSelection(
-      app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+      app_, interactionController_.viewport(), selectTool_.marqueeRect(),
       selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   requestRenderAtEndOfFrame_ = true;
   window_.wakeEventLoop();
@@ -2598,6 +3086,20 @@ void EditorShell::renderPenToolPreview() {
   const ImU32 handleColor = ImGui::GetColorU32(ImVec4(0.10f, 0.43f, 1.0f, 0.42f));
   const ImU32 anchorFill = ImGui::GetColorU32(ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
   const ImU32 anchorStroke = ImGui::GetColorU32(ImVec4(0.06f, 0.20f, 0.48f, 1.0f));
+  const ImU32 aabbColor = ImGui::GetColorU32(ImVec4(0.10f, 0.43f, 1.0f, 0.55f));
+
+  // Draw the in-progress path's selection AABB from the tool's *synchronous*
+  // draft bounds rather than the selection-bounds overlay, which reads the live
+  // DOM `d` attribute one `flushFrame()` behind (PenTool::appendLine only queues
+  // the SetAttribute write). Sourcing the box from `draftBounds()` keeps it
+  // lockstep with the anchors the user just placed — it grows to enclose the
+  // newest point in the same click frame instead of lagging one click behind.
+  if (const std::optional<Box2d> draftBoundsDoc = penTool_.draftBounds();
+      draftBoundsDoc.has_value()) {
+    const ImVec2 topLeft = ToImVec2(viewport.documentToScreen(draftBoundsDoc->topLeft));
+    const ImVec2 bottomRight = ToImVec2(viewport.documentToScreen(draftBoundsDoc->bottomRight));
+    drawList->AddRect(topLeft, bottomRight, aabbColor, 0.0f, 0, 1.0f);
+  }
 
   for (const PenTool::PreviewHandleLine& handle : penTool_.previewHandleLines()) {
     drawList->AddLine(ToImVec2(viewport.documentToScreen(handle.start)),
@@ -2630,6 +3132,20 @@ void EditorShell::renderPenToolPreview() {
     const ImVec2 max(center.x + 4.0f, center.y + 4.0f);
     drawList->AddRectFilled(min, max, anchorFill, 1.0f);
     drawList->AddRect(min, max, anchorStroke, 1.0f, 0, 1.4f);
+  }
+
+  // Close-path affordance: highlight the first anchor with a ring when a click
+  // at the current mouse position would close the contour.
+  if (const std::optional<Vector2d> first = penTool_.firstAnchor(); first.has_value()) {
+    const ImVec2 mouseScreen = ImGui::GetMousePos();
+    const Vector2d mouseDoc = viewport.screenToDocument(Vector2d(mouseScreen.x, mouseScreen.y));
+    MouseModifiers closeModifiers;
+    closeModifiers.pixelsPerDocUnit = viewport.pixelsPerDocUnit();
+    if (penTool_.wouldCloseAt(mouseDoc, closeModifiers)) {
+      const ImVec2 center = ToImVec2(viewport.documentToScreen(*first));
+      const ImU32 closeColor = ImGui::GetColorU32(ImVec4(0.10f, 0.65f, 0.35f, 1.0f));
+      drawList->AddCircle(center, 7.0f, closeColor, 0, 2.0f);
+    }
   }
 }
 
@@ -2693,6 +3209,38 @@ void EditorShell::renderRenderPaneContextMenu() {
   if (ImGui::MenuItem("Delete Selection", nullptr, false, app_.hasSelection())) {
     selectionChanged = app_.deleteSelectionWithUndo(textEditor_.getText());
   }
+
+  // Arrange (paint/z-order). Acts on the right-clicked element, or on the single
+  // selection when the menu was opened over empty canvas. Reuses the shared
+  // DOM-level reorderSelectedElement engine — the same path as the Cmd+[ / Cmd+]
+  // shortcuts — so the move is undoable and reflected back into the source.
+  std::optional<svg::SVGElement> arrangeTarget;
+  if (renderContextMenuHitElement_.has_value()) {
+    arrangeTarget = *renderContextMenuHitElement_;
+  } else if (app_.selectedElements().size() == 1u) {
+    arrangeTarget = app_.selectedElements().front();
+  }
+  if (ImGui::BeginMenu("Arrange", arrangeTarget.has_value())) {
+    const auto arrange = [&](EditorApp::ZOrder direction) {
+      app_.setSelection(*arrangeTarget);
+      selectionChanged = true;
+      std::ignore = app_.reorderSelectedElement(direction);
+    };
+    if (ImGui::MenuItem("Bring to Front", "Cmd+Shift+]")) {
+      arrange(EditorApp::ZOrder::BringToFront);
+    }
+    if (ImGui::MenuItem("Bring Forward", "Cmd+]")) {
+      arrange(EditorApp::ZOrder::BringForward);
+    }
+    if (ImGui::MenuItem("Send Backward", "Cmd+[")) {
+      arrange(EditorApp::ZOrder::SendBackward);
+    }
+    if (ImGui::MenuItem("Send to Back", "Cmd+Shift+[")) {
+      arrange(EditorApp::ZOrder::SendToBack);
+    }
+    ImGui::EndMenu();
+  }
+
   std::optional<svg::SVGElement> unbundleTarget;
   if (renderContextMenuHitElement_.has_value()) {
     unbundleTarget = *renderContextMenuHitElement_;
@@ -2726,7 +3274,7 @@ void EditorShell::renderRenderPaneContextMenu() {
   if (selectionChanged && !rendererBusy) {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
-        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
         selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
     window_.wakeEventLoop();
   }
@@ -2916,7 +3464,7 @@ void EditorShell::applySourceStyleDecorationChipClick() {
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
-        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
         selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
 
@@ -2951,7 +3499,7 @@ void EditorShell::setSourcePaneVisible(bool visible) {
     if (renderCoordinator_.setSourceHoverElements({}) &&
         !renderCoordinator_.asyncRenderer().isBusy()) {
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
-          app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+          app_, interactionController_.viewport(), selectTool_.marqueeRect(),
           selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
     }
   }
@@ -2974,7 +3522,7 @@ void EditorShell::runFrame() {
   contentOnlyCaptureForNextFrame_ = false;
   requestRenderAtEndOfFrame_ = false;
   textures_.advancePresentationFrame();
-  layerInspectorPanel_.advancePresentationFrame();
+  compositorDebugPanel_.advancePresentationFrame();
   if (reproRecorder_) {
     // Snapshot before any widget consumes input events. ImGui's IO
     // state for the frame has been populated by
@@ -3010,6 +3558,23 @@ void EditorShell::runFrame() {
   }
   const float frameDeltaMs = ImGui::GetIO().DeltaTime * 1000.0f;
   interactionController_.noteFrameDelta(frameDeltaMs);
+
+  // Advance the locked-rejection flash (clicking a locked element flashes its outline red) and push
+  // the current flash state to the render coordinator so the next overlay capture draws it. Capture
+  // whether a flash was active *before* the tick: the overlay rasterize below (after the frame
+  // flush) must also run on the final intensity→0 frame to erase the outline, and while the flash
+  // animates the editor is event-driven so the loop must keep waking.
+  const bool hadLockedRejectionFlash = renderCoordinator_.hasLockedRejectionFlash();
+  selectTool_.tickLockedRejectionFlash(ImGui::GetIO().DeltaTime);
+  const std::optional<SelectTool::LockedRejectionFlash> lockedRejectionFlash =
+      selectTool_.lockedRejectionFlash();
+  renderCoordinator_.setLockedRejectionFlash(lockedRejectionFlash);
+  const bool lockedRejectionFlashNeedsRedraw =
+      lockedRejectionFlash.has_value() || hadLockedRejectionFlash;
+  if (lockedRejectionFlash.has_value()) {
+    window_.wakeEventLoop();
+  }
+
   updateWindowTitle();
 
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,
@@ -3021,6 +3586,17 @@ void EditorShell::runFrame() {
           app_.document().lastFlushResult());
       renderCoordinator_.refreshSelectionBoundsCache(app_);
     }
+  }
+
+  // Re-rasterize the overlay against the just-flushed DOM while a locked-rejection flash is (or was
+  // just) active. A locked click never changes selection, so none of the selection-/hover-driven
+  // overlay rasterize triggers fire for the flash — this is what animates the fade and erases the
+  // outline on the final frame.
+  if (lockedRejectionFlashNeedsRedraw && app_.hasDocument() &&
+      !renderCoordinator_.asyncRenderer().isBusy()) {
+    renderCoordinator_.rasterizeOverlayForCurrentSelection(
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
 
   documentSyncController_.syncParseErrorMarkers(app_, textEditor_);
@@ -3073,6 +3649,9 @@ void EditorShell::runFrame() {
       .canUndo = app_.canUndo(),
       .canRedo = app_.canRedo(),
       .sourceFocusMode = sourceFocusMode_,
+      .hasShapeSelection = app_.hasSelection(),
+      .hasShapeClipboard = shapeClipboard_ != nullptr && shapeClipboard_->hasText(),
+      .hasTextSelection = selectionIsAllText(),
   };
   const MenuBarActions menuActions = menuBarPresenter_.render(menuState, uiFontBold_);
   if (menuActions.openAbout) {
@@ -3087,6 +3666,12 @@ void EditorShell::runFrame() {
   if (menuActions.saveFileAs) {
     requestSaveAs();
   }
+  if (menuActions.exportViewportSvg) {
+    requestExportViewportSvg(/*includeOverlay=*/false);
+  }
+  if (menuActions.exportViewportSvgWithOverlay) {
+    requestExportViewportSvg(/*includeOverlay=*/true);
+  }
   if (menuActions.revertFile) {
     requestRevert();
   }
@@ -3099,17 +3684,49 @@ void EditorShell::runFrame() {
   if (menuActions.redo && app_.canRedo()) {
     app_.redo();
   }
+  const bool sourcePaneFocusedForMenu = sourcePaneVisible_ && textEditor_.isFocused();
   if (menuActions.cut) {
-    textEditor_.cut();
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.cut();
+    } else {
+      cutSelectedShapesToClipboard();
+    }
   }
   if (menuActions.copy) {
-    textEditor_.copy();
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.copy();
+    } else {
+      copySelectedShapesToClipboard();
+    }
   }
   if (menuActions.paste) {
-    textEditor_.paste();
+    if (sourcePaneFocusedForMenu) {
+      textEditor_.paste();
+    } else {
+      pasteShapesFromClipboard(/*inFront=*/false);
+    }
+  }
+  if (menuActions.pasteInFront) {
+    pasteShapesFromClipboard(/*inFront=*/true);
+  }
+  if (menuActions.convertTextToOutlines) {
+    convertSelectedTextToOutlines();
   }
   if (menuActions.selectAll) {
     textEditor_.selectAll();
+  }
+  if (menuActions.selectAllCanvas) {
+    // Same canonical canvas Select-All path as the Cmd+A shortcut.
+    selectAllCanvasElements();
+  }
+  if (menuActions.deselectAll) {
+    // Source/XML pane focused: collapse the text selection to the caret, mirroring the
+    // focus-aware Cmd+Shift+A shortcut.
+    textEditor_.clearSelection();
+  }
+  if (menuActions.deselectAllCanvas) {
+    // Same canonical clear path as the Cmd+Shift+A shortcut and Escape.
+    app_.clearSelection();
   }
   if (menuActions.zoomIn) {
     interactionController_.applyZoom(kKeyboardZoomStep,
@@ -3128,7 +3745,10 @@ void EditorShell::runFrame() {
 
   dialogPresenter_.render(
       [this](std::string_view path, std::string* error) { return tryOpenPath(path, error); },
-      [this](std::string_view path, std::string* error) { return trySavePath(path, error); });
+      [this](std::string_view path, std::string* error) {
+        return pendingViewportExport_ ? tryExportViewportSvgToPath(path, error)
+                                      : trySavePath(path, error);
+      });
 
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;

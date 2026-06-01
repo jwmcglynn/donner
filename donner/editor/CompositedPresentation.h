@@ -1,7 +1,9 @@
 #pragma once
 /// @file
 
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <ostream>
 #include <variant>
@@ -155,12 +157,35 @@ public:
 
     const SelectTool::ActiveDragPreview representedPreview =
         representedPreviewForActiveCache(*cache, *activePreview);
-    if (activePreview->documentFromCachedDocument.isTranslation() &&
-        representedPreview.documentFromCachedDocument.isTranslation()) {
-      return false;
+    if (activePreview->documentFromCachedDocument.isTranslation()) {
+      // A pure translation tracks via the cached bitmap's translation offset with
+      // no re-capture — UNLESS the cached bitmap is still an affine (we just
+      // returned from a resize/rotate to a translation), in which case re-capture
+      // a clean, crisply-translated layer instead of carrying the stale affine.
+      return !representedPreview.documentFromCachedDocument.isTranslation();
     }
 
-    return !SameDragPreviewTransform(representedPreview, *activePreview);
+    // Affine (rotate/scale) drag: re-capture a crisp bitmap when the cached
+    // bitmap's SCALE has drifted past a threshold (it would otherwise look
+    // blurry). The re-capture is intentional (anti-blur); the presentation
+    // compensates for the swapped-in image via `represented` (the transform the
+    // re-captured bitmap was baked at) so the shape stays continuous across the
+    // swap — `effective = represented^-1 * active` re-bases tracking onto the
+    // fresh bitmap with no pop. Pure rotation is area-preserving so it never
+    // trips this (a rotated bitmap keeps resolution); scaling down downsamples
+    // and stays sharp; only upscaling past the threshold re-captures, and a
+    // continuous scale-up re-captures in ~threshold steps.
+    constexpr double kAffineRecaptureScaleThreshold = 1.5;
+    const double activeScale =
+        std::sqrt(std::abs(activePreview->documentFromCachedDocument.determinant()));
+    const double representedScale =
+        std::sqrt(std::abs(representedPreview.documentFromCachedDocument.determinant()));
+    if (representedScale < 1e-9) {
+      return true;
+    }
+    const double scaleDrift = activeScale / representedScale;
+    return scaleDrift > kAffineRecaptureScaleThreshold ||
+           scaleDrift < 1.0 / kAffineRecaptureScaleThreshold;
   }
 
   /// Returns true when a released drag should request a settled composited refresh.

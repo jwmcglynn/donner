@@ -1,8 +1,21 @@
 #include "donner/editor/RenderPanePresenter.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <optional>
+#include <span>
+#include <sstream>
+#include <string>
+#include <vector>
 
+#include "donner/base/Path.h"
+#include "donner/base/Vector2.h"
+#include "donner/editor/EditorApp.h"
+#include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/ViewportState.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {

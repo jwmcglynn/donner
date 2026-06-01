@@ -100,28 +100,34 @@ public:
   }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
-  /// Add immediate presenter-side overlay draw-list time to the current frame counters.
-  ///
-  /// @param drawMs Milliseconds spent issuing immediate overlay draw-list commands.
-  void addImmediateOverlayDrawCost(double drawMs) {
-    lastFrameCostBreakdown_.overlay.drawMs += drawMs;
-  }
   /// Replace transient source-hover chrome elements.
   ///
   /// @param elements Elements to highlight as source-hover preview chrome.
   /// @return true if the hover preview changed.
   bool setSourceHoverElements(std::vector<svg::SVGElement> elements);
 
+  /// Update the transient locked-rejection flash to draw on the next overlay capture. The flash
+  /// fades as `SelectTool` ticks it; this should be pushed once per frame from the editor's
+  /// per-frame path with `selectTool.lockedRejectionFlash()`.
+  ///
+  /// @param flash Active flash (element + intensity), or nullopt when no element is being rejected.
+  void setLockedRejectionFlash(std::optional<SelectTool::LockedRejectionFlash> flash);
+
+  /// @return true when a locked-rejection flash is currently stored (still fading).
+  [[nodiscard]] bool hasLockedRejectionFlash() const {
+    return lockedRejectionFlash_.has_value() && lockedRejectionFlash_->intensity > 0.0f;
+  }
+
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
   /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
   /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
-  /// the user isn't marquee-dragging). The snapshot is drawn directly by \ref RenderPanePresenter
-  /// so selected chrome does not allocate, rasterize, snapshot, or upload an overlay texture.
+  /// the user isn't marquee-dragging). The snapshot is drawn directly by Donner's OverlayRenderer
+  /// straight onto the Geode framebuffer, so selected chrome does not allocate, rasterize,
+  /// snapshot, or upload an overlay texture.
   bool rasterizeOverlayForCurrentSelection(
-      EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
-      const std::optional<Box2d>& marqueeRectDoc,
+      EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
       std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
       std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt,
       std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,
@@ -193,6 +199,9 @@ private:
 
   std::vector<svg::SVGElement> lastOverlaySelectionVec_;
   std::vector<svg::SVGElement> sourceHoverElements_;
+  /// Active locked-rejection flash pushed by the editor each frame, drawn red on the next overlay
+  /// capture and fading toward zero intensity. nullopt when no element is being rejected.
+  std::optional<SelectTool::LockedRejectionFlash> lockedRejectionFlash_;
   std::vector<svg::SVGElement> lastOverlaySourceHoverVec_;
   Vector2i lastOverlayRasterSize_ = Vector2i::Zero();
   std::optional<Box2d> lastOverlayScreenRect_;

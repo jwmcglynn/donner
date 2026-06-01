@@ -45,15 +45,16 @@ namespace donner::editor {
 /// small GL textures. WebGPU builds keep backend texture snapshots alive and
 /// pass their texture views directly to ImGui, avoiding thumbnail readback.
 /// Construct and destroy on the presentation thread.
-class LayerInspectorPanel {
+class CompositorDebugPanel {
 public:
-  explicit LayerInspectorPanel(std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
-  ~LayerInspectorPanel();
+  explicit CompositorDebugPanel(
+      std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice = nullptr);
+  ~CompositorDebugPanel();
 
-  LayerInspectorPanel(const LayerInspectorPanel&) = delete;
-  LayerInspectorPanel& operator=(const LayerInspectorPanel&) = delete;
-  LayerInspectorPanel(LayerInspectorPanel&&) = delete;
-  LayerInspectorPanel& operator=(LayerInspectorPanel&&) = delete;
+  CompositorDebugPanel(const CompositorDebugPanel&) = delete;
+  CompositorDebugPanel& operator=(const CompositorDebugPanel&) = delete;
+  CompositorDebugPanel(CompositorDebugPanel&&) = delete;
+  CompositorDebugPanel& operator=(CompositorDebugPanel&&) = delete;
 
   /// Render the panel into the current ImGui window. Must be called
   /// inside an `ImGui::Begin(...) / End()` pair AND on the GL thread.

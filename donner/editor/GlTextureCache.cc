@@ -58,6 +58,36 @@ double MillisecondsSince(std::chrono::steady_clock::time_point start) {
       .count();
 }
 
+// Cheap content fingerprint for a thumbnail bitmap, used to decide whether a
+// per-row thumbnail texture must be re-uploaded. FNV-1a over the valid pixel
+// rows (honoring rowBytes) plus the dimensions. A collision only costs a missed
+// re-upload of a same-size thumbnail, acceptable for a preview cell.
+std::uint64_t ThumbnailBitmapFingerprint(const svg::RendererBitmap& bitmap) {
+  std::uint64_t hash = 1469598103934665603ull;
+  const auto mix = [&hash](std::uint64_t value) {
+    hash ^= value;
+    hash *= 1099511628211ull;
+  };
+  mix(static_cast<std::uint64_t>(bitmap.dimensions.x));
+  mix(static_cast<std::uint64_t>(bitmap.dimensions.y));
+  if (bitmap.empty() || bitmap.rowBytes == 0u || bitmap.dimensions.y <= 0) {
+    return hash;
+  }
+  const std::size_t rowValidBytes =
+      std::min<std::size_t>(bitmap.rowBytes, static_cast<std::size_t>(bitmap.dimensions.x) * 4u);
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    const std::size_t rowStart = static_cast<std::size_t>(y) * bitmap.rowBytes;
+    if (rowStart + rowValidBytes > bitmap.pixels.size()) {
+      break;
+    }
+    const std::uint8_t* row = bitmap.pixels.data() + rowStart;
+    for (std::size_t i = 0; i < rowValidBytes; ++i) {
+      mix(row[i]);
+    }
+  }
+  return hash;
+}
+
 }  // namespace
 
 #ifdef DONNER_EDITOR_WGPU
@@ -169,11 +199,13 @@ FrameCostBreakdown::CompositedUpload CostForCompositedPreviewUpload(
 
 GlTextureCache::~GlTextureCache() {
 #ifdef DONNER_EDITOR_WGPU
-  releaseImGuiTexture(overlayTexture_);
   for (const auto& [_, entry] : tileTextures_) {
     releaseImGuiTexture(entry.texture);
   }
   for (const auto& [_, entry] : overviewTileTextures_) {
+    releaseImGuiTexture(entry.texture);
+  }
+  for (const auto& [_, entry] : thumbnailTextures_) {
     releaseImGuiTexture(entry.texture);
   }
   for (const RetiredSnapshot& retired : pendingRetiredSnapshots_) {
@@ -185,9 +217,6 @@ GlTextureCache::~GlTextureCache() {
     }
   }
 #else
-  if (overlayTexture_ != 0) {
-    glDeleteTextures(1, &overlayTexture_);
-  }
   for (auto& [_, entry] : tileTextures_) {
     if (entry.texture != 0) {
       glDeleteTextures(1, &entry.texture);
@@ -198,125 +227,15 @@ GlTextureCache::~GlTextureCache() {
       glDeleteTextures(1, &entry.texture);
     }
   }
-#endif
-}
-
-void GlTextureCache::initialize() {
-#ifndef DONNER_EDITOR_WGPU
-  if (overlayTexture_ == 0) {
-    glGenTextures(1, &overlayTexture_);
-    InitializeTexture(overlayTexture_);
-  }
-#endif
-}
-
-void GlTextureCache::uploadOverlay(const svg::RendererBitmap& bitmap) {
-  ZoneScopedN("GlTextureCache::uploadOverlay");
-  const auto uploadStart = std::chrono::steady_clock::now();
-  overlayScreenRect_.reset();
-#ifdef DONNER_EDITOR_WGPU
-  RetiredSnapshotBatch retiredSnapshots;
-  const std::shared_ptr<WgpuUploadedTexture> reusableTexture =
-      overlayTextureSnapshot_ == nullptr ? overlayUploadedTexture_ : nullptr;
-  std::shared_ptr<WgpuUploadedTexture> uploadedTexture =
-      uploadBitmapToWgpu(bitmap, reusableTexture);
-  const bool reusedTexture = uploadedTexture != nullptr &&
-                             uploadedTexture == overlayUploadedTexture_ &&
-                             overlayTextureSnapshot_ == nullptr;
-  if (overlayTexture_ != 0 && !reusedTexture) {
-    retiredSnapshots.push_back(RetiredSnapshot{
-        .texture = overlayTexture_,
-        .snapshot = std::move(overlayTextureSnapshot_),
-        .uploadedTexture = std::move(overlayUploadedTexture_),
-    });
-  }
-  overlayTextureSnapshot_.reset();
-  overlayUploadedTexture_ = std::move(uploadedTexture);
-  overlayTexture_ = overlayUploadedTexture_ != nullptr
-                        ? TextureViewToImTextureId(overlayUploadedTexture_->view.get())
-                        : 0;
-  if (overlayTexture_ != 0) {
-    overlayWidth_ = bitmap.dimensions.x;
-    overlayHeight_ = bitmap.dimensions.y;
-    overlayAllocatedWidth_ = overlayUploadedTexture_->allocationDimensions.x;
-    overlayAllocatedHeight_ = overlayUploadedTexture_->allocationDimensions.y;
-    overlayUvBottomRight_ = TextureUvBottomRightForPayload(
-        bitmap.dimensions, overlayUploadedTexture_->allocationDimensions);
-  } else {
-    overlayWidth_ = 0;
-    overlayHeight_ = 0;
-    overlayAllocatedWidth_ = 0;
-    overlayAllocatedHeight_ = 0;
-    overlayUvBottomRight_ = Vector2d(1.0, 1.0);
-  }
-  retireSnapshots(std::move(retiredSnapshots));
-#else
-  UploadBitmap(overlayTexture_, bitmap, &overlayWidth_, &overlayHeight_, &overlayAllocatedWidth_,
-               &overlayAllocatedHeight_, &overlayUvBottomRight_);
-#endif
-  lastOverlayUploadCost_ = FrameCostBreakdown::Overlay{
-      .uploadMs = MillisecondsSince(uploadStart),
-      .payloadBytes = BitmapPayloadBytes(bitmap),
-      .canvasSize = Vector2i(overlayWidth_, overlayHeight_),
-  };
-}
-
-void GlTextureCache::uploadOverlayTexture(
-    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot) {
-  ZoneScopedN("GlTextureCache::uploadOverlayTexture");
-#ifdef DONNER_EDITOR_WGPU
-  const Vector2i inputDimensions =
-      textureSnapshot != nullptr ? textureSnapshot->dimensions() : Vector2i::Zero();
-#else
-  const Vector2i inputDimensions = Vector2i::Zero();
-#endif
-  const auto uploadStart = std::chrono::steady_clock::now();
-  overlayScreenRect_.reset();
-#ifdef DONNER_EDITOR_WGPU
-  RetiredSnapshotBatch retiredSnapshots;
-  const bool acquiredSnapshot =
-      textureSnapshot != nullptr && overlayTextureSnapshot_ != textureSnapshot;
-  if (overlayTexture_ != 0 &&
-      (overlayTextureSnapshot_ != textureSnapshot || overlayUploadedTexture_ != nullptr)) {
-    retiredSnapshots.push_back(RetiredSnapshot{
-        .texture = overlayTexture_,
-        .snapshot = std::move(overlayTextureSnapshot_),
-        .uploadedTexture = std::move(overlayUploadedTexture_),
-    });
-  }
-  overlayUploadedTexture_.reset();
-  overlayTextureSnapshot_ = std::move(textureSnapshot);
-  overlayTexture_ = ToImTextureId(overlayTextureSnapshot_.get());
-  if (overlayTextureSnapshot_ != nullptr && overlayTexture_ != 0) {
-    if (acquiredSnapshot) {
-      ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(overlayTexture_);
+  for (auto& [_, entry] : thumbnailTextures_) {
+    if (entry.texture != 0) {
+      glDeleteTextures(1, &entry.texture);
     }
-    const Vector2i dims = overlayTextureSnapshot_->dimensions();
-    overlayWidth_ = dims.x;
-    overlayHeight_ = dims.y;
-    overlayAllocatedWidth_ = dims.x;
-    overlayAllocatedHeight_ = dims.y;
-    overlayUvBottomRight_ = TextureUvBottomRightForPayload(dims, dims);
-  } else {
-    overlayTextureSnapshot_.reset();
-    overlayTexture_ = 0;
-    overlayWidth_ = 0;
-    overlayHeight_ = 0;
-    overlayAllocatedWidth_ = 0;
-    overlayAllocatedHeight_ = 0;
-    overlayUvBottomRight_ = Vector2d(1.0, 1.0);
   }
-  retireSnapshots(std::move(retiredSnapshots));
-#else
-  (void)textureSnapshot;
-  clearOverlay();
 #endif
-  lastOverlayUploadCost_ = FrameCostBreakdown::Overlay{
-      .uploadMs = MillisecondsSince(uploadStart),
-      .payloadBytes = TexturePayloadBytes(inputDimensions),
-      .canvasSize = Vector2i(overlayWidth_, overlayHeight_),
-  };
 }
+
+void GlTextureCache::initialize() {}
 
 void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& preview,
                                       std::optional<EditorRasterViewport> rasterViewport) {
@@ -744,35 +663,6 @@ void GlTextureCache::advancePresentationFrame() {
 #endif
 }
 
-void GlTextureCache::clearOverlay() {
-  const auto uploadStart = std::chrono::steady_clock::now();
-  overlayScreenRect_.reset();
-#ifdef DONNER_EDITOR_WGPU
-  RetiredSnapshotBatch retiredSnapshots;
-  if (overlayTexture_ != 0) {
-    retiredSnapshots.push_back(RetiredSnapshot{
-        .texture = overlayTexture_,
-        .snapshot = std::move(overlayTextureSnapshot_),
-        .uploadedTexture = std::move(overlayUploadedTexture_),
-    });
-  }
-  overlayTextureSnapshot_.reset();
-  overlayUploadedTexture_.reset();
-  retireSnapshots(std::move(retiredSnapshots));
-#else
-  overlayTextureSnapshot_.reset();
-#endif
-  overlayTexture_ = 0;
-  overlayWidth_ = 0;
-  overlayHeight_ = 0;
-  overlayAllocatedWidth_ = 0;
-  overlayAllocatedHeight_ = 0;
-  overlayUvBottomRight_ = Vector2d(1.0, 1.0);
-  lastOverlayUploadCost_ = FrameCostBreakdown::Overlay{
-      .uploadMs = MillisecondsSince(uploadStart),
-  };
-}
-
 void GlTextureCache::resetComposited() {
 #ifdef DONNER_EDITOR_WGPU
   RetiredSnapshotBatch retiredSnapshots;
@@ -819,6 +709,99 @@ void GlTextureCache::resetComposited() {
   lastCompositedUploadCost_ = FrameCostBreakdown::CompositedUpload{};
 }
 
+ImTextureID GlTextureCache::uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap) {
+  ZoneScopedN("GlTextureCache::uploadThumbnail");
+  if (bitmap.empty()) {
+    return 0;
+  }
+
+  // Reuse `CachedTextureEntry::uploadedGeneration` as the cached content
+  // fingerprint and `width`/`height` as the cached payload dimensions so an
+  // unchanged thumbnail short-circuits without touching GL/WGPU.
+  const std::uint64_t fingerprint = ThumbnailBitmapFingerprint(bitmap);
+  CachedTextureEntry& entry = thumbnailTextures_[key];
+  const bool unchanged = entry.texture != 0 && entry.uploadedGeneration == fingerprint &&
+                         entry.width == bitmap.dimensions.x && entry.height == bitmap.dimensions.y;
+  if (unchanged) {
+    return ToImTextureId(entry.texture);
+  }
+
+#ifdef DONNER_EDITOR_WGPU
+  const std::shared_ptr<WgpuUploadedTexture> reusableTexture =
+      entry.textureSnapshot == nullptr ? entry.uploadedTexture : nullptr;
+  std::shared_ptr<WgpuUploadedTexture> uploadedTexture =
+      uploadBitmapToWgpu(bitmap, reusableTexture);
+  if (uploadedTexture == nullptr) {
+    return ToImTextureId(entry.texture);
+  }
+  const NativeTextureHandle textureId = TextureViewToImTextureId(uploadedTexture->view.get());
+  const bool reusedTexture = textureId == entry.texture &&
+                             uploadedTexture == entry.uploadedTexture &&
+                             entry.textureSnapshot == nullptr;
+  if (entry.texture != 0 && !reusedTexture) {
+    RetiredSnapshotBatch retiredSnapshots;
+    retiredSnapshots.push_back(RetiredSnapshot{
+        .texture = entry.texture,
+        .snapshot = std::move(entry.textureSnapshot),
+        .uploadedTexture = std::move(entry.uploadedTexture),
+    });
+    retireSnapshots(std::move(retiredSnapshots));
+  }
+  entry.textureSnapshot.reset();
+  entry.uploadedTexture = std::move(uploadedTexture);
+  entry.texture = textureId;
+  entry.width = bitmap.dimensions.x;
+  entry.height = bitmap.dimensions.y;
+  entry.allocatedWidth = entry.uploadedTexture->allocationDimensions.x;
+  entry.allocatedHeight = entry.uploadedTexture->allocationDimensions.y;
+  entry.uvBottomRight = TextureUvBottomRightForPayload(bitmap.dimensions,
+                                                       entry.uploadedTexture->allocationDimensions);
+#else
+  if (entry.texture == 0) {
+    glGenTextures(1, &entry.texture);
+    InitializeTexture(entry.texture);
+  }
+  UploadBitmap(entry.texture, bitmap, &entry.width, &entry.height, &entry.allocatedWidth,
+               &entry.allocatedHeight, &entry.uvBottomRight);
+#endif
+  entry.identity = CompositedTileTextureIdentity{};
+  entry.uploadedGeneration = fingerprint;
+  return ToImTextureId(entry.texture);
+}
+
+void GlTextureCache::retainThumbnailsOnly(const std::vector<std::uint64_t>& liveKeys) {
+  if (thumbnailTextures_.empty()) {
+    return;
+  }
+  const std::unordered_set<std::uint64_t> liveKeySet(liveKeys.begin(), liveKeys.end());
+#ifdef DONNER_EDITOR_WGPU
+  RetiredSnapshotBatch retiredSnapshots;
+#endif
+  for (auto it = thumbnailTextures_.begin(); it != thumbnailTextures_.end();) {
+    if (liveKeySet.find(it->first) == liveKeySet.end()) {
+#ifndef DONNER_EDITOR_WGPU
+      if (it->second.texture != 0) {
+        glDeleteTextures(1, &it->second.texture);
+      }
+#else
+      if (it->second.texture != 0) {
+        retiredSnapshots.push_back(RetiredSnapshot{
+            .texture = it->second.texture,
+            .snapshot = std::move(it->second.textureSnapshot),
+            .uploadedTexture = std::move(it->second.uploadedTexture),
+        });
+      }
+#endif
+      it = thumbnailTextures_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+#ifdef DONNER_EDITOR_WGPU
+  retireSnapshots(std::move(retiredSnapshots));
+#endif
+}
+
 PresentationResourceStats GlTextureCache::presentationResourceStats() const {
   PresentationResourceStats stats;
 
@@ -847,22 +830,6 @@ PresentationResourceStats GlTextureCache::presentationResourceStats() const {
     }
     return allocationBytes(Vector2i(entry.width, entry.height));
   };
-
-  if (overlayTexture_ != 0) {
-#ifdef DONNER_EDITOR_WGPU
-    if (overlayUploadedTexture_ != nullptr) {
-      stats.overlayBytes = allocationBytes(overlayUploadedTexture_->allocationDimensions);
-    } else
-#endif
-        if (overlayTextureSnapshot_ != nullptr) {
-      stats.overlayBytes = allocationBytes(overlayTextureSnapshot_->dimensions());
-    } else if (overlayAllocatedWidth_ > 0 && overlayAllocatedHeight_ > 0) {
-      stats.overlayBytes =
-          allocationBytes(Vector2i(overlayAllocatedWidth_, overlayAllocatedHeight_));
-    } else {
-      stats.overlayBytes = allocationBytes(Vector2i(overlayWidth_, overlayHeight_));
-    }
-  }
 
   stats.activeTileTextures = static_cast<int>(tileTextures_.size());
   for (const auto& [_, entry] : tileTextures_) {
@@ -928,19 +895,6 @@ PresentationCoverageDiagnostics GlTextureCache::coverageDiagnostics() const {
       .activeOutputSizePx = activeOutputSizePx_,
       .overviewOutputSizePx = overviewOutputSizePx_,
   };
-}
-
-ImTextureID GlTextureCache::overlayTexture() const {
-  return ToImTextureId(overlayTexture_);
-}
-
-void GlTextureCache::setOverlayScreenRect(std::optional<Box2d> screenRect) {
-  if (overlayWidth_ <= 0 || overlayHeight_ <= 0) {
-    overlayScreenRect_.reset();
-    return;
-  }
-
-  overlayScreenRect_ = std::move(screenRect);
 }
 
 ImTextureID GlTextureCache::ToImTextureId(NativeTextureHandle texture) {

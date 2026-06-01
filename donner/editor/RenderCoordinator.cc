@@ -327,6 +327,7 @@ void RenderCoordinator::resetForLoadedDocument() {
   displayedDocVersion_ = 0;
   lastOverlaySelectionVec_.clear();
   sourceHoverElements_.clear();
+  lockedRejectionFlash_.reset();
   lastOverlaySourceHoverVec_.clear();
   immediateOverlaySnapshot_.reset();
   lastOverlayRasterSize_ = Vector2i::Zero();
@@ -358,6 +359,11 @@ bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elem
   return true;
 }
 
+void RenderCoordinator::setLockedRejectionFlash(
+    std::optional<SelectTool::LockedRejectionFlash> flash) {
+  lockedRejectionFlash_ = std::move(flash);
+}
+
 void RenderCoordinator::refreshSelectionBoundsCache(EditorApp& app) {
   if (!app.hasDocument()) {
     selectionBoundsCache_ = SelectionBoundsCache{};
@@ -374,8 +380,7 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
 }
 
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
-    EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
-    const std::optional<Box2d>& marqueeRectDoc,
+    EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
     std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
     std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview,
     std::optional<SelectionChromeDetail> selectionDetail,
@@ -383,7 +388,6 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     immediateOverlaySnapshot_.reset();
-    textures.clearOverlay();
     return false;
   }
 
@@ -396,9 +400,13 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const auto& overlaySelection = app.selectedElements();
   const std::optional<SelectTool::ActiveDragPreview> effectiveLiveDragPreview =
       liveDragPreview.has_value() ? liveDragPreview : representedDragPreview;
+  // An active locked-rejection flash fades every frame, so it must force a fresh overlay capture
+  // (defeating the "geometry unchanged → reuse cached overlay" fast path below) until it expires.
+  const bool lockedFlashActive =
+      lockedRejectionFlash_.has_value() && lockedRejectionFlash_->intensity > 0.0f;
   const bool overlayInteractionActive =
       effectiveLiveDragPreview.has_value() || representedDragPreview.has_value() ||
-      marqueeRectDoc.has_value() || activeBoundsPreview.has_value();
+      marqueeRectDoc.has_value() || activeBoundsPreview.has_value() || lockedFlashActive;
   const bool overlayGeometryDiffers =
       overlaySelection != lastOverlaySelectionVec_ ||
       sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
@@ -422,8 +430,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
 
   if (!overlayInteractionActive && !overlayGeometryDiffers &&
       resolvedSelectionDetail == lastOverlaySelectionDetail_ &&
-      (immediateOverlaySnapshot_.has_value() ||
-       (textures.overlayWidth() > 0 && textures.overlayHeight() > 0))) {
+      immediateOverlaySnapshot_.has_value()) {
     FrameCostBreakdown::Overlay overlayCost;
     overlayCost.canvasSize = currentOverlayRasterSize;
     overlayCost.selectedElementCount = static_cast<int>(overlaySelection.size());
@@ -462,11 +469,18 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   // outlines. `selectionBoundsCache_` is maintained only for main-loop
   // selection-change detection and does not gate overlay geometry.
   const auto captureStart = std::chrono::steady_clock::now();
+  std::optional<LockedRejectionFlashInput> lockedFlashInput;
+  if (lockedFlashActive) {
+    lockedFlashInput = LockedRejectionFlashInput{
+        .element = lockedRejectionFlash_->element,
+        .intensity = lockedRejectionFlash_->intensity,
+    };
+  }
   const SelectionChromeSnapshot chromeSnapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(overlaySelection), marqueeRectDoc,
       currentOverlayCanvasFromDocument, chromeBoundsPreview,
       std::span<const svg::SVGElement>(sourceHoverElements_), currentOverlayCullRectDoc,
-      resolvedSelectionDetail, representedDocumentFromLiveDocument);
+      resolvedSelectionDetail, representedDocumentFromLiveDocument, lockedFlashInput);
   overlayCost.captureMs = MillisecondsSince(captureStart);
   overlayCost.pathCount = static_cast<int>(chromeSnapshot.paths.size());
   overlayCost.hoverPathCount = static_cast<int>(chromeSnapshot.hoverPaths.size());
@@ -474,8 +488,24 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.hoverAabbCount = static_cast<int>(chromeSnapshot.hoverAabbsDoc.size());
   overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleBoxesDoc.size());
   overlayCost.hasMarquee = chromeSnapshot.marqueeDoc.has_value();
+  // Report the overlay payload this frame so the metric is non-zero whenever the
+  // overlay was re-rasterized with content — independent of presentation
+  // backend. The TinySkia path uploads the overlay raster texture (its
+  // `payloadBytes` is that texture's bytes); the Geode/WGPU path renders the
+  // snapshot direct to the framebuffer with no upload, so without this the
+  // metric would read 0 even though the overlay was rebuilt every frame
+  // (gl_rnr GeodeDragZoomRerasterizes...). Mirror the upload metric: the overlay
+  // raster bytes, gated on the snapshot actually having something to draw.
+  const bool overlayHasContent =
+      !chromeSnapshot.paths.empty() || !chromeSnapshot.hoverPaths.empty() ||
+      !chromeSnapshot.handleBoxesDoc.empty() || !chromeSnapshot.aabbsDoc.empty() ||
+      chromeSnapshot.marqueeDoc.has_value() || chromeSnapshot.orientedBoundsDoc.has_value();
+  overlayCost.payloadBytes =
+      overlayHasContent
+          ? static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.x)) *
+                static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.y)) * 4u
+          : 0u;
   immediateOverlaySnapshot_ = chromeSnapshot;
-  textures.clearOverlay();
 
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlaySourceHoverVec_ = sourceHoverElements_;
@@ -505,7 +535,7 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
   const std::optional<SelectTool::ActiveDragPreview> liveDragPreview =
       liveActiveDragPreview.has_value() ? liveActiveDragPreview : activeDragPreview;
   return rasterizeOverlayForCurrentSelection(
-      app, viewport, textures, selectTool.marqueeRect(), representedDragPreview,
+      app, viewport, selectTool.marqueeRect(), representedDragPreview,
       selectTool.activeTransformBoundsPreview(), std::nullopt, liveDragPreview);
 }
 
@@ -586,8 +616,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     // chrome-refresh path. Composited drag lands here; SelectTool isn't
     // reachable, so we reuse whatever the most recent main-thread
     // rasterize baked in.
-    rasterizeOverlayForCurrentSelection(app, viewport, textures, lastOverlayMarqueeRectDoc_,
-                                        std::nullopt, std::nullopt, lastOverlaySelectionDetail_);
+    rasterizeOverlayForCurrentSelection(app, viewport, lastOverlayMarqueeRectDoc_, std::nullopt,
+                                        std::nullopt, lastOverlaySelectionDetail_);
     compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
   promoteSelectionBoundsIfReady();
@@ -757,7 +787,7 @@ std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp
   }
 
   for (const svg::SVGElement& selected : app.selectedElements()) {
-    if (!IsGraphicsElement(selected) || IsDisplayNone(selected)) {
+    if (!selected.isa<svg::SVGGraphicsElement>() || IsDisplayNone(selected)) {
       continue;
     }
 

@@ -164,19 +164,17 @@ EDITOR_BREAKDOWN: tuple[FeatureDefinition, ...] = (
     FeatureDefinition(
         label="Document sync and undo",
         description=(
-            "SVG document state, source sync, attribute writeback, change "
-            "classification, and undo"
+            "SVG document state, source sync, attribute writeback, "
+            "incremental reparse, and undo"
         ),
         patterns=(
             "donner/editor/AsyncSVGDocument.*",
             "donner/editor/AttributeWriteback.*",
-            "donner/editor/ChangeClassifier.*",
             "donner/editor/DocumentSyncController.*",
             "donner/editor/SourceSync.*",
             "donner/editor/UndoTimeline.*",
             "donner/editor/tests/AsyncSVGDocument_tests.cc",
             "donner/editor/tests/AttributeWriteback_tests.cc",
-            "donner/editor/tests/ChangeClassifier_tests.cc",
             "donner/editor/tests/DocumentSyncController_tests.cc",
             "donner/editor/tests/EditorSync_tests.cc",
             "donner/editor/tests/UndoTimeline_tests.cc",

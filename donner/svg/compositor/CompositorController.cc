@@ -252,7 +252,9 @@ struct StaticSpanCostEstimate {
   int drawOps = 0;
   int pathVerbs = 0;
   bool hasExpensiveEffect = false;
-  bool hasGradientPaint = false;
+  /// True when any draw in the span fills with a gradient, whose rasterize cost
+  /// scales with covered area. Feeds the area term of the immediate estimate.
+  bool usesAreaCostlyPaint = false;
 };
 
 struct StaticSpanPresentationCost {
@@ -270,18 +272,29 @@ bool PaintUsesExpensiveResource(const components::ResolvedPaintServer& paint) {
     return true;
   }
 
-  // Gradients are still a direct path paint in both renderer backends. They may
-  // be slower than solids, but the immediate-span timing heuristic can measure
-  // and demote them. Pattern paints and unresolved/unknown references may
-  // instantiate subtrees or need broader context, so keep those cached.
+  // Gradients are still a direct path paint in both renderer backends, so they
+  // are not hard-blocked from immediate presentation. Their per-pixel cost is
+  // instead folded into the immediate rasterize-cost estimate as an area term
+  // (`PaintIsAreaCostly` + `EstimateStaticSpanRasterizeMs`), so a small gradient
+  // span can go immediate while a large one stays cached. Pattern paints and
+  // unresolved/unknown references may instantiate subtrees or need broader
+  // context, so keep those fully cached.
   return ref->subtreeInfo.has_value() ||
          ref->reference.handle.try_get<components::ComputedGradientComponent>() == nullptr;
 }
 
-bool PaintUsesGradientResource(const components::ResolvedPaintServer& paint) {
+// True when @p paint is a resolved gradient — a fill whose rasterize cost scales
+// with covered pixel area (the shader evaluates per pixel) rather than with the
+// span's draw-op / path-verb counts. Used to add an area term to the immediate
+// rasterize estimate so a large gradient stays cached while a small one does not.
+// Patterns / unresolved references are already handled by
+// `PaintUsesExpensiveResource` (they force a cached tile outright).
+bool PaintIsAreaCostly(const components::ResolvedPaintServer& paint) {
   const auto* ref = std::get_if<components::PaintResolvedReference>(&paint);
-  return ref != nullptr && ref->reference.valid() &&
-         ref->reference.handle.try_get<components::ComputedGradientComponent>() != nullptr;
+  if (ref == nullptr || !ref->reference.valid() || ref->subtreeInfo.has_value()) {
+    return false;
+  }
+  return ref->reference.handle.try_get<components::ComputedGradientComponent>() != nullptr;
 }
 
 bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
@@ -322,9 +335,8 @@ void AccumulateStaticSpanCost(Registry& registry, Entity entity, StaticSpanCostE
       PaintUsesExpensiveResource(instance->resolvedStroke)) {
     estimate->hasExpensiveEffect = true;
   }
-  if (PaintUsesGradientResource(instance->resolvedFill) ||
-      PaintUsesGradientResource(instance->resolvedStroke)) {
-    estimate->hasGradientPaint = true;
+  if (PaintIsAreaCostly(instance->resolvedFill) || PaintIsAreaCostly(instance->resolvedStroke)) {
+    estimate->usesAreaCostlyPaint = true;
   }
 
   EntityHandle dataHandle = instance->dataHandle(registry);
@@ -420,8 +432,68 @@ bool IsCheapDirectGeometry(const StaticSpanCostEstimate& cost) {
          cost.pathVerbs <= kCheapDirectPathVerbs;
 }
 
+// Deterministic, forward-looking estimate (milliseconds) of how long it takes to
+// re-rasterize a non-promoted span (or cheap promoted layer) from its geometry.
+//
+// This replaces the previous *measured* per-render elapsed sample in the
+// immediate-vs-cached promotion decision. Measuring the wall clock and then
+// promoting if it happened to be fast made the decision flap with machine load:
+// the same span rendered immediate on an idle machine and cached under a busy
+// one, so editor presentation — and any test that asserted on it — was
+// runner-sensitive. Predicting the cost from the span's geometry instead makes
+// the choice identical on every machine.
+//
+// The model is dispatch-overhead-dominated for small spans (offscreen creation +
+// driver setup) plus a per-draw-op and per-path-verb term. Pixel-fill *area* is
+// intentionally excluded: fill is cheap on both backends and its cost belongs to
+// the cache/retained-memory side of the tradeoff (`cacheOverheadCost`), not the
+// redraw side. The constants are a first-order fit; the planner still records the
+// real `measuredRasterizeMs` for every span so the model can be recalibrated
+// against observed timings without reintroducing it into the decision.
+double EstimateStaticSpanRasterizeMs(int estimatedDrawOps, int estimatedPathVerbs,
+                                     bool usesAreaCostlyPaint, double coveredAreaPixels) {
+  constexpr double kBaseDispatchMs = 0.25;
+  constexpr double kMsPerDrawOp = 0.05;
+  constexpr double kMsPerPathVerb = 0.004;
+  double ms = kBaseDispatchMs + static_cast<double>(std::max(0, estimatedDrawOps)) * kMsPerDrawOp +
+              static_cast<double>(std::max(0, estimatedPathVerbs)) * kMsPerPathVerb;
+  if (usesAreaCostlyPaint) {
+    // A gradient fill evaluates its shader at every covered pixel, so unlike a
+    // solid fill its cost scales with area. Charge per covered kilopixel so a
+    // small gradient span (a letter accent) can still go immediate while a large
+    // one (a full-width cloud band) estimates over budget and stays cached —
+    // which is also what keeps a dragged gradient layer on the cached
+    // texture-transform path instead of re-rasterizing every frame.
+    // Calibrated against real splash gradient renders: the DONNER logo span
+    // (~98 kpx) rasterizes in ~1.9 ms and must stay under the ~2.08 ms budget
+    // (immediate), while #Blue_center_burst (~457 kpx) takes ~8 ms and must
+    // exceed it (cached). That brackets the per-kilopixel rate to ~0.0025-0.0083;
+    // 0.005 sits in the middle. Gradient cost isn't perfectly area-linear, but the
+    // immediate-vs-cached decision only needs the right side of the budget, and
+    // since the #633 paint-leak fix a misclassification costs at most a little
+    // perf, never pixels.
+    constexpr double kMsPerAreaCostlyKilopixel = 0.005;
+    ms += std::max(0.0, coveredAreaPixels) / 1000.0 * kMsPerAreaCostlyKilopixel;
+  }
+  return ms;
+}
+
 bool IsStaticSpanImmediateSafe(const CompositorController::StaticSpanPlan& spanPlan) {
   return IsImmediateSafe(spanPlan.visible, spanPlan.hasExpensiveEffect, spanPlan.estimatedDrawOps);
+}
+
+bool IsBoundedMultiDrawStaticSpan(const CompositorController::StaticSpanPlan& spanPlan) {
+  constexpr uint64_t kDirectStaticSpanMinBytes = 512u * 1024u;
+  constexpr uint64_t kDirectStaticSpanMaxBytes = 720u * 1024u;
+  return IsStaticSpanImmediateSafe(spanPlan) && spanPlan.estimatedDrawOps > 1 &&
+         spanPlan.estimatedRetainedBytes >= kDirectStaticSpanMinBytes &&
+         spanPlan.estimatedRetainedBytes <= kDirectStaticSpanMaxBytes;
+}
+
+bool ShouldDirectComposeLayer(const CompositorLayer& layer) {
+  return layer.isImmediate() ||
+         (layer.fallbackReasons() &
+          (FallbackReason::ExternalPaint | FallbackReason::IsolatedLayer)) != FallbackReason::None;
 }
 
 double ImmediateStaticSpanBudgetMs() {
@@ -823,6 +895,15 @@ bool HasPublicTileBitmap(const RendererBitmap& bitmap) {
   return !bitmap.empty() && !IsTransparentPlaceholderBitmap(bitmap);
 }
 
+// Returns true when two bitmaps are byte-for-byte identical (same format,
+// dimensions, stride, and pixel bytes). Used to detect a no-op re-rasterize
+// of a static segment so its tile generation — the editor's GL-texture-cache
+// invalidation key — isn't advanced when nothing actually changed.
+bool BitmapPixelsEqual(const RendererBitmap& a, const RendererBitmap& b) {
+  return a.dimensions == b.dimensions && a.rowBytes == b.rowBytes && a.alphaType == b.alphaType &&
+         a.pixels == b.pixels;
+}
+
 Entity DataEntityForPaintEntity(const Registry& registry, Entity entity) {
   if (const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity)) {
     return instance->dataEntity;
@@ -1085,27 +1166,23 @@ bool CompositorController::hasSplitStaticLayers() const {
   // at canvas scale — visible to the operator as "fast path counter
   // bumps but framerate stays low, worse at higher zoom". Count only
   // entries NOT pending demotion.
-  uint32_t activeDragHints = 0;
-  Entity activeDragCandidate = entt::null;
+  // Split-static presentation is a SINGLE-drag-target optimization: the editor
+  // blits exactly one promoted layer over the static remainder. It applies
+  // only when there is exactly one live (non-pending-demote) promoted hint.
+  // Count all live hints first — do NOT early-return on the first ActiveDrag
+  // hint, or two simultaneously-promoted layers would both look like a split
+  // when only a single drag target is allowed. Pinned by
+  // `MultiplePromotedLayersDoNotBuildSplitStaticLayers` (>=2 promoted => false)
+  // and `M9PendingDemoteKeepsHasSplitStaticLayersTrue` (sibling pending-demote
+  // is skipped, leaving one live hint => true).
   uint32_t liveHints = 0;
   Entity liveCandidate = entt::null;
   for (const auto& [hintEntity, hint] : activeHints_) {
     if (pendingDemotions_.contains(hintEntity)) {
       continue;
     }
-    if (hint.interactionKind() == InteractionHint::ActiveDrag) {
-      ++activeDragHints;
-      activeDragCandidate = hintEntity;
-    }
     ++liveHints;
     liveCandidate = hintEntity;
-  }
-  if (activeDragHints > 0) {
-    if (activeDragHints != 1 || liveHints != 1) {
-      return false;
-    }
-    const CompositorLayer* layer = findLayer(activeDragCandidate);
-    return layer != nullptr && layer->hasRenderablePayload();
   }
   if (liveHints != 1) {
     return false;
@@ -1586,15 +1663,20 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
 
       const bool isSubtree =
           matchedLayer->firstEntity() != entity || matchedLayer->lastEntity() != entity;
-      // Subtree layers require a pure-translation delta: only then can we
-      // cheaply propagate the same offset to descendant RICs without
-      // walking the layout system. Non-translation subtree mutations
-      // (scale, rotate, transform-list change) stay on the slow path.
-      // Single-entity layers can tolerate non-translation deltas via a
-      // targeted re-rasterize later in `renderFrame`.
-      if (isSubtree && !bitmapEntityFromEntity.isTranslation()) {
-        return false;
-      }
+      // Both single-entity AND subtree layers (e.g. a filter group like
+      // `#Lighting_glow_dark`) carry a non-translation drag delta in
+      // `canvasFromBitmap` and reuse their cached bitmap — the cached pixels
+      // (the whole filtered result, for a filter group) are transformed as a
+      // live quad in lockstep with the overlay. Re-rendering a filter every
+      // rotate/scale frame is exactly the per-frame cost that made filtered
+      // elements glitchy (#6/#7). For a pure-translation delta the apply phase
+      // additionally propagates the offset to descendant RICs cheaply; a
+      // non-translation delta skips that propagation (the descendant RICs
+      // re-sync on settle), and any independently-promoted descendant layer in
+      // the subtree gets its own affine compose offset via the descendant loop
+      // below. The bitmap is a soft preview during the gesture and re-rasterizes
+      // crisp once the drag settles. Pinned by
+      // `FilterGroupRotationDragReusesCachedBitmapForLockstep`.
 
       resolutions.push_back(FastPathResolution{
           .entity = entity,
@@ -1698,25 +1780,27 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
             res.newWorldFromEntity * instance.worldFromEntityTransform.inverse();
         instance.worldFromEntityTransform = res.newWorldFromEntity;
 
-        if (res.bitmapEntityFromEntity.isTranslation()) {
-          // Bitmap-reuse fast path: the delta between the current DOM
-          // transform and the bitmap's rasterize-time transform is a
-          // pure translation, so reuse the bitmap by updating
-          // `canvasFromBitmap_` instead of re-rasterizing. Every
-          // mouse-move flips the entity's transform attribute, but the
-          // compositor just writes a ~single-matrix compose offset
-          // rather than going back to the renderer.
-          res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
-          if (res.isSubtree) {
-            propagateFastPathTranslationToSubtree(registry, res.entity, worldFromPreviousWorld);
-          }
-        } else {
-          // Single-entity layer with non-translation delta (scale,
-          // rotate, etc.). Fall through to `consumeDirtyFlags` + the
-          // per-layer re-rasterize — correctness over optimization
-          // since the single entity has no descendants to worry about.
-          res.layer->markDirty();
-          unhandledDirtyEntities.push_back(res.entity);
+        // Bitmap-reuse fast path: reuse the cached bitmap by updating
+        // `canvasFromBitmap_` instead of re-rasterizing. Every mouse-move flips
+        // the entity's transform attribute, but the compositor just writes a
+        // single compose matrix rather than going back to the renderer, so the
+        // presentation transforms the cached pixels as a live quad that tracks
+        // the drag in lockstep with the overlay — no async-worker round trip.
+        //
+        // This applies to BOTH a pure-translation delta (the bitmap slides,
+        // pixel-exact) AND a single-entity affine delta (rotate/scale — the
+        // bitmap is transformed as a quad, a soft resample during the gesture
+        // that re-rasterizes crisp once the drag settles / the entity leaves
+        // ActiveDrag). Re-rasterizing the affine delta every frame instead
+        // baked the rotation with `canvasFromBitmap ~= identity`, dropping the
+        // shape off the live-tracking path so it lagged the overlay (#6/#7).
+        // Subtree layers with a non-translation delta never reach here — they
+        // were disqualified in `appendLayerResolution` — so the only
+        // non-translation case here is a single entity with no descendants to
+        // keep consistent.
+        res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
+        if (res.isSubtree && res.bitmapEntityFromEntity.isTranslation()) {
+          propagateFastPathTranslationToSubtree(registry, res.entity, worldFromPreviousWorld);
         }
       }
       // Clear the dirty flags ourselves since we skipped prepare. Tell
@@ -1816,6 +1900,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       ZoneScopedN("Compositor::driver.draw (first-frame)");
       driver.draw(document(), viewport, surfaceFromCanvas);
     }
+    mainRendererHasCachedFrame_ = true;
     // `driver.draw` runs preparation for the first frame. Defensively clear
     // the rebuild flag so the eager-warmed compositor caches survive the next
     // `renderFrame`.
@@ -2090,10 +2175,37 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   {
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
     for (auto& layer : layers_) {
-      // Immediate promoted layers still keep an internal payload so transform-only drags can reuse
-      // it through `canvasFromBitmap`; the editor-facing snapshot decides whether to retain or
-      // transiently upload that payload.
-      if (layer.isDirty() || !layer.hasRenderablePayload() || rootDirty_) {
+      // An immediate (direct-render) layer normally re-rasterizes every frame.
+      // But on a drag frame the layer's pixel content is unchanged — only its
+      // compose transform drifted, which the fast path above already encoded as
+      // a non-identity `canvasFromBitmap` against the still-valid rasterize-time
+      // stamp. Re-rasterizing such a layer here would call `setBitmap`, which
+      // resets `canvasFromBitmap_` to identity (clobbering the just-computed
+      // compose offset) and bumps the texture generation (defeating bitmap
+      // reuse on the editor's GL upload path).
+      //
+      // Reuse the cached bitmap and keep the compose offset whenever the layer
+      // is clean and still has a valid rasterize-time stamp — regardless of
+      // whether `canvasFromBitmap` is identity (settled / re-promote within the
+      // M9 hysteresis window), a pure translation (the bitmap slides,
+      // pixel-exact), or a single-entity affine (rotate/scale — the bitmap is
+      // transformed as a live quad, a soft preview that re-rasterizes crisp once
+      // the drag settles). `isDirty()` (consumed above) is the genuine
+      // content-change signal that forces a re-raster; the FORM of
+      // `canvasFromBitmap` must not. The previous `isTranslation()` guard
+      // re-rasterized every rotate/scale frame, which reset `canvasFromBitmap`
+      // to identity and dropped the shape off the live-tracking path so it
+      // lagged the overlay (#6/#7). See compositor
+      // `LayerComposeOffsetTracksDomTranslationDelta`,
+      // `RotationDragCarriesAffineInCanvasFromBitmapForLockstep`, and
+      // `M9RepromoteSameEntityCancelsPendingDemote`.
+      const bool immediateDragReuse = layer.isImmediate() && !layer.isDirty() &&
+                                      layer.hasRenderablePayload() &&
+                                      layer.bitmapEntityFromWorldTransform().has_value();
+      const bool needsRaster =
+          (layer.isDirty() || layer.isImmediate() || !layer.hasRenderablePayload() || rootDirty_) &&
+          !immediateDragReuse;
+      if (needsRaster) {
         // §M4: bail between layer rasterizes. The remaining dirty
         // layers keep their `isDirty()` flag set, so the next
         // `renderFrame` finishes them. Returns directly out of
@@ -2303,33 +2415,22 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
                                    !previousImmediatePlan.staticHeuristicImmediate;
 
   Registry& registry = document().registry();
-  const StaticSpanCostEstimate cost =
-      EstimateEntityRangeCost(registry, layer.firstEntity(), layer.lastEntity());
-  LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
+  const LayerRasterGeometry geometry = ComputeLayerRasterGeometry(
       renderer(), registry, layer.firstEntity(), layer.lastEntity(), viewport, surfaceFromCanvas);
-  if (!surfaceFromCanvas.isIdentity() &&
-      ((layer.fallbackReasons() & FallbackReason::Filter) != FallbackReason::None ||
-       cost.hasExpensiveEffect)) {
-    // TinySkia effect subregion clipping is defined in the output pixel frame. Cropping an
-    // effectful layer range and then applying a non-identity editor raster viewport transform can
-    // produce invalid subregion clears inside the backend. Keep identity-canvas renders tight, but
-    // use the full raster viewport for high-zoom/panned editor captures.
-    geometry = LayerRasterGeometry{
-        .viewport = viewport,
-        .surfaceFromCanvas = surfaceFromCanvas,
-    };
-  }
   ImmediateLayerPlan immediatePlan;
   immediatePlan.visible = geometry.boundsCanvas.has_value();
   if (geometry.boundsCanvas.has_value()) {
     immediatePlan.boundsCanvas = *geometry.boundsCanvas;
   }
+  const StaticSpanCostEstimate cost =
+      EstimateEntityRangeCost(registry, layer.firstEntity(), layer.lastEntity());
   const FallbackReason immediateBlockingFallbacks =
       layer.fallbackReasons() &
       (FallbackReason::BlendMode | FallbackReason::Filter | FallbackReason::ClipPath |
        FallbackReason::Mask | FallbackReason::Markers);
   immediatePlan.estimatedDrawOps = cost.drawOps;
   immediatePlan.estimatedPathVerbs = cost.pathVerbs;
+  immediatePlan.estimatedUsesAreaCostlyPaint = cost.usesAreaCostlyPaint;
   immediatePlan.hasExpensiveEffect =
       cost.hasExpensiveEffect || immediateBlockingFallbacks != FallbackReason::None;
   if (immediatePlan.visible) {
@@ -2396,6 +2497,13 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   const double elapsedMs = static_cast<double>(elapsedUs) / 1000.0;
   layer.setLastRasterizeMs(elapsedMs);
   immediatePlan.measuredRasterizeMs = elapsedMs;
+  // Deterministic geometry estimate drives the decision; measured time above is
+  // telemetry only. See `EstimateStaticSpanRasterizeMs`.
+  const double estimatedRasterizeMs = EstimateStaticSpanRasterizeMs(
+      immediatePlan.estimatedDrawOps, immediatePlan.estimatedPathVerbs,
+      immediatePlan.estimatedUsesAreaCostlyPaint,
+      static_cast<double>(immediatePlan.estimatedRetainedBytes) / 4.0);
+  immediatePlan.estimatedRasterizeMs = estimatedRasterizeMs;
   immediatePlan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
   const bool interactionLayer =
       activeHints_.contains(layer.entity()) || layer.entity() == splitStaticLayersEntity_;
@@ -2403,18 +2511,18 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   if (directLayerCandidate &&
       IsImmediateSafe(immediatePlan.visible, immediatePlan.hasExpensiveEffect,
                       immediatePlan.estimatedDrawOps)) {
-    const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(elapsedMs);
+    const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
     immediatePlan.immediateBudgetChargeMs = budgetChargeMs;
     if (immediatePlan.staticHeuristicImmediate) {
       immediatePlan.immediate = true;
-    } else if (interactionLayer && elapsedMs <= immediatePlan.immediateBudgetMs &&
+    } else if (interactionLayer && estimatedRasterizeMs <= immediatePlan.immediateBudgetMs &&
                budgetChargeMs <= immediatePlan.immediateBudgetMs) {
       immediatePlan.immediate = true;
       immediatePlan.dynamicHeuristicImmediate = true;
     }
   }
   if (wasDynamicImmediate && !immediatePlan.immediate &&
-      elapsedMs > immediatePlan.immediateBudgetMs) {
+      estimatedRasterizeMs > immediatePlan.immediateBudgetMs) {
     immediatePlan.demotedDynamicImmediate = true;
   }
   layer.setImmediatePlan(immediatePlan);
@@ -2504,6 +2612,21 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     }
     ZoneScopedN("Compositor::rasterizeSegment");
     const auto segmentRasterizeStart = std::chrono::steady_clock::now();
+
+    // Snapshot the slot's prior content + offset so we can detect a
+    // no-op re-rasterize below. `Immediate`-mode segments are marked
+    // dirty every frame (they're cheap enough to redraw rather than
+    // cache), but redrawing byte-identical pixels must NOT advance the
+    // generation — the generation is the editor's GL-texture-cache
+    // invalidation key, and bumping it on unchanged content forces a
+    // pointless re-upload and breaks the
+    // SelectionToActiveDragDoesNotAdvanceUnchangedTileGenerations
+    // contract (a hint-kind re-promote re-rasterizes a stable static
+    // segment whose pixels never moved).
+    RendererBitmap previousSegmentBitmap = staticSegments_[i];
+    const std::shared_ptr<const RendererTextureSnapshot> previousSegmentTexture =
+        staticSegmentTextures_[i];
+    const Vector2d previousSegmentOffset = staticSegmentOffsets_[i];
 
     // Segment `i` spans paint order strictly between layer i-1 and
     // layer i (exclusive on both ends). Edge cases: segment 0 starts
@@ -2598,14 +2721,9 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
 
       const StaticSpanCostEstimate cost =
           EstimateStaticSpanCost(registry, paintOrder, startIdx, endIdx);
-      if (cost.hasGradientPaint) {
-        // Gradient paint can differ by a few channels when its paths are rasterized from a cropped
-        // offscreen origin. Keep gradients eligible for immediate timing, but use a full-canvas
-        // segment so the paint server samples in the same coordinate frame as the reference render.
-        useTight = false;
-      }
       spanPlan.estimatedDrawOps = cost.drawOps;
       spanPlan.estimatedPathVerbs = cost.pathVerbs;
+      spanPlan.estimatedUsesAreaCostlyPaint = cost.usesAreaCostlyPaint;
       spanPlan.hasExpensiveEffect = cost.hasExpensiveEffect;
       spanPlan.visible = visibleInViewport;
       if (visibleInViewport) {
@@ -2675,14 +2793,22 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
                                .count();
     const double elapsedMs = static_cast<double>(elapsedUs) / 1000.0;
     spanPlan.measuredRasterizeMs = elapsedMs;
+    // Drive the immediate-vs-cached choice from a deterministic geometry estimate
+    // (not the measured `elapsedMs`) so it no longer flaps with machine load. The
+    // real time stays recorded above for telemetry / recalibration.
+    const double estimatedRasterizeMs =
+        EstimateStaticSpanRasterizeMs(spanPlan.estimatedDrawOps, spanPlan.estimatedPathVerbs,
+                                      spanPlan.estimatedUsesAreaCostlyPaint,
+                                      static_cast<double>(spanPlan.estimatedRetainedBytes) / 4.0);
+    spanPlan.estimatedRasterizeMs = estimatedRasterizeMs;
     spanPlan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
     if (IsStaticSpanImmediateSafe(spanPlan)) {
-      const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(elapsedMs);
+      const double budgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
       spanPlan.immediateBudgetChargeMs = budgetChargeMs;
       if (spanPlan.staticHeuristicImmediate) {
         spanPlan.mode = StaticSpanMode::Immediate;
         immediateBudgetUsedMs += budgetChargeMs;
-      } else if (elapsedMs <= spanPlan.immediateBudgetMs &&
+      } else if (estimatedRasterizeMs <= spanPlan.immediateBudgetMs &&
                  immediateBudgetUsedMs + budgetChargeMs <= spanPlan.immediateBudgetMs) {
         spanPlan.mode = StaticSpanMode::Immediate;
         spanPlan.dynamicHeuristicImmediate = true;
@@ -2690,10 +2816,15 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       }
     }
     if (wasDynamicImmediate && spanPlan.mode != StaticSpanMode::Immediate &&
-        elapsedMs > spanPlan.immediateBudgetMs) {
+        estimatedRasterizeMs > spanPlan.immediateBudgetMs) {
       spanPlan.demotedDynamicImmediate = true;
     }
     if (!segmentIsEmpty) {
+      if (!spanPlan.demotedDynamicImmediate && IsBoundedMultiDrawStaticSpan(spanPlan)) {
+        spanPlan.mode = StaticSpanMode::Immediate;
+        spanPlan.staticHeuristicImmediate = true;
+        spanPlan.immediateBudgetChargeMs = ImmediateStaticSpanBudgetChargeMs(estimatedRasterizeMs);
+      }
       const bool chargeAsImmediate = wasImmediate || spanPlan.mode == StaticSpanMode::Immediate;
       if (chargeAsImmediate) {
         lastRenderFrameStats_.immediateRasterizeMs += elapsedMs;
@@ -2705,10 +2836,22 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     }
     staticSpanPlans_[i] = spanPlan;
     staticSegmentDirty_[i] = spanPlan.mode == StaticSpanMode::Immediate;
-    // Bump the generation so the editor's GL texture cache sees this
-    // slot's pixel content changed and re-uploads on next frame.
+    // Bump the generation only when this re-rasterize actually produced
+    // different content (or moved the segment on the canvas). An
+    // `Immediate` segment redraws every frame; if its entities and the
+    // surfaceFromCanvas transform are unchanged it produces byte-
+    // identical pixels at the same offset, and the editor's GL texture
+    // cache must keep reusing its existing upload. Only a genuine pixel/
+    // offset change is a cache-invalidation event.
     if (i < staticSegmentGeneration_.size()) {
-      staticSegmentGeneration_[i] = nextTileGeneration_++;
+      const bool offsetUnchanged =
+          (staticSegmentOffsets_[i] - previousSegmentOffset).lengthSquared() == 0.0;
+      const bool contentUnchanged = offsetUnchanged &&
+                                    staticSegmentTextures_[i] == previousSegmentTexture &&
+                                    BitmapPixelsEqual(staticSegments_[i], previousSegmentBitmap);
+      if (!contentUnchanged || staticSegmentGeneration_[i] == 0) {
+        staticSegmentGeneration_[i] = nextTileGeneration_++;
+      }
     }
     if (i < staticSegmentLastRasterizeMs_.size()) {
       staticSegmentLastRasterizeMs_[i] = elapsedMs;
@@ -3093,6 +3236,17 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     ImageParams params;
     params.targetRect = Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(payloadDims.x),
                                                          static_cast<double>(payloadDims.y)));
+    // Reset the renderer's per-element paint state to defaults (opacity 1.0)
+    // before blitting a composited tile. The renderer convention is that
+    // `setPaint` is called before every draw; this tile blit isn't a normal
+    // element draw, so without it the blit inherits whatever `paintOpacity_` the
+    // previous draw left behind. When the prior compose step direct-renders an
+    // immediate layer whose range ends inside an opacity group (e.g. the
+    // splash `#Clouds_with_gradients` group, opacity 0.75), that group opacity
+    // leaks into this blit and dims the (already fully-composited) tile —
+    // the #633 cached-segment drag divergence (the same tile drawn immediate
+    // sets its own paint, which is why caching it exposed the leak).
+    renderer().setPaint(PaintParams{});
     renderer().setTransform(canvasFromPayload);
     if (texture != nullptr) {
       const bool drewTexture = renderer().drawTextureSnapshot(*texture, params.targetRect);
@@ -3117,6 +3271,17 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   };
 
   const auto drawLayer = [&](const CompositorLayer& layer) {
+    if (ShouldDirectComposeLayer(layer)) {
+      const auto directStart = std::chrono::steady_clock::now();
+      RendererDriver driver(renderer());
+      driver.drawEntityRangeIntoCurrentFrame(document().registry(), layer.firstEntity(),
+                                             layer.lastEntity(), viewport, surfaceFromCanvas);
+      const auto directEnd = std::chrono::steady_clock::now();
+      const auto elapsedUs =
+          std::chrono::duration_cast<std::chrono::microseconds>(directEnd - directStart).count();
+      lastRenderFrameStats_.immediateRasterizeMs += static_cast<double>(elapsedUs) / 1000.0;
+      return;
+    }
     if (!layer.hasRenderablePayload()) {
       return;
     }

@@ -117,10 +117,6 @@ struct GlRnrReplayFrameDiagnostics {
   int metadataOnlyMissCount = 0;
   /// Duplicate live texture handles found across different tile ids.
   int duplicateLiveTextureCount = 0;
-  /// Overlay texture dimensions in pixels.
-  Vector2i overlayDimsPx = Vector2i::Zero();
-  /// Backend overlay texture/view handle, represented as an integer for diagnostics.
-  std::uint64_t overlayTextureHandle = 0;
   /// Presentation-cache resource counters captured after the frame.
   PresentationResourceStats presentationResources;
   /// Latest editor rendering cost counters.
