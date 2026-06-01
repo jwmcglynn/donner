@@ -13,8 +13,8 @@
 
 // Unit coverage for `RenderCoordinator`'s pure-logic predicates and the
 // GL-free portions of its orchestration. These tests deliberately avoid any
-// path that calls into a live GL/WGPU context: `GlTextureCache::uploadOverlay`
-// / `uploadComposited` emit raw `glGenTextures`/`glBindTexture` in the default
+// path that calls into a live GL/WGPU context: `GlTextureCache::uploadComposited`
+// emits raw `glGenTextures`/`glBindTexture` in the default
 // (tiny-skia) build, so the editor unit-test process — which has no GL context
 // — would crash. The harness therefore:
 //   * uses the default CPU (`tiny-skia`) `svg::Renderer` (no Geode device), and
@@ -364,11 +364,10 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
 TEST(RenderCoordinatorTest, RasterizeOverlayReturnsFalseWithoutDocument) {
   EditorApp app;
   RenderCoordinator coordinator;
-  GlTextureCache textures;
   ViewportState viewport;
   ASSERT_FALSE(app.hasDocument());
 
-  EXPECT_FALSE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
+  EXPECT_FALSE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
                                                                /*marqueeRectDoc=*/std::nullopt));
 }
 
@@ -376,30 +375,26 @@ TEST(RenderCoordinatorTest, RasterizeOverlayPublishesImmediateSnapshot) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
-  GlTextureCache textures;
   ViewportState viewport = MakeViewport(app);
 
   app.setSelection(QuerySelector(app, "#r1"));
 
   ASSERT_GT(app.document().currentFrameVersion(), coordinator.displayedDocVersion());
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
                                                               /*marqueeRectDoc=*/std::nullopt));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
   EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
 }
 
 TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
-  GlTextureCache textures;
   ViewportState viewport = MakeViewport(app);
 
   // No selection: the overlay still rasterizes (empty chrome) and parks
   // pending against the undisplayed version.
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
                                                               /*marqueeRectDoc=*/std::nullopt));
 }
 

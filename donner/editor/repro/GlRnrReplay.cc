@@ -479,8 +479,6 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .compositorCanvas = layerStatus.compositorCanvas,
         .metadataOnlyMissCount = layerStatus.metadataOnlyMissCount,
         .duplicateLiveTextureCount = layerStatus.duplicateLiveTextureCount,
-        .overlayDimsPx = layerStatus.overlayDimsPx,
-        .overlayTextureHandle = layerStatus.overlayTextureHandle,
         .presentationResources = layerStatus.presentationResources,
         .frameCost = layerStatus.frameCost,
         .replayWorkerScheduling = options.workerScheduling,

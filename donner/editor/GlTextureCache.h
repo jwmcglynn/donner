@@ -171,9 +171,6 @@ public:
 
   void initialize();
 
-  void uploadOverlay(const svg::RendererBitmap& bitmap);
-  /// Register an overlay texture snapshot without CPU readback/upload.
-  void uploadOverlayTexture(std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
   /// Upload the worker's tile snapshot into per-tile GL textures.
   /// Allocates/reuses one texture per tile id; bumps a per-tile
   /// upload-generation so identity uploads short-circuit; evicts
@@ -188,7 +185,6 @@ public:
   /// handles have aged past the backend's frames-in-flight window.
   void advancePresentationFrame();
 
-  void clearOverlay();
   void resetComposited();
 
   /// Upload a Layers-panel preview thumbnail bitmap into a per-row GL/WGPU
@@ -216,23 +212,6 @@ public:
 
   /// Number of thumbnail textures currently retained (testing/diagnostics).
   [[nodiscard]] std::size_t thumbnailTextureCount() const { return thumbnailTextures_.size(); }
-
-  [[nodiscard]] ImTextureID overlayTexture() const;
-
-  [[nodiscard]] int overlayWidth() const { return overlayWidth_; }
-  [[nodiscard]] int overlayHeight() const { return overlayHeight_; }
-  /// Bottom-right UV for sampling the valid overlay payload from its backing texture.
-  [[nodiscard]] const Vector2d& overlayUvBottomRight() const { return overlayUvBottomRight_; }
-  /// Screen rect for viewport-space overlay textures.
-  ///
-  /// Nullopt means the overlay texture uses the legacy document-viewBox
-  /// placement path.
-  [[nodiscard]] const std::optional<Box2d>& overlayScreenRect() const { return overlayScreenRect_; }
-  /// Record the screen-space placement for the currently uploaded overlay.
-  ///
-  /// @param screenRect ImGui screen rect covered by the overlay texture, or nullopt to use the
-  ///   legacy document-viewBox placement path.
-  void setOverlayScreenRect(std::optional<Box2d> screenRect);
 
   /// One composite-tile entry as the presenter sees it: the GL
   /// texture handle (resolved from the upload cache) plus the
@@ -271,10 +250,6 @@ public:
   /// Cost counters for the most recent composited upload.
   [[nodiscard]] const FrameCostBreakdown::CompositedUpload& lastCompositedUploadCost() const {
     return lastCompositedUploadCost_;
-  }
-  /// Cost counters for the most recent overlay upload or clear.
-  [[nodiscard]] const FrameCostBreakdown::Overlay& lastOverlayUploadCost() const {
-    return lastOverlayUploadCost_;
   }
   /// Resource counters for the textures currently retained by this cache.
   [[nodiscard]] PresentationResourceStats presentationResourceStats() const;
@@ -336,19 +311,6 @@ private:
   std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
 #endif
 
-  NativeTextureHandle overlayTexture_ = 0;
-  std::shared_ptr<const svg::RendererTextureSnapshot> overlayTextureSnapshot_;
-#ifdef DONNER_EDITOR_WGPU
-  std::shared_ptr<WgpuUploadedTexture> overlayUploadedTexture_;
-#endif
-
-  int overlayWidth_ = 0;
-  int overlayHeight_ = 0;
-  int overlayAllocatedWidth_ = 0;
-  int overlayAllocatedHeight_ = 0;
-  Vector2d overlayUvBottomRight_ = Vector2d(1.0, 1.0);
-  std::optional<Box2d> overlayScreenRect_;
-
   /// Tile texture cache keyed on `CompositedTile::id`. Entries
   /// persist across frames so identical tiles re-use the same GL
   /// texture (only re-uploaded when their `generation` advances).
@@ -378,7 +340,6 @@ private:
   int metadataOnlyMissCount_ = 0;
   int duplicateLiveTextureCount_ = 0;
   FrameCostBreakdown::CompositedUpload lastCompositedUploadCost_;
-  FrameCostBreakdown::Overlay lastOverlayUploadCost_;
   mutable std::uint64_t peakTrackedResourceBytes_ = 0;
 
 #ifdef DONNER_EDITOR_WGPU

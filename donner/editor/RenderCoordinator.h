@@ -123,11 +123,11 @@ public:
   void promoteSelectionBoundsIfReady();
   /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
   /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
-  /// the user isn't marquee-dragging). The snapshot is drawn directly by \ref RenderPanePresenter
-  /// so selected chrome does not allocate, rasterize, snapshot, or upload an overlay texture.
+  /// the user isn't marquee-dragging). The snapshot is drawn directly by Donner's OverlayRenderer
+  /// straight onto the Geode framebuffer, so selected chrome does not allocate, rasterize,
+  /// snapshot, or upload an overlay texture.
   bool rasterizeOverlayForCurrentSelection(
-      EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
-      const std::optional<Box2d>& marqueeRectDoc,
+      EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
       std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
       std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt,
       std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,

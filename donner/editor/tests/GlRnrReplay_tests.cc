@@ -505,8 +505,7 @@ std::string CanonicalReplayDiagnostics(const repro::GlRnrReplayResult& result,
     out << ";compositor=";
     writeVec(frame.compositorCanvas);
     out << ";metadata_miss=" << frame.metadataOnlyMissCount
-        << ";duplicate_textures=" << frame.duplicateLiveTextureCount << ";overlay_dims=";
-    writeVec(frame.overlayDimsPx);
+        << ";duplicate_textures=" << frame.duplicateLiveTextureCount;
     out << ";scheduling=" << static_cast<int>(frame.replayWorkerScheduling)
         << ";hold=" << frame.replayHoldFramesBehind
         << ";withheld=" << frame.replayResultHoldPollsThisFrame << ";tiles=" << frame.tiles.size();

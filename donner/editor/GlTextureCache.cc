@@ -199,7 +199,6 @@ FrameCostBreakdown::CompositedUpload CostForCompositedPreviewUpload(
 
 GlTextureCache::~GlTextureCache() {
 #ifdef DONNER_EDITOR_WGPU
-  releaseImGuiTexture(overlayTexture_);
   for (const auto& [_, entry] : tileTextures_) {
     releaseImGuiTexture(entry.texture);
   }
@@ -218,9 +217,6 @@ GlTextureCache::~GlTextureCache() {
     }
   }
 #else
-  if (overlayTexture_ != 0) {
-    glDeleteTextures(1, &overlayTexture_);
-  }
   for (auto& [_, entry] : tileTextures_) {
     if (entry.texture != 0) {
       glDeleteTextures(1, &entry.texture);
@@ -239,122 +235,7 @@ GlTextureCache::~GlTextureCache() {
 #endif
 }
 
-void GlTextureCache::initialize() {
-#ifndef DONNER_EDITOR_WGPU
-  if (overlayTexture_ == 0) {
-    glGenTextures(1, &overlayTexture_);
-    InitializeTexture(overlayTexture_);
-  }
-#endif
-}
-
-void GlTextureCache::uploadOverlay(const svg::RendererBitmap& bitmap) {
-  ZoneScopedN("GlTextureCache::uploadOverlay");
-  const auto uploadStart = std::chrono::steady_clock::now();
-  overlayScreenRect_.reset();
-#ifdef DONNER_EDITOR_WGPU
-  RetiredSnapshotBatch retiredSnapshots;
-  const std::shared_ptr<WgpuUploadedTexture> reusableTexture =
-      overlayTextureSnapshot_ == nullptr ? overlayUploadedTexture_ : nullptr;
-  std::shared_ptr<WgpuUploadedTexture> uploadedTexture =
-      uploadBitmapToWgpu(bitmap, reusableTexture);
-  const bool reusedTexture = uploadedTexture != nullptr &&
-                             uploadedTexture == overlayUploadedTexture_ &&
-                             overlayTextureSnapshot_ == nullptr;
-  if (overlayTexture_ != 0 && !reusedTexture) {
-    retiredSnapshots.push_back(RetiredSnapshot{
-        .texture = overlayTexture_,
-        .snapshot = std::move(overlayTextureSnapshot_),
-        .uploadedTexture = std::move(overlayUploadedTexture_),
-    });
-  }
-  overlayTextureSnapshot_.reset();
-  overlayUploadedTexture_ = std::move(uploadedTexture);
-  overlayTexture_ = overlayUploadedTexture_ != nullptr
-                        ? TextureViewToImTextureId(overlayUploadedTexture_->view.get())
-                        : 0;
-  if (overlayTexture_ != 0) {
-    overlayWidth_ = bitmap.dimensions.x;
-    overlayHeight_ = bitmap.dimensions.y;
-    overlayAllocatedWidth_ = overlayUploadedTexture_->allocationDimensions.x;
-    overlayAllocatedHeight_ = overlayUploadedTexture_->allocationDimensions.y;
-    overlayUvBottomRight_ = TextureUvBottomRightForPayload(
-        bitmap.dimensions, overlayUploadedTexture_->allocationDimensions);
-  } else {
-    overlayWidth_ = 0;
-    overlayHeight_ = 0;
-    overlayAllocatedWidth_ = 0;
-    overlayAllocatedHeight_ = 0;
-    overlayUvBottomRight_ = Vector2d(1.0, 1.0);
-  }
-  retireSnapshots(std::move(retiredSnapshots));
-#else
-  UploadBitmap(overlayTexture_, bitmap, &overlayWidth_, &overlayHeight_, &overlayAllocatedWidth_,
-               &overlayAllocatedHeight_, &overlayUvBottomRight_);
-#endif
-  lastOverlayUploadCost_ = FrameCostBreakdown::Overlay{
-      .uploadMs = MillisecondsSince(uploadStart),
-      .payloadBytes = BitmapPayloadBytes(bitmap),
-      .canvasSize = Vector2i(overlayWidth_, overlayHeight_),
-  };
-}
-
-void GlTextureCache::uploadOverlayTexture(
-    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot) {
-  ZoneScopedN("GlTextureCache::uploadOverlayTexture");
-#ifdef DONNER_EDITOR_WGPU
-  const Vector2i inputDimensions =
-      textureSnapshot != nullptr ? textureSnapshot->dimensions() : Vector2i::Zero();
-#else
-  const Vector2i inputDimensions = Vector2i::Zero();
-#endif
-  const auto uploadStart = std::chrono::steady_clock::now();
-  overlayScreenRect_.reset();
-#ifdef DONNER_EDITOR_WGPU
-  RetiredSnapshotBatch retiredSnapshots;
-  const bool acquiredSnapshot =
-      textureSnapshot != nullptr && overlayTextureSnapshot_ != textureSnapshot;
-  if (overlayTexture_ != 0 &&
-      (overlayTextureSnapshot_ != textureSnapshot || overlayUploadedTexture_ != nullptr)) {
-    retiredSnapshots.push_back(RetiredSnapshot{
-        .texture = overlayTexture_,
-        .snapshot = std::move(overlayTextureSnapshot_),
-        .uploadedTexture = std::move(overlayUploadedTexture_),
-    });
-  }
-  overlayUploadedTexture_.reset();
-  overlayTextureSnapshot_ = std::move(textureSnapshot);
-  overlayTexture_ = ToImTextureId(overlayTextureSnapshot_.get());
-  if (overlayTextureSnapshot_ != nullptr && overlayTexture_ != 0) {
-    if (acquiredSnapshot) {
-      ImGui_ImplWGPU_AddTexturePremultipliedAlphaRef(overlayTexture_);
-    }
-    const Vector2i dims = overlayTextureSnapshot_->dimensions();
-    overlayWidth_ = dims.x;
-    overlayHeight_ = dims.y;
-    overlayAllocatedWidth_ = dims.x;
-    overlayAllocatedHeight_ = dims.y;
-    overlayUvBottomRight_ = TextureUvBottomRightForPayload(dims, dims);
-  } else {
-    overlayTextureSnapshot_.reset();
-    overlayTexture_ = 0;
-    overlayWidth_ = 0;
-    overlayHeight_ = 0;
-    overlayAllocatedWidth_ = 0;
-    overlayAllocatedHeight_ = 0;
-    overlayUvBottomRight_ = Vector2d(1.0, 1.0);
-  }
-  retireSnapshots(std::move(retiredSnapshots));
-#else
-  (void)textureSnapshot;
-  clearOverlay();
-#endif
-  lastOverlayUploadCost_ = FrameCostBreakdown::Overlay{
-      .uploadMs = MillisecondsSince(uploadStart),
-      .payloadBytes = TexturePayloadBytes(inputDimensions),
-      .canvasSize = Vector2i(overlayWidth_, overlayHeight_),
-  };
-}
+void GlTextureCache::initialize() {}
 
 void GlTextureCache::uploadComposited(const RenderResult::CompositedPreview& preview,
                                       std::optional<EditorRasterViewport> rasterViewport) {
@@ -782,35 +663,6 @@ void GlTextureCache::advancePresentationFrame() {
 #endif
 }
 
-void GlTextureCache::clearOverlay() {
-  const auto uploadStart = std::chrono::steady_clock::now();
-  overlayScreenRect_.reset();
-#ifdef DONNER_EDITOR_WGPU
-  RetiredSnapshotBatch retiredSnapshots;
-  if (overlayTexture_ != 0) {
-    retiredSnapshots.push_back(RetiredSnapshot{
-        .texture = overlayTexture_,
-        .snapshot = std::move(overlayTextureSnapshot_),
-        .uploadedTexture = std::move(overlayUploadedTexture_),
-    });
-  }
-  overlayTextureSnapshot_.reset();
-  overlayUploadedTexture_.reset();
-  retireSnapshots(std::move(retiredSnapshots));
-#else
-  overlayTextureSnapshot_.reset();
-#endif
-  overlayTexture_ = 0;
-  overlayWidth_ = 0;
-  overlayHeight_ = 0;
-  overlayAllocatedWidth_ = 0;
-  overlayAllocatedHeight_ = 0;
-  overlayUvBottomRight_ = Vector2d(1.0, 1.0);
-  lastOverlayUploadCost_ = FrameCostBreakdown::Overlay{
-      .uploadMs = MillisecondsSince(uploadStart),
-  };
-}
-
 void GlTextureCache::resetComposited() {
 #ifdef DONNER_EDITOR_WGPU
   RetiredSnapshotBatch retiredSnapshots;
@@ -979,22 +831,6 @@ PresentationResourceStats GlTextureCache::presentationResourceStats() const {
     return allocationBytes(Vector2i(entry.width, entry.height));
   };
 
-  if (overlayTexture_ != 0) {
-#ifdef DONNER_EDITOR_WGPU
-    if (overlayUploadedTexture_ != nullptr) {
-      stats.overlayBytes = allocationBytes(overlayUploadedTexture_->allocationDimensions);
-    } else
-#endif
-        if (overlayTextureSnapshot_ != nullptr) {
-      stats.overlayBytes = allocationBytes(overlayTextureSnapshot_->dimensions());
-    } else if (overlayAllocatedWidth_ > 0 && overlayAllocatedHeight_ > 0) {
-      stats.overlayBytes =
-          allocationBytes(Vector2i(overlayAllocatedWidth_, overlayAllocatedHeight_));
-    } else {
-      stats.overlayBytes = allocationBytes(Vector2i(overlayWidth_, overlayHeight_));
-    }
-  }
-
   stats.activeTileTextures = static_cast<int>(tileTextures_.size());
   for (const auto& [_, entry] : tileTextures_) {
     if (entry.texture != 0) {
@@ -1059,19 +895,6 @@ PresentationCoverageDiagnostics GlTextureCache::coverageDiagnostics() const {
       .activeOutputSizePx = activeOutputSizePx_,
       .overviewOutputSizePx = overviewOutputSizePx_,
   };
-}
-
-ImTextureID GlTextureCache::overlayTexture() const {
-  return ToImTextureId(overlayTexture_);
-}
-
-void GlTextureCache::setOverlayScreenRect(std::optional<Box2d> screenRect) {
-  if (overlayWidth_ <= 0 || overlayHeight_ <= 0) {
-    overlayScreenRect_.reset();
-    return;
-  }
-
-  overlayScreenRect_ = std::move(screenRect);
 }
 
 ImTextureID GlTextureCache::ToImTextureId(NativeTextureHandle texture) {

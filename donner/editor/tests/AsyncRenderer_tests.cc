@@ -4638,14 +4638,10 @@ TEST(RenderCoordinatorTest, ImmediateOverlayPublishesCurrentFrameWithoutVersionG
 
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  EXPECT_TRUE(
-      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
   EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
   EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.canvasSize, Vector2i(64, 96));
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
-  EXPECT_FALSE(textures.overlayScreenRect().has_value());
 }
 
 TEST(RenderCoordinatorTest, IdleSelectionReusesImmediateOverlayForPresentation) {
@@ -4670,12 +4666,9 @@ TEST(RenderCoordinatorTest, IdleSelectionReusesImmediateOverlayForPresentation) 
 
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  ASSERT_TRUE(
-      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
   const SelectionChromeSnapshot firstSnapshot = *coordinator.immediateOverlaySnapshot();
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
 
   SelectTool selectTool;
   coordinator.beginFrameCostTracking();
@@ -4685,8 +4678,6 @@ TEST(RenderCoordinatorTest, IdleSelectionReusesImmediateOverlayForPresentation) 
          "recapturing every frame.";
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
   EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), firstSnapshot.paths.size());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
   const FrameCostBreakdown::Overlay overlayCost = coordinator.lastFrameCostBreakdown().overlay;
   EXPECT_EQ(overlayCost.payloadBytes, 0u);
   EXPECT_EQ(overlayCost.captureMs, 0.0);
@@ -4715,8 +4706,7 @@ TEST(RenderCoordinatorTest, LargeSelectionAutoDetailPromotesFromBoundsOnlyToFull
 
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  ASSERT_TRUE(
-      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
   const FrameCostBreakdown::Overlay firstOverlayCost = coordinator.lastFrameCostBreakdown().overlay;
   EXPECT_TRUE(firstOverlayCost.selectionBoundsOnly);
   EXPECT_EQ(firstOverlayCost.pathCount, 0);
@@ -4725,8 +4715,7 @@ TEST(RenderCoordinatorTest, LargeSelectionAutoDetailPromotesFromBoundsOnlyToFull
 
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
 
-  ASSERT_TRUE(
-      coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt));
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
   const FrameCostBreakdown::Overlay secondOverlayCost =
       coordinator.lastFrameCostBreakdown().overlay;
   EXPECT_FALSE(secondOverlayCost.selectionBoundsOnly);
@@ -4759,11 +4748,9 @@ TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
 
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt,
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt,
                                                               selectTool.activeDragPreview()));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
 
   selectTool.onMouseMove(app, Vector2d(20.0, 12.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.flushFrame());
@@ -4780,8 +4767,6 @@ TEST(RenderCoordinatorTest, ActiveDragRerasterizesOverlayForPureTranslation) {
       << "Pure translation drags should rerasterize overlay chrome for the current frame instead "
          "of carrying a cached overlay drag baseline.";
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
 }
 
 TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingTextureTransform) {
@@ -4807,11 +4792,9 @@ TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingT
 
   GlTextureCache textures;
   RenderCoordinator coordinator;
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures, std::nullopt,
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt,
                                                               selectTool.activeDragPreview()));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
 
   selectTool.onMouseMove(app, Vector2d(32.0, 32.0), /*buttonHeld=*/true);
   ASSERT_TRUE(app.flushFrame());
@@ -4828,8 +4811,6 @@ TEST(RenderCoordinatorTest, AffineActiveDragRerasterizesOverlayInsteadOfReusingT
       << "Affine resize/rotate drags should rerasterize chrome instead of stretching the previous "
          "immediate overlay snapshot at presentation time.";
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
 }
 
 TEST(RenderCoordinatorTest, OverlayGesturePreviewUsesRepresentedDragTransformForChip) {
