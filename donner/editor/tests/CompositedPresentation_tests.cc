@@ -109,6 +109,12 @@ TEST(CompositedPresentationTest, PureTranslationActiveDragWithMatchingCacheSuppr
          "canvas refresh happens after drag settles.";
 }
 
+// A large affine scale drift past the threshold re-captures a crisp bitmap — the
+// intentional anti-blur re-capture. The worker bakes the live transform into the
+// fresh bitmap and `represented` is updated to that baked transform, so the
+// presentation (`effective = represented^-1 * active`) compensates for the
+// swapped-in image and the shape stays continuous (no pop). The seamless-swap
+// behavior itself is pinned by the .rnr replay test.
 TEST(CompositedPresentationTest, LargeAffineScaleDriftRequestsCrispRecapture) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
@@ -122,17 +128,11 @@ TEST(CompositedPresentationTest, LargeAffineScaleDriftRequestsCrispRecapture) {
   };
 
   EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100)))
-      << "Scaling the cached bitmap past the crisp-recapture threshold (here 2x from drag-start) "
-         "should request a fresh, sharper drag bitmap — the async crisp half of the hybrid.";
+      << "Scaling 2x past the crisp-recapture threshold should request a fresh, sharper bitmap.";
 }
 
-// Regression: a SMALL affine change must NOT re-capture every frame. Re-capturing
-// each frame republishes `represented` at the live transform, so `represented`
-// catches up to `active`, the presentation delta (`represented^-1 * active`)
-// collapses to identity, and the shape freezes at the cached position while the
-// overlay tracks the gesture — the rotate/scale "transforms cancel out" lag the
-// owner reported on #Donner_D. Below the scale threshold the presentation quad
-// tracks the live affine against the cached bitmap with no re-capture.
+// A small affine change below the scale threshold must NOT re-capture — the
+// presentation quad tracks it against the cached bitmap with no worker round-trip.
 TEST(CompositedPresentationTest, SmallAffineScaleDriftTracksWithoutRecapture) {
   const SelectTool::ActiveDragPreview represented{
       .entity = Entity(7),
@@ -152,14 +152,11 @@ TEST(CompositedPresentationTest, SmallAffineScaleDriftTracksWithoutRecapture) {
   state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
 
   EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
-      << "A small affine scale change (1.25x -> 1.45x, < 1.5x threshold) must NOT re-capture — "
-         "re-capturing every frame is what froze the shape (transforms cancel out).";
+      << "Continuing an affine manipulation must not re-capture; the presentation quad tracks it.";
 }
 
-// Pure rotation preserves the bitmap's scale (a rotated bitmap doesn't lose
-// resolution), so it must track via the presentation quad without ever
-// re-capturing.
-TEST(CompositedPresentationTest, PureRotationTracksWithoutRecapture) {
+// Pure rotation likewise tracks via the presentation quad with no re-capture.
+TEST(CompositedPresentationTest, PureRotationDoesNotRecapture) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100));
 
@@ -170,8 +167,7 @@ TEST(CompositedPresentationTest, PureRotationTracksWithoutRecapture) {
   };
 
   EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
-      << "Pure rotation is area-preserving, so it never trips the scale-drift recapture and tracks "
-         "purely through the presentation quad.";
+      << "Rotation (and any affine) tracks purely through the presentation quad.";
 }
 
 TEST(CompositedPresentationTest, MatchingAffineRepresentedPreviewSuppressesCaptureLoop) {

@@ -791,6 +791,7 @@ filegroup(
         "filter_post_drag_jump.rnr",
         "filter_snapback_repro.rnr",
         "filtered-element-flash-after-drags-2.rnr",
+        "scale-resize-glitch-2.rnr",
         "testdata/filter_disappear_rnr3_after_mup2.png",
         "testdata/filter_disappear_single_drag_lgd_post.png",
     ],

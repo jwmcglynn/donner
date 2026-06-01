@@ -373,6 +373,26 @@ protected:
     double maxWorkerRenderMs = 0.0;
   };
 
+  // Diagnostic dump of the rotate/scale presentation transforms, populated only
+  // when `dumpDragTransforms_` is set. Each sample is either a worker RESULT
+  // landing (carries the represented transform the worker claims the published
+  // bitmap is baked at, plus the drag tile's documentFromCachedDocument) or a
+  // FRAME (carries the live active transform the overlay tracks).
+  struct DragTransformSample {
+    enum class Kind { Result, Frame };
+    Kind kind;
+    std::uint64_t frameIndex = 0;
+    Transform2d active;       // live drag transform (Frame samples)
+    Transform2d represented;  // worker's represented transform (Result samples)
+    Transform2d tileDfc;      // drag tile documentFromCachedDocument (Result samples)
+    Vector2d canvasOffsetDoc = Vector2d::Zero();
+    Vector2d bitmapDimsDoc = Vector2d::Zero();
+    bool hasDrag = false;
+  };
+  bool dumpDragTransforms_ = false;
+  bool gateDragOnDebounce_ = false;
+  std::vector<DragTransformSample> dragSamples_;
+
   void ReplayRecording(const std::filesystem::path& reproPath, ReplaySnapshot* out) {
     ASSERT_NE(out, nullptr);
 
@@ -595,11 +615,43 @@ protected:
         pendingClick.reset();
       }
       // Update prewarm-cache state on landed result so future frames
-      // don't re-fire the same render.
+      // don't re-fire the same render. Mirror production
+      // (`RenderCoordinator`): pass the represented drag preview the worker
+      // baked into the published tiles, so the presentation can compensate for
+      // the swapped-in bitmap. Omitting it leaves `represented` empty and the
+      // harness diverges from the live editor.
       if (result->compositedPreview.has_value()) {
-        compositedPresentation.noteCachedTextures(result->compositedPreview->entity,
-                                                  result->version,
-                                                  app.document().document().canvasSize());
+        std::optional<SelectTool::ActiveDragPreview> represented;
+        const auto& rep = result->compositedPreview->representedDragPreview;
+        if (rep.has_value() && rep->entity != entt::null) {
+          represented = SelectTool::ActiveDragPreview{
+              .entity = rep->entity,
+              .extraEntities = rep->extraEntities,
+              .translation = rep->translation,
+              .documentFromCachedDocument = rep->documentFromCachedDocument,
+              .dragGeneration = rep->dragGeneration,
+          };
+        }
+        compositedPresentation.noteCachedTextures(
+            result->compositedPreview->entity, result->version,
+            app.document().document().canvasSize(), represented);
+        if (dumpDragTransforms_) {
+          DragTransformSample sample;
+          sample.kind = DragTransformSample::Kind::Result;
+          sample.hasDrag = represented.has_value();
+          if (represented.has_value()) {
+            sample.represented = represented->documentFromCachedDocument;
+          }
+          for (const auto& tile : result->compositedPreview->tiles) {
+            if (tile.isDragTarget) {
+              sample.tileDfc = tile.documentFromCachedDocument;
+              sample.canvasOffsetDoc = tile.canvasOffsetDoc;
+              sample.bitmapDimsDoc = tile.bitmapDimsDoc;
+              break;
+            }
+          }
+          dragSamples_.push_back(sample);
+        }
       }
     };
 
@@ -628,7 +680,18 @@ protected:
       const bool versionChanged = currentVersion != lastRenderedVersion;
       const bool dragChanged = dragPreview.has_value() != lastRenderedHadDrag;
 
-      const bool needsRegularRender = canvasChanged || versionChanged;
+      // Mirror production's drag re-capture gating: during an ActiveDrag the
+      // editor does NOT re-render on every version bump — it routes through the
+      // PresentationRenderScheduler, which only re-captures a fresh bitmap when
+      // `needsCompositedLayerCapture` trips (the scale-drift debounce). Without
+      // this, the harness re-bakes every frame and `represented` stays glued to
+      // `active`, hiding the multi-render lag the real editor accumulates.
+      bool dragRenderGated = versionChanged;
+      if (gateDragOnDebounce_ && dragPreview.has_value()) {
+        dragRenderGated = compositedPresentation.needsCompositedLayerCapture(
+            dragPreview, currentVersion, currentCanvasSize);
+      }
+      const bool needsRegularRender = canvasChanged || dragRenderGated;
       const bool needsCompositedPrewarm = compositedPresentation.shouldPrewarm(
           prewarmEntity, {}, currentVersion, currentCanvasSize, /*dragActive=*/false);
 
@@ -770,6 +833,17 @@ protected:
       }
       leftButtonHeld = nowHeld;
 
+      if (dumpDragTransforms_) {
+        if (auto preview = selectTool.activeDragPreview(); preview.has_value()) {
+          DragTransformSample sample;
+          sample.kind = DragTransformSample::Kind::Frame;
+          sample.frameIndex = frame.index;
+          sample.active = preview->documentFromCachedDocument;
+          sample.hasDrag = true;
+          dragSamples_.push_back(sample);
+        }
+      }
+
       if (drainWritebacksEachFrame_) {
         DrainWritebackAndReparse(app, selectTool, &liveSource_);
       }
@@ -872,6 +946,68 @@ TEST_F(RnrReplayTest, DragStartAfterZoomAsyncHarnessDoesNotHang) {
       << "Fixture did not exercise the deferred click slow path.";
   EXPECT_GT(snapshot.latencies[1].clickToDragRenderMs, 0.0);
   EXPECT_GE(snapshot.latencies[1].clickToDragRenderMs, snapshot.latencies[1].clickToSlowPathMs);
+}
+
+// Characterization test for the rotate/scale presentation transform. Replays the
+// scale-resize gesture through the production-faithful async harness (worker
+// bakes a fresh bitmap on each debounce-gated re-capture; `represented` carries
+// the baked transform; presentation = `tileDfc * represented^-1 * active`) and
+// proves the presentation formula compensates for the swapped-in bitmap with NO
+// size pop: when re-capture N+1 lands, displaying re-capture N's bitmap at
+// re-capture N+1's live transform must place the tile bbox where N+1's own bake
+// places it (the seamless-swap invariant), to within a sub-pixel tolerance.
+//
+// This locks in that the "glitches to different sizes" the operator reported is
+// NOT in `ResolvePresentedTileDocumentTransform`: across the whole gesture the
+// content tile tracks monotonically and the swap error stays < 2 document units.
+// (The visual glitch, if still present, lives below this — the EditorShell
+// baseline atomicity or the Geode blit, neither modeled by this harness.)
+TEST_F(RnrReplayTest, ScaleResizeRecaptureSwapHasNoSizePop) {
+  AsyncReplaySnapshot snapshot;
+  dumpDragTransforms_ = true;
+  gateDragOnDebounce_ = true;
+  drainWritebacksEachFrame_ = true;
+  ReplayRecordingAsync("donner/editor/tests/scale-resize-glitch-2.rnr", &snapshot);
+
+  // Worker results that carry a baked drag tile, in landing order.
+  std::vector<DragTransformSample> bakes;
+  for (const auto& s : dragSamples_) {
+    if (s.kind == DragTransformSample::Kind::Result && s.hasDrag && s.bitmapDimsDoc.x > 0.0 &&
+        s.bitmapDimsDoc.y > 0.0 && !s.represented.isIdentity()) {
+      bakes.push_back(s);
+    }
+  }
+  ASSERT_GE(bakes.size(), 2u)
+      << "Replay did not exercise at least one scale re-capture swap to characterize.";
+
+  const auto err = [](const Vector2d& a, const Vector2d& b) {
+    return std::sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+  };
+
+  // The seamless-swap invariant at each consecutive re-capture pair.
+  for (std::size_t i = 0; i + 1 < bakes.size(); ++i) {
+    const DragTransformSample& prev = bakes[i];      // bitmap on screen pre-swap
+    const DragTransformSample& next = bakes[i + 1];  // live transform + fresh bake
+    const Transform2d live = next.represented;
+
+    // Display prev's bitmap at the live transform (production presentation math).
+    const Transform2d effective = prev.tileDfc * prev.represented.inverse() * live;
+    const Vector2d shownTl = effective.transformPosition(prev.canvasOffsetDoc);
+    const Vector2d shownBr = effective.transformPosition(prev.canvasOffsetDoc + prev.bitmapDimsDoc);
+
+    // Ground truth: where next's own fresh bake places the same tile bbox.
+    const Vector2d truthTl = next.canvasOffsetDoc;
+    const Vector2d truthBr = next.canvasOffsetDoc + next.bitmapDimsDoc;
+
+    EXPECT_LT(err(shownTl, truthTl), 2.0)
+        << "Re-capture swap " << i << "->" << (i + 1)
+        << " moved the tile top-left: the presentation transform does not compensate for the "
+           "swapped bitmap (a size/position pop).";
+    EXPECT_LT(err(shownBr, truthBr), 2.0)
+        << "Re-capture swap " << i << "->" << (i + 1)
+        << " moved the tile bottom-right: the presentation transform does not compensate for the "
+           "swapped bitmap (a size/position pop).";
+  }
 }
 
 // Structural remaps must preserve the compositor across drag-release source

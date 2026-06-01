@@ -165,20 +165,16 @@ public:
       return !representedPreview.documentFromCachedDocument.isTranslation();
     }
 
-    // Affine (rotate/scale) drag: DON'T re-capture every frame. Re-capturing
-    // every frame re-renders the layer and republishes `representedPreview` at
-    // the live transform, so `represented` catches up to `active` and the
-    // presentation delta (`represented^-1 * active`) collapses to identity — the
-    // shape freezes at the cached position while the overlay tracks the gesture
-    // (the "rotate/scale transforms cancel out" lag). The high-frequency
-    // presentation quad already tracks the live affine against the cached
-    // bitmap, so keep the cached bitmap and only re-capture (an async, crisp
-    // refresh) when the bitmap has been SCALED past a threshold and would look
-    // blurry. Pure rotation is area-preserving so it never trips this (a rotated
-    // bitmap doesn't lose resolution); scaling down downsamples and stays sharp,
-    // so only upscaling past the threshold re-captures. After a capture the
-    // cached transform advances, so a continuous scale-up re-captures in
-    // ~threshold steps. Pinned by the rnr-replay lockstep coverage.
+    // Affine (rotate/scale) drag: re-capture a crisp bitmap when the cached
+    // bitmap's SCALE has drifted past a threshold (it would otherwise look
+    // blurry). The re-capture is intentional (anti-blur); the presentation
+    // compensates for the swapped-in image via `represented` (the transform the
+    // re-captured bitmap was baked at) so the shape stays continuous across the
+    // swap — `effective = represented^-1 * active` re-bases tracking onto the
+    // fresh bitmap with no pop. Pure rotation is area-preserving so it never
+    // trips this (a rotated bitmap keeps resolution); scaling down downsamples
+    // and stays sharp; only upscaling past the threshold re-captures, and a
+    // continuous scale-up re-captures in ~threshold steps.
     constexpr double kAffineRecaptureScaleThreshold = 1.5;
     const double activeScale =
         std::sqrt(std::abs(activePreview->documentFromCachedDocument.determinant()));
