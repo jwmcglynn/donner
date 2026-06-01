@@ -145,6 +145,83 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
   EXPECT_THAT(getPixel(flat, 35, 35), IsWhite()) << "Original position now vacated";
 }
 
+// Compositor-correctness guard for the rotate/scale QA regression
+// investigation (overlay rotates correctly, but the shape "lags then resets to
+// its original position"). Rotating a promoted single-entity layer applies a
+// NON-translation delta, so the bitmap-reuse fast path can't apply — the layer
+// re-rasterizes at the rotated transform (CompositorController.cc single-entity
+// `else` branch). This test confirms the COMPOSITOR unit produces pixel-correct
+// rotated output: DualPathVerifier compares the composited frame against a full
+// re-render of the rotated DOM and requires an exact match. It PASSES — which
+// is the point: it rules the compositor out and localizes the editor-reported
+// regression to the async presentation layer, where PresentedFrameComposer's
+// `tile.documentFromCachedDocument * represented⁻¹ * active` baseline correction
+// (valid only for the translation-reuse path, where the cached bitmap's compose
+// transform equals `represented`) spuriously re-transforms the already-correct
+// re-rasterized rotation bitmap about the canvas origin. Keep this green so the
+// presentation-layer fix can't regress compositor rotation.
+TEST_F(CompositorGoldenTest, RotationDragProducesCorrectPixels) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="70" y="30" width="60" height="40" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  // First frame rasterizes the cached bitmap at the identity transform.
+  compositor.renderFrame(viewport_);
+
+  // Rotate ~28.6° about the rect center — a non-translation gesture frame.
+  const Vector2d center(100.0, 50.0);
+  const Transform2d documentFromElement =
+      Transform2d::Translate(center) * Transform2d::Rotate(0.5) * Transform2d::Translate(-center);
+  target->cast<SVGGraphicsElement>().setTransform(documentFromElement);
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+}
+
+// Scale analog of RotationDragProducesCorrectPixels: a scale is also a
+// non-translation delta that re-rasterizes the promoted layer. Confirms the
+// compositor unit is pixel-correct under a scale gesture; the editor-reported
+// scale regression likewise lives in the presentation baseline correction.
+TEST_F(CompositorGoldenTest, ScaleDragProducesCorrectPixels) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="70" y="30" width="60" height="40" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(viewport_);
+
+  const Vector2d center(100.0, 50.0);
+  const Transform2d documentFromElement = Transform2d::Translate(center) *
+                                          Transform2d::Scale(1.5, 1.5) *
+                                          Transform2d::Translate(-center);
+  target->cast<SVGGraphicsElement>().setTransform(documentFromElement);
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+}
+
 // Editor-reported regression: when the compositor has a promoted layer
 // and the DOM transform changes by a pure translation, the fast path
 // should update `canvasFromBitmap` (cheap, ~50 µs) and NOT re-
