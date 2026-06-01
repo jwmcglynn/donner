@@ -145,21 +145,14 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
   EXPECT_THAT(getPixel(flat, 35, 35), IsWhite()) << "Original position now vacated";
 }
 
-// Compositor-correctness guard for the rotate/scale QA regression
-// investigation (overlay rotates correctly, but the shape "lags then resets to
-// its original position"). Rotating a promoted single-entity layer applies a
-// NON-translation delta, so the bitmap-reuse fast path can't apply — the layer
-// re-rasterizes at the rotated transform (CompositorController.cc single-entity
-// `else` branch). This test confirms the COMPOSITOR unit produces pixel-correct
-// rotated output: DualPathVerifier compares the composited frame against a full
-// re-render of the rotated DOM and requires an exact match. It PASSES — which
-// is the point: it rules the compositor out and localizes the editor-reported
-// regression to the async presentation layer, where PresentedFrameComposer's
-// `tile.documentFromCachedDocument * represented⁻¹ * active` baseline correction
-// (valid only for the translation-reuse path, where the cached bitmap's compose
-// transform equals `represented`) spuriously re-transforms the already-correct
-// re-rasterized rotation bitmap about the canvas origin. Keep this green so the
-// presentation-layer fix can't regress compositor rotation.
+// Composited output of a rotate drag matches a full re-render. Under the
+// lockstep fix (#6/#7) the promoted drag layer REUSES its cached bitmap and
+// carries the rotation in `canvasFromBitmap` (see
+// RotationDragCarriesAffineInCanvasFromBitmapForLockstep), so the composite is
+// that cached bitmap transformed as a rotated quad. For a solid fill that
+// composites identically to a crisp re-render in the interior; pixelmatch
+// excludes the AA edge band. DualPathVerifier requires an exact match, guarding
+// that the reused affine quad lands on the right pixels.
 TEST_F(CompositorGoldenTest, RotationDragProducesCorrectPixels) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
@@ -190,10 +183,9 @@ TEST_F(CompositorGoldenTest, RotationDragProducesCorrectPixels) {
   EXPECT_EQ(result.mismatchCount, 0u);
 }
 
-// Scale analog of RotationDragProducesCorrectPixels: a scale is also a
-// non-translation delta that re-rasterizes the promoted layer. Confirms the
-// compositor unit is pixel-correct under a scale gesture; the editor-reported
-// scale regression likewise lives in the presentation baseline correction.
+// Scale analog of RotationDragProducesCorrectPixels: a scale drag also reuses
+// the cached bitmap with an affine `canvasFromBitmap`, and the composited output
+// matches a full re-render of the scaled DOM for a solid fill.
 TEST_F(CompositorGoldenTest, ScaleDragProducesCorrectPixels) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
@@ -299,6 +291,56 @@ TEST_F(CompositorGoldenTest, HidingElementChangesPublishedTileGenerations) {
       << "hiding an element changed the composite but left the published "
          "(tileId, generation) set identical — the editor's GL cache would keep "
          "drawing the stale tile (the hide-layer ghost).";
+}
+
+// Lockstep rotate/scale preview (#6/#7): an ActiveDrag layer under a
+// NON-translation drag delta (rotate/scale) must carry the affine in
+// `canvasFromBitmap` and REUSE the cached bitmap — exactly like the translation
+// fast path slides it — so the presentation transforms the cached pixels as a
+// live quad in lockstep with the overlay. Re-rasterizing instead (baking the
+// rotation so canvasFromBitmap collapses to ~identity) drops the shape off the
+// live-tracking path: the presented quad then only carries the incremental
+// (represented->active) delta and snaps back as the worker republishes — the
+// "shape lags / doesn't move in lockstep" QA report.
+TEST_F(CompositorGoldenTest, RotationDragCarriesAffineInCanvasFromBitmapForLockstep) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="70" y="30" width="60" height="40" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));  // ActiveDrag hint
+  compositor.renderFrame(viewport_);              // bake the cached bitmap at identity
+
+  const auto dragLayerCanvasFromBitmap = [&]() -> std::optional<Transform2d> {
+    for (const auto& tile : compositor.snapshotTilesForUpload()) {
+      if (tile.layerEntity == entity) {
+        return tile.canvasFromBitmap;
+      }
+    }
+    return std::nullopt;
+  };
+
+  // Rotate ~28.6° about the rect center — a non-translation gesture frame.
+  const Vector2d center(100.0, 50.0);
+  const Transform2d documentFromElement =
+      Transform2d::Translate(center) * Transform2d::Rotate(0.5) * Transform2d::Translate(-center);
+  target->cast<SVGGraphicsElement>().setTransform(documentFromElement);
+  compositor.renderFrame(viewport_);
+
+  const std::optional<Transform2d> canvasFromBitmap = dragLayerCanvasFromBitmap();
+  ASSERT_TRUE(canvasFromBitmap.has_value()) << "drag-layer tile must be present after a drag frame";
+  EXPECT_FALSE(canvasFromBitmap->isTranslation())
+      << "rotation drag must carry the affine in canvasFromBitmap so the cached bitmap is "
+         "transformed as a live quad in lockstep with the overlay, not re-rasterized off the "
+         "live-tracking path. canvasFromBitmap=\n"
+      << *canvasFromBitmap;
 }
 
 // Editor-reported regression: when the compositor has a promoted layer

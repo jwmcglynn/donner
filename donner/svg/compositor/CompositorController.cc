@@ -1775,25 +1775,27 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
             res.newWorldFromEntity * instance.worldFromEntityTransform.inverse();
         instance.worldFromEntityTransform = res.newWorldFromEntity;
 
-        if (res.bitmapEntityFromEntity.isTranslation()) {
-          // Bitmap-reuse fast path: the delta between the current DOM
-          // transform and the bitmap's rasterize-time transform is a
-          // pure translation, so reuse the bitmap by updating
-          // `canvasFromBitmap_` instead of re-rasterizing. Every
-          // mouse-move flips the entity's transform attribute, but the
-          // compositor just writes a ~single-matrix compose offset
-          // rather than going back to the renderer.
-          res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
-          if (res.isSubtree) {
-            propagateFastPathTranslationToSubtree(registry, res.entity, worldFromPreviousWorld);
-          }
-        } else {
-          // Single-entity layer with non-translation delta (scale,
-          // rotate, etc.). Fall through to `consumeDirtyFlags` + the
-          // per-layer re-rasterize — correctness over optimization
-          // since the single entity has no descendants to worry about.
-          res.layer->markDirty();
-          unhandledDirtyEntities.push_back(res.entity);
+        // Bitmap-reuse fast path: reuse the cached bitmap by updating
+        // `canvasFromBitmap_` instead of re-rasterizing. Every mouse-move flips
+        // the entity's transform attribute, but the compositor just writes a
+        // single compose matrix rather than going back to the renderer, so the
+        // presentation transforms the cached pixels as a live quad that tracks
+        // the drag in lockstep with the overlay — no async-worker round trip.
+        //
+        // This applies to BOTH a pure-translation delta (the bitmap slides,
+        // pixel-exact) AND a single-entity affine delta (rotate/scale — the
+        // bitmap is transformed as a quad, a soft resample during the gesture
+        // that re-rasterizes crisp once the drag settles / the entity leaves
+        // ActiveDrag). Re-rasterizing the affine delta every frame instead
+        // baked the rotation with `canvasFromBitmap ~= identity`, dropping the
+        // shape off the live-tracking path so it lagged the overlay (#6/#7).
+        // Subtree layers with a non-translation delta never reach here — they
+        // were disqualified in `appendLayerResolution` — so the only
+        // non-translation case here is a single entity with no descendants to
+        // keep consistent.
+        res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
+        if (res.isSubtree && res.bitmapEntityFromEntity.isTranslation()) {
+          propagateFastPathTranslationToSubtree(registry, res.entity, worldFromPreviousWorld);
         }
       }
       // Clear the dirty flags ourselves since we skipped prepare. Tell
@@ -2169,24 +2171,35 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     ZoneScopedN("Compositor::rasterizeDirtyLayersLoop");
     for (auto& layer : layers_) {
       // An immediate (direct-render) layer normally re-rasterizes every frame.
-      // But on a translation-only drag frame the layer's pixel content is
-      // unchanged — only its position drifted, which the fast path / drift loop
-      // above already encoded as a pure-translation `canvasFromBitmap` against
-      // the still-valid rasterize-time stamp. Re-rasterizing such a layer here
-      // would call `setBitmap`, which resets `canvasFromBitmap_` to identity
-      // (clobbering the just-computed compose offset) and bumps the texture
-      // generation (defeating bitmap reuse on the editor's GL upload path).
-      // Reuse the cached bitmap and keep the compose offset. Genuine content
-      // changes still re-raster: those flip `isDirty()` (consumed above) or
-      // leave a non-translation `canvasFromBitmap` (scale/rotate drift). See
-      // compositor `LayerComposeOffsetTracksDomTranslationDelta`.
-      const bool immediateTranslationOnlyReuse =
-          layer.isImmediate() && !layer.isDirty() && layer.hasRenderablePayload() &&
-          layer.bitmapEntityFromWorldTransform().has_value() &&
-          layer.canvasFromBitmap().isTranslation();
+      // But on a drag frame the layer's pixel content is unchanged — only its
+      // compose transform drifted, which the fast path above already encoded as
+      // a non-identity `canvasFromBitmap` against the still-valid rasterize-time
+      // stamp. Re-rasterizing such a layer here would call `setBitmap`, which
+      // resets `canvasFromBitmap_` to identity (clobbering the just-computed
+      // compose offset) and bumps the texture generation (defeating bitmap
+      // reuse on the editor's GL upload path).
+      //
+      // Reuse the cached bitmap and keep the compose offset whenever the layer
+      // is clean and still has a valid rasterize-time stamp — regardless of
+      // whether `canvasFromBitmap` is identity (settled / re-promote within the
+      // M9 hysteresis window), a pure translation (the bitmap slides,
+      // pixel-exact), or a single-entity affine (rotate/scale — the bitmap is
+      // transformed as a live quad, a soft preview that re-rasterizes crisp once
+      // the drag settles). `isDirty()` (consumed above) is the genuine
+      // content-change signal that forces a re-raster; the FORM of
+      // `canvasFromBitmap` must not. The previous `isTranslation()` guard
+      // re-rasterized every rotate/scale frame, which reset `canvasFromBitmap`
+      // to identity and dropped the shape off the live-tracking path so it
+      // lagged the overlay (#6/#7). See compositor
+      // `LayerComposeOffsetTracksDomTranslationDelta`,
+      // `RotationDragCarriesAffineInCanvasFromBitmapForLockstep`, and
+      // `M9RepromoteSameEntityCancelsPendingDemote`.
+      const bool immediateDragReuse = layer.isImmediate() && !layer.isDirty() &&
+                                      layer.hasRenderablePayload() &&
+                                      layer.bitmapEntityFromWorldTransform().has_value();
       const bool needsRaster =
           (layer.isDirty() || layer.isImmediate() || !layer.hasRenderablePayload() || rootDirty_) &&
-          !immediateTranslationOnlyReuse;
+          !immediateDragReuse;
       if (needsRaster) {
         // §M4: bail between layer rasterizes. The remaining dirty
         // layers keep their `isDirty()` flag set, so the next
