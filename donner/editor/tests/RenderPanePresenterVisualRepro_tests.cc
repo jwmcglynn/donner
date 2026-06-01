@@ -90,32 +90,33 @@ std::filesystem::path StableOutputDir() {
   return tempDir / "donner-display-none-ui-repro";
 }
 
-// Best-effort write of a human-inspectable diagnostic PNG. This must NOT assert
-// on failure: under sandboxed / remote test execution the OS temp dir (and even
-// `TEST_UNDECLARED_OUTPUTS_DIR` on some workers) may be read-only, and a debug
-// artifact that can't be written is not a test failure — the real assertions are
-// the pixel-count checks in each test. (Asserting here made the whole target red
-// under remote execution.)
-void WriteBitmap(const svg::RendererBitmap& bitmap, const std::filesystem::path& outputPath) {
+// Write a diagnostic PNG, returning false if the destination could not be
+// written. Used best-effort for the developer-convenience temp-dir copy (whose
+// shared path may be unwritable under a sandboxed/remote test runner) and as a
+// hard requirement for the canonical $TEST_UNDECLARED_OUTPUTS_DIR artifact.
+bool WriteBitmap(const svg::RendererBitmap& bitmap, const std::filesystem::path& outputPath) {
   if (bitmap.empty()) {
-    return;
+    return false;
   }
 
   std::error_code error;
   std::filesystem::create_directories(outputPath.parent_path(), error);
   if (error) {
-    return;
+    return false;
   }
-  svg::RendererImageIO::writeRgbaPixelsToPngFile(outputPath.string().c_str(), bitmap.pixels,
-                                                 bitmap.dimensions.x, bitmap.dimensions.y,
-                                                 bitmap.rowBytes / 4u);
+  return svg::RendererImageIO::writeRgbaPixelsToPngFile(outputPath.string().c_str(), bitmap.pixels,
+                                                        bitmap.dimensions.x, bitmap.dimensions.y,
+                                                        bitmap.rowBytes / 4u);
 }
 
 void WriteDiagnosticBitmap(const svg::RendererBitmap& bitmap, std::string_view filename) {
-  WriteBitmap(bitmap, StableOutputDir() / filename);
+  // Best-effort developer-convenience copy: a shared temp dir may be
+  // unwritable under a sandboxed/remote test runner, which must not fail the
+  // test (the assertions below carry the real verification).
+  (void)WriteBitmap(bitmap, StableOutputDir() / filename);
   const char* undeclaredOutputsDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
   if (undeclaredOutputsDir != nullptr) {
-    WriteBitmap(bitmap, std::filesystem::path(undeclaredOutputsDir) / filename);
+    EXPECT_TRUE(WriteBitmap(bitmap, std::filesystem::path(undeclaredOutputsDir) / filename));
   }
 }
 
