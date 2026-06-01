@@ -133,7 +133,7 @@ new_local_repository(
 # resvg-test-suite goldens are now vendored in-tree under
 # third_party/resvg-test-suite/ so they ship in the source archive.
 
-bazel_dep(name = "rules_python", version = "1.9.0", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "1.9.1", dev_dependency = True)
 
 # Hermetic Python toolchain. Without this, rules_python's py_binary targets
 # fall back to `/usr/bin/env python3` on the host — which is fine for local
