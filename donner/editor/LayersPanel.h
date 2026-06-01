@@ -177,6 +177,13 @@ public:
   /// canvas/source selection-sync plumbing when a Layers row drives selection.
   [[nodiscard]] bool consumeSelectionChanged();
 
+  /// Whether the most recent `render` queued a DOM mutation (show/hide, lock,
+  /// rename, reorder, z-order) that is not reflected by a selection change.
+  /// Consumes the flag. `EditorShell` flushes the queued mutation and
+  /// re-renders when this is set; without it a show/hide toggle would leave the
+  /// canvas showing the pre-mutation frame (the "hidden layer ghost" report).
+  [[nodiscard]] bool consumeQueuedMutation();
+
   /// Record which visible row (if any) is under the mouse cursor. Called from
   /// `render` with the hovered row index, and directly by tests. Drives the
   /// canvas hover-highlight chrome the same way the source pane does. Passing
@@ -212,6 +219,9 @@ private:
   /// Set when render/handleRowClick changed selection; cleared by
   /// `consumeSelectionChanged`.
   bool selectionChanged_ = false;
+  /// Set when a handler queued a DOM mutation (show/hide, lock, rename, reorder,
+  /// z-order); cleared by `consumeQueuedMutation`.
+  bool mutationQueued_ = false;
   /// Element under the mouse cursor as of the most recent render, or nullopt.
   std::optional<svg::SVGElement> hoveredElement_;
   /// Stable id of the row currently being inline-renamed, or nullopt when no

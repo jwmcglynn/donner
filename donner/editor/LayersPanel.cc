@@ -144,6 +144,12 @@ bool LayersPanel::consumeSelectionChanged() {
   return changed;
 }
 
+bool LayersPanel::consumeQueuedMutation() {
+  const bool queued = mutationQueued_;
+  mutationQueued_ = false;
+  return queued;
+}
+
 void LayersPanel::noteRowHovered(std::optional<std::size_t> rowIndex) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (!rowIndex.has_value() || *rowIndex >= rows.size()) {
@@ -187,6 +193,11 @@ void LayersPanel::handleEyeClick(EditorApp& app, std::size_t rowIndex) {
     return;
   }
   app.setElementVisible(rows[rowIndex].element, !rows[rowIndex].isVisible);
+  // A show/hide toggle queues a DOM mutation but does not change the selection,
+  // so it produces no `selectionChanged_` signal. Flag it separately so the
+  // shell flushes the queued mutation and re-renders — otherwise the canvas
+  // keeps showing the pre-toggle frame (the "hidden layer ghost" QA report).
+  mutationQueued_ = true;
 }
 
 void LayersPanel::handleLockClick(EditorApp& app, std::size_t rowIndex) {
@@ -195,6 +206,7 @@ void LayersPanel::handleLockClick(EditorApp& app, std::size_t rowIndex) {
     return;
   }
   app.setElementLocked(rows[rowIndex].element, !rows[rowIndex].isLocked);
+  mutationQueued_ = true;
 }
 
 bool LayersPanel::handleRowRename(EditorApp& app, std::size_t rowIndex, std::string_view newId) {
@@ -206,7 +218,9 @@ bool LayersPanel::handleRowRename(EditorApp& app, std::size_t rowIndex, std::str
   // the shared DOM-level rename engine, which also repoints references.
   app.setSelection(rows[rowIndex].element);
   selectionChanged_ = true;
-  return app.renameSelectedElement(newId);
+  const bool renamed = app.renameSelectedElement(newId);
+  mutationQueued_ = mutationQueued_ || renamed;
+  return renamed;
 }
 
 bool LayersPanel::handleRowReorder(EditorApp& app, std::size_t fromIndex, std::size_t toIndex) {
@@ -231,6 +245,7 @@ bool LayersPanel::handleRowReorder(EditorApp& app, std::size_t fromIndex, std::s
   if (app.reorderElementBeforeSibling(moved, referenceSibling)) {
     app.setSelection(moved);
     selectionChanged_ = true;
+    mutationQueued_ = true;
     return true;
   }
   return false;
@@ -246,7 +261,9 @@ bool LayersPanel::handleRowZOrder(EditorApp& app, std::size_t rowIndex,
   // as the canvas Arrange menu and the Cmd+[ / Cmd+] shortcuts).
   app.setSelection(rows[rowIndex].element);
   selectionChanged_ = true;
-  return app.reorderSelectedElement(direction);
+  const bool reordered = app.reorderSelectedElement(direction);
+  mutationQueued_ = mutationQueued_ || reordered;
+  return reordered;
 }
 
 void LayersPanel::beginRename(std::uint64_t stableId) {

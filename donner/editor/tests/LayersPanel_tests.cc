@@ -369,6 +369,53 @@ TEST(LayersPanelTest, EyeClickTogglesVisibility) {
   EXPECT_TRUE(shown->isVisible);
 }
 
+// Regression for the "hidden layer ghost": a show/hide (or lock) click queues a
+// DOM mutation but changes no selection, so it emits no `selectionChanged_`
+// signal. EditorShell relies on `consumeQueuedMutation()` to know it must flush
+// the queued mutation and re-render; without it the canvas kept presenting the
+// pre-toggle frame. Pin that the mutation handlers latch the signal.
+TEST(LayersPanelTest, EyeAndLockClicksSignalQueuedMutation) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int index = RowIndex(panel, "rect1");
+  ASSERT_GE(index, 0);
+
+  // No interaction yet: nothing queued.
+  EXPECT_FALSE(panel.consumeQueuedMutation());
+
+  // Hide queues a `display` mutation and must signal a re-render.
+  panel.handleEyeClick(app, static_cast<std::size_t>(index));
+  EXPECT_TRUE(panel.consumeQueuedMutation())
+      << "hiding a layer must signal EditorShell to flush + re-render, else the canvas ghosts";
+  // Consuming clears the latch.
+  EXPECT_FALSE(panel.consumeQueuedMutation());
+  EXPECT_TRUE(app.document().flushFrame());
+  panel.refreshSnapshot(app);
+
+  // Lock likewise queues a mutation and signals.
+  panel.handleLockClick(app, static_cast<std::size_t>(RowIndex(panel, "rect1")));
+  EXPECT_TRUE(panel.consumeQueuedMutation());
+}
+
+// An out-of-range eye click queues no mutation, so it must not signal a
+// re-render (no spurious flush/repaint on a dead click).
+TEST(LayersPanelTest, NoOpClickDoesNotSignalQueuedMutation) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  panel.handleEyeClick(app, panel.rows().size() + 5u);
+  EXPECT_FALSE(panel.consumeQueuedMutation());
+}
+
 TEST(LayersPanelTest, EyeClickOutOfRangeIsNoOp) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">

@@ -2414,6 +2414,14 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
     treeSelectionOriginatedInTree_ = true;
     treeviewPendingScroll_ = false;
   }
+  // A Layers-panel show/hide, lock, rename, reorder, or z-order click queues a
+  // DOM mutation. Flush it and refresh the overlay the same way the Inspector
+  // panels do (above) — otherwise the queued mutation never reaches the worker
+  // and the canvas keeps presenting the pre-mutation frame (the hidden-layer
+  // "ghost").
+  if (layersPanel_.consumeQueuedMutation()) {
+    flushQueuedMutationAndRefreshOverlay();
+  }
   // Release thumbnail textures for rows that are no longer visible so the GPU
   // texture set does not grow across refreshes.
   std::vector<std::uint64_t> liveThumbnailKeys;

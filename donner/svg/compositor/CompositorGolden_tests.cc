@@ -222,6 +222,85 @@ TEST_F(CompositorGoldenTest, ScaleDragProducesCorrectPixels) {
   EXPECT_EQ(result.mismatchCount, 0u);
 }
 
+// Editor-reported QA regression (#3, "hiding a layer leaves a ghost"): toggling
+// an element to display:none must drop its pixels from the next composited
+// frame. The bug: the cached static segment / layer holding the element's
+// pixels was not invalidated by the `display` attribute change, so the hidden
+// element persisted as a ghost over the (now transparent) area. DualPathVerifier
+// compares the composite against a full re-render — which correctly omits a
+// display:none element — so a stale tile shows up as a non-zero mismatch.
+TEST_F(CompositorGoldenTest, HidingElementClearsItsPixelsFromComposite) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  // First frame bakes the red rect into the composite.
+  compositor.renderFrame(viewport_);
+  EXPECT_THAT(getPixel(renderer_.takeSnapshot(), 35, 35), IsRed())
+      << "red rect should be visible before hiding";
+
+  // Hide it — mirrors EditorApp::setElementVisible(false).
+  target->setAttribute(xml::XMLQualifiedNameRef("display"), "none");
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+  EXPECT_THAT(getPixel(renderer_.takeSnapshot(), 35, 35), IsWhite())
+      << "hidden rect must not leave a ghost";
+}
+
+// The composite-pixels test above proves the compositor renders the hidden
+// state correctly, but the editor's GL texture cache only re-uploads a tile when
+// its generation changes (and reuses the cached texture for a metadata-only /
+// unchanged-generation tile). So if hiding an element changes the visible
+// composite WITHOUT changing the published (tileId, generation) set, the editor
+// keeps drawing the stale texture — the reported "ghost". This pins the
+// invariant that a visible content change must change the published tile set.
+TEST_F(CompositorGoldenTest, HidingElementChangesPublishedTileGenerations) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(viewport_);
+
+  const auto tileIdentitySet = [&]() {
+    std::set<std::pair<uint64_t, uint64_t>> ids;
+    for (const auto& tile : compositor.snapshotTilesForUpload()) {
+      if (tile.bitmapDims.x > 0 && tile.bitmapDims.y > 0) {
+        ids.emplace(tile.tileId, tile.generation);
+      }
+    }
+    return ids;
+  };
+
+  const std::set<std::pair<uint64_t, uint64_t>> before = tileIdentitySet();
+
+  target->setAttribute(xml::XMLQualifiedNameRef("display"), "none");
+  compositor.renderFrame(viewport_);
+
+  const std::set<std::pair<uint64_t, uint64_t>> after = tileIdentitySet();
+
+  EXPECT_NE(before, after)
+      << "hiding an element changed the composite but left the published "
+         "(tileId, generation) set identical — the editor's GL cache would keep "
+         "drawing the stale tile (the hide-layer ghost).";
+}
+
 // Editor-reported regression: when the compositor has a promoted layer
 // and the DOM transform changes by a pure translation, the fast path
 // should update `canvasFromBitmap` (cheap, ~50 µs) and NOT re-
