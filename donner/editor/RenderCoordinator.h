@@ -112,6 +112,18 @@ public:
   /// @return true if the hover preview changed.
   bool setSourceHoverElements(std::vector<svg::SVGElement> elements);
 
+  /// Update the transient locked-rejection flash to draw on the next overlay capture. The flash
+  /// fades as `SelectTool` ticks it; this should be pushed once per frame from the editor's
+  /// per-frame path with `selectTool.lockedRejectionFlash()`.
+  ///
+  /// @param flash Active flash (element + intensity), or nullopt when no element is being rejected.
+  void setLockedRejectionFlash(std::optional<SelectTool::LockedRejectionFlash> flash);
+
+  /// @return true when a locked-rejection flash is currently stored (still fading).
+  [[nodiscard]] bool hasLockedRejectionFlash() const {
+    return lockedRejectionFlash_.has_value() && lockedRejectionFlash_->intensity > 0.0f;
+  }
+
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
@@ -193,6 +205,9 @@ private:
 
   std::vector<svg::SVGElement> lastOverlaySelectionVec_;
   std::vector<svg::SVGElement> sourceHoverElements_;
+  /// Active locked-rejection flash pushed by the editor each frame, drawn red on the next overlay
+  /// capture and fading toward zero intensity. nullopt when no element is being rejected.
+  std::optional<SelectTool::LockedRejectionFlash> lockedRejectionFlash_;
   std::vector<svg::SVGElement> lastOverlaySourceHoverVec_;
   Vector2i lastOverlayRasterSize_ = Vector2i::Zero();
   std::optional<Box2d> lastOverlayScreenRect_;
