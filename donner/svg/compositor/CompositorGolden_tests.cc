@@ -499,64 +499,6 @@ TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockste
       << afterDrag->canvasFromBitmap();
 }
 
-// "Occasionally re-rasterize scale to stay crisp" (#6/#7 follow-up): a scale drag
-// reuses the cached bitmap as a live quad for lockstep, but once the bitmap has
-// been scaled UP past the crisp-reraster threshold it re-rasterizes crisp at the
-// current scale instead — an occasional, async (worker) refresh, NOT every frame.
-// A small scale stays on the reuse path (sharp enough); a large scale re-rasters.
-TEST_F(CompositorGoldenTest, ScaleDragRerastersCrispPastDriftThreshold) {
-  SVGDocument document = parseDocument(R"svg(
-    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
-      <rect width="200" height="100" fill="white"/>
-      <rect id="target" x="70" y="30" width="60" height="40" fill="red"/>
-    </svg>
-  )svg");
-
-  auto target = document.querySelector("#target");
-  ASSERT_TRUE(target.has_value());
-  const Entity entity = target->unsafeEntityHandle().entity();
-
-  CompositorController compositor(document, renderer_);
-  ASSERT_TRUE(compositor.promoteEntity(entity));
-  compositor.renderFrame(viewport_);
-
-  const auto layerStamp = [&]() -> std::optional<Transform2d> {
-    const CompositorLayer* layer = compositor.findLayerForTest(entity);
-    return layer != nullptr ? layer->bitmapEntityFromWorldTransform() : std::nullopt;
-  };
-  const std::optional<Transform2d> stampAtBake = layerStamp();
-  ASSERT_TRUE(stampAtBake.has_value());
-
-  const Vector2d center(100.0, 50.0);
-  const auto scaleAboutCenter = [&](double s) {
-    return Transform2d::Translate(center) * Transform2d::Scale(s, s) *
-           Transform2d::Translate(-center);
-  };
-
-  // Small scale (1.2x, below the 1.5x threshold): reuse the cached bitmap (stamp
-  // unchanged) and carry the scale in canvasFromBitmap (live quad).
-  target->cast<SVGGraphicsElement>().setTransform(scaleAboutCenter(1.2));
-  compositor.renderFrame(viewport_);
-  const std::optional<Transform2d> stampAfterSmall = layerStamp();
-  ASSERT_TRUE(stampAfterSmall.has_value());
-  EXPECT_NEAR(stampAfterSmall->data[0], stampAtBake->data[0], 1e-9)
-      << "a small scale must reuse the cached bitmap (stamp unchanged), not re-raster";
-  const CompositorLayer* afterSmall = compositor.findLayerForTest(entity);
-  ASSERT_NE(afterSmall, nullptr);
-  EXPECT_FALSE(afterSmall->canvasFromBitmap().isIdentity())
-      << "a small scale must carry the scale in canvasFromBitmap for a live quad";
-
-  // Large scale (2x, above the threshold): re-raster crisp at the current scale
-  // (stamp advances) so the upscaled preview stays sharp instead of a blurry quad.
-  target->cast<SVGGraphicsElement>().setTransform(scaleAboutCenter(2.0));
-  compositor.renderFrame(viewport_);
-  const std::optional<Transform2d> stampAfterLarge = layerStamp();
-  ASSERT_TRUE(stampAfterLarge.has_value());
-  EXPECT_GT(std::abs(stampAfterLarge->data[0] - stampAtBake->data[0]), 1e-6)
-      << "scaling up past the threshold must re-rasterize crisp (rasterize stamp advances), "
-         "not reuse a blurry upscaled quad";
-}
-
 TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScales) {
   for (double canvasScale : {1.0, 2.0, 1.5}) {
     SCOPED_TRACE("canvasScale=" + std::to_string(canvasScale));

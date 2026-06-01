@@ -1787,38 +1787,20 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
         // presentation transforms the cached pixels as a live quad that tracks
         // the drag in lockstep with the overlay — no async-worker round trip.
         //
-        // This applies to a pure-translation delta (the bitmap slides,
-        // pixel-exact), a single-entity affine delta (rotate/scale), and a
-        // subtree/filter-group affine delta (the whole cached filtered result is
-        // transformed as one quad). Re-rasterizing the affine delta every frame
-        // instead baked the transform with `canvasFromBitmap ~= identity`,
-        // dropping the shape off the live-tracking path so it lagged the overlay
-        // (#6/#7).
-        //
-        // EXCEPT: when the cached bitmap has been scaled UP past
-        // `kCrispRerasterScaleThreshold`, the reused quad would look blurry, so
-        // re-rasterize the layer crisp at the current transform instead of
-        // reusing. This is an occasional, async refresh — it runs on the worker
-        // only when the accumulated scale drift since the last rasterize crosses
-        // the threshold (NOT every frame), so the drag stays smooth and in
-        // lockstep between refreshes and then snaps crisp. Rotation and
-        // translation preserve area (|determinant| ~= 1) so they never trip this
-        // and reuse indefinitely; scaling DOWN downsamples the cached bitmap,
-        // which stays sharp, so only upscaling re-rasterizes. After the re-raster
-        // the rasterize-time stamp advances to the current transform and the
-        // drift resets, so a continuous scale-up re-rasterizes in ~threshold
-        // steps. Pinned by `ScaleDragRerastersCrispPastDriftThreshold`.
-        constexpr double kCrispRerasterScaleThreshold = 1.5;
-        const double bitmapScaleDrift =
-            std::sqrt(std::abs(res.bitmapEntityFromEntity.determinant()));
-        if (bitmapScaleDrift > kCrispRerasterScaleThreshold) {
-          res.layer->markDirty();
-          unhandledDirtyEntities.push_back(res.entity);
-        } else {
-          res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
-          if (res.isSubtree && res.bitmapEntityFromEntity.isTranslation()) {
-            propagateFastPathTranslationToSubtree(registry, res.entity, worldFromPreviousWorld);
-          }
+        // This applies to BOTH a pure-translation delta (the bitmap slides,
+        // pixel-exact) AND a single-entity affine delta (rotate/scale — the
+        // bitmap is transformed as a quad, a soft resample during the gesture
+        // that re-rasterizes crisp once the drag settles / the entity leaves
+        // ActiveDrag). Re-rasterizing the affine delta every frame instead
+        // baked the rotation with `canvasFromBitmap ~= identity`, dropping the
+        // shape off the live-tracking path so it lagged the overlay (#6/#7).
+        // Subtree layers with a non-translation delta never reach here — they
+        // were disqualified in `appendLayerResolution` — so the only
+        // non-translation case here is a single entity with no descendants to
+        // keep consistent.
+        res.layer->setCanvasFromBitmap(res.bitmapEntityFromEntity);
+        if (res.isSubtree && res.bitmapEntityFromEntity.isTranslation()) {
+          propagateFastPathTranslationToSubtree(registry, res.entity, worldFromPreviousWorld);
         }
       }
       // Clear the dirty flags ourselves since we skipped prepare. Tell
