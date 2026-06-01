@@ -139,6 +139,49 @@ TEST(PresentedFrameComposerTest, RepresentedAffineTransformDoesNotDoubleApply) {
   EXPECT_EQ(quad->bottomRight, Vector2d(20.0, 20.0));
 }
 
+// A re-captured (baked) drag tile carries its content at the `represented`
+// transform with `documentFromCachedDocument == identity` (the worker bakes the
+// transform into the pixels and resets canvasFromBitmap). To present that bitmap
+// at the live `active` transform the presented transform `E` must satisfy
+// `E * represented == active` — i.e. the baked-at-`represented` pixels are
+// re-based onto `active`. For pure translation or axis-aligned scale this holds
+// either way because the factors commute, but a rotate+scale gesture
+// (non-commuting `represented` vs `active`) exposes the multiply order: a
+// conjugation `represented^-1 * active` leaves the content at the wrong
+// orientation/size while the overlay (drawn at `active`) tracks correctly — the
+// "glitches back to original size, doesn't scale to match the outline" bug.
+TEST(PresentedFrameComposerTest, BakedTileRebasesOntoActiveForNonCommutingDrag) {
+  // Rotated non-uniform scales: represented and active do NOT commute.
+  const Transform2d represented = Transform2d::Scale(Vector2d(2.0, 1.0)) * Transform2d::Rotate(0.3);
+  const Transform2d active = Transform2d::Scale(Vector2d(2.5, 1.0)) * Transform2d::Rotate(0.6);
+
+  PresentedFrameTileGeometry tile;
+  tile.canvasOffsetDoc = Vector2d(0.0, 0.0);
+  tile.bitmapDimsDoc = Vector2d(10.0, 10.0);
+  tile.documentFromCachedDocument = Transform2d();  // identity: a fresh bake
+  tile.isDragTarget = true;
+
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedDocumentFromCachedDocument = represented,
+      .activeDocumentFromCachedDocument = active,
+  };
+
+  const Transform2d effective =
+      ResolvePresentedTileDocumentTransform(PresentedFrameTileGeometry{tile}, baseline);
+
+  // The baked content sits at `represented`; presenting it must land it at
+  // `active`. If this fails, the content is at `effective * represented`, which
+  // for the buggy conjugation order is `represented^-1 * active * represented`.
+  const Transform2d landed = effective * represented;
+  for (int i = 0; i < 6; ++i) {
+    EXPECT_NEAR(landed.data[i], active.data[i], 1e-9)
+        << "Presented baked tile did not re-base onto the active transform "
+           "(component "
+        << i << "): the content tracks a conjugated transform, not the live gesture.";
+  }
+}
+
 TEST(PresentedFrameComposerTest, ComputesTileRectFromNonZeroCanvasOrigin) {
   PresentedFrameTileGeometry tile;
   tile.canvasOffsetDoc = Vector2d(12.25, 24.75);

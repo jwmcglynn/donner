@@ -68,8 +68,21 @@ Transform2d ResolvePresentedTileDocumentTransform(
             dragBaseline->representedTranslationDoc);
     const Transform2d activeDocumentFromCachedDocument = DocumentFromCachedWithTranslationFallback(
         dragBaseline->activeDocumentFromCachedDocument, dragBaseline->activeTranslationDoc);
-    return tileDocumentFromCachedDocument * representedDocumentFromCachedDocument.inverse() *
-           activeDocumentFromCachedDocument;
+    // Re-base the cached bitmap onto the live `active` transform. The bitmap's
+    // content sits at `represented` (a re-captured tile bakes the transform into
+    // its pixels with `tile.dfc == identity`; a reused tile carries it in
+    // `tile.dfc`), so the presented transform `E` must satisfy
+    // `E * represented == active`, giving `E = active * represented^-1 * tile`.
+    // The factors must multiply in THIS order: for a pure translation or
+    // axis-aligned scale they commute and the order is moot, but a rotate+scale
+    // gesture does not commute — the reverse order
+    // (`tile * represented^-1 * active`) leaves the content tracking a
+    // conjugation `represented^-1 * active * represented` while the overlay,
+    // drawn at `active`, tracks correctly, so the shape snaps to the wrong
+    // size/orientation as each async re-capture lands. Pinned by
+    // `BakedTileRebasesOntoActiveForNonCommutingDrag`.
+    return activeDocumentFromCachedDocument * representedDocumentFromCachedDocument.inverse() *
+           tileDocumentFromCachedDocument;
   }
 
   return tileDocumentFromCachedDocument;
