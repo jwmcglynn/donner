@@ -3595,7 +3595,7 @@ void EditorShell::runFrame() {
   if (lockedRejectionFlashNeedsRedraw && app_.hasDocument() &&
       !renderCoordinator_.asyncRenderer().isBusy()) {
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
-        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
         selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
 
