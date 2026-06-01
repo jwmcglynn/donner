@@ -2400,6 +2400,19 @@ void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float p
       [this](std::uint64_t stableId, const svg::RendererBitmap& bitmap) -> ImTextureID {
     return thumbnailTextures_.uploadThumbnail(stableId, bitmap);
   };
+  // Feed the current locked-rejection flash into the Layers panel so the rejected
+  // (locked) element's row flashes red in sync with the canvas outline flash. The
+  // flash was already ticked earlier this frame (see runFrame's
+  // tickLockedRejectionFlash), and the shell keeps the event loop awake while it
+  // fades, so the row fade animates for free. `std::nullopt` clears it.
+  if (const std::optional<SelectTool::LockedRejectionFlash> flash =
+          selectTool_.lockedRejectionFlash();
+      flash.has_value()) {
+    layersPanel_.setLockedRejectionFlash(
+        LayersLockedRejectionFlash{.element = flash->element, .intensity = flash->intensity});
+  } else {
+    layersPanel_.setLockedRejectionFlash(std::nullopt);
+  }
   layersPanel_.render(liveAppForClicks, thumbnailTextureProvider);
   // Feed the Layers-panel hover into the shared source-hover preview so the
   // canvas (and source pane) highlight the hovered element, the same way

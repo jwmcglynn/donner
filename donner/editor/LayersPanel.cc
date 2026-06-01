@@ -150,6 +150,23 @@ bool LayersPanel::consumeQueuedMutation() {
   return queued;
 }
 
+void LayersPanel::setLockedRejectionFlash(std::optional<LayersLockedRejectionFlash> flash) {
+  lockedRejectionFlash_ = std::move(flash);
+}
+
+std::optional<std::size_t> LayersPanel::flashedRowIndex() const {
+  if (!lockedRejectionFlash_.has_value() || lockedRejectionFlash_->intensity <= 0.0f) {
+    return std::nullopt;
+  }
+  const std::vector<LayerTreeRow>& rows = model_.rows();
+  for (std::size_t i = 0; i < rows.size(); ++i) {
+    if (rows[i].element == lockedRejectionFlash_->element) {
+      return i;
+    }
+  }
+  return std::nullopt;
+}
+
 void LayersPanel::noteRowHovered(std::optional<std::size_t> rowIndex) {
   const std::vector<LayerTreeRow>& rows = model_.rows();
   if (!rowIndex.has_value() || *rowIndex >= rows.size()) {
@@ -285,10 +302,28 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
   constexpr float kIndentStep = 14.0f;
   ImDrawList* drawList = ImGui::GetWindowDrawList();
 
+  // The visible row (if any) whose element matches the active locked-rejection
+  // flash. Its background flashes red in sync with the canvas outline flash; the
+  // alpha tracks the flash fade intensity.
+  const std::optional<std::size_t> flashRowIndex = flashedRowIndex();
+
   std::optional<std::size_t> hoveredRowIndex;
   for (std::size_t i = 0; i < rows.size(); ++i) {
     const LayerTreeRow& row = rows[i];
     ImGui::PushID(static_cast<int>(static_cast<std::uint32_t>(row.stableId)));
+
+    // For the flashed row, capture the row's top-left in screen space and split
+    // the draw list so the red highlight rect lands *behind* the row content
+    // (chevron, preview, label, affordances). The rect is filled after the row
+    // is laid out, when its full height is known. This is plain UI chrome (a row
+    // background), not a depiction of vector artwork — see CLAUDE.md "No
+    // Rendering Vector Graphics With ImGui".
+    const bool isFlashRow = flashRowIndex.has_value() && *flashRowIndex == i;
+    const ImVec2 rowFlashTopLeft = ImGui::GetCursorScreenPos();
+    if (isFlashRow) {
+      drawList->ChannelsSplit(2);
+      drawList->ChannelsSetCurrent(1);
+    }
 
     const float indent = static_cast<float>(row.depth) * kIndentStep;
     ImGui::Dummy(ImVec2(indent, 0.0f));
@@ -517,6 +552,24 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       // rather than inventing a new EditorApp API here.
       ImGui::MenuItem("Delete", nullptr, false, false);
       ImGui::EndPopup();
+    }
+
+    // Paint the locked-rejection flash behind the flashed row, then merge the
+    // split channels so the red background sits under the row content. The red
+    // matches the canvas outline flash color family (RGBA 0xFF,0x1A,0x1A); its
+    // alpha scales with the flash fade intensity (1 -> 0).
+    if (isFlashRow) {
+      drawList->ChannelsSetCurrent(0);
+      const float flashIntensity =
+          std::clamp(lockedRejectionFlash_ ? lockedRejectionFlash_->intensity : 0.0f, 0.0f, 1.0f);
+      const ImU32 flashColor = IM_COL32(0xff, 0x1a, 0x1a, static_cast<int>(flashIntensity * 160.0f));
+      const float rowBottomY = ImGui::GetCursorScreenPos().y;
+      const ImVec2 flashMin(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x,
+                            rowFlashTopLeft.y);
+      const ImVec2 flashMax(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x,
+                            rowBottomY);
+      drawList->AddRectFilled(flashMin, flashMax, flashColor, 3.0f);
+      drawList->ChannelsMerge();
     }
 
     ImGui::PopID();
