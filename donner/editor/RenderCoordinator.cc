@@ -374,8 +374,7 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
 }
 
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
-    EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
-    const std::optional<Box2d>& marqueeRectDoc,
+    EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
     std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
     std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview,
     std::optional<SelectionChromeDetail> selectionDetail,
@@ -383,7 +382,6 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     immediateOverlaySnapshot_.reset();
-    textures.clearOverlay();
     return false;
   }
 
@@ -422,8 +420,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
 
   if (!overlayInteractionActive && !overlayGeometryDiffers &&
       resolvedSelectionDetail == lastOverlaySelectionDetail_ &&
-      (immediateOverlaySnapshot_.has_value() ||
-       (textures.overlayWidth() > 0 && textures.overlayHeight() > 0))) {
+      immediateOverlaySnapshot_.has_value()) {
     FrameCostBreakdown::Overlay overlayCost;
     overlayCost.canvasSize = currentOverlayRasterSize;
     overlayCost.selectedElementCount = static_cast<int>(overlaySelection.size());
@@ -492,7 +489,6 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
                 static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.y)) * 4u
           : 0u;
   immediateOverlaySnapshot_ = chromeSnapshot;
-  textures.clearOverlay();
 
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlaySourceHoverVec_ = sourceHoverElements_;
@@ -522,7 +518,7 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
   const std::optional<SelectTool::ActiveDragPreview> liveDragPreview =
       liveActiveDragPreview.has_value() ? liveActiveDragPreview : activeDragPreview;
   return rasterizeOverlayForCurrentSelection(
-      app, viewport, textures, selectTool.marqueeRect(), representedDragPreview,
+      app, viewport, selectTool.marqueeRect(), representedDragPreview,
       selectTool.activeTransformBoundsPreview(), std::nullopt, liveDragPreview);
 }
 
@@ -603,8 +599,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     // chrome-refresh path. Composited drag lands here; SelectTool isn't
     // reachable, so we reuse whatever the most recent main-thread
     // rasterize baked in.
-    rasterizeOverlayForCurrentSelection(app, viewport, textures, lastOverlayMarqueeRectDoc_,
-                                        std::nullopt, std::nullopt, lastOverlaySelectionDetail_);
+    rasterizeOverlayForCurrentSelection(app, viewport, lastOverlayMarqueeRectDoc_, std::nullopt,
+                                        std::nullopt, lastOverlaySelectionDetail_);
     compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
   promoteSelectionBoundsIfReady();

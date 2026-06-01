@@ -898,8 +898,6 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .compositorCanvas = compositorCanvas,
       .metadataOnlyMissCount = textures_.metadataOnlyMissCount(),
       .duplicateLiveTextureCount = textures_.duplicateLiveTextureCount(),
-      .overlayDimsPx = Vector2i(textures_.overlayWidth(), textures_.overlayHeight()),
-      .overlayTextureHandle = static_cast<std::uint64_t>(textures_.overlayTexture()),
       .presentationResources = textures_.presentationResourceStats(),
       .frameCost = frameCost,
   };
@@ -1058,7 +1056,6 @@ void EditorShell::resetPresentationForLoadedDocument(std::string_view canonicalS
   treeviewPendingScroll_ = false;
   renderCoordinator_.resetForLoadedDocument();
   textures_.resetComposited();
-  textures_.clearOverlay();
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   dialogPresenter_.clearOpenFileError();
   dialogPresenter_.clearSaveFileError();
@@ -2153,7 +2150,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         requestRenderAtEndOfFrame_ = true;
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
-            app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+            app_, interactionController_.viewport(), selectTool_.marqueeRect(),
             selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         interactionController_.clearPendingClick();
       } else if (leftMouseDown && pendingClickCanStartMarquee) {
@@ -2189,7 +2186,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           requestRenderAtEndOfFrame_ = true;
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              app_, interactionController_.viewport(), selectTool_.marqueeRect(),
               selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         }
         interactionController_.clearPendingClick();
@@ -2234,7 +2231,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         if (!renderCoordinator_.asyncRenderer().isBusy() && app_.flushFrame()) {
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+              app_, interactionController_.viewport(), selectTool_.marqueeRect(),
               selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
         }
       }
@@ -2258,12 +2255,12 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
               previewBeforeRelease, app_.document().currentFrameVersion());
           renderCoordinator_.refreshSelectionBoundsCache(app_);
           renderCoordinator_.rasterizeOverlayForCurrentSelection(
-              app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
+              app_, interactionController_.viewport(), selectTool_.marqueeRect());
         }
       } else if (!renderCoordinator_.asyncRenderer().isBusy()) {
         renderCoordinator_.refreshSelectionBoundsCache(app_);
         renderCoordinator_.rasterizeOverlayForCurrentSelection(
-            app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect());
+            app_, interactionController_.viewport(), selectTool_.marqueeRect());
       }
     }
   }
@@ -2855,7 +2852,7 @@ void EditorShell::applyReferenceHighlightPreview() {
       textEditor_.setHoverSourceRanges(sourceHoverRangesForElements(previewElements));
   if (overlayChanged) {
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
-        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
         selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
   if (overlayChanged || sourceChanged) {
@@ -3050,7 +3047,7 @@ bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
   documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   renderCoordinator_.rasterizeOverlayForCurrentSelection(
-      app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+      app_, interactionController_.viewport(), selectTool_.marqueeRect(),
       selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   requestRenderAtEndOfFrame_ = true;
   window_.wakeEventLoop();
@@ -3256,7 +3253,7 @@ void EditorShell::renderRenderPaneContextMenu() {
   if (selectionChanged && !rendererBusy) {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
-        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
         selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
     window_.wakeEventLoop();
   }
@@ -3446,7 +3443,7 @@ void EditorShell::applySourceStyleDecorationChipClick() {
   if (!renderCoordinator_.asyncRenderer().isBusy()) {
     renderCoordinator_.refreshSelectionBoundsCache(app_);
     renderCoordinator_.rasterizeOverlayForCurrentSelection(
-        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        app_, interactionController_.viewport(), selectTool_.marqueeRect(),
         selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
   }
 
@@ -3481,7 +3478,7 @@ void EditorShell::setSourcePaneVisible(bool visible) {
     if (renderCoordinator_.setSourceHoverElements({}) &&
         !renderCoordinator_.asyncRenderer().isBusy()) {
       renderCoordinator_.rasterizeOverlayForCurrentSelection(
-          app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+          app_, interactionController_.viewport(), selectTool_.marqueeRect(),
           selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
     }
   }
