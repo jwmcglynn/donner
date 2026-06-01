@@ -1663,15 +1663,20 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
 
       const bool isSubtree =
           matchedLayer->firstEntity() != entity || matchedLayer->lastEntity() != entity;
-      // Subtree layers require a pure-translation delta: only then can we
-      // cheaply propagate the same offset to descendant RICs without
-      // walking the layout system. Non-translation subtree mutations
-      // (scale, rotate, transform-list change) stay on the slow path.
-      // Single-entity layers can tolerate non-translation deltas via a
-      // targeted re-rasterize later in `renderFrame`.
-      if (isSubtree && !bitmapEntityFromEntity.isTranslation()) {
-        return false;
-      }
+      // Both single-entity AND subtree layers (e.g. a filter group like
+      // `#Lighting_glow_dark`) carry a non-translation drag delta in
+      // `canvasFromBitmap` and reuse their cached bitmap — the cached pixels
+      // (the whole filtered result, for a filter group) are transformed as a
+      // live quad in lockstep with the overlay. Re-rendering a filter every
+      // rotate/scale frame is exactly the per-frame cost that made filtered
+      // elements glitchy (#6/#7). For a pure-translation delta the apply phase
+      // additionally propagates the offset to descendant RICs cheaply; a
+      // non-translation delta skips that propagation (the descendant RICs
+      // re-sync on settle), and any independently-promoted descendant layer in
+      // the subtree gets its own affine compose offset via the descendant loop
+      // below. The bitmap is a soft preview during the gesture and re-rasterizes
+      // crisp once the drag settles. Pinned by
+      // `FilterGroupRotationDragReusesCachedBitmapForLockstep`.
 
       resolutions.push_back(FastPathResolution{
           .entity = entity,

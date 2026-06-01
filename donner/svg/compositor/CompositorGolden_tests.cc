@@ -434,6 +434,71 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
   EXPECT_NEAR(canvasFromBitmap.translation().y, 0.0, 1e-6);
 }
 
+// Lockstep rotate/scale for a FILTERED group (#6/#7, e.g. #Lighting_glow_dark).
+// A filter group is a subtree layer (its cached bitmap is the whole filtered
+// result), so it must reuse that cached bitmap and carry the rotate/scale affine
+// in `canvasFromBitmap` — transforming the filtered result as a live quad —
+// rather than re-rendering the (expensive) filter every frame. Re-rendering each
+// frame is what makes a filtered element "glitchy" during resize/rotate: the
+// subtree fast-path gate disqualified non-translation deltas and fell back to a
+// full prepare+re-render. This pins that a filter-group rotate drag reuses the
+// cached bitmap (stamp unchanged) and carries the affine.
+TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockstep) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="4"/></filter>
+      </defs>
+      <rect width="200" height="200" fill="white"/>
+      <g id="target" filter="url(#blur)">
+        <rect x="60" y="60" width="40" height="20" fill="red"/>
+        <rect x="60" y="100" width="40" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  const CompositorLayer* warm = compositor.findLayerForTest(entity);
+  ASSERT_NE(warm, nullptr);
+  ASSERT_TRUE(warm->hasValidBitmap());
+  const std::optional<Transform2d> stampAfterWarm = warm->bitmapEntityFromWorldTransform();
+  ASSERT_TRUE(stampAfterWarm.has_value());
+
+  // Rotate the filter group about its center — a non-translation gesture frame.
+  const Vector2d center(80.0, 90.0);
+  const Transform2d documentFromElement =
+      Transform2d::Translate(center) * Transform2d::Rotate(0.4) * Transform2d::Translate(-center);
+  target->cast<SVGGraphicsElement>().setTransform(documentFromElement);
+  compositor.renderFrame(viewport);
+
+  const CompositorLayer* afterDrag = compositor.findLayerForTest(entity);
+  ASSERT_NE(afterDrag, nullptr);
+  ASSERT_TRUE(afterDrag->hasValidBitmap());
+
+  // The cached filtered bitmap must be reused (stamp unchanged) — not re-filtered.
+  const std::optional<Transform2d> stampAfterDrag = afterDrag->bitmapEntityFromWorldTransform();
+  ASSERT_TRUE(stampAfterDrag.has_value());
+  EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
+      << "filter group re-filtered during a rotate drag instead of reusing the cached bitmap";
+  EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9);
+
+  // And the rotation is carried as an affine compose offset (live quad), not baked.
+  EXPECT_FALSE(afterDrag->canvasFromBitmap().isTranslation())
+      << "filter-group rotate drag must carry the affine in canvasFromBitmap for lockstep. got\n"
+      << afterDrag->canvasFromBitmap();
+}
+
 TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScales) {
   for (double canvasScale : {1.0, 2.0, 1.5}) {
     SCOPED_TRACE("canvasScale=" + std::to_string(canvasScale));
