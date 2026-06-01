@@ -213,7 +213,7 @@ bool HandleKeyDown(EditorApp& app, const repro::ReproEvent& event) {
 }
 
 bool SyncCanvasSize(EditorApp& app, const ViewportState& viewport) {
-  const Vector2i desired = viewport.desiredCanvasSize();
+  const Vector2i desired = viewport.rasterViewport().semanticCanvasSizePx;
   const Vector2i current = app.document().document().canvasSize();
   if (desired == current) {
     return false;
@@ -232,7 +232,7 @@ constexpr double kCanvasSizeCommitDelayMs = 120.0;
 
 bool SyncCanvasSizeDebounced(EditorApp& app, const ViewportState& viewport,
                              double frameTimestampSeconds, double* lastCommitTimestampSeconds) {
-  const Vector2i desired = viewport.desiredCanvasSize();
+  const Vector2i desired = viewport.rasterViewport().semanticCanvasSizePx;
   const Vector2i current = app.document().document().canvasSize();
   if (desired == current) {
     return false;
