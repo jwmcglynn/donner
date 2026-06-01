@@ -699,6 +699,41 @@ protected:
     ImGui::Render();
   }
 
+  // Render one Layers-panel frame and return how many vertices in the window's
+  // draw list carry the locked-rejection flash red (RGBA 0xFF,0x1A,0x1A, any
+  // alpha). The flash row paints a filled rect in that color via the draw-list
+  // channel split, so a positive count proves the row background flashed red.
+  // Alpha is ignored so the count is stable across fade intensity (the
+  // intensity-driven alpha is asserted at the seam level instead).
+  int CountFlashRedVertices(LayersPanel& panel, EditorApp& app) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(400, 300);
+    io.AddMousePosEvent(-1.0f, -1.0f);  // mouse off-panel so hover chrome stays clear
+    io.AddMouseButtonEvent(0, false);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(300, 250), ImGuiCond_Always);
+    ImGui::Begin("##layers_flash_test", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    panel.render(&app);
+    const ImDrawList* drawList = ImGui::GetWindowDrawList();
+    int count = 0;
+    for (int i = 0; i < drawList->VtxBuffer.Size; ++i) {
+      const ImU32 col = drawList->VtxBuffer[i].col;
+      const int r = static_cast<int>((col >> IM_COL32_R_SHIFT) & 0xff);
+      const int g = static_cast<int>((col >> IM_COL32_G_SHIFT) & 0xff);
+      const int b = static_cast<int>((col >> IM_COL32_B_SHIFT) & 0xff);
+      const int a = static_cast<int>((col >> IM_COL32_A_SHIFT) & 0xff);
+      if (r == 0xff && g == 0x1a && b == 0x1a && a > 0) {
+        ++count;
+      }
+    }
+    ImGui::End();
+    ImGui::Render();
+    return count;
+  }
+
   ImGuiContext* ctx_ = nullptr;
 };
 
@@ -725,6 +760,76 @@ TEST_F(LayersPanelImGuiTest, LockButtonReceivesClick) {
   const std::optional<LayerTreeRow> locked = FindRow(panel, "rect1");
   ASSERT_TRUE(locked.has_value());
   EXPECT_TRUE(locked->isLocked) << "lock button click was eaten by the row Selectable";
+}
+
+// ---------------------------------------------------------------------------
+// Locked-rejection row flash: clicking a locked element flashes its Layers row
+// red in sync with the canvas outline flash.
+// ---------------------------------------------------------------------------
+
+// Seam-level: an active flash whose element matches a visible row reports that
+// row index + its fade intensity; an unset/zero-intensity flash reports none.
+TEST(LayersPanelTest, LockedFlashReportsRowAndIntensity) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  // No flash set: nothing flashes.
+  EXPECT_EQ(panel.flashedRowIndex(), std::nullopt);
+  EXPECT_FLOAT_EQ(panel.lockedRejectionFlashIntensity(), 0.0f);
+
+  const int leafIdx = RowIndex(panel, "leaf");
+  ASSERT_GE(leafIdx, 0);
+  const svg::SVGElement leafElement = panel.rows()[static_cast<std::size_t>(leafIdx)].element;
+
+  panel.setLockedRejectionFlash(
+      LayersLockedRejectionFlash{.element = leafElement, .intensity = 0.6f});
+  ASSERT_TRUE(panel.flashedRowIndex().has_value());
+  EXPECT_EQ(*panel.flashedRowIndex(), static_cast<std::size_t>(leafIdx));
+  EXPECT_FLOAT_EQ(panel.lockedRejectionFlashIntensity(), 0.6f);
+
+  // A fully-faded (intensity 0) flash maps to no row even though it is set.
+  panel.setLockedRejectionFlash(
+      LayersLockedRejectionFlash{.element = leafElement, .intensity = 0.0f});
+  EXPECT_EQ(panel.flashedRowIndex(), std::nullopt);
+
+  // Clearing the flash drops it entirely.
+  panel.setLockedRejectionFlash(
+      LayersLockedRejectionFlash{.element = leafElement, .intensity = 0.6f});
+  panel.setLockedRejectionFlash(std::nullopt);
+  EXPECT_EQ(panel.flashedRowIndex(), std::nullopt);
+  EXPECT_FLOAT_EQ(panel.lockedRejectionFlashIntensity(), 0.0f);
+}
+
+// ImGui-frame: an active flash paints the matching row's background red; no
+// flash (or zero intensity) paints no red.
+TEST_F(LayersPanelImGuiTest, LockedFlashPaintsRowBackgroundRed) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+    <rect id="rect2" x="0" y="20" width="10" height="10"/>
+  </svg>)");
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const std::optional<LayerTreeRow> rect2Row = FindRow(panel, "rect2");
+  ASSERT_TRUE(rect2Row.has_value());
+
+  // No flash: the panel paints no flash-red anywhere.
+  EXPECT_EQ(CountFlashRedVertices(panel, app), 0)
+      << "Layers panel painted flash-red with no active locked-rejection flash";
+
+  // Flash rect2's row: a red background rect appears (the row-rect quad
+  // contributes flash-red vertices).
+  panel.setLockedRejectionFlash(
+      LayersLockedRejectionFlash{.element = rect2Row->element, .intensity = 1.0f});
+  EXPECT_GT(CountFlashRedVertices(panel, app), 0)
+      << "flashed locked row did not paint a red background";
+
+  // Clearing the flash removes the red again.
+  panel.setLockedRejectionFlash(std::nullopt);
+  EXPECT_EQ(CountFlashRedVertices(panel, app), 0)
+      << "row stayed red after the locked-rejection flash was cleared";
 }
 
 }  // namespace
