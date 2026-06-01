@@ -101,7 +101,11 @@ std::vector<svg::SVGElement> QueryNumberedRects(svg::SVGDocument& document, int 
 }
 
 std::optional<RenderResult> WaitForRenderResult(AsyncRenderer& asyncRenderer) {
-  for (int i = 0; i < 400; ++i) {
+  // Poll up to 30s. The expensive cases (splash high-zoom render) finish in a
+  // few seconds on a fast machine but can take longer on a loaded self-hosted
+  // CI runner; a tight 4s budget flaked there (the worker simply hadn't
+  // published yet). A generous bound stays robust without masking a real hang.
+  for (int i = 0; i < 3000; ++i) {
     auto result = asyncRenderer.pollResult();
     if (result.has_value()) {
       return result;
@@ -334,7 +338,9 @@ TEST(AsyncRendererTest, ImmediateStaticSpansCarryPayloadAcrossPublishedFrames) {
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
+    // 30s budget — generous for a loaded self-hosted CI runner (see
+    // WaitForRenderResult).
+    for (int i = 0; i < 3000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) {
         return result;
@@ -939,7 +945,9 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   AsyncRenderer asyncRenderer;
 
   const auto waitForResult = [&]() -> std::optional<RenderResult> {
-    for (int i = 0; i < 400; ++i) {
+    // 30s budget — generous for a loaded self-hosted CI runner (see
+    // WaitForRenderResult).
+    for (int i = 0; i < 3000; ++i) {
       auto result = asyncRenderer.pollResult();
       if (result.has_value()) {
         return result;
