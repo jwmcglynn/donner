@@ -504,7 +504,13 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 }
 
 void SelectTool::requestLockedRejectionFlash(const svg::SVGElement& element) {
-  lockedFlashElement_ = element;
+  // Flash the entire locked layer, not just the clicked leaf: clicking a
+  // `<rect>` inside a locked `<g>` should outline (and highlight in the Layers
+  // panel) the whole `<g>` that actually carries the lock. Resolve to the
+  // locked ancestor; fall back to the clicked element if — somehow — it isn't
+  // locked (both call sites gate on `IsLocked` first, so this is belt-and-
+  // suspenders).
+  lockedFlashElement_ = LockedAncestor(element).value_or(element);
   lockedFlashRemainingSeconds_ = kLockedRejectionFlashSeconds;
 }
 

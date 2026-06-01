@@ -15,6 +15,7 @@
 /// `layer_tree_model` already depends on `editor_app`; a shared low-level
 /// target avoids a dependency cycle.
 
+#include <optional>
 #include <string_view>
 
 #include "donner/svg/SVGElement.h"
@@ -35,5 +36,17 @@ inline constexpr std::string_view kLockedAttributeValue = "true";
 /// the edit-gating path in `EditorApp` (to reject transform/delete mutations on
 /// locked elements).
 [[nodiscard]] bool IsLocked(const svg::SVGElement& element);
+
+/// The nearest ancestor-or-self of @p element that directly carries the
+/// `data-donner-locked="true"` marker — i.e. the element that actually owns the
+/// lock — or `std::nullopt` if neither @p element nor any ancestor is locked.
+///
+/// This walks the same ancestor chain as `IsLocked`, but returns the *locked
+/// layer* rather than a boolean: clicking a `<rect>` inside a locked `<g>`
+/// resolves to the `<g>`, so locked-rejection feedback (the red outline flash
+/// and the Layers-panel row highlight) targets the whole locked layer rather
+/// than just the clicked leaf. When @p element itself carries the marker, it is
+/// returned unchanged.
+[[nodiscard]] std::optional<svg::SVGElement> LockedAncestor(const svg::SVGElement& element);
 
 }  // namespace donner::editor

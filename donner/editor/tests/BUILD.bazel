@@ -907,6 +907,18 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "lock_state_tests",
+    srcs = ["LockState_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:lock_state",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "layers_panel_tests",
     srcs = ["LayersPanel_tests.cc"],
     deps = [
