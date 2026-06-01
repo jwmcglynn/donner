@@ -177,6 +177,24 @@ std::shared_ptr<const svg::RendererTextureSnapshot> CreateCountingGeodeTextureSn
       });
 }
 
+// Build a one-tile composited preview backed by a GPU texture snapshot. Reusing
+// the same `id` across uploads with an advancing `generation` exercises the
+// cache's per-tile texture retirement, which is the machinery the deleted
+// overlay-texture path used to drive.
+RenderResult::CompositedPreview SingleSnapshotTilePreview(
+    std::string id, std::uint64_t generation,
+    std::shared_ptr<const svg::RendererTextureSnapshot> snapshot) {
+  const Vector2i dims = snapshot != nullptr ? snapshot->dimensions() : Vector2i(1, 1);
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile =
+      MetadataTile(RenderResult::CompositedTile::Kind::Layer, generation, dims, Vector2i(100, 100));
+  tile.id = std::move(id);
+  tile.bitmapDimsDoc = Vector2d(dims.x, dims.y);
+  tile.textureSnapshot = std::move(snapshot);
+  preview.tiles.push_back(std::move(tile));
+  return preview;
+}
+
 TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   int firstDestructionCount = 0;
   int secondDestructionCount = 0;
@@ -189,13 +207,15 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
     std::shared_ptr<const svg::RendererTextureSnapshot> firstSnapshot =
         CreateCountingGeodeTextureSnapshot(device, &firstDestructionCount);
     ASSERT_NE(firstSnapshot, nullptr);
-    cache.uploadOverlayTexture(firstSnapshot);
+    cache.uploadComposited(SingleSnapshotTilePreview("layer:0", /*generation=*/1, firstSnapshot));
     firstSnapshot.reset();
 
     std::shared_ptr<const svg::RendererTextureSnapshot> secondSnapshot =
         CreateCountingGeodeTextureSnapshot(device, &secondDestructionCount);
     ASSERT_NE(secondSnapshot, nullptr);
-    cache.uploadOverlayTexture(secondSnapshot);
+    // Same tile id with an advanced generation retires the first snapshot's
+    // texture, mirroring the old overlay-texture retirement path.
+    cache.uploadComposited(SingleSnapshotTilePreview("layer:0", /*generation=*/2, secondSnapshot));
     secondSnapshot.reset();
 
     EXPECT_EQ(firstDestructionCount, 0);
@@ -216,37 +236,6 @@ TEST(GlTextureCacheTest, RetiredSnapshotsAgeByPresentationFrame) {
   EXPECT_EQ(secondDestructionCount, 1);
 }
 
-TEST(GlTextureCacheTest, OverlayScreenRectTracksCurrentUploadOnly) {
-  std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
-  ASSERT_NE(device, nullptr);
-
-  int firstDestructionCount = 0;
-  std::shared_ptr<const svg::RendererTextureSnapshot> firstSnapshot =
-      CreateCountingGeodeTextureSnapshot(device, &firstDestructionCount);
-  ASSERT_NE(firstSnapshot, nullptr);
-
-  GlTextureCache cache(device);
-  cache.uploadOverlayTexture(firstSnapshot);
-  firstSnapshot.reset();
-  cache.setOverlayScreenRect(Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0));
-
-  ASSERT_TRUE(cache.overlayScreenRect().has_value());
-  EXPECT_EQ(*cache.overlayScreenRect(), Box2d::FromXYWH(10.0, 20.0, 30.0, 40.0));
-
-  int secondDestructionCount = 0;
-  std::shared_ptr<const svg::RendererTextureSnapshot> secondSnapshot =
-      CreateCountingGeodeTextureSnapshot(device, &secondDestructionCount);
-  ASSERT_NE(secondSnapshot, nullptr);
-
-  cache.uploadOverlayTexture(secondSnapshot);
-  EXPECT_FALSE(cache.overlayScreenRect().has_value())
-      << "A new upload must not inherit stale screen-space placement.";
-
-  cache.setOverlayScreenRect(Box2d::FromXYWH(1.0, 2.0, 3.0, 4.0));
-  cache.clearOverlay();
-  EXPECT_FALSE(cache.overlayScreenRect().has_value());
-}
-
 TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures) {
   std::shared_ptr<geode::GeodeDevice> device = SharedGeodeDevice();
   ASSERT_NE(device, nullptr);
@@ -257,11 +246,11 @@ TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures)
   ASSERT_NE(firstSnapshot, nullptr);
 
   GlTextureCache cache(device);
-  cache.uploadOverlayTexture(firstSnapshot);
+  cache.uploadComposited(SingleSnapshotTilePreview("layer:0", /*generation=*/1, firstSnapshot));
   firstSnapshot.reset();
 
   PresentationResourceStats stats = cache.presentationResourceStats();
-  EXPECT_EQ(stats.overlayBytes, 3u * 5u * 4u);
+  EXPECT_EQ(stats.activeTileBytes, 3u * 5u * 4u);
   EXPECT_EQ(stats.pendingRetiredBytes, 0u);
   EXPECT_EQ(stats.totalTrackedBytes, 3u * 5u * 4u);
   EXPECT_EQ(stats.peakTrackedBytes, stats.totalTrackedBytes);
@@ -271,11 +260,12 @@ TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures)
   std::shared_ptr<const svg::RendererTextureSnapshot> secondSnapshot =
       CreateCountingGeodeTextureSnapshot(device, &secondDestructionCount, Vector2i(2, 2));
   ASSERT_NE(secondSnapshot, nullptr);
-  cache.uploadOverlayTexture(secondSnapshot);
+  // Same tile id, advanced generation: the first texture retires.
+  cache.uploadComposited(SingleSnapshotTilePreview("layer:0", /*generation=*/2, secondSnapshot));
   secondSnapshot.reset();
 
   stats = cache.presentationResourceStats();
-  EXPECT_EQ(stats.overlayBytes, 2u * 2u * 4u);
+  EXPECT_EQ(stats.activeTileBytes, 2u * 2u * 4u);
   EXPECT_EQ(stats.pendingRetiredBytes, 3u * 5u * 4u);
   EXPECT_EQ(stats.pendingRetiredTextures, 1);
   EXPECT_EQ(stats.totalTrackedBytes, 2u * 2u * 4u + 3u * 5u * 4u);
@@ -294,6 +284,7 @@ TEST(GlTextureCacheTest, PresentationResourceStatsTrackActiveAndRetiredTextures)
   stats = cache.presentationResourceStats();
   EXPECT_EQ(stats.pendingRetiredBytes, 0u);
   EXPECT_EQ(stats.agedRetiredBytes, 0u);
+  EXPECT_EQ(stats.activeTileBytes, 2u * 2u * 4u);
   EXPECT_EQ(stats.totalTrackedBytes, 2u * 2u * 4u);
   EXPECT_GE(stats.peakTrackedBytes, 2u * 2u * 4u + 3u * 5u * 4u);
   EXPECT_EQ(firstDestructionCount, 1);

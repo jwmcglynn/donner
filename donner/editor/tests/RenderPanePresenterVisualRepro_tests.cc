@@ -90,24 +90,33 @@ std::filesystem::path StableOutputDir() {
   return tempDir / "donner-display-none-ui-repro";
 }
 
-void WriteBitmap(const svg::RendererBitmap& bitmap, const std::filesystem::path& outputPath) {
+// Write a diagnostic PNG, returning false if the destination could not be
+// written. Used best-effort for the developer-convenience temp-dir copy (whose
+// shared path may be unwritable under a sandboxed/remote test runner) and as a
+// hard requirement for the canonical $TEST_UNDECLARED_OUTPUTS_DIR artifact.
+bool WriteBitmap(const svg::RendererBitmap& bitmap, const std::filesystem::path& outputPath) {
   if (bitmap.empty()) {
-    return;
+    return false;
   }
 
   std::error_code error;
   std::filesystem::create_directories(outputPath.parent_path(), error);
-  ASSERT_FALSE(error) << error.message();
-  ASSERT_TRUE(svg::RendererImageIO::writeRgbaPixelsToPngFile(
-      outputPath.string().c_str(), bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-      bitmap.rowBytes / 4u));
+  if (error) {
+    return false;
+  }
+  return svg::RendererImageIO::writeRgbaPixelsToPngFile(outputPath.string().c_str(), bitmap.pixels,
+                                                        bitmap.dimensions.x, bitmap.dimensions.y,
+                                                        bitmap.rowBytes / 4u);
 }
 
 void WriteDiagnosticBitmap(const svg::RendererBitmap& bitmap, std::string_view filename) {
-  WriteBitmap(bitmap, StableOutputDir() / filename);
+  // Best-effort developer-convenience copy: a shared temp dir may be
+  // unwritable under a sandboxed/remote test runner, which must not fail the
+  // test (the assertions below carry the real verification).
+  (void)WriteBitmap(bitmap, StableOutputDir() / filename);
   const char* undeclaredOutputsDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR");
   if (undeclaredOutputsDir != nullptr) {
-    WriteBitmap(bitmap, std::filesystem::path(undeclaredOutputsDir) / filename);
+    EXPECT_TRUE(WriteBitmap(bitmap, std::filesystem::path(undeclaredOutputsDir) / filename));
   }
 }
 

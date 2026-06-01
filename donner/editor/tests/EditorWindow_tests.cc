@@ -427,13 +427,25 @@ TEST(EditorWindowTest, WgpuPresentsUploadedStraightAlphaBitmapWithStraightBlend)
     bitmap.pixels[offset + 3] = 128u;
   }
 
+  RenderResult::CompositedPreview preview;
+  RenderResult::CompositedTile tile;
+  tile.kind = RenderResult::CompositedTile::Kind::Immediate;
+  tile.id = "seg:0";
+  tile.generation = 1;
+  tile.bitmap = std::move(bitmap);
+  tile.bitmapDimsPx = tile.bitmap.dimensions;
+  tile.rasterCanvasSize = Vector2i(32, 32);
+  tile.bitmapDimsDoc = Vector2d(32.0, 32.0);
+  preview.tiles.push_back(std::move(tile));
+
   GlTextureCache textures(window.geodeDevice());
   textures.initialize();
-  textures.uploadOverlay(bitmap);
-  ASSERT_NE(textures.overlayTexture(), 0);
+  textures.uploadComposited(preview);
+  ASSERT_EQ(textures.tiles().size(), 1u);
+  ASSERT_NE(textures.tiles().front().texture, 0);
 
   window.beginFrame();
-  ImGui::GetBackgroundDrawList()->AddImage(textures.overlayTexture(), ImVec2(16.0f, 16.0f),
+  ImGui::GetBackgroundDrawList()->AddImage(textures.tiles().front().texture, ImVec2(16.0f, 16.0f),
                                            ImVec2(48.0f, 48.0f));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
 
@@ -464,28 +476,45 @@ TEST(EditorWindowTest, WgpuPremultipliedTextureSurvivesOnePresentationOwnerRetir
       RenderPremultipliedRedTexture(window.geodeDevice());
   ASSERT_TRUE(texture != nullptr);
 
-  GlTextureCache liveOwner;
-  GlTextureCache transientOwner;
+  // Both owners present the same shared premultiplied snapshot via a one-tile
+  // composited upload. Retiring it from one owner must not drop the shared
+  // premultiplied-alpha registration while the other still draws it.
+  const auto sharedSnapshotPreview = [&texture]() {
+    RenderResult::CompositedPreview preview;
+    RenderResult::CompositedTile tile;
+    tile.kind = RenderResult::CompositedTile::Kind::Layer;
+    tile.id = "layer:0";
+    tile.generation = 1;
+    tile.textureSnapshot = texture;
+    tile.bitmapDimsPx = texture->dimensions();
+    tile.rasterCanvasSize = texture->dimensions();
+    tile.bitmapDimsDoc = Vector2d(texture->dimensions().x, texture->dimensions().y);
+    preview.tiles.push_back(std::move(tile));
+    return preview;
+  };
+
+  GlTextureCache liveOwner(window.geodeDevice());
+  GlTextureCache transientOwner(window.geodeDevice());
   liveOwner.initialize();
   transientOwner.initialize();
-  liveOwner.uploadOverlayTexture(texture);
-  transientOwner.uploadOverlayTexture(texture);
-  ASSERT_NE(liveOwner.overlayTexture(), 0);
+  liveOwner.uploadComposited(sharedSnapshotPreview());
+  transientOwner.uploadComposited(sharedSnapshotPreview());
+  ASSERT_EQ(liveOwner.tiles().size(), 1u);
+  ASSERT_NE(liveOwner.tiles().front().texture, 0);
+  const ImTextureID liveTexture = liveOwner.tiles().front().texture;
 
   window.beginFrame();
-  ImGui::GetBackgroundDrawList()->AddImage(liveOwner.overlayTexture(), ImVec2(16.0f, 16.0f),
-                                           ImVec2(48.0f, 48.0f));
+  ImGui::GetBackgroundDrawList()->AddImage(liveTexture, ImVec2(16.0f, 16.0f), ImVec2(48.0f, 48.0f));
   const svg::RendererBitmap expected = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(expected, "premul_shared_owner_before_retire_presentation.png");
 
-  transientOwner.clearOverlay();
+  transientOwner.resetComposited();
   for (int i = 0; i < 5; ++i) {
     transientOwner.advancePresentationFrame();
   }
 
   window.beginFrame();
-  ImGui::GetBackgroundDrawList()->AddImage(liveOwner.overlayTexture(), ImVec2(16.0f, 16.0f),
-                                           ImVec2(48.0f, 48.0f));
+  ImGui::GetBackgroundDrawList()->AddImage(liveTexture, ImVec2(16.0f, 16.0f), ImVec2(48.0f, 48.0f));
   const svg::RendererBitmap actual = window.endFrameAndReadPixels();
   WriteDiagnosticBitmap(actual, "premul_shared_owner_retire_presentation.png");
 
