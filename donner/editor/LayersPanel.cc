@@ -562,7 +562,8 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
       drawList->ChannelsSetCurrent(0);
       const float flashIntensity =
           std::clamp(lockedRejectionFlash_ ? lockedRejectionFlash_->intensity : 0.0f, 0.0f, 1.0f);
-      const ImU32 flashColor = IM_COL32(0xff, 0x1a, 0x1a, static_cast<int>(flashIntensity * 160.0f));
+      const ImU32 flashColor =
+          IM_COL32(0xff, 0x1a, 0x1a, static_cast<int>(flashIntensity * 160.0f));
       const float rowBottomY = ImGui::GetCursorScreenPos().y;
       const ImVec2 flashMin(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x,
                             rowFlashTopLeft.y);
