@@ -1,7 +1,10 @@
 #include "donner/editor/OverlayRenderer.h"
 
+#include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -86,6 +89,26 @@ svg::PaintParams MakeSourceHoverBoundsPaint(double worldStrokeWidth) {
   svg::PaintParams paint;
   paint.fill = svg::PaintServer::None{};
   paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0xc8, 0xff, 0xc8)));
+  paint.strokeOpacity = 1.0;
+  paint.strokeParams.strokeWidth = worldStrokeWidth;
+  paint.strokeParams.lineCap = svg::StrokeLinecap::Round;
+  paint.strokeParams.lineJoin = svg::StrokeLinejoin::Round;
+  paint.strokeParams.miterLimit = 4.0;
+  return paint;
+}
+
+/// Desired on-screen stroke thickness for the locked-rejection flash outline.
+/// Slightly heavier than the selection stroke so the rejection reads clearly.
+constexpr double kLockedFlashStrokePixels = 2.0;
+
+/// Red stroke, no fill, for the "this element is locked, you can't select it" flash. The stroke's
+/// alpha is the flash `intensity` (1 → 0 as it fades) scaled into the 0–255 channel range.
+svg::PaintParams MakeLockedFlashStrokePaint(double worldStrokeWidth, float intensity) {
+  svg::PaintParams paint;
+  const float clampedIntensity = std::clamp(intensity, 0.0f, 1.0f);
+  const uint8_t alpha = static_cast<uint8_t>(std::lround(clampedIntensity * 255.0f));
+  paint.stroke = svg::PaintServer::Solid(css::Color(css::RGBA(0xff, 0x1a, 0x1a, alpha)));
+  paint.fill = svg::PaintServer::None{};
   paint.strokeOpacity = 1.0;
   paint.strokeParams.strokeWidth = worldStrokeWidth;
   paint.strokeParams.lineCap = svg::StrokeLinecap::Round;
@@ -345,10 +368,33 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     const Transform2d& canvasFromDoc,
     const std::optional<SelectionChromeBoundsPreview>& activeBoundsPreview,
     std::span<const svg::SVGElement> sourceHover, const std::optional<Box2d>& cullRectDoc,
-    SelectionChromeDetail selectionDetail, const Transform2d& representedDocumentFromLiveDocument) {
+    SelectionChromeDetail selectionDetail, const Transform2d& representedDocumentFromLiveDocument,
+    const std::optional<LockedRejectionFlashInput>& lockedFlash) {
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = canvasFromDoc;
   snapshot.marqueeDoc = marqueeRectDoc;
+
+  // Locked-rejection flash: capture the rejected element's document-space outline (merged across
+  // its renderable geometry leaves, same path-build path as selection chrome) so the draw phase can
+  // stroke it red without touching the registry. Captured unconditionally of selection state — a
+  // locked click never selects, so the flashed element is typically NOT in `selection`.
+  if (lockedFlash.has_value() && lockedFlash->intensity > 0.0f) {
+    std::vector<SelectionChromeSnapshot::PathItem> flashPaths;
+    std::vector<Box2d> flashAabbs;
+    std::array<svg::SVGElement, 1> flashElements{lockedFlash->element};
+    AppendChromeItems(std::span<const svg::SVGElement>(flashElements), /*cullRectDoc=*/std::nullopt,
+                      &flashPaths, &flashAabbs);
+    if (!flashPaths.empty()) {
+      PathBuilder mergedFlashPath;
+      for (const SelectionChromeSnapshot::PathItem& item : flashPaths) {
+        mergedFlashPath.addPath(item.pathDoc);
+      }
+      snapshot.lockedFlash = SelectionChromeSnapshot::LockedFlash{
+          .pathDoc = mergedFlashPath.build(),
+          .intensity = lockedFlash->intensity,
+      };
+    }
+  }
 
   const double scale = LinearScale(canvasFromDoc);
   const auto pixelToWorld = [scale](double pixels) {
@@ -420,7 +466,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   ZoneScopedN("OverlayRenderer::drawChromeFromSnapshot");
   if (snapshot.paths.empty() && snapshot.hoverPaths.empty() && snapshot.aabbsDoc.empty() &&
       snapshot.hoverAabbsDoc.empty() && !snapshot.orientedBoundsDoc.has_value() &&
-      snapshot.handleBoxesDoc.empty() && !snapshot.marqueeDoc.has_value()) {
+      snapshot.handleBoxesDoc.empty() && !snapshot.marqueeDoc.has_value() &&
+      !snapshot.lockedFlash.has_value()) {
     return;
   }
 
@@ -509,6 +556,25 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     const svg::PaintParams marqueeStroke = MakeMarqueeStrokePaint(snapshot.marqueeStrokeWidthWorld);
     renderer.setPaint(marqueeStroke);
     renderer.drawRect(*snapshot.marqueeDoc, marqueeStroke.strokeParams);
+  }
+
+  // Locked-rejection flash: a red outline of the rejected (locked) element's path, drawn last so it
+  // reads on top of all other chrome. The stroke alpha fades with `intensity`. Stroke width tracks
+  // the snapshot's pixel-to-world scale just like the selection outline.
+  if (snapshot.lockedFlash.has_value() && snapshot.lockedFlash->intensity > 0.0f) {
+    const double lockedFlashStrokeWidthWorld =
+        snapshot.selectionStrokeWidthWorld > 0.0
+            ? snapshot.selectionStrokeWidthWorld *
+                  (kLockedFlashStrokePixels / kSelectionStrokePixels)
+            : kLockedFlashStrokePixels;
+    const svg::PaintParams lockedFlashPaint =
+        MakeLockedFlashStrokePaint(lockedFlashStrokeWidthWorld, snapshot.lockedFlash->intensity);
+    renderer.setPaint(lockedFlashPaint);
+    renderer.setTransform(snapshot.canvasFromDoc);
+    svg::PathShape shape;
+    shape.path = snapshot.lockedFlash->pathDoc;
+    shape.parentFromEntity = Transform2d();
+    renderer.drawPath(shape, lockedFlashPaint.strokeParams);
   }
 }
 

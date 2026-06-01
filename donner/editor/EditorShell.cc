@@ -3538,6 +3538,29 @@ void EditorShell::runFrame() {
   }
   const float frameDeltaMs = ImGui::GetIO().DeltaTime * 1000.0f;
   interactionController_.noteFrameDelta(frameDeltaMs);
+
+  // Advance the locked-rejection flash (clicking a locked element flashes its outline red), then
+  // push the current flash state to the render coordinator so the next overlay capture draws it.
+  // The flash fades over ~0.5s and a locked click never changes selection, so none of the
+  // selection-/hover-driven overlay rasterize triggers fire for it — re-rasterize the overlay
+  // directly each frame while a flash is (or was just) active, and keep the event-driven loop awake
+  // so the fade animates. `setLockedRejectionFlash` reporting a change covers the final
+  // intensity→0 frame that must repaint to erase the outline.
+  const bool hadLockedRejectionFlash = renderCoordinator_.hasLockedRejectionFlash();
+  selectTool_.tickLockedRejectionFlash(ImGui::GetIO().DeltaTime);
+  const std::optional<SelectTool::LockedRejectionFlash> lockedRejectionFlash =
+      selectTool_.lockedRejectionFlash();
+  renderCoordinator_.setLockedRejectionFlash(lockedRejectionFlash);
+  if ((lockedRejectionFlash.has_value() || hadLockedRejectionFlash) && app_.hasDocument() &&
+      !renderCoordinator_.asyncRenderer().isBusy()) {
+    renderCoordinator_.rasterizeOverlayForCurrentSelection(
+        app_, interactionController_.viewport(), textures_, selectTool_.marqueeRect(),
+        selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview());
+  }
+  if (lockedRejectionFlash.has_value()) {
+    window_.wakeEventLoop();
+  }
+
   updateWindowTitle();
 
   renderCoordinator_.pollRenderResult(app_, interactionController_.viewport(), textures_,

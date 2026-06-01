@@ -327,6 +327,7 @@ void RenderCoordinator::resetForLoadedDocument() {
   displayedDocVersion_ = 0;
   lastOverlaySelectionVec_.clear();
   sourceHoverElements_.clear();
+  lockedRejectionFlash_.reset();
   lastOverlaySourceHoverVec_.clear();
   immediateOverlaySnapshot_.reset();
   lastOverlayRasterSize_ = Vector2i::Zero();
@@ -356,6 +357,11 @@ bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elem
 
   sourceHoverElements_ = std::move(elements);
   return true;
+}
+
+void RenderCoordinator::setLockedRejectionFlash(
+    std::optional<SelectTool::LockedRejectionFlash> flash) {
+  lockedRejectionFlash_ = std::move(flash);
 }
 
 void RenderCoordinator::refreshSelectionBoundsCache(EditorApp& app) {
@@ -396,9 +402,13 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const auto& overlaySelection = app.selectedElements();
   const std::optional<SelectTool::ActiveDragPreview> effectiveLiveDragPreview =
       liveDragPreview.has_value() ? liveDragPreview : representedDragPreview;
+  // An active locked-rejection flash fades every frame, so it must force a fresh overlay capture
+  // (defeating the "geometry unchanged → reuse cached overlay" fast path below) until it expires.
+  const bool lockedFlashActive =
+      lockedRejectionFlash_.has_value() && lockedRejectionFlash_->intensity > 0.0f;
   const bool overlayInteractionActive =
       effectiveLiveDragPreview.has_value() || representedDragPreview.has_value() ||
-      marqueeRectDoc.has_value() || activeBoundsPreview.has_value();
+      marqueeRectDoc.has_value() || activeBoundsPreview.has_value() || lockedFlashActive;
   const bool overlayGeometryDiffers =
       overlaySelection != lastOverlaySelectionVec_ ||
       sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
@@ -462,11 +472,18 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   // outlines. `selectionBoundsCache_` is maintained only for main-loop
   // selection-change detection and does not gate overlay geometry.
   const auto captureStart = std::chrono::steady_clock::now();
+  std::optional<LockedRejectionFlashInput> lockedFlashInput;
+  if (lockedFlashActive) {
+    lockedFlashInput = LockedRejectionFlashInput{
+        .element = lockedRejectionFlash_->element,
+        .intensity = lockedRejectionFlash_->intensity,
+    };
+  }
   const SelectionChromeSnapshot chromeSnapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(overlaySelection), marqueeRectDoc,
       currentOverlayCanvasFromDocument, chromeBoundsPreview,
       std::span<const svg::SVGElement>(sourceHoverElements_), currentOverlayCullRectDoc,
-      resolvedSelectionDetail, representedDocumentFromLiveDocument);
+      resolvedSelectionDetail, representedDocumentFromLiveDocument, lockedFlashInput);
   overlayCost.captureMs = MillisecondsSince(captureStart);
   overlayCost.pathCount = static_cast<int>(chromeSnapshot.paths.size());
   overlayCost.hoverPathCount = static_cast<int>(chromeSnapshot.hoverPaths.size());
