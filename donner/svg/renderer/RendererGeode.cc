@@ -436,7 +436,10 @@ Transform2d resolveGradientTransform(
   const Vector2d origin = maybeTransformComponent->transformOrigin;
   const Transform2d parentFromEntity =
       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
-  return Transform2d::Translate(origin) * parentFromEntity * Transform2d::Translate(-origin);
+  // Pivot order matches shapes (LayoutSystem::getEntityFromParentTransform, #609) and the software
+  // renderer: `Translate(-origin)·M·Translate(origin)` (left-first `operator*`). The reversed order
+  // pushes a scaled gradient's center off the shape, collapsing it to one stop color (#621).
+  return Transform2d::Translate(-origin) * parentFromEntity * Transform2d::Translate(origin);
 }
 
 /// Resolved frame for either kind of gradient: the bounds against which

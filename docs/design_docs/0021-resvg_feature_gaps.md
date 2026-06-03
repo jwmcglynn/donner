@@ -94,7 +94,7 @@ bottom for completeness.
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
 | B3 | `<image>` embedded/data-URL sizing | 13 | Bug — one investigation |
 | B4 | `<use>` → inline `<svg>` sizing | 5 | Bug (shares machinery with B3) |
-| F12 | `transform-origin` on paint-servers / `<image>` / text | 2 left | **on-text/on-image DONE**; paint-servers (gradient/pattern) + on-text-path remain → [#621](https://github.com/jwmcglynn/donner/issues/621), [#624](https://github.com/jwmcglynn/donner/issues/624) |
+| F12 | `transform-origin` on paint-servers / `<image>` / text | 1 left | **on-text/on-image/paint-servers DONE**; only on-text-path remains → ~~[#621](https://github.com/jwmcglynn/donner/issues/621)~~, [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
 | F4 | `<switch>` conditional processing | 12 (+systemLanguage 3) | Feature |
@@ -275,16 +275,24 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 
 **Impact:** 7 tests in `structure/transform-origin/` (`on-gradient` ×2, `on-pattern`
 ×2, `on-image`, `on-text`, `on-text-path`), kept skipped after the F2 regression fix.
+Only `on-text-path` remains (see [#624](https://github.com/jwmcglynn/donner/issues/624)).
 
-**Symptom:** these were *never* green — they are a separate never-implemented gap, not
-the #514 regression. Gradients/patterns route their transform through
-`getRawEntityFromParentTransform` (`SVGGradientElement.cc`, `SVGPatternElement.cc`),
-which intentionally drops the `transform-origin` pivot; for `<image>`/text the layout
-computes the correct origin (verified) but it doesn't compose with the content-placement
-transform, so they render off-screen.
+**Paint-servers (gradient/pattern) — DONE (#621).** The renderer *did* apply a
+`transform-origin` pivot, but with the **translations reversed** vs. the shape fix
+(#609): `Translate(origin)·M·Translate(-origin)` instead of
+`Translate(-origin)·M·Translate(origin)`. Donner's `operator*` is left-first, so the
+reversed product pivots about `+origin` instead of `-origin`, pushing a scaled
+gradient's center off the shape — a `scale(2)` radial gradient collapsed to a single
+stop color (solid green) instead of a centered radial fade. Fixed in the three
+transform-resolution sites: `RendererTinySkia::resolveGradientTransform`,
+`RendererGeode::resolveGradientTransform`, and the shared pattern transform in
+`RendererDriver` (used by both backends). The `getRawEntityFromParentTransform`
+accessor in `SVGGradientElement.cc` / `SVGPatternElement.cc` is unrelated — the live
+pivot is recomputed in the renderers from the gradient/pattern's
+`ComputedLocalTransformComponent`.
 
-**Next step:** thread the resolved origin pivot through the paint-server and
-image/text content transforms (the shape path is now correct after #609 — mirror it).
+**`<image>` / text — DONE.** The layout computes the correct origin and now composes it
+with the content-placement transform.
 
 ### Smaller feature gaps
 
