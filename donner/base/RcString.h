@@ -111,8 +111,11 @@ public:
     return *this;
   }
 
-  /// Cast operator to `std::string_view`.
-  operator std::string_view() const {
+  /// Cast operator to `std::string_view`. With the small-string optimization the returned view can
+  /// point into this object's inline buffer, so it must not outlive the \ref RcString. Annotated
+  /// `[[clang::lifetimebound]]` so Clang's `-Wdangling` and clang-tidy flag binding the view to a
+  /// temporary \ref RcString (the small-string-in-temporary dangle from issue #603).
+  operator std::string_view() const [[clang::lifetimebound]] {
     return data_.isLong() ? data_.long_.view() : data_.short_.view();
   }
 
@@ -215,9 +218,13 @@ public:
   /// @}
 
   /**
-   * @return a pointer to the string data.
+   * @return a pointer to the string data. With the small-string optimization the pointer can alias
+   *   this object's inline buffer, so it must not outlive the \ref RcString (annotated
+   *   `[[clang::lifetimebound]]`).
    */
-  const char* data() const { return data_.isLong() ? data_.long_.data : &data_.short_.data[0]; }
+  const char* data() const [[clang::lifetimebound]] {
+    return data_.isLong() ? data_.long_.data : &data_.short_.data[0];
+  }
 
   /**
    * @return if the string is empty.
@@ -234,15 +241,16 @@ public:
    */
   std::string str() const { return std::string(data(), size()); }
 
-  // Iterators.
+  // Iterators. Each aliases this object's storage (the inline buffer under the small-string
+  // optimization) and must not outlive the \ref RcString (annotated `[[clang::lifetimebound]]`).
   /// Begin iterator.
-  const_iterator begin() const noexcept { return cbegin(); }
+  const_iterator begin() const noexcept [[clang::lifetimebound]] { return cbegin(); }
   /// End iterator.
-  const_iterator end() const noexcept { return cend(); }
+  const_iterator end() const noexcept [[clang::lifetimebound]] { return cend(); }
   /// Begin iterator.
-  const_iterator cbegin() const noexcept { return data(); }
+  const_iterator cbegin() const noexcept [[clang::lifetimebound]] { return data(); }
   /// End iterator.
-  const_iterator cend() const noexcept { return data() + size(); }
+  const_iterator cend() const noexcept [[clang::lifetimebound]] { return data() + size(); }
 
   /**
    * Returns true if the string equals another all-lowercase string, with a case insensitive
