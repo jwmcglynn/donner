@@ -118,6 +118,7 @@ bool IsNonDrawingContainer(const EntityHandle& dataHandle) {
   }
 
   switch (type->type()) {
+    case ElementType::A:
     case ElementType::Defs:
     case ElementType::G:
     case ElementType::SVG:

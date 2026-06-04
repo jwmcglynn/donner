@@ -25,7 +25,7 @@ protected:
 public:
   /// Returns true if the given element type can be cast to \ref SVGTextContentElement.
   static constexpr bool IsBaseOf(ElementType type) {
-    return type == ElementType::Circle || type == ElementType::Defs ||
+    return type == ElementType::A || type == ElementType::Circle || type == ElementType::Defs ||
            type == ElementType::Ellipse || type == ElementType::G || type == ElementType::Image ||
            type == ElementType::Line || type == ElementType::Path || type == ElementType::Polygon ||
            type == ElementType::Polyline || type == ElementType::Rect || type == ElementType::SVG ||

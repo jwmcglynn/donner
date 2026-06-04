@@ -1872,6 +1872,92 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGTextElement>(SVGParserContext& 
 }
 
 /**
+ * Parses attributes for \ref xml_a elements.
+ *
+ * `<a>` is a transparent grouping/text-content element. It carries the hyperlink target
+ * (`href` / `xlink:href`) and, as a text-content group, the per-glyph positioning attributes
+ * (`x`, `y`, `dx`, `dy`, `rotate`) plus `textLength` / `lengthAdjust`, mirroring \ref xml_tspan.
+ *
+ * @param context The parser context.
+ * @param element The element to parse.
+ * @param name The name of the attribute to parse.
+ * @param value The value of the attribute to parse.
+ */
+template <>
+std::optional<ParseDiagnostic> ParseAttribute<SVGAElement>(SVGParserContext& context,
+                                                           SVGAElement element,
+                                                           const XMLQualifiedNameRef& name,
+                                                           std::string_view value) {
+  if (name == XMLQualifiedNameRef("href") || name == XMLQualifiedNameRef("xlink", "href")) {
+    element.setHref(RcString(value));
+  } else if (name == XMLQualifiedNameRef("x")) {
+    SmallVector<Lengthd, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto length = ParseLengthAttribute(context, token)) {
+            list.push_back(*length);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setXList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("y")) {
+    SmallVector<Lengthd, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto length = ParseLengthAttribute(context, token)) {
+            list.push_back(*length);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setYList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("dx")) {
+    SmallVector<Lengthd, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto length = ParseLengthAttribute(context, token)) {
+            list.push_back(*length);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setDxList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("dy")) {
+    SmallVector<Lengthd, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto length = ParseLengthAttribute(context, token)) {
+            list.push_back(*length);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setDyList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("rotate")) {
+    SmallVector<double, 1> list;
+    if (auto error = parser::ListParser::Parse(value, [&](std::string_view token) {
+          if (auto angleRad = ParseAngleAttribute(context, token)) {
+            list.push_back(*angleRad * MathConstants<double>::kRadToDeg);
+          }
+        })) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    }
+    element.setRotateList(std::move(list));
+  } else if (name == XMLQualifiedNameRef("textLength")) {
+    if (auto length = ParseLengthAttribute(context, value)) {
+      element.setTextLength(length);
+    }
+  } else if (name == XMLQualifiedNameRef("lengthAdjust")) {
+    if (value == "spacing") {
+      element.setLengthAdjust(LengthAdjust::Spacing);
+    } else if (value == "spacingAndGlyphs") {
+      element.setLengthAdjust(LengthAdjust::SpacingAndGlyphs);
+    }
+  } else {
+    return ParseCommonAttribute(context, element, name, value);
+  }
+
+  return std::nullopt;
+}
+
+/**
  * Parses attributes for \ref xml_tspan elements.
  *
  * @tparam SVGTSpanElement The type of the element to parse.
