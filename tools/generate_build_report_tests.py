@@ -486,6 +486,200 @@ class GenerateBuildReportTests(unittest.TestCase):
             finally:
                 os.chdir(prior_cwd)
 
+    def test_parse_bazel_test_results_extracts_per_target_status(self):
+        stdout = "\n".join(
+            [
+                "INFO: Analyzed 3 targets.",
+                "//donner/base:base_tests                                  PASSED in 1.2s",
+                "//donner/svg:svg_tests                          (cached) PASSED in 0.0s",
+                "//donner/svg/renderer/tests:renderer_geode_tests          SKIPPED",
+                "//donner/css:css_tests                                    FAILED in 0.3s",
+                "Executed 2 out of 3 tests: 2 tests pass and 1 fails.",
+            ]
+        )
+        results = generate_build_report.parse_bazel_test_results(stdout)
+        by_target = {r.target: r for r in results}
+
+        self.assertEqual(by_target["//donner/base:base_tests"].status, "PASSED")
+        self.assertEqual(by_target["//donner/base:base_tests"].detail, "in 1.2s")
+        self.assertEqual(by_target["//donner/svg:svg_tests"].status, "PASSED")
+        self.assertEqual(
+            by_target["//donner/svg/renderer/tests:renderer_geode_tests"].status,
+            "SKIPPED",
+        )
+        self.assertEqual(by_target["//donner/css:css_tests"].status, "FAILED")
+        # The "Executed ... tests" trailer and INFO lines are not targets.
+        self.assertEqual(len(results), 4)
+
+    def test_parse_bazel_test_results_prefers_multiword_status(self):
+        # "FAILED TO BUILD" must not be parsed as "FAILED" + detail "TO BUILD".
+        stdout = "//donner/x:y                          FAILED TO BUILD"
+        results = generate_build_report.parse_bazel_test_results(stdout)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].status, "FAILED TO BUILD")
+        self.assertEqual(results[0].detail, "")
+
+    def test_tests_section_renders_structured_table_and_raw_block(self):
+        stdout = "\n".join(
+            [
+                "//donner/base:base_tests          PASSED in 1.2s",
+                "//donner/css:css_tests            FAILED in 0.3s",
+                "//donner/svg:svg_tests            SKIPPED",
+            ]
+        )
+        runner = FakeRunner(
+            {
+                ("bazel", "test", "//donner/..."): generate_build_report.CommandResult(
+                    label="tests",
+                    args=("bazel", "test", "//donner/..."),
+                    returncode=3,
+                    stdout=stdout,
+                    stderr="",
+                    duration_sec=12.0,
+                )
+            }
+        )
+        section = generate_build_report.make_tests_section(
+            runner,
+            None,  # no reports_root → no image harvest
+            bazel_testlogs=None,
+        )
+
+        self.assertEqual(section.status, "failed")
+        self.assertIn("### Test results", section.content)
+        self.assertIn("| Target | Result |", section.content)
+        self.assertIn("| `//donner/css:css_tests` | FAILED in 0.3s |", section.content)
+        self.assertIn("3 targets: 1 failed, 1 passed, 1 skipped.", section.content)
+        # Failures sort to the top of the table.
+        failed_idx = section.content.index("//donner/css:css_tests")
+        passed_idx = section.content.index("//donner/base:base_tests")
+        self.assertLess(failed_idx, passed_idx)
+        # The raw bazel output is preserved in a collapsible block.
+        self.assertIn("Raw <code>bazel test</code> output", section.content)
+        # Without a reports_root we still name the failed target.
+        self.assertIn("### Failed image comparisons", section.content)
+        self.assertIn("`//donner/css:css_tests`", section.content)
+
+    def test_documentation_section_links_to_doxygen(self):
+        links = generate_build_report._resolve_link_targets(
+            generate_build_report.LINK_MODE_DOCS
+        )
+        section = generate_build_report.make_documentation_section(links)
+        self.assertEqual(section.status, "success")
+        self.assertIn("API documentation", section.content)
+        self.assertIn(generate_build_report.DOCS_SITE_BASE_URL, section.content)
+
+    def test_resolve_link_targets_includes_doxygen(self):
+        local = generate_build_report._resolve_link_targets(
+            generate_build_report.LINK_MODE_LOCAL
+        )
+        self.assertEqual(local.doxygen_index, "generated-doxygen/html/index.html")
+        docs = generate_build_report._resolve_link_targets(
+            generate_build_report.LINK_MODE_DOCS
+        )
+        self.assertTrue(docs.doxygen_index.startswith("https://"))
+
+    def test_harvest_failed_image_artifacts_copies_loose_pngs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            testlogs = tmp_path / "testlogs"
+            outputs = (
+                testlogs
+                / "donner/svg/renderer/tests/renderer_geode_golden_tests/test.outputs"
+            )
+            outputs.mkdir(parents=True)
+            (outputs / "expected_Foo.png").write_bytes(b"\x89PNG-golden")
+            (outputs / "actual_Foo.png").write_bytes(b"\x89PNG-actual")
+            (outputs / "diff_Foo.png").write_bytes(b"\x89PNG-diff")
+            (outputs / "test.log").write_text("ignore me")
+
+            destination = tmp_path / "docs" / "reports" / "test-failures"
+            harvested = generate_build_report._harvest_failed_image_artifacts(
+                ["//donner/svg/renderer/tests:renderer_geode_golden_tests"],
+                destination,
+                testlogs,
+            )
+
+            target = "//donner/svg/renderer/tests:renderer_geode_golden_tests"
+            self.assertIn(target, harvested)
+            rels = harvested[target]
+            self.assertEqual(len(rels), 3)
+            self.assertTrue(
+                any(r.endswith("diff_Foo.png") for r in rels), rels
+            )
+            # Non-image artifacts are not copied.
+            self.assertFalse(any("test.log" in r for r in rels))
+            # The files actually landed under destination.
+            for rel in rels:
+                self.assertTrue((destination / rel).is_file())
+
+    def test_harvest_failed_image_artifacts_reads_outputs_zip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            testlogs = tmp_path / "testlogs"
+            outputs = testlogs / "donner/css/tests/css_tests/test.outputs"
+            outputs.mkdir(parents=True)
+            import zipfile as _zip
+
+            with _zip.ZipFile(outputs / "outputs.zip", "w") as zf:
+                zf.writestr("diff_Bar.png", b"\x89PNG-diff")
+                zf.writestr("expected_Bar.png", b"\x89PNG-golden")
+                zf.writestr("some_other_log.txt", b"not an image")
+
+            destination = tmp_path / "out"
+            harvested = generate_build_report._harvest_failed_image_artifacts(
+                ["//donner/css/tests:css_tests"],
+                destination,
+                testlogs,
+            )
+            target = "//donner/css/tests:css_tests"
+            self.assertIn(target, harvested)
+            self.assertEqual(len(harvested[target]), 2)
+            for rel in harvested[target]:
+                self.assertTrue((destination / rel).is_file())
+            # The transient _unzip staging dir is cleaned up.
+            self.assertFalse(
+                (destination / "donner/css/tests/css_tests/_unzip").exists()
+            )
+
+    def test_render_failed_image_comparisons_embeds_images(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            testlogs = tmp_path / "testlogs"
+            outputs = testlogs / "donner/svg/tests/svg_tests/test.outputs"
+            outputs.mkdir(parents=True)
+            (outputs / "diff_Case.png").write_bytes(b"\x89PNG")
+
+            reports_root = tmp_path / "docs" / "reports"
+            reports_root.mkdir(parents=True)
+            block = generate_build_report._render_failed_image_comparisons(
+                ["//donner/svg/tests:svg_tests"],
+                reports_root,
+                bazel_testlogs=testlogs,
+            )
+            self.assertIn("### Failed image comparisons", block)
+            self.assertIn("#### `//donner/svg/tests:svg_tests`", block)
+            self.assertIn(
+                "![diff_Case.png](reports/test-failures/"
+                "donner/svg/tests/svg_tests/diff_Case.png)",
+                block,
+            )
+
+    def test_render_failed_image_comparisons_omits_when_no_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            testlogs = tmp_path / "testlogs"
+            # A failed target with no image outputs at all.
+            (testlogs / "donner/base/base_tests/test.outputs").mkdir(parents=True)
+            reports_root = tmp_path / "reports"
+            reports_root.mkdir()
+            block = generate_build_report._render_failed_image_comparisons(
+                ["//donner/base:base_tests"],
+                reports_root,
+                bazel_testlogs=testlogs,
+            )
+            self.assertEqual(block, "")
+
     def test_command_runner_reports_progress(self):
         runner = generate_build_report.CommandRunner(
             progress_interval_sec=0.01,
