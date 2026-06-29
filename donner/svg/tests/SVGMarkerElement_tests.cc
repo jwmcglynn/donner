@@ -275,4 +275,45 @@ TEST(SVGMarkerElementTests, MarkerEndProperty) {
   )"));
 }
 
+/// @test SVG2 §11.6.2: a marker's refX/refY percentage/keyword resolves against the marker's own
+/// viewBox, not the referencing element's viewport. A `viewBox="0 0 4 4"` marker referenced from a
+/// 16x16 root must place refX/refY="center" (50% of 4 = 2) identically to the explicit refX/refY=2
+/// — even though the referencing viewport is 16 wide. Before the fix, "center" resolved to 50% of
+/// 16 = 8, displacing the marker. Asserted differentially so the expected placement needs no
+/// hand-derived golden.
+TEST(SVGMarkerElementRenderingTests, RefKeywordResolvesAgainstMarkerViewBox) {
+  if (ActiveRendererBackend() == RendererBackend::Geode) {
+    GTEST_SKIP() << "Known broken on Geode backend (jwmcglynn/donner#566).";
+  }
+
+  const AsciiImage keyword = RendererTestUtils::renderToAsciiImage(R"-(
+    <svg viewBox="0 0 16 16">
+      <defs>
+        <marker id="m" viewBox="0 0 4 4" markerWidth="4" markerHeight="4"
+                markerUnits="userSpaceOnUse" orient="0" refX="center" refY="center">
+          <rect width="4" height="4" fill="black"/>
+        </marker>
+      </defs>
+      <path d="M8,8 L14,8" stroke="white" fill="none" marker-start="url(#m)"/>
+    </svg>
+  )-");
+
+  const AsciiImage explicitLength = RendererTestUtils::renderToAsciiImage(R"-(
+    <svg viewBox="0 0 16 16">
+      <defs>
+        <marker id="m" viewBox="0 0 4 4" markerWidth="4" markerHeight="4"
+                markerUnits="userSpaceOnUse" orient="0" refX="2" refY="2">
+          <rect width="4" height="4" fill="black"/>
+        </marker>
+      </defs>
+      <path d="M8,8 L14,8" stroke="white" fill="none" marker-start="url(#m)"/>
+    </svg>
+  )-");
+
+  // Non-vacuous: the marker must actually render.
+  EXPECT_NE(explicitLength.generated.find('@'), std::string::npos);
+  // Keyword ("center" → 50% of the marker viewBox) must match the explicit-length placement.
+  EXPECT_EQ(keyword.generated, explicitLength.generated);
+}
+
 }  // namespace donner::svg::tests
