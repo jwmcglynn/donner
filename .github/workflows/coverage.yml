@@ -25,10 +25,8 @@ permissions:
 # runner or seeing the Codecov secret there. Everyone else stays on hosted
 # Ubuntu.
 #
-# EXCEPTION: pushes to main always stay GitHub-hosted, matching main.yml. A
-# continuous build on main must never wait on the homelab runner being online --
-# when event-horizon is offline the self-hosted lane queues forever and the
-# hosted lane is suppressed. PRs still route to the self-hosted lane.
+# EXCEPTION: pushes to main always stay GitHub-hosted, matching main.yml; PRs
+# still route to the self-hosted lane.
 jobs:
   build:
     runs-on: ubuntu-24.04
@@ -78,7 +76,7 @@ jobs:
           verbose: true
 
   coverage-self-hosted:
-    runs-on: [self-hosted, linux, arm64, event-horizon]
+    runs-on: [self-hosted, linux, arm64]
     if: ${{ github.ref != 'refs/heads/main' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Keep

@@ -29,13 +29,9 @@ permissions:
 # the runner or poison the shared LAN Bazel cache. Unset is a no-op: behavior
 # is identical to the GitHub-hosted-only workflow.
 #
-# EXCEPTION: pushes to main always stay GitHub-hosted, even when the gate is
-# set. A continuous build on main must never depend on a homelab runner being
-# online -- when event-horizon/deep-thought is offline the self-hosted lane sits
-# queued forever and the GitHub-hosted lane is suppressed, hanging main's
-# required check. Feature branches and PRs still route to the self-hosted lane
-# (extra ARM64 coverage + homelab cache) since a stuck branch build is cheap to
-# re-run and never blocks main.
+# EXCEPTION: pushes to main always stay GitHub-hosted so a stuck/offline
+# self-hosted runner can never hang main's required check. Feature branches and
+# PRs still route to the self-hosted lane.
 
 jobs:
   gatekeeper:
@@ -316,7 +312,7 @@ jobs:
             $TARGETS
 
 
-  # Operator's ARM64 Linux runs on the event-horizon self-hosted runner.
+  # Operator's ARM64 Linux runs on the operator's self-hosted runner.
   # Replaces `linux` for operator runs (extra arch coverage + homelab cache).
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
@@ -325,7 +321,7 @@ jobs:
   # rendering path used by GitHub-hosted Linux so this lane runs the same test
   # surface instead of excluding graphics targets.
   linux-self-hosted:
-    runs-on: [self-hosted, linux, arm64, event-horizon]
+    runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.ref != 'refs/heads/main' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
@@ -454,11 +450,11 @@ jobs:
         # fuzzer code re-trigger that workflow via path filter.
 
 
-  # Operator's ARM64 macOS runs on the deep-thought self-hosted runner.
+  # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for operator runs. The host pre-provisions Bazelisk,
   # Homebrew llvm@19, and Xcode Command Line Tools.
   macos-self-hosted:
-    runs-on: [self-hosted, macOS, ARM64, deep-thought]
+    runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.ref != 'refs/heads/main' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
