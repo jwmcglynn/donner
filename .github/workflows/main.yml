@@ -28,6 +28,14 @@ permissions:
 # push -- and no rerun of the operator's run by someone else -- can execute on
 # the runner or poison the shared LAN Bazel cache. Unset is a no-op: behavior
 # is identical to the GitHub-hosted-only workflow.
+#
+# EXCEPTION: pushes to main always stay GitHub-hosted, even when the gate is
+# set. A continuous build on main must never depend on a homelab runner being
+# online -- when event-horizon/deep-thought is offline the self-hosted lane sits
+# queued forever and the GitHub-hosted lane is suppressed, hanging main's
+# required check. Feature branches and PRs still route to the self-hosted lane
+# (extra ARM64 coverage + homelab cache) since a stuck branch build is cheap to
+# re-run and never blocks main.
 
 jobs:
   gatekeeper:
@@ -257,7 +265,7 @@ jobs:
     # self-hosted ARM64 lane is active (see gate comment above).
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (github.ref == 'refs/heads/main' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -319,7 +327,12 @@ jobs:
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64, event-horizon]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.ref != 'refs/heads/main' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    env:
+      # The runner host may add the LAN Bazel cache from its home rc. Keep
+      # that acceleration when it is healthy, but fall back to local execution
+      # if the private gRPC endpoint is down.
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -382,7 +395,7 @@ jobs:
   macos:
     runs-on: macos-15
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (github.ref == 'refs/heads/main' || vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
@@ -447,7 +460,7 @@ jobs:
   macos-self-hosted:
     runs-on: [self-hosted, macOS, ARM64, deep-thought]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.ref != 'refs/heads/main' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
       # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS
