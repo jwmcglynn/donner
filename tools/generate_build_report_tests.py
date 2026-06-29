@@ -560,6 +560,40 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertIn("### Failed image comparisons", section.content)
         self.assertIn("`//donner/css:css_tests`", section.content)
 
+    def test_tests_section_parses_results_from_stderr(self):
+        # Real `bazel test` writes its per-target summary to stderr, leaving stdout
+        # empty. The structured table and failed-target harvest must still populate.
+        stderr = "\n".join(
+            [
+                "//donner/base:base_tests          PASSED in 1.2s",
+                "//donner/css:css_tests            FAILED in 0.3s",
+            ]
+        )
+        runner = FakeRunner(
+            {
+                ("bazel", "test", "//donner/..."): generate_build_report.CommandResult(
+                    label="tests",
+                    args=("bazel", "test", "//donner/..."),
+                    returncode=3,
+                    stdout="",
+                    stderr=stderr,
+                    duration_sec=12.0,
+                )
+            }
+        )
+        section = generate_build_report.make_tests_section(
+            runner,
+            None,  # no reports_root → no image harvest
+            bazel_testlogs=None,
+        )
+
+        self.assertEqual(section.status, "failed")
+        self.assertIn("| `//donner/css:css_tests` | FAILED in 0.3s |", section.content)
+        self.assertIn("2 targets: 1 failed, 1 passed.", section.content)
+        # The stderr-only failure is still surfaced for image harvesting.
+        self.assertIn("### Failed image comparisons", section.content)
+        self.assertIn("`//donner/css:css_tests`", section.content)
+
     def test_documentation_section_links_to_doxygen(self):
         links = generate_build_report._resolve_link_targets(
             generate_build_report.LINK_MODE_DOCS

@@ -1007,7 +1007,10 @@ def make_tests_section(
     args = ["bazel", "test", "//donner/..."]
     result = runner.run("tests", args)
 
-    parsed = parse_bazel_test_results(result.stdout)
+    # Bazel emits its per-target test summary on stderr (stdout is usually empty),
+    # so parse both streams to populate the results table and failed-image harvest.
+    combined_output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    parsed = parse_bazel_test_results(combined_output)
     failed_targets = [r.target for r in parsed if r.status in ("FAILED", "TIMEOUT")]
 
     lines = [
