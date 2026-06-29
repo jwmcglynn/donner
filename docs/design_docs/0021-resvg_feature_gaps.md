@@ -293,7 +293,6 @@ content-placement transform.
 
 | Category | Tests | Gap |
 |---|---:|---|
-| ~~structure/a~~ | ~~3~~ | ✅ Fixed (#622): `<a>` now parses as `SVGAElement`, a transparent grouping/text-content element. |
 | structure/svg | 2 | nested-svg `overflow` |
 | structure/style | 1 | CSS `@import` / external CSS |
 | structure/symbol | 1 | `transform` on `<symbol>` (SVG2) |
