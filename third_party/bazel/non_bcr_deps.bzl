@@ -56,7 +56,7 @@ def _non_bcr_deps_impl(_mctx):
         name = "harfbuzz",
         build_file = "//third_party:BUILD.harfbuzz",
         remote = "https://github.com/harfbuzz/harfbuzz.git",
-        tag = "14.1.0",
+        tag = "14.2.1",
         patch_cmds = [
             """cat > src/config-override.h << 'HBEOF'
 // Re-enable the draw API for glyph outline extraction.
