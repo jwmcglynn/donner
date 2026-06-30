@@ -777,6 +777,7 @@ filegroup(
 
 donner_cc_test(
     name = "rnr_replay_tests",
+    size = "large",
     srcs = ["RnrReplay_tests.cc"],
     data = [
         ":rnr_replay_testdata",

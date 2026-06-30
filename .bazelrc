@@ -9,6 +9,7 @@
 ##   --config=macos-binary-size - Same as above but with additional flags for macOS.
 ##   --config=coverage          - Build with code coverage instrumentation.
 ##   --config=asan              - Build with address sanitizer.
+##   --config=ubsan             - Build with undefined behavior sanitizer.
 ##   --config=asan-fuzzer       - Build with address sanitizer and fuzzing engine.
 ##   --config=tsan              - Build with thread sanitizer.
 ##   --config=clang-tidy        - Build with clang-tidy checks.
@@ -155,6 +156,15 @@ build:re --action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 build:re --action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 build:re --host_action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+# NativeLink's sandbox can SIGKILL Tracy's static client startup before
+# gtest main runs (the test exits 9 with no gtest output). Keep editor
+# profiling enabled by default, but build the no-op wrapper for any action
+# that runs on Bazel RE. Two distinct paths route through the NativeLink
+# worker and BOTH need this: local RE via `--config=re`, and self-hosted CI,
+# which the runner's /etc/bazel.bazelrc routes through RE under `--config=ci`
+# (NOT `--config=re`, so this must be repeated on the ci config below).
+common:re --//build_defs:enable_tracy=false
+common:ci --//build_defs:enable_tracy=false
 
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size
@@ -213,6 +223,17 @@ build:asan --copt=-fno-sanitize=vptr,function
 build:asan --linkopt=-fno-sanitize=vptr,function
 build:asan --strip=never
 
+# Undefined behavior sanitizer builds
+build:ubsan --config=latest_llvm
+build:ubsan --linkopt=-ldl
+build:ubsan --copt=-fsanitize=undefined
+build:ubsan --linkopt=-fsanitize=undefined
+build:ubsan --copt=-fno-omit-frame-pointer
+build:ubsan --test_env=UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+build:ubsan --copt=-fno-sanitize=vptr,function
+build:ubsan --linkopt=-fno-sanitize=vptr,function
+build:ubsan --strip=never
+
 # Thread sanitizer builds
 build:tsan --config=latest_llvm
 build:tsan --linkopt=-ldl
@@ -245,8 +266,11 @@ build:clang-tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config
 test --test_output=errors
 
 # CI-specific optimizations — use `--config=ci` in GitHub Actions workflows.
-build:ci --local_test_jobs=HOST_CPUS
-build:ci --jobs=HOST_CPUS
+# NOTE: do NOT set --jobs / --local_test_jobs here. Trusted self-hosted Linux
+# runners route `--config=ci` through Bazel RE (bazel-re1) and cap concurrency
+# via /etc/bazel.bazelrc (--jobs=64). Setting HOST_CPUS here is read *after* the
+# system bazelrc and would override that cap, flooding the 96-slot RE worker and
+# (on cancel) leaking scheduler worker slots — the cause of the 2026-06-30 hang.
 build:ci --verbose_failures
 build:ci --repository_cache=~/.cache/bazel-repo
 # Bazel-diff's `affected targets` list can include targets whose

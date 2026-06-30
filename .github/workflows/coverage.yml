@@ -57,7 +57,7 @@ jobs:
 
       - name: Generate coverage
         run: |
-          tools/coverage.sh --quiet --no-html \
+          tools/coverage.sh --no-html \
             //donner/base/... \
             //donner/css/... \
             //donner/svg/... \
@@ -75,48 +75,38 @@ jobs:
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64, event-horizon]
     if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
-    env:
-      # The runner host may add the LAN Bazel cache from its home rc. Keep
-      # coverage resilient when the private gRPC endpoint is down.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
-      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
-
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Sync Bazel toolchain
-        run: |
-          find /var/cache/bazel/user-root -maxdepth 5 \
-            \( -name "*+local_config_cc" \
-            -o -name "local_config_cc" \
-            -o -name "*+local_config_cc_toolchains" \
-            -o -name "local_config_cc_toolchains" \
-            -o -name "*+local_config_cc.marker" \
-            -o -name "local_config_cc.marker" \
-            -o -name "*+local_config_cc_toolchains.marker" \
-            -o -name "local_config_cc_toolchains.marker" \) \
-            -exec rm -rf {} + 2>/dev/null || true
-
-      - name: Prepare Bazel LLVM linker
+        # Keep this in sync with CI's self-hosted Linux cleanup (main.yml).
+        # Surgically reset ONLY @local_config_cc (stale NixOS include paths)
+        # instead of `bazelisk clean --expunge`, which also wiped the
+        # persistent LLVM toolchain and forced a ~5-minute re-fetch every run.
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk fetch --config=latest_llvm $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
+          output_base=$(bazelisk info output_base)
+          bazelisk shutdown
+          find "$output_base/external" -maxdepth 1 -name '*local_config_cc*' \
+            -print -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Fetch Bazel LLVM toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          bazelisk fetch --config=ci --config=latest_llvm \
             //donner/base/... \
             //donner/css/... \
             //donner/svg/... \
             //donner/editor/...
-          patch-bazel-llvm-tools /var/cache/bazel/user-root
-          # `fetch` starts a Bazel server before we patch the downloaded
-          # linker. Restart it so coverage action inputs are digested from the
-          # patched ELF instead of stale server state.
           bazelisk shutdown
 
       - name: Generate coverage
         run: |
-          tools/coverage.sh --quiet --no-html \
+          tools/coverage.sh --no-html \
             //donner/base/... \
             //donner/css/... \
             //donner/svg/... \

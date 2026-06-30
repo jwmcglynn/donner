@@ -28,6 +28,12 @@ bool_flag(
     visibility = ["//visibility:public"],
 )
 
+bool_flag(
+    name = "enable_tracy",
+    build_setting_default = True,
+    visibility = ["//visibility:public"],
+)
+
 banned_deps_test(
     name = "check_banned_deps_test",
     allowed = [
