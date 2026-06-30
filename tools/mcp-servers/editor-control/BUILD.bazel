@@ -8,6 +8,18 @@ EDITOR_CONTROL_COMPATIBLE_WITH = select({
     "//conditions:default": ["@platforms//:incompatible"],
 })
 
+# Link shim providing copy_file_range, which LLVM's static libc++ references via
+# std::filesystem but the hermetic toolchain's old sysroot only exports as a
+# non-default versioned symbol. Linux-only; alwayslink because nothing in our
+# own code references the symbol (libc++.a does). See glibc_compat_shim.c.
+cc_library(
+    name = "glibc_compat_shim",
+    srcs = ["glibc_compat_shim.c"],
+    target_compatible_with = ["@platforms//os:linux"],
+    visibility = ["//visibility:private"],
+    alwayslink = True,
+)
+
 cc_library(
     name = "editor_control_session",
     srcs = ["EditorControlSession.cc"],
@@ -30,7 +42,10 @@ cc_library(
         "//donner/svg/renderer:renderer_image_io",
         "@nlohmann_json//:json",
         "@pixelmatch-cpp17",
-    ],
+    ] + select({
+        "@platforms//os:linux": [":glibc_compat_shim"],
+        "//conditions:default": [],
+    }),
 )
 
 cc_binary(
