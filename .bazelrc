@@ -157,9 +157,14 @@ build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Develo
 build:re --action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 build:re --host_action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 # NativeLink's sandbox can SIGKILL Tracy's static client startup before
-# gtest main runs. Keep editor profiling enabled by default, but build the
-# no-op wrapper for RE actions.
+# gtest main runs (the test exits 9 with no gtest output). Keep editor
+# profiling enabled by default, but build the no-op wrapper for any action
+# that runs on Bazel RE. Two distinct paths route through the NativeLink
+# worker and BOTH need this: local RE via `--config=re`, and self-hosted CI,
+# which the runner's /etc/bazel.bazelrc routes through RE under `--config=ci`
+# (NOT `--config=re`, so this must be repeated on the ci config below).
 common:re --//build_defs:enable_tracy=false
+common:ci --//build_defs:enable_tracy=false
 
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size
