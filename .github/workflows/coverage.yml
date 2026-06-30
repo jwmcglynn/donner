@@ -57,7 +57,7 @@ jobs:
 
       - name: Generate coverage
         run: |
-          tools/coverage.sh --quiet --no-html \
+          tools/coverage.sh --no-html \
             //donner/base/... \
             //donner/css/... \
             //donner/svg/... \
@@ -75,11 +75,6 @@ jobs:
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64, event-horizon]
     if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
-    env:
-      # coverage expands runner-provided --config=ci-re from /etc/bazel.bazelrc;
-      # keep only the explicit parallelism override here to avoid expanding the
-      # RE config twice.
-      DONNER_COVERAGE_BAZEL_FLAGS: "--jobs=128"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -95,7 +90,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk fetch --config=ci --config=latest_llvm --jobs=128 \
+          bazelisk fetch --config=ci --config=latest_llvm \
             //donner/base/... \
             //donner/css/... \
             //donner/svg/... \
@@ -104,7 +99,7 @@ jobs:
 
       - name: Generate coverage
         run: |
-          tools/coverage.sh --quiet --no-html \
+          tools/coverage.sh --no-html \
             //donner/base/... \
             //donner/css/... \
             //donner/svg/... \

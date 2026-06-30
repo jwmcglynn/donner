@@ -320,11 +320,6 @@ jobs:
     runs-on: [self-hosted, linux, arm64, event-horizon]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
-    env:
-      # The workspace --config=ci sets --jobs=HOST_CPUS for hosted runners.
-      # Pass this after configs so the RE-backed self-hosted lane is not
-      # throttled to the small runner VM.
-      DONNER_SELF_HOSTED_BAZEL_FLAGS: "--jobs=128"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -349,7 +344,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk fetch --config=ci --config=latest_llvm $DONNER_SELF_HOSTED_BAZEL_FLAGS $TARGETS
+          bazelisk fetch --config=ci --config=latest_llvm $TARGETS
           bazelisk shutdown
 
       - name: Build
@@ -361,7 +356,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci --config=latest_llvm $DONNER_SELF_HOSTED_BAZEL_FLAGS $TARGETS
+          bazelisk build --config=ci --config=latest_llvm $TARGETS
 
       - name: Test
         shell: bash
@@ -372,7 +367,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk test --config=ci --config=latest_llvm $DONNER_SELF_HOSTED_BAZEL_FLAGS --test_output=errors $TARGETS
+          bazelisk test --config=ci --config=latest_llvm --test_output=errors $TARGETS
 
 
   macos:
