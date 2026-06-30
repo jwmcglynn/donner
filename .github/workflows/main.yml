@@ -358,7 +358,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk fetch --config=ci $TARGETS
+          bazelisk fetch --config=ci --config=latest_llvm $TARGETS
           patch-bazel-llvm-tools /var/cache/bazel/user-root
           # `fetch` starts a Bazel server before we patch the downloaded
           # linker. Restart it so build/test action inputs are digested from
@@ -374,7 +374,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci $TARGETS
+          bazelisk build --config=ci --config=latest_llvm $TARGETS
 
       - name: Test
         shell: bash
@@ -385,7 +385,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk test --config=ci --test_output=errors $TARGETS
+          bazelisk test --config=ci --config=latest_llvm --test_output=errors $TARGETS
 
 
   macos:
