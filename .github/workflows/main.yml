@@ -330,18 +330,12 @@ jobs:
         # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
         # not track in cc_configure's cache key; a stale local_config_cc then
         # omits them and the hermetic include scanner rejects /nix/store
-        # headers. The downloaded LLVM toolchain is also patched with Nix store
-        # paths that can go stale after runner rebuilds/GC while Bazel's
-        # output_user_root persists. Reset the Bazel-owned output base through
-        # Bazel itself so external-repository markers and directories stay in sync.
+        # headers. Reset the Bazel-owned output base through Bazel itself so
+        # external-repository markers and directories stay in sync.
         run: |
           bazelisk clean --expunge
 
-      - name: Prepare Bazel LLVM linker
-        # Bazel downloads the upstream LLVM toolchain into the persistent
-        # output_user_root. On NixOS the downloaded ld.lld needs an explicit
-        # RPATH for libxml2/zlib, but we still want to use Donner's Bazel
-        # toolchain rather than replacing the linker with nixpkgs' lld.
+      - name: Fetch Bazel LLVM toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -351,10 +345,6 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk fetch --config=ci --config=latest_llvm $TARGETS
-          patch-bazel-llvm-tools /var/cache/bazel/user-root
-          # `fetch` starts a Bazel server before we patch the downloaded
-          # linker. Restart it so build/test action inputs are digested from
-          # the patched ELF instead of stale server state.
           bazelisk shutdown
 
       - name: Build

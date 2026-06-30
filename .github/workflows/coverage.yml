@@ -75,6 +75,8 @@ jobs:
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64, event-horizon]
     if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    env:
+      DONNER_COVERAGE_BAZEL_FLAGS: "--config=ci"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -83,22 +85,18 @@ jobs:
       - name: Sync Bazel toolchain
         run: |
           # Keep this in sync with CI's self-hosted Linux cleanup. The persistent
-          # Bazel output base can retain stale Nix-store wrapper paths.
+          # Bazel output base can retain stale external-repository state.
           bazelisk clean --expunge
 
-      - name: Prepare Bazel LLVM linker
+      - name: Fetch Bazel LLVM toolchain
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk fetch --config=latest_llvm \
+          bazelisk fetch --config=ci --config=latest_llvm \
             //donner/base/... \
             //donner/css/... \
             //donner/svg/... \
             //donner/editor/...
-          patch-bazel-llvm-tools /var/cache/bazel/user-root
-          # `fetch` starts a Bazel server before we patch the downloaded
-          # linker. Restart it so coverage action inputs are digested from the
-          # patched ELF instead of stale server state.
           bazelisk shutdown
 
       - name: Generate coverage
