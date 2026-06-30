@@ -9,6 +9,7 @@
 ##   --config=macos-binary-size - Same as above but with additional flags for macOS.
 ##   --config=coverage          - Build with code coverage instrumentation.
 ##   --config=asan              - Build with address sanitizer.
+##   --config=ubsan             - Build with undefined behavior sanitizer.
 ##   --config=asan-fuzzer       - Build with address sanitizer and fuzzing engine.
 ##   --config=tsan              - Build with thread sanitizer.
 ##   --config=clang-tidy        - Build with clang-tidy checks.
@@ -212,6 +213,17 @@ build:asan --test_env=ASAN_SYMBOLIZER_PATH
 build:asan --copt=-fno-sanitize=vptr,function
 build:asan --linkopt=-fno-sanitize=vptr,function
 build:asan --strip=never
+
+# Undefined behavior sanitizer builds
+build:ubsan --config=latest_llvm
+build:ubsan --linkopt=-ldl
+build:ubsan --copt=-fsanitize=undefined
+build:ubsan --linkopt=-fsanitize=undefined
+build:ubsan --copt=-fno-omit-frame-pointer
+build:ubsan --test_env=UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+build:ubsan --copt=-fno-sanitize=vptr,function
+build:ubsan --linkopt=-fno-sanitize=vptr,function
+build:ubsan --strip=never
 
 # Thread sanitizer builds
 build:tsan --config=latest_llvm
