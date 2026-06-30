@@ -245,8 +245,11 @@ build:clang-tidy --@bazel_clang_tidy//:clang_tidy_config=//:clang_tidy_config
 test --test_output=errors
 
 # CI-specific optimizations — use `--config=ci` in GitHub Actions workflows.
-build:ci --local_test_jobs=HOST_CPUS
-build:ci --jobs=HOST_CPUS
+# NOTE: do NOT set --jobs / --local_test_jobs here. Trusted self-hosted Linux
+# runners route `--config=ci` through Bazel RE (bazel-re1) and cap concurrency
+# via /etc/bazel.bazelrc (--jobs=64). Setting HOST_CPUS here is read *after* the
+# system bazelrc and would override that cap, flooding the 96-slot RE worker and
+# (on cancel) leaking scheduler worker slots — the cause of the 2026-06-30 hang.
 build:ci --verbose_failures
 build:ci --repository_cache=~/.cache/bazel-repo
 # Bazel-diff's `affected targets` list can include targets whose
