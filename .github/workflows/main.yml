@@ -320,11 +320,6 @@ jobs:
     runs-on: [self-hosted, linux, arm64, event-horizon]
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
-    env:
-      # The runner host may add the LAN Bazel cache from its home rc. Keep
-      # that acceleration when it is healthy, but fall back to local execution
-      # if the private gRPC endpoint is down.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -363,7 +358,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk fetch --config=ci $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS $TARGETS
+          bazelisk fetch --config=ci $TARGETS
           patch-bazel-llvm-tools /var/cache/bazel/user-root
           # `fetch` starts a Bazel server before we patch the downloaded
           # linker. Restart it so build/test action inputs are digested from
@@ -379,7 +374,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS $TARGETS
+          bazelisk build --config=ci $TARGETS
 
       - name: Test
         shell: bash
@@ -390,8 +385,7 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk test --config=ci --test_output=errors \
-            $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS $TARGETS
+          bazelisk test --config=ci --test_output=errors $TARGETS
 
 
   macos:
