@@ -331,10 +331,13 @@ jobs:
         # not track in cc_configure's cache key; a stale local_config_cc then
         # omits them and the hermetic include scanner rejects /nix/store
         # headers. Delete both Bzlmod repos and their markers to force fresh
-        # detection. Suffix-anchored patterns avoid clobbering apple_support's
-        # osx_cc_configure. Idempotent; a no-op on a cold cache.
+        # detection. Also drop cached toolchains_llvm repos: patch-bazel-llvm-tools
+        # wraps downloaded ld.lld/cc tools with Nix store paths, and those wrappers
+        # go stale after runner rebuilds/GC while Bazel's output_user_root persists.
+        # Suffix-anchored patterns avoid clobbering apple_support's osx_cc_configure.
+        # Idempotent; a no-op on a cold cache.
         run: |
-          find /var/cache/bazel/user-root -maxdepth 5 \
+          find /var/cache/bazel/user-root -maxdepth 8 -depth \
             \( -name "*+local_config_cc" \
             -o -name "local_config_cc" \
             -o -name "*+local_config_cc_toolchains" \
@@ -342,7 +345,8 @@ jobs:
             -o -name "*+local_config_cc.marker" \
             -o -name "local_config_cc.marker" \
             -o -name "*+local_config_cc_toolchains.marker" \
-            -o -name "local_config_cc_toolchains.marker" \) \
+            -o -name "local_config_cc_toolchains.marker" \
+            -o -name "toolchains_llvm++llvm+llvm_toolchain*" \) \
             -exec rm -rf {} + 2>/dev/null || true
 
       - name: Prepare Bazel LLVM linker

@@ -82,7 +82,9 @@ jobs:
 
       - name: Sync Bazel toolchain
         run: |
-          find /var/cache/bazel/user-root -maxdepth 5 \
+          # Keep this in sync with CI's self-hosted Linux cleanup. The persistent
+          # Bazel user root can retain Nix-store wrapper paths across runner rebuilds.
+          find /var/cache/bazel/user-root -maxdepth 8 -depth \
             \( -name "*+local_config_cc" \
             -o -name "local_config_cc" \
             -o -name "*+local_config_cc_toolchains" \
@@ -90,7 +92,8 @@ jobs:
             -o -name "*+local_config_cc.marker" \
             -o -name "local_config_cc.marker" \
             -o -name "*+local_config_cc_toolchains.marker" \
-            -o -name "local_config_cc_toolchains.marker" \) \
+            -o -name "local_config_cc_toolchains.marker" \
+            -o -name "toolchains_llvm++llvm+llvm_toolchain*" \) \
             -exec rm -rf {} + 2>/dev/null || true
 
       - name: Prepare Bazel LLVM linker
