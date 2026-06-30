@@ -81,10 +81,17 @@ jobs:
           persist-credentials: false
 
       - name: Sync Bazel toolchain
+        # Keep this in sync with CI's self-hosted Linux cleanup (main.yml).
+        # Surgically reset ONLY @local_config_cc (stale NixOS include paths)
+        # instead of `bazelisk clean --expunge`, which also wiped the
+        # persistent LLVM toolchain and forced a ~5-minute re-fetch every run.
+        shell: bash
         run: |
-          # Keep this in sync with CI's self-hosted Linux cleanup. The persistent
-          # Bazel output base can retain stale external-repository state.
-          bazelisk clean --expunge
+          set -euo pipefail
+          output_base=$(bazelisk info output_base)
+          bazelisk shutdown
+          find "$output_base/external" -maxdepth 1 -name '*local_config_cc*' \
+            -print -exec rm -rf {} + 2>/dev/null || true
 
       - name: Fetch Bazel LLVM toolchain
         shell: bash

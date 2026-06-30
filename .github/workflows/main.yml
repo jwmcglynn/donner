@@ -328,12 +328,21 @@ jobs:
 
       - name: Sync Bazel toolchain
         # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
-        # not track in cc_configure's cache key; a stale local_config_cc then
+        # not track in cc_configure's cache key; a stale @local_config_cc then
         # omits them and the hermetic include scanner rejects /nix/store
-        # headers. Reset the Bazel-owned output base through Bazel itself so
-        # external-repository markers and directories stay in sync.
+        # headers. Surgically reset ONLY @local_config_cc so it regenerates
+        # against the current env. This replaces `bazelisk clean --expunge`,
+        # which also wiped the persistent /var/cache/bazel LLVM toolchain and
+        # forced a ~5-minute re-download+re-extract of it on every run.
+        shell: bash
         run: |
-          bazelisk clean --expunge
+          set -euo pipefail
+          output_base=$(bazelisk info output_base)
+          bazelisk shutdown
+          # Match the repo dir + marker under any Bzlmod canonical name
+          # (local_config_cc, ...+local_config_cc, @local_config_cc.marker).
+          find "$output_base/external" -maxdepth 1 -name '*local_config_cc*' \
+            -print -exec rm -rf {} + 2>/dev/null || true
 
       - name: Fetch Bazel LLVM toolchain
         shell: bash
