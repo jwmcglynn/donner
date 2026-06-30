@@ -1,5 +1,13 @@
 load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
+COMPOSITOR_GOLDEN_PERF_TESTS = [
+    "CompositorGoldenTest.SplashDragLatencyBudgetsOnRealRenderer",
+    "CompositorGoldenTest.SplashPrewarmMakesFirstDragFree",
+    "CompositorGoldenTest.RealSplashDragLatencyOnTinySkia",
+    "CompositorGoldenTest.RealSplashBlueCenterBurstEllipseDragLatency",
+    "CompositorGoldenTest.SplashDragEndReplaceDocumentReplayLatency",
+]
+
 donner_cc_library(
     name = "compositor",
     srcs = [
@@ -61,6 +69,9 @@ donner_cc_library(
 
 donner_cc_test(
     name = "compositor_tests",
+    srcs = [
+        "CompositorController_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -68,14 +79,11 @@ donner_cc_test(
         "text_full",
         "geode",
     ],
-    srcs = [
-        "CompositorController_tests.cc",
-    ],
     deps = [
         ":compositor",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer/tests:mock_renderer_interface",
         "//donner/svg/renderer:renderer_utils",
+        "//donner/svg/renderer/tests:mock_renderer_interface",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
@@ -83,15 +91,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "drag_session_tests",
+    srcs = [
+        "DragSession_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "DragSession_tests.cc",
     ],
     deps = [
         ":compositor",
@@ -104,15 +112,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "compositor_hint_tests",
+    srcs = [
+        "CompositorHint_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "CompositorHint_tests.cc",
     ],
     deps = [
         ":compositor",
@@ -122,15 +130,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "layer_resolver_tests",
+    srcs = [
+        "LayerResolver_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "LayerResolver_tests.cc",
     ],
     deps = [
         ":compositor",
@@ -140,15 +148,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "mandatory_hint_detector_tests",
+    srcs = [
+        "MandatoryHintDetector_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "MandatoryHintDetector_tests.cc",
     ],
     deps = [
         ":compositor",
@@ -158,15 +166,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "complexity_bucketer_tests",
+    srcs = [
+        "ComplexityBucketer_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "ComplexityBucketer_tests.cc",
     ],
     deps = [
         ":compositor",
@@ -176,15 +184,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "animation_isolation_tests",
+    srcs = [
+        "AnimationIsolation_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "AnimationIsolation_tests.cc",
     ],
     deps = [
         ":compositor",
@@ -197,6 +205,7 @@ donner_cc_test(
     srcs = [
         "CompositorGolden_tests.cc",
     ],
+    args = ["--gtest_filter=-" + ":".join(COMPOSITOR_GOLDEN_PERF_TESTS)],
     data = [
         "//:donner_splash.svg",
     ],
@@ -210,16 +219,39 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "compositor_golden_perf_tests",
+    size = "large",
+    srcs = [
+        "CompositorGolden_tests.cc",
+    ],
+    args = ["--gtest_filter=" + ":".join(COMPOSITOR_GOLDEN_PERF_TESTS)],
+    data = [
+        "//:donner_splash.svg",
+    ],
+    tags = [
+        "manual",
+        "perf",
+    ],
+    deps = [
+        ":compositor",
+        ":dual_path_verifier",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "interaction_hint_no_allocation_tests",
+    srcs = [
+        "InteractionHintNoAllocation_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "InteractionHintNoAllocation_tests.cc",
     ],
     deps = [
         ":compositor",
@@ -231,15 +263,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "dual_path_verifier_tests",
+    srcs = [
+        "DualPathVerifier_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "DualPathVerifier_tests.cc",
     ],
     deps = [
         ":compositor",
@@ -257,12 +289,15 @@ donner_cc_test(
     srcs = [
         "CompositorPerf_tests.cc",
     ],
-    tags = ["manual", "perf"],
+    tags = [
+        "manual",
+        "perf",
+    ],
     deps = [
         ":compositor",
         "//donner/svg/renderer:renderer_interface",
-        "//donner/svg/renderer/tests:mock_renderer_interface",
         "//donner/svg/renderer:renderer_utils",
+        "//donner/svg/renderer/tests:mock_renderer_interface",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
