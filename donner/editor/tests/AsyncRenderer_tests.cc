@@ -51,6 +51,12 @@ svg::SVGGraphicsElement AsGraphicsElement(const svg::SVGElement& element) {
   });
 }
 
+void SetGraphicsElementTranslation(const svg::SVGElement& element, Vector2d translation) {
+  element.withWriteAccess([&element, translation](svg::DocumentWriteAccess&, EntityHandle) {
+    element.cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(translation));
+  });
+}
+
 Entity SelectedGraphicsEntity(EditorApp& app) {
   if (!app.selectedElement().has_value() || !IsGraphicsElement(*app.selectedElement())) {
     return entt::null;
@@ -2607,7 +2613,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
   // move's SetTransformCommand. THIS is the "click → first pixel with
   // moved shape" latency the user directly feels.
   {
-    target.cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
+    SetGraphicsElementTranslation(target, Vector2d(4.0, 0.0));
     const auto t = Clock::now();
     postRequest(/*version=*/2, /*hasSelection=*/true, /*hasDrag=*/true);
     auto result = waitForResult();
@@ -2620,8 +2626,7 @@ EndToEndDragStats RunEditorFlowDragHarness(AsyncSVGDocument& asyncDoc, svg::Rend
   // fast path should fire.
   double steadyTotal = 0.0;
   for (int i = 0; i < steadyFrames; ++i) {
-    target.cast<svg::SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 4.0, 0.0)));
+    SetGraphicsElementTranslation(target, Vector2d(static_cast<double>(i + 2) * 4.0, 0.0));
     const auto t = Clock::now();
     postRequest(/*version=*/static_cast<uint64_t>(3 + i), /*hasSelection=*/true,
                 /*hasDrag=*/true);
@@ -2773,7 +2778,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
   //   (b) main-thread overlay capture
   //   (c) combined click → first-pixel-with-overlay wall-clock
   {
-    target.cast<svg::SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(4.0, 0.0)));
+    SetGraphicsElementTranslation(target, Vector2d(4.0, 0.0));
     const auto tTotal = Clock::now();
 
     const auto tWorker = Clock::now();
@@ -2818,8 +2823,7 @@ FaithfulFrameDragStats RunFaithfulEditorFrameDragHarness(AsyncSVGDocument& async
   // worker round-trip + overlay capture the editor does.
   double steadyTotal = 0.0;
   for (int i = 0; i < steadyFrames; ++i) {
-    target.cast<svg::SVGGraphicsElement>().setTransform(
-        Transform2d::Translate(Vector2d(static_cast<double>(i + 2) * 4.0, 0.0)));
+    SetGraphicsElementTranslation(target, Vector2d(static_cast<double>(i + 2) * 4.0, 0.0));
     const auto tTotal = Clock::now();
 
     const auto tWorker = Clock::now();
@@ -2959,7 +2963,7 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   // Approach: drive one more drag frame via the compositor, capture
   // the main renderer's snapshot, then run a full (non-composited)
   // render of the same DOM into a fresh renderer and diff.
-  AsGraphicsElement(*target).setTransform(Transform2d::Translate(Vector2d(50.0, 0.0)));
+  SetGraphicsElementTranslation(*target, Vector2d(50.0, 0.0));
   // Toggle skipMainCompose off for this frame via a fresh AsyncRenderer
   // cycle that populates a non-skipped compositor, OR render directly
   // with a fresh non-composited renderer for the reference side. We

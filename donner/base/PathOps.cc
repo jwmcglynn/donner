@@ -1325,6 +1325,21 @@ bool ContainsIndex(const std::vector<std::size_t>& indices, std::size_t index) {
   return std::find(indices.begin(), indices.end(), index) != indices.end();
 }
 
+enum class ContourSearchResult : std::uint8_t {
+  Closed,
+  Open,
+  TooComplex,
+};
+
+std::size_t MaxContourSearchSteps(const PathBooleanOptions& options, std::size_t edgeCount) {
+  constexpr std::size_t kTraceSearchMultiplier = 16u;
+  const std::size_t base = std::max(edgeCount, options.maxOutputCommands);
+  if (base > std::numeric_limits<std::size_t>::max() / kTraceSearchMultiplier) {
+    return std::numeric_limits<std::size_t>::max();
+  }
+  return base * kTraceSearchMultiplier;
+}
+
 std::vector<std::size_t> CandidateNextEdges(const std::vector<TraceEdge>& edges,
                                             const PointKey& startKey, const Vector2d& startPoint,
                                             double previousAngle, double snapTolerance,
@@ -1352,12 +1367,20 @@ std::vector<std::size_t> CandidateNextEdges(const std::vector<TraceEdge>& edges,
   return candidates;
 }
 
-bool FindClosedContour(const std::vector<TraceEdge>& edges, const PointKey& contourStartKey,
-                       const Vector2d& contourStartPoint, const PointKey& currentKey,
-                       const Vector2d& currentPoint, double previousAngle, double snapTolerance,
-                       std::vector<std::size_t>* contourIndices) {
+ContourSearchResult FindClosedContour(const std::vector<TraceEdge>& edges,
+                                      const PointKey& contourStartKey,
+                                      const Vector2d& contourStartPoint, const PointKey& currentKey,
+                                      const Vector2d& currentPoint, double previousAngle,
+                                      double snapTolerance,
+                                      std::vector<std::size_t>* contourIndices,
+                                      std::size_t* searchSteps, std::size_t maxSearchSteps) {
+  if (*searchSteps >= maxSearchSteps) {
+    return ContourSearchResult::TooComplex;
+  }
+  ++*searchSteps;
+
   if (contourIndices->size() > edges.size()) {
-    return false;
+    return ContourSearchResult::Open;
   }
 
   for (std::size_t nextIndex : CandidateNextEdges(edges, currentKey, currentPoint, previousAngle,
@@ -1367,17 +1390,19 @@ bool FindClosedContour(const std::vector<TraceEdge>& edges, const PointKey& cont
     const Vector2d nextEndPoint = EdgePointAt(nextEdge.edge, 1.0);
     if (nextEdge.endKey == contourStartKey ||
         NearPoint(nextEndPoint, contourStartPoint, snapTolerance)) {
-      return true;
+      return ContourSearchResult::Closed;
     }
-    if (FindClosedContour(edges, contourStartKey, contourStartPoint, nextEdge.endKey, nextEndPoint,
-                          EdgeTangentAt(nextEdge.edge, 1.0).angle(), snapTolerance,
-                          contourIndices)) {
-      return true;
+    const ContourSearchResult result =
+        FindClosedContour(edges, contourStartKey, contourStartPoint, nextEdge.endKey, nextEndPoint,
+                          EdgeTangentAt(nextEdge.edge, 1.0).angle(), snapTolerance, contourIndices,
+                          searchSteps, maxSearchSteps);
+    if (result != ContourSearchResult::Open) {
+      return result;
     }
     contourIndices->pop_back();
   }
 
-  return false;
+  return ContourSearchResult::Open;
 }
 
 void AppendEdge(PathBuilder* builder, const Edge& edge) {
@@ -1403,6 +1428,9 @@ PathBooleanResult TraceOutput(std::vector<Edge> classifiedEdges, double toleranc
     });
   }
 
+  const std::size_t maxContourSearchSteps = MaxContourSearchSteps(options, edges.size());
+  std::size_t contourSearchSteps = 0;
+
   PathBuilder builder;
   std::size_t outputCommands = 0;
   std::size_t droppedOpenContours = 0;
@@ -1412,12 +1440,21 @@ PathBooleanResult TraceOutput(std::vector<Edge> classifiedEdges, double toleranc
     const Vector2d firstEndPoint = EdgePointAt(edges[*first].edge, 1.0);
     const double snapTolerance = std::max(tolerance * 512.0, tolerance);
     std::vector<std::size_t> contourIndices = {*first};
-    const bool contourClosed =
-        edges[*first].endKey == contourStartKey ||
-        NearPoint(firstEndPoint, contourStart, snapTolerance) ||
-        FindClosedContour(edges, contourStartKey, contourStart, edges[*first].endKey, firstEndPoint,
-                          EdgeTangentAt(edges[*first].edge, 1.0).angle(), snapTolerance,
-                          &contourIndices);
+    bool contourClosed = edges[*first].endKey == contourStartKey ||
+                         NearPoint(firstEndPoint, contourStart, snapTolerance);
+    if (!contourClosed) {
+      const ContourSearchResult searchResult = FindClosedContour(
+          edges, contourStartKey, contourStart, edges[*first].endKey, firstEndPoint,
+          EdgeTangentAt(edges[*first].edge, 1.0).angle(), snapTolerance, &contourIndices,
+          &contourSearchSteps, maxContourSearchSteps);
+      if (searchResult == ContourSearchResult::TooComplex) {
+        return {
+            .status = PathBooleanStatus::TooComplex,
+            .diagnostics = {"Path boolean trace exceeded contour search limit"},
+        };
+      }
+      contourClosed = searchResult == ContourSearchResult::Closed;
+    }
     if (!contourClosed) {
       edges[*first].used = true;
       ++droppedOpenContours;
