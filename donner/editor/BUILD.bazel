@@ -38,6 +38,22 @@ config_setting(
     },
 )
 
+config_setting(
+    name = "linux_tracy_enabled",
+    constraint_values = ["@platforms//os:linux"],
+    flag_values = {
+        "//build_defs:enable_tracy": "true",
+    },
+)
+
+config_setting(
+    name = "macos_tracy_enabled",
+    constraint_values = ["@platforms//os:macos"],
+    flag_values = {
+        "//build_defs:enable_tracy": "true",
+    },
+)
+
 exports_files(
     ["main.cc"],
     visibility = ["//donner/editor/wasm:__pkg__"],
@@ -910,20 +926,20 @@ donner_cc_library(
 
 # Conditional Tracy profiling macros. When `ENABLE_TRACY` is defined, the
 # library pulls in the real Tracy client; otherwise the macros are no-ops.
-# Tracy is linked into every editor build (including release + WASM), runtime-
-# gated by a UI toggle — see the Security section of docs/design_docs/0020-editor.md.
+# Native editor builds enable Tracy by default and may disable it with
+# `--//build_defs:enable_tracy=false`; WASM and RE builds use the no-op wrapper.
 donner_cc_library(
     name = "tracy_wrapper",
     hdrs = ["TracyWrapper.h"],
     defines = selects.with_or({
-        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
-        "//conditions:default": ["ENABLE_TRACY"],
+        (":linux_tracy_enabled", ":macos_tracy_enabled"): ["ENABLE_TRACY"],
+        "//conditions:default": [],
     }),
     deps = selects.with_or({
-        ("@platforms//cpu:wasm32", "@platforms//cpu:wasm64"): [],
-        "//conditions:default": [
+        (":linux_tracy_enabled", ":macos_tracy_enabled"): [
             "@tracy//:tracy_client",
         ],
+        "//conditions:default": [],
     }),
 )
 

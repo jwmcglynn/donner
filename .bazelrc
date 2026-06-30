@@ -156,6 +156,10 @@ build:re --action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 build:re --host_action_env=DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 build:re --action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
 build:re --host_action_env=SDKROOT=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+# NativeLink's sandbox can SIGKILL Tracy's static client startup before
+# gtest main runs. Keep editor profiling enabled by default, but build the
+# no-op wrapper for RE actions.
+common:re --//build_defs:enable_tracy=false
 
 # Reduces binary size on mac
 build:macos-binary-size --config=binary-size

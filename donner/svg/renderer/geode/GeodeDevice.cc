@@ -8,6 +8,8 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <string_view>
 
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -30,6 +32,89 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStr
   std::fprintf(stderr, "[Geode/wgpu-native] Uncaptured error (type=%d): %.*s\n",
                static_cast<int>(type), static_cast<int>(message.length),
                message.data ? message.data : "");
+}
+
+bool EqualsAsciiCaseInsensitive(std::string_view a, std::string_view b) {
+  if (a.size() != b.size()) {
+    return false;
+  }
+
+  for (size_t index = 0; index < a.size(); ++index) {
+    char aChar = a[index];
+    char bChar = b[index];
+    if (aChar >= 'A' && aChar <= 'Z') {
+      aChar = static_cast<char>(aChar - 'A' + 'a');
+    }
+    if (bChar >= 'A' && bChar <= 'Z') {
+      bChar = static_cast<char>(bChar - 'A' + 'a');
+    }
+    if (aChar != bChar) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+wgpu::BackendType RequestedHeadlessBackend() {
+  const char* backendEnv = std::getenv("WGPU_BACKEND");
+  if (backendEnv != nullptr && backendEnv[0] != '\0') {
+    const std::string_view backend(backendEnv);
+    if (EqualsAsciiCaseInsensitive(backend, "vulkan")) {
+      return wgpu::BackendType::Vulkan;
+    }
+    if (EqualsAsciiCaseInsensitive(backend, "metal")) {
+      return wgpu::BackendType::Metal;
+    }
+    if (EqualsAsciiCaseInsensitive(backend, "opengl") ||
+        EqualsAsciiCaseInsensitive(backend, "gl")) {
+      return wgpu::BackendType::OpenGL;
+    }
+    if (EqualsAsciiCaseInsensitive(backend, "opengles") ||
+        EqualsAsciiCaseInsensitive(backend, "gles")) {
+      return wgpu::BackendType::OpenGLES;
+    }
+
+    std::fprintf(stderr,
+                 "[Geode/wgpu-native] Ignoring unsupported WGPU_BACKEND=%.*s; "
+                 "using platform default.\n",
+                 static_cast<int>(backend.size()), backend.data());
+  }
+
+#if defined(__linux__)
+  return wgpu::BackendType::Vulkan;
+#else
+  return wgpu::BackendType::Undefined;
+#endif
+}
+
+WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
+  switch (static_cast<WGPUBackendType>(backendType)) {
+    case WGPUBackendType_Vulkan: return WGPUInstanceBackend_Vulkan;
+    case WGPUBackendType_Metal: return WGPUInstanceBackend_Metal;
+    case WGPUBackendType_OpenGL:
+    case WGPUBackendType_OpenGLES: return WGPUInstanceBackend_GL;
+    case WGPUBackendType_D3D12: return WGPUInstanceBackend_DX12;
+    case WGPUBackendType_D3D11: return WGPUInstanceBackend_DX11;
+    case WGPUBackendType_WebGPU: return WGPUInstanceBackend_BrowserWebGPU;
+    default: return WGPUInstanceBackend_All;
+  }
+}
+
+wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
+#ifndef __EMSCRIPTEN__
+  const WGPUInstanceBackend instanceBackends = InstanceBackendsFor(backendType);
+  if (instanceBackends != WGPUInstanceBackend_All) {
+    wgpu::InstanceExtras instanceExtras = wgpu::Default;
+    instanceExtras.backends = instanceBackends;
+
+    wgpu::InstanceDescriptor instanceDesc = wgpu::Default;
+    instanceDesc.nextInChain = &instanceExtras.chain;
+    return wgpu::createInstance(instanceDesc);
+  }
+#endif
+
+  return wgpu::createInstance();
 }
 
 }  // namespace
@@ -81,7 +166,8 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   // 1. Create the WebGPU instance. wgpu-native's `wgpuCreateInstance`
   //    is synchronous and never blocks on I/O; the returned handle is
   //    the root of the object graph.
-  result->impl_->instance = wgpu::createInstance();
+  const wgpu::BackendType headlessBackend = RequestedHeadlessBackend();
+  result->impl_->instance = CreateHeadlessInstance(headlessBackend);
   if (!result->impl_->instance) {
     std::fprintf(stderr, "[Geode/wgpu-native] wgpuCreateInstance returned null\n");
     return nullptr;
@@ -94,6 +180,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
   //    form is safe on native targets (Emscripten loops on
   //    `emscripten_sleep` instead).
   wgpu::RequestAdapterOptions adapterOptions = {};
+  adapterOptions.backendType = headlessBackend;
   result->adapter_ = result->impl_->instance.requestAdapter(adapterOptions);
   if (!result->adapter_) {
     std::fprintf(stderr, "[Geode/wgpu-native] No WebGPU adapter available.\n");
