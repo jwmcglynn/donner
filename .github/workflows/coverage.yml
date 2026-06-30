@@ -75,8 +75,6 @@ jobs:
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64, event-horizon]
     if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
-    env:
-      DONNER_COVERAGE_BAZEL_FLAGS: "--config=ci"
     steps:
       - uses: actions/checkout@v6
         with:
