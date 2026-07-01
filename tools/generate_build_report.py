@@ -125,6 +125,20 @@ class SectionResult:
     content: str
 
 
+_MAX_COMMAND_OUTPUT_CHARS = 64 * 1024
+_COMMAND_OUTPUT_TAIL_CHARS = 16 * 1024
+
+_TESTS_COMMAND_ARGS = (
+    "bazel",
+    "test",
+    "--test_tag_filters=-lint",
+    "--remote_executor=",
+    "--remote_cache=",
+    "--noremote_upload_local_results",
+    "//donner/...",
+)
+
+
 def format_command(args: typing.Sequence[str]) -> str:
     return " ".join(shlex.quote(arg) for arg in args)
 
@@ -404,14 +418,14 @@ def _render_command_block(
     lines = ["```", f"$ {command_display}"]
 
     if result.stdout:
-        lines.append(result.stdout)
+        lines.append(_limit_report_output(result.stdout))
     elif result.success:
         lines.append(empty_output_message)
 
     if result.stderr and not result.success:
         if result.stdout:
             lines.extend(["", "[stderr]"])
-        lines.append(result.stderr)
+        lines.append(_limit_report_output(result.stderr))
     elif not result.success and not result.stdout:
         lines.append("(command produced no output)")
 
@@ -420,6 +434,25 @@ def _render_command_block(
 
     lines.append("```")
     return "\n".join(lines)
+
+
+def _limit_report_output(
+    output: str, *, max_chars: int = _MAX_COMMAND_OUTPUT_CHARS
+) -> str:
+    """Keep generated Markdown reports from embedding unbounded tool output."""
+    if len(output) <= max_chars:
+        return output
+
+    tail_chars = min(_COMMAND_OUTPUT_TAIL_CHARS, max_chars // 2)
+    head_chars = max_chars - tail_chars
+    omitted_chars = len(output) - head_chars - tail_chars
+    return "\n\n".join(
+        [
+            output[:head_chars].rstrip(),
+            f"[... omitted {omitted_chars:,} characters of command output ...]",
+            output[-tail_chars:].lstrip(),
+        ]
+    )
 
 
 def _render_static_command_block(command_display: str, message: str) -> str:
@@ -967,6 +1000,8 @@ _TEST_STATUS_ORDER = (
     "SKIPPED",
 )
 
+_OMITTED_TEST_TABLE_STATUSES = frozenset({"NO STATUS"})
+
 
 def _render_test_results_table(results: typing.Sequence[TestCaseResult]) -> str:
     if not results:
@@ -992,9 +1027,33 @@ def _render_test_results_table(results: typing.Sequence[TestCaseResult]) -> str:
         "| Target | Result |",
         "| --- | --- |",
     ]
-    for record in sorted(results, key=lambda r: (status_key(r.status), r.target)):
+    omitted_counts = {
+        status: counts[status]
+        for status in _OMITTED_TEST_TABLE_STATUSES
+        if status in counts
+    }
+    visible_results = [
+        record for record in results if record.status not in _OMITTED_TEST_TABLE_STATUSES
+    ]
+    for record in sorted(visible_results, key=lambda r: (status_key(r.status), r.target)):
         detail = f" {record.detail}" if record.detail else ""
         lines.append(f"| `{record.target}` | {record.status}{detail} |")
+    if omitted_counts:
+        omitted_summary = ", ".join(
+            f"{count} {status.lower()}"
+            for status, count in sorted(
+                omitted_counts.items(), key=lambda kv: status_key(kv[0])
+            )
+        )
+        lines.extend(
+            [
+                "",
+                (
+                    f"Omitted {omitted_summary} target rows from the table; "
+                    "Bazel did not execute those targets after an earlier build failure."
+                ),
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -1004,7 +1063,7 @@ def make_tests_section(
     *,
     bazel_testlogs: typing.Optional[Path] = None,
 ) -> SectionResult:
-    args = ["bazel", "test", "//donner/..."]
+    args = list(_TESTS_COMMAND_ARGS)
     result = runner.run("tests", args)
 
     # Bazel emits its per-target test summary on stderr (stdout is usually empty),

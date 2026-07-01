@@ -14,6 +14,7 @@ assert MODULE_SPEC.loader is not None
 generate_build_report = importlib.util.module_from_spec(MODULE_SPEC)
 sys.modules[MODULE_SPEC.name] = generate_build_report
 MODULE_SPEC.loader.exec_module(generate_build_report)
+TESTS_ARGS = tuple(generate_build_report._TESTS_COMMAND_ARGS)
 
 
 class FakeRunner:
@@ -261,9 +262,9 @@ class GenerateBuildReportTests(unittest.TestCase):
                     stderr="",
                     duration_sec=1.25,
                 ),
-                ("bazel", "test", "//donner/..."): generate_build_report.CommandResult(
+                TESTS_ARGS: generate_build_report.CommandResult(
                     label="tests",
-                    args=("bazel", "test", "//donner/..."),
+                    args=TESTS_ARGS,
                     returncode=0,
                     stdout="//donner/... tests passed",
                     stderr="",
@@ -399,6 +400,39 @@ class GenerateBuildReportTests(unittest.TestCase):
         )
         self.assertIn("lines.......: 85.2%", section.content)
 
+    def test_coverage_section_truncates_large_failure_output(self):
+        limit = generate_build_report._MAX_COMMAND_OUTPUT_CHARS
+        stderr = (
+            "coverage-error-start\n"
+            + ("x" * (limit + 1024))
+            + "\ncoverage-error-end"
+        )
+        runner = FakeRunner(
+            {
+                ("tools/coverage.sh", "--quiet"): generate_build_report.CommandResult(
+                    label="code-coverage",
+                    args=("tools/coverage.sh", "--quiet"),
+                    returncode=1,
+                    stdout="",
+                    stderr=stderr,
+                    duration_sec=120.0,
+                )
+            }
+        )
+        section = generate_build_report.make_code_coverage_section(
+            runner,
+            None,
+            generate_build_report._resolve_link_targets(
+                generate_build_report.LINK_MODE_DOCS
+            ),
+        )
+
+        self.assertEqual(section.status, "failed")
+        self.assertIn("coverage-error-start", section.content)
+        self.assertIn("coverage-error-end", section.content)
+        self.assertIn("omitted", section.content)
+        self.assertLess(len(section.content), len(stderr))
+
     def test_binary_size_section_local_mode_copies_bargraph_next_to_save(self):
         """In local mode with --save, the bargraph SVG must land beside
         the saved markdown so the image link resolves from any viewer."""
@@ -519,6 +553,26 @@ class GenerateBuildReportTests(unittest.TestCase):
         self.assertEqual(results[0].status, "FAILED TO BUILD")
         self.assertEqual(results[0].detail, "")
 
+    def test_render_test_results_table_collapses_no_status_rows(self):
+        table = generate_build_report._render_test_results_table(
+            [
+                generate_build_report.TestCaseResult(
+                    "//donner/css:css_tests", "FAILED TO BUILD", ""
+                ),
+                generate_build_report.TestCaseResult(
+                    "//donner/base:base_tests", "NO STATUS", ""
+                ),
+                generate_build_report.TestCaseResult(
+                    "//donner/svg:svg_tests", "NO STATUS", ""
+                ),
+            ]
+        )
+
+        self.assertIn("3 targets: 1 failed to build, 2 no status.", table)
+        self.assertIn("| `//donner/css:css_tests` | FAILED TO BUILD |", table)
+        self.assertNotIn("| `//donner/base:base_tests` | NO STATUS |", table)
+        self.assertIn("Omitted 2 no status target rows", table)
+
     def test_tests_section_renders_structured_table_and_raw_block(self):
         stdout = "\n".join(
             [
@@ -529,9 +583,9 @@ class GenerateBuildReportTests(unittest.TestCase):
         )
         runner = FakeRunner(
             {
-                ("bazel", "test", "//donner/..."): generate_build_report.CommandResult(
+                TESTS_ARGS: generate_build_report.CommandResult(
                     label="tests",
-                    args=("bazel", "test", "//donner/..."),
+                    args=TESTS_ARGS,
                     returncode=3,
                     stdout=stdout,
                     stderr="",
@@ -546,6 +600,9 @@ class GenerateBuildReportTests(unittest.TestCase):
         )
 
         self.assertEqual(section.status, "failed")
+        self.assertEqual(runner.calls[0], ("tests", TESTS_ARGS))
+        self.assertIn("--test_tag_filters=-lint", TESTS_ARGS)
+        self.assertIn("--remote_executor=", TESTS_ARGS)
         self.assertIn("### Test results", section.content)
         self.assertIn("| Target | Result |", section.content)
         self.assertIn("| `//donner/css:css_tests` | FAILED in 0.3s |", section.content)
@@ -571,9 +628,9 @@ class GenerateBuildReportTests(unittest.TestCase):
         )
         runner = FakeRunner(
             {
-                ("bazel", "test", "//donner/..."): generate_build_report.CommandResult(
+                TESTS_ARGS: generate_build_report.CommandResult(
                     label="tests",
-                    args=("bazel", "test", "//donner/..."),
+                    args=TESTS_ARGS,
                     returncode=3,
                     stdout="",
                     stderr=stderr,
