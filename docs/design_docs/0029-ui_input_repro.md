@@ -1,7 +1,10 @@
 # Design: UI input recording + replay (`.donner-repro` files)
 
-**Status:** Implementing (Stage 1 landed — recording; Stage 2 — headless
-replay — scoped)
+**Status:** Implemented. Stage 1 recording (`ReproRecorder`/`ReproFile`, `.donner-repro`) and Stage
+2 headless replay (`GlRnrReplay`, backing the `gl_rnr_replay` CI binary and the
+`FilterDisappearRepro7*` golden-image suite referenced in `docs/editor_visual_debugging.md`) both
+ship under `//donner/editor/repro`. Future Work items below (visual diff inspector, repro
+minimization, cross-platform normalization) remain unimplemented.
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-19
 

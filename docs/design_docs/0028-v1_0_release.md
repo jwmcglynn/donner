@@ -1,6 +1,13 @@
 # Design: v1.0 Release
 
-**Status:** Draft
+**Status:** Draft — superseded as the *next* release by
+[`docs/ProjectRoadmap.md`](../ProjectRoadmap.md), which now targets **v0.8**
+(the editor/toolkit showcase, see
+[0047-v0_8_showcase.md](0047-v0_8_showcase.md)) as the immediate next release,
+with v1.0 following it. Several items this doc scoped into v1.0 — notably
+"Editor v1 (the app)" (Phase 8) — have since moved into the v0.8 milestone
+in the roadmap. The phase list below has not been re-sequenced to match;
+treat it as directional until reconciled with the roadmap.
 **Author:** Jeff McGlynn (with Claude Opus 4.7)
 **Created:** 2026-04-17
 
@@ -26,10 +33,10 @@ in [0011-v0_5_release.md](0011-v0_5_release.md#v05-retrospective):
   tolerance.
 - **Editor v1 (the app)** — ship `//donner/editor` at first-release quality, building on the
   in-progress MVP design in [0020-editor.md](0020-editor.md) and the render-pane UX design
-  in [0025-editor_ux.md](0025-editor_ux.md). Extend beyond the MVP to include shape and text
+  in [0025-2-editor_ux.md](0025-2-editor_ux.md). Extend beyond the MVP to include shape and text
   creation tools at minimum.
 - **Scripting** — `donner::script` (QuickJS-NG + IDL codegen) per
-  [0027-scripting.md](0027-scripting.md).
+  [0027-2-scripting.md](0027-2-scripting.md).
 - **Conformance** — the manifest-driven SVG 1.1 + WPT + scripted conformance program in
   [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md), plus contributing Donner
   back to the upstream resvg test harness.
@@ -59,7 +66,7 @@ The user's top-of-mind list for v1.0 (in priority order) drives the first phases
 11. BCR publish (debug v0.5 failure + re-publish).
 12. Binary-size report in Doxygen rendering correctly.
 13. **Editor v1** — ship the editor at first-release quality, extending the MVP design in
-    [0020-editor.md](0020-editor.md) + [0025-editor_ux.md](0025-editor_ux.md) with shape and
+    [0020-editor.md](0020-editor.md) + [0025-2-editor_ux.md](0025-2-editor_ux.md) with shape and
     text creation tools at minimum.
 
 Everything else from the ProjectRoadmap v1.0 section is included and sequenced into later phases —
@@ -86,7 +93,7 @@ re-scoped down later if the schedule demands it.
 ## Non-Goals
 
 - Shipping scripting features rejected in the scripting design's Non-Goals (HTML, JIT, network
-  I/O, `MutationObserver`, etc. — see [0027-scripting.md](0027-scripting.md) §Non-Goals).
+  I/O, `MutationObserver`, etc. — see [0027-2-scripting.md](0027-2-scripting.md) §Non-Goals).
 - Shipping SVG 1.1-only deprecated features: `enable-background`, `BackgroundImage`/
   `BackgroundAlpha`, `<tref>`, `kerning`, `glyph-orientation-*`. Those remain permanently
   `Params::Skip()`.
@@ -121,11 +128,11 @@ this doc only tracks "is the v1.0-gating slice of that work done".
 - [ ] **Phase 4** — Animation (SMIL Phases 1–9) + animation test suite.
 - [ ] **Phase 5** — Interactivity (`EventSystem`, `SpatialGrid`, `DonnerController`).
 - [ ] **Phase 6** — Scripting (`donner::script`) per
-  [0027-scripting.md](0027-scripting.md).
+  [0027-2-scripting.md](0027-2-scripting.md).
 - [ ] **Phase 7** — Interactive SVG editing API (structured API, partial re-parsing, reverse
   serialization, invalid-region tolerance). The library surface that Phase 8 consumes.
 - [ ] **Phase 8** — Editor v1 (the app): graduate `//donner/editor` from MVP to first-release
-  quality per [0020-editor.md](0020-editor.md) + [0025-editor_ux.md](0025-editor_ux.md),
+  quality per [0020-editor.md](0020-editor.md) + [0025-2-editor_ux.md](0025-2-editor_ux.md),
   adding shape and text creation tools at minimum.
 - [ ] **Phase 9** — Parser hardening + CSS3 gap closure.
 - [ ] **Phase 10** — Incremental invalidation completion + entity lifecycle + DOM gaps.
@@ -225,7 +232,7 @@ starts (currently only the top-level ProjectRoadmap entry exists).
 
 ### Phase 6: Scripting
 
-Owned by [0027-scripting.md](0027-scripting.md). This phase's v1.0 gate is completion of
+Owned by [0027-2-scripting.md](0027-2-scripting.md). This phase's v1.0 gate is completion of
 milestones **M1–M7** from that doc.
 
 - [ ] **M1** — QuickJS-NG runtime integration, sandbox, diagnostics, fuzz harness.
@@ -263,7 +270,7 @@ first-release-quality user-facing editor application. This is the visible half o
 editing story — Phase 7 provides the underlying library surface.
 
 Owned by [0020-editor.md](0020-editor.md) (overall editor design, migration, command queue,
-mutation seam) and [0025-editor_ux.md](0025-editor_ux.md) (viewport, zoom, pan, click math,
+mutation seam) and [0025-2-editor_ux.md](0025-2-editor_ux.md) (viewport, zoom, pan, click math,
 menu bar, multi-select, marquee, gestures).
 
 - [ ] **Finish the MVP design (0020)** — Close out the remaining milestones from 0020 beyond
@@ -342,7 +349,7 @@ gate is completion of M1–M4 from that doc, plus the two roadmap items on resvg
   external-reference input paths.
 - [ ] **Fuzzer expansion** — Add fuzzers for under-covered surfaces: CSS, filter parameters,
   animation timing, edit/patch paths, scripting IDL surface (codegen-emitted, per
-  0027-scripting.md).
+  0027-2-scripting.md).
 - [ ] **Integrate with [0012-continuous_fuzzing.md](0012-continuous_fuzzing.md)** — Make the
   dockerized always-on fuzzing harness the default for the new fuzzers.
 
@@ -420,7 +427,7 @@ per-phase design docs:
 - Animation → a forthcoming `00NN-animation.md` (Phase 4).
 - Interactivity → ProjectRoadmap §Interactivity (Phase 5), to be promoted to a design doc.
 - Composited rendering → [0025-composited_rendering.md](0025-composited_rendering.md).
-- Scripting → [0027-scripting.md](0027-scripting.md).
+- Scripting → [0027-2-scripting.md](0027-2-scripting.md).
 - Conformance → [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md).
 - Editor sandbox → [0023-editor_sandbox.md](0023-editor_sandbox.md).
 - Geode → [0017-geode_renderer.md](0017-geode_renderer.md).
@@ -442,7 +449,7 @@ serialization.
 v1.0 adds two major new trust boundaries beyond v0.5's parser / renderer surface:
 
 - **Scripting.** Untrusted JS running inside Donner. The threat model, sandbox, and fuzz
-  strategy are owned by [0027-scripting.md](0027-scripting.md) §Security / privacy.
+  strategy are owned by [0027-2-scripting.md](0027-2-scripting.md) §Security / privacy.
 - **Editor sandbox.** Process isolation for editor parser/renderer. Owned by
   [0023-editor_sandbox.md](0023-editor_sandbox.md).
 
@@ -465,7 +472,7 @@ unchanged across the scripting boundary. Phase 12 (Security pass) is the verific
 ## Dependencies
 
 - **QuickJS-NG** — new dep introduced by scripting (Phase 6). Licensed MIT; pinned via
-  `non_bcr_deps`. See [0027-scripting.md](0027-scripting.md) §Dependencies.
+  `non_bcr_deps`. See [0027-2-scripting.md](0027-2-scripting.md) §Dependencies.
 - **WPT subset** — vendored curated snapshot added by the conformance program (Phase 11). See
   [0026-svg_conformance_testing.md](0026-svg_conformance_testing.md) §Dependencies.
 - **Existing deps** unchanged.

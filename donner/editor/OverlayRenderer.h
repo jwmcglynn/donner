@@ -8,7 +8,7 @@
 /// chrome and document share one render target so there is no subpixel
 /// drift between them.
 ///
-/// See `docs/design_docs/editor.md` "OverlayRenderer uses direct canvas-
+/// See `docs/design_docs/0020-editor.md` "OverlayRenderer uses direct canvas-
 /// style Renderer calls" for the architectural rationale and the primitive
 /// policy.
 ///

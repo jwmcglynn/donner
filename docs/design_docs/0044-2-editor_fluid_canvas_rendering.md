@@ -102,7 +102,7 @@ This design proposes a second responsiveness pass:
   - [x] Emit immediate spans into the active composition render target via
         `RendererDriver::drawEntityRangeIntoCurrentFrame`; keep transient tile payloads only for
         the current editor split-tile presentation handoff.
-- [ ] **M5: Viewport-bounded high-zoom rendering.**
+- [x] **M5: Viewport-bounded high-zoom rendering.**
   - [x] Split display transform from raster target: high-zoom raster target is pane-sized plus
         margin, not full document viewBox sized.
   - [x] Render the visible document rect with an explicit `outputFromDocument` transform while

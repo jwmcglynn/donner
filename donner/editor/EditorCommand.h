@@ -10,7 +10,7 @@
 /// builds an `EditorCommand` and pushes it onto the per-frame
 /// `CommandQueue`. The queue drains and coalesces at frame boundaries; see
 /// `CommandQueue.h` and the "AsyncSVGDocument: single-threaded command queue"
-/// section of `docs/design_docs/editor.md`.
+/// section of `docs/design_docs/0020-editor.md`.
 
 #include <cstdint>
 #include <optional>

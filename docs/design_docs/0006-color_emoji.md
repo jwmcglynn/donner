@@ -1,5 +1,15 @@
 # Color Emoji Support
 
+**Status:** Implemented
+
+CBDT/CBLC color bitmap emoji rendering shipped for the `text_full` tier: `FontManager` accepts
+bitmap-only fonts, `TextBackendFull` extracts BGRA bitmaps via FreeType
+(`FT_Load_Glyph(FT_LOAD_COLOR)`), and both `RendererTinySkia` and `RendererGeode` draw them as
+scaled images. COLR/CPAL and the SVG glyph table remain unimplemented (out of scope, see below).
+See [text/0052-3-rtl_and_complex_scripts.md](text/0052-3-rtl_and_complex_scripts.md#color-emoji-phase-8) for the
+current implementation summary and test coverage; the rest of this document is the original design
+proposal, kept for rationale (git history has the full text if this summary is later trimmed).
+
 ## Overview
 
 Enable rendering of color emoji in SVG `<text>` elements, targeting fonts that use the CBDT/CBLC (Color Bitmap Data Table) format, such as Noto Color Emoji.

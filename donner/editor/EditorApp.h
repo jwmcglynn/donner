@@ -5,7 +5,7 @@
 /// that tools and the main loop interact with. Owns the `AsyncSVGDocument`,
 /// the active selection, and (eventually) the active tool dispatcher.
 ///
-/// Per `docs/design_docs/editor.md`, all editor-initiated DOM writes flow
+/// Per `docs/design_docs/0020-editor.md`, all editor-initiated DOM writes flow
 /// through `EditorApp::applyMutation()`. Tools never call
 /// `SVGElement::setTransform()` directly — they build `EditorCommand`s and
 /// hand them to the editor.

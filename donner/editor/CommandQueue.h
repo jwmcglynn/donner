@@ -3,7 +3,7 @@
 ///
 /// `CommandQueue` is the per-frame `EditorCommand` queue described in the
 /// "AsyncSVGDocument: single-threaded command queue" section of
-/// `docs/design_docs/editor.md`. It accumulates editor-initiated DOM
+/// `docs/design_docs/0020-editor.md`. It accumulates editor-initiated DOM
 /// mutations on the UI thread and coalesces them at flush time.
 ///
 /// Coalescing rules (applied in `flush()`):

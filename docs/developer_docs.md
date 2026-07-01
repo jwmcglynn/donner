@@ -11,8 +11,11 @@
 - \subpage BuildingDonner
 - \subpage Maintenance
 - \subpage Devtools
+- \subpage EditorArchitecture
 - \subpage EditorVisualDebugging
 - \subpage EditorSourceFocus
+- \subpage StructuredSourceEditing
+- \subpage DeterministicReplayTesting
 - \subpage AgentRoster
 - \subpage TerminalImageViewerGuide
 - \subpage ReSvgTestSuite

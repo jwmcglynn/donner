@@ -48,7 +48,7 @@ files.** Each case records its oracle type (`png`, `svg-ref`, `script-harness`,
   WPT is the living SVG 2 era corpus, but only a subset is static and
   renderer-only.
 - Define a future scripted-test lane that matches the architecture in
-  [0027-scripting.md](0027-scripting.md) without blocking the
+  [0027-2-scripting.md](0027-2-scripting.md) without blocking the
   immediate static test work on that branch landing first.
 - Produce conformance outputs that are meaningful per backend (`tiny-skia`,
   `skia`, later `geode`) and per feature tier (`text`, `text-full`, `script`).
@@ -74,7 +74,7 @@ files.** Each case records its oracle type (`png`, `svg-ref`, `script-harness`,
 - Add a curated WPT SVG snapshot plan for static reftests only; do not vendor
   the whole WPT repo.
 - Keep the future script/animation lane explicitly gated on the milestones in
-  [0027-scripting.md](0027-scripting.md).
+  [0027-2-scripting.md](0027-2-scripting.md).
 
 ## Implementation Plan
 
@@ -292,7 +292,7 @@ Purpose: future DOM / event / animation / script conformance.
 - Oracle: pass/fail result from a scripted harness, optionally plus reference
   rendering when the test is a script-driven reftest.
 - Dependencies:
-  [0027-scripting.md](0027-scripting.md), especially M1-M7 around
+  [0027-2-scripting.md](0027-2-scripting.md), especially M1-M7 around
   context limits, DOM exposure, event dispatch, and corpus testing.
 
 This runner is intentionally separate from the static image-comparison lane.
@@ -440,7 +440,7 @@ sharper:
 On the scripting branch:
 
 - reuse the corpus and release-gate model from
-  [0027-scripting.md](0027-scripting.md),
+  [0027-2-scripting.md](0027-2-scripting.md),
 - add a minimal WPT-scripted smoke subset first,
 - and only then grow into broader DOM/event/animation conformance.
 
@@ -516,7 +516,7 @@ still be useful later for scripted compatibility work.
 - New test-only external data snapshots:
   `@svg11-test-suite`, `@wpt-svg`.
 - Future scripted lane:
-  `donner::script` from [0027-scripting.md](0027-scripting.md).
+  `donner::script` from [0027-2-scripting.md](0027-2-scripting.md).
 
 ## Future Work
 

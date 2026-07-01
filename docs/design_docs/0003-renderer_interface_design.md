@@ -1,6 +1,10 @@
 # Design: Renderer Interface and Multi-Backend Support
 
-**Status:** Shipped (Phases 1-2a, CMake backend selection; Phase 2b-4 planned as future work)
+**Status:** Shipped (Phases 1-2a, CMake backend selection, `drawText`, `MockRendererInterface`).
+The original full-Skia backend this design decoupled *from* has since been fully removed from the
+codebase; `tiny-skia-cpp` is the sole CPU backend. The GPU backend (Geode, WebGPU + Slug) implements
+this same `RendererInterface` but is designed separately in
+[0017-geode_renderer.md](0017-geode_renderer.md). Phase 3 (recording backend) is not started.
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-05
 
@@ -8,14 +12,15 @@
 
 The renderer interface decouples SVG document traversal from backend-specific drawing, enabling
 multiple rendering backends behind a consistent API. Phase 1 extracted a backend-agnostic
-`RendererDriver` and `RendererInterface` from the monolithic full-Skia renderer, preserving Skia
-behavior and resvg parity. Phase 2a shipped a lightweight `tiny-skia-cpp` backend, Bazel backend
-selection, and a single-backend test architecture so normal test runs compile exactly one renderer
-backend at a time.
+`RendererDriver` and `RendererInterface` from the (now-removed) monolithic full-Skia renderer,
+preserving its behavior and resvg parity during the transition. Phase 2 shipped `tiny-skia-cpp` as
+the default CPU backend — including text rendering and Bazel/CMake build-time backend selection —
+and a single-backend test architecture so normal test runs compile exactly one renderer backend at
+a time. `MockRendererInterface` (Phase 4's structural-assertion backend) also exists, used by
+Geode's driver tests.
 
-The remaining work is focused on Phase 2b parity and developer ergonomics: completing TinySkia's
-unsupported features, running the broader renderer suites under `--config=tiny-skia`, adding CMake
-backend selection, and then implementing the recording and structural-test backends.
+Remaining work: full filter-effect parity in TinySkia, and the recording backend (Phase 3), which
+has not been started.
 
 ## Goals
 
@@ -69,7 +74,7 @@ backend selection, and then implementing the recording and structural-test backe
   - [x] Implement mask compositing.
   - [x] Implement `drawImage`.
   - [x] Implement `takeSnapshot` returning `RendererBitmap` from the pixel buffer.
-  - [ ] Implement `drawText`.
+  - [x] Implement `drawText`.
   - [ ] Implement full filter-effect parity. The current backend only supports a limited subset and
         emits verbose warnings for unsupported cases.
 - [x] Add Bazel backend selection and make `//donner/svg/renderer:renderer` resolve to exactly one
@@ -92,7 +97,8 @@ backend selection, and then implementing the recording and structural-test backe
 - [ ] Add round-trip tests: render, record, replay, compare bitmaps.
 
 ### Phase 4: GMock-integrated backend
-- [ ] Create `MockRendererInterface` using `MOCK_METHOD` for all `RendererInterface` methods.
+- [x] Create `MockRendererInterface` using `MOCK_METHOD` for all `RendererInterface` methods
+  (`donner/svg/renderer/tests/MockRendererInterface.h`, used by Geode's driver tests).
 - [ ] Create `RendererExpectations` helper with high-level matchers:
   - [ ] `ExpectPath(path_matcher, stroke_matcher)` for draw call assertions.
   - [ ] `ExpectTransform(transform_matcher)` for transform stack assertions.
@@ -283,77 +289,55 @@ write.
 
 ### Backend Selection {#backend-selection}
 
+The Skia backend described in earlier revisions of this doc has been fully removed —
+there is no `third_party/skia`, no `LegacyFullSkiaBackend.cc`, and no
+`legacy_full_skia_renderer` target. `tiny-skia-cpp` is the sole CPU backend; the GPU
+backend is Geode (WebGPU + Slug), designed in
+[0017-geode_renderer.md](0017-geode_renderer.md), not this doc.
+
 #### Bazel
 
-A `string_flag` controls which backend the `:renderer` target depends on:
+A `string_flag` selects between `tiny_skia` (default) and `geode`:
 
 ```python
 # donner/svg/renderer/BUILD.bazel
 string_flag(
     name = "renderer_backend",
-    build_setting_default = "tiny_skia",
+    build_setting_default = DONNER_CONFIG.get("renderer", "tiny_skia"),
     visibility = ["//visibility:public"],
 )
 
-donner_cc_library(
-    name = "renderer",
-    srcs = ["Renderer.cc"] + select({
-        ":renderer_backend_tiny_skia": ["RendererTinySkiaBackend.cc"],
-        "//conditions:default": ["LegacyFullSkiaBackend.cc"],
-    }),
-    hdrs = ["Renderer.h"],
-    deps = [
-        ":renderer_image_io",
-        ":renderer_interface",
-    ] + select({
-        ":renderer_backend_tiny_skia": [":renderer_tiny_skia"],
-        "//conditions:default": [":legacy_full_skia_renderer"],
-    }),
-)
+config_setting(name = "renderer_backend_tiny_skia", flag_values = {":renderer_backend": "tiny_skia"})
+config_setting(name = "renderer_backend_geode", flag_values = {":renderer_backend": "geode"})
 ```
 
-The repository also defines `.bazelrc` aliases:
+`bazel test //...` builds `tiny_skia` by default; `--config=geode` (which also sets
+`--//donner/svg/renderer/geode:enable_geode=true`) selects Geode. Bazel test targets use
+`target_compatible_with` to exclude backend-incompatible suites (e.g. Skia-only ASCII
+snapshot tests, now retired) from builds that don't support them. Shared image-comparison
+suites use a selected test backend shim and runtime feature checks so they still compile
+exactly one renderer backend per build.
+
+#### CMake
+
+CMake backend selection uses a cache variable, but currently supports only `tiny_skia` —
+`CMakeLists.txt` hard-fails (`FATAL_ERROR`) for any other value:
 
 ```sh
-bazel test //...                     # default (tiny-skia)
-bazel test <legacy full-Skia config> //...  # former full-Skia backend
-bazel test --config=tiny-skia //...  # explicit tiny-skia
+cmake -S . -B build                                # default: tiny_skia
+cmake -S . -B build -DDONNER_RENDERER_BACKEND=tiny_skia   # explicit
 ```
 
-In Phase 2a, Bazel test targets also use `target_compatible_with` to exclude Skia-only suites such
-as ASCII snapshot tests from `--config=tiny-skia`. Shared image-comparison suites use a selected
-test backend shim and runtime feature checks so they still compile exactly one renderer backend per
-build.
+`CMakePresets.json` still defines a `skia` preset from before the Skia backend was
+removed; it is stale and fails at configure time. The generator
+(`tools/cmake/gen_cmakelists.py`) still wraps backend-specific targets in
+`if(DONNER_RENDERER_BACKEND ...)` guards, so re-adding a second CMake-selectable backend
+(e.g. Geode) would extend this same mechanism rather than requiring a new one.
 
-#### CMake (shipped)
-
-CMake backend selection uses a cache variable matching Bazel's build-time selection model:
-
-```sh
-# Default: TinySkia backend
-cmake -S . -B build
-cmake -S . -B build -DDONNER_RENDERER_BACKEND=tiny_skia
-
-# Skia backend
-cmake -S . -B build -DDONNER_RENDERER_BACKEND=skia
-```
-
-The `DONNER_RENDERER_BACKEND` variable controls:
-- Which backend library is fetched (Skia via FetchContent or tiny-skia-cpp as a subdirectory).
-- Which backend-specific targets (`legacy_full_skia_renderer` or `renderer_tiny_skia`) are defined.
-- Which backend source (`LegacyFullSkiaBackend.cc` or `RendererTinySkiaBackend.cc`) is compiled
-  into the `renderer` target.
-
-The generator (`tools/cmake/gen_cmakelists.py`) wraps backend-specific targets in
-`if(DONNER_RENDERER_BACKEND ...)` guards and strips backend-specific sources/deps from the
-shared `renderer` target, adding them conditionally via `target_sources()` and
-`target_link_libraries()`.
-
-CMake presets are provided for convenience:
+CMake presets:
 
 ```sh
 cmake --preset default      # TinySkia (default)
-cmake --preset skia         # Skia
 cmake --preset tiny-skia    # TinySkia (explicit)
 ```
 
@@ -362,7 +346,7 @@ projects can set it before including Donner via `add_subdirectory()` or `FetchCo
 default will not overwrite it:
 
 ```cmake
-set(DONNER_RENDERER_BACKEND "skia" CACHE STRING "")
+set(DONNER_RENDERER_BACKEND "tiny_skia" CACHE STRING "")
 add_subdirectory(donner)
 ```
 
@@ -374,15 +358,15 @@ Phase 2a changed renderer testing to build only one backend at a time:
   shared checked-in goldens.
 - `//donner/svg/renderer/tests:resvg_test_suite` now depends on the same image-comparison fixture
   and can render whichever backend Bazel selects.
-- `ImageComparisonParams` declares backend restrictions and required backend features such as
-  `Text`, `FilterEffects`, `AsciiSnapshot`, and `SkpDebug`.
-- `renderer_test_backend` provides the active backend name, feature support, snapshot rendering,
-  and optional Skia `.skp` capture without forcing both concrete backends into one test binary.
-- Direct TinySkia-vs-Skia pixel comparison is removed from normal tests because it forced both
-  backends to build and undermined the `bazel test //...` build-time goal.
-- Skia-only ASCII snapshot tests now live in separate Bazel targets:
-  `//donner/svg/renderer/tests:renderer_ascii_tests` and
-  `//donner/svg/tests:svg_renderer_ascii_tests`.
+- `ImageComparisonParams` (`ImageComparisonTestFixture.h`) declares per-test backend
+  restrictions and skip conditions (e.g. `skipSimpleText`) so a test can opt out of
+  backends that don't support a feature it needs.
+- `renderer_test_backend` provides the active backend name, feature support, and snapshot
+  rendering without forcing both concrete backends into one test binary. The Skia `.skp`
+  capture path this section previously described has been removed along with the Skia
+  backend.
+- Backend-incompatible ASCII snapshot tests live in a separate Bazel target:
+  `//donner/svg/renderer/tests:renderer_ascii_tests`.
 
 ## Testing and Validation
 

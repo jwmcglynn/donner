@@ -8,7 +8,7 @@
 
 This design proposed five source-pane improvements for `//donner/editor`'s
 `TextEditor`, all built on the XML-owned source store from
-[`structured_text_editing.md`](structured_text_editing.md):
+[`0049-structured_text_editing.md`](0049-structured_text_editing.md):
 
 1. **Relevant-nodes focus view** keeps the selected element, referenced
    resources, and ancestor context visible while folding unrelated source.

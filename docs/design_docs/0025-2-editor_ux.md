@@ -1,6 +1,11 @@
 # Design: Editor Render Pane — Viewport, Zoom, Pan, and Click Math
 
-**Status:** Design
+**Status:** Implemented. `ViewportState` (zoom/pan/DPR/click math), marquee multi-select
+(`SelectTool`), trackpad pinch/pan gestures (`RenderPaneGesture`, `ViewportInteractionController`),
+and menu-bar parity (`MenuBarPresenter`) all shipped. The editor's frontend has since moved to a
+thin-client architecture (`EditorShell` + `RenderCoordinator` replacing the `main.cc`-centric
+design this doc describes) — treat the Proposed Architecture section as historical rationale, not
+a current map of the code. The Implementation Plan checkboxes below are stale (all unchecked).
 **Author:** Claude Sonnet 4.6
 **Created:** 2026-04-13
 

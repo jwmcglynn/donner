@@ -1,6 +1,12 @@
 # Design: Composited Rendering
 
-**Status:** Draft
+**Status:** Implementing — Phase 1 (minimum viable compositor) and Phase 2.5
+(complexity bucketing, default-on) are live in production; Phase 2's hint
+cascade is partially wired (interaction hints shipped, animation hints have
+no producer yet); Phases 3–4 (backend optimizations, advanced features) are
+not started. This is the active design doc for `donner/svg/compositor` — see
+the Postmortem section below for the #582 incident and 0026/0027/0032–0037/0043
+for the drag-latency and presentation follow-on work this design spawned.
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-13
 
@@ -1836,8 +1842,7 @@ and carries Explicit + Mandatory hints.
 - [ ] Measure load-time overhead; assert < 5% of parse+ECS-build
   (Goal 8).
 - [x] Runtime field `CompositorConfig::complexityBucketing` gates
-  bucketing independently of Phases 1/2 (default `false` in v1 —
-  see Phase 2 `CompositedPreview` open question).
+  bucketing independently of Phases 1/2 (default `true`).
 
 ### Phase 3: Backend optimizations (deferred)
 

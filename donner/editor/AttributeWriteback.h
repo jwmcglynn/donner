@@ -12,7 +12,7 @@
 /// in the source yet, the patch inserts `name="value"` before the element's
 /// closing `>`.
 ///
-/// See `docs/design_docs/structured_text_editing.md` M3.
+/// See `docs/design_docs/0049-structured_text_editing.md` M3.
 
 #include <optional>
 #include <string_view>

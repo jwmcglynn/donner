@@ -7,7 +7,7 @@
 ///
 /// Native editor builds enable Tracy by default; RE and WASM builds compile
 /// this wrapper as no-ops. See the Security section of
-/// `docs/design_docs/editor.md` for the trade-off.
+/// `docs/design_docs/0020-editor.md` for the trade-off.
 
 #ifdef ENABLE_TRACY
 #include "tracy/Tracy.hpp"

@@ -1,6 +1,10 @@
 # Design: CI Escape Prevention — Zero Escapes from Local to CI
 
-**Status:** Phase 1 Implemented
+**Status:** Phase 1 Implemented; Phase 2 (clang-tidy `misc-include-cleaner`) has
+also landed, in diff-only form (`lint.yml`), per
+[0031](0031-ci_hardening_2026q2.md) M1.1. Ongoing CI work (cache/nightly
+infra, self-hosted remote execution, escape categories 8–9) is now tracked in
+[0031-ci_hardening_2026q2.md](0031-ci_hardening_2026q2.md) rather than here.
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-07
 **Updated:** 2026-04-08

@@ -1,9 +1,18 @@
 # Design: CI Hardening — April 2026 (Escape Prevention + Runtime Reduction)
 
-**Status:** Design
+**Status:** In Progress — Milestone 1 (fast wins) and most of Milestone 2
+(cache/nightly infra) have landed on `main`: `lint.yml`, `sanitizers.yml`,
+`sanitizers-pr.yml`, `fuzz.yml`, `perf.yml`, and `coverage.yml` all exist as
+separate workflows, and `tools/presubmit.sh` has been deleted per M2.3.
+CI has also moved beyond this doc's original scope: Linux CI now runs on a
+self-hosted runner with Bazel remote execution (RE), and macOS CI has RE
+toolchain wiring — this is further along than Milestone 5's "stretch"
+framing anticipated and is not fully reflected in the milestone list below.
+Remaining open items: M1.8b (branch-protection), M2.6 (scheduled triage
+agent), M2.9 (per-library `misc-include-cleaner`), and all of Milestones 3–5.
 **Author:** Claude Opus 4.7 (MiscBot)
 **Created:** 2026-04-20
-**Supersedes:** [0029](0029-ci_runtime.md) (runtime reduction scope folded in here)
+**Supersedes:** [0029](0029-2-ci_runtime.md) (runtime reduction scope folded in here)
 **Related:** [0016](0016-ci_escape_prevention.md) (Phase 1 escape-prevention taxonomy)
 
 ## Summary
@@ -14,7 +23,7 @@ streams:
 1. **Escape prevention** (new post-0016 categories, issue #552 class): heap
    UAFs, iterator invalidation, perf-test flakes, CMake drift that `--check`
    misses.
-2. **Runtime reduction** (originally [0029](0029-ci_runtime.md)): cache
+2. **Runtime reduction** (originally [0029](0029-2-ci_runtime.md)): cache
    hygiene, runner sizing, parallelism, moving non-blocking work off the PR
    critical path.
 

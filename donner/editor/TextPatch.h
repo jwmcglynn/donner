@@ -8,7 +8,7 @@
 /// The main loop drains pending patches after `flushFrame()` and before
 /// rendering the source pane.
 ///
-/// See `docs/design_docs/structured_text_editing.md` M3 for the full
+/// See `docs/design_docs/0049-structured_text_editing.md` M3 for the full
 /// design.
 
 #include <cstddef>

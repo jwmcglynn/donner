@@ -4,7 +4,7 @@
 /// Measures the performance of operations that the structured-editing M5/M6
 /// incremental fast path is designed to replace. The numbers from this harness
 /// ground every "needs measurement" row in the Performance table of
-/// `docs/design_docs/structured_text_editing.md`.
+/// `docs/design_docs/0049-structured_text_editing.md`.
 ///
 /// All benchmarks use **representative SVG inputs** — not contrived worst-cases
 /// — so the baseline reflects what editors actually encounter. Worst-case
