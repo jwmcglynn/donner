@@ -136,6 +136,13 @@ public:
   /// bail out if this is false instead of trying to render.
   [[nodiscard]] bool valid() const { return valid_; }
 
+  /// True when window/context creation failed specifically because the host
+  /// cannot provide a usable GL context (a headless / GPU-less environment
+  /// with no software-GL fallback, e.g. GitHub-hosted macOS). Distinct from a
+  /// generic `!valid()` so callers can skip GL-dependent work rather than
+  /// treating it as a hard failure. Only meaningful when `valid()` is false.
+  [[nodiscard]] bool glUnavailable() const { return glUnavailable_; }
+
   /// True when the user has clicked the window close button or pressed
   /// the OS's "close" shortcut.
   [[nodiscard]] bool shouldClose() const;
@@ -254,6 +261,7 @@ private:
   /// its own (and `ImGui_ImplGlfw_NewFrame` would otherwise reset it to 1).
   double frameDisplayScaleOverride_ = 0.0;
   bool valid_ = false;
+  bool glUnavailable_ = false;
   bool imguiInitialized_ = false;
 };
 

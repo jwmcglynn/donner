@@ -335,9 +335,19 @@ TEST_F(RendererGeodeGoldenTests, LinearGradientStroke) {
 /// Basic radial gradient: white center → black rim, `objectBoundingBox` units,
 /// concentric (no focal point), pad spread. Exercises the `F == C, fr == 0`
 /// fast path of the radial-`t` derivation.
+///
+/// The golden is captured on arm64 lavapipe; on x86_64 lavapipe the per-pixel
+/// `radial_t` interior math (`sqrt`/`fma`) rounds a couple of LSB differently,
+/// shifting ~2 interior pixels by one iso-value band. This is cross-architecture
+/// float rounding in the software rasterizer, not an edge/coverage effect: a
+/// genuine regression (wrong `t` derivation or a stop/color flip) recolors the
+/// whole 64x64 fill — thousands of pixels, far above this budget. Allow a small
+/// absolute budget instead of strict identity so both arches pass.
 TEST_F(RendererGeodeGoldenTests, RadialGradientBasic) {
-  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_basic.svg",
-                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_basic.png");
+  compareWithGeodeGolden(
+      "donner/svg/renderer/testdata/radial_gradient_basic.svg",
+      "donner/svg/renderer/testdata/golden/geode/radial_gradient_basic.png",
+      ImageComparisonParams::WithThreshold(0.02f, 16).includeAntiAliasingDifferences());
 }
 
 /// `userSpaceOnUse` radial gradient with an anisotropic `gradientTransform`,

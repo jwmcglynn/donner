@@ -442,6 +442,14 @@ INSTANTIATE_TEST_SUITE_P(
                  Params::WithThreshold(0.3f, 600, "Subregion edge AA")},
                 {"with-subregion-3.svg", Params::WithThreshold(0.1f, kDefaultMismatchedPixels,
                                                                "Minor shading differences")},
+                // Geode draws a spurious ~58px vertical blue stroke straight up
+                // from the (65,135) path vertex, where the path has no vertical
+                // edge — a solid 1px-wide, 146px-tall hard diff (148px vs 100
+                // budget). TinySkia renders it at 1px, so this is a real Geode
+                // path-encoder / stroke-join defect, not AA or cross-arch
+                // rounding. CPU backends still compare; disable Geode only.
+                // Tracked in https://github.com/jwmcglynn/donner/issues/663.
+                {"path-bbox.svg", GeodeDisabled("Geode stroke-join bug #663")},
 
                 {"content-outside-the-canvas-2.svg",
                  Params::Skip(

@@ -537,7 +537,21 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   window_ = glfwCreateWindow(createWidth, createHeight, options_.title.c_str(), /*monitor=*/nullptr,
                              /*share=*/nullptr);
   if (window_ == nullptr) {
-    std::fprintf(stderr, "EditorWindow: glfwCreateWindow() failed\n");
+    const char* glfwErrorDesc = nullptr;
+    const int glfwErrorCode = glfwGetError(&glfwErrorDesc);
+    // A headless / GPU-less host with no software-GL fallback (e.g.
+    // GitHub-hosted macOS, whose NSGL path reports "Failed to find a suitable
+    // pixel format") genuinely cannot provide a GL context. GLFW surfaces that
+    // as one of the *_UNAVAILABLE codes or a platform error at window-creation
+    // time. Flag it so callers can distinguish "this environment has no usable
+    // GL" (skip GL-dependent work) from a real window-init regression on a
+    // capable host. Linux CI still exercises this path on llvmpipe, so genuine
+    // GL-init regressions remain covered there.
+    glUnavailable_ =
+        glfwErrorCode == GLFW_FORMAT_UNAVAILABLE || glfwErrorCode == GLFW_API_UNAVAILABLE ||
+        glfwErrorCode == GLFW_VERSION_UNAVAILABLE || glfwErrorCode == GLFW_PLATFORM_ERROR;
+    std::fprintf(stderr, "EditorWindow: glfwCreateWindow() failed (GLFW error %d: %s)\n",
+                 glfwErrorCode, glfwErrorDesc != nullptr ? glfwErrorDesc : "");
     glfwTerminate();
     return;
   }

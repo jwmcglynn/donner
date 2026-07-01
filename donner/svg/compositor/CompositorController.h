@@ -227,6 +227,18 @@ struct CompositorConfig {
   /// cached segments dirty so the next frame re-rasterizes under the
   /// new policy. See 0027-tight_bounded_segments.md § Reversibility.
   bool tightBoundedSegments = true;
+
+  /// When true, a static segment that the deterministic cost heuristic would
+  /// cache may additionally be promoted to an immediate (re-rasterized every
+  /// frame) span when its *measured* rasterize time fits the per-frame
+  /// immediate budget. This promotion is wall-clock-dependent: on a slow or
+  /// heavily-shared host a span can be immediate on one frame and demote to a
+  /// cached tile on the next as its measured time crosses the budget. That is
+  /// correct adaptive behavior for the interactive editor, but it makes the
+  /// immediate-vs-cached tile partition non-deterministic across hosts.
+  /// Deterministic tests that assert on that partition set this false so only
+  /// the (host-independent) cost heuristic classifies spans. Default on.
+  bool dynamicImmediateStaticSpans = true;
 };
 
 /**

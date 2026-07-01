@@ -2682,7 +2682,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       if (spanPlan.staticHeuristicImmediate) {
         spanPlan.mode = StaticSpanMode::Immediate;
         immediateBudgetUsedMs += budgetChargeMs;
-      } else if (elapsedMs <= spanPlan.immediateBudgetMs &&
+      } else if (config_.dynamicImmediateStaticSpans && elapsedMs <= spanPlan.immediateBudgetMs &&
                  immediateBudgetUsedMs + budgetChargeMs <= spanPlan.immediateBudgetMs) {
         spanPlan.mode = StaticSpanMode::Immediate;
         spanPlan.dynamicHeuristicImmediate = true;

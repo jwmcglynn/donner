@@ -147,6 +147,11 @@ struct GlRnrReplayResult {
   std::vector<GlRnrReplayFrameDiagnostics> frameDiagnostics;
   /// Selection label after the last replayed frame.
   std::optional<std::string> finalSelectedElementLabel;
+  /// True when replay could not run because the host provides no usable GL
+  /// context (a headless / GPU-less environment with no software-GL fallback,
+  /// e.g. GitHub-hosted macOS). Callers should treat this as "skip" rather than
+  /// "fail": it reflects a missing environment capability, not a code defect.
+  bool glUnavailable = false;
 };
 
 /**
