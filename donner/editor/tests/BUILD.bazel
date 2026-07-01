@@ -729,7 +729,12 @@ donner_cc_binary(
 donner_cc_test(
     name = "gl_rnr_replay_tests",
     size = "large",
-    timeout = "moderate",
+    # The GL replay suite runs several software-rendered replay scenarios on
+    # GPU-less Linux CI. Keep a 900 s Bazel backstop for legitimate slow runs,
+    # but use gtest_timeout_main below so an individual hung replay still fails
+    # with the offending test-case name instead of a silent target timeout.
+    timeout = "long",
+    env = {"DONNER_TEST_TIMEOUT_SECONDS": "180"},
     srcs = ["GlRnrReplay_tests.cc"],
     data = [
         "drag_start_hang_repro.rnr",
@@ -750,10 +755,10 @@ donner_cc_test(
         "//donner/editor:imgui_headers",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",
+        "//donner/base:gtest_timeout_main",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:renderer_image_test_utils",
-        "@com_google_gtest//:gtest_main",
     ],
 )
 

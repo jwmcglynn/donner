@@ -2283,23 +2283,18 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   components::LayoutSystem layoutSystem;
-  // Marker length attributes with percentage units resolve against the viewport of the
-  // *element referencing the marker* (the painted shape's nearest ancestor viewport),
-  // **not** the marker definition's own/inherited viewBox. Use `instance.dataHandle` (the
-  // painted entity) — `getViewBox(markerHandle)` was wrong for the common case of markers
-  // defined in a root `<defs>` and referenced from a nested `<svg>` viewport (PR #611
-  // Codex P1).  markerWidth/refX resolve against the width (Extent::X) and markerHeight/
-  // refY against the height (Extent::Y).
+  // markerWidth/markerHeight percentages resolve against the viewport of the *element referencing
+  // the marker* (the painted shape's nearest ancestor viewport), **not** the marker's own
+  // viewBox. Use `instance.dataHandle` (the painted entity) — `getViewBox(markerHandle)` was wrong
+  // for the common case of markers defined in a root `<defs>` and referenced from a nested `<svg>`
+  // viewport (PR #611 Codex P1). markerWidth resolves against the width (Extent::X) and
+  // markerHeight against the height (Extent::Y).
   const Box2d markerPercentViewport = layoutSystem.getViewBox(instance.dataHandle(registry));
   const FontMetrics markerFontMetrics;
   const double markerWidthPx = markerComponent->markerWidth.toPixels(
       markerPercentViewport, markerFontMetrics, Lengthd::Extent::X);
   const double markerHeightPx = markerComponent->markerHeight.toPixels(
       markerPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
-  const double refXPx =
-      markerComponent->refX.toPixels(markerPercentViewport, markerFontMetrics, Lengthd::Extent::X);
-  const double refYPx =
-      markerComponent->refY.toPixels(markerPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
 
   if (markerWidthPx <= 0.0 || markerHeightPx <= 0.0) {
     return;
@@ -2311,6 +2306,17 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
       layoutSystem.overridesViewBox(markerHandle)
           ? std::optional<Box2d>(layoutSystem.getViewBox(markerHandle))
           : std::nullopt;
+
+  // Per SVG2 §11.6.2, when the marker has a viewBox, refX/refY percentages (and the
+  // left/center/right / top/center/bottom keywords the parser maps to percentages) resolve
+  // against that viewBox's width/height. Without a viewBox there is no such basis, so they fall
+  // back to the referencing element's viewport — the same basis markerWidth/markerHeight use, and
+  // the behavior the resvg reference expects (e.g. painting/marker/percent-values).
+  const Box2d refPercentViewport = markerViewBox.value_or(markerPercentViewport);
+  const double refXPx =
+      markerComponent->refX.toPixels(refPercentViewport, markerFontMetrics, Lengthd::Extent::X);
+  const double refYPx =
+      markerComponent->refY.toPixels(refPercentViewport, markerFontMetrics, Lengthd::Extent::Y);
   const PreserveAspectRatio preserveAspectRatio =
       markerHandle.get<components::PreserveAspectRatioComponent>().preserveAspectRatio;
 
