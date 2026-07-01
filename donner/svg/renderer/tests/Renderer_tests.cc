@@ -477,5 +477,80 @@ TEST_F(RendererTests, Z0rlyTest6_MusicNotation) {
                           parser::SVGParser::Options());
 }
 
+// Builds a document whose root `<rect>` applies a chain of `<feImage>` fragment
+// references `chainLength` links long: `filter0`→`rect0`→`filter1`→`rect1`→…,
+// each rect (except the terminal one) carrying the *next* filter so the renderer
+// must recurse one fragment pre-render per link. Every link is a *distinct*
+// element, so the existing visited-set recursion guard — which keys on the
+// referenced light-tree entity — cannot collapse the chain; only the
+// fragment-depth cap bounds it.
+std::string MakeChainedFeImageSvg(int chainLength) {
+  std::string svg =
+      R"SVG(<svg id="svg1" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"
+              xmlns:xlink="http://www.w3.org/1999/xlink"><defs>)SVG";
+  for (int i = 0; i < chainLength; ++i) {
+    svg += "<filter id=\"filter" + std::to_string(i) +
+           "\" x=\"0\" y=\"0\" width=\"1\" height=\"1\"><feImage xlink:href=\"#rect" +
+           std::to_string(i) + "\"/></filter>";
+    svg += "<rect id=\"rect" + std::to_string(i) +
+           "\" width=\"120\" height=\"120\" fill=\"red\" filter=\"url(#filter" +
+           std::to_string(i + 1) + ")\"/>";
+  }
+  // Terminal filter references a plain rect with no further filter — ends the chain.
+  svg += "<filter id=\"filter" + std::to_string(chainLength) +
+         "\" x=\"0\" y=\"0\" width=\"1\" height=\"1\"><feImage xlink:href=\"#rectEnd\"/></filter>";
+  svg += R"SVG(<rect id="rectEnd" x="40" y="40" width="120" height="120" fill="green"/></defs>
+           <rect id="root" x="20" y="20" width="160" height="160" fill="red"
+                 filter="url(#filter0)"/>
+         </svg>)SVG";
+  return svg;
+}
+
+RendererBitmap RenderSvgString(const std::string& svg) {
+  ParseWarningSink disabled = ParseWarningSink::Disabled();
+  auto maybeResult = parser::SVGParser::ParseSVG(svg, disabled, parser::SVGParser::Options());
+  EXPECT_FALSE(maybeResult.hasError()) << "Parse Error: " << maybeResult.error();
+  if (maybeResult.hasError()) {
+    return RendererBitmap();
+  }
+  SVGDocument document = std::move(maybeResult.result());
+  return RenderDocumentWithBackend(document, ActiveRendererBackend(), /*verbose=*/false);
+}
+
+// Regression for issue #552: a long *acyclic* chain of `<feImage>` fragment
+// references recursed once per link in `RendererDriver::preRenderFeImageFragments`
+// — each level standing up a GPU offscreen instance — with no depth bound. The
+// visited-set guard only stops a *cycle* (it keys on the referenced light-tree
+// entity, which is distinct at every link here), so deep chains recursed
+// unbounded and crashed (`Segmentation fault` on macOS/Metal CI; GPU-resource /
+// stack exhaustion in the nested offscreen renderers).
+//
+// The fix caps the recursion at `kMaxFeImageFragmentDepth` (32); past that, each
+// over-deep fragment renders as empty/transparent. That makes the output
+// invariant to chain length once the chain exceeds the cap: links beyond depth 32
+// cannot influence any pixel. We render two chains that are *both* longer than the
+// cap (40 and 90 links) and require pixel-identical output.
+//
+// On the unbounded (pre-fix) code these two renders recurse to different depths,
+// produce different images (and on the CI host, crash), so this test is red→green.
+// The contract — bounded recursion → chain-length-invariant output — is
+// backend-independent, so it gates both the tiny-skia and Geode variants.
+TEST_F(RendererTests, ChainedFeImageDeepRecursionIsBoundedAndStable) {
+  const RendererBitmap shorterChain = RenderSvgString(MakeChainedFeImageSvg(40));
+  const RendererBitmap longerChain = RenderSvgString(MakeChainedFeImageSvg(90));
+
+  ASSERT_FALSE(shorterChain.pixels.empty())
+      << "Renderer returned an empty bitmap for the 40-link feImage chain";
+  ASSERT_FALSE(longerChain.pixels.empty())
+      << "Renderer returned an empty bitmap for the 90-link feImage chain";
+
+  // Both chains exceed the depth cap, so everything past depth 32 renders empty
+  // and the extra 50 links of the longer chain must not change a single pixel.
+  EXPECT_EQ(shorterChain.dimensions, longerChain.dimensions);
+  EXPECT_EQ(shorterChain.pixels, longerChain.pixels)
+      << "feImage chains of length 40 and 90 produced different images; the recursion is not "
+         "bounded by the depth cap (issue #552)";
+}
+
 }  // namespace
 }  // namespace donner::svg
