@@ -2,7 +2,7 @@ name: CMake Build
 
 on:
   push:
-    branches: ["*"]
+    branches: ["**"]
   pull_request:
     branches: [main, feature/ci-hardening-2026q2]
 

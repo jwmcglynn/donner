@@ -1,7 +1,8 @@
 name: Coverage
 
-# Runs coverage on: main merges, every PR push (so Codecov has data to
-# annotate the patch with), and on-demand via workflow_dispatch.
+# Runs full coverage on main merges and workflow_dispatch. PRs use the same
+# bazel-diff affected-target selection as CI so Codecov still has patch data
+# without rebuilding the full coverage universe on every push.
 #
 # We previously dropped the pull_request trigger thinking Codecov could
 # patch-annotate without a PR-side run, but Codecov's patch-coverage signal
@@ -25,8 +26,60 @@ permissions:
 # runner or seeing the Codecov secret there. Everyone else stays on hosted
 # Ubuntu.
 jobs:
+  determine-targets:
+    runs-on: ubuntu-24.04
+    env:
+      BAZEL_DIFF_TAG: "v18.1.0"
+    outputs:
+      fallback: ${{ steps.determine.outputs.fallback }}
+      affected: ${{ steps.determine.outputs.affected }}
+      mode: ${{ steps.determine.outputs.mode }}
+      reason: ${{ steps.determine.outputs.reason }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Download bazel-diff
+        run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
+
+      - id: determine
+        name: Determine affected Bazel targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/ci_determine_targets.py \
+            --bazel-diff-jar "$RUNNER_TEMP/bazel-diff.jar" \
+            --diagnostics-dir "$RUNNER_TEMP/donner-target-diagnostics" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload target-selection diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: target-selection-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-target-diagnostics
+          if-no-files-found: warn
+          retention-days: 3
+
   build:
     runs-on: ubuntu-24.04
+    needs: determine-targets
     if: ${{ vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn' }}
 
     steps:
@@ -56,12 +109,23 @@ jobs:
             libgl1-mesa-dev libosmesa6-dev
 
       - name: Generate coverage
+        env:
+          TARGET_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
+          AFFECTED_TARGETS: ${{ needs.determine-targets.outputs.affected }}
         run: |
+          set -euo pipefail
+          if [[ "$TARGET_FALLBACK" == "true" ]]; then
+            TARGETS=(
+              //donner/base/...
+              //donner/css/...
+              //donner/svg/...
+              //donner/editor/...
+            )
+          else
+            read -r -a TARGETS <<< "$AFFECTED_TARGETS"
+          fi
           tools/coverage.sh --no-html \
-            //donner/base/... \
-            //donner/css/... \
-            //donner/svg/... \
-            //donner/editor/...
+            "${TARGETS[@]}"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
@@ -74,6 +138,7 @@ jobs:
 
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64, event-horizon]
+    needs: determine-targets
     if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     steps:
       - uses: actions/checkout@v6
@@ -93,24 +158,35 @@ jobs:
           find "$output_base/external" -maxdepth 1 -name '*local_config_cc*' \
             -print -exec rm -rf {} + 2>/dev/null || true
 
+      - name: Init coverage diagnostics
+        shell: bash
+        env:
+          TARGET_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
+          TARGET_REASON: ${{ needs.determine-targets.outputs.reason }}
+          AFFECTED_TARGETS: ${{ needs.determine-targets.outputs.affected }}
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET_FALLBACK" == "true" ]]; then
+            export DONNER_CI_TARGETS="//donner/base/... //donner/css/... //donner/svg/... //donner/editor/..."
+          else
+            export DONNER_CI_TARGETS="$AFFECTED_TARGETS"
+          fi
+          export DONNER_CI_TARGET_FALLBACK="${TARGET_FALLBACK}:${TARGET_REASON}"
+          bash tools/ci_diagnostics.sh init coverage-self-hosted
+
       - name: Fetch Bazel LLVM toolchain
         shell: bash
         run: |
           set -euo pipefail
-          bazelisk fetch --config=ci --config=latest_llvm \
-            //donner/base/... \
-            //donner/css/... \
-            //donner/svg/... \
-            //donner/editor/...
+          bash tools/ci_diagnostics.sh bazel fetch \
+            bazelisk fetch --config=ci --config=latest_llvm
           bazelisk shutdown
 
       - name: Generate coverage
+        shell: bash
         run: |
-          tools/coverage.sh --no-html \
-            //donner/base/... \
-            //donner/css/... \
-            //donner/svg/... \
-            //donner/editor/...
+          set -euo pipefail
+          bash tools/ci_diagnostics.sh coverage tools/coverage.sh --no-html
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v6
@@ -119,6 +195,20 @@ jobs:
           path: coverage-report/filtered_report.dat
           if-no-files-found: error
           retention-days: 1
+
+      - name: Finalize CI diagnostics
+        if: always()
+        shell: bash
+        run: bash tools/ci_diagnostics.sh finalize
+
+      - name: Upload CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-ci-diagnostics
+          if-no-files-found: warn
+          retention-days: 3
 
   upload-self-hosted-coverage:
     needs: coverage-self-hosted
