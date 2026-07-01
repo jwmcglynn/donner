@@ -407,6 +407,9 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       .enableFramebufferReadback = true,
   });
   if (!window.valid()) {
+    if (window.glUnavailable()) {
+      result->glUnavailable = true;
+    }
     return SetError(error, "failed to initialize editor window");
   }
 

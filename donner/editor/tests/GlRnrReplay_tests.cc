@@ -29,6 +29,23 @@
 namespace donner::editor {
 namespace {
 
+// Runs a GL replay and, on failure, either GTEST_SKIP()s or FAIL()s. The skip
+// path fires only when the host genuinely cannot provide a GL context (a
+// headless / GPU-less environment with no software-GL fallback, e.g.
+// GitHub-hosted macOS, whose NSGL path reports "Failed to find a suitable pixel
+// format"). Every other failure is a real error and still FAILs. Linux CI runs
+// these same tests on Mesa llvmpipe, so a genuine GL-path regression is caught
+// there — this only skips where GL is truly unavailable.
+#define ASSERT_GL_REPLAY_OR_SKIP(optionsExpr, resultVar, errorVar)                                 \
+  do {                                                                                             \
+    if (!repro::RunGlRnrReplay((optionsExpr), &(resultVar), &(errorVar))) {                        \
+      if ((resultVar).glUnavailable) {                                                             \
+        GTEST_SKIP() << "GL context unavailable on this host; skipping GL replay: " << (errorVar); \
+      }                                                                                            \
+      FAIL() << (errorVar);                                                                        \
+    }                                                                                              \
+  } while (false)
+
 struct PixelCrop {
   int x = 0;
   int y = 0;
@@ -668,7 +685,7 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 1);
   ASSERT_TRUE(actual.has_value());
@@ -710,7 +727,7 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
 
       repro::GlRnrReplayResult result;
       std::string error;
-      ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+      ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
       std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 1);
       ASSERT_TRUE(capture.has_value());
@@ -755,7 +772,7 @@ TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   const repro::GlRnrReplayFrameDiagnostics* withheld = FindFrameDiagnostics(result, 1);
   ASSERT_NE(withheld, nullptr);
@@ -806,7 +823,7 @@ TEST(GlRnrReplayTest, UsesEmbeddedSvgSourceWhenOriginalPathIsMissing) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
   ASSERT_NE(FindCapture(result, 0), nullptr);
 
   std::error_code ec;
@@ -904,7 +921,7 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, 60);
   ASSERT_TRUE(bitmap.has_value());
@@ -948,7 +965,7 @@ TEST(GlRnrReplayTest, SecondDragActiveFrameMatchesMouseUpFrame) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   std::optional<svg::RendererBitmap> active = LoadCaptureBitmap(result, activeFrame);
   std::optional<svg::RendererBitmap> comparison = LoadCaptureBitmap(result, comparisonFrame);
@@ -989,7 +1006,7 @@ TEST(GlRnrReplayTest, GeodeDragZoomOReplayCoversTextureReuseWindow) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   for (std::uint64_t frame = kFirstCaptureFrame; frame <= kLastCaptureFrame; ++frame) {
     const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, frame);
@@ -1054,7 +1071,7 @@ TEST(GlRnrReplayTest, GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
   ASSERT_EQ(result.finalSelectedElementLabel, expect.expectedSelectionLabel);
 
   for (std::uint64_t frame = kFirstZoomFrame; frame <= kLastZoomFrame; ++frame) {
@@ -1097,7 +1114,7 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedConte
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
   ASSERT_EQ(result.finalSelectedElementLabel, expect.expectedSelectionLabel);
 
   int checkedDragFrames = 0;
@@ -1146,7 +1163,7 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragDoesNotFreezeLiveDragPreviewWhileWorkerBu
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   std::optional<Vector2d> previousTranslation;
   for (std::uint64_t frame = 37; frame <= 42; ++frame) {
@@ -1196,7 +1213,7 @@ TEST(GlRnrReplayTest, GeodeFarZoomThenDragKeepsDonnerNOverlayLockedToPresentedCo
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
   ASSERT_EQ(result.finalSelectedElementLabel, expect.expectedSelectionLabel);
 
   const std::string dragDiagnostics = CanonicalReplayDiagnostics(result, 50u, 61u);
@@ -1278,7 +1295,7 @@ TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   std::optional<svg::RendererBitmap> beforeRClick = LoadCaptureBitmap(result, beforeClickFrame);
   std::optional<svg::RendererBitmap> firstRClickFrame = LoadCaptureBitmap(result, firstClickFrame);
