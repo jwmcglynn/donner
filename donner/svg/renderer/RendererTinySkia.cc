@@ -197,7 +197,12 @@ Transform2d resolveGradientTransform(
   const Vector2d origin = maybeTransformComponent->transformOrigin;
   const Transform2d parentFromEntity =
       maybeTransformComponent->rawCssTransform.compute(viewBox, FontMetrics());
-  return Transform2d::Translate(origin) * parentFromEntity * Transform2d::Translate(-origin);
+  // Apply the `transform-origin` pivot in the same `Translate(-origin)·M·Translate(origin)` order
+  // used for shapes (LayoutSystem::getEntityFromParentTransform, #609). Donner's `operator*` is
+  // left-first (`A * B` applies A, then B), so the pivot-out `Translate(-origin)` must come first
+  // and the pivot-back `Translate(origin)` last. The reversed order pushes the gradient center off
+  // the shape, collapsing scaled radial gradients to a single stop color (#621).
+  return Transform2d::Translate(-origin) * parentFromEntity * Transform2d::Translate(origin);
 }
 
 std::optional<tiny_skia::Shader> instantiateGradientShader(

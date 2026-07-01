@@ -94,7 +94,7 @@ bottom for completeness.
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
 | B3 | `<image>` embedded/data-URL sizing | 13 | Bug — one investigation |
 | B4 | `<use>` → inline `<svg>` sizing | 5 | Bug (shares machinery with B3) |
-| F12 | `transform-origin` on paint-servers / `<image>` / text | 5 (2 gaps) | **on-text/on-image DONE**; paint-servers (gradient/pattern, 4 tests) + on-text-path (1 test) remain → [#621](https://github.com/jwmcglynn/donner/issues/621), [#624](https://github.com/jwmcglynn/donner/issues/624) |
+| F12 | `transform-origin` on `<textPath>` baseline | 1 | gradient/pattern/`<image>`/text resolve the pivot; `on-text-path` baseline still drops it → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
 | F4 | `<switch>` conditional processing | 12 (+systemLanguage 3) | Feature |
@@ -273,18 +273,21 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 
 ### F12: `transform-origin` on paint-servers / `<image>` / text
 
-**Impact:** 5 tests remain skipped in `structure/transform-origin/` (`on-gradient` ×2,
-`on-pattern` ×2, `on-text-path`); `on-image` and `on-text` are now fixed.
+**Impact:** 1 remaining test in `structure/transform-origin/` (`on-text-path`); the
+`on-gradient` ×2, `on-pattern` ×2, `on-image`, and `on-text` cases pass.
 
-**Symptom:** these were *never* green — they are a separate never-implemented gap, not
-the #514 regression. Gradients/patterns route their transform through
-`getRawEntityFromParentTransform` (`SVGGradientElement.cc`, `SVGPatternElement.cc`),
-which intentionally drops the `transform-origin` pivot; for `<image>`/text the layout
-computes the correct origin (verified) but it doesn't compose with the content-placement
-transform, so they render off-screen.
+Gradient/pattern paint-servers and `<image>`/text apply the `transform-origin` pivot
+as `Translate(-origin)·M·Translate(origin)` (matching the shape path; Donner's
+`operator*` is left-first). For paint-servers the pivot is recomputed in the renderers
+from each entity's `ComputedLocalTransformComponent` —
+`RendererTinySkia::resolveGradientTransform`,
+`RendererGeode::resolveGradientTransform`, and the shared pattern transform in
+`RendererDriver` — not via the `getRawEntityFromParentTransform` accessor, which is
+unrelated. For `<image>`/text the layout composes the resolved origin with the
+content-placement transform.
 
-**Next step:** thread the resolved origin pivot through the paint-server and
-image/text content transforms (the shape path is now correct after #609 — mirror it).
+`on-text-path` still renders the baseline path without the pivot, so a rotated
+`<textPath>` samples its glyphs off-screen → [#624](https://github.com/jwmcglynn/donner/issues/624).
 
 ### Smaller feature gaps
 
