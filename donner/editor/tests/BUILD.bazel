@@ -734,7 +734,6 @@ donner_cc_test(
     # but use gtest_timeout_main below so an individual hung replay still fails
     # with the offending test-case name instead of a silent target timeout.
     timeout = "long",
-    env = {"DONNER_TEST_TIMEOUT_SECONDS": "180"},
     srcs = ["GlRnrReplay_tests.cc"],
     data = [
         "drag_start_hang_repro.rnr",
@@ -744,6 +743,11 @@ donner_cc_test(
         "//:donner_splash.svg",
         "//:zoom-out-drag-jump.rnr",
     ],
+    env = {"DONNER_TEST_TIMEOUT_SECONDS": "180"},
+    # 12 independent replay scenarios ran serially at ~307 s total on the
+    # self-hosted RE lane (CI baseline, 2026-07-01). Sharding runs
+    # them as parallel RE actions, cutting the test-step critical path.
+    shard_count = 6,
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -751,11 +755,11 @@ donner_cc_test(
     }),
     deps = [
         ":bitmap_golden_compare",
+        "//donner/base:gtest_timeout_main",
         "//donner/editor:editor_app",
         "//donner/editor:imgui_headers",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",
-        "//donner/base:gtest_timeout_main",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
         "//donner/svg/renderer/tests:renderer_image_test_utils",
@@ -788,6 +792,10 @@ donner_cc_test(
         ":rnr_replay_testdata",
         "//:donner_splash.svg",
     ],
+    # 5 independent replay scenarios ran serially at ~331 s total on the
+    # self-hosted RE lane (CI baseline, 2026-07-01). One shard per
+    # scenario caps the target at its slowest single replay.
+    shard_count = 5,
     deps = [
         ":bitmap_golden_compare",
         "//donner/editor:async_renderer",

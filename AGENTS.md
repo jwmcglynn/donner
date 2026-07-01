@@ -89,6 +89,7 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
 ## General Practices
 
 - Prefer existing Donner utilities (`Transform2d`, `RcString`, `StringUtils`) before adding dependencies.
+- **No private-infra references.** Donner is public: never cite the operator's private repos, their design-doc numbers, or personal notes in code, comments, commits, or PRs. State the motivation in self-contained terms instead. See `CLAUDE.md` §"No Private-Infra References".
 - Docs: follow `docs/AGENTS.md`, use templates under `docs/design_docs/`. Run `tools/doxygen.sh` to regenerate.
 - **All code changes should include tests.** Use gMock/gTest. Add fuzzers for parser paths when practical.
 - Fix root causes, not symptoms; include necessary error handling without asking. Mainline must stay green — investigate failures rather than dismissing them as pre-existing.
