@@ -5,10 +5,12 @@ markers, patterns, gradients, images, text (Slug fill), and filters all render l
 Geode runs the full resvg suite as the `*_geode` variant under `bazel test //...`, using
 the same `ImageComparisonParams` as the CPU backends
 ([0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)).
-Text + filter parity with tiny-skia is reached; the only residual geode↔tiny diff is the
-accepted sub-pixel coverage floor ([0041](0041-geode_analytical_aa.md)). Real-GPU verified
-on Intel Arc A380 / Mesa Vulkan, with a vendor-gated alpha-coverage shader fallback for
-drivers that hang on `sample_mask` output.
+Geode now renders analytic Slug coverage at `sampleCount=1` on every adapter
+([0041](0041-geode_analytical_aa.md), landed) — the 4× MSAA `sample_mask` path and the
+Intel-Arc alpha-coverage fallback described earlier in this doc are deleted. Text parity
+with tiny-skia is tracked separately in [0038](0038-geode_tinyskia_text_parity.md) (0
+structural divergences). Each backend now gates against the shared resvg reference
+directly (`GeodeGolden`/`TinyGolden`); geode-vs-tiny parity comparison was retired.
 **Author:** Jeff McGlynn
 **Created:** 2026-04-07
 **Last updated:** 2026-05-29
@@ -96,11 +98,13 @@ drivers that hang on `sample_mask` output.
   resvg suite.
 - **Phase 4** (Text rendering): ✅ `drawText` implemented.
   Routes shaped-glyph outlines through the Slug fill pipeline via the
-  existing `drawPath` path. Enables text rendering for direct Geode
-  consumers. The resvg `text/*` category gate stays closed -- Geode's
-  4x MSAA produces ~600-800 px AA drift per glyph vs tiny-skia's 16x
-  supersample reference; unlocking those 268 tests requires a finer
-  sample pattern or analytic glyph AA (Phase 5 follow-up).
+  existing `drawPath` path. The resvg `text/*` category runs on Geode
+  with no blanket gate: [0041](0041-geode_analytical_aa.md)'s analytic
+  dual-ray coverage rewrite replaced the 4x MSAA sample_mask path,
+  closing the AA-drift gap this phase originally deferred to a "finer
+  sample pattern or analytic glyph AA" follow-up. Text parity with
+  tiny-skia is tracked in [0038](0038-geode_tinyskia_text_parity.md)
+  (0 structural divergences remaining).
 - **Real-GPU verification (2026-04-17)**: 🚧 first run on real hardware,
   plus a targeted fallback shader path for Intel+Vulkan. Added
   adapter-info logging to `GeodeDevice::CreateHeadless` (commit

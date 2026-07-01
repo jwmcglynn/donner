@@ -40,9 +40,9 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | | Count |
 |---|---:|
-| `Params::Skip(...)` | 234 |
-| `Params::RenderOnly(...)` | 72 (render-must-not-crash, no pixel compare) |
-| `WithThreshold` / max-pixel overrides | 96 (~15 still over 1000 px -> masked-bug candidates) |
+| `Params::Skip(...)` | 218 |
+| `Params::RenderOnly(...)` | 52 (render-must-not-crash, no pixel compare) |
+| `WithThreshold` / max-pixel overrides | 77 (~15 still over 1000 px -> masked-bug candidates) |
 | Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature (down from 22; analytic dual-ray landed, see 0041) |
 | Commented-out category blocks | 1 (`filters/filter-functions`) |
 
@@ -94,7 +94,7 @@ bottom for completeness.
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
 | B3 | `<image>` embedded/data-URL sizing | 13 | Bug — one investigation |
 | B4 | `<use>` → inline `<svg>` sizing | 5 | Bug (shares machinery with B3) |
-| F12 | `transform-origin` on paint-servers / `<image>` / text | 2 left | **on-text/on-image DONE**; paint-servers (gradient/pattern) + on-text-path remain → [#621](https://github.com/jwmcglynn/donner/issues/621), [#624](https://github.com/jwmcglynn/donner/issues/624) |
+| F12 | `transform-origin` on paint-servers / `<image>` / text | 5 (2 gaps) | **on-text/on-image DONE**; paint-servers (gradient/pattern, 4 tests) + on-text-path (1 test) remain → [#621](https://github.com/jwmcglynn/donner/issues/621), [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
 | F4 | `<switch>` conditional processing | 12 (+systemLanguage 3) | Feature |
@@ -273,8 +273,8 @@ algorithm + RTL shaping (`text-full`). Group as one workstream.
 
 ### F12: `transform-origin` on paint-servers / `<image>` / text
 
-**Impact:** 7 tests in `structure/transform-origin/` (`on-gradient` ×2, `on-pattern`
-×2, `on-image`, `on-text`, `on-text-path`), kept skipped after the F2 regression fix.
+**Impact:** 5 tests remain skipped in `structure/transform-origin/` (`on-gradient` ×2,
+`on-pattern` ×2, `on-text-path`); `on-image` and `on-text` are now fixed.
 
 **Symptom:** these were *never* green — they are a separate never-implemented gap, not
 the #514 regression. Gradients/patterns route their transform through

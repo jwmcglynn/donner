@@ -1,6 +1,13 @@
 # Design: v1.0 Release
 
-**Status:** Draft
+**Status:** Draft — superseded as the *next* release by
+[`docs/ProjectRoadmap.md`](../ProjectRoadmap.md), which now targets **v0.8**
+(the editor/toolkit showcase, see
+[0047-v0_8_showcase.md](0047-v0_8_showcase.md)) as the immediate next release,
+with v1.0 following it. Several items this doc scoped into v1.0 — notably
+"Editor v1 (the app)" (Phase 8) — have since moved into the v0.8 milestone
+in the roadmap. The phase list below has not been re-sequenced to match;
+treat it as directional until reconciled with the roadmap.
 **Author:** Jeff McGlynn (with Claude Opus 4.7)
 **Created:** 2026-04-17
 

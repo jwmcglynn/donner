@@ -1,6 +1,11 @@
 # Design: Test Coverage Improvement (74% → 80%, stretch 90%)
 
-**Status:** In Progress (Round 1 complete, Round 2 in progress)
+**Status:** Superseded by later coverage pushes. Repo-wide line coverage is
+now 85.63% (see [0044-coverage_improvement_2026q2](0044-coverage_improvement_2026q2.md),
+landed 2026-05-29), past this doc's 80% target and partway to the 90%
+stretch goal. A `TextEngine_tests.cc` now exists (Phase 1 target was
+untested), so some items below may already be addressed — this doc's
+per-phase checkboxes have not been re-audited against current test files.
 **Updated:** 2026-04-07
 **Tracking:** v1.0 milestone
 

@@ -16,7 +16,8 @@ Donner ships a two-tier text stack:
    WOFF2, and native OpenType shaping.
 
 Both tiers share a single `TextEngine` with pluggable backends
-(`TextBackendSimple` / `TextBackendFull`). Skia and TinySkia both render text today.
+(`TextBackendSimple` / `TextBackendFull`). `RendererTinySkia` and `RendererGeode` both render text
+today (the full-Skia renderer was removed).
 
 This design covers:
 
@@ -278,30 +279,16 @@ mirrors the existing `Feature::FilterEffects` pattern.
 
 ## Current State
 
-### What works
-
-| Component | Status |
-|-----------|--------|
-| `<text>`, `<tspan>` parsing | Done — attributes, content nodes, positioning lists |
-| `ComputedTextComponent` | Done — resolved spans with x/y/dx/dy/rotate |
-| `TextParams` | Done — font families, size, fill/stroke colors, opacity, text-anchor, dominant-baseline, text-decoration, textLength |
-| WOFF 1.0 parsing | Done — `WoffParser` decompresses tables via zlib |
-| WOFF 2.0 parsing | Done — `Woff2Parser` via Google woff2 + Brotli (`--config=text-full`) |
-| `@font-face` CSS parsing | Done — `FontFace` struct with local/url/data sources |
-| `FontLoader` | Done — loads WOFF from URI/data, returns `FontResource` |
-| `FontManager` | Done — TTF/OTF/WOFF1 loading, `@font-face` cascade, fallback to Public Sans |
-| `TextLayout` | Done — stb_truetype layout with kern-table kerning, text-anchor, dominant-baseline, textLength |
-| `TextShaper` | Done — HarfBuzz shaping with GSUB/GPOS (`--config=text-full`) |
-| Skia `drawText` | Done — fill, stroke, rotation, text-anchor, dominant-baseline, text-decoration |
-| TinySkia `drawText` | Done — glyph outlines via stb_truetype/HarfBuzz, fill, stroke, rotation |
-| Embedded fallback font | Done — Public Sans Medium OTF in `third_party/public-sans` |
+Component-level status (parsing, `FontManager`, `TextEngine`/`TextBackend*`, per-renderer
+`drawText`) is covered by the [SVG2 Text Feature Checklist](../0010-text_rendering.md) on the hub
+page rather than duplicated here.
 
 ### What's remaining
 
-| Feature | Skia | TinySkia |
-|---------|------|----------|
-| `<textPath>` rendering | No | No |
-| Bidirectional text (RTL) | No | No |
-| Vertical writing modes | No | No |
-| Variable fonts | No | No |
-| System font discovery | Partial (via SkFontMgr) | No (embedded/loaded only) |
+`<textPath>`, basic RTL/complex-script shaping (full tier), and vertical writing modes (basic
+Latin + CJK) have since shipped — see [the hub](../0010-text_rendering.md) for current coverage.
+Still remaining across both `RendererTinySkia` and `RendererGeode`:
+
+- Full Unicode BiDi reordering for mixed-direction paragraphs
+- Variable fonts (`font-variation-settings`)
+- System font discovery (embedded/loaded fonts only)

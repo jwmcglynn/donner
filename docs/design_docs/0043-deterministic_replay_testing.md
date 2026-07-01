@@ -1,6 +1,11 @@
 # Design: Deterministic Multi-Thread Replay Testing
 
-**Status:** Implemented locally
+**Status:** Implemented — shipped in [#602](https://github.com/jwmcglynn/donner/pull/602),
+closing [#601](https://github.com/jwmcglynn/donner/issues/601). The `#601`-disabled
+`gl_rnr_replay_tests` / `editor_layer_stress_tests` subtests are re-enabled and run
+untagged (default `bazel test //...`, not flaky-quarantined). No standalone developer
+doc has been written yet; this design doc remains the living reference for the
+deterministic-replay mechanism.
 **Author:** Claude Opus 4.7
 **Created:** 2026-05-23
 

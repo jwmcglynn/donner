@@ -39,12 +39,13 @@ CI runs all feature combinations to ensure both enabled and disabled paths work.
 
 ### Backend parity
 
-- Text golden images differ between Skia and TinySkia at the base tier because Skia uses
-  its own internal layout (with GPOS access) while TinySkia uses stb_truetype (kern-table only).
-- At the `text_full` tier, shaping output is identical between backends since both use
-  HarfBuzz, and golden images should be much closer.
-- TinySkia renders glyph outlines as vector paths (no hinting), so small-size text will look
-  slightly different from Skia's hinted rasterization regardless of shaping tier.
+- `RendererTinySkia` and `RendererGeode` both consume the same `TextEngine`/`TextBackend*` layout
+  output, so glyph positions match between them at both the base and `text_full` tiers; residual
+  diffs are limited to rasterization (MSAA vs vector fill). See
+  [0038-geode_tinyskia_text_parity.md](../0038-geode_tinyskia_text_parity.md) for the parity gate.
+- The base tier (stb_truetype, `TextBackendSimple`) and `text_full` tier (HarfBuzz,
+  `TextBackendFull`) can still diverge in glyph advances/kerning between each other, since only
+  `text_full` processes GPOS.
 
 ## Current Snapshot (2026-04-04) {#current-snapshot}
 

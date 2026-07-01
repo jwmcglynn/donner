@@ -1,8 +1,13 @@
 # Design: Continuous Fuzzing Harness
 
-**Status:** Design
+**Status:** Implemented
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-06
+
+All milestones in both phases landed: `tools/fuzzing/` has the runner, corpus
+manager, crash reporter, dashboard, systemd units, and Dockerfile described
+below; corpus-management workflow is documented in
+[`docs/fuzzing.md`](../fuzzing.md).
 
 ## Summary
 
@@ -60,7 +65,7 @@ The plan is split into two phases: a **local-first scaffold** you can run immedi
   - [x] Pre-run: merge in-tree corpus + persistent corpus into working dir
   - [x] Post-run: minimize via `libFuzzer -merge=1` back into persistent corpus
   - [x] `manage_corpus.py update-intree` command to copy minimized corpus back to repo
-  - [ ] Document corpus management workflow
+  - [x] Document corpus management workflow — see [`docs/fuzzing.md`](../fuzzing.md)
 
 ### Phase 2: Automation and reporting
 

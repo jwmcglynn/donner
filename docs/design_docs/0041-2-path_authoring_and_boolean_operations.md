@@ -1,6 +1,14 @@
 # Design: Path Authoring and Boolean Operations
 
-**Status:** Prototype
+**Status:** Partially implemented. Tool palette + dispatch (M1, `ActiveTool::Select`/`Pen` in
+`EditorShell`) and the Pen tool (M3, `PenTool`: click-to-place, cubic drag, close-path, shift-angle
+constraint) work, though the Pen tool does not use the formal `EditablePath`/`EditableAnchor` model
+M2 describes — it manages its own draft state directly, and "append to a selected open path" isn't
+implemented. Donner-level boolean path operations (M6, `PathBooleanOp`/`ApplyPathBoolean` in
+`donner/base/PathOps.h`) are implemented and tested, minus an SVG visual-regression corpus. The
+right-side Path Operations panel (M5) is partially wired (actions + undo + selection-preserve
+land; Arrange controls and paint-order commands don't). The Path Edit tool (M4) has not been
+started — no `PathEditTool` exists.
 **Author:** Codex GPT-5
 **Created:** 2026-05-25
 

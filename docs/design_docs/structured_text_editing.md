@@ -1,6 +1,11 @@
 # Design: Projected DOM Editing (Bidirectional Source ↔ Canvas)
 
-**Status:** Draft — revised 2026-05-16 after structured-editing postmortem
+**Status:** Implemented — per the doc's own M1–M8 Status Audit (below) all milestones through M8
+(structured editing on by default) have shipped and are verified in code
+(`EditorApp::structuredEditingEnabled_` defaults to `true`). This doc has not yet been converted
+to the short "Implemented" stub + developer-doc-links form the design doc workflow calls for
+(no standalone developer doc exists yet for `XMLSourceStore`/`DocumentSyncController`) — flagged
+for a follow-up finalization pass rather than done here.
 **Author:** Claude Opus 4.6 (1M context)
 **Created:** 2026-04-11
 **Reviewed by:** DesignReviewBot, DuckBot, ParserBot, CSSBot, PerfBot, SecurityBot

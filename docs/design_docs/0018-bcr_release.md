@@ -1,6 +1,11 @@
 # BCR Release Runbook
 
-**Status:** Active — first BCR release is planned for v0.5.0.
+**Status:** Active — blocked. The first BCR publish attempt, on the `v0.5.0`
+tag (2026-04-16), failed (see the
+[v0.5 retrospective](0011-v0_5_release.md#release-process-bugs-carry-to-v06)).
+Root-causing and re-running the publish flow is tracked as a release-blocking
+item in [0028-v1_0_release.md](0028-v1_0_release.md) Phase 1; no successful
+BCR publish has landed yet.
 **Last updated:** 2026-04-08.
 
 This doc is the single source of truth for cutting a new Donner release on the [Bazel Central Registry](https://registry.bazel.build/). It's tuned for quick execution, not exhaustive explanation — the "why" lives in the companion docs and PRs linked at the bottom.

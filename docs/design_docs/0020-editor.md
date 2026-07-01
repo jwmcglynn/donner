@@ -1,6 +1,12 @@
 # Design: Donner Editor
 
-**Status:** Draft
+**Status:** Implemented. The in-tree editor landed as `//donner/editor` (M1–M8, #529) and has
+since grown well beyond this doc's original M1–M6 plan — composited rendering, Geode/WASM
+support, and further editor UX work are tracked in later docs (0033-2, 0044-2, 0045, 0046,
+0047). The Implementation Plan checkboxes below reflect the original M1–M6 scope only; several
+diverged from what shipped (e.g. no standalone `NativeFileDialog` or `fuzz_replay_cli` target
+exist) and M7–M8 aren't described here at all. Treat this doc as historical design rationale,
+not a current status source — see git history at `#529` for what actually landed.
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-10
 

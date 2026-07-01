@@ -1,6 +1,15 @@
 # Filter Performance Optimization
 
-**Status:** Complete (all filters within 1.5x of Skia)
+**Status:** Historical. All optimization phases below completed, and at the time TinySkia's
+filter/render performance was verified within 1.5x of the Skia backend on every measured
+primitive. The Skia backend itself has since been fully removed from the codebase (see
+[0003](0003-renderer_interface_design.md)), along with `SkiaRenderPerfBench.cpp` and the
+Skia-comparison benchmark targets this doc references — so the 1.5x-of-Skia comparison is no
+longer a live, re-runnable gate. Part 2 (TinySkia SIMD/algorithmic optimizations — running-sum
+blur, NEON vectorization, van Herk/Gil-Werman morphology, fused gradient/pattern pipeline
+stages) remains the current implementation; Part 1 (native Skia `SkImageFilter` lowering)
+describes work in the now-deleted Skia backend and is retained here for historical reference
+only.
 **Author:** jwm
 **Date:** 2025-03-11
 **Related:** [renderer_interface_design.md](./0003-renderer_interface_design.md)

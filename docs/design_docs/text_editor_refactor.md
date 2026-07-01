@@ -1,6 +1,11 @@
 # Design: TextEditor Refactor — Headless Core + ImGui Shell
 
-**Status:** Draft
+**Status:** Mostly implemented — `TextEditorCore` (headless editing/undo/syntax state) and
+`ClipboardInterface` (with `ImGuiClipboard` / `InMemoryClipboard` implementations) exist and
+`TextEditorCore_tests.cc` covers the headless surface (Commits 1–2). Commit 3's cleanup is
+incomplete: `TextEditor.h` still declares `friend class TextEditorTests` and
+`TextEditor_tests.cc` still carries non-rendering tests rather than having fully migrated to
+`TextEditorCore_tests.cc`.
 **Author:** Claude Opus 4.6 (1M context)
 **Created:** 2026-04-12
 
@@ -124,8 +129,8 @@ testable on its own.
 
 ### Commit 1: Extract `TextEditorCore` — move editing state + ops
 
-- [ ] Create `donner/editor/TextEditorCore.{h,cc}`.
-- [ ] Move the following fields from `TextEditor` to
+- [x] Create `donner/editor/TextEditorCore.{h,cc}`.
+- [x] Move the following fields from `TextEditor` to
       `TextEditorCore`:
   - Text buffer (`text_` — already a `TextBuffer`)
   - Cursor/selection state (`state_: EditorState`)
@@ -136,7 +141,7 @@ testable on its own.
     `checkComments_`, `regexList_`, `languageDefinition_`)
   - Change tracking (`textChanged_`)
   - Indent settings (`tabSize_`, `insertSpaces_`, `indentMode_`)
-- [ ] Move the following methods (copy, then remove from
+- [x] Move the following methods (copy, then remove from
       `TextEditor`):
   - `setText` / `getText`
   - `setCursorPosition` / `getCursorPosition`
@@ -151,20 +156,20 @@ testable on its own.
   - `setLanguageDefinition` / `colorize` / `colorizeRange` /
     `colorizeInternal`
   - `setPalette`
-- [ ] `TextEditor` holds a `TextEditorCore core_` member and forwards
+- [x] `TextEditor` holds a `TextEditorCore core_` member and forwards
       every ported method via a one-line wrapper:
       ```cpp
       void TextEditor::setText(string_view t) { core_.setText(t); }
       ```
       (This keeps the public `TextEditor` API identical so callers
       don't need changes.)
-- [ ] Build: `bazel build //donner/editor:text_editor`.
-- [ ] Tests: `bazel test //donner/editor/tests:all` — same 60 pass /
+- [x] Build: `bazel build //donner/editor:text_editor`.
+- [x] Tests: `bazel test //donner/editor/tests:all` — same 60 pass /
       13 fail as before.
 
 ### Commit 2: Abstract the clipboard
 
-- [ ] Add `donner/editor/ClipboardInterface.h`:
+- [x] Add `donner/editor/ClipboardInterface.h`:
       ```cpp
       class ClipboardInterface {
        public:
@@ -174,17 +179,17 @@ testable on its own.
         virtual bool hasText() const = 0;
       };
       ```
-- [ ] Add `ImGuiClipboard` implementation in
+- [x] Add `ImGuiClipboard` implementation in
       `donner/editor/TextEditor.cc` (anonymous namespace) that calls
       `ImGui::GetClipboardText` / `ImGui::SetClipboardText`.
-- [ ] Add `InMemoryClipboard` implementation in
+- [x] Add `InMemoryClipboard` implementation in
       `donner/editor/tests/InMemoryClipboard.h` for test use.
-- [ ] `TextEditorCore` holds a `ClipboardInterface*` (non-owning
+- [x] `TextEditorCore` holds a `ClipboardInterface*` (non-owning
       pointer, injected at construction or via a setter). Default is
       `nullptr`, which makes `copy()` / `cut()` / `paste()` no-ops
       — acceptable because production always injects the ImGui
       clipboard before use.
-- [ ] `TextEditor`'s constructor injects the `ImGuiClipboard` into
+- [x] `TextEditor`'s constructor injects the `ImGuiClipboard` into
       its `core_`.
 - [ ] Migrate `copy()`, `cut()`, `paste()` from `TextEditor` to
       `TextEditorCore` — they call through the interface instead of
@@ -193,7 +198,7 @@ testable on its own.
 
 ### Commit 3: Migrate tests to headless core
 
-- [ ] Create `donner/editor/tests/TextEditorCore_tests.cc`.
+- [x] Create `donner/editor/tests/TextEditorCore_tests.cc`.
 - [ ] Move every test from `TextEditor_tests.cc` that doesn't need
       ImGui rendering/input-capture (basically all 73 of them in the
       current file) over to the new file. They now construct a

@@ -1,13 +1,15 @@
 # 0038 — Geode ↔ tiny-skia text parity: developer reference
 
 **Status:** Developer reference. Text parity between the Geode and tiny-skia
-backends is **complete** — 0 structural divergences remain; the only residual
-geode↔tiny diff is the accepted sub-pixel coverage floor ([0041](0041-geode_analytical_aa.md)).
-This doc describes the shared text layer both backends consume and how per-test
-parity is expressed in `ImageComparisonParams`. Geode runs the same params as the CPU
-variants; a parity-only exception is a per-test `disableGeodeParity(reason)` (see
-[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)).
-The §4 catalog records the resolved divergences as implementation notes.
+backends is **complete** — 0 structural divergences remain (§4 catalog, resolved). Since
+this doc was written, [0041](0041-geode_analytical_aa.md)'s analytic dual-ray coverage
+rewrite landed and retired the `GeodeTinyParity` (geode-vs-tiny) comparison mode for the
+resvg corpus entirely — each backend now gates against the shared reference image
+directly (`GeodeGolden`/`TinyGolden`), not against each other. §3 below still describes
+the now-retired `GeodeTinyParity` mode and `disableGeodeParity(reason)` mechanism as
+live; treat that section as historical context for how text parity was originally
+verified, not the current gating mechanism. This doc describes the shared text layer
+both backends consume, which is unaffected and still current.
 
 **Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
 [0041 anti-aliasing](0041-geode_analytical_aa.md),

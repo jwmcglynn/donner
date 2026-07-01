@@ -1,6 +1,8 @@
 # Design: CSS Fonts Support
 
-**Status:** Partial
+**Status:** Partial — core properties (`font-family`, `font-size`, `font-weight`, `font-style`,
+`font-stretch`, `font-variant` small-caps) and matching are implemented; `font` shorthand,
+`font-feature-settings`, variable fonts, and `unicode-range` remain unimplemented.
 **Standard:** [CSS Fonts Level 4](https://www.w3.org/TR/css-fonts-4/)
 **Related:** [text/overview.md](text/overview.md)
 
@@ -17,16 +19,16 @@ implementation plan for CSS font properties within the donner SVG renderer.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `font-family` | Implemented | Parsed as comma-separated list. Resolved via `FontManager::findFont()` against registered `@font-face` rules. Falls back to embedded Public Sans. |
-| `font-size` | Implemented | Supports `px`, `em`, `%`, and other CSS length units. Inherited. Keywords (`small`, `large`, `x-large` etc.) not yet supported. |
-| `font-weight` | Implemented | Supports `normal` (400), `bold` (700), and numeric 100-900. Per-span resolution selects weight-matched font from registered `@font-face` rules. Keywords `bolder`/`lighter` not supported. |
+| `font-size` | Implemented | Supports `px`, `em`, `%`, and other CSS length units, absolute-size keywords (`xx-small`–`xx-large`), and `larger`/`smaller` relative keywords. Inherited. |
+| `font-weight` | Implemented | Supports `normal` (400), `bold` (700), numeric 100-900, and `bolder`/`lighter` relative keywords. Per-span resolution selects weight-matched font from registered `@font-face` rules. |
+| `font-style` | Implemented | `normal`, `italic`, `oblique` parsed (`PropertyRegistry`) and used in `FontManager::findFont(family, weight, style, stretch)` matching. |
+| `font-stretch` | Implemented | Keyword and percentage values parsed; used in font matching. |
+| `font-variant` | Partial | `normal`/`small-caps` parsed; small-caps synthesized in the base tier, native `smcp` OpenType feature used in the full tier. Other CSS Fonts 4 sub-values (`all-small-caps`, `petite-caps`, etc.) not supported. |
 
 ### Registered but Not Parsed (stored as unparsed presentation attributes)
 
 | Property | CSS Fonts 4 Section | Priority | Notes |
 |----------|---------------------|----------|-------|
-| `font-style` | [3.3](https://www.w3.org/TR/css-fonts-4/#font-style-prop) | High | `normal`, `italic`, `oblique [<angle>]`. Needed for italic text rendering. |
-| `font-variant` | [3.6](https://www.w3.org/TR/css-fonts-4/#font-variant-prop) | Low | Shorthand for sub-properties (caps, ligatures, etc.). Complex parsing. |
-| `font-stretch` | [3.4](https://www.w3.org/TR/css-fonts-4/#font-stretch-prop) | Low | `condensed`, `expanded`, percentage. Rarely used in SVG. |
 | `font-size-adjust` | [3.5](https://www.w3.org/TR/css-fonts-4/#font-size-adjust-prop) | Low | Adjusts x-height across font fallback. Complex metric computation. |
 
 ### Not Registered
@@ -52,8 +54,8 @@ implementation plan for CSS font properties within the donner SVG renderer.
 | `font-family` | Implemented | Family name for matching. |
 | `src` | Partial | `Data` (inline bytes) supported. `url()` and `local()` not implemented. |
 | `font-weight` | Implemented | Stored in `FontFace::fontWeight`. Weight matching in `findFont(family, weight)`. |
-| `font-style` | Not implemented | No style matching (italic vs normal). |
-| `font-stretch` | Not implemented | No stretch matching. |
+| `font-style` | Implemented | Stored in `FontFace::fontStyle`. Style matching in `findFont(family, weight, style, stretch)`. |
+| `font-stretch` | Implemented | Stored on `FontFace`. Stretch matching in `findFont(family, weight, style, stretch)`. |
 | `font-display` | Not applicable | Only relevant for web loading behavior. |
 | `unicode-range` | Not implemented | Would enable per-codepoint font fallback. |
 
@@ -69,39 +71,14 @@ defines a multi-step matching algorithm:
 
 Our current implementation:
 - Step 1: ✅ Exact family name match
-- Step 2: ❌ Not implemented (always uses first style found)
+- Step 2: ✅ Style matching (`findFont(family, weight, style, stretch)`)
 - Step 3: ✅ Basic closest-weight match via `abs(face.fontWeight - weight)`
-- Step 4: ❌ Not implemented
+- Step 4: ✅ Stretch matching
 
 ## Implementation Plan
 
-### Phase 1: font-style (High Priority)
-
-Add `font-style` as a CSS property and `@font-face` descriptor.
-
-**PropertyRegistry changes:**
-```cpp
-Property<FontStyle, PropertyCascade::Inherit> fontStyle{
-    "font-style", []() -> std::optional<FontStyle> { return FontStyle::Normal; }};
-```
-
-Where `FontStyle` is an enum: `Normal`, `Italic`, `Oblique`.
-
-**FontFace changes:**
-```cpp
-struct FontFace {
-  RcString familyName;
-  std::vector<FontFaceSource> sources;
-  int fontWeight = 400;
-  FontStyle fontStyle = FontStyle::Normal;  // NEW
-};
-```
-
-**Font matching:**
-Update `findFont(family, weight)` → `findFont(family, weight, style)`.
-
-**Test registration:**
-Parse style from filename suffix: `NotoSans-Italic.ttf` → `FontStyle::Italic`.
+Phase 1 (font-style) is complete: `FontStyle` is a `PropertyRegistry` property and a `FontFace`
+descriptor, and `FontManager::findFont(family, weight, style, stretch)` matches on it.
 
 ### Phase 2: font shorthand (Medium Priority)
 
@@ -115,20 +92,13 @@ Example: `font: bold 16px "Noto Sans"` → weight=700, size=16px, family="Noto S
 Pass OpenType feature settings to HarfBuzz via `hb_feature_t`. Parse format:
 `font-feature-settings: "liga" 0, "smcp" 1`
 
-**TextShaper changes:**
-Store parsed features in `TextParams` and pass to `hb_shape()`:
+**`TextBackendFull` changes:**
+Store parsed features in `TextLayoutParams` and pass to `hb_shape()`:
 ```cpp
 hb_shape(hbFont, chunkBuf, features.data(), features.size());
 ```
 
-### Phase 4: font-size keywords (Medium Priority)
-
-Support CSS font-size keywords: `xx-small`, `x-small`, `small`, `medium`, `large`,
-`x-large`, `xx-large`, `smaller`, `larger`.
-
-Map to pixel values per CSS spec (medium = 16px, each step ~1.2x).
-
-### Phase 5: Variable fonts (Low Priority)
+### Phase 4: Variable fonts (Low Priority)
 
 Support `font-variation-settings` for variable font axes (wght, wdth, ital, etc.).
 Requires FreeType's `FT_Set_Var_Design_Coordinates` API.

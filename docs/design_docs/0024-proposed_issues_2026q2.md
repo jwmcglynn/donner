@@ -1,6 +1,14 @@
 # Design: Proposed Issues — 2026 Q2 Feature Gaps, Bugs & Build Improvements
 
-**Status:** Draft
+**Status:** Stale wishlist — largely overtaken by direct implementation. Part 1's P0
+items (S1 CSS filter functions, most of S2 transform-origin) shipped directly via
+PRs #515/#609 rather than filed issues; remaining gaps are tracked live in
+[0021](0021-resvg_feature_gaps.md). Part 2's CI/build proposals were partly adopted
+(EnTT modular headers, additional test sharding) and partly superseded by
+[0031-ci_hardening_2026q2.md](0031-ci_hardening_2026q2.md); `--local_test_jobs` was
+deliberately left unset for self-hosted runners rather than raised per B3. This doc
+is kept as a historical proposal snapshot, not an active backlog — see 0021 and 0031
+for current state.
 **Author:** Claude Opus 4.6 (with SpecBot, PerfBot, BazelBot)
 **Created:** 2026-04-12
 

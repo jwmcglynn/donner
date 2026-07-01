@@ -1,8 +1,18 @@
 # Design: Drag-end latency elimination
 
-**Status:** Design
+**Status:** Superseded by [0035: Filter Layer Compose-Offset Bug](0035-filter_layer_compose_offset_bug.md)
 **Author:** Claude Opus 4.7
 **Created:** 2026-04-18
+
+> **Note:** The drag-end freeze was fixed, but not via this doc's Option A
+> (dropping the drag-end reparse). `QueueSourceWritebackReparse` still always
+> queues a preserving reparse; the fix is `AsyncSVGDocument`/`CompositorController`
+> structural-remap machinery (`remapAfterStructuralReplace`,
+> `RemapAfterStructuralReplaceIdentityPreservesCaches`) — the "Option B" path
+> this doc proposed — landed and is exercised by the fixes documented in 0035.
+> The `SplashDragEndReplaceDocumentReplayLatency` test still gates the
+> full-reset fallback at a 5000 ms worst-case budget; the common case now
+> takes the remap path instead. Milestones below are preserved for history.
 
 ## Summary
 

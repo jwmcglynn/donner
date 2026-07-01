@@ -426,7 +426,8 @@ commit, nothing else.
 
 ### Post-Release
 
-- [ ] **Update ProjectRoadmap.md** — Mark v0.5 as shipped and update the design-doc table.
+- [x] **Update ProjectRoadmap.md** — `ProjectRoadmap.md` now marks v0.5 as shipped and lists v0.8
+  as the next release.
 - [ ] **Announce** — Post the release to the relevant channels.
 - [ ] **BCR publish** — Publishing to the Bazel Central Registry failed on the v0.5.0 tag. See
   [Retrospective → Release-process bugs](#release-process-bugs-carry-to-v06).
