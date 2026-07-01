@@ -1,0 +1,46 @@
+name: Upload Bazel test artifacts
+description: Collect Bazel test logs and undeclared outputs for failed CI jobs.
+
+inputs:
+  name:
+    description: Artifact name.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Collect Bazel test artifacts
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        output_dir="${RUNNER_TEMP}/bazel-test-artifacts"
+        rm -rf "${output_dir}"
+        mkdir -p "${output_dir}"
+
+        if [[ ! -e bazel-testlogs ]]; then
+          echo "No bazel-testlogs symlink found."
+          exit 0
+        fi
+
+        while IFS= read -r -d '' file; do
+          rel="${file#bazel-testlogs/}"
+          dest="${output_dir}/${rel}"
+          mkdir -p "$(dirname "${dest}")"
+          cp "${file}" "${dest}"
+        done < <(
+          find -L bazel-testlogs \
+            \( -name test.log -o -name test.xml -o -path '*/test.outputs/*' \) \
+            -type f -print0
+        )
+
+        echo "Collected Bazel test artifacts:"
+        find "${output_dir}" -type f -print | sort || true
+
+    - name: Upload Bazel test artifacts
+      uses: actions/upload-artifact@v6
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ runner.temp }}/bazel-test-artifacts
+        if-no-files-found: ignore
+        retention-days: 14

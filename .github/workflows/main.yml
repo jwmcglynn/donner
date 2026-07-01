@@ -311,6 +311,12 @@ jobs:
           bazelisk test --config=ci --test_output=errors \
             $TARGETS
 
+      - name: Upload Bazel test failure artifacts
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
 
   # Operator's ARM64 Linux runs on the operator's self-hosted runner.
   # Replaces `linux` for operator runs (extra arch coverage + homelab cache).
@@ -413,6 +419,12 @@ jobs:
           fi)
           bazelisk test --config=ci --config=latest_llvm --test_output=errors $TARGETS
 
+      - name: Upload Bazel test failure artifacts
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
 
   macos:
     runs-on: macos-15
@@ -475,6 +487,12 @@ jobs:
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
 
+      - name: Upload Bazel test failure artifacts
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
+
 
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for operator runs. The host pre-provisions Bazelisk,
@@ -531,3 +549,9 @@ jobs:
         # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
         # nightly cron so it doesn't gate every main push. PRs touching
         # fuzzer code re-trigger that workflow via path filter.
+
+      - name: Upload Bazel test failure artifacts
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}

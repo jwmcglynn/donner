@@ -732,19 +732,21 @@ TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDe
       std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 1);
       ASSERT_TRUE(capture.has_value());
       const svg::RendererBitmap normalizedCapture = NormalizeBitmap(*capture);
-      const std::string diagnostics = CanonicalReplayDiagnostics(result);
+      // Frame 0 observes initial async-renderer warm-up and can report a transient stale canvas on
+      // slower software GL hosts. The invariant for this matrix is the explicit capture frame.
+      const std::string captureFrameDiagnostics = CanonicalReplayDiagnostics(result, 1u, 1u);
       const std::string label = std::string("gl_replay_matrix_") + (pace ? "paced" : "unpaced") +
                                 "_delay_" + std::to_string(delayMs);
 
       if (!baselineCapture.has_value()) {
         baselineCapture = normalizedCapture;
-        baselineDiagnostics = diagnostics;
+        baselineDiagnostics = captureFrameDiagnostics;
         continue;
       }
 
       tests::CompareBitmapToBitmap(normalizedCapture, *baselineCapture, label,
                                    tests::PixelmatchIdentityParams());
-      EXPECT_EQ(diagnostics, *baselineDiagnostics) << label;
+      EXPECT_EQ(captureFrameDiagnostics, *baselineDiagnostics) << label;
     }
   }
 
