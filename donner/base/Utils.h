@@ -57,6 +57,23 @@
 #endif
 
 /**
+ * \def UTILS_LIFETIME_BOUND
+ *
+ * Marks a returned reference/pointer/view (or a parameter) as aliasing storage owned by the
+ * object, so the compiler can diagnose binding it to a longer-lived variable (Clang's
+ * `-Wdangling` / clang-tidy's `clang-diagnostic-dangling`). Clang and MSVC support the
+ * attribute; GCC has no equivalent, so it expands to nothing there.
+ */
+
+#if defined(__clang__)
+#define UTILS_LIFETIME_BOUND [[clang::lifetimebound]]
+#elif defined(_MSC_VER)
+#define UTILS_LIFETIME_BOUND [[msvc::lifetimebound]]
+#else
+#define UTILS_LIFETIME_BOUND
+#endif
+
+/**
  * \def UTILS_RELEASE_ASSERT(x)
  *
  * An assert that evaluates on both release and debug builds.

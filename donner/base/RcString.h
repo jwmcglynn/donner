@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "donner/base/StringUtils.h"
+#include "donner/base/Utils.h"
 
 namespace donner {
 
@@ -113,9 +114,9 @@ public:
 
   /// Cast operator to `std::string_view`. With the small-string optimization the returned view can
   /// point into this object's inline buffer, so it must not outlive the \ref RcString. Annotated
-  /// `[[clang::lifetimebound]]` so Clang's `-Wdangling` and clang-tidy flag binding the view to a
+  /// `UTILS_LIFETIME_BOUND` so Clang's `-Wdangling` and clang-tidy flag binding the view to a
   /// temporary \ref RcString (the small-string-in-temporary dangle from issue #603).
-  operator std::string_view() const [[clang::lifetimebound]] {
+  operator std::string_view() const UTILS_LIFETIME_BOUND {
     return data_.isLong() ? data_.long_.view() : data_.short_.view();
   }
 
@@ -220,9 +221,9 @@ public:
   /**
    * @return a pointer to the string data. With the small-string optimization the pointer can alias
    *   this object's inline buffer, so it must not outlive the \ref RcString (annotated
-   *   `[[clang::lifetimebound]]`).
+   *   `UTILS_LIFETIME_BOUND`).
    */
-  const char* data() const [[clang::lifetimebound]] {
+  const char* data() const UTILS_LIFETIME_BOUND {
     return data_.isLong() ? data_.long_.data : &data_.short_.data[0];
   }
 
@@ -242,15 +243,15 @@ public:
   std::string str() const { return std::string(data(), size()); }
 
   // Iterators. Each aliases this object's storage (the inline buffer under the small-string
-  // optimization) and must not outlive the \ref RcString (annotated `[[clang::lifetimebound]]`).
+  // optimization) and must not outlive the \ref RcString (annotated `UTILS_LIFETIME_BOUND`).
   /// Begin iterator.
-  const_iterator begin() const noexcept [[clang::lifetimebound]] { return cbegin(); }
+  const_iterator begin() const noexcept UTILS_LIFETIME_BOUND { return cbegin(); }
   /// End iterator.
-  const_iterator end() const noexcept [[clang::lifetimebound]] { return cend(); }
+  const_iterator end() const noexcept UTILS_LIFETIME_BOUND { return cend(); }
   /// Begin iterator.
-  const_iterator cbegin() const noexcept [[clang::lifetimebound]] { return data(); }
+  const_iterator cbegin() const noexcept UTILS_LIFETIME_BOUND { return data(); }
   /// End iterator.
-  const_iterator cend() const noexcept [[clang::lifetimebound]] { return data() + size(); }
+  const_iterator cend() const noexcept UTILS_LIFETIME_BOUND { return data() + size(); }
 
   /**
    * Returns true if the string equals another all-lowercase string, with a case insensitive

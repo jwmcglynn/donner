@@ -18,9 +18,10 @@ Modern C++20 SVG project. Source lives in `donner/`.
   `std::string_view` across statements dereferenced the small-string-optimized inline bytes of the
   destroyed temporary `XMLQualifiedNameRef`. Prefer returning an owning type (`RcString`,
   `XMLQualifiedName`) when it is cheap. When a view return is genuinely warranted (it aliases stable
-  storage), annotate the aliasing accessor with `[[clang::lifetimebound]]` so Clang's `-Wdangling`
-  and the clang-tidy gate (`clang-diagnostic-dangling` under `WarningsAsErrors: "*"`) reject binding
-  the view to a temporary. Never cache `view.member` of a returned temporary `*Ref` in a local
+  storage), annotate the aliasing accessor with `UTILS_LIFETIME_BOUND` (from `base/Utils.h`, which
+  maps to `[[clang::lifetimebound]]`/`[[msvc::lifetimebound]]` and is a no-op on GCC) so Clang's
+  `-Wdangling` and the clang-tidy gate (`clang-diagnostic-dangling` under `WarningsAsErrors: "*"`)
+  reject binding the view to a temporary. Never cache `view.member` of a returned temporary `*Ref` in a local
   `std::string_view`; copy into an owning `RcString`/`std::string` instead.
 - Use `enum class` with `operator<<` for debugging. Prefer `operator<=>` with explicit `operator==` (gtest bug workaround).
 - Use `auto` sparingly — only when type is obvious or for standard patterns (iterators, `ParseResult`).
