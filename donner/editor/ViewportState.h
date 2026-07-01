@@ -3,7 +3,7 @@
 ///
 /// `ViewportState` is the single source of truth for the editor render
 /// pane's screen↔document coordinate mapping. See
-/// `docs/design_docs/0025-editor_ux.md` for the full design rationale;
+/// `docs/design_docs/0025-2-editor_ux.md` for the full design rationale;
 /// this header is the public API.
 ///
 /// Conceptually a `ViewportState` is a value the main loop snapshots

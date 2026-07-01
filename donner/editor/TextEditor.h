@@ -118,7 +118,7 @@ class TextEditor {
   // Test-only access to private members (enterCharacter, backspace, etc.)
   // so headless unit tests can exercise the real user-facing editing
   // paths without going through ImGui input capture. Will be removed
-  // once the TextEditor refactor (see text_editor_refactor.md) migrates
+  // once the TextEditor refactor (see 0051-text_editor_refactor.md) migrates
   // the tests onto `TextEditorCore` directly (commit C3).
   friend class TextEditorTests;
   friend class TextEditorTests_UndoReversesInsertion_Test;

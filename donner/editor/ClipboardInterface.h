@@ -2,7 +2,7 @@
 /// @file
 ///
 /// Abstract clipboard interface used by the editor's text-editor
-/// core (see text_editor_refactor.md). Decouples copy/cut/paste
+/// core (see 0051-text_editor_refactor.md). Decouples copy/cut/paste
 /// from ImGui so headless unit tests can inject an in-memory
 /// implementation instead of requiring an ImGui context.
 

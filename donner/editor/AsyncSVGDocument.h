@@ -4,7 +4,7 @@
 /// `AsyncSVGDocument` is the editor-owned wrapper around `svg::SVGDocument`
 /// that gates DOM mutations through the `CommandQueue` and provides the
 /// snapshot hand-off to the render thread described in the M1.5 design note
-/// in `docs/design_docs/editor.md`.
+/// in `docs/design_docs/0020-editor.md`.
 ///
 /// The current M2 implementation is **single-threaded**: there is no real
 /// render thread yet, so the snapshot hand-off is just a pointer to the

@@ -32,19 +32,19 @@ Key components:
 
 ## Sub-documents
 
-- **[Overview](text/overview.md)** — Goals, non-goals, feature tiers, Bazel flags, phase summary.
-- **[Architecture](text/architecture.md)** — Dependency evaluation, component design, implementation
+- **[Overview](text/0052-overview.md)** — Goals, non-goals, feature tiers, Bazel flags, phase summary.
+- **[Architecture](text/0052-2-architecture.md)** — Dependency evaluation, component design, implementation
   phases 1–6. *Note: describes the pre-refactor TextLayout/TextShaper split; the current unified
   TextEngine/TextBackend architecture is documented in the refactor doc.*
-- **[Testing and Validation](text/testing.md)** — Test strategy, golden image tests, failure
+- **[Testing and Validation](text/0052-4-testing.md)** — Test strategy, golden image tests, failure
   analysis snapshot (2026-03-30), tspan gap analysis.
-- **[RTL Text and Complex Scripts](text/rtl_and_complex_scripts.md)** — HarfBuzz script detection,
+- **[RTL Text and Complex Scripts](text/0052-3-rtl_and_complex_scripts.md)** — HarfBuzz script detection,
   RTL per-character coordinates, combining marks, font fallback, color emoji.
-- **[textPath](text/textpath.md)** — `<textPath>` element: architecture, path resolution,
+- **[textPath](text/0052-7-textpath.md)** — `<textPath>` element: architecture, path resolution,
   glyph-on-path positioning, test coverage, known gaps.
-- **[Text v1 Release](text/text_v1_release.md)** — Release scope, `<textPath>` finish plan,
+- **[Text v1 Release](text/0052-6-text_v1_release.md)** — Release scope, `<textPath>` finish plan,
   standards baseline, and pre-publish gate.
-- **[TextBackend Refactor](text/text_backend_refactor.md)** — TextBackend abstraction, TextEngine
+- **[TextBackend Refactor](text/0052-5-text_backend_refactor.md)** — TextBackend abstraction, TextEngine
   extraction, layout helper decomposition, ECS caching, invalidation wiring. **This is the
   authoritative architecture document for the current text stack.**
 
@@ -268,5 +268,5 @@ Explicitly deferred for v1:
 - `method=stretch`, `spacing=auto`, `side=right`, `path` attribute on textPath.
 - Text interaction with filters, masks, clip-paths.
 
-See **[Text v1 Release](text/text_v1_release.md)** for the detailed release scope, compliance
+See **[Text v1 Release](text/0052-6-text_v1_release.md)** for the detailed release scope, compliance
 matrix, and normative spec baseline.

@@ -70,7 +70,7 @@ donner_cc_library(
 
 # Single source of truth for the editor render pane's screen↔document
 # coordinate mapping, including zoom, pan, DPR, and the focal-point-
-# preserving zoom math. See `docs/design_docs/0025-editor_ux.md`.
+# preserving zoom math. See `docs/design_docs/0025-2-editor_ux.md`.
 donner_cc_library(
     name = "viewport_state",
     srcs = ["ViewportState.cc"],
@@ -900,7 +900,7 @@ donner_cc_library(
 
 # Abstract clipboard interface + header-only InMemoryClipboard. No
 # ImGui dependency — safe to link from headless unit tests. See
-# docs/design_docs/text_editor_refactor.md for the split rationale.
+# docs/design_docs/0051-text_editor_refactor.md for the split rationale.
 donner_cc_library(
     name = "clipboard_interface",
     hdrs = [

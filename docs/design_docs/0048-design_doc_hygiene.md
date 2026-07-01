@@ -1,6 +1,6 @@
 # Design: Design Doc Hygiene — 2026-06-30 Audit Follow-Up
 
-**Status:** Draft
+**Status:** In Progress — Milestones 1–5 complete; Milestone 6 blocked on `v08/*` merges.
 **Author:** Claude Sonnet 5
 **Created:** 2026-06-30
 
@@ -49,70 +49,71 @@ This doc tracks that cleanup to completion.
 
 ## Next Steps
 
-- Resolve the five collisions the settled way (Milestone 1): leave both numbers in
-  place and give the later-landed doc in each pair a `NNNN-2-` suffix — the same
-  convention already used for `0033-2`/`0041-2`/`0044-2`. No fresh top-level renumbering.
-- Recreate or retire `0015-skia_filter_conformance.md` (Milestone 2).
+- Milestones 1–5 are complete and validated (collisions, `0015`, unnumbered-doc
+  numbering, the four Finalization rewrites, and the resvg snapshot re-scoping).
+- Only Milestone 6 remains, and it is blocked: re-audit the v0.8 feature-branch docs
+  (`0041-2`, `0044-2`, `0046`, `0047`) once the `v08/*` branches merge to `main`.
 
 ## Implementation Plan
 
-- [ ] Milestone 1: Resolve doc-number collisions (decided: keep both numbers, `-2`
-      suffix on the later-landed doc — no fresh renumbering)
-  - [ ] Establish landing order per pair with `git log --diff-filter=A` so the
-        earlier-landed doc keeps the bare `NNNN-` number and the later one takes
-        `NNNN-2-`, per `AGENTS.md`. Both are currently on `main`:
-    - `0025-composited_rendering.md` vs `0025-editor_ux.md`
-    - `0026-drag_end_latency.md` vs `0026-svg_conformance_testing.md`
-    - `0027-tight_bounded_segments.md` vs `0027-scripting.md`
-    - `0028-v1_0_release.md` vs `0028-tinyskia_premul_internal.md`
-    - `0029-ci_runtime.md` vs `0029-ui_input_repro.md`
-  - [ ] Rename the later-landed file in each pair to its `NNNN-2-` form.
-  - [ ] Grep the repo (`docs/`, code comments, PR-linked commit messages are
-        out of reach but doc cross-references aren't) for inbound links to the old
-        filename and update them.
-  - [ ] Update `README.md`'s Document Index to drop the collision-flag notes added by
-        the audit pass and reflect the final numbers.
-- [ ] Milestone 2: Fix the `0015` broken reference
-  - [ ] Check git history (`git log --all --full-history -- 'docs/design_docs/0015*'`)
-        for whether `0015-skia_filter_conformance.md` ever existed and was deleted, or
-        whether the README entry was always aspirational.
-  - [ ] If content exists in history, restore it as an `Implemented`/`Removed` stub
-        per the Finalization workflow (Skia was removed as a backend entirely — this
-        doc's whole premise may now be moot). If it never existed, remove the row from
-        `README.md`'s Document Index.
-- [ ] Milestone 3: Index the unnumbered docs
-  - [ ] Assign real `NNNN-` numbers to: `structured_text_editing.md`,
-        `text_editor_behavior.md`, `text_editor_refactor.md`, and the seven files
-        under `text/` (`architecture.md`, `overview.md`, `rtl_and_complex_scripts.md`,
-        `testing.md`, `text_backend_refactor.md`, `text_v1_release.md`,
-        `textpath.md`). Follow `AGENTS.md` numbering rules — next free number per
-        file, or group them under one number with `-2`/`-3` suffixes if they're
-        meant to stay logically grouped (matches the existing `text/` directory
-        convention).
-  - [ ] For the three top-level docs, rename the files with their new `NNNN-` prefix
-        and update inbound references. For the `text/` files, **recommended default:
-        keep the `text/` directory paths stable and assign the number only in the index
-        row** (grouped under one parent number with `-2…`/`-8` suffixes) — because
-        `0010-text_rendering.md` and code link into `text/` by relative path, so
-        renaming those files is the highest-churn, most breakage-prone part of this
-        plan for the least benefit. If a per-file top-level number is chosen instead
-        (see Open Questions), grep every relative link into `text/` and update it.
-  - [ ] Replace the unnumbered README rows added by the audit pass with the final
-        numbered rows.
-- [ ] Milestone 4: Complete deferred Finalization rewrites
-  - [ ] `0020-editor.md`: the M3–M6 checklist doesn't match what actually shipped
-        (e.g. no `NativeFileDialog`/`fuzz_replay_cli`), and M7–M8 aren't described at
-        all. Do the full stub rewrite per `AGENTS.md` §Workflow step 4 — link the
-        developer docs this design spawned, not the doc's own now-inaccurate plan.
-  - [ ] `structured_text_editing.md`: flagged "Implemented" by the audit but not
-        finalized into a short stub, because no standalone developer doc exists yet
-        for `XMLSourceStore`/`DocumentSyncController` to link to. Write that developer
-        doc (via `developer_template.md`), then finalize this doc down to a summary +
-        pointer.
-  - [ ] `0043-deterministic_replay_testing.md`: marked Implemented but has no
-        standalone developer doc yet either. Same treatment — write the developer doc,
-        then finalize.
-- [ ] Milestone 5: Re-scope resvg snapshots as living references
+- [x] Milestone 1: Resolve doc-number collisions — done. Kept both numbers and gave the
+      `-2` suffix to one doc per pair (no fresh renumbering). Assignment policy: the more
+      heavily / code-referenced doc keeps the bare number to minimize churn; ties fall
+      back to `git log --diff-filter=A` landing order. Final result:
+    - `0025-composited_rendering.md` keeps `0025`; `editor_ux` → `0025-2-editor_ux.md`
+    - `0026-svg_conformance_testing.md` keeps `0026`; `drag_end_latency` → `0026-2-drag_end_latency.md`
+    - `0027-tight_bounded_segments.md` keeps `0027`; `scripting` → `0027-2-scripting.md`
+    - `0028-v1_0_release.md` keeps `0028`; `tinyskia_premul_internal` → `0028-2-tinyskia_premul_internal.md`
+    - `0029-ui_input_repro.md` keeps `0029`; `ci_runtime` → `0029-2-ci_runtime.md`
+  - [x] Renamed the five files with `git mv`.
+  - [x] Updated every inbound reference (doc cross-links + code comments in
+        `donner/editor/ViewportState.h`, `donner/editor/BUILD.bazel`, and the
+        `0026`/`0028`/`0031` design docs).
+  - [x] Rewrote the `README.md` Document Index rows: renumbered, dropped the
+        collision-flag notes, and reordered each bare-number keeper before its `-2` sibling.
+- [x] Milestone 2: Fix the `0015` broken reference — done. History shows
+      `0015-skia_filter_conformance.md` existed (created in #523) and was deleted in
+      #546 "Remove full-Skia rendering backend", violating the never-delete rule.
+      Restored it as a short `Removed` stub (subject backend is gone; keeps the number
+      and inbound links valid, points to git history for the original 300-line doc) and
+      converted the README's bare "Missing" placeholder row into a real link.
+- [x] Milestone 3: Index the unnumbered docs — done. Decision: number everything.
+  - [x] Top-level docs given independent numbers: `structured_text_editing.md` →
+        `0049`, `text_editor_behavior.md` → `0050`, `text_editor_refactor.md` → `0051`.
+  - [x] The seven `text/` files grouped under one parent number and renamed in place
+        (kept in `text/` so `../00NN` parent links stay valid): hub `overview` →
+        `text/0052-overview.md`; the rest take `0052-2…-7` (`architecture`,
+        `rtl_and_complex_scripts`, `testing`, `text_backend_refactor`, `text_v1_release`,
+        `textpath`).
+  - [x] Updated inbound references (code comments for `0049`/`0051`; `text/00NN` links
+        from `0006`/`0008`/`0010`; the one intra-`text/` sibling link). Also fixed two
+        pre-existing broken cross-links in `0049` (`incremental_invalidation.md` /
+        `continuous_fuzzing.md` → their `0005-`/`0012-` numbered targets).
+  - [x] Replaced the unnumbered README rows with final numbered rows. Validation script
+        confirms: 0 collisions, 0 broken index/relative links, every file indexed.
+- [x] Milestone 4: Complete deferred Finalization rewrites — done
+  - [x] `0020-editor.md`: done. Authored a comprehensive new developer doc
+        [`docs/editor_architecture.md`](../editor_architecture.md)
+        (`{#EditorArchitecture}`, wired into `developer_docs.md`) from the shipped code
+        — frame loop, mutation seam, async rendering/threading, compositor
+        presentation, panes/tools, persistence, and trust boundary — then finalized the
+        design doc to a summary + pointers + git-history reference. Two stale-comment
+        traps were caught and stated accurately in the new doc: the `AsyncSVGDocument.h`
+        "single-threaded, no render thread" comment is obsolete (the worker + `ConcurrentDom`
+        is live), and the process-isolation sandbox ships as separate binaries and is not
+        wired into the interactive editor. Also fixed 6 stale `docs/design_docs/editor.md`
+        code-comment references (→ `0020-editor.md`).
+  - [x] `0049-structured_text_editing.md`: done. Authored the developer doc
+        [`docs/structured_source_editing.md`](../structured_source_editing.md)
+        (`{#StructuredSourceEditing}`, wired into `developer_docs.md`) from the shipped
+        `XMLSourceStore` / `XMLDocument::applySourceEdit` / `DocumentSyncController`
+        API, then finalized the design doc to a summary + pointer + git-history reference.
+  - [x] `0043-deterministic_replay_testing.md`: done. Authored the developer doc
+        [`docs/deterministic_replay_testing.md`](../deterministic_replay_testing.md)
+        (`{#DeterministicReplayTesting}`, wired into `developer_docs.md`) from the
+        shipped `GlRnrReplay` / `AsyncRenderer` API, then finalized the design doc to a
+        summary + pointer + git-history reference.
+- [x] Milestone 5: Re-scope resvg snapshots as living references — done
   - Decision: these tables stay as living references (refreshed by re-running the
     suite) until the underlying text/font design work is complete — at which point the
     finalization pass replaces them with a pointer to a live CI artifact. Until then,
@@ -122,7 +123,7 @@ This doc tracks that cleanup to completion.
   - Regenerated 2026-06-30 against a green suite run (both tiny-skia variants pass;
     "failing" entries in the old tables were stale — the suite has no failures, only
     enabled-passing + `DISABLED_`/commented-out tests). Done in this pass:
-    - [x] `text/testing.md` **Current Snapshot** table refreshed and re-scoped as a
+    - [x] `text/0052-4-testing.md` **Current Snapshot** table refreshed and re-scoped as a
           living reference: `e-text-*` **31/31** (was 30/30), `e-tspan-*` **24/24** (was
           23/24; stale "active failure `e-tspan-030`" callout deleted), `e-textPath-*`
           **33/33** enabled via blessed goldens (was "Still disabled"). Date dropped;
@@ -131,30 +132,35 @@ This doc tracks that cleanup to completion.
           `a-font-weight-*` **12/12** at default params (old "0/6, 18K threshold" was
           stale — override gone), `a-font-size-*` **20/20** (was 3/8), `e-tspan-024`
           now passes / `e-tspan-028` now disabled (old pixel-count failures were stale).
-          No longer contradicts `text/testing.md`.
-    - [ ] **Remaining (larger, separate No-History cleanup):** `text/testing.md` is 749
-          lines and its body below the Current Snapshot is dated/stale gap-analysis
-          ("Historical Failure Analysis (2026-03-30)", "Changes since 2026-03-29/03-21",
-          per-property "NOT IMPLEMENTED / PARTIAL" sections that the green suite
-          contradicts — e.g. font-weight is 12/12 but §"font-weight PARTIAL (7 tests)"
-          remains, and §textpath still says "34 failures / all commented out" against
-          the now-enabled 33). This is a full doc rewrite per `AGENTS.md` §"No History",
-          not a counts refresh — scope and schedule it on its own. The `e-tspan-006`
-          "Still failing" line lives in this body and gets fixed as part of it.
-  - [ ] `0009-resvg_test_suite_bugs.md`: the audit flagged the doc's "34 active
-        overrides" as possibly off-by-one vs live. The golden dir holds **36**
-        `resvg-*.png` (34 active + 2 parked), which still matches the doc; but counting
-        active golden-override *call sites* in `resvg_test_suite.cc` is not grep-able
-        (filenames contain `=`, e.g. `resvg-orient=auto-on-M-C-C-4.png`, and some paths
-        are concatenated). Reconcile by careful source read, correct the count, and note
-        in the doc that the count is hand-maintained because it can't be mechanically
-        derived.
-  - [ ] `0013-coverage_improvement.md`: confirm every phase's checkbox state against
-        current code (the audit only spot-checked `TextEngine_tests.cc`) before
-        finalizing it as fully superseded by 0044.
-  - [ ] `0002-mcp_test_triage_server.md`: re-verify the cited line-number references
-        (e.g. `server.py:890-977`) against the current file, which has likely grown
-        since the doc was written.
+          No longer contradicts `text/0052-4-testing.md`.
+    - [x] **`text/0052-4-testing.md` body rewritten** for `AGENTS.md` §"No History"
+          compliance (749 → 121 lines). Deleted the dated "Historical Failure Analysis
+          (2026-03-30)" snapshot, the "Changes since 2026-03-29/03-21" changelogs, the
+          "RESOLVED/COMPLETE/Improved from X to Y" gap-analysis fix-plans, and the
+          per-property "NOT IMPLEMENTED/PARTIAL" tables that the green suite and 0008's
+          updated table contradict. Replaced them with a concise present-tense "Known
+          gaps and disabled tests" section grounded in the current `Params::Skip(...)`
+          reasons in `resvg_test_suite.cc` (BiDi/RTL, `<tref>`, `textLength`+`lengthAdjust`,
+          font shorthand/kerning, SVG 2 text features, plus the catalogued known bugs).
+          Kept the intro + refreshed Current Snapshot; no dangling anchors.
+  - [x] `0009-resvg_test_suite_bugs.md`: reconciled — **the doc's "34 active overrides"
+        is correct; the audit's "off by one (35)" was itself a miscount.** Verified by
+        extracting every `resvg-*.png` string fragment (including the `=`-containing and
+        concatenated ones a naive grep misses) from `resvg_test_suite.cc`: 34 distinct
+        goldens are referenced, and exactly 2 (`resvg-drop-shadow-function-{mm,em}-values.png`)
+        are unreferenced on disk — the parked pair. 34 active + 2 parked = the 36
+        `resvg-*.png` files present. No change to `0009`.
+  - [x] `0013-coverage_improvement.md`: confirmed superseded and finalized into a short
+        stub. 7 of 8 proposed test files now exist (`TextEngine_tests.cc`,
+        `SVGSVGElement_tests.cc`, `SVGImageElement_tests.cc`, `SVGUseElement_tests.cc`,
+        `SVGTextPathElement_tests.cc`, `SVGStopElement_tests.cc`, `SVGLineElement_tests.cc`;
+        only the Phase-5 `FontMetadata_tests.cc` didn't land) and 0044 confirms the 85%
+        goal is met — so the stale per-phase checklist and dated coverage tables were
+        collapsed to a summary + pointer to 0044 (original recoverable from git history).
+  - [x] `0002-mcp_test_triage_server.md`: the cited `server.py:NNN-NNN` ranges were all
+        stale (file grew 977→1147 lines; `detect_svg_features` moved 157→175, etc.).
+        Replaced every line-number citation with a stable reference — the `call_tool`
+        handler name per tool, or the named helper function — so they no longer drift.
 - [ ] Milestone 6: v0.8 branch reconciliation pass
   - [ ] Once `v08/*` branches (Layers panel, path-authoring UI, showcase export) merge
         to `main`, re-run status checks on `0041-2-path_authoring_and_boolean_operations.md`,
@@ -180,11 +186,12 @@ boundaries, or data handling are touched.
 
 ## Open Questions
 
-- ~~Milestone 1's renumbering scheme~~ — **resolved:** keep both numbers and give the
-  later-landed doc a `NNNN-2-` suffix (no fresh top-level renumbering). Bare-number docs
-  keep their number so existing inbound links stay stable.
-- Milestone 3: should the `text/` subdirectory keep its own numbering namespace
-  (e.g. all seven files share one parent number with `-2.../-8` suffixes) or should
-  each file get an independent top-level number? The existing `0033-2`/`0041-2`/`0044-2`
-  convention suggests grouping under a parent is idiomatic here, but there's no single
-  "parent" design doc for the `text/` docs to attach to (0010 is the closest fit).
+- ~~Milestone 1's renumbering scheme~~ — **resolved:** keep both numbers, `-2` suffix on
+  one doc per pair (more heavily/code-referenced doc keeps the bare number; ties fall
+  back to landing order). No fresh top-level renumbering.
+- ~~Milestone 3's `text/` namespace~~ — **resolved:** the seven `text/` files share one
+  parent number (`0052`, hub `overview` bare + `-2…-7`) and stay in the `text/`
+  subdirectory so their `../00NN` parent links remain valid.
+
+All open questions are resolved; the remaining work (Milestones 4–6) is tracked in the
+Implementation Plan.

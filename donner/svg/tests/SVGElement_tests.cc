@@ -326,7 +326,7 @@ TEST_F(SVGElementTests, Style) {
 
 TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentationAttrs) {
   // Regression for the structured-editing M−1 prerequisite (see
-  // docs/design_docs/structured_text_editing.md). `StyleComponent::setStyle`
+  // docs/design_docs/0049-structured_text_editing.md). `StyleComponent::setStyle`
   // must *replace* the prior `style=""` contribution (so declarations the
   // user removed from the source text don't linger in the ECS) while
   // preserving properties set by presentation attributes like `fill="red"`

@@ -66,9 +66,9 @@ Analyzes a single test failure with comprehensive diagnostics.
 }
 ```
 
-**Implementation:** `server.py:531-610`
-**Feature Detection:** `server.py:157-254` (`detect_svg_features`)
-**Categorization Logic:** `server.py:287-315` (`categorize_failure`)
+**Implementation:** `call_tool` handler for `analyze_test_failure` in `server.py`
+**Feature Detection:** `detect_svg_features()` in `server.py`
+**Categorization Logic:** `categorize_failure()` in `server.py`
 
 #### 2. `batch_triage_tests`
 
@@ -110,7 +110,7 @@ Process multiple test failures from bazel output, grouping by feature.
 }
 ```
 
-**Implementation:** `server.py:612-688`
+**Implementation:** `call_tool` handler for `batch_triage_tests` in `server.py`
 
 #### 3. `detect_svg_features`
 
@@ -144,7 +144,7 @@ Parse SVG content to identify advanced features being tested.
 - **Styling:** text-anchor, letter-spacing, word-spacing, text-decoration, font-*
 - **Layout:** writing-mode, baseline-shift, alignment-baseline, dominant-baseline
 
-**Implementation:** `server.py:511-529`
+**Implementation:** `call_tool` handler for `detect_svg_features` in `server.py` (wraps the `detect_svg_features()` helper)
 
 #### 4. `suggest_skip_comment`
 
@@ -177,7 +177,7 @@ Generate properly formatted skip comments for `resvg_test_suite.cc`.
 - `Bug: <description>` - Known bug
 - `Larger threshold due to <reason>` - Anti-aliasing artifacts
 
-**Implementation:** `server.py:690-712` + `server.py:318-363` (format logic)
+**Implementation:** `call_tool` handler for `suggest_skip_comment` in `server.py`, plus the `suggest_skip_comment()` helper (format logic)
 
 ### Implementation Guidance Tools
 
@@ -238,7 +238,7 @@ Suggests which files to modify and provides implementation hints.
 - Header files: +0.1 confidence
 - Test files: -0.3 confidence penalty
 
-**Implementation:** `server.py:714-764` + `codebase_helpers.py`
+**Implementation:** `call_tool` handler for `suggest_implementation_approach` in `server.py`, plus `codebase_helpers.py`
 
 #### 6. `find_related_tests`
 
@@ -278,7 +278,7 @@ Find all tests failing for the same feature.
 - 2-5 tests: medium
 - 6+ tests: high
 
-**Implementation:** `server.py:766-823` + `test_output_parser.py:identify_missing_features()`
+**Implementation:** `call_tool` handler for `find_related_tests` in `server.py`, plus `test_output_parser.identify_missing_features()`
 
 #### 7. `generate_feature_report`
 
@@ -327,7 +327,7 @@ Generate progress reports by test category.
 - `e-path` - Path element tests
 - etc.
 
-**Implementation:** `server.py:825-888` + `test_output_parser.py:group_by_category()`
+**Implementation:** `call_tool` handler for `generate_feature_report` in `server.py`, plus `test_output_parser.group_by_category()`
 
 #### 8. `analyze_visual_diff`
 
@@ -375,7 +375,7 @@ Programmatically analyze diff images to categorize failure types.
 5. Detect uniform offsets (concentrated in single region)
 6. Categorize based on pixel count and distribution
 
-**Implementation:** `server.py:890-977`
+**Implementation:** `call_tool` handler for `analyze_visual_diff` in `server.py`
 
 ## Usage Examples
 

@@ -5,7 +5,7 @@
 > Historical note: this document captures the original dependency evaluation and phased design
 > before the `TextEngine` / `TextBackend` refactor landed. The current shipped architecture is
 > summarized in [the hub](../0010-text_rendering.md) and documented in
-> [text_backend_refactor.md](text_backend_refactor.md).
+> [text_backend_refactor.md](0052-5-text_backend_refactor.md).
 
 ## Dependency Evaluation
 

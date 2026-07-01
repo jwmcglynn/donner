@@ -4,7 +4,7 @@
 `font-stretch`, `font-variant` small-caps) and matching are implemented; `font` shorthand,
 `font-feature-settings`, variable fonts, and `unicode-range` remain unimplemented.
 **Standard:** [CSS Fonts Level 4](https://www.w3.org/TR/css-fonts-4/)
-**Related:** [text/overview.md](text/overview.md)
+**Related:** [text/0052-overview.md](text/0052-overview.md)
 
 ## Summary
 
@@ -126,12 +126,14 @@ to Amiri.
 
 ## Resvg Test Coverage
 
-Current font-related test results (`--config=text-full`):
+Font-related resvg status in the full-text tier (`--config=text-full`). Living
+reference: regenerate with
+`bazel test //donner/svg/renderer/tests:resvg_test_suite_max` and read
+`bazel-testlogs/.../resvg_test_suite_max/test.xml` (enabled = `status="run"`,
+disabled = `status="notrun"`). The suite is green, so every enabled test passes.
 
-| Test Group | Passing | Failing | Notes |
-|-----------|---------|---------|-------|
-| `a-font-weight-*` | 0 | 6 | All have 18K threshold — our renderer produces different widths |
-| `a-font-size-*` | 3 | 8 | Missing keyword support, relative units |
-| `e-tspan-006` | ✅ | | Bold tspan now renders with NotoSans-Bold |
-| `e-tspan-024` | | 16,722px | Bold + text-anchor interaction |
-| `e-tspan-028` | | 9,336px | Mixed font-size in nested tspan |
+| Test Group | Enabled passing | Disabled | Notes |
+|-----------|-----------------|----------|-------|
+| `a-font-weight-*` | 12/12 | 0 | Now passing at default params (the old 18K-threshold override is gone) |
+| `a-font-size-*` | 20/20 | 0 | Keyword + relative-unit support landed; `named-value{,-without-a-parent}` pass via blessed goldens (CSS Fonts L4 differs from resvg — see [0009](0009-resvg_test_suite_bugs.md)) |
+| `e-tspan-*` | 24/24 | 7 | `e-tspan-006` (bold) and `e-tspan-024` (bold + text-anchor) now pass; `e-tspan-028` (mixed font-size) is among the 7 disabled |
