@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <string_view>
 
+#include "donner/base/StringUtils.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
@@ -34,44 +35,24 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStr
                message.data ? message.data : "");
 }
 
-bool EqualsAsciiCaseInsensitive(std::string_view a, std::string_view b) {
-  if (a.size() != b.size()) {
-    return false;
-  }
-
-  for (size_t index = 0; index < a.size(); ++index) {
-    char aChar = a[index];
-    char bChar = b[index];
-    if (aChar >= 'A' && aChar <= 'Z') {
-      aChar = static_cast<char>(aChar - 'A' + 'a');
-    }
-    if (bChar >= 'A' && bChar <= 'Z') {
-      bChar = static_cast<char>(bChar - 'A' + 'a');
-    }
-    if (aChar != bChar) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 wgpu::BackendType RequestedHeadlessBackend() {
   const char* backendEnv = std::getenv("WGPU_BACKEND");
   if (backendEnv != nullptr && backendEnv[0] != '\0') {
     const std::string_view backend(backendEnv);
-    if (EqualsAsciiCaseInsensitive(backend, "vulkan")) {
+    using namespace std::string_view_literals;
+
+    if (StringUtils::EqualsLowercase(backend, "vulkan"sv)) {
       return wgpu::BackendType::Vulkan;
     }
-    if (EqualsAsciiCaseInsensitive(backend, "metal")) {
+    if (StringUtils::EqualsLowercase(backend, "metal"sv)) {
       return wgpu::BackendType::Metal;
     }
-    if (EqualsAsciiCaseInsensitive(backend, "opengl") ||
-        EqualsAsciiCaseInsensitive(backend, "gl")) {
+    if (StringUtils::EqualsLowercase(backend, "opengl"sv) ||
+        StringUtils::EqualsLowercase(backend, "gl"sv)) {
       return wgpu::BackendType::OpenGL;
     }
-    if (EqualsAsciiCaseInsensitive(backend, "opengles") ||
-        EqualsAsciiCaseInsensitive(backend, "gles")) {
+    if (StringUtils::EqualsLowercase(backend, "opengles"sv) ||
+        StringUtils::EqualsLowercase(backend, "gles"sv)) {
       return wgpu::BackendType::OpenGLES;
     }
 
