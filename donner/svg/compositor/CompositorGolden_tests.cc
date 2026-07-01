@@ -1086,7 +1086,17 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
 
-  CompositorController compositor(document, renderer_);
+  // This test asserts on the immediate-vs-cached tile partition across drag
+  // frames. Production's dynamic (wall-clock-measured) immediate-span promotion
+  // makes that partition host-load-dependent: on a slow/shared CI runner a
+  // static segment can be immediate on the first frame and demote to a cached
+  // tile on a later frame once its measured rasterize time crosses the budget,
+  // making it appear as a brand-new retained tile and tripping the checks below
+  // spuriously. Pin classification to the deterministic cost heuristic so the
+  // cache-stability invariant is verified identically on every host.
+  CompositorConfig config;
+  config.dynamicImmediateStaticSpans = false;
+  CompositorController compositor(document, renderer_, config);
   compositor.renderFrame(viewport_);
 
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
