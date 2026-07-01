@@ -28,6 +28,10 @@ permissions:
 # push -- and no rerun of the operator's run by someone else -- can execute on
 # the runner or poison the shared LAN Bazel cache. Unset is a no-op: behavior
 # is identical to the GitHub-hosted-only workflow.
+#
+# EXCEPTION: pushes to main always stay GitHub-hosted so a stuck/offline
+# self-hosted runner can never hang main's required check. Feature branches and
+# PRs still route to the self-hosted lane.
 
 jobs:
   gatekeeper:
@@ -257,7 +261,7 @@ jobs:
     # self-hosted ARM64 lane is active (see gate comment above).
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (github.ref == 'refs/heads/main' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -308,7 +312,7 @@ jobs:
             $TARGETS
 
 
-  # Operator's ARM64 Linux runs on the event-horizon self-hosted runner.
+  # Operator's ARM64 Linux runs on the operator's self-hosted runner.
   # Replaces `linux` for operator runs (extra arch coverage + homelab cache).
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
   # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
@@ -317,9 +321,14 @@ jobs:
   # rendering path used by GitHub-hosted Linux so this lane runs the same test
   # surface instead of excluding graphics targets.
   linux-self-hosted:
-    runs-on: [self-hosted, linux, arm64, event-horizon]
+    runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.ref != 'refs/heads/main' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    env:
+      # The runner host may add the LAN Bazel cache from its home rc. Keep
+      # that acceleration when it is healthy, but fall back to local execution
+      # if the private gRPC endpoint is down.
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -382,7 +391,7 @@ jobs:
   macos:
     runs-on: macos-15
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (github.ref == 'refs/heads/main' || vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
     env:
       # Xcode's libc++ marks std::format floating-point support as macOS 13.3+.
       # Set the CI deployment target explicitly so hosted and self-hosted macOS
@@ -441,13 +450,13 @@ jobs:
         # fuzzer code re-trigger that workflow via path filter.
 
 
-  # Operator's ARM64 macOS runs on the deep-thought self-hosted runner.
+  # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for operator runs. The host pre-provisions Bazelisk,
   # Homebrew llvm@19, and Xcode Command Line Tools.
   macos-self-hosted:
-    runs-on: [self-hosted, macOS, ARM64, deep-thought]
+    runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
-    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && github.ref != 'refs/heads/main' && github.event_name == 'pull_request' && needs.gatekeeper.outputs.docs_only != 'true' && vars.SELFHOSTED_MACOS_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host has an operator ~/.bazelrc for interactive RE/cache work.
       # The invocations below use --nohome_rc so CI matches GitHub-hosted macOS

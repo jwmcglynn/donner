@@ -24,10 +24,13 @@ permissions:
 # jwmcglynn. That prevents collaborator reruns from executing on the homelab
 # runner or seeing the Codecov secret there. Everyone else stays on hosted
 # Ubuntu.
+#
+# EXCEPTION: pushes to main always stay GitHub-hosted, matching main.yml; PRs
+# still route to the self-hosted lane.
 jobs:
   build:
     runs-on: ubuntu-24.04
-    if: ${{ vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn' }}
+    if: ${{ github.ref == 'refs/heads/main' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn' }}
 
     steps:
       - uses: actions/checkout@v6
@@ -73,8 +76,14 @@ jobs:
           verbose: true
 
   coverage-self-hosted:
-    runs-on: [self-hosted, linux, arm64, event-horizon]
-    if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    runs-on: [self-hosted, linux, arm64]
+    if: ${{ github.ref != 'refs/heads/main' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    env:
+      # The runner host may add the LAN Bazel cache from its home rc. Keep
+      # coverage resilient when the private gRPC endpoint is down.
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
+      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
+
     steps:
       - uses: actions/checkout@v6
         with:
@@ -123,7 +132,7 @@ jobs:
   upload-self-hosted-coverage:
     needs: coverage-self-hosted
     runs-on: ubuntu-24.04
-    if: ${{ vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ github.ref != 'refs/heads/main' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
 
     steps:
       - uses: actions/checkout@v6
