@@ -14,14 +14,17 @@ function print_help() {
 
 TARGETS=()
 BAZEL_COVERAGE_FLAGS=()
-DEFAULT_BAZEL_COVERAGE_FLAGS=(
-  --remote_executor=
-  --remote_cache=
-  --noremote_upload_local_results
-)
+DEFAULT_BAZEL_COVERAGE_FLAGS=()
 
 if [[ -n "${DONNER_COVERAGE_BAZEL_FLAGS:-}" ]]; then
   read -r -a BAZEL_COVERAGE_FLAGS <<< "$DONNER_COVERAGE_BAZEL_FLAGS"
+else
+  DEFAULT_BAZEL_COVERAGE_FLAGS=(
+    --remote_executor=
+    --remote_cache=
+    --experimental_remote_downloader=
+    --noremote_upload_local_results
+  )
 fi
 
 # Check for --quiet option
