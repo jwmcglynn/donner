@@ -37,8 +37,8 @@ TEST(SVGSymbolElementTests, Defaults) {
   EXPECT_THAT(symbol->width(), testing::Eq(std::nullopt));
   EXPECT_THAT(symbol->height(), testing::Eq(std::nullopt));
 
-  EXPECT_DOUBLE_EQ(symbol->refX(), 0.0);
-  EXPECT_DOUBLE_EQ(symbol->refY(), 0.0);
+  EXPECT_THAT(symbol->refX(), LengthIs(0.0, Lengthd::Unit::None));
+  EXPECT_THAT(symbol->refY(), LengthIs(0.0, Lengthd::Unit::None));
 }
 
 TEST(SVGSymbolElementTests, ViewBoxAndPreserveAspectRatio) {
@@ -91,14 +91,53 @@ TEST(SVGSymbolElementTests, SizeAttributes) {
 TEST(SVGSymbolElementTests, ReferencePointAttributes) {
   auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>(R"(<symbol refX="25" refY="30" />)");
 
-  EXPECT_DOUBLE_EQ(symbol->refX(), 25.0);
-  EXPECT_DOUBLE_EQ(symbol->refY(), 30.0);
+  EXPECT_THAT(symbol->refX(), LengthIs(25.0, Lengthd::Unit::None));
+  EXPECT_THAT(symbol->refY(), LengthIs(30.0, Lengthd::Unit::None));
 
-  symbol->setRefX(5.0);
-  symbol->setRefY(6.0);
+  symbol->setRefX(Lengthd(5.0, Lengthd::Unit::None));
+  symbol->setRefY(Lengthd(6.0, Lengthd::Unit::None));
 
-  EXPECT_DOUBLE_EQ(symbol->refX(), 5.0);
-  EXPECT_DOUBLE_EQ(symbol->refY(), 6.0);
+  EXPECT_THAT(symbol->refX(), LengthIs(5.0, Lengthd::Unit::None));
+  EXPECT_THAT(symbol->refY(), LengthIs(6.0, Lengthd::Unit::None));
+}
+
+TEST(SVGSymbolElementTests, ReferencePointLengthUnits) {
+  // refX/refY accept length units, including percentages (which resolve against the symbol's
+  // viewBox at layout time).
+  auto symbol =
+      instantiateSubtreeElementAs<SVGSymbolElement>(R"(<symbol refX="5%" refY="10px" />)");
+
+  EXPECT_THAT(symbol->refX(), LengthIs(5.0, Lengthd::Unit::Percent));
+  EXPECT_THAT(symbol->refY(), LengthIs(10.0, Lengthd::Unit::Px));
+}
+
+TEST(SVGSymbolElementTests, ReferencePointKeywords) {
+  // Per SVG2, refX accepts left/center/right and refY accepts top/center/bottom, each mapping to a
+  // percentage Lengthd: left/top → 0%, center → 50%, right/bottom → 100%.
+  {
+    auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>(R"(<symbol refX="left" />)");
+    EXPECT_THAT(symbol->refX(), LengthIs(0.0, Lengthd::Unit::Percent));
+  }
+  {
+    auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>(R"(<symbol refX="center" />)");
+    EXPECT_THAT(symbol->refX(), LengthIs(50.0, Lengthd::Unit::Percent));
+  }
+  {
+    auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>(R"(<symbol refX="right" />)");
+    EXPECT_THAT(symbol->refX(), LengthIs(100.0, Lengthd::Unit::Percent));
+  }
+  {
+    auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>(R"(<symbol refY="top" />)");
+    EXPECT_THAT(symbol->refY(), LengthIs(0.0, Lengthd::Unit::Percent));
+  }
+  {
+    auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>(R"(<symbol refY="center" />)");
+    EXPECT_THAT(symbol->refY(), LengthIs(50.0, Lengthd::Unit::Percent));
+  }
+  {
+    auto symbol = instantiateSubtreeElementAs<SVGSymbolElement>(R"(<symbol refY="bottom" />)");
+    EXPECT_THAT(symbol->refY(), LengthIs(100.0, Lengthd::Unit::Percent));
+  }
 }
 
 /**
@@ -386,6 +425,48 @@ TEST(SVGSymbolElementRenderingTests, CustomReferencePoint) {
         <symbol id="square" viewBox="0 0 6 6"
                 width="6" height="6"
                 refX="3" refY="3" style="overflow: visible">
+          <rect width="6" height="6" fill="black"/>
+        </symbol>
+      </defs>
+      <use href="#square" x="8" y="8" width="6" height="6"/>
+    </svg>
+  )-");
+
+  const AsciiImage ascii = RendererTestUtils::renderToAsciiImage(document);
+  EXPECT_TRUE(ascii.matches(R"(
+    ................
+    ................
+    ................
+    ................
+    ................
+    .....@@@@@@.....
+    .....@@@@@@.....
+    .....@@@@@@.....
+    .....@@@@@@.....
+    .....@@@@@@.....
+    .....@@@@@@.....
+    ................
+    ................
+    ................
+    ................
+    ................
+  )"));
+}
+
+/**
+ * @test `refX="center" refY="center"` must resolve to 50% of the symbol's viewBox. With a
+ * `0 0 6 6` viewBox that is (3,3), so this renders identically to the `refX="3" refY="3"` case in
+ * CustomReferencePoint above: the 6x6 square is centered on the &lt;use&gt; position (8,8),
+ * spanning [5,11]. This validates the percentage basis (keyword → viewBox extent), not just the
+ * parse.
+ */
+TEST(SVGSymbolElementRenderingTests, KeywordCenterReferencePoint) {
+  SVGDocument document = instantiateSubtree(R"-(
+    <svg viewBox="0 0 16 16">
+      <defs>
+        <symbol id="square" viewBox="0 0 6 6"
+                width="6" height="6"
+                refX="center" refY="center" style="overflow: visible">
           <rect width="6" height="6" fill="black"/>
         </symbol>
       </defs>

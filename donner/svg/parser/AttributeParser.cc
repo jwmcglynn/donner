@@ -85,6 +85,38 @@ std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::stri
   return maybeLengthResult.result().length;
 }
 
+/**
+ * Parses a `<symbol>` `refX`/`refY` attribute, which per SVG2 accepts a `<length>` or one of the
+ * axis keywords. Keywords map to a percentage `Lengthd` resolved against the symbol's viewBox at
+ * layout time: refX `left`/`center`/`right` → 0%/50%/100%, refY `top`/`center`/`bottom` →
+ * 0%/50%/100%.
+ *
+ * See https://www.w3.org/TR/SVG2/struct.html#SymbolElementRefXAttribute.
+ *
+ * @param context The parser context, used to report warnings on invalid values.
+ * @param value The raw attribute value.
+ * @param isX True for `refX` (left/center/right keywords), false for `refY`
+ *   (top/center/bottom keywords).
+ * @return The parsed length, or \c std::nullopt if the value was invalid (a warning is reported).
+ */
+std::optional<Lengthd> ParseSymbolRefAttribute(SVGParserContext& context, std::string_view value,
+                                               bool isX) {
+  // Keyword → percentage mapping. `center` is valid on both axes.
+  if (value == "center") {
+    return Lengthd(50.0, Lengthd::Unit::Percent);
+  } else if (isX && value == "left") {
+    return Lengthd(0.0, Lengthd::Unit::Percent);
+  } else if (isX && value == "right") {
+    return Lengthd(100.0, Lengthd::Unit::Percent);
+  } else if (!isX && value == "top") {
+    return Lengthd(0.0, Lengthd::Unit::Percent);
+  } else if (!isX && value == "bottom") {
+    return Lengthd(100.0, Lengthd::Unit::Percent);
+  }
+
+  return ParseLengthAttribute(context, value);
+}
+
 std::optional<float> ParseStopOffset(SVGParserContext& context, std::string_view value) {
   using donner::parser::LengthParser;
 
@@ -1764,20 +1796,13 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGSymbolElement>(SVGParserContext
     // Warning already added if there was an error.
     return std::nullopt;
   } else if (name == XMLQualifiedNameRef("refX")) {
-    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      element.setRefX(maybeNumber.value());
-    } else {
-      ParseDiagnostic err;
-      err.reason = "Invalid refX value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    if (auto maybeLength = ParseSymbolRefAttribute(context, value, /*isX=*/true)) {
+      element.setRefX(maybeLength.value());
     }
+    // Warning already added by ParseSymbolRefAttribute on error.
   } else if (name == XMLQualifiedNameRef("refY")) {
-    if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      element.setRefY(maybeNumber.value());
-    } else {
-      ParseDiagnostic err;
-      err.reason = "Invalid refY value '" + std::string(value) + "'";
-      context.addSubparserWarning(std::move(err), context.parserOriginFrom(value));
+    if (auto maybeLength = ParseSymbolRefAttribute(context, value, /*isX=*/false)) {
+      element.setRefY(maybeLength.value());
     }
   } else {
     return ParseCommonAttribute(context, element, name, value);

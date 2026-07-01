@@ -606,7 +606,7 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesResourceElementSetters)
       use.setHref(RcString("#symbol"));
       use.setX(Lengthd(iteration));
       symbol.setX(Lengthd(iteration));
-      symbol.setRefX(iteration);
+      symbol.setRefX(Lengthd(iteration));
       (void)ReadElement(image, [](auto image) { return image.href(); });
       (void)ReadElement(use, [](auto use) { return use.href(); });
       (void)ReadElement(symbol, [](auto symbol) { return symbol.refX(); });
