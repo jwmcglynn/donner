@@ -40,6 +40,16 @@ else
   echo "Note: $REPORTS_SRC/binary-size/ not present; skipping." >&2
 fi
 
+# Test failures: SVG-vs-golden PNGs harvested from failed image-comparison
+# tests (only present when a test failed at report-generation time). Copy the
+# tree verbatim so the embedded ![diff](reports/test-failures/...) links in
+# build_report.md resolve on the deployed docs site.
+if [ -d "$REPORTS_SRC/test-failures" ]; then
+  rm -rf "$REPORTS_DST/test-failures"
+  cp -R "$REPORTS_SRC/test-failures" "$REPORTS_DST/test-failures"
+  echo "Copied $REPORTS_SRC/test-failures/ → $REPORTS_DST/test-failures/"
+fi
+
 # Coverage: shipped as a zip (otherwise the lcov tree is ~hundreds of small
 # files that bloat the repo and make fuzzy file-name search noisy). Extract
 # into the output tree so reports/coverage/index.html is reachable on the

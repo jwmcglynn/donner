@@ -17,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('push-{0}-{1}', github.workflow, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # A workflow run is made up of one or more jobs that can run sequentially or in parallel
 #
 # Self-hosted coverage uses the same operator-only gate as CI's Linux lane:
@@ -28,8 +32,214 @@ permissions:
 # EXCEPTION: pushes to main always stay GitHub-hosted, matching main.yml; PRs
 # still route to the self-hosted lane.
 jobs:
+  determine-targets:
+    runs-on: ubuntu-24.04
+    env:
+      BAZEL_DIFF_TAG: "v18.1.0"
+      FULL_COVERAGE_TARGETS: "//donner/base/... //donner/css/... //donner/svg/... //donner/editor/..."
+      SMOKE_COVERAGE_TARGETS: "//donner/base/..."
+    outputs:
+      fallback: ${{ steps.determine.outputs.fallback }}
+      fallback_reason: ${{ steps.determine.outputs.fallback_reason }}
+      targets: ${{ steps.determine.outputs.targets }}
+      target_count: ${{ steps.determine.outputs.target_count }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+          external-cache: true
+          cache-save: false
+
+      - name: Download bazel-diff
+        if: github.event_name == 'pull_request'
+        run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
+
+      - id: determine
+        name: Determine coverage targets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          diagnostics_dir="$RUNNER_TEMP/coverage-target-selection"
+          mkdir -p "$diagnostics_dir"
+
+          emit_targets() {
+            local fallback="$1"
+            local reason="$2"
+            local targets="$3"
+            local count
+            count="$(wc -w <<< "$targets" | tr -d ' ')"
+
+            {
+              echo "fallback=$fallback"
+              echo "fallback_reason=$reason"
+              echo "targets=$targets"
+              echo "target_count=$count"
+            } >> "$GITHUB_OUTPUT"
+
+            {
+              echo "fallback=$fallback"
+              echo "fallback_reason=$reason"
+              echo "target_count=$count"
+              echo
+              echo "$targets" | tr ' ' '\n'
+            } > "$diagnostics_dir/summary.txt"
+          }
+
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "Non-PR event; using full coverage target set."
+            emit_targets true non_pr "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          eval "$(
+            python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); labels = [label.get("name", "") for label in pr.get("labels", [])]; values = {"BASE_SHA": pr.get("base", {}).get("sha", ""), "HEAD_SHA": pr.get("head", {}).get("sha", ""), "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false"}; print("\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items()))'
+          )"
+
+          if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
+            echo "Missing PR base/head SHA; using full coverage target set."
+            emit_targets true missing_pr_sha "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          if [[ "$FORCE_FULL_TEST" == "true" ]]; then
+            echo "ci:full-test label present; using full coverage target set."
+            emit_targets true full_test_label "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          changed_files="$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          printf "%s\n" "$changed_files" > "$diagnostics_dir/changed-files.txt"
+
+          if [[ -z "$changed_files" ]]; then
+            echo "No changed files detected; using full coverage target set."
+            emit_targets true no_changed_files "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          should_fallback=false
+          fallback_reason=""
+          smoke_only=true
+          while IFS= read -r path; do
+            [[ -z "$path" ]] && continue
+            case "$path" in
+              MODULE.bazel|WORKSPACE|WORKSPACE.*|build_defs/*|third_party/bazel/*)
+                echo "Build graph infrastructure change requires full coverage: $path"
+                should_fallback=true
+                fallback_reason="infra_change"
+                break
+                ;;
+            esac
+
+            case "$path" in
+              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/generate_build_report.py|tools/generate_build_report_tests.py)
+                ;;
+              *)
+                smoke_only=false
+                ;;
+            esac
+          done <<< "$changed_files"
+
+          if [[ "$should_fallback" == "true" ]]; then
+            emit_targets true "$fallback_reason" "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          if [[ "$smoke_only" == "true" ]]; then
+            echo "Coverage/reporting/tooling-only change; using smoke coverage target set."
+            emit_targets true coverage_smoke "$SMOKE_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          work_dir="$(mktemp -d)"
+          base_dir="$work_dir/base"
+          head_dir="$work_dir/head"
+          cleanup() {
+            git worktree remove --force "$base_dir" 2>/dev/null || true
+            git worktree remove --force "$head_dir" 2>/dev/null || true
+            rm -rf "$work_dir"
+          }
+          trap cleanup EXIT
+
+          if ! git worktree add --detach "$base_dir" "$BASE_SHA"; then
+            echo "Failed to check out PR base; using full coverage target set."
+            emit_targets true base_checkout_failed "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+          if ! git worktree add --detach "$head_dir" "$HEAD_SHA"; then
+            echo "Failed to check out PR head; using full coverage target set."
+            emit_targets true head_checkout_failed "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
+            -w "$base_dir" \
+            -b bazelisk \
+            "$work_dir/base-hashes.json"; then
+            echo "bazel-diff failed while hashing base; using full coverage target set."
+            emit_targets true base_hash_failed "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
+            -w "$head_dir" \
+            -b bazelisk \
+            "$work_dir/head-hashes.json"; then
+            echo "bazel-diff failed while hashing head; using full coverage target set."
+            emit_targets true head_hash_failed "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" get-impacted-targets \
+            -w "$head_dir" \
+            -b bazelisk \
+            -sh "$work_dir/base-hashes.json" \
+            -fh "$work_dir/head-hashes.json" \
+            -o "$work_dir/affected.txt"; then
+            echo "bazel-diff failed while determining impacted targets; using full coverage target set."
+            emit_targets true impacted_targets_failed "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          cp "$work_dir/affected.txt" "$diagnostics_dir/affected-targets.txt"
+
+          affected="$(
+            python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$work_dir/affected.txt"
+          )"
+
+          if [[ -z "$affected" ]]; then
+            echo "bazel-diff produced no affected targets; using full coverage target set."
+            emit_targets true no_affected_targets "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          emit_targets false bazel_diff "$affected"
+
+      - name: Upload target selection artifact
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: coverage-target-selection-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/coverage-target-selection
+          if-no-files-found: ignore
+          retention-days: 3
+
   build:
     runs-on: ubuntu-24.04
+    needs: determine-targets
     if: ${{ github.ref == 'refs/heads/main' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn' }}
 
     steps:
@@ -59,12 +269,14 @@ jobs:
             libgl1-mesa-dev libosmesa6-dev
 
       - name: Generate coverage
+        shell: bash
         run: |
-          tools/coverage.sh --no-html \
-            //donner/base/... \
-            //donner/css/... \
-            //donner/svg/... \
-            //donner/editor/...
+          set -euo pipefail
+          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
+          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          printf "Coverage targets:\n"
+          printf "  %s\n" "${TARGETS[@]}"
+          tools/coverage.sh --no-html "${TARGETS[@]}"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
@@ -77,6 +289,7 @@ jobs:
 
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64]
+    needs: determine-targets
     if: ${{ github.ref != 'refs/heads/main' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Keep
@@ -106,12 +319,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          TARGETS=(
-            //donner/base/...
-            //donner/css/...
-            //donner/svg/...
-            //donner/editor/...
-          )
+          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
+          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          printf "Coverage targets:\n"
+          printf "  %s\n" "${TARGETS[@]}"
 
           fetch_llvm() {
             bazelisk fetch --config=ci --config=latest_llvm "${TARGETS[@]}"
@@ -142,12 +353,12 @@ jobs:
           bazelisk shutdown
 
       - name: Generate coverage
+        shell: bash
         run: |
-          tools/coverage.sh --no-html \
-            //donner/base/... \
-            //donner/css/... \
-            //donner/svg/... \
-            //donner/editor/...
+          set -euo pipefail
+          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
+          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          tools/coverage.sh --no-html "${TARGETS[@]}"
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v6

@@ -12,27 +12,19 @@ function print_help() {
   exit 0
 }
 
-function file_mtime() {
-  local file="$1"
-
-  if stat -c %Y "$file" >/dev/null 2>&1; then
-    stat -c %Y "$file"
-    return
-  fi
-
-  if stat -f %m "$file" >/dev/null 2>&1; then
-    stat -f %m "$file"
-    return
-  fi
-
-  echo 0
-}
-
 TARGETS=()
 BAZEL_COVERAGE_FLAGS=()
+DEFAULT_BAZEL_COVERAGE_FLAGS=()
 
 if [[ -n "${DONNER_COVERAGE_BAZEL_FLAGS:-}" ]]; then
   read -r -a BAZEL_COVERAGE_FLAGS <<< "$DONNER_COVERAGE_BAZEL_FLAGS"
+else
+  DEFAULT_BAZEL_COVERAGE_FLAGS=(
+    --remote_executor=
+    --remote_cache=
+    --experimental_remote_downloader=
+    --noremote_upload_local_results
+  )
 fi
 
 # Check for --quiet option
@@ -58,14 +50,6 @@ fi
 
 echo "Analyzing coverage for: ${TARGETS[*]}"
 
-function file_mtime() {
-  if [[ "$(uname)" == "Darwin" ]]; then
-    stat -f %m "$1"
-  else
-    stat -c %Y "$1"
-  fi
-}
-
 # Error if genhtml is not found (only required when HTML output is enabled).
 if [ "$NO_HTML" = false ] && ! which genhtml > /dev/null; then
     echo "ERROR: genhtml not found, please install lcov"
@@ -81,10 +65,11 @@ if ! which java > /dev/null; then
 fi
 
 JAVA_HOME=$(dirname $(dirname $(which java)))
+WORKSPACE_ROOT=$(bazel info workspace)
 
-BAZEL_TEST_ENV=""
+BAZEL_TEST_ENV=()
 if [[ "$(uname)" == "Darwin" ]]; then
-  BAZEL_TEST_ENV="--test_env=DYLD_LIBRARY_PATH=$(bazel info workspace)"
+  BAZEL_TEST_ENV=(--test_env=DYLD_LIBRARY_PATH="$WORKSPACE_ROOT")
 fi
 
 LLVM_COV_PATH=""
@@ -104,31 +89,42 @@ if [[ -z "$LLVM_PROFDATA_PATH" || ! -x "$LLVM_PROFDATA_PATH" ]]; then
   exit 1
 fi
 
-(
-  cd $(bazel info workspace)
+LLVM_COVERAGE_FLAGS=(
+  --features=llvm_coverage_map_format
+  # Bazel's test runner copies GCOV into COVERAGE_GCOV_PATH. For LLVM lcov
+  # collection that path is used as llvm-profdata to merge profraw files.
+  --action_env=GCOV="$LLVM_PROFDATA_PATH"
+  --action_env=BAZEL_LLVM_COV="$LLVM_COV_PATH"
+  --action_env=BAZEL_LLVM_PROFDATA="$LLVM_PROFDATA_PATH"
+  --test_env=LLVM_COV="$LLVM_COV_PATH"
+  --test_env=LLVM_PROFDATA="$LLVM_PROFDATA_PATH"
+)
 
-  GENHTML_OPTIONS="--legend --branch-coverage --ignore-errors category --ignore-errors inconsistent --output-directory coverage-report"
+(
+  cd "$WORKSPACE_ROOT"
+
+  COVERAGE_HTML_DIR=coverage-report
+  GENHTML_OPTIONS="--legend --branch-coverage --ignore-errors category --ignore-errors inconsistent --output-directory $COVERAGE_HTML_DIR"
 
   COVERAGE_REPORT=$(bazel info output_path)/_coverage/_coverage_report.dat
 
   # --keep_going is set in .bazelrc for coverage so that analysis failures
-  # don't block the rest of the run.  Record the timestamp before running so
-  # we can verify a fresh report was produced (avoid processing stale data on
-  # early exit).
-  BEFORE_TS=0
-  if [ -f "$COVERAGE_REPORT" ]; then
-    BEFORE_TS=$(file_mtime "$COVERAGE_REPORT")
-  fi
+  # don't block the rest of the run. Remove any previous combined report so
+  # early exits cannot accidentally process stale data.
+  rm -f "$COVERAGE_REPORT"
 
   if [ "$QUIET" = true ]; then
     bazel coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr --noshow_progress \
+      "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
-      --action_env=BAZEL_LLVM_COV=$LLVM_COV_PATH --action_env=GCOV=$LLVM_PROFDATA_PATH \
-      $BAZEL_TEST_ENV "${TARGETS[@]}" || true
+      "${LLVM_COVERAGE_FLAGS[@]}" \
+      "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || true
   else
-    bazel coverage --config=latest_llvm "${BAZEL_COVERAGE_FLAGS[@]}" \
-      --action_env=BAZEL_LLVM_COV=$LLVM_COV_PATH \
-      --action_env=GCOV=$LLVM_PROFDATA_PATH $BAZEL_TEST_ENV "${TARGETS[@]}" || true
+    bazel coverage --config=latest_llvm \
+      "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
+      "${BAZEL_COVERAGE_FLAGS[@]}" \
+      "${LLVM_COVERAGE_FLAGS[@]}" \
+      "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || true
   fi
 
   if [ ! -f "$COVERAGE_REPORT" ]; then
@@ -136,14 +132,9 @@ fi
     exit 1
   fi
 
-  AFTER_TS=$(file_mtime "$COVERAGE_REPORT")
-  if [ "$AFTER_TS" -le "$BEFORE_TS" ]; then
-    echo "ERROR: Coverage report was not updated (stale data from a previous run)"
-    exit 1
-  fi
-
-  mkdir -p coverage-report
-  FILTER_ARGS=(--input "$COVERAGE_REPORT" --output coverage-report/filtered_report.dat)
+  rm -rf "$COVERAGE_HTML_DIR"
+  mkdir -p "$COVERAGE_HTML_DIR"
+  FILTER_ARGS=(--input "$COVERAGE_REPORT" --output "$COVERAGE_HTML_DIR/filtered_report.dat")
 
   if [ "$QUIET" = true ]; then
     python3 tools/filter_coverage.py "${FILTER_ARGS[@]}"
@@ -153,9 +144,9 @@ fi
 
   if [ "$NO_HTML" = false ]; then
     if [ "$QUIET" = true ]; then
-      genhtml --quiet coverage-report/filtered_report.dat $GENHTML_OPTIONS
+      genhtml --quiet "$COVERAGE_HTML_DIR/filtered_report.dat" $GENHTML_OPTIONS
     else
-      genhtml coverage-report/filtered_report.dat $GENHTML_OPTIONS
+      genhtml "$COVERAGE_HTML_DIR/filtered_report.dat" $GENHTML_OPTIONS
     fi
   fi
 )
