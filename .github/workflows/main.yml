@@ -362,7 +362,33 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk fetch --config=ci --config=latest_llvm $TARGETS
+
+          fetch_llvm() {
+            bazelisk fetch --config=ci --config=latest_llvm $TARGETS
+          }
+
+          cleanup_partial_llvm_fetch() {
+            local output_base
+            output_base=$(bazelisk info output_base 2>/dev/null || true)
+            bazelisk shutdown || true
+
+            echo "::group::Bazel disk state before LLVM fetch retry"
+            df -h /var/cache/bazel "$GITHUB_WORKSPACE" || true
+            if [[ -n "$output_base" && -d "$output_base/external" ]]; then
+              du -sh "$output_base"/external/*llvm_toolchain_linux_aarch64_llvm* 2>/dev/null || true
+            fi
+            echo "::endgroup::"
+
+            if [[ -n "$output_base" && -d "$output_base/external" ]]; then
+              find "$output_base/external" -maxdepth 1 -name '*llvm_toolchain_linux_aarch64_llvm*' \
+                -print -exec rm -rf {} + 2>/dev/null || true
+            fi
+          }
+
+          if ! fetch_llvm; then
+            cleanup_partial_llvm_fetch
+            fetch_llvm
+          fi
           bazelisk shutdown
 
       - name: Build
