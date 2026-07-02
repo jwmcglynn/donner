@@ -86,61 +86,35 @@ class FetchContentExternalsTest(unittest.TestCase):
             self.assertNotIn(".bcr.", tag, f"{name} has BCR suffix: {tag}")
 
 
-class AbslDepHandlingTest(unittest.TestCase):
-    def test_absl_dep_pattern_canonical(self):
-        self.assertTrue(
-            g._ABSL_DEP_RE.match("@@abseil-cpp+//absl/container:flat_hash_set")
+class ExternalDepManifestTest(unittest.TestCase):
+    def test_maps_cmake_target_dependency(self):
+        dep = g._resolve_external_dep("@zlib//:z")
+        self.assertEqual(dep, g.ExternalDepResolution("target", "zlib"))
+
+    def test_maps_system_dependency(self):
+        dep = g._resolve_external_dep("@harfbuzz//:harfbuzz")
+        self.assertEqual(
+            dep,
+            g.ExternalDepResolution(
+                "system",
+                "${HARFBUZZ_LIBRARIES}",
+                "${HARFBUZZ_INCLUDE_DIRS}",
+            ),
         )
 
-    def test_absl_dep_pattern_legacy(self):
-        self.assertTrue(g._ABSL_DEP_RE.match("@com_google_absl//absl/types:any"))
-
-    def test_non_absl_does_not_match(self):
-        self.assertFalse(g._ABSL_DEP_RE.match("@foo//bar:baz"))
-
-    def test_unmapped_absl_dep_is_internal(self):
-        # Unmapped abseil deps are silently dropped (matches pre-existing
-        # behavior; some absl rules don't export under absl::<rulename>).
-        self.assertTrue(
-            g._is_known_bazel_internal("@@abseil-cpp+//absl/flags:flag")
+    def test_ignores_toolchain_and_absl_prefix_deps(self):
+        self.assertEqual(
+            g._resolve_external_dep("@rules_cc//:link_extra_lib"),
+            g.ExternalDepResolution("ignore"),
+        )
+        self.assertEqual(
+            g._resolve_external_dep("@@abseil-cpp+//absl/flags:flag"),
+            g.ExternalDepResolution("ignore"),
         )
 
-    def test_mapped_absl_dep_is_not_internal(self):
-        # Explicitly mapped absl deps must NOT be ignored as internal.
-        # failure_signal_handler is in KNOWN_BAZEL_TO_CMAKE_DEPS.
-        self.assertFalse(
-            g._is_known_bazel_internal(
-                "@com_google_absl//absl/debugging:failure_signal_handler"
-            )
-        )
-
-
-class IsKnownBazelInternalTest(unittest.TestCase):
-    def test_bazel_tools(self):
-        self.assertTrue(g._is_known_bazel_internal("@bazel_tools//tools/cpp:link_extra_lib"))
-        self.assertTrue(g._is_known_bazel_internal("@bazel_tools//tools/cpp:malloc"))
-        self.assertTrue(g._is_known_bazel_internal("@rules_cc//:link_extra_lib"))
-
-    def test_handled_externally(self):
-        self.assertTrue(g._is_known_bazel_internal("@harfbuzz//:harfbuzz"))
-        self.assertTrue(g._is_known_bazel_internal("@freetype//:freetype"))
-
-    def test_ignored_deps(self):
-        self.assertTrue(g._is_known_bazel_internal("@re2//:re2"))
-        self.assertTrue(g._is_known_bazel_internal("@glfw//:glfw"))
-
-    def test_real_dep_not_internal(self):
-        self.assertFalse(g._is_known_bazel_internal("@zlib//:z"))
-        self.assertFalse(g._is_known_bazel_internal("//donner/base:base"))
-
-
-class SkipCmakeDepTest(unittest.TestCase):
-    def test_geode_subpackage_dep_is_skipped(self):
-        self.assertTrue(g._should_skip_cmake_dep("donner_svg_renderer_geode_geo_encoder"))
-
-    def test_normal_dep_is_not_skipped(self):
-        self.assertFalse(g._should_skip_cmake_dep("donner_svg_renderer_renderer_tiny_skia"))
-        self.assertFalse(g._should_skip_cmake_dep(None))
+    def test_explicit_absl_mapping_wins_over_prefix_ignore(self):
+        dep = g._resolve_external_dep("@com_google_absl//absl/debugging:symbolize")
+        self.assertEqual(dep, g.ExternalDepResolution("target", "absl::symbolize"))
 
 
 class CmakeTargetNameTest(unittest.TestCase):
@@ -157,42 +131,191 @@ class CmakeTargetNameTest(unittest.TestCase):
         )
 
 
-class BazelXmlTargetInfoTest(unittest.TestCase):
-    def test_parse_cc_target_info_xml(self):
-        xml = textwrap.dedent(
-            """\
-            <?xml version="1.1" encoding="UTF-8" standalone="no"?>
-            <query version="2">
-                <rule class="cc_library" name="//donner/base:base">
-                    <list name="tags"/>
-                    <list name="srcs">
-                        <label value="//donner/base:Foo.cc"/>
-                        <label value="//other/package:Ignore.cc"/>
-                    </list>
-                    <list name="hdrs">
-                        <label value="//donner/base:Foo.h"/>
-                        <label value="//donner/base:nested/Bar.h"/>
-                        <label value="@entt//:entt.hpp"/>
-                    </list>
-                    <list name="copts">
-                        <string value="-I."/>
-                        <string value="-isystem/opt/include"/>
-                        <string value="-DNAME=&quot;a&amp;b&quot;"/>
-                    </list>
-                    <list name="includes">
-                        <string value="generated/include"/>
-                    </list>
-                </rule>
-            </query>
-            """
+class CqueryBuildOutputTest(unittest.TestCase):
+    def test_parse_configured_cc_library(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            output = textwrap.dedent(
+                f"""\
+                # {workspace}/donner/svg/renderer/BUILD.bazel:423:18
+                cc_library(
+                  name = "renderer",
+                  srcs = ["//donner/svg/renderer:Renderer.cc", "//donner/svg/renderer:RendererTinySkiaBackend.cc"],
+                  copts = ["-I."],
+                  hdrs = ["//donner/svg/renderer:Renderer.h"],
+                  deps = ["//donner/svg/renderer:renderer_tiny_skia"],
+                  include_prefix = "donner/svg/renderer",
+                )
+                # Rule renderer instantiated at (most recent call last):
+                """
+            )
+
+            targets = g._parse_cquery_build_output(output, workspace)
+
+        self.assertEqual(len(targets), 1)
+        self.assertEqual(targets[0].label, "//donner/svg/renderer:renderer")
+        self.assertEqual(targets[0].kind, "cc_library")
+        self.assertTrue(targets[0].compatible)
+        self.assertEqual(
+            targets[0].attrs["srcs"],
+            [
+                "//donner/svg/renderer:Renderer.cc",
+                "//donner/svg/renderer:RendererTinySkiaBackend.cc",
+            ],
         )
 
-        info = g._parse_cc_target_info_xml(xml, "//donner/base:base")
+    def test_parse_incompatible_and_embed_resources_targets(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td)
+            output = textwrap.dedent(
+                f"""\
+                # {workspace}/donner/svg/text/BUILD.bazel:88:18
+                cc_library(
+                  name = "text_backend_full",
+                  target_compatible_with = ["@platforms//:incompatible"],
+                  srcs = ["//donner/svg/text:TextBackendFull.cc"],
+                )
 
-        self.assertEqual(info.srcs, ["Foo.cc"])
-        self.assertEqual(info.hdrs, ["Foo.h", "nested/Bar.h"])
-        self.assertEqual(info.copts, ['-DNAME="a&b"'])
-        self.assertEqual(info.includes, ["generated/include"])
+                # {workspace}/third_party/roboto/BUILD.bazel:3:16
+                embed_resources_generate_header(
+                  name = "roboto_header_gen",
+                  generator_name = "roboto",
+                  variable_names = ["kRobotoRegularTtf"],
+                  out = "//third_party/roboto:RobotoFont.h",
+                )
+                """
+            )
+
+            targets = g._parse_cquery_build_output(output, workspace)
+
+        self.assertEqual(targets[0].label, "//donner/svg/text:text_backend_full")
+        self.assertFalse(targets[0].compatible)
+        self.assertEqual(targets[1].label, "//third_party/roboto:roboto")
+        self.assertEqual(targets[1].kind, "embed_resources")
+
+
+class ConditionDerivationTest(unittest.TestCase):
+    def _configs_where(self, predicate):
+        return {config.name for config in g.CMAKE_CONFIGS if predicate(config)}
+
+    def test_common_feature_conditions_are_simplified(self):
+        self.assertIsNone(g._condition_for_config_names(g._ALL_CONFIG_NAMES))
+        self.assertEqual(
+            g._condition_for_config_names(self._configs_where(lambda c: c.text)),
+            "DONNER_TEXT",
+        )
+        self.assertEqual(
+            g._condition_for_config_names(self._configs_where(lambda c: c.text_full)),
+            "DONNER_TEXT_FULL",
+        )
+        self.assertEqual(
+            g._condition_for_config_names(self._configs_where(lambda c: c.filters)),
+            "DONNER_FILTERS",
+        )
+
+    def test_values_for_target_uses_feature_conditions(self):
+        target = g.CMakeTarget(
+            label="//donner/svg/renderer:renderer_tiny_skia",
+            package="donner/svg/renderer",
+            name="renderer_tiny_skia",
+            kind="cc_library",
+            configs=set(g._ALL_CONFIG_NAMES),
+            values={
+                "defines": {
+                    "DONNER_TEXT_ENABLED": self._configs_where(lambda c: c.text),
+                    "DONNER_FILTERS_ENABLED": self._configs_where(lambda c: c.filters),
+                },
+            },
+        )
+
+        fixed, conditional = g._values_for_target(target, "defines")
+
+        self.assertEqual(fixed, [])
+        self.assertEqual(
+            dict(conditional),
+            {"DONNER_TEXT_ENABLED": "DONNER_TEXT", "DONNER_FILTERS_ENABLED": "DONNER_FILTERS"},
+        )
+
+    def test_woff2_condition_uses_cmake_specific_option(self):
+        target = g.CMakeTarget(
+            label="//donner/svg/resources:font_manager",
+            package="donner/svg/resources",
+            name="font_manager",
+            kind="cc_library",
+            configs=set(g._ALL_CONFIG_NAMES),
+            values={"defines": {}},
+        )
+
+        condition = g._condition_for_item(
+            target,
+            "DONNER_TEXT_WOFF2_ENABLED",
+            self._configs_where(lambda c: c.text_full),
+        )
+
+        self.assertEqual(condition, "DONNER_TEXT_WOFF2")
+
+    def test_dependency_condition_respects_referenced_target_guard(self):
+        all_configs_target = g.CMakeTarget(
+            label="//donner/svg/renderer/tests:text_backend_tests",
+            package="donner/svg/renderer/tests",
+            name="text_backend_tests",
+            kind="cc_test",
+            configs=set(g._ALL_CONFIG_NAMES),
+            values={"deps": {}},
+        )
+        text_full_dep = g.CMakeTarget(
+            label="//donner/svg/text:text_backend_full",
+            package="donner/svg/text",
+            name="text_backend_full",
+            kind="cc_library",
+            configs=self._configs_where(lambda c: c.text_full),
+            values={"deps": {}},
+        )
+
+        condition = g._condition_for_dep(
+            all_configs_target,
+            "donner_svg_text_text_backend_full",
+            set(g._ALL_CONFIG_NAMES),
+            {"donner_svg_text_text_backend_full": text_full_dep},
+        )
+
+        self.assertEqual(condition, "DONNER_TEXT_FULL")
+
+    def test_target_configs_constrained_by_unavailable_direct_dep(self):
+        text_full_configs = self._configs_where(lambda c: c.text_full)
+        all_config_values = g._target_value_map()
+        all_config_values["srcs"]["TextBackend_tests.cc"] = set(g._ALL_CONFIG_NAMES)
+        all_config_values["deps"]["//donner/svg/text:text_backend_full"] = set(g._ALL_CONFIG_NAMES)
+        text_full_values = g._target_value_map()
+        text_full_values["srcs"]["TextBackendFull.cc"] = set(text_full_configs)
+        targets = {
+            "//donner/svg/renderer/tests:text_backend_tests": g.CMakeTarget(
+                label="//donner/svg/renderer/tests:text_backend_tests",
+                package="donner/svg/renderer/tests",
+                name="text_backend_tests",
+                kind="cc_test",
+                configs=set(g._ALL_CONFIG_NAMES),
+                values=all_config_values,
+            ),
+            "//donner/svg/text:text_backend_full": g.CMakeTarget(
+                label="//donner/svg/text:text_backend_full",
+                package="donner/svg/text",
+                name="text_backend_full",
+                kind="cc_library",
+                configs=set(text_full_configs),
+                values=text_full_values,
+            ),
+        }
+
+        g._constrain_target_configs_by_dependency_compatibility(targets)
+
+        constrained = targets["//donner/svg/renderer/tests:text_backend_tests"]
+        self.assertEqual(constrained.configs, text_full_configs)
+        self.assertEqual(constrained.values["srcs"]["TextBackend_tests.cc"], text_full_configs)
+        self.assertEqual(
+            constrained.values["deps"]["//donner/svg/text:text_backend_full"],
+            text_full_configs,
+        )
 
 
 class ExtractTargetsAndRefsTest(unittest.TestCase):

@@ -1,0 +1,134 @@
+{
+  "targets": [
+    {
+      "labels": ["@com_google_absl//absl/debugging:failure_signal_handler"],
+      "cmake": "absl::failure_signal_handler",
+      "reason": "Abseil exports this debugging library as a CMake target."
+    },
+    {
+      "labels": ["@com_google_absl//absl/debugging:symbolize"],
+      "cmake": "absl::symbolize",
+      "reason": "Abseil exports this debugging library as a CMake target."
+    },
+    {
+      "labels": ["@com_google_gtest//:gtest_main"],
+      "cmake": "gmock_main",
+      "reason": "FetchContent googletest builds gmock_main for Donner tests."
+    },
+    {
+      "labels": ["@com_google_gtest//:gtest"],
+      "cmake": "gmock",
+      "reason": "FetchContent googletest builds gmock for Donner tests."
+    },
+    {
+      "labels": ["@entt//:entt", "@entt//src:entt"],
+      "cmake": "EnTT::EnTT",
+      "reason": "FetchContent EnTT exports EnTT::EnTT."
+    },
+    {
+      "labels": ["@nlohmann_json//:json"],
+      "cmake": "nlohmann_json::nlohmann_json",
+      "reason": "FetchContent nlohmann_json exports nlohmann_json::nlohmann_json."
+    },
+    {
+      "labels": ["@rules_cc//cc/runfiles:runfiles"],
+      "cmake": "rules_cc_runfiles",
+      "reason": "The generator builds rules_cc runfiles manually."
+    },
+    {
+      "labels": ["@stb//:image_write"],
+      "cmake": "stb_image_write",
+      "reason": "The generator builds Donner's vendored stb_image_write wrapper."
+    },
+    {
+      "labels": ["@stb//:image"],
+      "cmake": "stb_image",
+      "reason": "The generator builds Donner's vendored stb_image wrapper."
+    },
+    {
+      "labels": ["@stb//:truetype"],
+      "cmake": "stb_truetype",
+      "reason": "The generator builds Donner's vendored stb_truetype wrapper."
+    },
+    {
+      "labels": ["@pixelmatch-cpp17//:pixelmatch-cpp17"],
+      "cmake": "pixelmatch-cpp17",
+      "reason": "FetchContent pixelmatch-cpp17 exports this target."
+    },
+    {
+      "labels": ["@zlib//:z", "//third_party:zlib"],
+      "cmake": "zlib",
+      "reason": "FetchContent zlib builds the zlib target used by Donner."
+    },
+    {
+      "labels": [
+        "@tiny-skia-cpp//src:tiny_skia_lib",
+        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+        "@tiny-skia-cpp//src/tiny_skia:tiny_skia_core",
+        "@tiny-skia-cpp//src/tiny_skia/filter:filter"
+      ],
+      "cmake": "tiny_skia",
+      "reason": "The vendored tiny-skia-cpp CMakeLists exposes one tiny_skia target."
+    },
+    {
+      "labels": ["@woff2//:woff2_decode"],
+      "cmake": "woff2dec",
+      "reason": "FetchContent woff2 builds woff2dec."
+    },
+    {
+      "labels": ["@brotli//:brotlidec"],
+      "cmake": "brotlidec",
+      "reason": "FetchContent brotli builds brotlidec."
+    }
+  ],
+  "system": [
+    {
+      "labels": ["//third_party:freetype", "@freetype//:freetype"],
+      "libraries": "${FREETYPE_LIBRARIES}",
+      "include_dirs": "${FREETYPE_INCLUDE_DIRS}",
+      "reason": "CMake uses pkg-config for FreeType in the text-full backend."
+    },
+    {
+      "labels": ["@harfbuzz//:harfbuzz"],
+      "libraries": "${HARFBUZZ_LIBRARIES}",
+      "include_dirs": "${HARFBUZZ_INCLUDE_DIRS}",
+      "reason": "CMake uses pkg-config for HarfBuzz in the text-full backend."
+    }
+  ],
+  "ignore": [
+    {
+      "labels": [
+        "@bazel_tools//tools/cpp:link_extra_lib",
+        "@bazel_tools//tools/cpp:malloc",
+        "@rules_cc//:link_extra_lib"
+      ],
+      "reason": "Implicit Bazel C++ toolchain link deps are handled by the CMake toolchain."
+    },
+    {
+      "labels": ["@re2//:re2"],
+      "reason": "re2 is a test-only transitive dep of googletest in this CMake mirror."
+    },
+    {
+      "labels": ["@glfw//:glfw", "@glfw"],
+      "reason": "GLFW is only used by Bazel-only viewer/geode/editor targets."
+    },
+    {
+      "labels": ["@imgui//:imgui", "@imgui"],
+      "reason": "ImGui is only used by Bazel-only viewer/editor targets."
+    },
+    {
+      "labels": ["@tracy//:tracy_client"],
+      "reason": "Tracy is editor-only profiling and compiles to no-ops in the CMake mirror."
+    }
+  ],
+  "ignore_prefixes": [
+    {
+      "prefixes": ["@@abseil-cpp+//absl/", "@com_google_absl//absl/"],
+      "except_labels": [
+        "@com_google_absl//absl/debugging:failure_signal_handler",
+        "@com_google_absl//absl/debugging:symbolize"
+      ],
+      "reason": "Most direct Abseil attrs are header-only or transitively supplied by mapped Abseil targets."
+    }
+  ]
+}
