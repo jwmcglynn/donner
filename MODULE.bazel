@@ -154,7 +154,7 @@ use_repo(python, "python_3_12")
 # Toolchain
 #
 
-bazel_dep(name = "toolchains_llvm", version = "1.7.0", dev_dependency = True)
+bazel_dep(name = "toolchains_llvm", version = "1.8.0", dev_dependency = True)
 
 # To use a local copy of the toolchains_llvm repository, uncomment the following.
 # local_path_override(
