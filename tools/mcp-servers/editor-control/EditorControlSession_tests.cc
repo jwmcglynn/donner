@@ -25,7 +25,7 @@ using ::testing::ElementsAreArray;
 /// resolves to the shared /tmp on remote-execution workers (which do not set
 /// TMPDIR), so fixed filenames written there collide across users: a file left
 /// by one worker user makes a later run under a different user fail to open the
-/// same path for write (observed on the shared macOS RE host, 2026-07-02).
+/// same path for write.
 std::filesystem::path TestTempDir() {
   if (const char* testTmpdir = std::getenv("TEST_TMPDIR"); testTmpdir && *testTmpdir) {
     return std::filesystem::path(testTmpdir);
