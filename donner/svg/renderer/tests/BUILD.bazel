@@ -213,6 +213,9 @@ donner_cc_test(
     name = "zoom_filter_repro_tests",
     srcs = ["ZoomFilterRepro_tests.cc"],
     data = ["//:donner_splash.svg"],
+    # 4 independent zoom/filter repro scenarios, ~80 s serial on the
+    # self-hosted RE lane (CI baseline, 2026-07-01).
+    shard_count = 4,
     deps = [
         "//donner/svg",
         "//donner/svg/parser",
@@ -528,6 +531,11 @@ donner_variant_cc_test(
             "text_full": "false",
         },
     ],
+    # Hundreds of independent image comparisons per variant. Unsharded, the
+    # geode variant alone ran ~267 s on the self-hosted RE lane
+    # (CI baseline, 2026-07-01) and sat on the test-step critical path. 8 shards
+    # per variant turn that into parallel ~35 s RE actions.
+    shard_count = 8,
 )
 
 donner_cc_test(

@@ -335,11 +335,40 @@ jobs:
       # that acceleration when it is healthy, but fall back to local execution
       # if the private gRPC endpoint is down.
       BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
+      # Every self-hosted run uploads Bazel profiles + BEP + compact execution
+      # logs so slow runs can be attributed to targets/actions without live
+      # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
+      # from the first step ($RUNNER_TEMP; the `runner` context is not
+      # available in job-level env).
+      # Build without the Bytes: the runner microvm is a thin RE client on a
+      # CPU-capped host. Downloading every toplevel output (unstripped ARM64
+      # test binaries) added minutes of pure transfer per run. Tests execute
+      # remotely, so only test logs/XML need to come back.
+      DIAG_BUILD_FLAGS: "--remote_download_outputs=minimal"
+      DIAG_TEST_FLAGS: "--remote_download_outputs=minimal --remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Record target selection
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIAG_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
+          echo "DIAG_DIR=$DIAG_DIR" >> "$GITHUB_ENV"
+          mkdir -p "$DIAG_DIR"/{fetch,build,test}
+          {
+            echo "run_id=${{ github.run_id }} attempt=${{ github.run_attempt }} sha=${{ github.sha }}"
+            echo "fallback=${{ needs.determine-targets.outputs.fallback }}"
+          } | tee "$DIAG_DIR/manifest.txt"
+          if [[ "${{ needs.determine-targets.outputs.fallback }}" == "true" ]]; then
+            echo "//..." > "$DIAG_DIR/target-list.txt"
+          else
+            echo "${{ needs.determine-targets.outputs.affected }}" | tr ' ' '\n' > "$DIAG_DIR/target-list.txt"
+          fi
+          echo "target_count=$(grep -c . "$DIAG_DIR/target-list.txt")" | tee -a "$DIAG_DIR/manifest.txt"
 
       - name: Sync Bazel toolchain
         # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
@@ -395,7 +424,9 @@ jobs:
             cleanup_partial_llvm_fetch
             fetch_llvm
           fi
-          bazelisk shutdown
+          # NOTE: no `bazelisk shutdown` here. Keeping the server alive lets
+          # Build reuse this invocation's loading/analysis instead of paying
+          # a fresh JVM start + ~30 s re-analysis.
 
       - name: Build
         shell: bash
@@ -406,7 +437,12 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci --config=latest_llvm $TARGETS
+          bazelisk build --config=ci --config=latest_llvm \
+            $DIAG_BUILD_FLAGS \
+            --profile="$DIAG_DIR/build/profile.gz" \
+            --build_event_json_file="$DIAG_DIR/build/bep.json" \
+            --execution_log_compact_file="$DIAG_DIR/build/exec.log.zst" \
+            $TARGETS
 
       - name: Test
         shell: bash
@@ -417,7 +453,33 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk test --config=ci --config=latest_llvm --test_output=errors $TARGETS
+          bazelisk test --config=ci --config=latest_llvm --test_output=errors \
+            $DIAG_TEST_FLAGS \
+            --profile="$DIAG_DIR/test/profile.gz" \
+            --build_event_json_file="$DIAG_DIR/test/bep.json" \
+            --execution_log_compact_file="$DIAG_DIR/test/exec.log.zst" \
+            $TARGETS
+
+      - name: Summarize diagnostics
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -f tools/ci_diagnostics_report.py && -f "$DIAG_DIR/build/profile.gz" ]]; then
+            python3 tools/ci_diagnostics_report.py "$DIAG_DIR" | tee "$DIAG_DIR/report.md" || true
+            if [[ -s "$DIAG_DIR/report.md" ]]; then
+              cat "$DIAG_DIR/report.md" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: Upload CI diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-ci-diagnostics/
+          retention-days: 3
+          if-no-files-found: ignore
 
       - name: Upload Bazel test failure artifacts
         if: failure()

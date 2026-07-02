@@ -181,6 +181,17 @@ build --config=libc++ --config=c++20
 # Debug builds
 build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linkopt=-g --strip=never --apple_generate_dsym --spawn_strategy=standalone
 
+# Compile-time deep dive (see tools/time_trace_report.py). Clang writes a
+# <object>.json trace next to each .o. Those are undeclared outputs, so
+# sandboxing and remote execution would
+# discard them — force standalone local execution and disable the remote
+# cache/executor for this config. Usage:
+#   bazel build --config=time-trace //donner/svg/...
+#   python3 tools/time_trace_report.py
+build:time-trace --copt=-ftime-trace
+build:time-trace --strategy=CppCompile=standalone --spawn_strategy=standalone
+build:time-trace --remote_executor= --remote_cache= --noremote_upload_local_results
+
 # Binary-size builds: optimized for size while preserving debug attribution.
 build:binary-size -c opt --copt=-Os --copt=-g --strip=never
 build:binary-size --copt=-ffunction-sections --copt=-fdata-sections

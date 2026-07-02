@@ -10,6 +10,11 @@
 - **Always prefix AI-generated GitHub comments with 🤖.** This applies to all PR comments, review comments, and issue comments posted by any AI agent (Claude, Codex, Copilot, etc.).
 - This distinguishes human comments from AI comments, since all AI activity goes through `jwmcglynn`'s GitHub account.
 
+## No Private-Infra References
+
+- **Never reference the operator's private infrastructure repos or their design docs in this repository** — not in code, comments, commit messages, PR descriptions, or docs. That includes design-doc numbers (e.g. "design 0018"), repo names like `event-horizon`, private hostnames beyond what CI configs already expose, and personal-notes references (zettelkasten pages, handoff notes).
+- Donner is public. Describe the *reason* for a change in self-contained terms ("CI baseline, 2026-07-01: this test ran ~307 s serially on the self-hosted lane") instead of pointing at a private document.
+
 ## Always-Green Main
 
 - **`main` is always green.** There is no such thing as a "preexisting test failure" — any red test blocks merge, full stop. If something on `main` breaks, the next PR is fixing it, not routing around it.
