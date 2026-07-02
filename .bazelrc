@@ -221,6 +221,10 @@ build:coverage --experimental_generate_llvm_lcov
 build:coverage --features=llvm_coverage_map_format
 build:coverage --copt=-ffile-compilation-dir=.
 build:coverage --action_env=BAZEL_USE_LLVM_NATIVE_COVERAGE=1
+# Split coverage postprocessing runs the merge in a separate spawn. Keep
+# coverage outputs writable so Bazel's Linux C++ coverage script can write
+# COVERAGE_DIR/gcov and _cc_coverage.dat there. See bazelbuild/bazel#28310.
+build:coverage --experimental_writable_outputs
 # Bazel's test runner copies GCOV into COVERAGE_GCOV_PATH. For LLVM lcov
 # collection that path is used as llvm-profdata to merge profraw files.
 build:coverage --action_env=GCOV=llvm-profdata
@@ -232,10 +236,13 @@ test:coverage --collect_code_coverage
 # of its cached result, and --experimental_fetch_all_coverage_outputs makes
 # Bazel download it so the combined lcov report stays complete (validated
 # 2026-07-02: two consecutive runs, second fully cached, byte-identical
-# _coverage_report.dat). The previous `--nocache_test_results` (2024-04,
-# pre-remote-cache) forced every coverage run to re-execute every test in
-# scope, which dominated CI coverage wall time.
+# _coverage_report.dat). Split postprocessing keeps coverage merge outputs out
+# of the cached test tree, avoiding absolute GCOV symlinks in _coverage/gcov.
+# The previous `--nocache_test_results` (2024-04, pre-remote-cache) forced every
+# coverage run to re-execute every test in scope, which dominated CI coverage
+# wall time.
 test:coverage --experimental_fetch_all_coverage_outputs
+test:coverage --experimental_split_coverage_postprocessing
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --config=latest_llvm
