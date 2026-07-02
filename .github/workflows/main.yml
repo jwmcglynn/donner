@@ -337,8 +337,9 @@ jobs:
       BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
       # Every self-hosted run uploads Bazel profiles + BEP + compact execution
       # logs so slow runs can be attributed to targets/actions without live
-      # SSH. Keep artifacts small; retention is 3 days.
-      DIAG_DIR: ${{ runner.temp }}/donner-ci-diagnostics
+      # SSH. Keep artifacts small; retention is 3 days. DIAG_DIR is exported
+      # from the first step ($RUNNER_TEMP; the `runner` context is not
+      # available in job-level env).
       # Build without the Bytes: the runner microvm is a thin RE client on a
       # CPU-capped host. Downloading every toplevel output (unstripped ARM64
       # test binaries) added minutes of pure transfer per run. Tests execute
@@ -355,6 +356,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          DIAG_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
+          echo "DIAG_DIR=$DIAG_DIR" >> "$GITHUB_ENV"
           mkdir -p "$DIAG_DIR"/{fetch,build,test}
           {
             echo "run_id=${{ github.run_id }} attempt=${{ github.run_attempt }} sha=${{ github.sha }}"
