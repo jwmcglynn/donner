@@ -18,7 +18,7 @@ jobs:
       should_run: ${{ steps.decide.outputs.should_run }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Decide whether nightly perf jobs should run
         id: decide
@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 90
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
