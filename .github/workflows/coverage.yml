@@ -67,6 +67,24 @@ jobs:
         if: github.event_name == 'pull_request'
         run: curl -fsSL -o "$RUNNER_TEMP/bazel-diff.jar" "https://github.com/Tinder/bazel-diff/releases/download/${BAZEL_DIFF_TAG}/bazel-diff_deploy.jar"
 
+      - id: pr-meta
+        name: Extract PR base SHA for hash caching
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "base_sha=$(python3 -c 'import json, os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")).get("pull_request", {}).get("base", {}).get("sha", ""))')" >> "$GITHUB_OUTPUT"
+
+      # Shares the cache convention (and main-push pre-warm) with main.yml's
+      # determine-targets: base hashes are keyed by (bazel-diff version,
+      # base SHA) and skip half the bazel-diff work on a hit.
+      - name: Cache bazel-diff base hashes
+        if: github.event_name == 'pull_request' && steps.pr-meta.outputs.base_sha != ''
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
+          key: bazel-diff-base-hashes-${{ env.BAZEL_DIFF_TAG }}-${{ steps.pr-meta.outputs.base_sha }}
+
       - id: determine
         name: Determine coverage targets
         shell: bash
@@ -174,24 +192,35 @@ jobs:
           }
           trap cleanup EXIT
 
-          if ! git worktree add --detach "$base_dir" "$BASE_SHA"; then
-            echo "Failed to check out PR base; using full coverage target set."
-            emit_targets true base_checkout_failed "$FULL_COVERAGE_TARGETS"
-            exit 0
-          fi
           if ! git worktree add --detach "$head_dir" "$HEAD_SHA"; then
             echo "Failed to check out PR head; using full coverage target set."
             emit_targets true head_checkout_failed "$FULL_COVERAGE_TARGETS"
             exit 0
           fi
 
-          if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
-            -w "$base_dir" \
-            -b bazelisk \
-            "$work_dir/base-hashes.json"; then
-            echo "bazel-diff failed while hashing base; using full coverage target set."
-            emit_targets true base_hash_failed "$FULL_COVERAGE_TARGETS"
-            exit 0
+          cached_base="$HOME/.cache/bazel-diff-base-hashes/$BASE_SHA.json"
+          if [[ -s "$cached_base" ]]; then
+            echo "Using cached bazel-diff base hashes for $BASE_SHA."
+            cp "$cached_base" "$work_dir/base-hashes.json"
+          else
+            if ! git worktree add --detach "$base_dir" "$BASE_SHA"; then
+              echo "Failed to check out PR base; using full coverage target set."
+              emit_targets true base_checkout_failed "$FULL_COVERAGE_TARGETS"
+              exit 0
+            fi
+
+            if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
+              -w "$base_dir" \
+              -b bazelisk \
+              "$work_dir/base-hashes.json"; then
+              echo "bazel-diff failed while hashing base; using full coverage target set."
+              emit_targets true base_hash_failed "$FULL_COVERAGE_TARGETS"
+              exit 0
+            fi
+
+            # Save for subsequent pushes to this PR (post-job cache step).
+            mkdir -p "$(dirname "$cached_base")"
+            cp "$work_dir/base-hashes.json" "$cached_base"
           fi
 
           if ! java -jar "$RUNNER_TEMP/bazel-diff.jar" generate-hashes \
