@@ -63,6 +63,8 @@ Stages transform components through the ECS:
 
 ## Pull Request Workflow
 
+**NEVER merge a PR without explicit operator approval.** Agents open, update, monitor, and review PRs — but `gh pr merge` (any flavor) is operator-gated: the operator must approve merging that specific PR in the current conversation. Green CI, passing reviews, or "obviously safe" changes do not substitute for approval.
+
 When creating a pull request:
 
 1. **Rebase on latest `origin/main`** before pushing — `git fetch origin main && git rebase origin/main`.
