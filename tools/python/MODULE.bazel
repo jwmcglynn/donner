@@ -5,7 +5,7 @@ support including text, filters, and animation."""
 
 module(name = "donner_tools_python", version = "0.0.1")
 
-bazel_dep(name = "rules_python", version = "1.9.1", dev_dependency = True)
+bazel_dep(name = "rules_python", version = "2.1.0", dev_dependency = True)
 
 pip = use_extension(
     "@rules_python//python/extensions:pip.bzl",
