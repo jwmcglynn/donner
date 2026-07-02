@@ -50,6 +50,11 @@ struct Intersection {
   double t1 = 0.0;
 };
 
+struct SegmentIntersectionResult {
+  std::vector<Intersection> intersections;
+  bool tooComplex = false;
+};
+
 struct Edge {
   SegmentKind kind = SegmentKind::Line;
   Vector2d p0;
@@ -384,6 +389,16 @@ void AddIntersection(std::vector<Intersection>* intersections, double t0, double
     }
   }
   intersections->push_back({.t0 = clampedT0, .t1 = clampedT1});
+}
+
+std::size_t MaxIntersectionSearchSteps(const PathBooleanOptions& options,
+                                       std::size_t segmentCount) {
+  constexpr std::size_t kIntersectionSearchMultiplier = 64u;
+  const std::size_t base = std::max(segmentCount, options.maxIntersections);
+  if (base > std::numeric_limits<std::size_t>::max() / kIntersectionSearchMultiplier) {
+    return std::numeric_limits<std::size_t>::max();
+  }
+  return base * kIntersectionSearchMultiplier;
 }
 
 bool SegmentsNearEqualSameDirection(const Segment& lhs, const Segment& rhs, double tolerance) {
@@ -953,14 +968,20 @@ bool RefineCubicIntersection(const CubicSlice& lhs, const CubicSlice& rhs, doubl
   return true;
 }
 
-void IntersectCubicRecursive(const CubicSlice& lhs, const CubicSlice& rhs, double tolerance,
-                             int depth, std::vector<Intersection>* intersections) {
+bool IntersectCubicRecursive(const CubicSlice& lhs, const CubicSlice& rhs, double tolerance,
+                             int depth, std::size_t* searchSteps, std::size_t maxSearchSteps,
+                             std::vector<Intersection>* intersections) {
   constexpr int kMaxDepth = 26;
   const Box2d lhsBounds = CubicBoundsOf(lhs.points);
   const Box2d rhsBounds = CubicBoundsOf(rhs.points);
   if (!BoxesOverlap(lhsBounds, rhsBounds, tolerance)) {
-    return;
+    return true;
   }
+
+  if (*searchSteps >= maxSearchSteps) {
+    return false;
+  }
+  ++*searchSteps;
 
   if (depth >= kMaxDepth ||
       (BoxMaxExtent(lhsBounds) <= tolerance && BoxMaxExtent(rhsBounds) <= tolerance)) {
@@ -969,43 +990,51 @@ void IntersectCubicRecursive(const CubicSlice& lhs, const CubicSlice& rhs, doubl
     if (RefineCubicIntersection(lhs, rhs, tolerance, &lhsT, &rhsT)) {
       AddIntersection(intersections, lhsT, rhsT, tolerance * 16.0);
     }
-    return;
+    return true;
   }
 
   if (BoxMaxExtent(lhsBounds) >= BoxMaxExtent(rhsBounds)) {
-    IntersectCubicRecursive(LeftSlice(lhs, 0.5), rhs, tolerance, depth + 1, intersections);
-    IntersectCubicRecursive(RightSlice(lhs, 0.5), rhs, tolerance, depth + 1, intersections);
-  } else {
-    IntersectCubicRecursive(lhs, LeftSlice(rhs, 0.5), tolerance, depth + 1, intersections);
-    IntersectCubicRecursive(lhs, RightSlice(rhs, 0.5), tolerance, depth + 1, intersections);
+    return IntersectCubicRecursive(LeftSlice(lhs, 0.5), rhs, tolerance, depth + 1, searchSteps,
+                                   maxSearchSteps, intersections) &&
+           IntersectCubicRecursive(RightSlice(lhs, 0.5), rhs, tolerance, depth + 1, searchSteps,
+                                   maxSearchSteps, intersections);
   }
+
+  return IntersectCubicRecursive(lhs, LeftSlice(rhs, 0.5), tolerance, depth + 1, searchSteps,
+                                 maxSearchSteps, intersections) &&
+         IntersectCubicRecursive(lhs, RightSlice(rhs, 0.5), tolerance, depth + 1, searchSteps,
+                                 maxSearchSteps, intersections);
 }
 
-std::vector<Intersection> IntersectSegments(const Segment& lhs, const Segment& rhs,
-                                            double tolerance) {
+SegmentIntersectionResult IntersectSegments(const Segment& lhs, const Segment& rhs,
+                                            double tolerance, std::size_t* searchSteps,
+                                            std::size_t maxSearchSteps) {
   if (std::optional<std::vector<Intersection>> coincident =
           IntersectCoincidentFullSegments(lhs, rhs, tolerance)) {
-    return *coincident;
+    return {.intersections = *coincident};
   }
   if (std::optional<std::vector<Intersection>> coincident =
           IntersectCoincidentPartialSegments(lhs, rhs, tolerance)) {
-    return *coincident;
+    return {.intersections = *coincident};
   }
   if (lhs.kind == SegmentKind::Line && rhs.kind == SegmentKind::Line) {
-    return IntersectLineLine(lhs, rhs, tolerance);
+    return {.intersections = IntersectLineLine(lhs, rhs, tolerance)};
   }
   if (lhs.kind == SegmentKind::Line) {
-    return IntersectLineCurve(lhs, rhs, true, tolerance);
+    return {.intersections = IntersectLineCurve(lhs, rhs, true, tolerance)};
   }
   if (rhs.kind == SegmentKind::Line) {
-    return IntersectLineCurve(rhs, lhs, false, tolerance);
+    return {.intersections = IntersectLineCurve(rhs, lhs, false, tolerance)};
   }
 
   std::vector<Intersection> intersections;
   const CubicSlice lhsSlice{.points = SegmentAsCubic(lhs), .t0 = 0.0, .t1 = 1.0};
   const CubicSlice rhsSlice{.points = SegmentAsCubic(rhs), .t0 = 0.0, .t1 = 1.0};
-  IntersectCubicRecursive(lhsSlice, rhsSlice, tolerance, 0, &intersections);
-  return intersections;
+  if (!IntersectCubicRecursive(lhsSlice, rhsSlice, tolerance, 0, searchSteps, maxSearchSteps,
+                               &intersections)) {
+    return {.tooComplex = true};
+  }
+  return {.intersections = std::move(intersections)};
 }
 
 std::array<Vector2d, 3> SubQuadratic(const Segment& segment, double t0, double t1) {
@@ -1557,14 +1586,25 @@ PathBooleanResult ApplyPathBoolean(PathBooleanOp op, std::span<const PathBoolean
   }
 
   std::size_t intersectionCount = 0;
+  std::size_t intersectionSearchSteps = 0;
+  const std::size_t maxIntersectionSearchSteps =
+      MaxIntersectionSearchSteps(options, segments.size());
   for (std::size_t i = 0; i < segments.size(); ++i) {
     for (std::size_t j = i + 1; j < segments.size(); ++j) {
       if (!BoxesOverlap(SegmentBounds(segments[i]), SegmentBounds(segments[j]), tolerance)) {
         continue;
       }
 
-      const std::vector<Intersection> intersections =
-          IntersectSegments(segments[i], segments[j], tolerance);
+      const SegmentIntersectionResult intersectionResult =
+          IntersectSegments(segments[i], segments[j], tolerance, &intersectionSearchSteps,
+                            maxIntersectionSearchSteps);
+      if (intersectionResult.tooComplex) {
+        return {
+            .status = PathBooleanStatus::TooComplex,
+            .diagnostics = {"Path boolean intersection search exceeded complexity limit"},
+        };
+      }
+      const std::vector<Intersection>& intersections = intersectionResult.intersections;
       intersectionCount += intersections.size();
       if (intersectionCount > options.maxIntersections) {
         return {

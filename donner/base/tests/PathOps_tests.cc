@@ -5,6 +5,7 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -39,8 +40,13 @@ Path NonZeroRectDonutPath() {
       .build();
 }
 
-PathBooleanInput Input(Path path) {
-  return PathBooleanInput{.path = std::move(path)};
+PathBooleanInput Input(Path path, FillRule fillRule = FillRule::NonZero,
+                       Transform2d outputFromPath = Transform2d()) {
+  return PathBooleanInput{
+      .path = std::move(path),
+      .fillRule = fillRule,
+      .outputFromPath = outputFromPath,
+  };
 }
 
 PathBooleanResult Boolean(PathBooleanOp op, std::initializer_list<PathBooleanInput> inputs) {
@@ -83,6 +89,42 @@ std::size_t CommandCount(const Path& path, Path::Verb verb) {
     }
   }
   return count;
+}
+
+double FuzzerCoord(std::uint16_t raw) {
+  return (static_cast<double>(raw) / 65535.0) * 200.0 - 100.0;
+}
+
+Vector2d FuzzerPoint(std::uint16_t x, std::uint16_t y) {
+  return {FuzzerCoord(x), FuzzerCoord(y)};
+}
+
+Path NearCoincidentCubicTimeoutLhsPath() {
+  const Vector2d a = FuzzerPoint(0x5959, 0x5959);
+  const Vector2d b = FuzzerPoint(0x5555, 0x5555);
+
+  return PathBuilder()
+      .moveTo(a)
+      .curveTo(b, b, b)
+      .quadTo(a, a)
+      .curveTo(a, a, a)
+      .curveTo(a, FuzzerPoint(0x59b8, 0x5959), a)
+      .curveTo(FuzzerPoint(0x5959, 0xffff), FuzzerPoint(0xffff, 0xff59), b)
+      .quadTo(b, b)
+      .closePath()
+      .build();
+}
+
+Path NearCoincidentCubicTimeoutRhsPath() {
+  const Vector2d a = FuzzerPoint(0x5959, 0x5959);
+  const Vector2d b = FuzzerPoint(0x5555, 0x5555);
+
+  return PathBuilder()
+      .moveTo(b)
+      .quadTo(b, b)
+      .quadTo(FuzzerPoint(0x5555, 0x5959), a)
+      .closePath()
+      .build();
 }
 
 Path QuadraticCapPath() {
@@ -1217,6 +1259,24 @@ TEST(PathOpsTest, RespectsIntersectionCap) {
   };
 
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Union, inputs, options);
+
+  EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
+  EXPECT_TRUE(result.paths.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(PathOpsTest, DegenerateCubicIntersectionSearchReturnsTooComplex) {
+  PathBooleanOptions options;
+  options.maxCurveCount = 64;
+  options.maxIntersections = 256;
+  options.maxOutputCommands = 512;
+  const Transform2d outputFromPath = Transform2d::SkewX(0.2);
+  const std::array<PathBooleanInput, 2> inputs = {
+      Input(NearCoincidentCubicTimeoutLhsPath(), FillRule::EvenOdd, outputFromPath),
+      Input(NearCoincidentCubicTimeoutRhsPath(), FillRule::EvenOdd, outputFromPath),
+  };
+
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Difference, inputs, options);
 
   EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
   EXPECT_TRUE(result.paths.empty());
