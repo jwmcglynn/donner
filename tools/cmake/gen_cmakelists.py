@@ -343,29 +343,13 @@ def _run_bazel(args: List[str]) -> str:
         raise RuntimeError(f"Bazel command failed:\n  {cmd_str}\n{exc.stderr}") from exc
 
 
-_CQUERY_EXCLUDED_TARGETS = (
-    # Bazel-only examples: these are not emitted into generated CMake and
-    # their dependency graphs pull in editor/Geode-only external archives that
-    # CMake validation should not fetch.
-    "//examples:svg_viewer",
-    "//examples:geode_embed",
-    "//examples:geode_embed_surface",
-    "//examples:geode_embed_surface_linux",
+_CMAKE_LEAF_TARGET_PATTERNS = (
+    "//:donner",
 )
-
+_CMAKE_LEAF_TARGET_EXPRESSION = "(" + " + ".join(_CMAKE_LEAF_TARGET_PATTERNS) + ")"
 _CQUERY_TARGET_EXPRESSION = (
     'kind(".*cc_.*|embed_resources_generate_header", '
-    "(//:donner + //donner/... + //examples/... + //third_party/...) "
-    "except //donner/editor/... "
-    "except //donner/benchmarks/... "
-    "except //donner/svg/renderer/benchmarks/... "
-    "except //donner/svg/renderer/geode/... "
-    "except //donner/svg/renderer/wasm/... "
-    "except //third_party/emdawnwebgpu/... "
-    "except //third_party/emscripten-glfw/... "
-    "except //third_party/webgpu-cpp/... "
-    + " ".join(f"except {target}" for target in _CQUERY_EXCLUDED_TARGETS)
-    + ")"
+    f"deps({_CMAKE_LEAF_TARGET_EXPRESSION}))"
 )
 
 
@@ -573,20 +557,17 @@ def _record_values(
         dest.setdefault(value, set()).add(config_name)
 
 
+_MANUALLY_HANDLED_CMAKE_PACKAGES = {
+    "",
+    "pixelmatch-cpp17",
+    "third_party",
+    "third_party/stb",
+    "third_party/tiny-skia-cpp",
+}
+
+
 def _is_skipped_package(pkg: str) -> bool:
-    if pkg in {"", "third_party", "third_party/stb", "pixelmatch-cpp17"}:
-        return True
-    skipped_prefixes = (
-        "donner/benchmarks",
-        "donner/editor",
-        "donner/svg/renderer/benchmarks",
-        "donner/svg/renderer/geode",
-        "donner/svg/renderer/wasm",
-        "third_party/emdawnwebgpu",
-        "third_party/emscripten-glfw",
-        "third_party/webgpu-cpp",
-    )
-    return any(pkg == prefix or pkg.startswith(prefix + "/") for prefix in skipped_prefixes)
+    return pkg in _MANUALLY_HANDLED_CMAKE_PACKAGES
 
 
 def _intersect_target_values_with_configs(target: CMakeTarget) -> None:
