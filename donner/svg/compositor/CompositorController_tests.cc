@@ -1124,11 +1124,12 @@ TEST_F(CompositorControllerTest, StaticImmediateHeuristicDoesNotDemoteAfterSlowM
     <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
   )svg");
 
-  configureMockForCaching(std::chrono::milliseconds(5));
+  configureMockForCaching();
   auto target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
+  compositor.setStaticSpanRasterizeElapsedMsForTesting(5.0);
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
@@ -1153,6 +1154,7 @@ TEST_F(CompositorControllerTest, FastMeasuredStaticSpanCanExpandToImmediate) {
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
+  compositor.setStaticSpanRasterizeElapsedMsForTesting(0.5);
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
 
@@ -1181,6 +1183,7 @@ TEST_F(CompositorControllerTest, DynamicImmediateSpanDemotesToCachedAfterSlowRen
   ASSERT_TRUE(target.has_value());
 
   CompositorController compositor(document, renderer_);
+  compositor.setStaticSpanRasterizeElapsedMsForTesting(0.5);
   ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
   compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
 
@@ -1192,7 +1195,8 @@ TEST_F(CompositorControllerTest, DynamicImmediateSpanDemotesToCachedAfterSlowRen
     ASSERT_EQ(plans[1].mode, StaticSpanMode::Immediate);
   }
 
-  configureMockForCaching(std::chrono::milliseconds(5));
+  configureMockForCaching();
+  compositor.setStaticSpanRasterizeElapsedMsForTesting(5.0);
   compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
 
   const auto plans = compositor.snapshotStaticSpanPlansForTesting();
