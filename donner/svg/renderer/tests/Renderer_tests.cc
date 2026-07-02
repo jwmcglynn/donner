@@ -552,5 +552,75 @@ TEST_F(RendererTests, ChainedFeImageDeepRecursionIsBoundedAndStable) {
          "bounded by the depth cap (issue #552)";
 }
 
+// Root-cause documentation for issue #623's stroke-dasharray/n-0 residual.
+//
+// The resvg golden draws a *butt-capped* (notched) top-left corner on a `40 0`-dashed closed
+// rect. Donner renders an SVG `<rect>` as a genuinely closed path (`M L L L Z`), and tiny-skia
+// (a line-faithful port of Rust tiny-skia) seam-joins the first and last dash across the start
+// vertex into one continuous dash — so the start corner becomes an interior miter join that
+// fills the outer corner quadrant. This is the spec-conformant closed-dashed-path behavior
+// (Skia / Chrome / Firefox seam-join closed dashed contours); resvg's golden differs because
+// usvg flattens the rect to a non-closed path before dashing.
+//
+// This test pins the difference to closed-vs-open dash seam handling — NOT a rasterizer,
+// coverage, or transform bug — by rendering the same `40 0`-dashed square three ways and
+// measuring green coverage in the outer start-corner quadrant. A `<rect>` and an equivalent
+// closed `<path ... Z>` both miter (fill); only an explicitly open `<path>` butt-caps (empty),
+// reproducing the resvg golden. If a future change makes Donner stop seam-joining closed dashed
+// paths, the rect/closed expectations here trip loudly.
+TEST_F(RendererTests, DashSeamClosedContourMitersStartCorner) {
+  auto renderInner = [&](const std::string& inner) {
+    const std::string svg =
+        "<svg viewBox=\"0 0 200 200\" xmlns=\"http://www.w3.org/2000/svg\">" + inner + "</svg>";
+    ParseWarningSink disabled = ParseWarningSink::Disabled();
+    auto result = parser::SVGParser::ParseSVG(svg, disabled);
+    EXPECT_FALSE(result.hasError()) << result.error();
+    SVGDocument document = std::move(result.result());
+    return RenderDocumentWithBackend(document, RendererBackend::TinySkia, /*verbose=*/false);
+  };
+
+  // The outer top-left quadrant of the (40,40) corner is doc [30,40]x[30,40]; the document
+  // renders at its intrinsic 200x200 (scale 1), so that is px [31,39)^2 (sampled inside the
+  // AA edge band). A full miter fills all 64 sampled pixels; a butt cap leaves them empty.
+  auto greenInOuterCorner = [](const RendererBitmap& bmp) {
+    int count = 0;
+    const std::size_t stride = bmp.rowBytes;
+    for (int y = 31; y < 39; ++y) {
+      for (int x = 31; x < 39; ++x) {
+        const std::size_t i =
+            static_cast<std::size_t>(y) * stride + static_cast<std::size_t>(x) * 4;
+        const uint8_t r = bmp.pixels[i];
+        const uint8_t g = bmp.pixels[i + 1];
+        const uint8_t b = bmp.pixels[i + 2];
+        if (g > 100 && r < 120 && b < 120) {
+          ++count;
+        }
+      }
+    }
+    return count;
+  };
+
+  const std::string attrs =
+      "fill=\"none\" stroke=\"green\" stroke-width=\"20\" stroke-dasharray=\"40 0\"";
+  const RendererBitmap rectEl =
+      renderInner("<rect x=\"40\" y=\"40\" width=\"120\" height=\"120\" " + attrs + "/>");
+  const RendererBitmap closedPath =
+      renderInner("<path d=\"M40,40 L160,40 L160,160 L40,160 Z\" " + attrs + "/>");
+  const RendererBitmap openPath =
+      renderInner("<path d=\"M40,40 L160,40 L160,160 L40,160 L40,40\" " + attrs + "/>");
+
+  ASSERT_FALSE(rectEl.empty());
+  ASSERT_FALSE(closedPath.empty());
+  ASSERT_FALSE(openPath.empty());
+
+  // <rect> is a closed contour -> the dash seam-joins -> mitered start corner (quadrant filled).
+  EXPECT_EQ(greenInOuterCorner(rectEl), 64) << "dashed <rect> should miter its start corner";
+  // An explicit closed <path ... Z> behaves identically.
+  EXPECT_EQ(greenInOuterCorner(closedPath), 64)
+      << "closed <path ... Z> should miter its start corner";
+  // An explicitly open path (no Z) butt-caps the start vertex, like the resvg golden.
+  EXPECT_EQ(greenInOuterCorner(openPath), 0) << "open dashed path should butt-cap its start corner";
+}
+
 }  // namespace
 }  // namespace donner::svg

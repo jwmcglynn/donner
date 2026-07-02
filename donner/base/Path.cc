@@ -981,6 +981,11 @@ std::vector<Path::Vertex> Path::vertices() const {
   std::vector<Vertex> result;
   std::optional<size_t> openPathCommand;
   bool justMoved = false;
+  // Whether the current subpath contains at least one straight `LineTo` edge. Used to
+  // decide whether a zero-length ClosePath emits an "arrival" marker-mid at the coincident
+  // start vertex (corner contours like a rounded rect do; smooth all-curve loops like a
+  // circle/ellipse do not — see the ClosePath branch).
+  bool subpathHasLine = false;
 
   bool wasInternal = false;
   for (size_t i = 0; i < commands_.size(); ++i) {
@@ -992,6 +997,10 @@ std::vector<Path::Vertex> Path::vertices() const {
     wasInternal = command.isInternal;
     if (shouldSkip) {
       continue;
+    }
+
+    if (command.verb == Verb::LineTo) {
+      subpathHasLine = true;
     }
 
     if (command.verb == Verb::MoveTo) {
@@ -1008,6 +1017,7 @@ std::vector<Path::Vertex> Path::vertices() const {
 
       openPathCommand = i;
       justMoved = true;
+      subpathHasLine = false;
 
     } else if (command.verb == Verb::ClosePath) {
       // If this ClosePath draws a line back to the starting point, place a vertex at the current
@@ -1019,10 +1029,31 @@ std::vector<Path::Vertex> Path::vertices() const {
       const Vector2d startPoint = endPointOfCommand(commands_, points_, i - 1);
       const Vector2d endPoint = endPointOfCommand(commands_, points_, i);
 
-      // Only place a vertex if the ClosePath line has non-zero length.
-      if (!NearZero((startPoint - endPoint).lengthSquared())) {
+      // Place a marker-mid vertex at the join between the last drawing segment and the
+      // closing segment — the point where the final drawing command arrives.
+      //
+      // - Non-zero-length ClosePath (e.g. a sharp rect `M L L L Z`): `startPoint` is the
+      //   distinct vertex before the closing line; the mid orientation bisects the incoming
+      //   tangent and the closing line's direction.
+      // - Zero-length ClosePath where the last segment already lands on the subpath start
+      //   (then `Z`): `startPoint == endPoint == subpath start`. Whether an arrival mid is
+      //   emitted there — stacking with the start and end markers — depends on the contour:
+      //     * Corner contours (a rounded rect: `M L C L C L C L C Z`) DO get the arrival
+      //       mid at the start corner, matching resvg / SVG 2 §11.6.2. Issue #623: dropping
+      //       it left one fewer marker at the rounded-rect start corner.
+      //     * Smooth all-curve loops (a circle/ellipse: `M C C C C Z`) do NOT — resvg places
+      //       only start + end at the seam, so emitting an arrival mid would over-stack.
+      //   `subpathHasLine` distinguishes the two: a contour with straight edges is a corner
+      //   contour, a pure-curve loop is smooth.
+      const bool closeIsZeroLength = NearZero((startPoint - endPoint).lengthSquared());
+      if (!closeIsZeroLength || subpathHasLine) {
         const Vector2d prevTangent = tangentAtEnd(commands_, points_, i - 1).normalize();
-        const Vector2d nextTangent = tangentAtStart(commands_, points_, i).normalize();
+        Vector2d nextTangent = tangentAtStart(commands_, points_, i).normalize();
+        if (NearZero(nextTangent.lengthSquared()) && openPathCommand &&
+            *openPathCommand + 1 < commands_.size()) {
+          // Zero-length closing line: use the subpath's first drawing segment direction.
+          nextTangent = tangentAtStart(commands_, points_, *openPathCommand + 1).normalize();
+        }
 
         const Vector2d orientationStart = InterpolateTangents(prevTangent, nextTangent);
         result.push_back(Vertex{startPoint, orientationStart});

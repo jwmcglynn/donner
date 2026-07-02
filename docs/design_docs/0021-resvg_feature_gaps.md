@@ -301,8 +301,22 @@ content-placement transform.
 | masking/mask | 8 | `mask-type`, `mask-units`, `color-interpolation`, mask-on-self |
 | text/font | 2 | `font` shorthand; canvas-size mismatch (test harness) |
 | text/tspan | 3 | tspan interaction with `clip-path`/`filter`/`mask` |
-| painting/stroke-dasharray | 4 | `0 n` dash patterns with caps |
-| painting/marker | 4 | multiple closepaths, rounded-rect corners, recursive-5 |
+| painting/stroke-dasharray | 4 | `0 n` dash patterns with caps; `40 0` closed-rect dash-seam (see note) |
+| painting/marker | 3 | multiple closepaths, recursive-5 (rounded-rect corner fixed, [#623](https://github.com/jwmcglynn/donner/issues/623)) |
+
+**`painting/stroke-dasharray/n-0` (`40 0`)** — root-caused under [#623](https://github.com/jwmcglynn/donner/issues/623)
+and intentionally left skipped: an SVG `<rect>` is a *closed* contour, so tiny-skia
+(the faithful Rust-tiny-skia port) seam-joins the first and last `40`-unit dash across
+the start vertex into one continuous dash, making the start corner an interior MITER.
+resvg's golden butt-caps that corner because usvg flattens the rect to a *non-closed*
+path before dashing. Donner's mitered closed-contour seam is the spec-conformant
+behavior (matches Skia/Chrome/Firefox); the diff is a resvg-pipeline difference, not a
+Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartCorner`.
+
+**`painting/marker/marker-on-rounded-rect`** — fixed under [#623](https://github.com/jwmcglynn/donner/issues/623):
+`Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
+start corner (stacking start + mid + end, matching resvg), while still excluding smooth
+all-curve loops (circle/ellipse).
 | text/writing-mode | ~6 | `writing-mode=tb` with `dx`/`dy`, vertical-lr/rl edge cases |
 
 ---

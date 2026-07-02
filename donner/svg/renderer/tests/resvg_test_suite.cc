@@ -806,12 +806,11 @@ INSTANTIATE_TEST_SUITE_P(
                 {"with-markerUnits=userSpaceOnUse.svg", WithMaxPixels(300, "Marker clip edge AA")},
                 {"with-viewBox-1.svg", Params::RenderOnly("UB: with `viewBox`")},
 
-                // Marker vertex placement on a rounded rect emits an extra start-vertex
-                // marker vs resvg (~666px = one 20x20 marker). Rounded-rect path
-                // decomposition vertex set, distinct from the multiple-closepath case.
-                {"marker-on-rounded-rect.svg",
-                 Params::Skip("Marker vertex set on rounded-rect path differs (extra start "
-                              "marker)")},
+                // Issue #623: the rounded-rect start corner now stacks marker-start +
+                // arrival marker-mid + marker-end (3 markers), matching resvg, after
+                // Path::vertices() emits the arrival mid for zero-length-close corner
+                // contours. Residual is sub-marker edge coverage.
+                {"marker-on-rounded-rect.svg", WithMaxPixels(60, "Marker stack edge coverage")},
                 {"recursive-5.svg", Params::Skip("Recursive marker rendering edge case (~787px)")},
             })),
         ValuesIn(ActiveComparisonModes())),
@@ -902,10 +901,20 @@ INSTANTIATE_TEST_SUITE_P(
                     {"negative-values.svg", Params::RenderOnly("UB (negative values)")},
 
                     // `0 N` dash patterns (zero-length dashes -> caps/dots) now render. `40 0`
-                    // (zero gap) still differs by ~625px at the closed-rect dash-start vertex —
-                    // a dasher seam/wrap difference at the first contour segment, not the `0 N`
-                    // gap this entry originally covered.
-                    {"n-0.svg", Params::Skip("closed-path dash-start-vertex seam (40 0 pattern)")},
+                    // (zero gap) differs by ~625px at exactly the closed-rect dash-START corner
+                    // (doc (40,40), the outer top-left stroke quadrant). Root-caused (#623): the
+                    // `<rect>` is a *closed* contour, so tiny-skia (faithful Rust port) seam-joins
+                    // the first and last `40`-unit dash across the start vertex into one continuous
+                    // dash — making that corner an interior MITER (filled quadrant). resvg's golden
+                    // butt-caps it (notched) because usvg flattens the rect to a *non-closed* path
+                    // before dashing. Donner's mitered closed-contour seam is the spec-conformant
+                    // behavior (matches Skia/Chrome/Firefox); the residual is a resvg-pipeline
+                    // (usvg path-normalization) difference, not a Donner/tiny-skia bug. Pinned by
+                    // RendererTests.DashSeamClosedContourMitersStartCorner in Renderer_tests.cc.
+                    {"n-0.svg",
+                     Params::Skip("resvg golden butt-caps the closed-rect dash-start corner; "
+                                  "Donner spec-correctly seam-joins it (usvg flattens rect to an "
+                                  "open path). See DashSeamClosedContourMitersStartCorner.")},
                     // `0 N` round/square caps render as dots on the CPU backend; Geode's dot
                     // rendering for zero-length dashes differs. Compare CPU, disable Geode.
                     {"0-n-with-round-caps.svg", GeodeDisabled("Geode 0-N dash cap rendering gap")},

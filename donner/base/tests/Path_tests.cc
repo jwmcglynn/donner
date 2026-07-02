@@ -1573,6 +1573,72 @@ TEST(Path, VerticesClosedPathDegenerateFirstSegment) {
   EXPECT_NEAR(verts.front().orientation.y, 0.0, 1e-9);
 }
 
+// When a closed subpath's final drawing segment already arrives at the subpath start
+// (so the ClosePath line is zero-length, e.g. a circle, ellipse, or rounded rect built
+// from curves), the arrival point is still a real path vertex and must receive a
+// marker-mid. SVG 2 §11.6.2 places marker-start, that marker-mid, and marker-end all at
+// the coincident vertex (they stack). Issue #623: dropping the mid left one fewer marker
+// at the start corner of a rounded rect (and circle), differing from resvg.
+TEST(Path, VerticesClosedCurveEmitsMidAtCoincidentStart) {
+  // A rounded rect built from curves: the last curve lands on (35,20) = the subpath start,
+  // then a zero-length closePath. The (35,20) vertex must appear *twice* — once as the
+  // marker-mid for the last segment's arrival, once as the marker-end at the subpath start
+  // — in addition to the marker-start emitted from the first segment.
+  Path path =
+      PathBuilder().addRoundedRect(Box2d(Vector2d(20, 20), Vector2d(180, 180)), 15, 15).build();
+  std::vector<Path::Vertex> verts = path.vertices();
+
+  // 8 segment endpoints + the coincident-start mid = 10 vertices total: V0 (marker-start),
+  // V1..V8 (marker-mid), V9 (marker-end). V0, V8, V9 all sit on the start point (35,20).
+  ASSERT_EQ(verts.size(), 10u);
+  EXPECT_EQ(verts.front().point, Vector2d(35, 20));  // marker-start
+  EXPECT_EQ(verts.back().point, Vector2d(35, 20));   // marker-end
+  // The second-to-last vertex is the mid emitted for the last curve's arrival at the start.
+  EXPECT_EQ(verts[verts.size() - 2].point, Vector2d(35, 20));
+
+  // Exactly three vertices coincide with the start point (start + arrival-mid + end).
+  int atStart = 0;
+  for (const auto& v : verts) {
+    if (v.point == Vector2d(35, 20)) {
+      ++atStart;
+    }
+  }
+  EXPECT_EQ(atStart, 3);
+}
+
+// A circle is a smooth all-curve loop (`M C C C C Z`) closed with a zero-length closePath.
+// Unlike the rounded rect, it must NOT gain an arrival marker-mid at the seam — resvg
+// stacks only start + end there. (If this regressed to 3, marker-on-circle over-stacks.)
+TEST(Path, VerticesClosedCircleStacksTwiceAtStart) {
+  Path path = PathBuilder().addCircle(Vector2d(100, 100), 80).build();
+  std::vector<Path::Vertex> verts = path.vertices();
+  // start, 3 mids, end = 5 vertices; start + end coincide at (180,100).
+  ASSERT_EQ(verts.size(), 5u);
+  int atStart = 0;
+  for (const auto& v : verts) {
+    if (v.point == Vector2d(180, 100)) {
+      ++atStart;
+    }
+  }
+  EXPECT_EQ(atStart, 2);  // start + end only — no arrival mid on a smooth loop.
+}
+
+// A sharp rect closes with a non-zero-length line (bottom-left back to top-left), so the
+// arrival mid sits on the distinct bottom-left corner — start and end stack only twice at
+// the top-left. This is the control case that must NOT gain an extra vertex.
+TEST(Path, VerticesSharpRectStartStacksTwice) {
+  Path path = PathBuilder().addRect(Box2d(Vector2d(20, 20), Vector2d(180, 180))).build();
+  std::vector<Path::Vertex> verts = path.vertices();
+  ASSERT_EQ(verts.size(), 5u);  // start, 3 mids, end.
+  int atStart = 0;
+  for (const auto& v : verts) {
+    if (v.point == Vector2d(20, 20)) {
+      ++atStart;
+    }
+  }
+  EXPECT_EQ(atStart, 2);  // start + end only; the close-line mid is the distinct BL corner.
+}
+
 // =============================================================================
 // PathBuilder::arcTo
 // =============================================================================
