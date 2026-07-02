@@ -1026,7 +1026,8 @@ def generate_root() -> None:
         # libraries and resolved at binary link time (like Bazel).
         f.write("set(BUILD_SHARED_LIBS OFF CACHE BOOL \"\" FORCE)\n\n")
         f.write("include(FetchContent)\n")
-        f.write("option(DONNER_BUILD_TESTS \"Build Donner tests\" OFF)\n\n")
+        f.write("option(DONNER_BUILD_TESTS \"Build Donner tests\" OFF)\n")
+        f.write("option(DONNER_BUILD_EXAMPLES \"Build Donner CMake examples\" OFF)\n\n")
 
         # ── Feature options (mirror Bazel flags) ───────────────────────
         f.write("# Feature options (mirror Bazel flags)\n")
@@ -1148,7 +1149,7 @@ def generate_root() -> None:
 
         # Optional test enable switch
         f.write("\n")
-        f.write("if(DONNER_BUILD_TESTS)\n")
+        f.write("if(DONNER_BUILD_TESTS OR DONNER_BUILD_EXAMPLES)\n")
         f.write("  enable_testing()\n")
         f.write("endif()\n\n")
 
@@ -1571,6 +1572,10 @@ def generate_all_packages() -> None:
                     f.write(f"    target_link_libraries(donner INTERFACE {resolution.value})\n")
                     f.write("  endif()\n")
         f.write("endif()\n")
+        f.write("\n")
+        f.write("if(DONNER_BUILD_EXAMPLES AND CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)\n")
+        f.write("  add_subdirectory(examples/cmake_consumer)\n")
+        f.write("endif()\n")
 
 #
 # Entry point
@@ -1846,6 +1851,7 @@ def main() -> None:
             "third_party/stb",
             "third_party/frozen",
             "third_party/css-parsing-tests",
+            "examples/cmake_consumer",
         )
 
         def _is_generated_cmake(rel: Path) -> bool:

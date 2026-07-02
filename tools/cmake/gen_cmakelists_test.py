@@ -5,6 +5,7 @@ query. That includes the parser/validator helpers plus the opt-in CMake
 build-validation helper exercised against synthetic source trees.
 """
 
+import os
 import sys
 import tempfile
 import textwrap
@@ -211,6 +212,51 @@ class CqueryExpressionTest(unittest.TestCase):
         self.assertTrue(g._is_skipped_package("third_party/tiny-skia-cpp"))
         self.assertFalse(g._is_skipped_package("donner/editor"))
         self.assertFalse(g._is_skipped_package("donner/svg/renderer/geode"))
+
+
+class GeneratedRootCmakeTest(unittest.TestCase):
+    def test_cmake_consumer_example_is_opt_in(self):
+        root_target = g.CMakeTarget(
+            label="//:donner",
+            package="",
+            name="donner",
+            kind="cc_library",
+            configs=set(g._ALL_CONFIG_NAMES),
+            values=g._target_value_map(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(temp_dir)
+                with mock.patch.object(g, "get_fetchcontent_externals", return_value=[]):
+                    with mock.patch.object(
+                        g,
+                        "extract_versions_from_module_bazel",
+                        return_value={},
+                    ):
+                        with mock.patch.object(
+                            g, "get_cmake_targets", return_value={"//:donner": root_target}
+                        ):
+                            g.generate_root()
+                            g.generate_all_packages()
+            finally:
+                os.chdir(previous_cwd)
+
+            contents = (Path(temp_dir) / "CMakeLists.txt").read_text()
+
+        self.assertIn('option(DONNER_BUILD_EXAMPLES "Build Donner CMake examples" OFF)', contents)
+        self.assertIn("if(DONNER_BUILD_TESTS OR DONNER_BUILD_EXAMPLES)", contents)
+        self.assertIn("add_library(donner INTERFACE)", contents)
+        self.assertIn(
+            "if(DONNER_BUILD_EXAMPLES AND CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)",
+            contents,
+        )
+        self.assertIn("  add_subdirectory(examples/cmake_consumer)", contents)
+        self.assertLess(
+            contents.index("add_library(donner INTERFACE)"),
+            contents.index("add_subdirectory(examples/cmake_consumer)"),
+        )
 
 
 class ConditionDerivationTest(unittest.TestCase):

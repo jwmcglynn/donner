@@ -154,9 +154,11 @@ jobs:
           python3 tools/cmake/gen_cmakelists.py
           cmake -S . -B build -G Ninja \
             -DDONNER_RENDERER_BACKEND=${{ matrix.backend }} \
+            -DDONNER_BUILD_EXAMPLES=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --parallel
+          ctest --test-dir build --output-on-failure -R donner_cmake_consumer
           ccache --show-stats
 
   macos:
@@ -206,7 +208,9 @@ jobs:
           python3 tools/cmake/gen_cmakelists.py
           cmake -S . -B build -G Ninja \
             -DDONNER_RENDERER_BACKEND=${{ matrix.backend }} \
+            -DDONNER_BUILD_EXAMPLES=ON \
             -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           cmake --build build --parallel
+          ctest --test-dir build --output-on-failure -R donner_cmake_consumer
           ccache --show-stats
