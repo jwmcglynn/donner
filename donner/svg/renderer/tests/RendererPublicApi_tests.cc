@@ -9,10 +9,13 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 
 namespace donner::svg {
 namespace {
+
+using ::testing::_;
 
 SVGDocument ParseDocument(std::string_view svgSource) {
   ParseWarningSink warningSink;
@@ -200,6 +203,61 @@ TEST(RendererPublicApiTest, DoubleDrawWithoutMutationProducesSameOutput) {
 
   EXPECT_EQ(firstSnapshot.dimensions, secondSnapshot.dimensions);
   EXPECT_EQ(firstSnapshot.pixels, secondSnapshot.pixels);
+}
+
+RendererBitmap MakePaddedTwoByTwoBitmap() {
+  RendererBitmap bitmap;
+  bitmap.dimensions = Vector2i(2, 2);
+  bitmap.rowBytes = 12;
+  bitmap.alphaType = AlphaType::Premultiplied;
+  bitmap.pixels = {
+      255, 0, 0,   255, 0,   255, 0, 255, 99, 99, 99, 99,
+      0,   0, 255, 255, 255, 255, 0, 255, 88, 88, 88, 88,
+  };
+  return bitmap;
+}
+
+TEST(RendererPublicApiTest, DrawBitmapFallbackPacksPaddedRowsBeforeDrawImage) {
+  tests::MockRendererInterface renderer;
+  const RendererBitmap bitmap = MakePaddedTwoByTwoBitmap();
+
+  ImageResource capturedImage;
+  EXPECT_CALL(renderer, drawImage(_, _))
+      .WillOnce([&](const ImageResource& image, const ImageParams&) { capturedImage = image; });
+
+  const std::vector<std::uint8_t> expectedData = {
+      255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+  };
+
+  ImageParams params;
+  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(2, 2));
+  renderer.drawBitmap(bitmap, params);
+
+  EXPECT_EQ(capturedImage.width, 2);
+  EXPECT_EQ(capturedImage.height, 2);
+  EXPECT_EQ(capturedImage.data, expectedData);
+}
+
+TEST(RendererPublicApiTest, DrawBitmapHonorsPaddedRows) {
+  Renderer renderer;
+  RenderViewport viewport;
+  viewport.size = Vector2d(2, 2);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+
+  ImageParams params;
+  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(2, 2));
+  params.imageRenderingPixelated = true;
+  renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
+  renderer.endFrame();
+
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_FALSE(snapshot.empty());
+  ASSERT_EQ(snapshot.dimensions, Vector2i(2, 2));
+  EXPECT_EQ(PixelAt(snapshot, 0, 0), (std::array<std::uint8_t, 4>{255, 0, 0, 255}));
+  EXPECT_EQ(PixelAt(snapshot, 1, 0), (std::array<std::uint8_t, 4>{0, 255, 0, 255}));
+  EXPECT_EQ(PixelAt(snapshot, 0, 1), (std::array<std::uint8_t, 4>{0, 0, 255, 255}));
+  EXPECT_EQ(PixelAt(snapshot, 1, 1), (std::array<std::uint8_t, 4>{255, 255, 0, 255}));
 }
 
 TEST(RendererPublicApiTest, TripleDrawWithoutMutationStaysStable) {

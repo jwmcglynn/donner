@@ -12,8 +12,6 @@ class GeodeDevice;
 
 namespace donner::svg {
 
-class RendererImplementation;
-
 /**
  * Backend-agnostic renderer that resolves to the active build backend (Skia or tiny-skia).
  *
@@ -193,6 +191,13 @@ public:
    * @param params Image placement parameters.
    */
   void drawImage(const ImageResource& image, const ImageParams& params) override;
+
+  /**
+   * Draws a CPU-readable bitmap into the given target rectangle.
+   *
+   * @param bitmap The bitmap to draw.
+   * @param params Image placement parameters.
+   */
   void drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) override;
 
   /// Draws a backend-owned texture snapshot when the active backend supports it.
@@ -248,7 +253,7 @@ public:
   [[nodiscard]] int height() const override;
 
 private:
-  std::unique_ptr<RendererImplementation> impl_;
+  std::unique_ptr<RendererInterface> impl_;
 };
 
 }  // namespace donner::svg

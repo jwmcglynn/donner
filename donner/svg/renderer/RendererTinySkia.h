@@ -179,10 +179,10 @@ public:
   /**
    * Zero-copy compose blit for premultiplied CPU bitmaps.
    *
-   * tiny-skia consumes premultiplied RGBA natively, so a premultiplied
-   * \ref RendererBitmap is drawn through a borrowed `PixmapView` with no
-   * pixel-buffer conversion or copy. Non-premultiplied bitmaps fall back to
-   * the converting base implementation.
+   * tiny-skia consumes premultiplied RGBA natively, so a tightly-packed
+   * premultiplied \ref RendererBitmap is drawn through a borrowed `PixmapView`
+   * with no pixel-buffer conversion or copy. Padded and non-premultiplied
+   * bitmaps are packed into draw scratch before creating the view.
    *
    * @param bitmap The bitmap to draw.
    * @param params Image placement parameters.

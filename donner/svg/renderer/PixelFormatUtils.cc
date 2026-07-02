@@ -1,20 +1,90 @@
 #include "donner/svg/renderer/PixelFormatUtils.h"
 
 #include <algorithm>
+#include <limits>
+#include <optional>
 
 namespace donner::svg {
+namespace {
+
+std::optional<std::size_t> TightRowBytesForWidth(int width) {
+  if (width <= 0) {
+    return std::nullopt;
+  }
+
+  const std::size_t sizeWidth = static_cast<std::size_t>(width);
+  if (sizeWidth > std::numeric_limits<std::size_t>::max() / 4u) {
+    return std::nullopt;
+  }
+
+  return sizeWidth * 4u;
+}
+
+bool HasRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width, int height,
+                 std::size_t rowBytes) {
+  if (height <= 0) {
+    return false;
+  }
+
+  const std::optional<std::size_t> tightRowBytes = TightRowBytesForWidth(width);
+  if (!tightRowBytes.has_value() || rowBytes < *tightRowBytes) {
+    return false;
+  }
+
+  const std::size_t sizeHeight = static_cast<std::size_t>(height);
+  if (sizeHeight > std::numeric_limits<std::size_t>::max() / rowBytes) {
+    return false;
+  }
+
+  return rgbaPixels.size() >= rowBytes * sizeHeight;
+}
+
+void PremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba) {
+  for (std::size_t i = 0; i + 3 < rgba.size(); i += 4) {
+    const unsigned alpha = rgba[i + 3];
+    rgba[i + 0] =
+        static_cast<std::uint8_t>((static_cast<unsigned>(rgba[i + 0]) * alpha + 127u) / 255u);
+    rgba[i + 1] =
+        static_cast<std::uint8_t>((static_cast<unsigned>(rgba[i + 1]) * alpha + 127u) / 255u);
+    rgba[i + 2] =
+        static_cast<std::uint8_t>((static_cast<unsigned>(rgba[i + 2]) * alpha + 127u) / 255u);
+  }
+}
+
+}  // namespace
 
 std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
   std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
-  for (std::size_t i = 0; i + 3 < result.size(); i += 4) {
-    const unsigned alpha = result[i + 3];
-    result[i + 0] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 0]) * alpha + 127u) / 255u);
-    result[i + 1] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 1]) * alpha + 127u) / 255u);
-    result[i + 2] =
-        static_cast<std::uint8_t>((static_cast<unsigned>(result[i + 2]) * alpha + 127u) / 255u);
+  PremultiplyRgbaInPlace(result);
+  return result;
+}
+
+std::vector<std::uint8_t> CopyTightRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width,
+                                            int height, std::size_t rowBytes) {
+  if (!HasRgbaRows(rgbaPixels, width, height, rowBytes)) {
+    return {};
   }
+
+  const std::size_t tightRowBytes = *TightRowBytesForWidth(width);
+  const std::size_t sizeHeight = static_cast<std::size_t>(height);
+  std::vector<std::uint8_t> result(tightRowBytes * sizeHeight);
+  if (rowBytes == tightRowBytes) {
+    std::copy_n(rgbaPixels.begin(), result.size(), result.begin());
+    return result;
+  }
+
+  for (std::size_t y = 0; y < sizeHeight; ++y) {
+    std::copy_n(rgbaPixels.begin() + static_cast<std::ptrdiff_t>(y * rowBytes), tightRowBytes,
+                result.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes));
+  }
+
+  return result;
+}
+
+std::vector<std::uint8_t> PremultiplyRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width,
+                                              int height, std::size_t rowBytes) {
+  std::vector<std::uint8_t> result = CopyTightRgbaRows(rgbaPixels, width, height, rowBytes);
+  PremultiplyRgbaInPlace(result);
   return result;
 }
 
@@ -46,6 +116,13 @@ void UnpremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba) {
 
 std::vector<std::uint8_t> UnpremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
   std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
+  UnpremultiplyRgbaInPlace(result);
+  return result;
+}
+
+std::vector<std::uint8_t> UnpremultiplyRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width,
+                                                int height, std::size_t rowBytes) {
+  std::vector<std::uint8_t> result = CopyTightRgbaRows(rgbaPixels, width, height, rowBytes);
   UnpremultiplyRgbaInPlace(result);
   return result;
 }

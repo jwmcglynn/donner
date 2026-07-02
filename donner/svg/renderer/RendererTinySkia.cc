@@ -1369,25 +1369,35 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
     return;
   }
 
-  // Premultiplied payloads draw through a borrowed view: no conversion, no
-  // copy. Unpremultiplied payloads (the root surface stores unpremultiplied
-  // for display, so layer/segment snapshots usually arrive that way)
-  // premultiply directly into the draw scratch — one conversion, zero
-  // intermediate copies. Both beat the ImageResource contract, which costs
-  // an extra full-buffer copy (and, for premultiplied payloads, an extra
-  // unpremultiply) per compose blit.
+  const std::size_t tightRowBytes = static_cast<std::size_t>(bitmap.dimensions.x) * 4u;
+
+  // Premultiplied tightly-packed payloads draw through a borrowed view: no
+  // conversion, no copy. Padded rows must be packed because tiny-skia's view
+  // indexes rows by width, not by caller-supplied stride. Unpremultiplied
+  // payloads premultiply directly into the draw scratch while packing rows.
+  // All cases beat the ImageResource contract, which costs an extra
+  // full-buffer copy and, for premultiplied payloads, an extra unpremultiply.
   std::optional<tiny_skia::PixmapView> sourceView;
-  std::vector<std::uint8_t> premultipliedScratch;
+  std::vector<std::uint8_t> scratch;
   if (bitmap.alphaType == AlphaType::Premultiplied) {
-    sourceView = tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(bitmap.pixels),
+    if (bitmap.rowBytes == tightRowBytes) {
+      sourceView =
+          tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(bitmap.pixels),
+                                           static_cast<std::uint32_t>(bitmap.dimensions.x),
+                                           static_cast<std::uint32_t>(bitmap.dimensions.y));
+    } else {
+      scratch = CopyTightRgbaRows(bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+                                  bitmap.rowBytes);
+      sourceView = tiny_skia::PixmapView::fromBytes(
+          std::span<const std::uint8_t>(scratch), static_cast<std::uint32_t>(bitmap.dimensions.x),
+          static_cast<std::uint32_t>(bitmap.dimensions.y));
+    }
+  } else {
+    scratch = PremultiplyRgbaRows(bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+                                  bitmap.rowBytes);
+    sourceView = tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(scratch),
                                                   static_cast<std::uint32_t>(bitmap.dimensions.x),
                                                   static_cast<std::uint32_t>(bitmap.dimensions.y));
-  } else {
-    premultipliedScratch = PremultiplyRgba(bitmap.pixels);
-    sourceView =
-        tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(premultipliedScratch),
-                                         static_cast<std::uint32_t>(bitmap.dimensions.x),
-                                         static_cast<std::uint32_t>(bitmap.dimensions.y));
   }
   if (!sourceView.has_value()) {
     return;
