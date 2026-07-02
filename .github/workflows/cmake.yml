@@ -90,10 +90,23 @@ jobs:
 
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
 
-  linux:
+  validate-generator:
     runs-on: ubuntu-24.04
     needs: gatekeeper
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Validate generated CMakeLists.txt
+        run: python3 tools/cmake/gen_cmakelists.py --check
+
+  linux:
+    runs-on: ubuntu-24.04
+    needs: [gatekeeper, validate-generator]
+    if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 750M
     strategy:
       fail-fast: false
       matrix:
@@ -103,38 +116,56 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install fontconfig and freetype
-        if: matrix.backend == 'skia'
+      - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
+          sudo apt-get install -y ccache ninja-build
+          if [[ "${{ matrix.backend }}" == "skia" ]]; then
+            sudo apt-get install -y pkg-config libfontconfig1-dev libfreetype6-dev
+          fi
 
       # Cache key includes both gen_cmakelists.py AND MODULE.bazel because the
       # generated CMakeLists.txt embeds FetchContent versions extracted from
       # MODULE.bazel. A version bump must invalidate the cached build/_deps
       # tree -- otherwise FetchContent's git stash/unstash dance fails when it
       # tries to retarget a cached source checkout to the new tag.
+      # external_deps.json and the Bazel lock/module-extension files are included
+      # because they can change emitted CMake dependency edges.
       # restore-keys is intentionally absent: a partial-match restore would
       # bring in incompatible state.
       - name: Cache CMake dependencies
         uses: actions/cache@v5
         with:
           path: build/_deps
-          key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'MODULE.bazel') }}
+          key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
 
-      - name: Validate generated CMakeLists.txt
-        run: python3 tools/cmake/gen_cmakelists.py --check
+      - name: Cache compiler outputs
+        uses: actions/cache@v5
+        with:
+          path: .ccache
+          key: ccache-linux-${{ matrix.backend }}-${{ github.sha }}
+          restore-keys: |
+            ccache-linux-${{ matrix.backend }}-
 
       - name: Build with CMake (${{ matrix.backend }})
         run: |
+          ccache --zero-stats
+          ccache --max-size="$CCACHE_MAXSIZE"
           python3 tools/cmake/gen_cmakelists.py
-          cmake -S . -B build -DDONNER_RENDERER_BACKEND=${{ matrix.backend }}
-          cmake --build build -j$(nproc)
+          cmake -S . -B build -G Ninja \
+            -DDONNER_RENDERER_BACKEND=${{ matrix.backend }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel
+          ccache --show-stats
 
   macos:
     runs-on: macos-15
-    needs: gatekeeper
+    needs: [gatekeeper, validate-generator]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 750M
     strategy:
       fail-fast: false
       matrix:
@@ -144,18 +175,38 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install build tools
+        run: |
+          missing=()
+          command -v ccache >/dev/null || missing+=(ccache)
+          command -v ninja >/dev/null || missing+=(ninja)
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            brew install "${missing[@]}"
+          fi
+
       # See linux job above for why restore-keys is absent.
       - name: Cache CMake dependencies
         uses: actions/cache@v5
         with:
           path: build/_deps
-          key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'MODULE.bazel') }}
+          key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
 
-      - name: Validate generated CMakeLists.txt
-        run: python3 tools/cmake/gen_cmakelists.py --check
+      - name: Cache compiler outputs
+        uses: actions/cache@v5
+        with:
+          path: .ccache
+          key: ccache-macos-${{ matrix.backend }}-${{ github.sha }}
+          restore-keys: |
+            ccache-macos-${{ matrix.backend }}-
 
       - name: Build with CMake (${{ matrix.backend }})
         run: |
+          ccache --zero-stats
+          ccache --max-size="$CCACHE_MAXSIZE"
           python3 tools/cmake/gen_cmakelists.py
-          cmake -S . -B build -DDONNER_RENDERER_BACKEND=${{ matrix.backend }}
-          cmake --build build -j$(sysctl -n hw.logicalcpu)
+          cmake -S . -B build -G Ninja \
+            -DDONNER_RENDERER_BACKEND=${{ matrix.backend }} \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build --parallel
+          ccache --show-stats
