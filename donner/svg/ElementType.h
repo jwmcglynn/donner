@@ -11,6 +11,7 @@ namespace donner::svg {
  * \ref xml_rect, etc.
  */
 enum class ElementType : uint8_t {
+  A,                    //!< \ref xml_a
   Circle,               //!< \ref xml_circle
   ClipPath,             //!< \ref xml_clipPath
   Defs,                 //!< \ref xml_defs
@@ -103,6 +104,7 @@ std::ostream& operator<<(std::ostream& os, ElementType type);
 template <typename ReturnType, typename FnT>
 ReturnType ToConstexpr(ElementType type, FnT fn) {
   switch (type) {
+    case ElementType::A: return fn(std::integral_constant<ElementType, ElementType::A>());
     case ElementType::Circle: return fn(std::integral_constant<ElementType, ElementType::Circle>());
     case ElementType::ClipPath:
       return fn(std::integral_constant<ElementType, ElementType::ClipPath>());

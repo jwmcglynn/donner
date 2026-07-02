@@ -293,7 +293,6 @@ content-placement transform.
 
 | Category | Tests | Gap |
 |---|---:|---|
-| structure/a | 3 | `<a>` hyperlink rendering |
 | structure/svg | 2 | nested-svg `overflow` |
 | structure/style | 1 | CSS `@import` / external CSS |
 | structure/symbol | 1 | `transform` on `<symbol>` (SVG2) |

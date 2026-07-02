@@ -12,6 +12,7 @@ namespace donner::svg {
 
 /// @test Ostream output \c operator<< for all \ref ElementType values.
 TEST(ElementTypeTest, OstreamOutput) {
+  EXPECT_THAT(ElementType::A, ToStringIs("A"));
   EXPECT_THAT(ElementType::Circle, ToStringIs("Circle"));
   EXPECT_THAT(ElementType::ClipPath, ToStringIs("ClipPath"));
   EXPECT_THAT(ElementType::Defs, ToStringIs("Defs"));

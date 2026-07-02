@@ -6,6 +6,7 @@ namespace donner::svg {
 
 std::ostream& operator<<(std::ostream& os, ElementType type) {
   switch (type) {
+    case ElementType::A: return os << "A";
     case ElementType::Circle: return os << "Circle";
     case ElementType::ClipPath: return os << "ClipPath";
     case ElementType::Defs: return os << "Defs";

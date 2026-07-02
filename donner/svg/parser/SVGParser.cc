@@ -114,6 +114,35 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGTextElement>(SVGParserContex
 }
 
 /**
+ * Parse text content for \ref xml_a elements.
+ *
+ * `<a>` is a transparent text-content group when nested in text, so its direct text children must
+ * be captured into the text layout (with chunk boundaries around nested elements) exactly like
+ * \ref xml_tspan. Outside of text the captured chunks are inert — the text layout only descends
+ * from a text root — so the same handling is safe for the general-container case.
+ *
+ * @param context The parser context.
+ * @param element The `<a>` element to parse contents for.
+ * @param node The XML node containing the text content.
+ * @return std::nullopt if successful, otherwise a ParseDiagnostic describing the failure.
+ */
+template <>
+std::optional<ParseDiagnostic> ParseNodeContents<SVGAElement>(SVGParserContext& context,
+                                                              SVGAElement element,
+                                                              const XMLNode& node) {
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      if (auto maybeValue = child->value()) {
+        element.appendText(maybeValue.value());
+      }
+    } else if (child->type() == XMLNode::Type::Element) {
+      element.advanceTextChunk();
+    }
+  }
+  return std::nullopt;
+}
+
+/**
  * Parse text content for \ref xml_tspan elements.
  *
  * @param context The parser context.
