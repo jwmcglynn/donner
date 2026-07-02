@@ -175,7 +175,7 @@ jobs:
       # on main are visible to all PR branches.
       - name: Cache bazel-diff base hashes
         if: steps.pr-meta.outputs.base_sha != ''
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
           key: bazel-diff-base-hashes-tt-${{ env.BAZEL_DIFF_TAG }}-${{ steps.pr-meta.outputs.base_sha }}
