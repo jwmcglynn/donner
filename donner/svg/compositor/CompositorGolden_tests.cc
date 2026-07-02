@@ -7,6 +7,8 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
@@ -1214,12 +1216,17 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
   compositor.renderFrame(viewport_);
 
   const auto preDragTiles = compositor.snapshotTilesForUpload();
-  std::unordered_map<uint64_t, uint64_t> preDragGenerations;
+  std::unordered_map<uint64_t, uint64_t> preDragRetainedGenerations;
+  std::unordered_set<uint64_t> preDragImmediateTileIds;
   for (const CompositorTile& tile : preDragTiles) {
     ASSERT_FALSE(tile.bitmap.empty()) << "prewarmed tile " << tile.tileId << " has no pixels";
-    preDragGenerations[tile.tileId] = tile.generation;
+    if (tile.immediate) {
+      preDragImmediateTileIds.insert(tile.tileId);
+      continue;
+    }
+    preDragRetainedGenerations[tile.tileId] = tile.generation;
   }
-  ASSERT_FALSE(preDragGenerations.empty());
+  ASSERT_FALSE(preDragRetainedGenerations.empty());
 
   // Starting an active drag on an already-elevated target changes only presentation geometry: the
   // target's cached pixels are reused through canvasFromBitmap, and unrelated retained
@@ -1241,9 +1248,12 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
     if (tile.immediate) {
       continue;
     }
-    const auto it = preDragGenerations.find(tile.tileId);
-    ASSERT_NE(it, preDragGenerations.end())
-        << "new tile id appeared on drag start: " << tile.tileId;
+    const auto it = preDragRetainedGenerations.find(tile.tileId);
+    if (it == preDragRetainedGenerations.end()) {
+      EXPECT_TRUE(preDragImmediateTileIds.contains(tile.tileId))
+          << "new retained tile id appeared on drag start: " << tile.tileId;
+      continue;
+    }
     EXPECT_EQ(tile.generation, it->second)
         << "tile " << tile.tileId
         << " advanced generation even though drag start changed only presentation geometry";
