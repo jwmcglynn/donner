@@ -12,8 +12,6 @@ class GeodeDevice;
 
 namespace donner::svg {
 
-class RendererImplementation;
-
 /**
  * Backend-agnostic renderer that resolves to the active build backend (Skia or tiny-skia).
  *
@@ -248,7 +246,7 @@ public:
   [[nodiscard]] int height() const override;
 
 private:
-  std::unique_ptr<RendererImplementation> impl_;
+  std::unique_ptr<RendererInterface> impl_;
 };
 
 }  // namespace donner::svg
