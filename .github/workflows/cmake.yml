@@ -134,13 +134,13 @@ jobs:
       # restore-keys is intentionally absent: a partial-match restore would
       # bring in incompatible state.
       - name: Cache CMake dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: build/_deps
           key: cmake-deps-linux-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
 
       - name: Cache compiler outputs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .ccache
           key: ccache-linux-${{ matrix.backend }}-${{ github.sha }}
@@ -186,13 +186,13 @@ jobs:
 
       # See linux job above for why restore-keys is absent.
       - name: Cache CMake dependencies
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: build/_deps
           key: cmake-deps-macos-${{ matrix.backend }}-${{ hashFiles('tools/cmake/gen_cmakelists.py', 'tools/cmake/external_deps.json', 'MODULE.bazel', 'MODULE.bazel.lock', 'third_party/bazel/non_bcr_deps.bzl') }}
 
       - name: Cache compiler outputs
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: .ccache
           key: ccache-macos-${{ matrix.backend }}-${{ github.sha }}
