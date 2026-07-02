@@ -22,18 +22,27 @@ retaining the original dependency graph.
 from __future__ import annotations
 
 import argparse
-import filecmp
-import html
-import subprocess
-import sys
-import re
-import shutil
-import tempfile
-from pathlib import Path
-from typing import DefaultDict, Dict, List, Optional, Set, Tuple
-from dataclasses import dataclass
+import ast
 import json
 import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import (
+    Any,
+    DefaultDict,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Optional,
+    Set,
+    Tuple,
+)
 
 #
 # Bazel helpers
@@ -50,256 +59,124 @@ _unmapped_deps: List[str] = []
 # Global state collected while emitting libraries
 #
 
-# Mapping of known Bazel labels for external/third-party deps → CMake targets.
-# Adjust when an external project changes its exported target name.
-KNOWN_BAZEL_TO_CMAKE_DEPS: Dict[str, str] = {
-    "@com_google_absl//absl/debugging:failure_signal_handler": "absl::failure_signal_handler",
-    "@com_google_absl//absl/debugging:symbolize": "absl::symbolize",
-    "@com_google_gtest//:gtest_main": "gmock_main",
-    "@com_google_gtest//:gtest": "gmock",
-    "@entt//:entt": "EnTT::EnTT",
-    "@entt//src:entt": "EnTT::EnTT",
-    "@nlohmann_json//:json": "nlohmann_json::nlohmann_json",
-    "@rules_cc//cc/runfiles:runfiles": "rules_cc_runfiles",
-    "@stb//:image_write": "stb_image_write",
-    "@stb//:image": "stb_image",
-    "@stb//:truetype": "stb_truetype",
-    "@pixelmatch-cpp17//:pixelmatch-cpp17": "pixelmatch-cpp17",
-    "@zlib//:z": "zlib",
-    "//third_party:zlib": "zlib",
-    "@tiny-skia-cpp//src:tiny_skia_lib": "tiny_skia",
-    "@tiny-skia-cpp//src:tiny_skia_lib_native": "tiny_skia",
-    "@tiny-skia-cpp//src/tiny_skia:tiny_skia_core": "tiny_skia",
-    "@tiny-skia-cpp//src/tiny_skia/filter:filter": "tiny_skia",
-    "@woff2//:woff2_decode": "woff2dec",
-    "@brotli//:brotlidec": "brotlidec",
-    # @re2 is a test-only transitive dep via googletest; not linked separately
-    # in CMake (googletest already handles it via FetchContent).
-}
-
-# Bazel external labels that appear in the dep graph but have no corresponding
-# CMake target (either because they're internal implementation details of a
-# FetchContent'd library, or they're test-only transitive deps). Silently drop
-# these without warning.
-_IGNORED_EXTERNAL_DEPS: Set[str] = {
-    # re2 is pulled in as a test-only dep by googletest; FetchContent handles it.
-    "@re2//:re2",
-    # ImGui and GLFW are used by the SVG viewer (Bazel-only WASM target).
-    "@glfw//:glfw",
-    "@imgui//:imgui",
-    # Tracy is editor-only profiling; the CMake mirror doesn't fetch it and
-    # `donner_editor_tracy_wrapper` is whitelisted as a no-op external target.
-    "@tracy//:tracy_client",
-}
-
-# Packages whose CMake build is provided manually or by FetchContent and must
-# *not* be auto-generated here.
-SKIPPED_PACKAGES = {
-    "",  # root package - handled by generate_root()
-    "third_party",  # perf-sensitive wrappers only; CMake deps resolved via KNOWN_BAZEL_TO_CMAKE_DEPS
-    "donner/benchmarks",  # requires Google Benchmark (Bazel-only)
-    "donner/svg/renderer/benchmarks",  # renderer_bench is Geode-only; its .cc includes webgpu/webgpu.hpp which the CMake mirror doesn't fetch (Bazel-only)
-    "donner/svg/renderer/geode",  # Geode (WebGPU) — Bazel-only, gated behind --enable_geode flag
-    "donner/svg/renderer/wasm",  # Emscripten WASM module (cc_binary uses --no-entry); native link fails without main()
-    "third_party/emdawnwebgpu",  # Dawn's Emscripten WebGPU bindings — WASM-only; `webgpu.cpp` includes <emscripten/emscripten.h>
-    "third_party/webgpu-cpp",  # wgpu-native C++ wrapper — Bazel-only, pulls webgpu.h from http_archive prebuilts
-    "donner/editor",  # Donner Editor — Bazel-only, depends on imgui/glfw/tracy
-    "donner/editor/app",
-    "donner/editor/app/tests",
-    "donner/editor/gui",
-    "donner/editor/repro",
-    "donner/editor/repro/tests",
-    "donner/editor/resources",
-    "donner/editor/sandbox",
-    "donner/editor/sandbox/tests",
-    "donner/editor/tests",
-    "donner/editor/wasm",
-    "third_party/emscripten-glfw",
-    "third_party/stb",
-    "pixelmatch-cpp17",
-}
-
-# Individual targets to skip entirely from CMake generation.
-SKIPPED_TARGETS: Set[str] = {
-    # Freetype linking is handled by EXTRA_LINK_DEPS for text_backend_full;
-    # the bare "freetype" name is not a valid CMake target.
-    "//third_party:freetype",
-    # svg_viewer depends on @imgui (which pulls GLFW), neither of which is
-    # wired into the CMake mirror. Bazel-only, tagged manual.
-    "//examples:svg_viewer",
-    # geode_embed depends on @glfw plus the Bazel-only --config=geode renderer
-    # and is not part of the CMake build.
-    "//examples:geode_embed",
-    "//examples:geode_embed_surface",
-    "//examples:geode_embed_surface_linux",
-}
-
-# Bazel toolchain-internal deps that are not real C++ libraries and should not
-# trigger "unmapped external dep" warnings. These are implicit deps that Bazel
-# adds to cc_test/cc_binary targets but are handled by the CMake toolchain itself.
-_BAZEL_INTERNAL_DEPS: Set[str] = {
-    "@bazel_tools//tools/cpp:link_extra_lib",
-    "@bazel_tools//tools/cpp:malloc",
-    "@rules_cc//:link_extra_lib",
-}
-
-# External deps that are handled via EXTRA_LINK_DEPS / pkg-config in CMake
-# and shouldn't warn as "unmapped". Linking happens through system find_package.
-_DEPS_HANDLED_EXTERNALLY: Set[str] = {
-    "@harfbuzz//:harfbuzz",
-    "@freetype//:freetype",
-}
+_EXTERNAL_DEPS_MANIFEST = Path(__file__).with_name("external_deps.json")
 
 
-# Pattern for identifying abseil-cpp deps in either the canonical
-# (@@abseil-cpp+//) or legacy (@com_google_absl//) form.
-_ABSL_DEP_RE = re.compile(r"^@+(?:abseil-cpp\+?|com_google_absl)//absl/")
+@dataclass(frozen=True)
+class CMakeConfig:
+    """One Bazel configuration sampled by the CMake generator."""
+
+    name: str
+    bazel_args: Tuple[str, ...]
+    text: bool
+    text_full: bool
+    filters: bool
 
 
-def _is_known_bazel_internal(dep: str) -> bool:
-    """Return True if *dep* is a Bazel toolchain-internal label or otherwise
-    handled outside the normal target_link_libraries() path."""
-    if dep in _BAZEL_INTERNAL_DEPS or dep in _DEPS_HANDLED_EXTERNALLY:
-        return True
-    if dep in _IGNORED_EXTERNAL_DEPS:
-        return True
-    # Abseil deps are silently dropped unless they appear in
-    # KNOWN_BAZEL_TO_CMAKE_DEPS. Auto-mapping the rule name to absl::<rulename>
-    # is unreliable: some abseil rules export under a different CMake target
-    # (e.g. //absl/flags:parse → absl::flags_parse, not absl::parse), and
-    # several rules don't export a CMake target at all when absl is built as
-    # a subproject via FetchContent. The downstream cc_library/cc_test
-    # historically pulls absl in transitively or only uses header-only parts,
-    # so dropping these matches the pre-existing CMake build behavior.
-    if _ABSL_DEP_RE.match(dep) and dep not in KNOWN_BAZEL_TO_CMAKE_DEPS:
-        return True
-    return False
+# The matrix covers every valid combination of the public CMake feature
+# booleans (`DONNER_TEXT_FULL` implies `DONNER_TEXT`).  Per-config Bazel attrs
+# are merged into CMake conditions from this truth table.
+CMAKE_CONFIGS: Tuple[CMakeConfig, ...] = (
+    CMakeConfig("default", (), text=True, text_full=False, filters=True),
+    CMakeConfig("no_text", ("--config=no-text",), text=False, text_full=False, filters=True),
+    CMakeConfig("no_filters", ("--config=no-filters",), text=True, text_full=False, filters=False),
+    CMakeConfig("tiny", ("--config=tiny",), text=False, text_full=False, filters=False),
+    CMakeConfig("text_full", ("--config=text-full",), text=True, text_full=True, filters=True),
+    CMakeConfig(
+        "text_full_no_filters",
+        ("--config=text-full", "--config=no-filters"),
+        text=True,
+        text_full=True,
+        filters=False,
+    ),
+)
+
+_CONFIG_BY_NAME = {config.name: config for config in CMAKE_CONFIGS}
+_ALL_CONFIG_NAMES: FrozenSet[str] = frozenset(_CONFIG_BY_NAME)
+
+
+@dataclass(frozen=True)
+class ExternalDepResolution:
+    """How a Bazel external label is represented in generated CMake."""
+
+    kind: str
+    value: Optional[str] = None
+    include_dirs: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ExternalDepManifest:
+    """Parsed external dependency manifest."""
+
+    targets: Dict[str, str]
+    system: Dict[str, Tuple[str, str]]
+    ignored: Set[str]
+    ignored_prefixes: Tuple[Tuple[str, Tuple[str, ...]], ...]
+
+
+_external_dep_manifest_cache: Optional[ExternalDepManifest] = None
+
+
+def _load_external_dep_manifest() -> ExternalDepManifest:
+    """Load the declarative Bazel-label → CMake external dependency manifest."""
+    global _external_dep_manifest_cache
+    if _external_dep_manifest_cache is not None:
+        return _external_dep_manifest_cache
+
+    data = json.loads(_EXTERNAL_DEPS_MANIFEST.read_text())
+    targets: Dict[str, str] = {}
+    system: Dict[str, Tuple[str, str]] = {}
+    ignored: Set[str] = set()
+    ignored_prefixes: List[Tuple[str, Tuple[str, ...]]] = []
+
+    for entry in data.get("targets", []):
+        cmake_target = entry["cmake"]
+        for label in entry.get("labels", []):
+            targets[label] = cmake_target
+
+    for entry in data.get("system", []):
+        libraries = entry["libraries"]
+        include_dirs = entry["include_dirs"]
+        for label in entry.get("labels", []):
+            system[label] = (libraries, include_dirs)
+
+    for entry in data.get("ignore", []):
+        ignored.update(entry.get("labels", []))
+
+    for entry in data.get("ignore_prefixes", []):
+        except_labels = tuple(entry.get("except_labels", []))
+        for prefix in entry.get("prefixes", []):
+            ignored_prefixes.append((prefix, except_labels))
+
+    _external_dep_manifest_cache = ExternalDepManifest(
+        targets=targets,
+        system=system,
+        ignored=ignored,
+        ignored_prefixes=tuple(ignored_prefixes),
+    )
+    return _external_dep_manifest_cache
+
+
+def _resolve_external_dep(dep: str) -> Optional[ExternalDepResolution]:
+    """Resolve an external Bazel dep using tools/cmake/external_deps.json."""
+    manifest = _load_external_dep_manifest()
+    if dep in manifest.targets:
+        return ExternalDepResolution("target", manifest.targets[dep])
+    if dep in manifest.system:
+        libraries, include_dirs = manifest.system[dep]
+        return ExternalDepResolution("system", libraries, include_dirs)
+    if dep in manifest.ignored:
+        return ExternalDepResolution("ignore")
+
+    for prefix, except_labels in manifest.ignored_prefixes:
+        if dep.startswith(prefix) and dep not in except_labels:
+            return ExternalDepResolution("ignore")
+
+    return None
 
 # Helper constants for CMake condition strings.
 _TINY_SKIA = 'DONNER_RENDERER_BACKEND STREQUAL "tiny_skia"'
 _TEXT_FULL = "DONNER_TEXT_FULL"
-
-# Maps CMake target name → CMake condition expression.
-# Targets in this map are wrapped in if(<condition>) … endif().
-CONDITIONAL_TARGETS: Dict[str, str] = {
-    # Geode backend (Bazel-only: depends on wgpu-native prebuilts fetched via
-    # http_archive under //third_party/webgpu-cpp). The renderer_geode library
-    # and its tests are unbuildable in CMake — the webgpu-cpp wrapper isn't
-    # generated by gen_cmakelists.py, and the geode/ subpackage targets it
-    # depends on are in SKIPPED_PACKAGES. Wrap in if(FALSE).
-    "donner_svg_renderer_renderer_geode": "FALSE",
-    "donner_svg_renderer_tests_renderer_geode_tests": "FALSE",
-    "donner_svg_renderer_tests_renderer_geode_tests_impl": "FALSE",
-    "donner_svg_renderer_tests_renderer_geode_golden_tests": "FALSE",
-    "donner_svg_renderer_tests_renderer_geode_golden_tests_impl": "FALSE",
-    # TinySkia backend
-    "donner_svg_renderer_renderer_tiny_skia": _TINY_SKIA,
-    # tiny-skia lib
-    "tiny_skia": _TINY_SKIA,
-    # Filters (tiny-skia filter graph executor)
-    "donner_svg_renderer_filter_graph_executor": f"{_TINY_SKIA} AND DONNER_FILTERS",
-    # Text rendering
-    "donner_svg_resources_font_manager": "DONNER_TEXT",
-    "donner_svg_resources_font_manager_tests": "DONNER_TEXT",
-    # WOFF2
-    "donner_base_fonts_woff2_parser": "DONNER_TEXT_WOFF2",
-    "donner_base_fonts_woff2_parser_tests": "DONNER_TEXT_WOFF2",
-    "woff2dec": "DONNER_TEXT_WOFF2",
-    "stb_truetype": "DONNER_TEXT",
-    # Text full tier (FreeType + HarfBuzz)
-    "donner_svg_text_text_backend_full": _TEXT_FULL,
-    "donner_svg_renderer_tests_text_backend_tests": _TEXT_FULL,
-}
-
-# Deps that may not exist depending on CMake options. When these appear in a
-# target_link_libraries() call for an *unconditional* target they are emitted
-# inside if(TARGET <dep>) guards.
-OPTIONAL_DEPS: Set[str] = {
-    "woff2dec",
-    "stb_truetype",
-    "tiny_skia",
-    "donner_svg_renderer_renderer_tiny_skia",
-    "donner_svg_renderer_renderer_geode",
-    "donner_svg_renderer_filter_graph_executor",
-    "donner_svg_resources_font_manager",
-    "donner_base_fonts_woff2_parser",
-    "donner_svg_renderer_tests_renderer_test_utils",
-    "donner_svg_text_text_backend_full",
-    # wgpu-native C++ wrapper: Bazel-only (pulls webgpu.h from http_archive
-    # prebuilts that the CMake mirror doesn't fetch). References from
-    # non-conditional targets are fine because the link path is only exercised
-    # when the Geode backend is selected, which is itself CMake-excluded.
-    "donner_third_party_webgpu-cpp_webgpu_cpp",
-}
-
-# Bazel-only targets that live in packages intentionally skipped by the CMake
-# generator. These must never be emitted as link dependencies, because the
-# validator treats every target_link_libraries() reference as real even when it
-# sits under an unreachable CMake guard.
-SKIPPED_CMAKE_TARGET_DEPS: Set[str] = {
-    "donner_svg_renderer_geode_geo_encoder",
-    "donner_svg_renderer_geode_geode_counters",
-    # :geode_device now absorbs the former :geode_filter_engine,
-    # :geode_image_pipeline, and :geode_pipeline targets — see the
-    # comment on that Bazel library (issue #575).
-    "donner_svg_renderer_geode_geode_device",
-    "donner_svg_renderer_geode_geode_path_cache_component",
-    "donner_svg_renderer_geode_geode_path_encoder",
-    "donner_svg_renderer_geode_geode_shaders",
-    "donner_svg_renderer_geode_geode_texture_encoder",
-    "donner_svg_renderer_geode_geode_wgpu_util",
-    # `//donner/editor:tracy_wrapper` is depended on by the compositor for
-    # `ZoneScopedN` profiling. In Bazel it resolves to a real Tracy client;
-    # in CMake the editor package is skipped (SKIPPED_PACKAGES), so the
-    # link edge has nowhere to go. Drop the dep entirely — Tracy's headers
-    # compile to no-ops when `TRACY_ENABLE` is undefined (the CMake default),
-    # so the zones on the compositor hot path are silently elided.
-    "donner_editor_tracy_wrapper",
-}
-
-
-def _should_skip_cmake_dep(cmake_dep: Optional[str]) -> bool:
-    """Return True when a mapped CMake dep should be omitted entirely."""
-    return bool(cmake_dep) and cmake_dep in SKIPPED_CMAKE_TARGET_DEPS
-
-# Sources that must be conditionally compiled. Maps cmake target name → dict of
-# source filename → CMake condition. Matched sources are removed from the main
-# add_library() call and added via target_sources() inside if() blocks.
-CONDITIONAL_SOURCES: Dict[str, Dict[str, str]] = {
-    "donner_svg_renderer_renderer": {
-        "RendererTinySkiaBackend.cc": _TINY_SKIA,
-        # Geode is Bazel-only — never compile its backend factory in CMake.
-        "RendererGeodeBackend.cc": "FALSE",
-    },
-    "donner_svg_renderer_tests_renderer_test_backend": {
-        "RendererTestBackendTinySkia.cc": _TINY_SKIA,
-        "RendererTestBackendGeode.cc": "FALSE",
-    },
-}
-
-# Compile definitions gated on CMake options.
-# (cmake_target, condition, [definitions], scope)
-CONDITIONAL_DEFINES: List[Tuple[str, str, List[str], str]] = [
-    ("donner_svg_renderer_renderer_tiny_skia", "DONNER_FILTERS", ["DONNER_FILTERS_ENABLED"], "PUBLIC"),
-    ("donner_svg_renderer_renderer_tiny_skia", "DONNER_TEXT", ["DONNER_TEXT_ENABLED"], "PUBLIC"),
-    ("donner_svg_resources_font_manager", "DONNER_TEXT_WOFF2", ["DONNER_TEXT_WOFF2_ENABLED"], "PUBLIC"),
-    ("donner_svg_resources_font_manager_tests", "DONNER_TEXT_WOFF2", ["DONNER_TEXT_WOFF2_ENABLED"], "PRIVATE"),
-    ("donner_svg_text_text_engine", _TEXT_FULL, ["DONNER_TEXT_FULL"], "PUBLIC"),
-    ("donner_svg_renderer_rendering_context", _TEXT_FULL, ["DONNER_TEXT_FULL"], "PUBLIC"),
-]
-
-# Extra link deps to inject for specific CMake targets.
-# (cmake_target, condition, link_expression)
-EXTRA_LINK_DEPS: List[Tuple[str, str, str]] = [
-    ("donner_svg_text_text_backend_full", _TEXT_FULL,
-     "${FREETYPE_LIBRARIES} ${HARFBUZZ_LIBRARIES}"),
-]
-
-# Extra include dirs to inject for specific CMake targets.
-EXTRA_INCLUDE_DIRS: List[Tuple[str, str, str]] = [
-    ("donner_svg_text_text_backend_full", _TEXT_FULL,
-     "${FREETYPE_INCLUDE_DIRS} ${HARFBUZZ_INCLUDE_DIRS}"),
-]
 
 #
 # MODULE.bazel version extraction
@@ -466,160 +343,411 @@ def _run_bazel(args: List[str]) -> str:
         raise RuntimeError(f"Bazel command failed:\n  {cmd_str}\n{exc.stderr}") from exc
 
 
-def query_targets() -> Dict[str, str]:
-    """Return label->kind mapping for every cc_* and embed_resources target."""
-    query = 'kind(".*cc_.*|embed_resources_generate_header", //donner/... + //examples/... + //third_party/...)'
-    output = _run_bazel(["query", query, "--output=label_kind"])
-
-    if not output:
-        raise RuntimeError("No cc_library, cc_binary, cc_test, or embed_resources targets found.")
-
-    results: Dict[str, str] = {}
-    for line in output.splitlines():
-        if not line.strip():
-            continue
-
-        parts = line.strip().split(" ")
-        if len(parts) >= 3:  # Should have at least kind, 'rule', and label
-            kind = parts[0]
-            label = parts[2]
-
-            # Normalize rule kinds
-            if kind.endswith("cc_library"):
-                kind = "cc_library"
-                if label in results:
-                    continue  # Already covered as an embed_resources target
-            elif kind.endswith("cc_binary"):
-                kind = "cc_binary"
-            elif kind.endswith("cc_test"):
-                kind = "cc_test"
-            elif kind.endswith("embed_resources_generate_header"):
-                label = label.removesuffix("_header_gen")
-                kind = "embed_resources"
-            else:
-                print(f"Skipping unknown target kind: {kind} for label {label}")
-                continue
-
-            results[label] = kind
-    return results
-
-
-def query_labels(attr: str, target: str, *, relative_to: str) -> List[str]:
-    """
-    Return file paths listed in ``labels(attr, target)`` relative to *relative_to*.
-
-    Only paths within the same Bazel package are returned; external labels are ignored.
-    """
-    pkg = target.split(":")[0].removeprefix("//")
-    prefix = f"//{pkg}:"
-    results: List[str] = []
-    for line in _run_bazel(["query", f"labels({attr}, {target})"]).splitlines():
-        line = line.strip()
-        if line.startswith(prefix):
-            label = line[len(prefix) :]
-            results.append(str(Path(pkg, label).relative_to(relative_to)))
-    return results
+_CMAKE_LEAF_TARGET_PATTERNS = (
+    "//:donner",
+    "//donner/base/...",
+    "//donner/css/...",
+    "//donner/svg:all",
+    "//donner/svg/components/...",
+    "//donner/svg/core/...",
+    "//donner/svg/graph/...",
+    "//donner/svg/parser/...",
+    "//donner/svg/properties/...",
+    "//donner/svg/renderer:all",
+    "//donner/svg/renderer/common/...",
+    "//donner/svg/renderer/tests:all",
+    "//donner/svg/resources/...",
+    "//donner/svg/tests:all",
+    "//donner/svg/text/...",
+    "//donner/svg/tool/...",
+    "//examples:custom_css_parser",
+    "//examples:render_test",
+    "//examples:wasm_reproducer",
+)
+_CMAKE_LEAF_TARGET_EXPRESSION = "(" + " + ".join(_CMAKE_LEAF_TARGET_PATTERNS) + ")"
+_CQUERY_TARGET_EXPRESSION = (
+    'kind(".*cc_.*|embed_resources_generate_header", '
+    f"deps({_CMAKE_LEAF_TARGET_EXPRESSION}))"
+)
 
 
 @dataclass
-class CcTargetInfo:
-    hdrs: List[str]
-    srcs: List[str]
-    copts: List[str]
-    includes: List[str]
+class ConfiguredTargetInfo:
+    """Resolved attrs for one target in one Bazel configuration."""
+
+    label: str
+    package: str
+    name: str
+    kind: str
+    attrs: Dict[str, Any]
+    compatible: bool
 
 
-def _xml_attr(tag_attrs: str, name: str) -> Optional[str]:
-    """Return XML attribute *name* from a Bazel query tag attribute string."""
-    match = re.search(rf'\b{re.escape(name)}="([^"]*)"', tag_attrs)
-    if not match:
+@dataclass
+class CMakeTarget:
+    """Merged CMake target data across the sampled Bazel configurations."""
+
+    label: str
+    package: str
+    name: str
+    kind: str
+    configs: Set[str]
+    values: Dict[str, Dict[str, Set[str]]]
+
+
+_cmake_targets_cache: Optional[Dict[str, CMakeTarget]] = None
+
+
+def _normalize_rule_kind(rule_class: str) -> Optional[str]:
+    """Map a Bazel rule class from cquery output to the generator's target kind."""
+    if rule_class.endswith("embed_resources_generate_header"):
+        return "embed_resources"
+    if rule_class.endswith("cc_library"):
+        return "cc_library"
+    if rule_class.endswith("cc_binary"):
+        return "cc_binary"
+    if rule_class.endswith("cc_test"):
+        return "cc_test"
+    return None
+
+
+def _split_build_attrs(body: str) -> Dict[str, Any]:
+    """Parse the small Python-like attr syntax from `bazel cquery --output=build`."""
+    attrs: Dict[str, Any] = {}
+    current_key: Optional[str] = None
+    current_value: List[str] = []
+    bracket_depth = 0
+
+    def finish_attr() -> None:
+        nonlocal current_key, current_value, bracket_depth
+        if current_key is None:
+            return
+        raw_value = "\n".join(current_value).strip()
+        if raw_value.endswith(","):
+            raw_value = raw_value[:-1].rstrip()
+        try:
+            attrs[current_key] = ast.literal_eval(raw_value)
+        except (SyntaxError, ValueError):
+            attrs[current_key] = raw_value.strip('"')
+        current_key = None
+        current_value = []
+        bracket_depth = 0
+
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if current_key is None:
+            if " = " not in stripped:
+                continue
+            key, value = stripped.split(" = ", 1)
+            current_key = key
+            current_value = [value]
+        else:
+            current_value.append(stripped)
+
+        bracket_depth += stripped.count("[") - stripped.count("]")
+        if bracket_depth <= 0 and stripped.endswith(","):
+            finish_attr()
+
+    finish_attr()
+    return attrs
+
+
+def _package_from_build_comment(comment: str, workspace: Path) -> Optional[str]:
+    """Extract a Bazel package path from a cquery `# /path/BUILD.bazel` comment."""
+    location = comment.removeprefix("# ").split(":", 1)[0]
+    path = Path(location)
+    try:
+        rel = path.relative_to(workspace)
+    except ValueError:
         return None
-
-    return html.unescape(match.group(1))
-
-
-def _parse_cc_target_info_xml(xml_out: str, target_label: str) -> CcTargetInfo:
-    """Parse the small Bazel XML subset used by :func:`get_cc_target_info`."""
-    rule_match = re.search(r"<rule(?:\s[^>]*)?>(.*?)</rule>", xml_out, re.DOTALL)
-    if rule_match is None:
-        raise RuntimeError(f"Failed to parse XML for {target_label}")
-
-    pkg = target_label.split(":", 1)[0].removeprefix("//")
-    pkg_prefix = f"//{pkg}:"
-
-    hdrs: List[str] = []
-    srcs: List[str] = []
-    copts: List[str] = []
-    includes: List[str] = []
-
-    def _maybe_add_label(value: str, out: List[str]) -> None:
-        """Convert ``//pkg:sub/dir/file`` → ``sub/dir/file`` and append."""
-        if value.startswith(pkg_prefix):
-            rel = value[len(pkg_prefix):]
-            out.append(str(Path(rel)))
-
-    # We intentionally parse only the direct <list> shape emitted by
-    # ``bazel query --output=xml`` for cc rule attributes. Python's
-    # ElementTree lazily imports pyexpat when parsing; Homebrew Python can pick
-    # up the system libexpat first on macOS, making this check fail before any
-    # Donner code is involved.
-    rule_body = rule_match.group(1)
-    for list_match in re.finditer(r"<list\b([^/>]*)>(.*?)</list>", rule_body, re.DOTALL):
-        name = _xml_attr(list_match.group(1), "name") or ""
-        body = list_match.group(2)
-        if name == "hdrs":
-            for elem in re.finditer(r"<label\b([^>]*)/>", body):
-                value = _xml_attr(elem.group(1), "value")
-                if value is not None:
-                    _maybe_add_label(value, hdrs)
-        elif name == "srcs":
-            for elem in re.finditer(r"<label\b([^>]*)/>", body):
-                value = _xml_attr(elem.group(1), "value")
-                if value is not None:
-                    _maybe_add_label(value, srcs)
-        elif name == "copts":
-            for elem in re.finditer(r"<string\b([^>]*)/>", body):
-                value = _xml_attr(elem.group(1), "value")
-                if value is None:
-                    continue
-                if value.startswith("-I") or value.startswith("-isystem"):
-                    # Skip, these are handled in includes
-                    continue
-
-                copts.append(value)
-        elif name == "includes":
-            for elem in re.finditer(r"<string\b([^>]*)/>", body):
-                value = _xml_attr(elem.group(1), "value")
-                if value is not None:
-                    includes.append(value)
-
-    return CcTargetInfo(hdrs=hdrs, srcs=srcs, copts=copts, includes=includes)
+    if rel.name != "BUILD.bazel":
+        return None
+    return "" if rel.parent == Path(".") else rel.parent.as_posix()
 
 
-def get_cc_target_info(target_label: str) -> CcTargetInfo:
+def _is_compatible(attrs: Dict[str, Any]) -> bool:
+    target_compatible_with = attrs.get("target_compatible_with", [])
+    if not isinstance(target_compatible_with, list):
+        return True
+    return "@platforms//:incompatible" not in target_compatible_with
+
+
+def _parse_cquery_build_output(output: str, workspace: Path) -> List[ConfiguredTargetInfo]:
+    """Parse configured target attrs from `bazel cquery --output=build`."""
+    pattern = re.compile(
+        r"^(# /[^\n]+/BUILD\.bazel:\d+:\d+)\n([A-Za-z0-9_]+)\(\n(.*?)^\)\n",
+        re.MULTILINE | re.DOTALL,
+    )
+    result: List[ConfiguredTargetInfo] = []
+    for match in pattern.finditer(output):
+        package = _package_from_build_comment(match.group(1), workspace)
+        if package is None:
+            continue
+
+        kind = _normalize_rule_kind(match.group(2))
+        if kind is None:
+            continue
+
+        attrs = _split_build_attrs(match.group(3))
+        name = str(attrs.get("name", ""))
+        if not name:
+            continue
+
+        if kind == "embed_resources":
+            name = str(attrs.get("generator_name", name.removesuffix("_header_gen")))
+
+        label = f"//{package}:{name}" if package else f"//:{name}"
+        result.append(
+            ConfiguredTargetInfo(
+                label=label,
+                package=package,
+                name=name,
+                kind=kind,
+                attrs=attrs,
+                compatible=_is_compatible(attrs),
+            )
+        )
+
+    return result
+
+
+def _query_configured_targets(config: CMakeConfig) -> List[ConfiguredTargetInfo]:
+    """Return configured target attrs for one CMake feature config."""
+    args = [
+        "cquery",
+        _CQUERY_TARGET_EXPRESSION,
+        "--output=build",
+        "--//build_defs:disable_backend_test_transition=true",
+        "--//build_defs:disable_perf_opt_transition=true",
+    ]
+    args.extend(config.bazel_args)
+    output = _run_bazel(args)
+    targets = _parse_cquery_build_output(output, Path.cwd())
+    if not targets:
+        raise RuntimeError(f"No C++ targets found for CMake config {config.name}")
+    return targets
+
+
+def _target_value_map() -> Dict[str, Dict[str, Set[str]]]:
+    return {
+        "srcs": {},
+        "hdrs": {},
+        "deps": {},
+        "copts": {},
+        "defines": {},
+        "includes": {},
+        "tags": {},
+    }
+
+
+def _normalize_dep_label(label: str) -> str:
+    if label.startswith("@donner//"):
+        return "//" + label.split("//", 1)[1]
+    return label
+
+
+def _label_to_pkg_relative_path(label: str, pkg: str) -> Optional[str]:
+    prefix = f"//{pkg}:"
+    if label.startswith(prefix):
+        rel = label[len(prefix):]
+        return str(Path(rel))
+    return None
+
+
+def _list_attr(attrs: Dict[str, Any], name: str) -> List[str]:
+    value = attrs.get(name, [])
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return []
+
+
+def _record_values(
+    target: CMakeTarget,
+    attr: str,
+    values: Iterable[str],
+    config_name: str,
+) -> None:
+    dest = target.values[attr]
+    for value in values:
+        dest.setdefault(value, set()).add(config_name)
+
+
+_MANUALLY_HANDLED_CMAKE_PACKAGES = {
+    "",
+    "pixelmatch-cpp17",
+    "third_party",
+    "third_party/stb",
+    "third_party/tiny-skia-cpp",
+}
+
+
+def _is_skipped_package(pkg: str) -> bool:
+    return pkg in _MANUALLY_HANDLED_CMAKE_PACKAGES
+
+
+def _intersect_target_values_with_configs(target: CMakeTarget) -> None:
+    """Drop per-attr config entries that are outside the target's configs."""
+    for value_map in target.values.values():
+        for value, configs in list(value_map.items()):
+            configs &= target.configs
+            if not configs:
+                value_map.pop(value)
+
+
+def _constrain_target_configs_by_dependency_compatibility(
+    targets: Dict[str, CMakeTarget],
+) -> None:
+    """Constrain targets that directly require deps unavailable in some configs.
+
+    Bazel `cquery --output=build` can report an unconditional dep edge even when
+    the referenced target is incompatible in part of the sampled config matrix.
+    Such a target cannot be emitted in CMake for those configs unless its source
+    files are also split by config. Constrain it to the configs where all direct
+    internal deps exist, then propagate that restriction through dependents.
     """
-    Return a CcTargetInfo containing headers, sources, copts, and includes
-    for *target_label* using a single Bazel XML query.
+    changed = True
+    while changed:
+        changed = False
+        for label, target in targets.items():
+            if label == "//:donner" or target.kind == "embed_resources" or not target.configs:
+                continue
 
-    The paths in ``hdrs`` and ``srcs`` are made relative to the package
-    directory to match the expectations of downstream CMake generation.
-    """
-    # Query Bazel once and parse the XML.  This is substantially faster than
-    # issuing separate ``labels()`` queries for each attribute.
-    xml_out = _run_bazel(["query", target_label, "--output=xml"])
-    return _parse_cc_target_info_xml(xml_out, target_label)
+            allowed_configs = set(target.configs)
+            for dep, dep_configs in target.values["deps"].items():
+                dep_target = targets.get(dep)
+                if dep_target is None:
+                    continue
+
+                relevant_dep_configs = set(dep_configs) & target.configs
+                missing_configs = relevant_dep_configs - dep_target.configs
+                if missing_configs:
+                    allowed_configs -= missing_configs
+
+            if allowed_configs != target.configs:
+                print(
+                    f"Constraining target {label}: direct deps are unavailable in "
+                    f"{sorted(target.configs - allowed_configs)}"
+                )
+                target.configs = allowed_configs
+                _intersect_target_values_with_configs(target)
+                changed = True
 
 
-def query_deps(target_label: str) -> List[str]:
-    """Return cc_library deps, excluding *target_label* itself."""
-    deps = _run_bazel(
-        [
-            "query",
-            f'kind("cc_library", deps({target_label}, 2) - {target_label})',
-        ]
-    ).splitlines()
+def _aggregate_configured_targets() -> Dict[str, CMakeTarget]:
+    """Merge configured Bazel attrs into CMake target metadata."""
+    targets: Dict[str, CMakeTarget] = {}
 
-    return deps
+    for config in CMAKE_CONFIGS:
+        print(f"Querying configured Bazel graph for CMake config: {config.name}")
+        for info in _query_configured_targets(config):
+            if info.label != "//:donner" and _is_skipped_package(info.package):
+                continue
+            if not info.compatible:
+                continue
+
+            existing = targets.get(info.label)
+            if existing is not None and existing.kind == "embed_resources" and info.kind != "embed_resources":
+                continue
+            if existing is not None and info.kind == "embed_resources" and existing.kind != "embed_resources":
+                existing = None
+
+            if existing is None:
+                existing = CMakeTarget(
+                    label=info.label,
+                    package=info.package,
+                    name=info.name,
+                    kind=info.kind,
+                    configs=set(),
+                    values=_target_value_map(),
+                )
+                targets[info.label] = existing
+
+            existing.configs.add(config.name)
+            if info.kind == "embed_resources":
+                continue
+
+            srcs = [
+                rel
+                for label in _list_attr(info.attrs, "srcs")
+                if (rel := _label_to_pkg_relative_path(label, info.package)) is not None
+            ]
+            hdrs = [
+                rel
+                for label in _list_attr(info.attrs, "hdrs")
+                if (rel := _label_to_pkg_relative_path(label, info.package)) is not None
+            ]
+            copts = [
+                opt
+                for opt in _list_attr(info.attrs, "copts")
+                if not opt.startswith("-I") and not opt.startswith("-isystem")
+            ]
+
+            _record_values(existing, "srcs", srcs, config.name)
+            _record_values(existing, "hdrs", hdrs, config.name)
+            _record_values(existing, "deps", map(_normalize_dep_label, _list_attr(info.attrs, "deps")), config.name)
+            _record_values(existing, "copts", copts, config.name)
+            _record_values(existing, "defines", _list_attr(info.attrs, "defines"), config.name)
+            _record_values(existing, "includes", _list_attr(info.attrs, "includes"), config.name)
+            _record_values(existing, "tags", _list_attr(info.attrs, "tags"), config.name)
+
+    # Drop targets that only exist to reach unsupported CMake packages.
+    changed = True
+    while changed:
+        changed = False
+        for label, target in list(targets.items()):
+            if label == "//:donner" or target.kind == "embed_resources":
+                continue
+            unsupported = False
+            for dep in target.values["deps"]:
+                if dep.startswith("//"):
+                    dep_pkg = dep.removeprefix("//").split(":", 1)[0]
+                    if _is_skipped_package(dep_pkg) or dep not in targets:
+                        if _resolve_external_dep(dep) is None:
+                            unsupported = True
+                            break
+            if unsupported:
+                print(f"Skipping target {label}: depends on unsupported CMake package")
+                targets.pop(label)
+                changed = True
+
+    _constrain_target_configs_by_dependency_compatibility(targets)
+
+    for label, target in list(targets.items()):
+        if label != "//:donner" and target.kind != "embed_resources" and not target.configs:
+            print(f"Skipping target {label}: no supported CMake configs remain")
+            targets.pop(label)
+
+    changed = True
+    while changed:
+        changed = False
+        for label, target in list(targets.items()):
+            if label == "//:donner" or target.kind == "embed_resources":
+                continue
+            unsupported = False
+            for dep in target.values["deps"]:
+                if dep.startswith("//"):
+                    dep_pkg = dep.removeprefix("//").split(":", 1)[0]
+                    if _is_skipped_package(dep_pkg) or dep not in targets:
+                        if _resolve_external_dep(dep) is None:
+                            unsupported = True
+                            break
+            if unsupported:
+                print(f"Skipping target {label}: depends on unsupported CMake package")
+                targets.pop(label)
+                changed = True
+
+    return targets
+
+
+def get_cmake_targets() -> Dict[str, CMakeTarget]:
+    """Return all CMake-supported Bazel C++ targets, merged across configs."""
+    global _cmake_targets_cache
+    if _cmake_targets_cache is None:
+        _cmake_targets_cache = _aggregate_configured_targets()
+    return _cmake_targets_cache
 
 
 def cmake_target_name(pkg: str, lib: str) -> str:
@@ -639,6 +767,188 @@ def cmake_target_name(pkg: str, lib: str) -> str:
 
     base = f"donner_{pkg_rel}"
     return f"{base}_{lib}"
+
+
+_CONDITION_VARIABLES: Tuple[Tuple[str, str], ...] = (
+    ("DONNER_TEXT", "text"),
+    ("DONNER_TEXT_FULL", "text_full"),
+    ("DONNER_FILTERS", "filters"),
+)
+
+
+def _config_matches_term(config: CMakeConfig, term: Tuple[Optional[bool], ...]) -> bool:
+    for index, (_, attr_name) in enumerate(_CONDITION_VARIABLES):
+        expected = term[index]
+        if expected is None:
+            continue
+        if getattr(config, attr_name) != expected:
+            return False
+    return True
+
+
+def _term_to_condition(term: Tuple[Optional[bool], ...]) -> str:
+    parts: List[str] = []
+    for index, (cmake_name, _) in enumerate(_CONDITION_VARIABLES):
+        expected = term[index]
+        if expected is None:
+            continue
+        parts.append(cmake_name if expected else f"NOT {cmake_name}")
+    if not parts:
+        return "TRUE"
+    if len(parts) == 1:
+        return parts[0]
+    return " AND ".join(f"({part})" if part.startswith("NOT ") else part for part in parts)
+
+
+def _condition_for_config_names(config_names: Iterable[str]) -> Optional[str]:
+    """Return a compact CMake condition for a set of sampled config names.
+
+    ``None`` means the item is present in every supported config and does not
+    need a guard. ``FALSE`` means the item should never be emitted.
+    """
+    requested = frozenset(config_names)
+    if requested == _ALL_CONFIG_NAMES:
+        return None
+    if not requested:
+        return "FALSE"
+
+    candidates: List[Tuple[Tuple[Optional[bool], ...], FrozenSet[str]]] = []
+    for text in (None, False, True):
+        for text_full in (None, False, True):
+            for filters in (None, False, True):
+                term = (text, text_full, filters)
+                covered = frozenset(
+                    config.name
+                    for config in CMAKE_CONFIGS
+                    if _config_matches_term(config, term)
+                )
+                if covered and covered.issubset(requested):
+                    candidates.append((term, covered))
+
+    candidates.sort(key=lambda item: (sum(value is not None for value in item[0]), _term_to_condition(item[0])))
+
+    best: Optional[Tuple[int, int, int, Tuple[str, ...]]] = None
+
+    def search(index: int, covered: FrozenSet[str], terms: Tuple[Tuple[Optional[bool], ...], ...]) -> None:
+        nonlocal best
+        if covered == requested:
+            rendered = tuple(_term_to_condition(term) for term in terms)
+            score = (
+                len(terms),
+                sum(sum(value is not None for value in term) for term in terms),
+                len(" OR ".join(rendered)),
+            )
+            if best is None or score < best[:3]:
+                best = (*score, rendered)
+            return
+        if index >= len(candidates):
+            return
+        if best is not None and len(terms) >= best[0]:
+            return
+
+        for next_index in range(index, len(candidates)):
+            term, term_configs = candidates[next_index]
+            if term_configs.issubset(covered):
+                continue
+            search(next_index + 1, frozenset(covered | term_configs), terms + (term,))
+
+    search(0, frozenset(), tuple())
+    if best is None:
+        return " OR ".join(
+            f"({_term_to_condition((config.text, config.text_full, config.filters))})"
+            for config in CMAKE_CONFIGS
+            if config.name in requested
+        )
+
+    rendered_terms = best[3]
+    if len(rendered_terms) == 1:
+        return rendered_terms[0]
+    return " OR ".join(f"({term})" for term in rendered_terms)
+
+
+_WOFF2_CMAKE_TARGETS = {
+    "donner_base_fonts_woff2_parser",
+    "donner_base_fonts_woff2_parser_tests",
+    "woff2dec",
+}
+
+
+def _condition_for_target(target: CMakeTarget) -> Optional[str]:
+    """Return the CMake condition guarding a target declaration."""
+    cmake_name = cmake_target_name(target.package, target.name)
+    if cmake_name in _WOFF2_CMAKE_TARGETS:
+        return "DONNER_TEXT_WOFF2"
+    return _condition_for_config_names(target.configs)
+
+
+def _condition_for_item(
+    target: CMakeTarget,
+    item: str,
+    item_configs: Set[str],
+) -> Optional[str]:
+    """Return a CMake guard for a source, define, or dep on ``target``."""
+    if item == "DONNER_TEXT_WOFF2_ENABLED" or item in _WOFF2_CMAKE_TARGETS:
+        return "DONNER_TEXT_WOFF2"
+    if item_configs == target.configs:
+        return None
+    return _condition_for_config_names(item_configs)
+
+
+def _targets_by_cmake_name(targets: Dict[str, CMakeTarget]) -> Dict[str, CMakeTarget]:
+    """Return CMake target name -> merged Bazel target metadata."""
+    return {
+        cmake_target_name(target.package, target.name): target
+        for label, target in targets.items()
+        if label != "//:donner"
+    }
+
+
+def _condition_for_dep(
+    target: CMakeTarget,
+    dep_name: str,
+    dep_configs: Set[str],
+    targets_by_cmake_name: Dict[str, CMakeTarget],
+) -> Optional[str]:
+    """Return the CMake guard for linking ``target`` to ``dep_name``.
+
+    Direct Bazel deps may still appear in configured attrs even when the dep
+    target is incompatible in that config. Intersect the edge's configs with
+    the referenced target's configs so CMake does not emit an unconditional
+    link to a target that is declared behind an option guard.
+    """
+    effective_configs = set(dep_configs)
+    dep_target = targets_by_cmake_name.get(dep_name)
+    dep_condition: Optional[str] = None
+    if dep_target is not None:
+        effective_configs &= dep_target.configs
+        if not effective_configs:
+            return "FALSE"
+        dep_condition = _condition_for_target(dep_target)
+
+    edge_condition = _condition_for_item(target, dep_name, effective_configs)
+    if dep_condition is None or edge_condition == dep_condition:
+        return edge_condition
+    if edge_condition is None:
+        return dep_condition
+    if edge_condition == "FALSE" or dep_condition == "FALSE":
+        return "FALSE"
+    return f"({edge_condition}) AND ({dep_condition})"
+
+
+def _values_for_target(
+    target: CMakeTarget,
+    attr: str,
+) -> Tuple[List[str], List[Tuple[str, str]]]:
+    """Split target attr values into unconditional and conditional lists."""
+    fixed: List[str] = []
+    conditional: List[Tuple[str, str]] = []
+    for value, configs in sorted(target.values[attr].items()):
+        condition = _condition_for_item(target, value, configs)
+        if condition is None:
+            fixed.append(value)
+        elif condition != "FALSE":
+            conditional.append((value, condition))
+    return fixed, conditional
 
 
 #
@@ -794,8 +1104,7 @@ def generate_root() -> None:
             "CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
         )
 
-        # ── stb_truetype (only when text is enabled) ───────────────────
-        f.write("if(DONNER_TEXT)\n")
+        # ── stb_truetype (locally vendored) ────────────────────────────
         f.write(
             "add_library(stb_truetype third_party/stb/stb_truetype_impl.cc "
             "third_party/stb/stb_truetype.h)\n"
@@ -808,7 +1117,6 @@ def generate_root() -> None:
             "set_target_properties(stb_truetype PROPERTIES CXX_STANDARD 20 "
             "CXX_STANDARD_REQUIRED YES POSITION_INDEPENDENT_CODE YES)\n"
         )
-        f.write("endif()\n")
 
         # ── tiny-skia-cpp (needed when backend=tiny_skia OR filters are on) ──
         f.write(f"if({_TINY_SKIA} OR DONNER_FILTERS)\n")
@@ -898,13 +1206,17 @@ def generate_root() -> None:
         # the root CMakeLists.txt in sync with the Bazel graph instead of
         # relying on a hand‑maintained list.
         discovered_pkgs = {
-            label.removeprefix("//").split(":", 1)[0]
-            for label in query_targets().keys()
+            target.package
+            for label, target in get_cmake_targets().items()
+            if label != "//:donner" and target.kind != "embed_resources"
+        } | {
+            target.package
+            for label, target in get_cmake_targets().items()
+            if label != "//:donner" and target.kind == "embed_resources"
         }
 
         # Skip third‑party packages that are handled manually elsewhere.
-        discovered_pkgs -= SKIPPED_PACKAGES
-
+        discovered_pkgs = {pkg for pkg in discovered_pkgs if not _is_skipped_package(pkg)}
 
         for pkg in sorted(discovered_pkgs):
             f.write(f"add_subdirectory({pkg})\n")
@@ -966,17 +1278,110 @@ def _emit_embed_resources(f, pkg: str, info: EmbedInfo) -> None:
 # Step 2: Generate per-package CMakeLists.txt
 #
 
+def _scope_for_target(kind: str, has_concrete_sources: bool) -> str:
+    if kind in {"cc_binary", "cc_test"}:
+        return "PRIVATE"
+    return "PUBLIC" if has_concrete_sources else "INTERFACE"
+
+
+def _compile_option_scope(kind: str, has_concrete_sources: bool) -> str:
+    if kind in {"cc_binary", "cc_test"}:
+        return "PRIVATE"
+    return "PRIVATE" if has_concrete_sources else "INTERFACE"
+
+
+def _include_scope(kind: str, has_concrete_sources: bool) -> str:
+    if kind in {"cc_binary", "cc_test"}:
+        return "PRIVATE"
+    return "PUBLIC" if has_concrete_sources else "INTERFACE"
+
+
+def _resolve_cmake_dep(dep: str) -> Optional[ExternalDepResolution]:
+    """Map a Bazel dep label to a CMake target/system/ignore resolution."""
+    external = _resolve_external_dep(dep)
+    if external is not None:
+        return external
+
+    if dep.startswith("//"):
+        pkg, name = dep.removeprefix("//").split(":", 1)
+        return ExternalDepResolution("target", cmake_target_name(pkg, name))
+
+    msg = f"Unmapped external dep: {dep}"
+    if msg not in _unmapped_deps:
+        _unmapped_deps.append(msg)
+        print(f"WARNING: {msg}")
+    return None
+
+
+def _write_guarded_line(f, condition: Optional[str], line: str) -> None:
+    if condition is None:
+        f.write(line)
+    else:
+        f.write(f"if({condition})\n")
+        f.write(f"  {line}")
+        f.write("endif()\n")
+
+
+def _emit_links_and_system_includes(
+    f,
+    target: CMakeTarget,
+    cmake_name: str,
+    scope: str,
+    targets_by_cmake_name: Dict[str, CMakeTarget],
+) -> None:
+    """Emit target_link_libraries and pkg-config include dirs for a target."""
+    linked_targets: Dict[Tuple[str, Optional[str]], None] = {}
+    system_includes: Dict[Tuple[str, Optional[str]], None] = {}
+
+    for dep, configs in sorted(target.values["deps"].items()):
+        resolution = _resolve_cmake_dep(dep)
+        if resolution is None or resolution.kind == "ignore":
+            continue
+
+        condition = _condition_for_dep(
+            target,
+            resolution.value or dep,
+            configs,
+            targets_by_cmake_name,
+        )
+        if condition == "FALSE":
+            continue
+        if resolution.kind == "target":
+            if resolution.value == cmake_name:
+                continue
+            linked_targets[(resolution.value or "", condition)] = None
+        elif resolution.kind == "system":
+            linked_targets[(resolution.value or "", condition)] = None
+            if resolution.include_dirs:
+                system_includes[(resolution.include_dirs, condition)] = None
+
+    for dep, condition in linked_targets:
+        _write_guarded_line(
+            f,
+            condition,
+            f"target_link_libraries({cmake_name} {scope} {dep})\n",
+        )
+
+    for include_dirs, condition in system_includes:
+        _write_guarded_line(
+            f,
+            condition,
+            f"target_include_directories({cmake_name} PUBLIC {include_dirs})\n",
+        )
+
 
 def generate_all_packages() -> None:
     """Emit a CMakeLists.txt for every internal package discovered with Bazel."""
 
-    print("Discovering cc_library, cc_binary, and cc_test targets...")
-    by_pkg: DefaultDict[str, List[Tuple[str, str]]] = DefaultDict(list)
-    for label, kind in query_targets().items():
-        pkg, tgt = label.removeprefix("//").split(":", 1)
-        if pkg in SKIPPED_PACKAGES:
+    print("Discovering configured cc_library, cc_binary, and cc_test targets...")
+    targets = get_cmake_targets()
+    targets_by_cmake_name = _targets_by_cmake_name(targets)
+    by_pkg: DefaultDict[str, List[CMakeTarget]] = DefaultDict(list)
+    for label, target in targets.items():
+        if label == "//:donner" or _is_skipped_package(target.package):
             continue
-        by_pkg[pkg].append((kind, tgt))
+        if target.configs:
+            by_pkg[target.package].append(target)
 
     # Per-package generation
     for pkg, entries in by_pkg.items():
@@ -988,17 +1393,15 @@ def generate_all_packages() -> None:
             f.write("##\n\n")
             f.write("cmake_minimum_required(VERSION 3.20)\n\n")
 
-            for kind, tgt in sorted(entries):
-                bazel_label = f"//{pkg}:{tgt}"
+            for target in sorted(entries, key=lambda t: (t.kind, t.name)):
+                bazel_label = target.label
+                kind = target.kind
+                tgt = target.name
                 cmake_name = cmake_target_name(pkg, tgt)
 
                 if "_fuzzer" in tgt:
                     # Skip fuzzers, they are not built with CMake
                     print(f"Skipping fuzzer {bazel_label}")
-                    continue
-
-                if bazel_label in SKIPPED_TARGETS:
-                    print(f"Skipping target {bazel_label}")
                     continue
 
                 if kind == "embed_resources":
@@ -1012,28 +1415,16 @@ def generate_all_packages() -> None:
                     _emit_embed_resources(f, pkg, embed_info)
                     continue
 
-                target_info = get_cc_target_info(bazel_label)
+                hdrs = sorted(target.values["hdrs"])
+                srcs, extracted_cond_srcs = _values_for_target(target, "srcs")
+                copts, cond_copts = _values_for_target(target, "copts")
+                includes, cond_includes = _values_for_target(target, "includes")
+                defines, cond_defines = _values_for_target(target, "defines")
 
-                hdrs = target_info.hdrs
-                srcs = target_info.srcs
-                copts = target_info.copts
-                includes = target_info.includes
-
-                # Check for conditional sources
-                cond_srcs: Dict[str, str] = CONDITIONAL_SOURCES.get(cmake_name, {})
-                extracted_cond_srcs: List[Tuple[str, str]] = []  # (filename, condition)
-                if cond_srcs:
-                    new_srcs = []
-                    for s in srcs:
-                        basename = Path(s).name
-                        if basename in cond_srcs:
-                            extracted_cond_srcs.append((s, cond_srcs[basename]))
-                        else:
-                            new_srcs.append(s)
-                    srcs = new_srcs
-
-                # Check if this target is conditional
-                condition = CONDITIONAL_TARGETS.get(cmake_name)
+                condition = _condition_for_target(target)
+                if condition == "FALSE":
+                    print(f"Skipping target {bazel_label}: unsupported in CMake configs")
+                    continue
                 if condition:
                     f.write(f"if({condition})\n")
 
@@ -1044,22 +1435,13 @@ def generate_all_packages() -> None:
                     + (f" [conditional: {condition}]" if condition else ""),
                 )
 
-                scope = (
-                    "PRIVATE"
-                    if kind in {"cc_binary", "cc_test"}
-                    else (
-                        "LINK_PUBLIC" if srcs
-                        else "INTERFACE"  # Header-only libraries
-                    )
-                )
-
-
                 # If a target has conditional sources but no fixed sources, it
                 # must be created as a concrete (STATIC) library rather than
                 # INTERFACE, so that target_sources(PRIVATE ...) works.
                 has_concrete_sources = bool(srcs) or bool(extracted_cond_srcs)
-                if not srcs and extracted_cond_srcs:
-                    scope = "LINK_PUBLIC"
+                scope = _scope_for_target(kind, has_concrete_sources)
+                option_scope = _compile_option_scope(kind, has_concrete_sources)
+                include_scope = _include_scope(kind, has_concrete_sources)
 
                 # Target declaration
                 if kind == "cc_library":
@@ -1080,19 +1462,27 @@ def generate_all_packages() -> None:
                         write_library(f, cmake_name, srcs, hdrs)
                     if copts:
                         f.write(
-                            f"target_compile_options({cmake_name} {scope} {' '.join(copts)})\n"
+                            f"target_compile_options({cmake_name} {option_scope} {' '.join(copts)})\n"
+                        )
+                    for copt, copt_condition in cond_copts:
+                        _write_guarded_line(
+                            f,
+                            copt_condition,
+                            f"target_compile_options({cmake_name} {option_scope} {copt})\n",
                         )
                     if includes:
-                        include_scope = (
-                            "PUBLIC" if srcs
-                            else "INTERFACE"
-                        )
-
                         for inc in includes:
                             f.write(
                                 f"target_include_directories({cmake_name} {include_scope} "
                                 f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n'
                             )
+                    for inc, inc_condition in cond_includes:
+                        _write_guarded_line(
+                            f,
+                            inc_condition,
+                            f"target_include_directories({cmake_name} {include_scope} "
+                            f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n',
+                        )
                 else:  # cc_binary or cc_test
                     f.write(f"add_executable({cmake_name}\n")
                     for p in srcs + hdrs:
@@ -1115,6 +1505,12 @@ def generate_all_packages() -> None:
                     f.write(
                         f"target_compile_options({cmake_name} {scope} {' '.join(all_copts)})\n"
                     )
+                    for copt, copt_condition in cond_copts:
+                        _write_guarded_line(
+                            f,
+                            copt_condition,
+                            f"target_compile_options({cmake_name} {scope} {copt})\n",
+                        )
                     if kind == "cc_test":
                         f.write(f"add_test(NAME {cmake_name} COMMAND {cmake_name})\n")
                         f.write(
@@ -1127,6 +1523,13 @@ def generate_all_packages() -> None:
                                 f"target_include_directories({cmake_name} {scope} "
                                 f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n'
                             )
+                    for inc, inc_condition in cond_includes:
+                        _write_guarded_line(
+                            f,
+                            inc_condition,
+                            f"target_include_directories({cmake_name} {scope} "
+                            f'"${{PROJECT_SOURCE_DIR}}/{pkg}/{inc}")\n',
+                        )
 
                 # Emit conditional sources via target_sources()
                 for cond_src, cond in extracted_cond_srcs:
@@ -1134,100 +1537,26 @@ def generate_all_packages() -> None:
                     f.write(f"  target_sources({cmake_name} PRIVATE {cond_src})\n")
                     f.write("endif()\n")
 
-                # Link dependencies — split into unconditional and optional
-                #
-                # Backend-specific deps are stripped from most targets because
-                # the `renderer` target pulls in the correct backend
-                # conditionally.  For tiny-skia-only targets we keep tiny-skia
-                # deps.
-                _TINY_SKIA_DEPS = {
-                    "donner_svg_renderer_renderer_tiny_skia",
-                    "donner_svg_renderer_filter_graph_executor",
-                    "donner_svg_renderer_software_renderer_deps",
-                    "donner_svg_renderer_tiny_skia_filter_deps",
-                    "tiny_skia",
-                }
-                _ALL_BACKEND_DEPS = _TINY_SKIA_DEPS
-                all_deps: List[str] = []
-                for dep in query_deps(bazel_label):
-                    if dep in SKIPPED_TARGETS:
-                        continue
-                    # KNOWN_BAZEL_TO_CMAKE_DEPS wins first so explicit
-                    # mappings override the silently-dropped internal/abseil
-                    # categories below.
-                    mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
-                    if mapped:
-                        if mapped != cmake_name:
-                            all_deps.append(mapped)
-                        continue
-                    if _is_known_bazel_internal(dep):
-                        continue
-                    if dep.startswith("//"):
-                        p, n = dep.removeprefix("//").split(":", 1)
-                        mapped = cmake_target_name(p, n)
-                    else:
-                        msg = f"Unmapped external dep: {dep} (needed by {bazel_label})"
-                        if msg not in _unmapped_deps:
-                            _unmapped_deps.append(msg)
-                            print(f"WARNING: {msg}")
-                    if _should_skip_cmake_dep(mapped):
-                        continue
-                    if mapped and mapped != cmake_name:
-                        all_deps.append(mapped)
-
-                # Deduplicate preserving order
-                all_deps = list(dict.fromkeys(all_deps))
-
-                # Split deps into unconditional and optional. Optional deps
-                # get if() guards using the condition from CONDITIONAL_TARGETS
-                # (preferred over if(TARGET) to avoid ordering issues).
-                fixed_deps = [d for d in all_deps if d not in OPTIONAL_DEPS]
-                opt_deps = [d for d in all_deps if d in OPTIONAL_DEPS]
-
-                if fixed_deps:
-                    deps_list = " ".join(fixed_deps)
+                define_scope = scope if kind in {"cc_binary", "cc_test"} else include_scope
+                if defines:
                     f.write(
-                        f"target_link_libraries({cmake_name} {scope} {deps_list})\n"
+                        f"target_compile_definitions({cmake_name} {define_scope} "
+                        f"{' '.join(defines)})\n"
                     )
-                for opt_dep in opt_deps:
-                    dep_cond = CONDITIONAL_TARGETS.get(opt_dep)
-                    if dep_cond:
-                        f.write(f"if({dep_cond})\n")
-                    else:
-                        f.write(f"if(TARGET {opt_dep})\n")
-                    f.write(
-                        f"  target_link_libraries({cmake_name} {scope} {opt_dep})\n"
-                    )
-                    f.write("endif()\n")
-
-                # Emit conditional compile definitions
-                for def_target, def_cond, defines, def_scope in CONDITIONAL_DEFINES:
-                    if def_target == cmake_name:
-                        f.write(f"if({def_cond})\n")
-                        for d in defines:
-                            f.write(
-                                f"  target_compile_definitions({cmake_name} {def_scope} {d})\n"
-                            )
-                        f.write("endif()\n")
-
-                # Hand-written tweaks
-                if cmake_name == "donner_svg_renderer_software_renderer_deps":
-                    f.write(
-                        f"target_link_libraries(donner_svg_renderer_software_renderer_deps {scope} tiny_skia)\n"
-                    )
-                if cmake_name == "donner_svg_renderer_tiny_skia_filter_deps":
-                    f.write(
-                        f"target_link_libraries(donner_svg_renderer_tiny_skia_filter_deps {scope} tiny_skia)\n"
+                for define, define_condition in cond_defines:
+                    _write_guarded_line(
+                        f,
+                        define_condition,
+                        f"target_compile_definitions({cmake_name} {define_scope} {define})\n",
                     )
 
-                # Extra link deps (e.g. system FreeType/HarfBuzz for text_backend_full)
-                for extra_target, extra_cond, extra_libs in EXTRA_LINK_DEPS:
-                    if extra_target == cmake_name:
-                        f.write(f"target_link_libraries({cmake_name} PUBLIC {extra_libs})\n")
-
-                for extra_target, extra_cond, extra_dirs in EXTRA_INCLUDE_DIRS:
-                    if extra_target == cmake_name:
-                        f.write(f"target_include_directories({cmake_name} PUBLIC {extra_dirs})\n")
+                _emit_links_and_system_includes(
+                    f,
+                    target,
+                    cmake_name,
+                    scope,
+                    targets_by_cmake_name,
+                )
 
                 # Close conditional block
                 if condition:
@@ -1239,24 +1568,26 @@ def generate_all_packages() -> None:
         f.write("\n# Umbrella library for external consumers\n")
         f.write("if(NOT TARGET donner)\n")
         f.write("  add_library(donner INTERFACE)\n")
-        for dep in query_deps("//:donner"):
-            mapped = KNOWN_BAZEL_TO_CMAKE_DEPS.get(dep)
-            if not mapped:
-                if _is_known_bazel_internal(dep):
+        root_target = targets.get("//:donner")
+        if root_target is not None:
+            for dep, configs in sorted(root_target.values["deps"].items()):
+                resolution = _resolve_cmake_dep(dep)
+                if resolution is None or resolution.kind != "target" or resolution.value == "donner":
                     continue
-                if dep.startswith("//"):
-                    mapped = cmake_target_name(*dep.removeprefix("//").split(":", 1))
-            if _should_skip_cmake_dep(mapped):
-                continue
-            if mapped and mapped != "donner":
-                if mapped in OPTIONAL_DEPS:
-                    dep_cond = CONDITIONAL_TARGETS.get(mapped)
-                    guard = dep_cond if dep_cond else f"TARGET {mapped}"
-                    f.write(f"  if({guard})\n")
-                    f.write(f"    target_link_libraries(donner INTERFACE {mapped})\n")
-                    f.write(f"  endif()\n")
+                condition = _condition_for_dep(
+                    root_target,
+                    resolution.value or dep,
+                    configs,
+                    targets_by_cmake_name,
+                )
+                if condition == "FALSE":
+                    continue
+                if condition is None:
+                    f.write(f"  target_link_libraries(donner INTERFACE {resolution.value})\n")
                 else:
-                    f.write(f"  target_link_libraries(donner INTERFACE {mapped})\n")
+                    f.write(f"  if({condition})\n")
+                    f.write(f"    target_link_libraries(donner INTERFACE {resolution.value})\n")
+                    f.write("  endif()\n")
         f.write("endif()\n")
 
 #
@@ -1290,13 +1621,6 @@ _KNOWN_EXTERNAL_TARGETS: Set[str] = {
     # System libraries
     "${FREETYPE_LIBRARIES}", "${HARFBUZZ_LIBRARIES}",
     "${FONTCONFIG_LIBRARIES}",
-    # wgpu-native C++ wrapper. The package is Bazel-only (prebuilt archives
-    # via http_archive that the CMake mirror doesn't fetch). References from
-    # Geode-backend targets are wrapped in `if(TARGET ...)` via OPTIONAL_DEPS,
-    # and the only callers that actually activate the Geode path are CMake-
-    # excluded via CONDITIONAL_TARGETS. So at runtime this name never
-    # resolves, but that's fine — no one links through to it.
-    "donner_third_party_webgpu-cpp_webgpu_cpp",
     # Fallback umbrella
     "donner",
 }
@@ -1610,8 +1934,8 @@ def main() -> None:
             for msg in _unmapped_deps:
                 print(f"  {msg}")
             print(
-                "\nAdd these to KNOWN_BAZEL_TO_CMAKE_DEPS or _IGNORED_EXTERNAL_DEPS "
-                "in tools/cmake/gen_cmakelists.py"
+                "\nAdd these to tools/cmake/external_deps.json as a target, "
+                "system dependency, or ignored dependency with a reason."
             )
 
         if had_errors:

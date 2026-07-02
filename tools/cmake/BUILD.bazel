@@ -4,6 +4,7 @@ py_library(
     name = "gen_cmakelists_lib",
     srcs = ["gen_cmakelists.py"],
     data = [
+        "external_deps.json",
         "//:MODULE.bazel",
         # Read at runtime to discover git_repository versions that are
         # hidden behind the dev-only non_bcr_deps module extension.
@@ -16,10 +17,11 @@ py_test(
     name = "gen_cmakelists_test",
     srcs = ["gen_cmakelists_test.py"],
     data = [
+        "external_deps.json",
         "//:MODULE.bazel",
         "//third_party:bazel/non_bcr_deps.bzl",
     ],
-    deps = [":gen_cmakelists_lib"],
     # Needs the workspace root for MODULE.bazel discovery
     env = {"BAZEL_WORKSPACE_TEST": "1"},
+    deps = [":gen_cmakelists_lib"],
 )
