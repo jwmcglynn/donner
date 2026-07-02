@@ -311,7 +311,7 @@ jobs:
           tools/coverage.sh --no-html "${TARGETS[@]}"
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-report/filtered_report.dat
@@ -435,7 +435,7 @@ jobs:
           path: coverage-report
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v6
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-report/filtered_report.dat
