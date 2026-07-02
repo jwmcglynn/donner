@@ -1,6 +1,7 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -8,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -18,6 +20,8 @@ namespace {
 
 using nlohmann::json;
 using ::testing::ElementsAreArray;
+
+using donner::TestTempDir;
 
 constexpr std::string_view kFilteredScene = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
@@ -646,7 +650,7 @@ TEST(EditorControlSessionTest,
 }
 
 TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path tempDir = TestTempDir();
   const std::filesystem::path svgPath = tempDir / "donner_editor_control_rnr_roundtrip.svg";
   const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_roundtrip.rnr";
   {
@@ -754,7 +758,7 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
 }
 
 TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path tempDir = TestTempDir();
   const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_memory.rnr";
 
   EditorControlSession session;

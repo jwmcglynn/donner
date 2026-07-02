@@ -90,6 +90,7 @@ donner_cc_test(
     deps = [
         ":bitmap_golden_compare",
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:document_save",
         "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
@@ -272,6 +273,7 @@ donner_cc_test(
     srcs = ["RenderPanePresenterVisualRepro_tests.cc"],
     deps = [
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:gl_texture_cache",
         "//donner/editor:imgui_headers",
         "//donner/editor:render_pane_presenter",
@@ -798,6 +800,7 @@ donner_cc_test(
     shard_count = 5,
     deps = [
         ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:attribute_writeback",
         "//donner/editor:composited_presentation",

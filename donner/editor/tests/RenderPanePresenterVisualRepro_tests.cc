@@ -9,6 +9,7 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/gui/EditorWindow.h"
@@ -114,16 +115,12 @@ svg::RendererBitmap MakeOverlayBitmap() {
 }
 
 std::filesystem::path StableOutputDir() {
-  // A fixed, easy-to-open location for the diagnostic screenshots. Use the
-  // platform temp dir rather than a hardcoded "/private/tmp" so the directory
-  // is writable on Linux CI (which has no "/private") as well as macOS. The
+  // A fixed, easy-to-open location for the diagnostic screenshots. Prefer the
+  // per-test scratch dir (TestTempDir): a fixed directory name in the shared
+  // system temp collides across users on remote-execution workers — a
+  // directory created by one worker user is unwritable for the next. The
   // canonical CI artifacts still land in $TEST_UNDECLARED_OUTPUTS_DIR below.
-  std::error_code error;
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path(error);
-  if (error) {
-    return std::filesystem::path("donner-display-none-ui-repro");
-  }
-  return tempDir / "donner-display-none-ui-repro";
+  return TestTempDir() / "donner-display-none-ui-repro";
 }
 
 void WriteBitmap(const svg::RendererBitmap& bitmap, const std::filesystem::path& outputPath) {

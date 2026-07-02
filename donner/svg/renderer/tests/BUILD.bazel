@@ -114,6 +114,7 @@ donner_cc_library(
     deps = [
         ":renderer_image_test_utils",
         ":renderer_test_backend",
+        "//donner/base:base_test_utils",
         "//donner/css:core",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/parser",

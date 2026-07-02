@@ -68,6 +68,7 @@ cc_test(
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
     deps = [
         ":editor_control_session",
+        "//donner/base:base_test_utils",
         "//donner/editor/repro:repro_file",
         "@com_google_gtest//:gtest",
         "@com_google_gtest//:gtest_main",
