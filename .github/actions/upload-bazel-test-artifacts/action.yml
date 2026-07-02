@@ -38,7 +38,7 @@ runs:
         find "${output_dir}" -type f -print | sort || true
 
     - name: Upload Bazel test artifacts
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.name }}
         path: ${{ runner.temp }}/bazel-test-artifacts

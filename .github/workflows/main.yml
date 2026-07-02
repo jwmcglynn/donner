@@ -525,7 +525,7 @@ jobs:
 
       - name: Upload CI diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/donner-ci-diagnostics/
