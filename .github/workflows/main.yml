@@ -540,7 +540,7 @@ jobs:
 
 
   macos:
-    runs-on: macos-15
+    runs-on: macos-26
     needs: [gatekeeper, determine-targets]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (github.ref == 'refs/heads/main' || vars.SELFHOSTED_MACOS_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
     env:

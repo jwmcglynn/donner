@@ -53,7 +53,7 @@ jobs:
           fi
 
   macos:
-    runs-on: macos-15
+    runs-on: macos-26
     needs: gatekeeper
     if: needs.gatekeeper.outputs.should_run == 'true'
     timeout-minutes: 90
