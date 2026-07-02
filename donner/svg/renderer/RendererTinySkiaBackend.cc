@@ -70,6 +70,10 @@ public:
     renderer_.drawImage(image, params);
   }
 
+  void drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) override {
+    renderer_.drawBitmap(bitmap, params);
+  }
+
   void drawText(Registry& registry, const components::ComputedTextComponent& text,
                 const TextParams& params) override {
     renderer_.drawText(registry, text, params);

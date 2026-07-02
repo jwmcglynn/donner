@@ -136,6 +136,7 @@ donner_cc_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":pixel_format_utils",
         ":stroke_params",
         "//donner/base",
         "//donner/css:core",

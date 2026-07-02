@@ -193,6 +193,7 @@ public:
    * @param params Image placement parameters.
    */
   void drawImage(const ImageResource& image, const ImageParams& params) override;
+  void drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) override;
 
   /// Draws a backend-owned texture snapshot when the active backend supports it.
   bool drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,

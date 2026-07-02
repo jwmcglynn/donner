@@ -123,19 +123,6 @@ bool IsEntityInLiveTree(Registry& registry, Entity entity, Entity rootEntity) {
   return IsDomDescendantOf(registry, entity, rootEntity);
 }
 
-ImageResource BuildImageResource(const RendererBitmap& bitmap) {
-  ImageResource img;
-  img.width = bitmap.dimensions.x;
-  img.height = bitmap.dimensions.y;
-  if (bitmap.alphaType == AlphaType::Premultiplied) {
-    // ImageResource is interpreted as unpremultiplied RGBA by drawImage.
-    img.data = UnpremultiplyRgba(bitmap.pixels);
-  } else {
-    img.data = bitmap.pixels;
-  }
-  return img;
-}
-
 Vector2i LayerPayloadDimensions(const CompositorLayer& layer) {
   if (layer.hasValidBitmap()) {
     return layer.bitmap().dimensions;
@@ -3115,8 +3102,11 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
       return;
     }
     if (HasPublicTileBitmap(bitmap)) {
-      ImageResource image = BuildImageResource(bitmap);
-      renderer().drawImage(image, params);
+      // drawBitmap consumes the premultiplied raster directly. Routing this
+      // through the unpremultiplied ImageResource contract cost two full
+      // pixel-buffer conversions plus three allocations per layer/segment per
+      // composed frame — the dominant compose cost on drag-heavy replays.
+      renderer().drawBitmap(bitmap, params);
     }
   };
 
