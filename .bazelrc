@@ -228,7 +228,14 @@ build:coverage --action_env=BAZEL_LLVM_COV=llvm-cov
 build:coverage --action_env=BAZEL_LLVM_PROFDATA=llvm-profdata
 
 test:coverage --collect_code_coverage
-test:coverage --nocache_test_results
+# Coverage test results ARE cacheable: a cache-hit test's coverage.dat is part
+# of its cached result, and --experimental_fetch_all_coverage_outputs makes
+# Bazel download it so the combined lcov report stays complete (validated
+# 2026-07-02: two consecutive runs, second fully cached, byte-identical
+# _coverage_report.dat). The previous `--nocache_test_results` (2024-04,
+# pre-remote-cache) forced every coverage run to re-execute every test in
+# scope, which dominated CI coverage wall time.
+test:coverage --experimental_fetch_all_coverage_outputs
 
 # Basic ASAN/UBSAN that works for gcc
 build:asan --config=latest_llvm

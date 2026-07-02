@@ -350,12 +350,15 @@ jobs:
             cleanup_partial_llvm_fetch
             fetch_llvm
           fi
-          bazelisk shutdown
+          # NOTE: no `bazelisk shutdown` — Generate coverage reuses this
+          # server's loading/analysis instead of paying a fresh JVM start.
 
       - name: Generate coverage
         shell: bash
         run: |
           set -euo pipefail
+          export DONNER_CI_DIAGNOSTICS_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
+          echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
           read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
           echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
           tools/coverage.sh --no-html "${TARGETS[@]}"
@@ -367,6 +370,15 @@ jobs:
           path: coverage-report/filtered_report.dat
           if-no-files-found: error
           retention-days: 1
+
+      - name: Upload coverage diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ci-diagnostics-${{ github.job }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/donner-ci-diagnostics/
+          retention-days: 3
+          if-no-files-found: ignore
 
   upload-self-hosted-coverage:
     needs: coverage-self-hosted
