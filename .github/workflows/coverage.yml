@@ -293,9 +293,15 @@ jobs:
     if: ${{ github.ref != 'refs/heads/main' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Keep
-      # coverage resilient when the private gRPC endpoint is down.
-      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
-      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=5s"
+      # coverage resilient when the private gRPC endpoint is down
+      # (remote_local_fallback), but do NOT use an aggressive call deadline:
+      # --remote_timeout applies to every remote call, and a healthy-but-busy
+      # RE endpoint can legitimately take >5s to accept large coverage
+      # uploads under a multi-job burst (observed 2026-07-02 as
+      # DEADLINE_EXCEEDED upload failures). 60s fails fast enough on a dead
+      # endpoint while tolerating a loaded one.
+      BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=60s"
+      DONNER_COVERAGE_BAZEL_FLAGS: "--remote_local_fallback=true --incompatible_remote_local_fallback_for_remote_cache=true --remote_timeout=60s"
 
     steps:
       - uses: actions/checkout@v6
