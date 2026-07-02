@@ -18,7 +18,7 @@ jobs:
       should_run: ${{ steps.decide.outputs.should_run }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Decide whether nightly sanitizer jobs should run
         id: decide
@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install system dependencies
         uses: nick-fields/retry@v3
@@ -97,7 +97,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install system dependencies
         uses: nick-fields/retry@v3

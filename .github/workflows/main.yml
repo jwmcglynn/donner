@@ -40,7 +40,7 @@ jobs:
       docs_only: ${{ steps.docs_only.outputs.docs_only }}
       is_duplicate_push: ${{ steps.dup_push.outputs.is_duplicate_push }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -133,7 +133,7 @@ jobs:
       affected: ${{ steps.determine.outputs.affected }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -315,7 +315,7 @@ jobs:
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') && (github.ref == 'refs/heads/main' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn') }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install system dependencies
         uses: nick-fields/retry@v3
@@ -399,7 +399,7 @@ jobs:
       DIAG_TEST_FLAGS: "--remote_download_outputs=minimal --remote_download_regex=.*(test\\.log|test\\.xml|outputs\\.zip)$"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -553,7 +553,7 @@ jobs:
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Install clang-tidy
         uses: nick-fields/retry@v3
@@ -623,7 +623,7 @@ jobs:
       BAZEL_MACOS_TEST_FLAGS: "--test_env=HOME"
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           persist-credentials: false
 
