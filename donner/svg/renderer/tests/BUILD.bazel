@@ -240,6 +240,7 @@ donner_cc_test(
         "geode",
     ],
     deps = [
+        ":mock_renderer_interface",
         ":renderer_test_backend",
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",

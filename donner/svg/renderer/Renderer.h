@@ -191,6 +191,13 @@ public:
    * @param params Image placement parameters.
    */
   void drawImage(const ImageResource& image, const ImageParams& params) override;
+
+  /**
+   * Draws a CPU-readable bitmap into the given target rectangle.
+   *
+   * @param bitmap The bitmap to draw.
+   * @param params Image placement parameters.
+   */
   void drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) override;
 
   /// Draws a backend-owned texture snapshot when the active backend supports it.

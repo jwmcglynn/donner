@@ -60,7 +60,7 @@ enum class AlphaType : uint8_t {
 struct RendererBitmap {
   /// Pixel dimensions of the bitmap in device pixels.
   Vector2i dimensions = Vector2i::Zero();
-  /// Raw pixel data in tightly packed RGBA 8-bit format.
+  /// Raw RGBA8 pixel data; row starts are separated by \ref rowBytes.
   std::vector<uint8_t> pixels;
   /// Bytes between rows; allows alignment/padding differences between renderers.
   std::size_t rowBytes = 0;
@@ -397,6 +397,9 @@ public:
    * Backends that can consume premultiplied pixels directly should override
    * this with a zero-copy path; the default converts and delegates so every
    * backend stays correct.
+   *
+   * @param bitmap The bitmap to draw.
+   * @param params Image placement parameters.
    */
   virtual void drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) {
     if (bitmap.empty()) {
@@ -405,8 +408,14 @@ public:
     ImageResource image;
     image.width = bitmap.dimensions.x;
     image.height = bitmap.dimensions.y;
-    image.data = bitmap.alphaType == AlphaType::Premultiplied ? UnpremultiplyRgba(bitmap.pixels)
-                                                              : bitmap.pixels;
+    image.data = bitmap.alphaType == AlphaType::Premultiplied
+                     ? UnpremultiplyRgbaRows(bitmap.pixels, bitmap.dimensions.x,
+                                             bitmap.dimensions.y, bitmap.rowBytes)
+                     : CopyTightRgbaRows(bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+                                         bitmap.rowBytes);
+    if (image.data.empty()) {
+      return;
+    }
     drawImage(image, params);
   }
 
