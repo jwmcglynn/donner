@@ -108,6 +108,24 @@ LLVM_COVERAGE_FLAGS=(
 
   COVERAGE_REPORT=$(bazel info output_path)/_coverage/_coverage_report.dat
 
+  # CI diagnostics: when DONNER_CI_DIAGNOSTICS_DIR is set (self-hosted CI),
+  # capture the inner `bazel coverage` profile + BEP there and record phase
+  # wall times, so slow coverage runs are attributable from artifacts alone.
+  DIAG_FLAGS=()
+  if [ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]; then
+    mkdir -p "$DONNER_CI_DIAGNOSTICS_DIR/coverage"
+    DIAG_FLAGS=(
+      --profile="$DONNER_CI_DIAGNOSTICS_DIR/coverage/profile.gz"
+      --build_event_json_file="$DONNER_CI_DIAGNOSTICS_DIR/coverage/bep.json"
+    )
+  fi
+  phase_mark() {
+    if [ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]; then
+      echo "$1=$(date +%s)" >> "$DONNER_CI_DIAGNOSTICS_DIR/coverage/timing.txt"
+    fi
+  }
+  phase_mark start
+
   # --keep_going is set in .bazelrc for coverage so that analysis failures
   # don't block the rest of the run. Remove any previous combined report so
   # early exits cannot accidentally process stale data.
@@ -118,14 +136,17 @@ LLVM_COVERAGE_FLAGS=(
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
+      "${DIAG_FLAGS[@]}" \
       "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || true
   else
     bazel coverage --config=latest_llvm \
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
+      "${DIAG_FLAGS[@]}" \
       "${BAZEL_TEST_ENV[@]}" "${TARGETS[@]}" || true
   fi
+  phase_mark bazel_coverage_done
 
   if [ ! -f "$COVERAGE_REPORT" ]; then
     echo "ERROR: Coverage report was not generated"
@@ -141,6 +162,7 @@ LLVM_COVERAGE_FLAGS=(
   else
     python3 tools/filter_coverage.py --verbose "${FILTER_ARGS[@]}"
   fi
+  phase_mark filter_done
 
   if [ "$NO_HTML" = false ]; then
     if [ "$QUIET" = true ]; then
@@ -149,6 +171,7 @@ LLVM_COVERAGE_FLAGS=(
       genhtml "$COVERAGE_HTML_DIR/filtered_report.dat" $GENHTML_OPTIONS
     fi
   fi
+  phase_mark end
 )
 
 if [ "$NO_HTML" = true ]; then
