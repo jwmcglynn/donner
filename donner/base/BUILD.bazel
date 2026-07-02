@@ -5,9 +5,11 @@ donner_cc_library(
     name = "base",
     srcs = [
         "BezierUtils.cc",
+        "FormatNumber.cc",
         "ParseDiagnostic.cc",
         "Path.cc",
         "PathOps.cc",
+        "Transform.cc",
     ],
     hdrs = [
         "BezierUtils.h",

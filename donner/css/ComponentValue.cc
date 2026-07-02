@@ -78,6 +78,17 @@ ComponentValue::ComponentValue(ComponentValue::Type&& value) : value(std::move(v
 
 ComponentValue::~ComponentValue() = default;
 
+// Defaulted out-of-line so the variant<Token, Function, SimpleBlock> copy/move
+// machinery instantiates once here instead of in every TU (see ComponentValue.h).
+ComponentValue::ComponentValue(const ComponentValue&) = default;
+ComponentValue& ComponentValue::operator=(const ComponentValue&) = default;
+ComponentValue::ComponentValue(ComponentValue&&) noexcept = default;
+ComponentValue& ComponentValue::operator=(ComponentValue&&) noexcept = default;
+
+static_assert(std::is_nothrow_move_constructible_v<ComponentValue::Type>,
+              "ComponentValue::Type must be nothrow-move-constructible: the out-of-line "
+              "move members are declared noexcept.");
+
 bool ComponentValue::operator==(const ComponentValue& other) const {
   return value == other.value;
 }

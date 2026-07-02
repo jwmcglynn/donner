@@ -1,9 +1,6 @@
 #pragma once
 /// @file
 
-#include <cmath>
-#include <cstdint>
-#include <format>
 #include <string>
 
 namespace donner::detail {
@@ -18,14 +15,13 @@ namespace donner::detail {
 ///   defaults to 6-significant-digit precision, which drops accuracy for values like
 ///   `tan(π/6) = 0.57735026918962562`.
 ///
+/// Defined out-of-line in FormatNumber.cc: this header is included nearly everywhere
+/// (via Length.h and Transform.h), and an inline definition instantiates the
+/// `std::format` machinery in every including translation unit.
+///
 /// Used by \ref donner::toSVGTransformString "toSVGTransformString",
 /// \ref donner::Path::toSVGPathData "Path::toSVGPathData", and
 /// \ref donner::Length::toRcString "Length::toRcString()".
-inline std::string FormatNumberForSVG(double value) {
-  if (value == std::trunc(value) && std::isfinite(value)) {
-    return std::format("{}", static_cast<std::int64_t>(value));
-  }
-  return std::format("{}", value);
-}
+std::string FormatNumberForSVG(double value);
 
 }  // namespace donner::detail

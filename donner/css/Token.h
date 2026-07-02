@@ -769,6 +769,23 @@ struct Token {
    */
   Token(TokenValue&& value, size_t offset) : value_(std::move(value)), offset_(offset) {}
 
+  // Special members are declared here and defaulted in Token.cc. Token.h is included
+  // across most of the codebase, and implicit (inline) special members instantiate the
+  // 26-alternative `std::variant` copy/move/destroy machinery in every translation unit
+  // that copies, moves, or destroys a Token. Out-of-line definitions confine that
+  // instantiation to Token.cc.
+
+  /// Copy constructor.
+  Token(const Token& other);
+  /// Move constructor.
+  Token(Token&& other) noexcept;
+  /// Copy assignment operator.
+  Token& operator=(const Token& other);
+  /// Move assignment operator.
+  Token& operator=(Token&& other) noexcept;
+  /// Destructor.
+  ~Token();
+
   /**
    * Returns the token type.
    *
@@ -943,16 +960,7 @@ struct Token {
   /**
    * Returns true if this token is a type of parse error.
    */
-  bool isParseError() const {
-    switch (value_.index()) {
-      case indexOf<BadUrl>(): [[fallthrough]];
-      case indexOf<BadString>(): [[fallthrough]];
-      case indexOf<CloseParenthesis>(): [[fallthrough]];
-      case indexOf<CloseSquareBracket>(): [[fallthrough]];
-      case indexOf<CloseCurlyBracket>(): return true;
-      default: return false;
-    }
-  }
+  bool isParseError() const;
 
   /**
    * Serialize this token back to its CSS text representation.
@@ -961,74 +969,13 @@ struct Token {
    * that can be parsed back. For example, an `Ident("red")` token produces `"red"`, a
    * `Number(0.8)` produces `"0.8"`, etc.
    */
-  std::string toCssText() const {
-    return visit([](auto&& t) -> std::string {
-      using T = std::remove_cvref_t<decltype(t)>;
-
-      if constexpr (std::is_same_v<T, Ident>) {
-        return std::string(t.value);
-      } else if constexpr (std::is_same_v<T, Function>) {
-        return std::string(t.name) + "(";
-      } else if constexpr (std::is_same_v<T, AtKeyword>) {
-        return "@" + std::string(t.value);
-      } else if constexpr (std::is_same_v<T, Hash>) {
-        return "#" + std::string(t.name);
-      } else if constexpr (std::is_same_v<T, String>) {
-        return "\"" + std::string(t.value) + "\"";
-      } else if constexpr (std::is_same_v<T, Url>) {
-        return "url(" + std::string(t.value) + ")";
-      } else if constexpr (std::is_same_v<T, Delim>) {
-        return std::string(1, t.value);
-      } else if constexpr (std::is_same_v<T, Number>) {
-        return std::string(t.valueString);
-      } else if constexpr (std::is_same_v<T, Percentage>) {
-        return std::string(t.valueString) + "%";
-      } else if constexpr (std::is_same_v<T, Dimension>) {
-        return std::string(t.valueString) + std::string(t.suffixString);
-      } else if constexpr (std::is_same_v<T, Whitespace>) {
-        return " ";
-      } else if constexpr (std::is_same_v<T, CDO>) {
-        return "<!--";
-      } else if constexpr (std::is_same_v<T, CDC>) {
-        return "-->";
-      } else if constexpr (std::is_same_v<T, Colon>) {
-        return ":";
-      } else if constexpr (std::is_same_v<T, Semicolon>) {
-        return ";";
-      } else if constexpr (std::is_same_v<T, Comma>) {
-        return ",";
-      } else if constexpr (std::is_same_v<T, SquareBracket>) {
-        return "[";
-      } else if constexpr (std::is_same_v<T, Parenthesis>) {
-        return "(";
-      } else if constexpr (std::is_same_v<T, CurlyBracket>) {
-        return "{";
-      } else if constexpr (std::is_same_v<T, CloseSquareBracket>) {
-        return "]";
-      } else if constexpr (std::is_same_v<T, CloseParenthesis>) {
-        return ")";
-      } else if constexpr (std::is_same_v<T, CloseCurlyBracket>) {
-        return "}";
-      } else {
-        // BadString, BadUrl, ErrorToken, EofToken
-        return "";
-      }
-    });
-  }
+  std::string toCssText() const;
 
   /// Equality operator.
-  bool operator==(const Token& other) const {
-    return value_ == other.value_ && offset_ == other.offset_;
-  }
+  bool operator==(const Token& other) const;
 
   /// Ostream output operator.
-  friend std::ostream& operator<<(std::ostream& os, const Token& token) {
-    os << "Token { ";
-    token.visit([&os](auto&& value) { os << value; });
-    os << " offset: " << token.offset();
-    os << " }";
-    return os;
-  }
+  friend std::ostream& operator<<(std::ostream& os, const Token& token);
 
 private:
   TokenValue value_;
