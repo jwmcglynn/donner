@@ -194,6 +194,23 @@ class CqueryBuildOutputTest(unittest.TestCase):
         self.assertEqual(targets[1].kind, "embed_resources")
 
 
+class CqueryExpressionTest(unittest.TestCase):
+    def test_query_uses_positive_leaf_dependency_closure(self):
+        self.assertIn("deps((", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn(" except ", g._CQUERY_TARGET_EXPRESSION)
+        self.assertIn("//:donner", g._CQUERY_TARGET_EXPRESSION)
+        self.assertIn("//donner/svg/renderer/tests:all", g._CQUERY_TARGET_EXPRESSION)
+        self.assertIn("//examples:render_test", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn("//examples:svg_viewer", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn("//donner/editor", g._CQUERY_TARGET_EXPRESSION)
+
+    def test_skipped_packages_are_only_hand_written_cmake_packages(self):
+        self.assertTrue(g._is_skipped_package("third_party/stb"))
+        self.assertTrue(g._is_skipped_package("third_party/tiny-skia-cpp"))
+        self.assertFalse(g._is_skipped_package("donner/editor"))
+        self.assertFalse(g._is_skipped_package("donner/svg/renderer/geode"))
+
+
 class ConditionDerivationTest(unittest.TestCase):
     def _configs_where(self, predicate):
         return {config.name for config in g.CMAKE_CONFIGS if predicate(config)}
