@@ -1369,26 +1369,31 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
     return;
   }
 
-  // Premultiplied payloads draw through a borrowed view: no conversion, no
-  // copy. Unpremultiplied payloads (the root surface stores unpremultiplied
-  // for display, so layer/segment snapshots usually arrive that way)
-  // premultiply directly into the draw scratch — one conversion, zero
-  // intermediate copies. Both beat the ImageResource contract, which costs
-  // an extra full-buffer copy (and, for premultiplied payloads, an extra
-  // unpremultiply) per compose blit.
-  std::optional<tiny_skia::PixmapView> sourceView;
-  std::vector<std::uint8_t> premultipliedScratch;
-  if (bitmap.alphaType == AlphaType::Premultiplied) {
-    sourceView = tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(bitmap.pixels),
-                                                  static_cast<std::uint32_t>(bitmap.dimensions.x),
-                                                  static_cast<std::uint32_t>(bitmap.dimensions.y));
-  } else {
-    premultipliedScratch = PremultiplyRgba(bitmap.pixels);
-    sourceView =
-        tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(premultipliedScratch),
-                                         static_cast<std::uint32_t>(bitmap.dimensions.x),
-                                         static_cast<std::uint32_t>(bitmap.dimensions.y));
+  // Tightly-packed premultiplied payloads draw through a borrowed view: no
+  // conversion, no copy. Unpremultiplied payloads (the root surface stores
+  // unpremultiplied for display, so layer/segment snapshots usually arrive
+  // that way) premultiply directly into the draw scratch — one conversion,
+  // zero intermediate copies. Both beat the ImageResource contract, which
+  // costs an extra full-buffer copy (and, for premultiplied payloads, an
+  // extra unpremultiply) per compose blit. Row-padded payloads
+  // (rowBytes > width * 4) are repacked first since PixmapView assumes
+  // tightly packed rows.
+  std::span<const std::uint8_t> pixels(bitmap.pixels);
+  const std::size_t tightRowBytes = static_cast<std::size_t>(bitmap.dimensions.x) * 4u;
+  std::vector<std::uint8_t> packedScratch;
+  if (bitmap.rowBytes != 0 && bitmap.rowBytes != tightRowBytes) {
+    packedScratch =
+        TightlyPackRgbaRows(pixels, bitmap.dimensions.x, bitmap.dimensions.y, bitmap.rowBytes);
+    pixels = packedScratch;
   }
+  std::vector<std::uint8_t> premultipliedScratch;
+  if (bitmap.alphaType != AlphaType::Premultiplied) {
+    premultipliedScratch = PremultiplyRgba(pixels);
+    pixels = premultipliedScratch;
+  }
+  std::optional<tiny_skia::PixmapView> sourceView =
+      tiny_skia::PixmapView::fromBytes(pixels, static_cast<std::uint32_t>(bitmap.dimensions.x),
+                                       static_cast<std::uint32_t>(bitmap.dimensions.y));
   if (!sourceView.has_value()) {
     return;
   }

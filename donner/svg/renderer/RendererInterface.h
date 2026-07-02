@@ -60,9 +60,11 @@ enum class AlphaType : uint8_t {
 struct RendererBitmap {
   /// Pixel dimensions of the bitmap in device pixels.
   Vector2i dimensions = Vector2i::Zero();
-  /// Raw pixel data in tightly packed RGBA 8-bit format.
+  /// Raw RGBA 8-bit pixel data; rows start `rowBytes` apart, so rows may carry
+  /// trailing padding when `rowBytes > dimensions.x * 4`.
   std::vector<uint8_t> pixels;
-  /// Bytes between rows; allows alignment/padding differences between renderers.
+  /// Bytes between row starts; allows alignment/padding differences between
+  /// renderers. A value of 0 means tightly packed (`dimensions.x * 4`).
   std::size_t rowBytes = 0;
   /// Alpha channel interpretation. Backends produce premultiplied data by default.
   AlphaType alphaType = AlphaType::Premultiplied;
@@ -405,8 +407,19 @@ public:
     ImageResource image;
     image.width = bitmap.dimensions.x;
     image.height = bitmap.dimensions.y;
-    image.data = bitmap.alphaType == AlphaType::Premultiplied ? UnpremultiplyRgba(bitmap.pixels)
-                                                              : bitmap.pixels;
+    const std::size_t tightRowBytes = static_cast<std::size_t>(bitmap.dimensions.x) * 4u;
+    if (bitmap.rowBytes != 0 && bitmap.rowBytes != tightRowBytes) {
+      // `ImageResource` expects tightly packed rows; drop the per-row padding.
+      std::vector<uint8_t> packed = TightlyPackRgbaRows(bitmap.pixels, bitmap.dimensions.x,
+                                                        bitmap.dimensions.y, bitmap.rowBytes);
+      if (bitmap.alphaType == AlphaType::Premultiplied) {
+        UnpremultiplyRgbaInPlace(packed);
+      }
+      image.data = std::move(packed);
+    } else {
+      image.data = bitmap.alphaType == AlphaType::Premultiplied ? UnpremultiplyRgba(bitmap.pixels)
+                                                                : bitmap.pixels;
+    }
     drawImage(image, params);
   }
 

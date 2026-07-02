@@ -1,6 +1,8 @@
 #include "donner/svg/renderer/PixelFormatUtils.h"
 
 #include <algorithm>
+#include <cassert>
+#include <cstring>
 
 namespace donner::svg {
 
@@ -47,6 +49,24 @@ void UnpremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba) {
 std::vector<std::uint8_t> UnpremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
   std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
   UnpremultiplyRgbaInPlace(result);
+  return result;
+}
+
+std::vector<std::uint8_t> TightlyPackRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width,
+                                              int height, std::size_t rowBytes) {
+  assert(width >= 0 && height >= 0);
+  const std::size_t tightRowBytes = static_cast<std::size_t>(width) * 4u;
+  assert(rowBytes >= tightRowBytes);
+
+  std::vector<std::uint8_t> result(tightRowBytes * static_cast<std::size_t>(height));
+  for (int y = 0; y < height; ++y) {
+    const std::size_t srcOffset = static_cast<std::size_t>(y) * rowBytes;
+    if (srcOffset + tightRowBytes > rgbaPixels.size()) {
+      break;
+    }
+    std::memcpy(result.data() + static_cast<std::size_t>(y) * tightRowBytes,
+                rgbaPixels.data() + srcOffset, tightRowBytes);
+  }
   return result;
 }
 

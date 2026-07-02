@@ -43,4 +43,17 @@ void UnpremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba);
 /// @param rgbaPixels Premultiplied RGBA bytes (size must be a multiple of 4).
 [[nodiscard]] std::vector<std::uint8_t> UnpremultiplyRgba(std::span<const std::uint8_t> rgbaPixels);
 
+/// Repack row-padded RGBA8 pixels into a tightly packed buffer, dropping any
+/// per-row padding. Rows that extend past the end of \p rgbaPixels are left
+/// zero-filled rather than read out of bounds.
+///
+/// @param rgbaPixels Source pixels: \p height rows spaced \p rowBytes apart.
+/// @param width Row width in pixels.
+/// @param height Number of rows.
+/// @param rowBytes Bytes between the start of consecutive source rows; must be
+///   >= `width * 4`.
+/// @return Tightly packed buffer of `width * height * 4` bytes.
+[[nodiscard]] std::vector<std::uint8_t> TightlyPackRgbaRows(
+    std::span<const std::uint8_t> rgbaPixels, int width, int height, std::size_t rowBytes);
+
 }  // namespace donner::svg

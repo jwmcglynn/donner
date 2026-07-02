@@ -285,6 +285,15 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "pixel_format_utils_tests",
+    srcs = ["PixelFormatUtils_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:pixel_format_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "terminal_image_viewer_tests",
     srcs = ["TerminalImageViewer_tests.cc"],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
