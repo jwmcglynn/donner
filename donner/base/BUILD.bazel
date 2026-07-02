@@ -76,8 +76,11 @@ donner_cc_library(
         "tests/BaseTestUtils.h",
         "tests/ParseResultTestUtils.h",
         "tests/Runfiles.h",
+        "tests/TestTempDir.h",
     ],
-    visibility = donner_internal_visibility(),
+    # //tools tests (MCP servers, build tooling) share the same test-hygiene
+    # helpers (TestTempDir) as //donner tests.
+    visibility = donner_internal_visibility() + ["//tools:__subpackages__"],
     deps = [
         "@com_google_gtest//:gtest",
         "@rules_cc//cc/runfiles",

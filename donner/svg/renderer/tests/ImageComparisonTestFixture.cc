@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/TestTempDir.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -361,7 +362,7 @@ std::filesystem::path parityOutputDir() {
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     return std::filesystem::path(dir);
   }
-  return std::filesystem::temp_directory_path();
+  return TestTempDir();
 }
 
 std::string escapeFilename(std::string filename) {
@@ -886,12 +887,12 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
               << params.effectiveMaxMismatchedPixels() << " max)\n";
 
     const std::filesystem::path actualImagePath =
-        std::filesystem::temp_directory_path() / escapeFilename(effectiveGoldenFilename);
+        TestTempDir() / escapeFilename(effectiveGoldenFilename);
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(), snapshot.pixels,
                                               width, height, strideInPixels);
 
-    const std::filesystem::path diffFilePath = std::filesystem::temp_directory_path() /
-                                               ("diff_" + escapeFilename(effectiveGoldenFilename));
+    const std::filesystem::path diffFilePath =
+        TestTempDir() / ("diff_" + escapeFilename(effectiveGoldenFilename));
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 

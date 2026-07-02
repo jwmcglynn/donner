@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/ImGuiIncludes.h"
@@ -35,7 +36,7 @@ std::filesystem::path TestOutputDir() {
   if (const char* outputDir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
     return std::filesystem::path(outputDir);
   }
-  return std::filesystem::temp_directory_path();
+  return TestTempDir();
 }
 
 std::filesystem::path UniqueTestPath(std::string_view suffix) {

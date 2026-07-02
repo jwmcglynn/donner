@@ -21,6 +21,7 @@
 
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/CompositedPresentation.h"
@@ -82,7 +83,7 @@ std::filesystem::path DiagnosticOutputDir() {
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR"); dir != nullptr) {
     return std::filesystem::path(dir);
   }
-  return std::filesystem::temp_directory_path();
+  return TestTempDir();
 }
 
 std::string LoadFileOrEmpty(const std::filesystem::path& path) {

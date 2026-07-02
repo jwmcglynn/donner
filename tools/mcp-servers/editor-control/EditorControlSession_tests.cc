@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -20,18 +21,7 @@ namespace {
 using nlohmann::json;
 using ::testing::ElementsAreArray;
 
-/// Bazel's per-test scratch directory, falling back to the system temp dir when
-/// running outside `bazel test`. `std::filesystem::temp_directory_path()` alone
-/// resolves to the shared /tmp on remote-execution workers (which do not set
-/// TMPDIR), so fixed filenames written there collide across users: a file left
-/// by one worker user makes a later run under a different user fail to open the
-/// same path for write.
-std::filesystem::path TestTempDir() {
-  if (const char* testTmpdir = std::getenv("TEST_TMPDIR"); testTmpdir && *testTmpdir) {
-    return std::filesystem::path(testTmpdir);
-  }
-  return std::filesystem::temp_directory_path();
-}
+using donner::TestTempDir;
 
 constexpr std::string_view kFilteredScene = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
