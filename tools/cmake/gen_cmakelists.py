@@ -343,17 +343,29 @@ def _run_bazel(args: List[str]) -> str:
         raise RuntimeError(f"Bazel command failed:\n  {cmd_str}\n{exc.stderr}") from exc
 
 
+_CQUERY_EXCLUDED_TARGETS = (
+    # Bazel-only examples: these are not emitted into generated CMake and
+    # their dependency graphs pull in editor/Geode-only external archives that
+    # CMake validation should not fetch.
+    "//examples:svg_viewer",
+    "//examples:geode_embed",
+    "//examples:geode_embed_surface",
+    "//examples:geode_embed_surface_linux",
+)
+
 _CQUERY_TARGET_EXPRESSION = (
     'kind(".*cc_.*|embed_resources_generate_header", '
-    '(//:donner + //donner/... + //examples/... + //third_party/...) '
-    'except //donner/editor/... '
-    'except //donner/benchmarks/... '
-    'except //donner/svg/renderer/benchmarks/... '
-    'except //donner/svg/renderer/geode/... '
-    'except //donner/svg/renderer/wasm/... '
-    'except //third_party/emdawnwebgpu/... '
-    'except //third_party/emscripten-glfw/... '
-    'except //third_party/webgpu-cpp/...)'
+    "(//:donner + //donner/... + //examples/... + //third_party/...) "
+    "except //donner/editor/... "
+    "except //donner/benchmarks/... "
+    "except //donner/svg/renderer/benchmarks/... "
+    "except //donner/svg/renderer/geode/... "
+    "except //donner/svg/renderer/wasm/... "
+    "except //third_party/emdawnwebgpu/... "
+    "except //third_party/emscripten-glfw/... "
+    "except //third_party/webgpu-cpp/... "
+    + " ".join(f"except {target}" for target in _CQUERY_EXCLUDED_TARGETS)
+    + ")"
 )
 
 
