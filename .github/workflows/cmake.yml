@@ -160,7 +160,7 @@ jobs:
           ccache --show-stats
 
   macos:
-    runs-on: macos-15
+    runs-on: macos-26
     needs: [gatekeeper, validate-generator]
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     env:
