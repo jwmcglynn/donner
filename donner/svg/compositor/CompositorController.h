@@ -617,6 +617,13 @@ public:
     return staticSpanPlans_;
   }
 
+  /// Override static-span rasterize duration samples for deterministic tests.
+  /// @param elapsedMs Duration in milliseconds to use, or `std::nullopt` to use steady-clock
+  /// measurement.
+  void setStaticSpanRasterizeElapsedMsForTesting(std::optional<double> elapsedMs) {
+    staticSpanRasterizeElapsedMsForTesting_ = elapsedMs;
+  }
+
   /// One row of the unified "everything composited together" view that
   /// the layer-inspector panel renders in paint order — design doc 0033
   /// §M1++. Mirrors what `composeLayers` actually draws so the operator
@@ -1092,6 +1099,10 @@ private:
   /// doc 0033 M1+). Zero for slots that have never rasterized in the
   /// current session.
   std::vector<double> staticSegmentLastRasterizeMs_;
+  /// Test-only static-span rasterize duration override. Production uses the
+  /// steady-clock measurement so immediate/cached presentation can adapt to
+  /// real render cost.
+  std::optional<double> staticSpanRasterizeElapsedMsForTesting_;
   /// Per-segment immediate-vs-cached presentation plan, parallel to
   /// `staticSegments_` after the first segment raster pass.
   std::vector<StaticSpanPlan> staticSpanPlans_;

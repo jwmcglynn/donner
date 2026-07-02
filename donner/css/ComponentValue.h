@@ -132,15 +132,17 @@ struct ComponentValue {
   /// Destructor.
   ~ComponentValue();
 
-  // Copy and move constructors.
+  // Copy and move members are declared here and defaulted in ComponentValue.cc: an
+  // in-class `= default` is inline, which instantiates the variant<Token, Function,
+  // SimpleBlock> copy/move machinery in every including translation unit.
   /// Copy constructor.
-  ComponentValue(const ComponentValue&) = default;
-  /// Move constructor.
-  ComponentValue& operator=(const ComponentValue&) = default;
-  /// Move assignment operator.
-  ComponentValue(ComponentValue&&) noexcept = default;
+  ComponentValue(const ComponentValue&);
   /// Copy assignment operator.
-  ComponentValue& operator=(ComponentValue&&) noexcept = default;
+  ComponentValue& operator=(const ComponentValue&);
+  /// Move constructor.
+  ComponentValue(ComponentValue&&) noexcept;
+  /// Move assignment operator.
+  ComponentValue& operator=(ComponentValue&&) noexcept;
 
   /// Equality operator.
   bool operator==(const ComponentValue& other) const;

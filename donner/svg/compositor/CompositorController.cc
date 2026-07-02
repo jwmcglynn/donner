@@ -2674,7 +2674,10 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     const auto elapsedUs = std::chrono::duration_cast<std::chrono::microseconds>(
                                segmentRasterizeEnd - segmentRasterizeStart)
                                .count();
-    const double elapsedMs = static_cast<double>(elapsedUs) / 1000.0;
+    double elapsedMs = static_cast<double>(elapsedUs) / 1000.0;
+    if (staticSpanRasterizeElapsedMsForTesting_.has_value()) {
+      elapsedMs = *staticSpanRasterizeElapsedMsForTesting_;
+    }
     spanPlan.measuredRasterizeMs = elapsedMs;
     spanPlan.immediateBudgetMs = ImmediateStaticSpanBudgetMs();
     if (IsStaticSpanImmediateSafe(spanPlan)) {
