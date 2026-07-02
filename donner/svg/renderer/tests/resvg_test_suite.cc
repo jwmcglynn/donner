@@ -840,25 +840,33 @@ INSTANTIATE_TEST_SUITE_P(PaintingOverflow, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingPaintOrder, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "painting/paint-order",
-                {
-                    // paint-order itself is honored (stroke-under-fill renders correctly); the
-                    // residual diff is tspan-split glyph positioning drift, present even in the
-                    // default-order "Te" run. Tracked under the text/tspan interaction gap.
-                    {"on-tspan.svg", Params::Skip("tspan-split glyph positioning drift, not "
-                                                  "paint-order")},
-                    // paint-order rendering is implemented on the CPU backend only; Geode does not
-                    // honor the fill/stroke/marker reordering yet. Compare CPU, disable Geode.
-                    {"fill-markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                    {"markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                    {"markers.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                    {"stroke-markers-fill.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                    {"stroke-markers.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                    {"stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                    {"on-text.svg", GeodeDisabled("Geode paint-order rendering gap")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "painting/paint-order",
+            {
+                // `Te<tspan paint-order="stroke fill">xt</tspan>`. NOT a positioning bug:
+                // the glyph positions are correct (identical to the unsplit on-text.svg, which
+                // passes — cross-tspan kerning keeps "xt" at the same x as "Text"). The ~1968px
+                // residual is a paint-order *layering* difference across the two runs with
+                // different paint-orders: Donner draws run "Te" (default order: fill then
+                // stroke-on-top) fully, then run "xt" (stroke then fill) fully on top, so at the
+                // e/x overlap "x"'s green fill covers "e"'s on-top blue stroke where resvg keeps
+                // the blue (≈1.6k green↔blue edge swaps). resvg layers paint-order across the
+                // whole <text> rather than per-run. Fixing this needs the renderer's text
+                // paint-order passes to span runs, not the text layout. See #624.
+                {"on-tspan.svg",
+                 Params::Skip("paint-order layering across tspan runs (not positioning) — #624")},
+                // paint-order rendering is implemented on the CPU backend only; Geode does not
+                // honor the fill/stroke/marker reordering yet. Compare CPU, disable Geode.
+                {"fill-markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                {"markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                {"markers.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                {"stroke-markers-fill.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                {"stroke-markers.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                {"stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
+                {"on-text.svg", GeodeDisabled("Geode paint-order rendering gap")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingShapeRendering, ImageComparisonTestFixture,
@@ -1246,16 +1254,8 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransformOrigin, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/transform-origin",
-                {
-                    // transform-origin pivot composes for plain text/image now; textPath layout
-                    // still drifts (entangled with the textPath SVG2 attribute gap, F10).
-                    {"on-text-path.svg",
-                     Params::Skip("transform-origin on textPath: entangled with textPath layout "
-                                  "(F10)")},
-                },
-                Params::WithThreshold(0.13f, 300, "Rotated edge AA"))),
+    Combine(ValuesIn(getTestsInCategory("structure/transform-origin", {},
+                                        Params::WithThreshold(0.13f, 300, "Rotated edge AA"))),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
