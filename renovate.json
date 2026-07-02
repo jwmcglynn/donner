@@ -36,6 +36,6 @@
     }
   ],
   "ignorePaths": [
-    "**/third_party/doxygen-awesome-css/**"
+    "**/third_party/**"
   ]
 }
