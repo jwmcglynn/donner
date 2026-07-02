@@ -286,11 +286,15 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"complex-transform.svg",
                      Params::WithThreshold(0.03f, kDefaultMismatchedPixels, "Minor AA differences")
-                         .disableBackend(RendererBackend::Geode,
-                                         "Geode analytic dual-ray Slug coverage (0041 §6) on the "
-                                         "rotated/skewed rect edges diverges from the resvg "
-                                         "finite-sample reference by a ~1px edge band (259px), "
-                                         "amplified by the blur kernel")},
+                         .withGeodeGoldenOverride(
+                             "donner/svg/renderer/testdata/golden/geode/"
+                             "filters_feGaussianBlur_complex-transform.png",
+                             "Geode's analytic coverage on this rotated rect is geometrically "
+                             "exact (area matches a 16x scan-conversion to <0.3px, no missed "
+                             "content); resvg's finite-sample scan-converter differs at the edge, "
+                             "and the directional stdDeviation=\"12 0\" blur widens that into a "
+                             "thin ~1px band (259px). Not a coverage bug; TinyGolden still checks "
+                             "tiny-skia vs resvg.")},
                     {"huge-stdDeviation.svg",
                      Params::RenderOnly("Extreme sigma=1000; output is implementation-defined")},
                 })),

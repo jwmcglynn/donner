@@ -16,10 +16,15 @@ bug fixes that the analytic rewrite *revealed* were never coverage issues — se
 > pattern-tile filter-region-scissor leak, a missing feMorphology linearRGB round-trip,
 > and a degenerate zero-area closed-stroke decomposition) plus two cases where Geode is
 > verified-correct but differs from resvg's finite-sample reference (per-backend Geode
-> goldens, the legitimate "Donner renders higher quality" pattern). All 16 are now
-> un-skipped and green. The single remaining Geode resvg gate is
-> `feGaussianBlur/complex-transform` (genuine analytic-vs-finite-sample 1px blur edge,
-> §6) — tracked in [#625](https://github.com/jwmcglynn/donner/issues/625).
+> goldens, the legitimate "Donner renders higher quality" pattern). All 16 are
+> un-skipped and green. `feGaussianBlur/complex-transform` (genuine
+> analytic-vs-finite-sample 1px blur edge, §6) uses a verified per-backend Geode
+> golden, not a coverage suppression: its per-pixel analytic coverage on the rotated
+> edge is a correctly-centered 1px box-filter ramp and the filled area matches a 16×
+> scan-conversion to <0.3px. The resvg finite-sample reference differs from the
+> analytic ideal, and the directional `stdDeviation="12 0"` blur amplifies that
+> sub-pixel edge into a thin ~1px band (~259px; 700× 1px-runs, max 4px). There are
+> **zero** `disableBackend(Geode)` resvg gates for coverage reasons.
 
 > **History:** earlier this doc concluded analytic AA was *rejected* and the 4× MSAA
 > edge-floor was *accepted by-design*. That conclusion is **reversed**. The technical
