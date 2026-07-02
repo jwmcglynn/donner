@@ -28,6 +28,7 @@
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
 #include "donner/svg/core/WritingMode.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/resources/ImageResource.h"
 
@@ -384,6 +385,30 @@ public:
    * Draws an image resource into the given target rectangle.
    */
   virtual void drawImage(const ImageResource& image, const ImageParams& params) = 0;
+
+  /**
+   * Draws a CPU bitmap (typically a compositor layer/segment raster) into the
+   * given target rectangle.
+   *
+   * The `ImageResource` contract is unpremultiplied RGBA, while renderer
+   * snapshots are premultiplied — routing a per-frame compose through
+   * `drawImage` costs an unpremultiply + repremultiply round trip (two full
+   * pixel-buffer conversions and three allocations per layer per frame).
+   * Backends that can consume premultiplied pixels directly should override
+   * this with a zero-copy path; the default converts and delegates so every
+   * backend stays correct.
+   */
+  virtual void drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) {
+    if (bitmap.empty()) {
+      return;
+    }
+    ImageResource image;
+    image.width = bitmap.dimensions.x;
+    image.height = bitmap.dimensions.y;
+    image.data = bitmap.alphaType == AlphaType::Premultiplied ? UnpremultiplyRgba(bitmap.pixels)
+                                                              : bitmap.pixels;
+    drawImage(image, params);
+  }
 
   /**
    * Draws a backend-owned texture snapshot into the given target rectangle.

@@ -108,6 +108,13 @@ void Renderer::drawImage(const ImageResource& image, const ImageParams& params) 
   impl_->drawImage(image, params);
 }
 
+void Renderer::drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) {
+  // Forward so the backend's zero-copy premultiplied path is reachable —
+  // falling through to the base default here would convert through the
+  // unpremultiplied ImageResource contract on every compositor blit.
+  impl_->drawBitmap(bitmap, params);
+}
+
 bool Renderer::drawTextureSnapshot(const RendererTextureSnapshot& texture, const Box2d& targetRect,
                                    double opacity, bool pixelated) {
   return impl_->drawTextureSnapshot(texture, targetRect, opacity, pixelated);

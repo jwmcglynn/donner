@@ -546,8 +546,20 @@ void SVGDocument::setCanvasSize(int width, int height) {
   DocumentMutationBatch mutation(*documentState_, true);
   DocumentWriteAccess& access = mutation.access();
   Registry& registry = access.registry();
+  auto& documentContext = registry.ctx().get<components::SVGDocumentContext>();
+  if (documentContext.canvasSize == Vector2i(width, height)) {
+    // No-op when the stored explicit canvas size is unchanged: do not
+    // invalidate the render tree (that invalidation cascades into a full
+    // restyle + render-tree rebuild + full recompose on the next rendered
+    // frame) and do not commit a mutation revision. Callers (e.g. per-frame
+    // viewport sync) cannot cheaply detect this themselves: the canvasSize()
+    // getter returns the *derived* canvas-scaled document size, which does
+    // not round-trip with the value stored here.
+    mutation.cancel();
+    return;
+  }
   components::RenderingContext(registry).invalidateRenderTree();
-  registry.ctx().get<components::SVGDocumentContext>().canvasSize = Vector2i(width, height);
+  documentContext.canvasSize = Vector2i(width, height);
 }
 
 Transform2d SVGDocument::canvasFromDocumentTransform() const {

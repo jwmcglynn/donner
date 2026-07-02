@@ -1359,6 +1359,59 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
                                  toTinyTransform(imageFromLocal), mask);
 }
 
+void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) {
+  if (bitmap.empty()) {
+    return;
+  }
+
+  const std::optional<tiny_skia::Rect> targetRect = toTinyRect(params.targetRect);
+  if (!targetRect.has_value()) {
+    return;
+  }
+
+  // Premultiplied payloads draw through a borrowed view: no conversion, no
+  // copy. Unpremultiplied payloads (the root surface stores unpremultiplied
+  // for display, so layer/segment snapshots usually arrive that way)
+  // premultiply directly into the draw scratch — one conversion, zero
+  // intermediate copies. Both beat the ImageResource contract, which costs
+  // an extra full-buffer copy (and, for premultiplied payloads, an extra
+  // unpremultiply) per compose blit.
+  std::optional<tiny_skia::PixmapView> sourceView;
+  std::vector<std::uint8_t> premultipliedScratch;
+  if (bitmap.alphaType == AlphaType::Premultiplied) {
+    sourceView = tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(bitmap.pixels),
+                                                  static_cast<std::uint32_t>(bitmap.dimensions.x),
+                                                  static_cast<std::uint32_t>(bitmap.dimensions.y));
+  } else {
+    premultipliedScratch = PremultiplyRgba(bitmap.pixels);
+    sourceView =
+        tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(premultipliedScratch),
+                                         static_cast<std::uint32_t>(bitmap.dimensions.x),
+                                         static_cast<std::uint32_t>(bitmap.dimensions.y));
+  }
+  if (!sourceView.has_value()) {
+    return;
+  }
+
+  const double scaleX = params.targetRect.width() / static_cast<double>(bitmap.dimensions.x);
+  const double scaleY = params.targetRect.height() / static_cast<double>(bitmap.dimensions.y);
+  const Transform2d imageFromLocal = Transform2d::Scale(scaleX, scaleY) *
+                                     Transform2d::Translate(params.targetRect.topLeft) *
+                                     deviceFromLocalTransform_;
+
+  tiny_skia::PixmapPaint paint;
+  paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
+  paint.blendMode = tiny_skia::BlendMode::SourceOver;
+  paint.quality = params.imageRenderingPixelated ? tiny_skia::FilterQuality::Nearest
+                                                 : tiny_skia::FilterQuality::Bilinear;
+  paint.unpremulStore = surfaceStack_.empty();
+
+  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  auto pixmapView = currentPixmapView();
+  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, *sourceView, paint,
+                                 toTinyTransform(imageFromLocal), mask);
+}
+
 void RendererTinySkia::drawText(Registry& registry, const components::ComputedTextComponent& text,
                                 const TextParams& params) {
 #ifdef DONNER_TEXT_ENABLED

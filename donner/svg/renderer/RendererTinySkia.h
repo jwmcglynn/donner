@@ -177,6 +177,19 @@ public:
   void drawImage(const ImageResource& image, const ImageParams& params) override;
 
   /**
+   * Zero-copy compose blit for premultiplied CPU bitmaps.
+   *
+   * tiny-skia consumes premultiplied RGBA natively, so a premultiplied
+   * \ref RendererBitmap is drawn through a borrowed `PixmapView` with no
+   * pixel-buffer conversion or copy. Non-premultiplied bitmaps fall back to
+   * the converting base implementation.
+   *
+   * @param bitmap The bitmap to draw.
+   * @param params Image placement parameters.
+   */
+  void drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) override;
+
+  /**
    * Draws shaped text.
    *
    * @param registry ECS registry used for resolving paint references.
