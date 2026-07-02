@@ -1,6 +1,7 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -18,6 +19,19 @@ namespace {
 
 using nlohmann::json;
 using ::testing::ElementsAreArray;
+
+/// Bazel's per-test scratch directory, falling back to the system temp dir when
+/// running outside `bazel test`. `std::filesystem::temp_directory_path()` alone
+/// resolves to the shared /tmp on remote-execution workers (which do not set
+/// TMPDIR), so fixed filenames written there collide across users: a file left
+/// by one worker user makes a later run under a different user fail to open the
+/// same path for write (observed on the shared macOS RE host, 2026-07-02).
+std::filesystem::path TestTempDir() {
+  if (const char* testTmpdir = std::getenv("TEST_TMPDIR"); testTmpdir && *testTmpdir) {
+    return std::filesystem::path(testTmpdir);
+  }
+  return std::filesystem::temp_directory_path();
+}
 
 constexpr std::string_view kFilteredScene = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
@@ -646,7 +660,7 @@ TEST(EditorControlSessionTest,
 }
 
 TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path tempDir = TestTempDir();
   const std::filesystem::path svgPath = tempDir / "donner_editor_control_rnr_roundtrip.svg";
   const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_roundtrip.rnr";
   {
@@ -754,7 +768,7 @@ TEST(EditorControlSessionTest, RecordsAndReplaysRnrFromSelectorDrag) {
 }
 
 TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {
-  const std::filesystem::path tempDir = std::filesystem::temp_directory_path();
+  const std::filesystem::path tempDir = TestTempDir();
   const std::filesystem::path rnrPath = tempDir / "donner_editor_control_rnr_memory.rnr";
 
   EditorControlSession session;
