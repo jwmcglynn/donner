@@ -312,6 +312,25 @@ jobs:
             exit 0
           fi
 
+          manual_affected="$(
+            cd "$head_dir"
+            bazelisk query --keep_going "attr(\"tags\", \"manual\", set($affected))"
+          )"
+          if [[ -n "$manual_affected" ]]; then
+            printf '%s\n' "$manual_affected" > "$work_dir/manual-affected.txt"
+            affected="$(
+              python3 -c 'import pathlib, sys; manual = set(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8").splitlines()); labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip() and line.strip() not in manual]; print(" ".join(labels))' "$work_dir/affected.txt" "$work_dir/manual-affected.txt"
+            )"
+            echo "Filtered $(grep -c . "$work_dir/manual-affected.txt") manual-tagged affected target(s)."
+          fi
+
+          if [[ -z "$affected" ]]; then
+            echo "Only manual-tagged affected targets detected; falling back to //... coverage."
+            echo "fallback=true" >> "$GITHUB_OUTPUT"
+            echo "affected=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "fallback=false" >> "$GITHUB_OUTPUT"
           echo "affected=$affected" >> "$GITHUB_OUTPUT"
 
