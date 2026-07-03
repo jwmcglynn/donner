@@ -657,13 +657,12 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "painting/context",
                 {
-                    // Golden bakes resvg's pattern tile-size rounding: the context bbox tile is
-                    // 56.57px on screen but resvg rasterizes it as 57px, drifting the tile grid
-                    // ~0.8%/tile. Donner keeps the exact period, so the diamond edges drift by up
-                    // to ~2px at the extremes (~5.3k px). See 0009-resvg_test_suite_bugs.md.
                     {"with-pattern-objectBoundingBox-in-use.svg",
-                     Params::Skip("Bug: golden bakes resvg pattern tile-size rounding "
-                                  "(fractional 56.57px tile drawn as 57px), see doc 0009")},
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "resvg-with-pattern-objectBoundingBox-in-use.png")
+                         .withReason("resvg golden bakes fractional-tile rounding (56.57px tile "
+                                     "rasterized as 57px, ~0.8% period drift); Donner tiles at "
+                                     "the exact computed context box, see doc 0009")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
