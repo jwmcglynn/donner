@@ -522,6 +522,28 @@ TEST(PathOpsTest, UnionOfNestedCirclesKeepsOuterCircle) {
   EXPECT_FALSE(path.isInside({5, 50}));
 }
 
+TEST(PathOpsTest, LowIntersectionCapAllowsNestedCircleContainment) {
+  PathBooleanOptions options;
+  options.maxIntersections = 64;
+  const std::array<PathBooleanInput, 2> inputs = {
+      Input(CirclePath({50, 50}, 40)),
+      Input(CirclePath({50, 50}, 15)),
+  };
+
+  const PathBooleanResult unionResult = ApplyPathBoolean(PathBooleanOp::Union, inputs, options);
+  ASSERT_EQ(unionResult.status, PathBooleanStatus::Ok) << Diagnostics(unionResult);
+  ASSERT_EQ(unionResult.paths.size(), 1u);
+  EXPECT_TRUE(unionResult.paths.front().isInside({50, 50}));
+  EXPECT_FALSE(unionResult.paths.front().isInside({5, 50}));
+
+  const PathBooleanResult intersectResult =
+      ApplyPathBoolean(PathBooleanOp::Intersect, inputs, options);
+  ASSERT_EQ(intersectResult.status, PathBooleanStatus::Ok) << Diagnostics(intersectResult);
+  ASSERT_EQ(intersectResult.paths.size(), 1u);
+  EXPECT_TRUE(intersectResult.paths.front().isInside({50, 50}));
+  EXPECT_FALSE(intersectResult.paths.front().isInside({50, 25}));
+}
+
 TEST(PathOpsTest, XorOfNestedCirclesCreatesCurvedRing) {
   const PathBooleanResult result = Boolean(
       PathBooleanOp::Xor, {Input(CirclePath({50, 50}, 40)), Input(CirclePath({50, 50}, 15))});

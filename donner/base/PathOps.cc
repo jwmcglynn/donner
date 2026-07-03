@@ -323,15 +323,25 @@ double BoxMaxExtent(const Box2d& box) {
   return std::max(std::abs(box.width()), std::abs(box.height()));
 }
 
-std::size_t MaxIntersectionSearchSteps(std::size_t maxIntersections) {
-  constexpr std::size_t kMinIntersectionSearchSteps = 256;
-  constexpr std::size_t kIntersectionSearchMultiplier = 1;
-  if (maxIntersections >
-      (std::numeric_limits<std::size_t>::max() / kIntersectionSearchMultiplier)) {
+std::size_t SaturatingMultiply(std::size_t lhs, std::size_t rhs) {
+  if (lhs != 0 && rhs > std::numeric_limits<std::size_t>::max() / lhs) {
     return std::numeric_limits<std::size_t>::max();
   }
+  return lhs * rhs;
+}
 
-  return std::max(kMinIntersectionSearchSteps, maxIntersections * kIntersectionSearchMultiplier);
+std::size_t MaxIntersectionSearchSteps(const PathBooleanOptions& options,
+                                       std::size_t segmentCount) {
+  constexpr std::size_t kMinIntersectionSearchSteps = 512;
+  constexpr std::size_t kSearchStepsPerSegment = 64;
+  constexpr std::size_t kSearchStepsPerAllowedIntersection = 1;
+
+  const std::size_t segmentBudget = std::max(
+      kMinIntersectionSearchSteps, SaturatingMultiply(segmentCount, kSearchStepsPerSegment));
+  const std::size_t intersectionBudget =
+      SaturatingMultiply(options.maxIntersections, kSearchStepsPerAllowedIntersection);
+
+  return std::max(segmentBudget, intersectionBudget);
 }
 
 std::array<Vector2d, 4> SegmentAsCubic(const Segment& segment) {
@@ -1603,7 +1613,7 @@ PathBooleanResult ApplyPathBoolean(PathBooleanOp op, std::span<const PathBoolean
 
   std::size_t intersectionCount = 0;
   IntersectionSearchBudget intersectionSearchBudget{
-      .maxSteps = MaxIntersectionSearchSteps(options.maxIntersections),
+      .maxSteps = MaxIntersectionSearchSteps(options, segments.size()),
   };
   for (std::size_t i = 0; i < segments.size(); ++i) {
     for (std::size_t j = i + 1; j < segments.size(); ++j) {
