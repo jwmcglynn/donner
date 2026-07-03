@@ -30,8 +30,8 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | State | Count | Meaning |
 |---|---:|---|
-| `Params::Skip("reason")` | 234 | Not run. Feature gap or known bug. The bulk of this doc. |
-| `Params::RenderOnly("reason")` | 72 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful. |
+| `Params::Skip("reason")` | 188 | Not run. Feature gap or known bug. The bulk of this doc. |
+| `Params::RenderOnly("reason")` | 52 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful. |
 | Commented-out `INSTANTIATE_TEST_SUITE_P` | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci). |
 | `Params::WithThreshold(…, maxPx)` / local max-pixel budget | 96 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
 | Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature | The analytic-coverage work closed the former ~16-gate cluster; remaining = 1 `feGaussianBlur/complex-transform` ([#625](https://github.com/jwmcglynn/donner/issues/625)) + paint-order/0-N-dash tests Geode doesn't implement yet. See [Geode coverage (resolved)](#geode-coverage-analytic-slug-dual-ray-resolved--the-misdiagnosis-correction). |
@@ -40,7 +40,7 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | | Count |
 |---|---:|
-| `Params::Skip(...)` | 218 |
+| `Params::Skip(...)` | 188 (derived 2026-07-03) |
 | `Params::RenderOnly(...)` | 52 (render-must-not-crash, no pixel compare) |
 | `WithThreshold` / max-pixel overrides | 77 (~15 still over 1000 px -> masked-bug candidates) |
 | Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature (down from 22; analytic dual-ray landed, see 0041) |
@@ -103,7 +103,6 @@ bottom for completeness.
 | F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
 | F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`) | 8 | Feature |
 | F11 | BiDi / RTL text shaping | ~8 | Feature (needs `text-full`) |
-| F8 | primitive subregion clipping (feBlend/feComposite/feFlood) | 5 | Feature |
 | B7 | font substitution — missing bundled families (masked by fat thresholds) | ~9 | Triage: bundle fonts vs. document as known gap |
 | — | masking edge cases (mask 8, clipPath 6) | ~14 | Mixed |
 | — | uncertain `Bug?` entries (need triage) | ~12 | Needs investigation |
@@ -246,17 +245,12 @@ baseline alignment.
 **Impact:** 8 tests in `painting/paint-order/`. The property name parses but
 render order (fill/stroke/markers) is not reordered. On shapes, text, and tspan.
 
-### F8: primitive subregion clipping
-
-**Impact:** 5 tests (`filters/feBlend` 2, `filters/feComposite` 3 incl. feFlood
-subregion). Filter primitives don't clip output to their `x`/`y`/`width`/`height`
-subregion. Overlaps [B6 (fixed)](#recently-fixed-prs-608611)'s subregion cases.
-
 ### F9: `textLength` + `lengthAdjust`
 
-**Impact:** ~8 (`text/textLength` 4 + `text/lengthAdjust` 3 + `text/text-decoration`
+**Impact:** ~6 (`text/textLength` 2 + `text/lengthAdjust` 3 + `text/text-decoration`
 interaction). Text stretching/compressing to a target length (`spacing` and
-`spacingAndGlyphs`), including the Arabic cases.
+`spacingAndGlyphs`). The `arabic`/`arabic-with-lengthAdjust` cases pass on
+text-full builds and are enabled with `.onlyTextFull()`.
 
 ### F10: `textPath` SVG2 attributes
 
@@ -326,17 +320,20 @@ all-curve loops (circle/ellipse).
 These have a question-mark reason in the file and need a root-cause pass to decide
 bug vs. out-of-scope:
 
-- `structure/svg`: XML Entity references (3), mixed namespaces, non-UTF-8 encoding,
-  rect-inside-non-SVG-element, xmlns validation
+- `structure/svg`: non-UTF-8 encoding, rect-inside-non-SVG-element, xmlns validation
+  (XML entity references ×3 and mixed-namespaces now pass and are enabled)
 - `paint-servers/stop`: `stop-color` inherit edge case
 - `text/letter-spacing/non-ASCII-character`: different CJK glyph (wrong font? →
   overlaps [B7](#b7-font-substitution--missing-bundled-families))
-- `text/textLength/on-text-and-tspan`: we compress more than the golden
 - `text/font-family/fallback-1`: fallback from invalid family
-- `masking/clip/simple-case`: empty `Skip()` with no reason — must get a reason or
-  be fixed
-- `filters/feImage/empty.svg`: `Skip("Linux CI: std::bad_alloc in test setup")` —
-  a CI-only allocation failure that should be root-caused, not left skipped
+- `masking/clip/simple-case`: CSS2 `clip` property (`rect()` clipping on viewport
+  elements, deprecated) — not implemented, 76k px diff
+- `filters/feImage/empty.svg`: `std::bad_alloc` **crash** on Linux CI runners
+  (passes on macOS; enabled briefly on 2026-07-03 and reverted after the Linux
+  lane crashed in all variants). Likely shares a resource-loading root cause
+  with [#576](https://github.com/jwmcglynn/donner/issues/576) — a failed/corrupt
+  load yielding garbage dimensions would explain the giant allocation. Crash =
+  "never crash on untrusted input" violation; root-cause on a Linux x86_64 env.
 
 ---
 
@@ -349,8 +346,7 @@ bug vs. out-of-scope:
 | text/tref | 9 (+1 display) | `<tref>` removed in SVG 2. |
 | text/kerning | 2 | `kerning` attribute deprecated SVG 1.1. |
 | text/glyph-orientation-* | 2 | deprecated SVG 1.1. |
-| paint-servers/radialGradient | 2 | test-suite bugs (`focal-point-correction`, `fr>` default — SVG2 behavior changed). |
-| painting/opacity/50percent | 1 | css-color-4 allows percentage; test predates it. |
+| paint-servers/radialGradient | 1 | test-suite bug (`fr>` default — SVG2 behavior changed). `focal-point-correction` now passes and is enabled. |
 | structure/style-attribute | 1 | `<svg version="1.1">` disables geometry-in-style (SVG 1.1 behavior). |
 | Other RenderOnly UB cases | 51 | Implementation-defined output; we verify no-crash only (per project policy, kept RenderOnly not Skip). |
 
