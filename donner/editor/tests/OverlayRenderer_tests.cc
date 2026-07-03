@@ -1601,5 +1601,75 @@ TEST(OverlayRendererTest, LockedFlashDrawsRedOutlineScaledByIntensity) {
       << "Dimmer flash (0.3) should paint a lower peak alpha than a full flash (1.0).";
 }
 
+TEST(OverlayRendererTest, TextSelectionCapturesBoundsAndTransformHandles) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d());
+
+  // Selected text gets the same overlay rectangle + drag/rotate handles as
+  // shapes, driven by its laid-out ink bounds.
+  ASSERT_EQ(snapshot.aabbsDoc.size(), 1u);
+  EXPECT_GT(snapshot.aabbsDoc[0].size().x, 0.0);
+  EXPECT_NEAR(snapshot.aabbsDoc[0].topLeft.x, 50.0, 3.0);
+  EXPECT_LT(snapshot.aabbsDoc[0].topLeft.y, 80.0);
+  EXPECT_FALSE(snapshot.handleBoxesDoc.empty());
+}
+
+TEST(OverlayRendererTest, TextSelectionCapturesBaselineUnderlay) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d());
+
+  // One baseline segment for the single line: it runs along the y="80"
+  // baseline starting at the x="50" pen position, spanning the glyph run.
+  ASSERT_EQ(snapshot.textBaselinesDoc.size(), 1u);
+  EXPECT_NEAR(snapshot.textBaselinesDoc[0].startDoc.y, 80.0, 1.0);
+  EXPECT_NEAR(snapshot.textBaselinesDoc[0].endDoc.y, 80.0, 1.0);
+  EXPECT_NEAR(snapshot.textBaselinesDoc[0].startDoc.x, 50.0, 3.0);
+  EXPECT_GT(snapshot.textBaselinesDoc[0].endDoc.x, snapshot.textBaselinesDoc[0].startDoc.x + 10.0);
+}
+
+TEST(OverlayRendererTest, MultiLineTextCapturesOneBaselinePerLine) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">
+             <tspan x="50">One</tspan><tspan x="50" dy="24">Two</tspan>
+           </text>
+         </svg>)";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+  app.setSelection(*text);
+
+  const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
+      std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, Transform2d());
+
+  ASSERT_EQ(snapshot.textBaselinesDoc.size(), 2u);
+  EXPECT_NEAR(snapshot.textBaselinesDoc[0].startDoc.y, 80.0, 1.0);
+  EXPECT_NEAR(snapshot.textBaselinesDoc[1].startDoc.y, 104.0, 1.0);
+}
+
 }  // namespace
 }  // namespace donner::editor

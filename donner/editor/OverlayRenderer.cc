@@ -20,6 +20,7 @@
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/properties/PropertyRegistry.h"
@@ -386,17 +387,75 @@ struct AppendChromeItemsOptions {
   Transform2d representedDocumentFromLiveDocument = Transform2d();
 };
 
+/// Append one document-space baseline segment per laid-out line of @p text:
+/// consecutive characters sharing a text-local baseline y form a line, and the
+/// segment spans from the first glyph's pen position to the last glyph's
+/// advance end on that baseline.
+void AppendTextBaselines(const svg::SVGTextElement& text,
+                         const Transform2d& representedDocumentFromLiveDocument,
+                         const std::optional<Box2d>& cullRectDoc,
+                         std::vector<SelectionChromeSnapshot::TextBaseline>* outTextBaselines) {
+  const long charCount = text.getNumberOfChars();
+  if (charCount <= 0) {
+    return;
+  }
+
+  const Transform2d documentFromText = text.elementFromWorld();
+  const auto appendBaseline = [&](const Vector2d& startLocal, const Vector2d& endLocal) {
+    SelectionChromeSnapshot::TextBaseline baseline;
+    baseline.startDoc = representedDocumentFromLiveDocument.transformPosition(
+        documentFromText.transformPosition(startLocal));
+    baseline.endDoc = representedDocumentFromLiveDocument.transformPosition(
+        documentFromText.transformPosition(endLocal));
+    Box2d segmentBounds = Box2d::CreateEmpty(baseline.startDoc);
+    segmentBounds.addPoint(baseline.endDoc);
+    if (!BoxIntersectsCullRect(segmentBounds, cullRectDoc)) {
+      return;
+    }
+    outTextBaselines->push_back(baseline);
+  };
+
+  // Two lines are never closer than a fraction of the glyph size, so a small
+  // absolute tolerance on the baseline y is enough to group a line's
+  // characters without merging adjacent lines.
+  constexpr double kBaselineYToleranceLocal = 0.25;
+  std::optional<double> runBaselineY;
+  double runStartX = 0.0;
+  double runEndX = 0.0;
+  for (long i = 0; i < charCount; ++i) {
+    const Vector2d startLocal = text.getStartPositionOfChar(static_cast<std::size_t>(i));
+    const Vector2d endLocal = text.getEndPositionOfChar(static_cast<std::size_t>(i));
+    if (!runBaselineY.has_value() ||
+        std::abs(startLocal.y - *runBaselineY) > kBaselineYToleranceLocal) {
+      if (runBaselineY.has_value()) {
+        appendBaseline(Vector2d(runStartX, *runBaselineY), Vector2d(runEndX, *runBaselineY));
+      }
+      runBaselineY = startLocal.y;
+      runStartX = std::min(startLocal.x, endLocal.x);
+      runEndX = std::max(startLocal.x, endLocal.x);
+    } else {
+      runStartX = std::min(runStartX, std::min(startLocal.x, endLocal.x));
+      runEndX = std::max(runEndX, std::max(startLocal.x, endLocal.x));
+    }
+  }
+  if (runBaselineY.has_value()) {
+    appendBaseline(Vector2d(runStartX, *runBaselineY), Vector2d(runEndX, *runBaselineY));
+  }
+}
+
 std::optional<Box2d> AppendChromeItems(
     std::span<const svg::SVGElement> elements, const std::optional<Box2d>& cullRectDoc,
     std::vector<SelectionChromeSnapshot::PathItem>* outPaths, std::vector<Box2d>* outAabbs,
     std::vector<Box2d>* outPathAnchorBoxes,
     std::vector<SelectionChromeSnapshot::PathControlLine>* outPathControlLines,
-    std::vector<Box2d>* outPathControlPointBoxes, AppendChromeItemsOptions options = {}) {
+    std::vector<Box2d>* outPathControlPointBoxes,
+    std::vector<SelectionChromeSnapshot::TextBaseline>* outTextBaselines = nullptr,
+    AppendChromeItemsOptions options = {}) {
   std::optional<Box2d> combinedBounds;
   for (const auto& element : elements) {
     element.withWriteAccess([&element, &cullRectDoc, outPaths, outAabbs, outPathAnchorBoxes,
-                             outPathControlLines, outPathControlPointBoxes, options,
-                             &combinedBounds](svg::DocumentWriteAccess&, EntityHandle) {
+                             outPathControlLines, outPathControlPointBoxes, outTextBaselines,
+                             options, &combinedBounds](svg::DocumentWriteAccess&, EntityHandle) {
       std::optional<Box2d> mergedBounds;
       for (const auto& geometry : CollectRenderableGeometry(element)) {
         const std::optional<Box2d> worldBoundsDoc = geometry.worldBounds();
@@ -431,6 +490,25 @@ std::optional<Box2d> AppendChromeItems(
                                   outPathControlPointBoxes);
           }
           outPaths->push_back(std::move(item));
+        }
+      }
+
+      // Text roots have no spline outline; they contribute their laid-out
+      // ink bounds (so text gets the same selection rectangle + transform
+      // handles as shapes) plus a baseline underlay segment per line.
+      for (const auto& text : CollectRenderableTextRoots(element)) {
+        const std::optional<Box2d> inkBoundsDoc = TextWorldInkBounds(text);
+        if (!inkBoundsDoc.has_value()) {
+          continue;
+        }
+        const Box2d representedInkBoundsDoc =
+            options.representedDocumentFromLiveDocument.transformBox(*inkBoundsDoc);
+        AddBoxToOptional(&mergedBounds, representedInkBoundsDoc);
+
+        if (outTextBaselines != nullptr &&
+            BoxIntersectsCullRect(representedInkBoundsDoc, cullRectDoc)) {
+          AppendTextBaselines(text, options.representedDocumentFromLiveDocument, cullRectDoc,
+                              outTextBaselines);
         }
       }
 
@@ -610,6 +688,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
     AppendChromeItems(std::span<const svg::SVGElement>(flashElements), /*cullRectDoc=*/std::nullopt,
                       &flashPaths, &flashAabbs, /*outPathAnchorBoxes=*/nullptr,
                       /*outPathControlLines=*/nullptr, /*outPathControlPointBoxes=*/nullptr,
+                      /*outTextBaselines=*/nullptr,
                       AppendChromeItemsOptions{.includePathPointChrome = false});
     if (!flashPaths.empty()) {
       PathBuilder mergedFlashPath;
@@ -637,7 +716,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   if (!sourceHover.empty()) {
     AppendChromeItems(sourceHover, cullRectDoc, &snapshot.hoverPaths, &snapshot.hoverAabbsDoc,
                       /*outPathAnchorBoxes=*/nullptr, /*outPathControlLines=*/nullptr,
-                      /*outPathControlPointBoxes=*/nullptr,
+                      /*outPathControlPointBoxes=*/nullptr, /*outTextBaselines=*/nullptr,
                       AppendChromeItemsOptions{.includePathPointChrome = false});
   }
 
@@ -653,7 +732,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   const bool includePathPointChrome = pathOutlinesOnly;
   const std::optional<Box2d> combinedSelectionBounds = AppendChromeItems(
       selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc, &snapshot.pathAnchorBoxesDoc,
-      &snapshot.pathControlLinesDoc, &snapshot.pathControlPointBoxesDoc,
+      &snapshot.pathControlLinesDoc, &snapshot.pathControlPointBoxesDoc, &snapshot.textBaselinesDoc,
       AppendChromeItemsOptions{
           .includePaths = !combinedBoundsOnly,
           .includePerElementAabbs = !combinedBoundsOnly && !pathOutlinesOnly,
@@ -714,7 +793,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       !snapshot.marqueeDoc.has_value() && !snapshot.lockedFlash.has_value() &&
       !snapshot.livePathPreview.has_value() && !snapshot.penPreviewSegmentDoc.has_value() &&
       !snapshot.penCloseAffordanceDoc.has_value() && !snapshot.textCaretDoc.has_value() &&
-      !snapshot.textBoxDoc.has_value()) {
+      !snapshot.textBoxDoc.has_value() && snapshot.textBaselinesDoc.empty()) {
     return;
   }
 
@@ -744,6 +823,26 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     shape.fillRule = preview.fillRule;
     shape.parentFromEntity = Transform2d();
     renderer.drawPath(shape, paint.strokeParams);
+  }
+
+  // Baseline underlay for selected text: drawn before every other chrome
+  // layer so the selection rectangle, handles, and caret all read on top of
+  // it. Guidance styling (translucent control-line stroke), not committed-
+  // geometry styling.
+  if (!snapshot.textBaselinesDoc.empty()) {
+    const svg::PaintParams baselinePaint =
+        MakePathControlLinePaint(snapshot.selectionStrokeWidthWorld);
+    renderer.setPaint(baselinePaint);
+    renderer.setTransform(snapshot.canvasFromDoc);
+    for (const SelectionChromeSnapshot::TextBaseline& baseline : snapshot.textBaselinesDoc) {
+      PathBuilder builder;
+      builder.moveTo(baseline.startDoc);
+      builder.lineTo(baseline.endDoc);
+      svg::PathShape shape;
+      shape.path = builder.build();
+      shape.parentFromEntity = Transform2d();
+      renderer.drawPath(shape, baselinePaint.strokeParams);
+    }
   }
 
   if (!snapshot.hoverPaths.empty()) {

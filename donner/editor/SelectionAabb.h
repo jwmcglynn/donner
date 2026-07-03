@@ -3,12 +3,14 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
+#include "donner/svg/SVGTextElement.h"
 
 namespace donner::editor {
 
@@ -24,11 +26,24 @@ namespace donner::editor {
 [[nodiscard]] std::vector<svg::SVGGeometryElement> CollectRenderableGeometry(
     const svg::SVGElement& root);
 
+/// Collect every renderable `<text>` root in @p root's subtree (including
+/// @p root itself if it is one). Skips the same non-rendered containers as
+/// \ref CollectRenderableGeometry and does not descend into text content —
+/// tspans contribute chrome through their text root.
+[[nodiscard]] std::vector<svg::SVGTextElement> CollectRenderableTextRoots(
+    const svg::SVGElement& root);
+
+/// Document-space AABB of @p text's laid-out glyph ink, or nullopt when the
+/// text has no ink (empty content or unlaid-out text). The text-local ink
+/// box is mapped corner-by-corner through the element's transform, so a
+/// rotated text still produces a covering axis-aligned box.
+[[nodiscard]] std::optional<Box2d> TextWorldInkBounds(const svg::SVGTextElement& text);
+
 /// Snapshot world-space bounds for every selected element that has
-/// renderable geometry. Elements that are themselves geometry contribute
-/// their own bounds; group-like elements contribute the union of their
-/// renderable geometry descendants. Elements with no renderable geometry
-/// produce no entry.
+/// renderable content. Elements that are themselves geometry contribute
+/// their own bounds; `<text>` roots contribute their laid-out ink bounds;
+/// group-like elements contribute the union of their renderable
+/// descendants. Elements with no renderable content produce no entry.
 ///
 /// @param selection Current selection handles.
 /// @return Document-space AABBs in selection order (one per selected
@@ -36,8 +51,8 @@ namespace donner::editor {
 [[nodiscard]] std::vector<Box2d> SnapshotSelectionWorldBounds(
     std::span<const svg::SVGElement> selection);
 
-/// Snapshot world-space bounds for renderable geometry painted after a
-/// single selected element. This is a conservative occlusion hint for the
+/// Snapshot world-space bounds for renderable content (geometry and text)
+/// painted after a single selected element. This is a conservative occlusion hint for the
 /// async-safe re-drag path: if the click falls inside one of these bounds,
 /// the editor should wait for the normal hit-test path instead of assuming
 /// the selected element owns the click.

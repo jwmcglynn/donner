@@ -1337,6 +1337,64 @@ TEST_F(SelectToolTest, CornerHandleResizesSelectionFromOppositeCorner) {
   EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Resize element");
 }
 
+TEST_F(SelectToolTest, CornerHandleResizesTextSelection) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="label" x="40" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
+  loadSvg(kTextSvg);
+  app.setSelection(elementById("#label"));
+
+  const std::vector<Box2d> before =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(before.size(), 1u);
+  const Vector2d anchoredCorner = before[0].topLeft;
+  const Vector2d grabbedCorner = before[0].bottomRight;
+
+  tool.onMouseDown(app, grabbedCorner, MouseModifiers{});
+  tool.onMouseMove(app, grabbedCorner + Vector2d(30.0, 15.0), /*buttonHeld=*/true);
+  const auto resizeGesture = tool.activeGesturePreview();
+  ASSERT_TRUE(resizeGesture.has_value());
+  EXPECT_EQ(resizeGesture->kind, SelectTool::ActiveGestureKind::Resize);
+  tool.onMouseUp(app, grabbedCorner + Vector2d(30.0, 15.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const std::vector<Box2d> after =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(after.size(), 1u);
+  EXPECT_NEAR(after[0].topLeft.x, anchoredCorner.x, 1e-3);
+  EXPECT_NEAR(after[0].topLeft.y, anchoredCorner.y, 1e-3);
+  EXPECT_NEAR(after[0].bottomRight.x, grabbedCorner.x + 30.0, 1e-3);
+  EXPECT_NEAR(after[0].bottomRight.y, grabbedCorner.y + 15.0, 1e-3);
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Resize element");
+}
+
+TEST_F(SelectToolTest, DragInsideInkBoundsMovesTextSelection) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+           <text id="label" x="40" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
+  loadSvg(kTextSvg);
+  app.setSelection(elementById("#label"));
+
+  const std::vector<Box2d> before =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(before.size(), 1u);
+  const Vector2d inside = (before[0].topLeft + before[0].bottomRight) * 0.5;
+
+  tool.onMouseDown(app, inside, MouseModifiers{});
+  tool.onMouseMove(app, inside + Vector2d(25.0, -10.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, inside + Vector2d(25.0, -10.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const std::vector<Box2d> after =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(after.size(), 1u);
+  EXPECT_NEAR(after[0].topLeft.x, before[0].topLeft.x + 25.0, 1e-3);
+  EXPECT_NEAR(after[0].topLeft.y, before[0].topLeft.y - 10.0, 1e-3);
+}
+
 TEST_F(SelectToolTest, ResizeUndoRedoRestoresBounds) {
   loadSvg(kResizeRectSvg);
   app.setSelection(elementById("#target"));

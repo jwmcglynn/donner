@@ -317,6 +317,80 @@ TEST(SelectionAabbTest, RefreshSelectionBoundsCachePromotesOnlyDisplayedVersionA
   EXPECT_TRUE(cache.displayedOccludingBoundsDoc.empty());
 }
 
+TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsIncludesTextInkBounds) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*text};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  // The text root contributes its laid-out ink bounds: glyphs start at the
+  // x="50" pen position and sit on the y="80" baseline (ascenders above it).
+  ASSERT_EQ(bounds.size(), 1u);
+  EXPECT_GT(bounds[0].size().x, 0.0);
+  EXPECT_GT(bounds[0].size().y, 0.0);
+  EXPECT_NEAR(bounds[0].topLeft.x, 50.0, 3.0);
+  EXPECT_LT(bounds[0].topLeft.y, 80.0);
+  EXPECT_GT(bounds[0].bottomRight.y, 60.0);
+}
+
+TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsMapsTextThroughItsTransform) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+              <text id="plain" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+              <text id="moved" x="50" y="80" font-size="20" font-family="sans-serif"
+                    transform="translate(100 40)">Hello</text>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto plain = app.document().document().querySelector("#plain");
+  auto moved = app.document().document().querySelector("#moved");
+  ASSERT_TRUE(plain.has_value());
+  ASSERT_TRUE(moved.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*plain, *moved};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 2u);
+  EXPECT_NEAR(bounds[1].topLeft.x, bounds[0].topLeft.x + 100.0, 1e-6);
+  EXPECT_NEAR(bounds[1].topLeft.y, bounds[0].topLeft.y + 40.0, 1e-6);
+}
+
+TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsIncludesTextInsideSelectedGroup) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <g id="group">
+                <rect x="20" y="20" width="40" height="40" fill="red"/>
+                <text x="50" y="180" font-size="20" font-family="sans-serif">Hello</text>
+              </g>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto group = app.document().document().querySelector("#group");
+  ASSERT_TRUE(group.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*group};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  // The group AABB unions the rect with the text ink bounds, so it must
+  // extend down to the text sitting on the y="180" baseline.
+  ASSERT_EQ(bounds.size(), 1u);
+  EXPECT_LE(bounds[0].topLeft.y, 20.0 + 1e-6);
+  EXPECT_GT(bounds[0].bottomRight.y, 160.0);
+}
+
 TEST(SelectionAabbTest, SnapshotOccludingBoundsAllowConcurrentDom) {
   constexpr std::string_view kSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
