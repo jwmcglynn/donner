@@ -1086,8 +1086,15 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     if (app_.document().hasPendingMutations() && flushQueuedMutationAndRefreshOverlay()) {
       penDragFlushedThisFrame_ = true;
     }
-  } else if (input.leftMouseDown && activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
+  } else if (input.leftMouseDown && activeTool_ == ActiveTool::Text &&
+             (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
+    const bool adjustingFrame = textTool_.isAdjustingFrame();
     textTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true);
+    if (adjustingFrame) {
+      // Frame gestures mutate the DOM each move; keep the selection chrome
+      // (frame rect + handles) tracking the live frame.
+      refreshAfterToolDrivenFlush();
+    }
   } else if (input.leftMouseDown && (selectTool_.isDragging() || selectTool_.isMarqueeing())) {
     selectTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true, input.modifiers);
     if (!renderCoordinator_.asyncRenderer().isBusy()) {
@@ -1097,7 +1104,8 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   }
 
   if (input.leftMouseReleased) {
-    if (activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
+    if (activeTool_ == ActiveTool::Text &&
+        (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
       textTool_.onMouseUp(app_, input.documentPoint);
       refreshAfterToolDrivenFlush();
       return;
@@ -2693,12 +2701,18 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
   }
 
   // Text-tool live pointer path: the pending-click buffer delivers the
-  // mousedown (starting the box drag), but the drag extension and the release
-  // that opens the editing session come from the live ImGui pointer, exactly
+  // mousedown (starting the box drag or a frame handle gesture), but the
+  // drag extension and the release come from the live ImGui pointer, exactly
   // like the pen tool's anchor drag below.
-  if (textToolActive && textTool_.isDraggingBox()) {
+  if (textToolActive && (textTool_.isDraggingBox() || textTool_.isAdjustingFrame())) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
+      const bool adjustingFrame = textTool_.isAdjustingFrame();
       textTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+      if (adjustingFrame) {
+        // Frame gestures mutate the DOM each move; keep the selection chrome
+        // (frame rect + handles) tracking the live frame.
+        refreshAfterToolDrivenFlush();
+      }
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       textTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));

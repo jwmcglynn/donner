@@ -1370,6 +1370,52 @@ TEST_F(SelectToolTest, CornerHandleResizesTextSelection) {
   EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Resize element");
 }
 
+TEST_F(SelectToolTest, CornerHandleScalesBoxTextWithTransform) {
+  // With the SELECT tool, resize is the normal scale gesture: the element
+  // gets a transform and the authored box attributes stay untouched (the
+  // text-tool frame resize is the one that rewrites the box).
+  constexpr std::string_view kBoxTextSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <text id="label" x="40" y="80" font-size="20" font-family="sans-serif"
+                 data-donner-text-box-width="120" data-donner-text-box-height="60">Hi</text>
+         </svg>)svg";
+  loadSvg(kBoxTextSvg);
+  app.setSelection(elementById("#label"));
+
+  const std::vector<Box2d> before =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(before.size(), 1u);
+  // The selection rect is the authored box: (40,60) 120x60.
+  ASSERT_NEAR(before[0].topLeft.x, 40.0, 1e-6);
+  ASSERT_NEAR(before[0].topLeft.y, 60.0, 1e-6);
+  ASSERT_NEAR(before[0].size().x, 120.0, 1e-6);
+  ASSERT_NEAR(before[0].size().y, 60.0, 1e-6);
+
+  const Vector2d grabbedCorner = before[0].bottomRight;
+  tool.onMouseDown(app, grabbedCorner, MouseModifiers{});
+  tool.onMouseMove(app, grabbedCorner + Vector2d(60.0, 30.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, grabbedCorner + Vector2d(60.0, 30.0));
+  ASSERT_TRUE(app.flushFrame());
+
+  const svg::SVGElement element = elementById("#label");
+  // `setTransform` writes the transform component (the attribute string is
+  // reflected by the shell's source writeback, not at this layer).
+  const Transform2d transform =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.cast<svg::SVGGraphicsElement>().transform();
+      });
+  EXPECT_FALSE(transform.isIdentity()) << "select-tool resize must scale via transform";
+  const auto widthAttr = element.getAttribute("data-donner-text-box-width");
+  ASSERT_TRUE(widthAttr.has_value());
+  EXPECT_EQ(*widthAttr, "120");
+
+  const std::vector<Box2d> after =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
+  ASSERT_EQ(after.size(), 1u);
+  EXPECT_NEAR(after[0].bottomRight.x, grabbedCorner.x + 60.0, 1e-3);
+  EXPECT_NEAR(after[0].bottomRight.y, grabbedCorner.y + 30.0, 1e-3);
+}
+
 TEST_F(SelectToolTest, DragInsideInkBoundsMovesTextSelection) {
   constexpr std::string_view kTextSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">

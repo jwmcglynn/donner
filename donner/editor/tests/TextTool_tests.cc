@@ -561,6 +561,114 @@ TEST_F(TextToolExistingTextTest, BoxTextSoftWrapRoundTripsThroughReedit) {
   EXPECT_EQ(tool.sessionContent(), U"MMMM MMMM");
 }
 
+TEST_F(TextToolTest, FrameHandleResizeReflowsBoxWithoutScalingGlyphs) {
+  // Box text narrow enough to wrap: box (10,20)-(70,120).
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("MMMM MMMM");
+  ASSERT_GE(tspanCount(), 2);
+
+  // Grab the bottom-right frame handle and drag it out to (410,140): with
+  // the text tool this resizes the BOX (reflow), never the glyphs.
+  tool.onMouseDown(app, Vector2d(70.0, 120.0), MouseModifiers{});
+  EXPECT_TRUE(tool.isAdjustingFrame());
+  tool.onMouseMove(app, Vector2d(410.0, 140.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(410.0, 140.0));
+  EXPECT_FALSE(tool.isAdjustingFrame());
+  EXPECT_TRUE(tool.isEditing());
+
+  svg::SVGTextElement element = text();
+  EXPECT_THAT(attr(element, "data-donner-text-box-width"), Eq("400"));
+  EXPECT_THAT(attr(element, "data-donner-text-box-height"), Eq("120"));
+  EXPECT_THAT(attr(element, "x"), Eq("10"));
+  EXPECT_THAT(attr(element, "y"), Eq("52"));
+  // No glyph scaling: font-size and transform untouched.
+  EXPECT_THAT(attr(element, "font-size"), Eq("32"));
+  EXPECT_THAT(attr(element, "transform"), Eq(""));
+  // The wider frame no longer wraps the content.
+  EXPECT_EQ(tspanCount(), 0);
+  EXPECT_EQ(element.textContent(), "MMMM MMMM");
+}
+
+TEST_F(TextToolTest, FrameResizeConvertsPointTextToUserSizedBox) {
+  doubleClickAt(Vector2d(50.0, 80.0));
+  type("Hello");
+  ASSERT_THAT(attr(text(), "data-donner-text-box-width"), Eq(""));
+
+  // Point text: the frame is the computed ink rect. Grab its bottom-right
+  // corner and drag outward — the text becomes user-sized box text.
+  svg::SVGTextElement element = text();
+  const Box2d ink = element.withWriteAccess(
+      [&element](svg::DocumentWriteAccess&, EntityHandle) { return element.inkBoundingBox(); });
+  ASSERT_FALSE(ink.isEmpty());
+
+  tool.onMouseDown(app, ink.bottomRight, MouseModifiers{});
+  EXPECT_TRUE(tool.isAdjustingFrame());
+  tool.onMouseMove(app, ink.bottomRight + Vector2d(60.0, 40.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, ink.bottomRight + Vector2d(60.0, 40.0));
+  EXPECT_TRUE(tool.isEditing());
+
+  const std::string widthAttr = attr(text(), "data-donner-text-box-width");
+  const std::string heightAttr = attr(text(), "data-donner-text-box-height");
+  ASSERT_FALSE(widthAttr.empty());
+  ASSERT_FALSE(heightAttr.empty());
+  EXPECT_NEAR(std::stod(widthAttr), ink.size().x + 60.0, 1e-6);
+  EXPECT_NEAR(std::stod(heightAttr), ink.size().y + 40.0, 1e-6);
+  EXPECT_EQ(text().textContent(), "Hello");
+  EXPECT_THAT(attr(text(), "font-size"), Eq("32"));
+  EXPECT_THAT(attr(text(), "transform"), Eq(""));
+}
+
+TEST_F(TextToolTest, RotateRingRotatesElementKeepingFrameAttributes) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+
+  // Press in the rotate ring outside the bottom-right corner (distance
+  // ~19.8px at zoom 1: outside the resize handle, inside the ring).
+  tool.onMouseDown(app, Vector2d(84.0, 134.0), MouseModifiers{});
+  EXPECT_TRUE(tool.isAdjustingFrame());
+  // Sweep the pointer around the frame center to rotate.
+  tool.onMouseMove(app, Vector2d(10.0, 134.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(10.0, 134.0));
+  EXPECT_TRUE(tool.isEditing());
+
+  svg::SVGTextElement element = text();
+  // `setTransform` writes the transform component (the attribute string is
+  // reflected by the shell's source writeback, not at this layer).
+  const Transform2d transform =
+      element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
+        return element.cast<svg::SVGGraphicsElement>().transform();
+      });
+  EXPECT_FALSE(transform.isIdentity()) << "rotate ring must rotate the element";
+  // Rotate never rewrites the frame: box attributes and font-size stay.
+  EXPECT_THAT(attr(element, "data-donner-text-box-width"), Eq("60"));
+  EXPECT_THAT(attr(element, "data-donner-text-box-height"), Eq("100"));
+  EXPECT_THAT(attr(element, "font-size"), Eq("32"));
+}
+
+TEST_F(TextToolTest, ClickInsideFrameOffGlyphsParksCaretAtEnd) {
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("Hi");
+  tool.moveCaret(app, TextTool::CaretMove::LineStart);
+  ASSERT_EQ(tool.caretIndex(), 0u);
+
+  // Click in the empty lower half of the box: no glyph there, but the
+  // session stays open with the caret parked at the end.
+  clickAt(Vector2d(40.0, 100.0));
+
+  EXPECT_TRUE(tool.isEditing());
+  EXPECT_EQ(tool.caretIndex(), 2u);
+  EXPECT_EQ(textElementCount(), 1);
+}
+
 TEST_F(TextToolTest, CancelResetsWithoutTouchingDocument) {
   doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");

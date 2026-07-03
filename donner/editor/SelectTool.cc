@@ -44,17 +44,6 @@ Vector2d CenterOf(const Box2d& box) {
   return (box.topLeft + box.bottomRight) * 0.5;
 }
 
-Transform2d TransformDocumentAroundPoint(const Vector2d& fixedDocumentPoint,
-                                         const Transform2d& centeredDocumentFromDocument) {
-  return Transform2d::Translate(-fixedDocumentPoint) * centeredDocumentFromDocument *
-         Transform2d::Translate(fixedDocumentPoint);
-}
-
-double AngleFromCenter(const Vector2d& center, const Vector2d& point) {
-  const Vector2d delta = point - center;
-  return std::atan2(delta.y, delta.x);
-}
-
 std::optional<Transform2d> ResizeTransform(const Box2d& startBounds,
                                            SelectionTransformCorner corner,
                                            const Vector2d& documentPoint, bool preserveAspectRatio,

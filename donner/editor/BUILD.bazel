@@ -100,6 +100,7 @@ donner_cc_library(
     hdrs = ["SelectionAabb.h"],
     deps = [
         "//donner/base",
+        "//donner/base/parser",
         "//donner/svg",
     ],
 )
@@ -855,6 +856,7 @@ donner_cc_library(
         ":command_queue",
         ":editor_app",
         ":lock_state",
+        ":selection_transform_handles",
         ":tool",
         "//donner/base",
         "//donner/base/parser",

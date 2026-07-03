@@ -23,6 +23,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/editor/Tool.h"
 #include "donner/svg/SVGTextElement.h"
 
@@ -62,25 +63,32 @@ public:
     std::optional<Box2d> boxDoc;
   };
 
-  /// Begin a gesture: move the caret when the click lands inside the active
-  /// session's text; otherwise commit any active session, then either open
-  /// an editing session on the existing `<text>` under the click (caret at
-  /// the clicked character) or start a box drag on empty canvas.
+  /// Begin a gesture: a press on the session frame's transform handles
+  /// starts a frame resize (reflow — glyphs never scale) or a rotate; a
+  /// click inside the session's text moves the caret (clicks inside the
+  /// frame but off every glyph land the caret at the end); otherwise commit
+  /// any active session, then either open an editing session on the
+  /// existing `<text>` under the click (caret at the clicked character) or
+  /// start a box drag on empty canvas.
   void onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                    MouseModifiers modifiers) override;
 
-  /// Extend the box drag.
+  /// Extend the box drag or the active frame gesture.
   void onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) override;
 
   /// Finish the gesture: a drag creates box text and a double-click places
   /// point text, opening the editing session with the caret at the start; a
-  /// plain click on empty canvas creates nothing.
+  /// plain click on empty canvas creates nothing. Releasing a frame gesture
+  /// keeps the editing session open.
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
   /// True while an in-canvas editing session (with caret) is active.
   [[nodiscard]] bool isEditing() const { return state_ == State::Editing; }
   /// True while a text-box drag is in progress.
   [[nodiscard]] bool isDraggingBox() const { return state_ == State::DraggingBox; }
+  /// True while a frame handle gesture (frame resize or rotate) is active.
+  /// The editing session stays open underneath it.
+  [[nodiscard]] bool isAdjustingFrame() const { return frameGesture_ != FrameGesture::None; }
   /// The box being dragged, for drag-preview chrome.
   [[nodiscard]] const std::optional<Box2d>& dragBoxDoc() const { return dragBoxDoc_; }
 
@@ -142,6 +150,17 @@ private:
   /// or nullopt when the click misses every glyph. Clicks in the trailing
   /// half of a glyph place the caret after it.
   [[nodiscard]] std::optional<std::size_t> caretIndexAtPoint(const Vector2d& documentPoint) const;
+  /// The session frame in the text's local space: the authored box for box
+  /// text, or the laid-out ink bounds for point text. Nullopt when the ink
+  /// is empty and no box is authored.
+  [[nodiscard]] std::optional<Box2d> sessionFrameLocal() const;
+  /// Start a frame resize/rotate when @p documentPoint lands on the session
+  /// frame's transform handles. Returns true when a gesture began.
+  bool beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModifiers modifiers);
+  /// Advance the active frame gesture to @p documentPoint: resize rewrites
+  /// the box attributes and rewraps (converting point text to a user-sized
+  /// box on the first move); rotate sets the element transform.
+  void updateFrameGesture(EditorApp& editor, const Vector2d& documentPoint);
   /// Rebuild the element's content from `content_` (single text node for one
   /// line; one `<tspan>` per line otherwise), wrapping box text to the box
   /// width using measured character advances. Flushes so subsequent
@@ -161,7 +180,28 @@ private:
   /// Record the pre-session source baseline for the single session undo.
   void beginSessionUndo(EditorApp& editor);
 
+  /// Active frame handle gesture (session stays in Editing underneath).
+  enum class FrameGesture {
+    None,    //!< No frame gesture.
+    Resize,  //!< Corner handle drag resizes the frame (reflow, never scale).
+    Rotate,  //!< Rotate ring drag rotates the element.
+  };
+
   State state_ = State::Idle;
+  FrameGesture frameGesture_ = FrameGesture::None;
+  /// Grabbed corner for a frame resize.
+  SelectionTransformCorner frameCorner_ = SelectionTransformCorner::BottomRight;
+  /// Frame rect (text-local space) captured at frame-gesture start.
+  Box2d frameStartLocal_ = Box2d(Vector2d::Zero(), Vector2d::Zero());
+  /// `documentFromText_` captured at frame-gesture start; the live value
+  /// changes under a rotate.
+  Transform2d frameStartDocumentFromText_;
+  /// Element transform captured at rotate start.
+  Transform2d rotateStartTransform_;
+  /// Pointer angle around the frame center at rotate start (radians).
+  double rotateStartAngleRadians_ = 0.0;
+  /// Frame center (document space) the rotate pivots around.
+  Vector2d rotateCenterDoc_ = Vector2d::Zero();
   /// The session's `<text>` element (valid in Editing).
   std::optional<svg::SVGTextElement> sessionText_;
   /// True when the session created its `<text>` element (a click-away with

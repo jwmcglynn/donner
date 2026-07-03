@@ -139,4 +139,15 @@ double PixelsPerDocUnitFromTransform(const Transform2d& canvasFromDoc) {
   return canvasFromDoc.transformVector(Vector2d(1.0, 0.0)).length();
 }
 
+Transform2d TransformDocumentAroundPoint(const Vector2d& fixedDocumentPoint,
+                                         const Transform2d& centeredDocumentFromDocument) {
+  return Transform2d::Translate(-fixedDocumentPoint) * centeredDocumentFromDocument *
+         Transform2d::Translate(fixedDocumentPoint);
+}
+
+double AngleFromCenter(const Vector2d& center, const Vector2d& point) {
+  const Vector2d delta = point - center;
+  return std::atan2(delta.y, delta.x);
+}
+
 }  // namespace donner::editor

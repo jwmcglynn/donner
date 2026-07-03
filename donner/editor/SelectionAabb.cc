@@ -4,6 +4,7 @@
 #include <optional>
 
 #include "donner/base/Transform.h"
+#include "donner/base/parser/NumberParser.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/SVGDocument.h"
@@ -100,8 +101,35 @@ void CollectRenderableTextRootsImpl(const svg::SVGElement& root,
   }
 }
 
+/// Parse @p name as a plain SVG number, or nullopt when absent/malformed.
+std::optional<double> ParseNumericAttribute(const svg::SVGElement& element, std::string_view name) {
+  const std::optional<RcString> value = element.getAttribute(name);
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  const auto result = ::donner::parser::NumberParser::Parse(std::string_view(*value));
+  if (result.hasError()) {
+    return std::nullopt;
+  }
+  return result.result().number;
+}
+
+/// Document-space AABB covering @p localRect mapped through @p text's
+/// element transform, corner by corner.
+Box2d TextWorldAabbOfLocalRect(const svg::SVGTextElement& text, const Box2d& localRect) {
+  const Transform2d documentFromText = text.elementFromWorld();
+  const std::array<Vector2d, 4> corners = {
+      localRect.topLeft, Vector2d(localRect.bottomRight.x, localRect.topLeft.y),
+      localRect.bottomRight, Vector2d(localRect.topLeft.x, localRect.bottomRight.y)};
+  Box2d worldRect = Box2d::CreateEmpty(documentFromText.transformPosition(corners[0]));
+  for (std::size_t i = 1; i < corners.size(); ++i) {
+    worldRect.addPoint(documentFromText.transformPosition(corners[i]));
+  }
+  return worldRect;
+}
+
 /// Merge the document-space bounds of every renderable leaf (geometry world
-/// bounds + text ink bounds) in @p root's subtree into @p merged.
+/// bounds + text frame bounds) in @p root's subtree into @p merged.
 void MergeRenderableWorldBounds(const svg::SVGElement& root, std::optional<Box2d>& merged) {
   std::vector<svg::SVGGeometryElement> geometryElements;
   CollectRenderableGeometryImpl(root, geometryElements);
@@ -120,14 +148,14 @@ void MergeRenderableWorldBounds(const svg::SVGElement& root, std::optional<Box2d
   std::vector<svg::SVGTextElement> textRoots;
   CollectRenderableTextRootsImpl(root, textRoots);
   for (const auto& text : textRoots) {
-    const std::optional<Box2d> inkDoc = TextWorldInkBounds(text);
-    if (!inkDoc.has_value()) {
+    const std::optional<Box2d> frameDoc = TextWorldFrameBounds(text);
+    if (!frameDoc.has_value()) {
       continue;
     }
     if (merged.has_value()) {
-      merged->addBox(*inkDoc);
+      merged->addBox(*frameDoc);
     } else {
-      merged = *inkDoc;
+      merged = *frameDoc;
     }
   }
 }
@@ -159,9 +187,9 @@ void CollectLaterRenderableBoundsImpl(const svg::SVGElement& root, const svg::SV
 
   if (root.isa<svg::SVGTextElement>()) {
     if (afterSelected) {
-      const std::optional<Box2d> inkDoc = TextWorldInkBounds(root.cast<svg::SVGTextElement>());
-      if (inkDoc.has_value()) {
-        out.push_back(*inkDoc);
+      const std::optional<Box2d> frameDoc = TextWorldFrameBounds(root.cast<svg::SVGTextElement>());
+      if (frameDoc.has_value()) {
+        out.push_back(*frameDoc);
       }
     }
     return;
@@ -198,15 +226,32 @@ std::optional<Box2d> TextWorldInkBounds(const svg::SVGTextElement& text) {
     return std::nullopt;
   }
 
-  const Transform2d documentFromText = text.elementFromWorld();
-  const std::array<Vector2d, 4> corners = {
-      inkLocal.topLeft, Vector2d(inkLocal.bottomRight.x, inkLocal.topLeft.y), inkLocal.bottomRight,
-      Vector2d(inkLocal.topLeft.x, inkLocal.bottomRight.y)};
-  Box2d inkDoc = Box2d::CreateEmpty(documentFromText.transformPosition(corners[0]));
-  for (std::size_t i = 1; i < corners.size(); ++i) {
-    inkDoc.addPoint(documentFromText.transformPosition(corners[i]));
+  return TextWorldAabbOfLocalRect(text, inkLocal);
+}
+
+std::optional<Box2d> AuthoredTextBoxLocal(const svg::SVGTextElement& text) {
+  const std::optional<double> boxWidth = ParseNumericAttribute(text, "data-donner-text-box-width");
+  const std::optional<double> boxHeight =
+      ParseNumericAttribute(text, "data-donner-text-box-height");
+  if (!boxWidth.has_value() || !boxHeight.has_value()) {
+    return std::nullopt;
   }
-  return inkDoc;
+
+  // Invert the text tool's creation rule: the `x`/`y` origin is the box's
+  // top-left with the first baseline one font-size below the top. 16 is the
+  // CSS `font-size` initial value, matching what an attribute-less text
+  // renders at.
+  const double fontSize = ParseNumericAttribute(text, "font-size").value_or(16.0);
+  const Vector2d topLeft(ParseNumericAttribute(text, "x").value_or(0.0),
+                         ParseNumericAttribute(text, "y").value_or(0.0) - fontSize);
+  return Box2d(topLeft, topLeft + Vector2d(*boxWidth, *boxHeight));
+}
+
+std::optional<Box2d> TextWorldFrameBounds(const svg::SVGTextElement& text) {
+  if (const std::optional<Box2d> boxLocal = AuthoredTextBoxLocal(text); boxLocal.has_value()) {
+    return TextWorldAabbOfLocalRect(text, *boxLocal);
+  }
+  return TextWorldInkBounds(text);
 }
 
 std::vector<Box2d> SnapshotSelectionWorldBounds(std::span<const svg::SVGElement> selection) {

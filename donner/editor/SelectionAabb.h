@@ -39,6 +39,18 @@ namespace donner::editor {
 /// rotated text still produces a covering axis-aligned box.
 [[nodiscard]] std::optional<Box2d> TextWorldInkBounds(const svg::SVGTextElement& text);
 
+/// Text-local frame rect authored by the text tool: the
+/// `data-donner-text-box-width`/`-height` region anchored one font-size
+/// above the `x`/`y` origin (inverting the tool's "first baseline sits one
+/// font-size below the box top" rule). Nullopt for point text.
+[[nodiscard]] std::optional<Box2d> AuthoredTextBoxLocal(const svg::SVGTextElement& text);
+
+/// Document-space frame of @p text: the authored text box when present (the
+/// region the user dragged out), otherwise the laid-out ink bounds (the
+/// computed extent of a point-text span). This is the rect that selection
+/// chrome and transform handles anchor to.
+[[nodiscard]] std::optional<Box2d> TextWorldFrameBounds(const svg::SVGTextElement& text);
+
 /// Snapshot world-space bounds for every selected element that has
 /// renderable content. Elements that are themselves geometry contribute
 /// their own bounds; `<text>` roots contribute their laid-out ink bounds;

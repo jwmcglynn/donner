@@ -1,7 +1,9 @@
 #include "donner/editor/TextTool.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -11,8 +13,10 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/LockState.h"
+#include "donner/editor/SelectionTransformHandles.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
+#include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextContentElement.h"
 
@@ -123,6 +127,19 @@ std::optional<double> ParseNumericAttribute(const svg::SVGElement& element, std:
   return result.result().number;
 }
 
+/// Document-space AABB covering @p frameLocal mapped corner-by-corner
+/// through @p documentFromText.
+Box2d FrameDocAabb(const Transform2d& documentFromText, const Box2d& frameLocal) {
+  const std::array<Vector2d, 4> corners = {
+      frameLocal.topLeft, Vector2d(frameLocal.bottomRight.x, frameLocal.topLeft.y),
+      frameLocal.bottomRight, Vector2d(frameLocal.topLeft.x, frameLocal.bottomRight.y)};
+  Box2d frameDoc = Box2d::CreateEmpty(documentFromText.transformPosition(corners[0]));
+  for (std::size_t i = 1; i < corners.size(); ++i) {
+    frameDoc.addPoint(documentFromText.transformPosition(corners[i]));
+  }
+  return frameDoc;
+}
+
 /// Map a DOM character index (which counts rendered glyphs only) back to a
 /// logical caret index into @p content (which also stores '\n' hard breaks).
 std::size_t LogicalIndexForDomChar(const std::u32string& content, std::size_t domChar) {
@@ -152,13 +169,25 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   dragToleranceDoc_ = kBoxDragScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001);
 
   if (state_ == State::Editing) {
-    // A click inside the session's text moves the caret; a click anywhere
-    // else commits the session before the idle click rules run below.
+    // A press on the frame's transform handles starts a frame gesture; a
+    // click inside the session's text moves the caret (inside the frame but
+    // off every glyph parks it at the end); a click anywhere else commits
+    // the session before the idle click rules run below.
     if (sessionText_.has_value()) {
+      if (beginFrameGestureAtPoint(documentPoint, modifiers)) {
+        return;
+      }
       if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
           caret.has_value()) {
         caretIndex_ = *caret;
         return;
+      }
+      if (const std::optional<Box2d> frameLocal = sessionFrameLocal(); frameLocal.has_value()) {
+        const Vector2d localPoint = documentFromText_.inverse().transformPosition(documentPoint);
+        if (frameLocal->contains(localPoint)) {
+          caretIndex_ = content_.size();
+          return;
+        }
       }
     }
     commit(editor);
@@ -189,7 +218,13 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 }
 
 void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) {
-  (void)editor;
+  if (frameGesture_ != FrameGesture::None) {
+    if (buttonHeld) {
+      updateFrameGesture(editor, documentPoint);
+    }
+    return;
+  }
+
   if (state_ != State::DraggingBox || !buttonHeld) {
     return;
   }
@@ -202,6 +237,12 @@ void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, boo
 }
 
 void TextTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
+  if (frameGesture_ != FrameGesture::None) {
+    // Frame gestures end on release; the editing session stays open.
+    frameGesture_ = FrameGesture::None;
+    return;
+  }
+
   if (state_ != State::DraggingBox) {
     return;
   }
@@ -365,6 +406,116 @@ std::optional<std::size_t> TextTool::caretIndexAtPoint(const Vector2d& documentP
   const std::size_t logical = LogicalIndexForDomChar(content_, static_cast<std::size_t>(hit.index));
   // A click in the trailing half of a glyph places the caret after it.
   return hit.afterCenter ? std::min(logical + 1u, content_.size()) : logical;
+}
+
+std::optional<Box2d> TextTool::sessionFrameLocal() const {
+  if (!sessionText_.has_value()) {
+    return std::nullopt;
+  }
+  if (boxText_.has_value()) {
+    return boxText_;
+  }
+
+  // Point text: the frame is the computed ink extent.
+  const Box2d inkLocal = sessionText_->withWriteAccess(
+      [this](svg::DocumentWriteAccess&, EntityHandle) { return sessionText_->inkBoundingBox(); });
+  if (inkLocal.isEmpty()) {
+    return std::nullopt;
+  }
+  return inkLocal;
+}
+
+bool TextTool::beginFrameGestureAtPoint(const Vector2d& documentPoint, MouseModifiers modifiers) {
+  const std::optional<Box2d> frameLocal = sessionFrameLocal();
+  if (!frameLocal.has_value()) {
+    return false;
+  }
+
+  const Box2d frameDoc = FrameDocAabb(documentFromText_, *frameLocal);
+  const std::array<Box2d, 1> bounds{frameDoc};
+  const SelectionTransformHandleIntent intent = HitTestSelectionTransformHandles(
+      std::span<const Box2d>(bounds), documentPoint, modifiers.pixelsPerDocUnit,
+      /*includeRotate=*/!modifiers.shift);
+  if (intent.kind == SelectionTransformHandleKind::None) {
+    return false;
+  }
+
+  frameStartLocal_ = *frameLocal;
+  frameStartDocumentFromText_ = documentFromText_;
+  frameCorner_ = intent.corner;
+  if (intent.kind == SelectionTransformHandleKind::Resize) {
+    frameGesture_ = FrameGesture::Resize;
+  } else {
+    frameGesture_ = FrameGesture::Rotate;
+    rotateCenterDoc_ = (frameDoc.topLeft + frameDoc.bottomRight) * 0.5;
+    rotateStartAngleRadians_ = AngleFromCenter(rotateCenterDoc_, documentPoint);
+    rotateStartTransform_ =
+        sessionText_->withReadAccess([this](svg::DocumentReadAccess&, EntityHandle) {
+          return sessionText_->cast<svg::SVGGraphicsElement>().transform();
+        });
+  }
+  return true;
+}
+
+void TextTool::updateFrameGesture(EditorApp& editor, const Vector2d& documentPoint) {
+  if (frameGesture_ == FrameGesture::None || !sessionText_.has_value()) {
+    return;
+  }
+
+  if (frameGesture_ == FrameGesture::Rotate) {
+    const double angleDelta =
+        AngleFromCenter(rotateCenterDoc_, documentPoint) - rotateStartAngleRadians_;
+    const Transform2d documentFromStartDocument =
+        TransformDocumentAroundPoint(rotateCenterDoc_, Transform2d::Rotate(angleDelta));
+    editor.applyMutation(EditorCommand::SetTransformCommand(
+        *sessionText_, rotateStartTransform_ * documentFromStartDocument));
+    editor.flushFrame();
+    // The element transform changed under the session — refresh the local→
+    // document mapping so caret math and subsequent frame hit-tests track
+    // the rotated frame.
+    documentFromText_ =
+        sessionText_->withWriteAccess([this](svg::DocumentWriteAccess&, EntityHandle) {
+          return sessionText_->elementFromWorld();
+        });
+    return;
+  }
+
+  // Frame resize: recompute the frame in the text's local space with the
+  // corner opposite the grab anchored. The glyphs never scale — the box
+  // attributes change and the content rewraps to the new width. A resize of
+  // point text writes box attributes for the first time, converting the
+  // computed frame into a user-sized one.
+  const Vector2d localPoint =
+      frameStartDocumentFromText_.inverse().transformPosition(documentPoint);
+  const Vector2d anchor = SelectionTransformCornerPoint(
+      frameStartLocal_, OppositeSelectionTransformCorner(frameCorner_));
+  const Vector2d startCorner = SelectionTransformCornerPoint(frameStartLocal_, frameCorner_);
+
+  // Clamp the moving corner to its side of the anchor so the frame never
+  // inverts or collapses.
+  constexpr double kMinFrameExtent = 1.0;
+  const double signX = startCorner.x >= anchor.x ? 1.0 : -1.0;
+  const double signY = startCorner.y >= anchor.y ? 1.0 : -1.0;
+  const double extentX = std::max(kMinFrameExtent, (localPoint.x - anchor.x) * signX);
+  const double extentY = std::max(kMinFrameExtent, (localPoint.y - anchor.y) * signY);
+  const Vector2d movingCorner = anchor + Vector2d(extentX * signX, extentY * signY);
+  const Box2d newFrame(
+      Vector2d(std::min(anchor.x, movingCorner.x), std::min(anchor.y, movingCorner.y)),
+      Vector2d(std::max(anchor.x, movingCorner.x), std::max(anchor.y, movingCorner.y)));
+
+  boxText_ = newFrame;
+  originText_ = Vector2d(newFrame.topLeft.x, newFrame.topLeft.y + fontSize_);
+  editor.applyMutation(EditorCommand::SetAttributeCommand(
+      *sessionText_, "x", donner::detail::FormatNumberForSVG(originText_.x)));
+  editor.applyMutation(EditorCommand::SetAttributeCommand(
+      *sessionText_, "y", donner::detail::FormatNumberForSVG(originText_.y)));
+  editor.applyMutation(
+      EditorCommand::SetAttributeCommand(*sessionText_, "data-donner-text-box-width",
+                                         donner::detail::FormatNumberForSVG(newFrame.size().x)));
+  editor.applyMutation(
+      EditorCommand::SetAttributeCommand(*sessionText_, "data-donner-text-box-height",
+                                         donner::detail::FormatNumberForSVG(newFrame.size().y)));
+  syncContentToDom(editor);
 }
 
 void TextTool::insertCodepoint(EditorApp& editor, char32_t codepoint) {
@@ -537,6 +688,7 @@ bool TextTool::commit(EditorApp& editor) {
 
 void TextTool::cancel() {
   state_ = State::Idle;
+  frameGesture_ = FrameGesture::None;
   sessionText_.reset();
   createdBySession_ = true;
   documentFromText_ = Transform2d();

@@ -391,6 +391,84 @@ TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsIncludesTextInsideSelectedGr
   EXPECT_GT(bounds[0].bottomRight.y, 160.0);
 }
 
+TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsUsesAuthoredBoxForBoxText) {
+  // Box text: the selection rect is the region the user dragged (recorded as
+  // data-donner-text-box-*), not the laid-out glyph ink. The box top edge
+  // sits one font-size above the first baseline.
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+              <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+                    data-donner-text-box-width="200" data-donner-text-box-height="120">Hi</text>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  const std::vector<svg::SVGElement> selection = {*text};
+  const std::vector<Box2d> bounds =
+      SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
+
+  ASSERT_EQ(bounds.size(), 1u);
+  EXPECT_NEAR(bounds[0].topLeft.x, 50.0, 1e-6);
+  EXPECT_NEAR(bounds[0].topLeft.y, 60.0, 1e-6);
+  EXPECT_NEAR(bounds[0].size().x, 200.0, 1e-6);
+  EXPECT_NEAR(bounds[0].size().y, 120.0, 1e-6);
+}
+
+TEST(SelectionAabbTest, TextWorldFrameBoundsMapsAuthoredBoxThroughTransform) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">
+              <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+                    data-donner-text-box-width="200" data-donner-text-box-height="120"
+                    transform="translate(100 40)">Hi</text>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  const std::optional<Box2d> frame = text->cast<svg::SVGTextElement>().withWriteAccess(
+      [&text](svg::DocumentWriteAccess&, EntityHandle) {
+        return TextWorldFrameBounds(text->cast<svg::SVGTextElement>());
+      });
+
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_NEAR(frame->topLeft.x, 150.0, 1e-6);
+  EXPECT_NEAR(frame->topLeft.y, 100.0, 1e-6);
+  EXPECT_NEAR(frame->size().x, 200.0, 1e-6);
+  EXPECT_NEAR(frame->size().y, 120.0, 1e-6);
+}
+
+TEST(SelectionAabbTest, TextWorldFrameBoundsFallsBackToInkForPointText) {
+  constexpr std::string_view kSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+              <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+            </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  const auto boundsOf = [&](auto&& fn) {
+    return text->cast<svg::SVGTextElement>().withWriteAccess(
+        [&text, &fn](svg::DocumentWriteAccess&, EntityHandle) {
+          return fn(text->cast<svg::SVGTextElement>());
+        });
+  };
+  const std::optional<Box2d> frame =
+      boundsOf([](const svg::SVGTextElement& element) { return TextWorldFrameBounds(element); });
+  const std::optional<Box2d> ink =
+      boundsOf([](const svg::SVGTextElement& element) { return TextWorldInkBounds(element); });
+
+  ASSERT_TRUE(frame.has_value());
+  ASSERT_TRUE(ink.has_value());
+  EXPECT_EQ(*frame, *ink);
+}
+
 TEST(SelectionAabbTest, SnapshotOccludingBoundsAllowConcurrentDom) {
   constexpr std::string_view kSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">

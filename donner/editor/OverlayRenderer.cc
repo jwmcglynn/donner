@@ -493,20 +493,21 @@ std::optional<Box2d> AppendChromeItems(
         }
       }
 
-      // Text roots have no spline outline; they contribute their laid-out
-      // ink bounds (so text gets the same selection rectangle + transform
-      // handles as shapes) plus a baseline underlay segment per line.
+      // Text roots have no spline outline; they contribute their frame — the
+      // authored text box for box text, or the laid-out ink bounds for point
+      // text — so text gets the same selection rectangle + transform handles
+      // as shapes, plus a baseline underlay segment per line.
       for (const auto& text : CollectRenderableTextRoots(element)) {
-        const std::optional<Box2d> inkBoundsDoc = TextWorldInkBounds(text);
-        if (!inkBoundsDoc.has_value()) {
+        const std::optional<Box2d> frameBoundsDoc = TextWorldFrameBounds(text);
+        if (!frameBoundsDoc.has_value()) {
           continue;
         }
-        const Box2d representedInkBoundsDoc =
-            options.representedDocumentFromLiveDocument.transformBox(*inkBoundsDoc);
-        AddBoxToOptional(&mergedBounds, representedInkBoundsDoc);
+        const Box2d representedFrameBoundsDoc =
+            options.representedDocumentFromLiveDocument.transformBox(*frameBoundsDoc);
+        AddBoxToOptional(&mergedBounds, representedFrameBoundsDoc);
 
         if (outTextBaselines != nullptr &&
-            BoxIntersectsCullRect(representedInkBoundsDoc, cullRectDoc)) {
+            BoxIntersectsCullRect(representedFrameBoundsDoc, cullRectDoc)) {
           AppendTextBaselines(text, options.representedDocumentFromLiveDocument, cullRectDoc,
                               outTextBaselines);
         }
