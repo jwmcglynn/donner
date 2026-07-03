@@ -97,7 +97,6 @@ bottom for completeness.
 | F12 | `transform-origin` on `<textPath>` baseline | 1 | gradient/pattern/`<image>`/text resolve the pivot; `on-text-path` baseline still drops it → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
-| F4 | `<switch>` conditional processing | 12 (+systemLanguage 3) | Feature |
 | F6 | full `alignment-baseline` keyword set | 10 | Feature |
 | F7 | `paint-order` rendering | **DONE** (7/8) | Rendered on shapes + text; `on-tspan` residual → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
@@ -223,12 +222,6 @@ together if convenient.
 
 **Impact:** 13 tests in `painting/context/`. Parsed but not honored at render.
 Used by markers and `<use>` to inherit the referencing element's paint.
-
-### F4: `<switch>` conditional processing
-
-**Impact:** 12 tests in `structure/switch/` (+1 in `clipPath`). Includes
-`requiredFeatures` / `systemLanguage` evaluation. Related: `structure/systemLanguage`
-(3), which F4 should subsume.
 
 ### F5: full `dominant-baseline` keyword set
 
