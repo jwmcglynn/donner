@@ -3781,7 +3781,7 @@ void EditorShell::openRenderPaneContextMenu(const Vector2d& documentPoint) {
   renderContextMenuHitElement_.reset();
 
   if (app_.hasDocument() && !renderCoordinator_.asyncRenderer().isBusy()) {
-    if (std::optional<svg::SVGGeometryElement> hit = app_.hitTest(documentPoint)) {
+    if (std::optional<svg::SVGGraphicsElement> hit = app_.hitTest(documentPoint)) {
       renderContextMenuHitElement_ = *hit;
     }
   }

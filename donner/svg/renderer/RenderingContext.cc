@@ -47,6 +47,7 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/components/text/TextSystem.h"
 #include "donner/svg/graph/RecursionGuard.h"
 #include "donner/svg/graph/Reference.h"
@@ -1053,6 +1054,26 @@ bool RenderingContext::hitTestEntity(Entity entity, const Vector2d& point) {
   const bool hasStrokePaint = style.properties->stroke.get().value() != PaintServer::None();
   const double strokeWidth =
       hasStrokePaint ? style.properties->strokeWidth.get().value().value : 0.0;
+
+#ifdef DONNER_TEXT_ENABLED
+  // Text roots hit-test against their laid-out glyph ink bounds: any point
+  // inside the ink box (including the gaps between letters) hits, which is
+  // the pointer contract for selecting text. Text has no ComputedPath, so
+  // the shape-based fill/stroke tests below can never match it.
+  if (registry_.any_of<TextRootComponent>(entity) && registry_.ctx().contains<TextEngine>()) {
+    const Box2d inkBounds =
+        registry_.ctx().get<TextEngine>().computedInkBounds(EntityHandle(registry_, entity));
+    if (!inkBounds.isEmpty()) {
+      const Vector2d pointInLocal =
+          LayoutSystem()
+              .getEntityFromWorldTransform(EntityHandle(registry_, entity))
+              .inverse()
+              .transformPosition(point);
+      return inkBounds.contains(pointInLocal);
+    }
+    return false;
+  }
+#endif
 
   if (const auto bounds = ShapeSystem().getShapeWorldBounds(EntityHandle(registry_, entity));
       bounds && bounds->inflatedBy(strokeWidth).contains(point)) {

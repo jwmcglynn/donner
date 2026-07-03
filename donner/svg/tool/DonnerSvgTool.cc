@@ -30,6 +30,7 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
@@ -341,10 +342,38 @@ SampledImageInfo RenderPreview(const RendererBitmap& bitmap, bool interactive, s
  * Create a highlight bitmap by adding a semi-transparent white copy of the element's path on top
  * of the SVG, re-rendering, and compositing a pixel-perfect AABB outline.
  */
+/// World-space bounds for any selectable graphics element: geometry uses its
+/// computed shape bounds; text uses its laid-out ink bounds transformed to
+/// document space.
+std::optional<Box2d> GraphicsWorldBounds(const SVGGraphicsElement& element) {
+  if (element.isa<SVGGeometryElement>()) {
+    return element.cast<SVGGeometryElement>().worldBounds();
+  }
+  if (element.isa<SVGTextElement>()) {
+    const SVGTextElement text = element.cast<SVGTextElement>();
+    const Box2d inkLocal = text.inkBoundingBox();
+    if (inkLocal.isEmpty()) {
+      return std::nullopt;
+    }
+    const Transform2d documentFromText = text.elementFromWorld();
+    Box2d inkDoc(documentFromText.transformPosition(inkLocal.topLeft),
+                 documentFromText.transformPosition(inkLocal.topLeft));
+    inkDoc.addPoint(documentFromText.transformPosition(inkLocal.bottomRight));
+    inkDoc.addPoint(
+        documentFromText.transformPosition(Vector2d(inkLocal.bottomRight.x, inkLocal.topLeft.y)));
+    inkDoc.addPoint(
+        documentFromText.transformPosition(Vector2d(inkLocal.topLeft.x, inkLocal.bottomRight.y)));
+    return inkDoc;
+  }
+  return std::nullopt;
+}
+
 RendererBitmap CreateHighlightBitmap(SVGDocument& document, Renderer& renderer,
-                                     const SVGGeometryElement& element,
+                                     const SVGGraphicsElement& element,
                                      const SampledImageInfo& imageInfo) {
-  const auto maybeSpline = element.computedSpline();
+  const auto maybeSpline = element.isa<SVGGeometryElement>()
+                               ? element.cast<SVGGeometryElement>().computedSpline()
+                               : std::nullopt;
   if (!maybeSpline) {
     return renderer.takeSnapshot();
   }
@@ -361,7 +390,7 @@ RendererBitmap CreateHighlightBitmap(SVGDocument& document, Renderer& renderer,
   overlay.remove();
 
   // Composite the AABB outline directly into the bitmap - bypasses anti-aliasing.
-  if (const auto bounds = element.worldBounds()) {
+  if (const auto bounds = GraphicsWorldBounds(element)) {
     CompositeAABBRect(highlighted, *bounds, imageInfo);
   }
 
@@ -532,7 +561,7 @@ void RunInteractiveSelection(SVGDocument document, Renderer& renderer, const Ren
       selectedView.dimensions = bitmap.dimensions;
       selectedView.rowBytes = bitmap.rowBytes;
       selectedView.pixels = bitmap.pixels;
-      if (const auto bounds = selected->worldBounds()) {
+      if (const auto bounds = GraphicsWorldBounds(*selected)) {
         CompositeAABBRect(selectedView, *bounds, imageInfo);
       }
       const TerminalImageView selectedImageView = MakeView(selectedView);

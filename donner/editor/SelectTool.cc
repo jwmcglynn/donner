@@ -281,7 +281,7 @@ bool SelectTool::clickHitsCurrentSelection(EditorApp& editor, const Vector2d& do
     return false;
   }
 
-  const std::optional<svg::SVGGeometryElement> hit = editor.hitTest(documentPoint);
+  const std::optional<svg::SVGGraphicsElement> hit = editor.hitTest(documentPoint);
   if (!hit.has_value()) {
     return false;
   }
@@ -307,7 +307,7 @@ bool SelectTool::clickHitsCurrentSelection(EditorApp& editor, const Vector2d& do
 
 bool SelectTool::clickHitsImmediatelySelectableElement(EditorApp& editor,
                                                        const Vector2d& documentPoint) const {
-  const std::optional<svg::SVGGeometryElement> hit = editor.hitTest(documentPoint);
+  const std::optional<svg::SVGGraphicsElement> hit = editor.hitTest(documentPoint);
   return hit.has_value() && !IsLocked(*hit);
 }
 

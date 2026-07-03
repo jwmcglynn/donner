@@ -225,6 +225,47 @@ TEST(EditorAppTest, HitTestReturnsTopElementAtPoint) {
   EXPECT_FALSE(miss.has_value());
 }
 
+// Clicking on rendered text selects it: the pointer contract for text is a
+// hit anywhere inside the laid-out glyph ink bounds (including the gaps
+// between letters), like any design tool's selection pointer.
+TEST(EditorAppTest, HitTestPicksTextByGlyphInkBounds) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+         <text id="label" x="20" y="120" font-size="64" fill="#0033aa">SVG</text>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+
+  // A point on the first glyph's ink (the "S" around x=40, baseline y=120).
+  auto onGlyph = app.hitTest(Vector2d(40.0, 100.0));
+  ASSERT_TRUE(onGlyph.has_value()) << "clicking on rendered text must hit the <text> element";
+  EXPECT_EQ(onGlyph->id(), "label");
+
+  // A point between glyphs but inside the text's ink bounds still hits.
+  auto betweenGlyphs = app.hitTest(Vector2d(80.0, 100.0));
+  ASSERT_TRUE(betweenGlyphs.has_value());
+  EXPECT_EQ(betweenGlyphs->id(), "label");
+
+  // Far from the text: no hit.
+  EXPECT_FALSE(app.hitTest(Vector2d(20.0, 180.0)).has_value());
+}
+
+// A marquee over rendered text selects it, mirroring the click contract.
+TEST(EditorAppTest, MarqueePicksTextByGlyphInkBounds) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+         <text id="label" x="20" y="120" font-size="64" fill="#0033aa">SVG</text>
+       </svg>)";
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+
+  const auto hits = app.hitTestRect(Box2d(Vector2d(10.0, 40.0), Vector2d(190.0, 140.0)));
+  ASSERT_EQ(hits.size(), 1u) << "marquee over text must select the <text> element";
+  EXPECT_EQ(hits.front().id(), "label");
+
+  EXPECT_TRUE(app.hitTestRect(Box2d(Vector2d(0.0, 150.0), Vector2d(20.0, 190.0))).empty());
+}
+
 TEST(EditorAppTest, HitTestReturnsNulloptWhenNoDocument) {
   EditorApp app;
   EXPECT_FALSE(app.hitTest(Vector2d(0.0, 0.0)).has_value());
@@ -243,7 +284,7 @@ TEST(EditorAppTest, MarqueeHitTestRectUnderConcurrentDomHoldsAccess) {
   app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
 
   // Marquee covering r1 (10,10 → 30,30) but not r2 (50,50 → 70,70).
-  const std::vector<svg::SVGGeometryElement> hits =
+  const std::vector<svg::SVGGraphicsElement> hits =
       app.hitTestRect(Box2d(Vector2d(0.0, 0.0), Vector2d(40.0, 40.0)));
 
   ASSERT_EQ(hits.size(), 1u);
@@ -1510,7 +1551,7 @@ TEST(EditorAppTest, HitTestRectCoversStrokeCapAndJoinVariants) {
                                                       "round-join", "bevel-join", "arcs-join"));
 }
 
-TEST(EditorAppTest, HitTestRectSkipsXmlTextNodeChildren) {
+TEST(EditorAppTest, HitTestRectSelectsTextRootNotXmlTextNodeChildren) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -1518,8 +1559,11 @@ TEST(EditorAppTest, HitTestRectSkipsXmlTextNodeChildren) {
            <rect id="r1" x="10" y="10" width="20" height="20" fill="red"/>
          </svg>)"));
 
+  // The marquee returns the <text> ROOT (selectable like any design-tool
+  // object) plus the rect; the text's raw XML data child never appears and
+  // never breaks the walk.
   auto hits = app.hitTestRect(Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
-  EXPECT_THAT(ElementIds(hits), ::testing::ElementsAre("r1"));
+  EXPECT_THAT(ElementIds(hits), ::testing::ElementsAre("label", "r1"));
 }
 
 TEST(EditorAppTest, HitTestRectReturnsEmptyWithoutDocument) {
