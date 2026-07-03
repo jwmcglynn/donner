@@ -4,6 +4,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
 #include "donner/base/SmallVector.h"
+#include "donner/base/Utils.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::components {
@@ -78,8 +79,13 @@ public:
    */
   void remove(Registry& registry);
 
-  /// Get the qualified tag name of the element, e.g. "svg".
-  xml::XMLQualifiedNameRef tagName() const { return tagName_; }
+  /**
+   * Get the qualified tag name of the element, e.g. "svg".
+   *
+   * The returned reference is tied to this component and remains valid until the component is
+   * destroyed or its tag name is replaced.
+   */
+  const xml::XMLQualifiedName& tagName() const UTILS_LIFETIME_BOUND { return tagName_; }
 
   /// Get the parent of this node, if it has one. Returns \c entt::null if this is the root.
   Entity parent() const { return parent_; }

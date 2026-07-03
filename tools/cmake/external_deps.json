@@ -68,7 +68,7 @@
         "@tiny-skia-cpp//src/tiny_skia/filter:filter"
       ],
       "cmake": "tiny_skia",
-      "reason": "The generated vendored tiny-skia-cpp CMakeLists exposes one tiny_skia target."
+      "reason": "Donner's vendored tiny-skia-cpp CMakeLists exposes one tiny_skia target."
     },
     {
       "labels": ["@woff2//:woff2_decode"],

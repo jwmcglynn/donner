@@ -609,11 +609,13 @@ bool SVGDocument::hasSourceStore() const {
 }
 
 std::string_view SVGDocument::source() const {
-  if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
+  Registry& registry = documentState_->registry();
+  if (!registry.ctx().contains<xml::components::XMLDocumentContext>()) {
     return std::string_view();
   }
 
-  return xmlDocument().source();
+  const auto& context = registry.ctx().get<xml::components::XMLDocumentContext>();
+  return context.sourceStore != nullptr ? context.sourceStore->source() : std::string_view();
 }
 
 std::uint64_t SVGDocument::sourceVersion() const {

@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/Utils.h"
+
 namespace donner::xml {
 
 /// Stable identifier for a source anchor stored in \ref XMLSourceStore.
@@ -81,7 +83,7 @@ public:
   explicit XMLSourceStore(std::string source);
 
   /// Return the current source bytes.
-  [[nodiscard]] std::string_view source() const { return source_; }
+  [[nodiscard]] std::string_view source() const UTILS_LIFETIME_BOUND { return source_; }
 
   /// Return the monotonically increasing source version.
   [[nodiscard]] std::uint64_t sourceVersion() const { return sourceVersion_; }

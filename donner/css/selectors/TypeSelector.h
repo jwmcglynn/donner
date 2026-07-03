@@ -79,7 +79,7 @@ struct TypeSelector {
    */
   template <ElementLike T>
   bool matches(const T& element) const {
-    const xml::XMLQualifiedNameRef elementName = element.tagName();
+    const xml::XMLQualifiedName elementName(element.tagName());
 
     // Match namespace.
     const bool namespaceMatched =

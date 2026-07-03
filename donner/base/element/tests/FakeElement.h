@@ -40,7 +40,7 @@ public:
   bool operator==(const FakeElement& other) const { return data_ == other.data_; }
 
   /// Get the XML tag name string for this element.
-  xml::XMLQualifiedNameRef tagName() const { return data_->tagName; }
+  xml::XMLQualifiedName tagName() const { return data_->tagName; }
 
   /// Returns true if this is a known element type. For FakeElement, returns false for "unknown"
   /// elements.

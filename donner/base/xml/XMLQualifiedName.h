@@ -6,9 +6,11 @@
  */
 
 #include <ostream>
+#include <string_view>
 
 #include "donner/base/RcString.h"
 #include "donner/base/RcStringOrRef.h"
+#include "donner/base/Utils.h"
 
 namespace donner::xml {
 
@@ -62,6 +64,20 @@ struct XMLQualifiedName {
   /* implicit */ XMLQualifiedName(const RcString& name) : namespacePrefix(), name(name) {}
 
   /**
+   * Construct from an attribute with an empty (default) namespace.
+   *
+   * @param name The attribute name.
+   */
+  explicit XMLQualifiedName(const char* name) : XMLQualifiedName(RcString(name)) {}
+
+  /**
+   * Construct from an attribute with an empty (default) namespace.
+   *
+   * @param name The attribute name.
+   */
+  explicit XMLQualifiedName(std::string_view name) : XMLQualifiedName(RcString(name)) {}
+
+  /**
    * Construct from an attribute with a namespace prefix.
    *
    * @param namespacePrefix The namespace of the name, or empty if the name belongs to the default
@@ -70,6 +86,13 @@ struct XMLQualifiedName {
    */
   XMLQualifiedName(const RcString& namespacePrefix, const RcString& name)
       : namespacePrefix(namespacePrefix), name(name) {}
+
+  /**
+   * Construct by copying from a qualified-name reference.
+   *
+   * @param attr Qualified name reference to copy from.
+   */
+  explicit XMLQualifiedName(const XMLQualifiedNameRef& attr);
 
   /// Destructor.
   ~XMLQualifiedName() = default;
@@ -94,6 +117,14 @@ struct XMLQualifiedName {
 
   /// Equality operator for gtest.
   bool operator==(const XMLQualifiedName& other) const = default;
+
+  /// Compare against an unqualified name string in the default namespace.
+  friend bool operator==(const XMLQualifiedName& lhs, std::string_view rhs) {
+    return lhs.namespacePrefix.empty() && lhs.name == rhs;
+  }
+
+  /// Compare against an unqualified name string in the default namespace.
+  friend bool operator==(std::string_view lhs, const XMLQualifiedName& rhs) { return rhs == lhs; }
 
   /// Ostream output operator using XML syntax (e.g. "ns:name").
   friend std::ostream& operator<<(std::ostream& os, const XMLQualifiedName& obj) {
@@ -154,14 +185,15 @@ struct XMLQualifiedNameRef {
    *
    * @param name The attribute name.
    */
-  /* implicit */ constexpr XMLQualifiedNameRef(const char* name) : namespacePrefix(), name(name) {}
+  /* implicit */ constexpr XMLQualifiedNameRef(const char* name UTILS_LIFETIME_BOUND)
+      : namespacePrefix(), name(name) {}
 
   /**
    * Construct from an attribute name as a \c std::string_view, assumes no namespacePrefix.
    *
    * @param name The attribute name.
    */
-  /* implicit */ constexpr XMLQualifiedNameRef(std::string_view name)
+  /* implicit */ constexpr XMLQualifiedNameRef(std::string_view name UTILS_LIFETIME_BOUND)
       : namespacePrefix(), name(name) {}
 
   /**
@@ -269,6 +301,9 @@ struct XMLQualifiedNameRef {
     return details::DeferredCssSyntaxPrinter<XMLQualifiedNameRef>{*this};
   }
 };
+
+inline XMLQualifiedName::XMLQualifiedName(const XMLQualifiedNameRef& attr)
+    : namespacePrefix(RcString(attr.namespacePrefix)), name(RcString(attr.name)) {}
 
 }  // namespace donner::xml
 

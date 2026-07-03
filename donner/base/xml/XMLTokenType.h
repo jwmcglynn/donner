@@ -9,6 +9,7 @@
 #include <ostream>
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/Utils.h"
 
 namespace donner::xml {
 
@@ -70,7 +71,7 @@ struct XMLToken {
   SourceRange range;  ///< Source byte range `[start, end)`.
 
   /// Convenience: extract the token's text from the original source.
-  std::string_view text(std::string_view source) const {
+  std::string_view text(std::string_view source UTILS_LIFETIME_BOUND) const {
     if (!range.start.offset || !range.end.offset) {
       return {};
     }
