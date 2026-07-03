@@ -178,6 +178,9 @@ ElementType ElementTypeForTag(const xml::XMLQualifiedNameRef& tagName) {
   if (tagName.name == "style") {
     return ElementType::Style;
   }
+  if (tagName.name == "switch") {
+    return ElementType::Switch;
+  }
   if (tagName.name == "text") {
     return ElementType::Text;
   }

@@ -2,8 +2,10 @@
 /// @file
 
 #include <optional>
+#include <string_view>
 
 #include "donner/base/RcString.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 
 namespace donner::svg::components {
 
@@ -36,6 +38,44 @@ struct ConditionalProcessingComponent {
    */
   std::optional<RcString> systemLanguage;
 };
+
+/**
+ * Return true if \p name is one of the SVG conditional-processing attributes.
+ *
+ * @param name Attribute name to inspect.
+ * @return true if \p name is `requiredFeatures`, `requiredExtensions`, or `systemLanguage`.
+ */
+bool IsConditionalProcessingAttribute(const xml::XMLQualifiedNameRef& name);
+
+/**
+ * Store a conditional-processing attribute value.
+ *
+ * @param conditional Component to update.
+ * @param name Conditional-processing attribute name.
+ * @param value Raw attribute value.
+ * @return true if \p name was a conditional-processing attribute and \p conditional was updated.
+ */
+bool SetConditionalProcessingAttribute(ConditionalProcessingComponent& conditional,
+                                       const xml::XMLQualifiedNameRef& name,
+                                       std::string_view value);
+
+/**
+ * Clear a conditional-processing attribute value.
+ *
+ * @param conditional Component to update.
+ * @param name Conditional-processing attribute name.
+ * @return true if \p name was a conditional-processing attribute and \p conditional was updated.
+ */
+bool RemoveConditionalProcessingAttribute(ConditionalProcessingComponent& conditional,
+                                          const xml::XMLQualifiedNameRef& name);
+
+/**
+ * Return true if any conditional-processing attribute is still present on \p conditional.
+ *
+ * @param conditional Component to inspect.
+ * @return true if any conditional-processing field is present.
+ */
+bool HasConditionalProcessingAttributes(const ConditionalProcessingComponent& conditional);
 
 /**
  * Evaluates an element's conditional-processing attributes.

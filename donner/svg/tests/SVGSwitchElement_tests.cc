@@ -3,10 +3,18 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include "donner/base/FileOffset.h"
+#include "donner/base/ParseWarningSink.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/RendererTestUtils.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using testing::Ne;
+using testing::Optional;
 
 namespace donner::svg {
 
@@ -122,6 +130,53 @@ TEST(SVGSwitchElementTests, SkipsChildWithFailingRequiredExtensions) {
 }
 
 /**
+ * A `<switch>` inserted through the source-edit projection path gets the same element type as a
+ * full SVG parser load, so rendering uses switch child selection instead of generic traversal.
+ */
+TEST(SVGSwitchElementTests, SourceEditInsertedSwitchProjectsAsSwitch) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+      <g id="layer"><rect id="existing" width="0" height="0"/></g>
+    </svg>
+  )";
+  parser::SVGParser::Options options;
+  options.parseAsInlineSVG = true;
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  auto maybeDocument = parser::SVGParser::ParseSVG(input, disabledSink, options);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+  const std::string switchSource =
+      R"(<switch id="inserted">)"
+      R"(<rect x="0" y="0" width="16" height="16" fill="black" systemLanguage="ru-RU"/>)"
+      R"(<rect x="0" y="0" width="8" height="16" fill="black"/>)"
+      R"(</switch>)";
+  const std::size_t insertionOffset = input.find("</g>");
+  ASSERT_NE(insertionOffset, std::string_view::npos);
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = {FileOffset::Offset(insertionOffset), FileOffset::Offset(insertionOffset)},
+      .replacement = switchSource,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  ASSERT_FALSE(result.diagnostic.has_value()) << *result.diagnostic;
+  EXPECT_TRUE(result.applied);
+  ASSERT_FALSE(result.mutations.empty());
+
+  std::optional<SVGElement> layer = document.svgElement().firstChild();
+  ASSERT_TRUE(layer.has_value());
+  EXPECT_THAT(layer->getAttribute("id"), Optional(RcString("layer")));
+
+  std::optional<SVGElement> inserted = layer->lastChild();
+  ASSERT_TRUE(inserted.has_value())
+      << "source: " << document.source() << "\nmutations: " << result.mutations.size();
+  EXPECT_THAT(inserted->getAttribute("id"), Optional(RcString("inserted")));
+  EXPECT_EQ(inserted->type(), ElementType::Switch);
+  EXPECT_THAT(inserted->tryCast<SVGSwitchElement>(), Ne(std::nullopt));
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(document).matches(kLeftHalfFilled));
+}
+
+/**
  * `requiredFeatures` always evaluates to true (deprecated in SVG2), so a child declaring it is
  * still selected.
  */
@@ -155,6 +210,48 @@ TEST(SVGSwitchElementTests, SystemLanguageSelectsMatchingChild) {
   )");
 
   EXPECT_TRUE(generatedAscii.matches(kLeftHalfFilled));
+}
+
+/**
+ * Changing a conditional-processing attribute through the DOM mutation path updates the parsed
+ * conditional state used by `<switch>` selection.
+ */
+TEST(SVGSwitchElementTests, SetAttributeUpdatesConditionalSelection) {
+  SVGDocument document = instantiateSubtree(R"(
+      <switch>
+        <rect id="candidate" x="0" y="0" width="16" height="16" fill="black"
+              systemLanguage="ru-RU"/>
+        <rect x="0" y="0" width="8" height="16" fill="black"/>
+      </switch>
+    )",
+                                            parser::SVGParser::Options(), Vector2i(16, 16));
+
+  std::optional<SVGElement> candidate = document.querySelector("#candidate");
+  ASSERT_TRUE(candidate.has_value());
+  candidate->setAttribute("systemLanguage", "en");
+
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(document).matches(kAllFilled));
+}
+
+/**
+ * Removing a conditional-processing attribute through the DOM mutation path clears the parsed
+ * conditional state instead of leaving the old value active.
+ */
+TEST(SVGSwitchElementTests, RemoveAttributeUpdatesConditionalSelection) {
+  SVGDocument document = instantiateSubtree(R"(
+      <switch>
+        <rect id="candidate" x="0" y="0" width="16" height="16" fill="black"
+              requiredExtensions="http://example.org/bogus"/>
+        <rect x="0" y="0" width="8" height="16" fill="black"/>
+      </switch>
+    )",
+                                            parser::SVGParser::Options(), Vector2i(16, 16));
+
+  std::optional<SVGElement> candidate = document.querySelector("#candidate");
+  ASSERT_TRUE(candidate.has_value());
+  candidate->removeAttribute("requiredExtensions");
+
+  EXPECT_TRUE(RendererTestUtils::renderToAsciiImage(document).matches(kAllFilled));
 }
 
 /**

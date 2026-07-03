@@ -9,6 +9,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/components/ClassComponent.h"
+#include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/IdComponent.h"
@@ -48,6 +49,11 @@ components::RenderTreeState& getRenderTreeState(EntityHandle handle) {
 
 void markNeedsFullStyleRecompute(EntityHandle handle) {
   getRenderTreeState(handle).needsFullStyleRecompute = true;
+}
+
+void markConditionalProcessingChanged(EntityHandle handle) {
+  markNeedsFullStyleRecompute(handle);
+  markDirty(handle, components::DirtyFlagsComponent::StyleCascade);
 }
 
 void invalidateComputedStyleForDescendants(EntityHandle handle) {
@@ -557,6 +563,15 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
     return std::nullopt;
   }
 
+  if (components::IsConditionalProcessingAttribute(name)) {
+    auto& conditional = handle_.get_or_emplace<components::ConditionalProcessingComponent>(access);
+    (void)components::SetConditionalProcessingAttribute(conditional, name, value);
+    handle_.get_or_emplace<donner::components::AttributesComponent>(access).setAttribute(
+        *handle_.registry(), name, RcString(value));
+    markConditionalProcessingChanged(handle_);
+    return std::nullopt;
+  }
+
   // If it's not in the list above, it may be presentation attribute.
   // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
   // Only parse empty namespaces for now.
@@ -606,6 +621,14 @@ void SVGElement::removeAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& 
     setClassName("");
   } else if (name == xml::XMLQualifiedNameRef("style")) {
     setStyle("");
+  } else if (components::IsConditionalProcessingAttribute(name)) {
+    if (auto* conditional = handle_.try_get<components::ConditionalProcessingComponent>(access)) {
+      (void)components::RemoveConditionalProcessingAttribute(*conditional, name);
+      if (!components::HasConditionalProcessingAttributes(*conditional)) {
+        handle_.remove<components::ConditionalProcessingComponent>(access);
+      }
+    }
+    markConditionalProcessingChanged(handle_);
   } else {
     // TODO(jwmcglynn): Add support for namespace when parsing presentation attributes.
     // Only parse empty namespaces for now.

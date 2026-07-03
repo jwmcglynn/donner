@@ -12,7 +12,56 @@ namespace {
  */
 constexpr std::string_view kUserLanguage = "en";
 
+using ConditionalProcessingField = std::optional<RcString> ConditionalProcessingComponent::*;
+
+ConditionalProcessingField FieldForConditionalProcessingAttribute(
+    const xml::XMLQualifiedNameRef& name) {
+  if (name == xml::XMLQualifiedNameRef("requiredFeatures")) {
+    return &ConditionalProcessingComponent::requiredFeatures;
+  }
+  if (name == xml::XMLQualifiedNameRef("requiredExtensions")) {
+    return &ConditionalProcessingComponent::requiredExtensions;
+  }
+  if (name == xml::XMLQualifiedNameRef("systemLanguage")) {
+    return &ConditionalProcessingComponent::systemLanguage;
+  }
+
+  return nullptr;
+}
+
 }  // namespace
+
+bool IsConditionalProcessingAttribute(const xml::XMLQualifiedNameRef& name) {
+  return FieldForConditionalProcessingAttribute(name) != nullptr;
+}
+
+bool SetConditionalProcessingAttribute(ConditionalProcessingComponent& conditional,
+                                       const xml::XMLQualifiedNameRef& name,
+                                       std::string_view value) {
+  const ConditionalProcessingField field = FieldForConditionalProcessingAttribute(name);
+  if (field == nullptr) {
+    return false;
+  }
+
+  conditional.*field = RcString(value);
+  return true;
+}
+
+bool RemoveConditionalProcessingAttribute(ConditionalProcessingComponent& conditional,
+                                          const xml::XMLQualifiedNameRef& name) {
+  const ConditionalProcessingField field = FieldForConditionalProcessingAttribute(name);
+  if (field == nullptr) {
+    return false;
+  }
+
+  conditional.*field = std::nullopt;
+  return true;
+}
+
+bool HasConditionalProcessingAttributes(const ConditionalProcessingComponent& conditional) {
+  return conditional.requiredFeatures.has_value() || conditional.requiredExtensions.has_value() ||
+         conditional.systemLanguage.has_value();
+}
 
 bool SystemLanguageMatches(std::string_view systemLanguage, std::string_view userLanguage) {
   for (const std::string_view rawTag : StringUtils::Split(systemLanguage, ',')) {

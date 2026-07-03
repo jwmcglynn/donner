@@ -431,21 +431,13 @@ void ParsePresentationAttribute(SVGParserContext& context, SVGElement& element,
  */
 bool ParseConditionalProcessingAttribute(SVGElement& element, const XMLQualifiedNameRef& name,
                                          std::string_view value) {
-  std::optional<RcString> components::ConditionalProcessingComponent::* field = nullptr;
-  if (name == XMLQualifiedNameRef("requiredFeatures")) {
-    field = &components::ConditionalProcessingComponent::requiredFeatures;
-  } else if (name == XMLQualifiedNameRef("requiredExtensions")) {
-    field = &components::ConditionalProcessingComponent::requiredExtensions;
-  } else if (name == XMLQualifiedNameRef("systemLanguage")) {
-    field = &components::ConditionalProcessingComponent::systemLanguage;
-  } else {
+  if (!components::IsConditionalProcessingAttribute(name)) {
     return false;
   }
 
   auto& conditional =
       element.entityHandle().get_or_emplace<components::ConditionalProcessingComponent>();
-  conditional.*field = RcString(value);
-  return true;
+  return components::SetConditionalProcessingAttribute(conditional, name, value);
 }
 
 void ParseUnconditionalCommonAttribute(SVGParserContext& context, SVGElement& element,
