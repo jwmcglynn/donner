@@ -204,9 +204,15 @@ _REF_RETURN_RE = re.compile(
     (?:\[\[[^\]]+\]\]\s*)*
     (?:(?:static|inline|constexpr|friend|virtual)\s+)*
     (?P<type>
-      (?:std::optional\s*<\s*)?
-      (?:(?:[A-Za-z_][A-Za-z0-9_]*)::)*(?:XMLQualifiedNameRef|RcStringOrRef)
-      (?:\s*>)?
+      (?:const\s+)?
+      (?:
+        std::optional\s*<\s*
+        (?:(?:[A-Za-z_][A-Za-z0-9_]*)::)*(?:XMLQualifiedNameRef|RcStringOrRef)
+        \s*>
+        |
+        (?:(?:[A-Za-z_][A-Za-z0-9_]*)::)*(?:XMLQualifiedNameRef|RcStringOrRef)
+      )
+      (?:\s*[&*])?
     )
     \s+
     (?P<name>(?:(?:[A-Za-z_][A-Za-z0-9_]*)::)*[A-Za-z_][A-Za-z0-9_]*)
