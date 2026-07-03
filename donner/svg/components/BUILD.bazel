@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "svg_document_context",
@@ -53,6 +53,7 @@ donner_cc_library(
 donner_cc_library(
     name = "components_core",
     srcs = [
+        "ConditionalProcessingComponent.cc",
         "NodeLifetimeCollector.cc",
         "StylesheetComponent.cc",
         "TreeMutation.cc",
@@ -60,6 +61,7 @@ donner_cc_library(
     hdrs = [
         "ClassComponent.h",
         "ComputedClipPathsComponent.h",
+        "ConditionalProcessingComponent.h",
         "DirtyFlagsComponent.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
@@ -110,5 +112,16 @@ donner_cc_library(
         "//donner/svg/components/shape:shape_system",
         "//donner/svg/components/text:text_system",
         "//donner/svg/properties",
+    ],
+)
+
+donner_cc_test(
+    name = "conditional_processing_tests",
+    srcs = [
+        "tests/ConditionalProcessingComponent_tests.cc",
+    ],
+    deps = [
+        ":components_core",
+        "@com_google_gtest//:gtest_main",
     ],
 )

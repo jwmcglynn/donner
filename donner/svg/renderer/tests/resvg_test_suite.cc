@@ -1177,21 +1177,20 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureSwitch, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("structure/switch")), ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureSwitch, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/switch")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(StructureSymbol, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("structure/symbol")),
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureSystemLanguage, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("structure/systemLanguage")),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureSystemLanguage, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/systemLanguage")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransform, ImageComparisonTestFixture,

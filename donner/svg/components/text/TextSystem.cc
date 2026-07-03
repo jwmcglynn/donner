@@ -8,6 +8,7 @@
 
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/PathComponent.h"
@@ -379,6 +380,15 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     if (!isHidden) {
       auto* style = handle.try_get<ComputedStyleComponent>();
       if (style && style->properties && style->properties->display.get().value() == Display::None) {
+        isHidden = true;
+      }
+    }
+
+    // Conditional-processing attributes (requiredExtensions, systemLanguage) hide the span and
+    // its children when they evaluate to false, e.g. `<tspan systemLanguage="ru-RU">`.
+    if (!isHidden) {
+      if (const auto* conditional = handle.try_get<ConditionalProcessingComponent>();
+          conditional && !EvaluateConditionalProcessing(*conditional)) {
         isHidden = true;
       }
     }

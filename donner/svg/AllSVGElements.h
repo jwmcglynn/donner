@@ -54,6 +54,7 @@
 #include "donner/svg/SVGSVGElement.h"                  // IWYU pragma: export
 #include "donner/svg/SVGStopElement.h"                 // IWYU pragma: export
 #include "donner/svg/SVGStyleElement.h"                // IWYU pragma: export
+#include "donner/svg/SVGSwitchElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGSymbolElement.h"               // IWYU pragma: export
 #include "donner/svg/SVGTSpanElement.h"                // IWYU pragma: export
 #include "donner/svg/SVGTextElement.h"                 // IWYU pragma: export
@@ -117,6 +118,7 @@ using AllSVGElements = entt::type_list<  //
     SVGRectElement,                      //
     SVGStyleElement,                     //
     SVGSVGElement,                       //
+    SVGSwitchElement,                    //
     SVGSymbolElement,                    //
     SVGTextElement,                      //
     SVGTextPathElement,                  //

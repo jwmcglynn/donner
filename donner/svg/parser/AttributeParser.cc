@@ -17,6 +17,7 @@
 #include "donner/svg/SVGFilterElement.h"
 #include "donner/svg/SVGImageElement.h"
 #include "donner/svg/SVGMarkerElement.h"
+#include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
@@ -417,11 +418,46 @@ void ParsePresentationAttribute(SVGParserContext& context, SVGElement& element,
   (void)AttributeParser::ApplyParsedAttribute(element, name, value);
 }
 
+/**
+ * Store a conditional-processing attribute (`requiredFeatures`, `requiredExtensions`,
+ * `systemLanguage`) in the element's \ref components::ConditionalProcessingComponent.
+ *
+ * These attributes are valid on any element, so they are handled in the common attribute path.
+ *
+ * @param element The element to store the attribute on.
+ * @param name The attribute name.
+ * @param value The attribute value.
+ * @return True if the attribute was a conditional-processing attribute.
+ */
+bool ParseConditionalProcessingAttribute(SVGElement& element, const XMLQualifiedNameRef& name,
+                                         std::string_view value) {
+  std::optional<RcString> components::ConditionalProcessingComponent::* field = nullptr;
+  if (name == XMLQualifiedNameRef("requiredFeatures")) {
+    field = &components::ConditionalProcessingComponent::requiredFeatures;
+  } else if (name == XMLQualifiedNameRef("requiredExtensions")) {
+    field = &components::ConditionalProcessingComponent::requiredExtensions;
+  } else if (name == XMLQualifiedNameRef("systemLanguage")) {
+    field = &components::ConditionalProcessingComponent::systemLanguage;
+  } else {
+    return false;
+  }
+
+  auto& conditional =
+      element.entityHandle().get_or_emplace<components::ConditionalProcessingComponent>();
+  conditional.*field = RcString(value);
+  return true;
+}
+
 void ParseUnconditionalCommonAttribute(SVGParserContext& context, SVGElement& element,
                                        const XMLQualifiedNameRef& name, std::string_view value) {
   // TODO: Support namespaces on presentation attributes.
   // For now, only parse attributes that are not in a namespace as presentation attributes.
   if (IsAlwaysGenericAttribute(name)) {
+    (void)AttributeParser::ApplyParsedAttribute(element, name, value);
+  } else if (name.namespacePrefix.empty() &&
+             ParseConditionalProcessingAttribute(element, name, value)) {
+    // Conditional-processing attributes are stored on a component; keep the raw attribute so it
+    // round-trips through the DOM.
     (void)AttributeParser::ApplyParsedAttribute(element, name, value);
   } else {
     ParsePresentationAttribute(context, element, name, value);
