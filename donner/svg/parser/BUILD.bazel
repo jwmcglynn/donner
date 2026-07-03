@@ -58,6 +58,7 @@ donner_cc_library(
     deps = [
         ":parser_details",
         "//donner/svg:svg_core",
+        "//donner/svg/components:components_core",
         "//donner/svg/components/filter:components",
     ],
 )
@@ -98,13 +99,6 @@ donner_cc_library(
 
 donner_cc_test(
     name = "parser_tests",
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
-    variants = [
-        "tiny",
-        "text_full",
-        "geode",
-    ],
     srcs = [
         "tests/AngleParser_tests.cc",
         "tests/AttributeParser_tests.cc",
@@ -118,6 +112,13 @@ donner_cc_test(
         "tests/SVGParser_tests.cc",
         "tests/TransformParser_tests.cc",
         "tests/ViewBoxParser_tests.cc",
+    ],
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
     ],
     deps = [
         ":parser",

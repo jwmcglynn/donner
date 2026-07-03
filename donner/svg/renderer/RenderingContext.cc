@@ -5,6 +5,7 @@
 
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
@@ -151,6 +152,15 @@ public:
     const bool isShape = dataHandle.all_of<ComputedPathComponent>();
 
     if (!dataHandle.all_of<ElementTypeComponent>()) {
+      return;
+    }
+
+    // Conditional-processing attributes (requiredExtensions, systemLanguage) disable rendering of
+    // the element and its entire subtree when they evaluate to false. Non-rendered elements
+    // referenced by IRI (gradients, <clipPath>, <defs> content) are resolved elsewhere and are
+    // intentionally not affected, matching resvg.
+    if (const auto* conditional = dataHandle.try_get<ConditionalProcessingComponent>();
+        conditional && !EvaluateConditionalProcessing(*conditional)) {
       return;
     }
 
@@ -358,9 +368,17 @@ public:
 
     if (traverseChildren) {
       const auto& tree = registry_.get<donner::components::TreeComponent>(treeEntity);
-      for (auto cur = tree.firstChild(); cur != entt::null;
-           cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
-        traverseTree(cur);
+      if (dataHandle.get<ElementTypeComponent>().type() == ElementType::Switch) {
+        // <switch> renders only the first direct child whose conditional-processing attributes
+        // all evaluate to true.
+        if (const Entity selectedChild = selectSwitchChild(tree); selectedChild != entt::null) {
+          traverseTree(selectedChild);
+        }
+      } else {
+        for (auto cur = tree.firstChild(); cur != entt::null;
+             cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
+          traverseTree(cur);
+        }
       }
     }
 
@@ -375,6 +393,38 @@ public:
     if (lastRenderedEntityIfSubtree) {
       *lastRenderedEntityIfSubtree = lastRenderedEntity_;
     }
+  }
+
+  /**
+   * Select the first direct child of a \ref xml_switch whose conditional-processing attributes
+   * all evaluate to true. Non-element children (comments, text) and unknown (non-SVG) elements
+   * are never selected. `display` does not participate in selection, so a selected child with
+   * `display: none` still wins and renders nothing.
+   *
+   * @param switchTree Tree component of the `<switch>` element (or its shadow instance).
+   * @return The selected child entity, or `entt::null` if no child matches.
+   */
+  Entity selectSwitchChild(const donner::components::TreeComponent& switchTree) const {
+    for (Entity cur = switchTree.firstChild(); cur != entt::null;
+         cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
+      const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(cur);
+      const EntityHandle childDataHandle(
+          registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : cur);
+
+      const auto* typeComponent = childDataHandle.try_get<ElementTypeComponent>();
+      if (!typeComponent || typeComponent->type() == ElementType::Unknown) {
+        continue;
+      }
+
+      if (const auto* conditional = childDataHandle.try_get<ConditionalProcessingComponent>();
+          conditional && !EvaluateConditionalProcessing(*conditional)) {
+        continue;
+      }
+
+      return cur;
+    }
+
+    return entt::null;
   }
 
   bool collectClipPaths(EntityHandle clipPathHandle,

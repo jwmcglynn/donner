@@ -52,6 +52,7 @@ std::ostream& operator<<(std::ostream& os, ElementType type) {
     case ElementType::Stop: return os << "Stop";
     case ElementType::Style: return os << "Style";
     case ElementType::SVG: return os << "SVG";
+    case ElementType::Switch: return os << "Switch";
     case ElementType::Symbol: return os << "Symbol";
     case ElementType::Text: return os << "Text";
     case ElementType::TextPath: return os << "TextPath";

@@ -70,6 +70,7 @@ donner_cc_test(
         "SVGStopElement_tests.cc",
         "SVGStyleCascade_tests.cc",
         "SVGStyleElement_tests.cc",
+        "SVGSwitchElement_tests.cc",
         "SVGSymbolElement_tests.cc",
         "SVGTSpanElement_tests.cc",
         "SVGTextElement_tests.cc",

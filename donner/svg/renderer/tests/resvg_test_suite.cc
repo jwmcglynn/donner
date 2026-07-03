@@ -510,7 +510,7 @@ INSTANTIATE_TEST_SUITE_P(
                 {"clipping-with-text.svg", Params::Skip("Not impl: clipPath with <text> children")},
                 {"on-the-root-svg-without-size.svg",
                  Params::RenderOnly("UB: on root `<svg>` without size")},
-                {"switch-is-not-a-valid-child.svg", Params::Skip("Not impl: <switch>")},
+                {"with-use-child.svg", Params::Skip("Not impl: <use> child")},
 
                 {"circle-shorthand-with-stroke-box.svg",
                  Params::Skip("Bug: clipPath edge cases beyond core support")},
@@ -1177,44 +1177,20 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureSwitch, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/switch",
-                {
-                    {"comment-as-first-child.svg", Params::Skip("Not impl: <switch>")},
-                    {"display-none-on-child.svg", Params::Skip("Not impl: <switch>")},
-                    {"non-SVG-child.svg", Params::Skip("Not impl: <switch>")},
-                    {"requiredFeatures.svg", Params::Skip("Not impl: <switch>")},
-                    {"simple-case.svg", Params::Skip("Not impl: <switch>")},
-                    {"systemLanguage.svg", Params::Skip("Not impl: <switch>")},
-                    {"systemLanguage=en-GB.svg", Params::Skip("Not impl: <switch>")},
-                    {"systemLanguage=en-US.svg", Params::Skip("Not impl: <switch>")},
-                    {"systemLanguage=en.svg", Params::Skip("Not impl: <switch>")},
-                    {"systemLanguage=ru-Ru.svg", Params::Skip("Not impl: <switch>")},
-                    {"systemLanguage=ru-en.svg", Params::Skip("Not impl: <switch>")},
-                    {"with-attributes.svg", Params::Skip("Not impl: <switch>")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureSwitch, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/switch")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(StructureSymbol, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("structure/symbol")),
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    StructureSystemLanguage, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "structure/systemLanguage",
-                {
-                    {"on-svg.svg", Params::Skip("Not impl: systemLanguage conditional processing")},
-                    {"on-tspan.svg",
-                     Params::Skip("Not impl: systemLanguage conditional processing")},
-                    {"ru-Ru.svg", Params::Skip("Not impl: systemLanguage conditional processing")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(StructureSystemLanguage, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("structure/systemLanguage")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     StructureTransform, ImageComparisonTestFixture,
