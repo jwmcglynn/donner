@@ -578,15 +578,17 @@ TEST(AsyncRendererTest, RenderInFlightForTestingExcludesStagedDoneResult) {
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
-  asyncRenderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(1));
+
+  std::promise<void> wakeFired;
+  asyncRenderer.setWakeCallback([&] { wakeFired.set_value(); });
 
   RenderRequest request(renderer, document);
   request.version = 1;
   asyncRenderer.requestRender(request);
 
-  EXPECT_TRUE(asyncRenderer.hasRenderInFlightForTesting());
-  ASSERT_TRUE(asyncRenderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                                std::chrono::seconds(5)));
+  auto wakeFuture = wakeFired.get_future();
+  const auto status = wakeFuture.wait_for(std::chrono::seconds(5));
+  ASSERT_EQ(status, std::future_status::ready) << "render result was not staged";
 
   EXPECT_FALSE(asyncRenderer.hasRenderInFlightForTesting());
   EXPECT_TRUE(asyncRenderer.isBusy()) << "staged Done result should still block new requests";
