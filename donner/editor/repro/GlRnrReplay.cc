@@ -660,6 +660,8 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .presentationResources = layerStatus.presentationResources,
         .presentationCoverage = layerStatus.presentationCoverage,
         .overviewTileCount = layerStatus.overviewTileCount,
+        .renderPaneScrollY = layerStatus.renderPaneScrollY,
+        .renderPaneScrollMaxY = layerStatus.renderPaneScrollMaxY,
         .frameCost = layerStatus.frameCost,
         .activeDragPreview = layerStatus.activeDragPreview,
         .displayedDragPreview = layerStatus.displayedDragPreview,

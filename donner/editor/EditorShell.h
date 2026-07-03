@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/editor/CanvasScrollbars.h"
 #include "donner/editor/ClipboardInterface.h"
 #include "donner/editor/CompositorDebugPanel.h"
 #include "donner/editor/DialogPresenter.h"
@@ -200,6 +201,11 @@ struct LayerInspectorStatusReadback {
   PresentationCoverageDiagnostics presentationCoverage;
   /// Number of retained overview tiles available as zoom/pan infill.
   std::size_t overviewTileCount = 0;
+  /// Render-pane ImGui window scroll state. The canvas pane must never
+  /// window-scroll (that would move the overlay chrome instead of the
+  /// document), so a non-zero max is a layout bug.
+  float renderPaneScrollY = 0.0f;
+  float renderPaneScrollMaxY = 0.0f;
   /// Latest editor rendering cost counters.
   FrameCostBreakdown frameCost;
   /// Active drag transform driving the presenter, if any.
@@ -366,6 +372,10 @@ private:
   /// Keyboard handling while the in-canvas text editing session is active:
   /// typing, caret movement, Cmd+B/I/U style toggles, Escape commit.
   void handleTextEditingKeyboard();
+  /// Emulated canvas scrollbars along the pane edges: they represent the
+  /// document extent relative to the viewport and pan the canvas when
+  /// dragged. The pane window itself never scrolls.
+  void renderCanvasScrollbars();
   /// Point the render coordinator's pen live-geometry preview at the path the
   /// Pen tool is actively editing (or keep it alive after a session ends
   /// until the async raster of the final geometry lands), clearing it
@@ -437,6 +447,9 @@ private:
   bool contentOnlyCaptureForNextFrame_ = false;
   bool contentOnlyCaptureThisFrame_ = false;
   bool requestRenderAtEndOfFrame_ = false;
+  /// Render-pane ImGui scroll state sampled each frame for diagnostics.
+  float renderPaneScrollYForDiagnostics_ = 0.0f;
+  float renderPaneScrollMaxYForDiagnostics_ = 0.0f;
   /// True when an actively-moving pen drag flushed new path geometry this UI
   /// frame. The end-of-frame render request is skipped for such frames so the
   /// async worker stays idle during continuous pen drags: the live preview

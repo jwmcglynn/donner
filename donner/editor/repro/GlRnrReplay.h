@@ -196,6 +196,10 @@ struct GlRnrReplayFrameDiagnostics {
   PresentationCoverageDiagnostics presentationCoverage;
   /// Number of retained overview tiles available as zoom/pan infill.
   std::size_t overviewTileCount = 0;
+  /// Render-pane ImGui window scroll state (must stay zero; the canvas pane
+  /// never window-scrolls).
+  float renderPaneScrollY = 0.0f;
+  float renderPaneScrollMaxY = 0.0f;
   /// Latest editor rendering cost counters.
   FrameCostBreakdown frameCost;
   /// Active drag transform driving the presenter, if any.

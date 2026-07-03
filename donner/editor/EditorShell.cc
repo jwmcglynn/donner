@@ -917,6 +917,8 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .presentationResources = textures_.presentationResourceStats(),
       .presentationCoverage = textures_.coverageDiagnostics(),
       .overviewTileCount = textures_.overviewTiles().size(),
+      .renderPaneScrollY = renderPaneScrollYForDiagnostics_,
+      .renderPaneScrollMaxY = renderPaneScrollMaxYForDiagnostics_,
       .frameCost = frameCost,
   };
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
@@ -2264,6 +2266,8 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
       ImGuiCond_Always);
   ImGui::Begin("Render", nullptr, paneFlags);
 
+  renderPaneScrollYForDiagnostics_ = ImGui::GetScrollY();
+  renderPaneScrollMaxYForDiagnostics_ = ImGui::GetScrollMaxY();
   const ImVec2 contentRegion = ImGui::GetContentRegionAvail();
   const ImVec2 paneOriginImGui = ImGui::GetCursorScreenPos();
   interactionController_.updatePaneLayout(
@@ -2372,7 +2376,11 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     openRenderPaneContextMenu(screenToDocument(ImGui::GetMousePos()));
   }
 
-  const bool toolEligible = canvasHovered && !interactionController_.panning() && !spaceHeld;
+  const ImVec2 hoverMousePos = ImGui::GetMousePos();
+  const bool overCanvasScrollbar = CanvasScrollbarsContain(
+      interactionController_.viewport(), Vector2d(hoverMousePos.x, hoverMousePos.y));
+  const bool toolEligible =
+      canvasHovered && !interactionController_.panning() && !spaceHeld && !overCanvasScrollbar;
   const bool selectToolActive = activeTool_ == ActiveTool::Select;
   const bool penToolActive = activeTool_ == ActiveTool::Pen;
   const bool textToolActive = activeTool_ == ActiveTool::Text;
@@ -2898,10 +2906,79 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     renderSelectionSizeChip(hoverTransformIntent, representedGesturePreview);
     renderReferenceHighlightChip();
     renderToolPalette(paneOriginImGui, contentRegion);
+    renderCanvasScrollbars();
     renderRenderPaneContextMenu();
   }
 
   ImGui::End();
+}
+
+void EditorShell::renderCanvasScrollbars() {
+  const ViewportState& viewport = interactionController_.viewport();
+  const CanvasScrollbars bars = ComputeCanvasScrollbars(viewport);
+  if (!bars.horizontal.visible && !bars.vertical.visible) {
+    return;
+  }
+
+  const float kRailThickness = static_cast<float>(kCanvasScrollbarRailPx);
+  constexpr float kThumbPadding = 2.0f;
+  constexpr float kThumbRounding = 3.0f;
+  const ImU32 kRailColor = IM_COL32(28, 28, 32, 150);
+  const ImU32 kThumbColor = IM_COL32(112, 116, 126, 200);
+  const ImU32 kThumbActiveColor = IM_COL32(156, 160, 170, 230);
+  ImDrawList* drawList = ImGui::GetWindowDrawList();
+  const Vector2d paneOrigin = viewport.paneOrigin;
+  const Vector2d paneSize = viewport.paneSize;
+
+  // Scrollbars represent the DOCUMENT extent relative to the viewport and
+  // pan the canvas when dragged — they never window-scroll the pane (which
+  // would move the overlay chrome instead of the document).
+  if (bars.horizontal.visible) {
+    const float railTop = static_cast<float>(paneOrigin.y + paneSize.y) - kRailThickness;
+    ImGui::SetCursorScreenPos(ImVec2(static_cast<float>(bars.horizontal.thumbStart), railTop));
+    ImGui::InvisibleButton("##canvas_scroll_h",
+                           ImVec2(static_cast<float>(bars.horizontal.thumbLength), kRailThickness));
+    const bool active = ImGui::IsItemActive();
+    if (active && ImGui::GetIO().MouseDelta.x != 0.0f) {
+      interactionController_.viewport().panBy(Vector2d(
+          -static_cast<double>(ImGui::GetIO().MouseDelta.x) * bars.horizontal.contentPerThumbPx,
+          0.0));
+      requestRenderAtEndOfFrame_ = true;
+    }
+    drawList->AddRectFilled(
+        ImVec2(static_cast<float>(bars.horizontal.railStart), railTop),
+        ImVec2(static_cast<float>(bars.horizontal.railStart + bars.horizontal.railLength),
+               railTop + kRailThickness),
+        kRailColor);
+    drawList->AddRectFilled(
+        ImVec2(static_cast<float>(bars.horizontal.thumbStart), railTop + kThumbPadding),
+        ImVec2(static_cast<float>(bars.horizontal.thumbStart + bars.horizontal.thumbLength),
+               railTop + kRailThickness - kThumbPadding),
+        active ? kThumbActiveColor : kThumbColor, kThumbRounding);
+  }
+  if (bars.vertical.visible) {
+    const float railLeft = static_cast<float>(paneOrigin.x + paneSize.x) - kRailThickness;
+    ImGui::SetCursorScreenPos(ImVec2(railLeft, static_cast<float>(bars.vertical.thumbStart)));
+    ImGui::InvisibleButton("##canvas_scroll_v",
+                           ImVec2(kRailThickness, static_cast<float>(bars.vertical.thumbLength)));
+    const bool active = ImGui::IsItemActive();
+    if (active && ImGui::GetIO().MouseDelta.y != 0.0f) {
+      interactionController_.viewport().panBy(Vector2d(
+          0.0,
+          -static_cast<double>(ImGui::GetIO().MouseDelta.y) * bars.vertical.contentPerThumbPx));
+      requestRenderAtEndOfFrame_ = true;
+    }
+    drawList->AddRectFilled(
+        ImVec2(railLeft, static_cast<float>(bars.vertical.railStart)),
+        ImVec2(railLeft + kRailThickness,
+               static_cast<float>(bars.vertical.railStart + bars.vertical.railLength)),
+        kRailColor);
+    drawList->AddRectFilled(
+        ImVec2(railLeft + kThumbPadding, static_cast<float>(bars.vertical.thumbStart)),
+        ImVec2(railLeft + kRailThickness - kThumbPadding,
+               static_cast<float>(bars.vertical.thumbStart + bars.vertical.thumbLength)),
+        active ? kThumbActiveColor : kThumbColor, kThumbRounding);
+  }
 }
 
 void EditorShell::renderSidebars(float rightPaneX, float rightPaneWidth, float paneOriginY,
@@ -4326,7 +4403,17 @@ void EditorShell::runFrame() {
     renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
   }
   markPhase(mainFrameCost.sourcePaneMs);
-  renderRenderPane(renderPaneOrigin, renderPaneSize, kPaneFlags | ImGuiWindowFlags_NoBackground);
+  // The canvas pane must never window-scroll: an ImGui scrollbar here would
+  // scroll the in-pane overlay chrome (toolbar, perf HUD) away from the
+  // canvas. Canvas scrolling is the emulated document-extent scrollbars +
+  // wheel panning instead.
+  // The canvas pane must never window-scroll: an ImGui scrollbar here would
+  // scroll the in-pane overlay chrome (toolbar, perf HUD) away from the
+  // canvas. Canvas scrolling is the emulated document-extent scrollbars +
+  // wheel panning instead.
+  renderRenderPane(renderPaneOrigin, renderPaneSize,
+                   kPaneFlags | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar |
+                       ImGuiWindowFlags_NoScrollWithMouse);
   markPhase(mainFrameCost.renderPaneMs);
   renderSidebars(rightPaneX, rightPaneWidth_, paneOriginY, rightSidebarLayout, kPaneFlags);
   if (highlightSelectionSourceIfNeeded()) {

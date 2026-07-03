@@ -1218,7 +1218,36 @@ std::optional<std::filesystem::path> WriteHighZoomPanReplay(const std::filesyste
 
   // Settle at the initial viewport so the bounded raster and the overview
   // infill both land.
-  for (std::uint64_t index = 0; index <= 20; ++index) {
+  for (std::uint64_t index = 0; index <= 11; ++index) {
+    PushDonnerDReplayFrame(file, index, viewportAt(4.0, 870.0), mouseDoc, 0);
+  }
+  // Frames 12-19: grab the pane's right-edge scrollbar strip and drag it
+  // down. The canvas scrollbar must pan the DOCUMENT (or do nothing), never
+  // window-scroll the pane's overlay chrome (toolbar, perf HUD) — dragging
+  // the old ImGui window scrollbar here scrolled the chrome away from the
+  // canvas. Screen x=1165 sits in the scrollbar strip (pane right edge is
+  // 568+604=1172); the doc points below map to (1165, 300..420) at this
+  // viewport via ScreenFromDoc.
+  const auto docAtScreen = [&](double screenX, double screenY) {
+    return Vector2d(446.0 + (screenX - 870.0) / 4.0, 256.0 + (screenY - 460.5) / 4.0);
+  };
+  {
+    repro::ReproEvent mouseDown;
+    mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+    mouseDown.mouseButton = 0;
+    PushDonnerDReplayFrame(file, 12, viewportAt(4.0, 870.0), docAtScreen(1165.0, 300.0), 1,
+                           {mouseDown});
+    for (std::uint64_t index = 13; index <= 17; ++index) {
+      const double screenY = 300.0 + 24.0 * static_cast<double>(index - 12);
+      PushDonnerDReplayFrame(file, index, viewportAt(4.0, 870.0), docAtScreen(1165.0, screenY), 1);
+    }
+    repro::ReproEvent mouseUp;
+    mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+    mouseUp.mouseButton = 0;
+    PushDonnerDReplayFrame(file, 18, viewportAt(4.0, 870.0), docAtScreen(1165.0, 420.0), 0,
+                           {mouseUp});
+  }
+  for (std::uint64_t index = 19; index <= 20; ++index) {
     PushDonnerDReplayFrame(file, index, viewportAt(4.0, 870.0), mouseDoc, 0);
   }
   // Rapid pan: +40 screen px per frame for 10 frames (400 px total, ~3x the
@@ -2323,6 +2352,16 @@ TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
     EXPECT_GT(contentRatio(paneCrop(*bitmap)), settledRatio - 0.02)
         << what << " lost document coverage (clipped): " << FindCapture(result, frame)->path;
   };
+
+  // The canvas pane must never window-scroll: the wheel spin over the canvas
+  // during settle pans the document, and a non-zero ImGui scroll position
+  // here means it ALSO scrolled the in-pane overlay chrome (toolbar, perf
+  // HUD) away from the canvas.
+  if (const repro::GlRnrReplayFrameDiagnostics* settledDiag = FindFrameDiagnostics(result, 20)) {
+    EXPECT_EQ(settledDiag->renderPaneScrollY, 0.0f)
+        << "render pane window-scrolled its overlay chrome (scrollMaxY="
+        << settledDiag->renderPaneScrollMaxY << ")";
+  }
 
   // Mid-pan and end-of-pan: the pane must stay covered by document content
   // even though no fresh bounded raster has landed for the new viewport.
