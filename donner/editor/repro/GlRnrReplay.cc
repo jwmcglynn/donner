@@ -766,6 +766,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   }
 
   result->finalSelectedElementLabel = shell.selectedElementLabelForReadback();
+  result->finalDocumentSource = shell.documentSourceForReadback();
   return true;
 }
 

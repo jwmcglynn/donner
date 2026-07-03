@@ -879,6 +879,13 @@ std::optional<std::string> EditorShell::selectedElementLabelForReadback() const 
   return ElementContextMenuLabel(*selected);
 }
 
+std::optional<std::string> EditorShell::documentSourceForReadback() const {
+  if (!app_.hasDocument() || !app_.document().document().hasSourceStore()) {
+    return std::nullopt;
+  }
+  return std::string(app_.document().document().source());
+}
+
 LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() const {
   const auto& viewport = interactionController_.viewport();
   const Vector2i viewportDesiredCanvas = viewport.desiredCanvasSize();

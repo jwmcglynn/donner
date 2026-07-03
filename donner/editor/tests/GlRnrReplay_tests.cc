@@ -25,6 +25,7 @@
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -798,6 +799,95 @@ std::optional<std::filesystem::path> WriteTextTypingLivePointerReplay(
   pushFrame(12, clickX, clickY, 0, {}, {escapeUp});
   for (std::uint64_t index = 13; index <= 16; ++index) {
     pushFrame(index, clickX, clickY, 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+// First resize of a freshly selected <g> — the state convert-text-to-outlines
+// leaves the editor in (selection jumps to a group whose own layer raster has
+// never been produced). Selects the group via the mouse-down hit checkpoint,
+// grabs the bottom-right transform handle at (100,120) in the same press, and
+// drags it to (130,150) while the worker lags. The presented content must
+// track the resize in lockstep with the overlay the whole way.
+std::optional<std::filesystem::path> WriteGroupFirstResizeReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_group_first_resize.svg";
+  file.metadata.svgBasename = "group_first_resize.svg";
+  file.metadata.svgContentHash = "fnv1a64:group-first-resize";
+  file.metadata.svgSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+  <rect width="200" height="200" fill="#ffffff"/>
+  <g id="g">
+    <rect id="r" x="40" y="40" width="60" height="40" fill="#ff0000"/>
+    <rect x="60" y="90" width="40" height="30" fill="#0000ff"/>
+  </g>
+</svg>)svg";
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d(10.0, 10.0), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "select",
+            }});
+  for (std::uint64_t index = 1; index <= 5; ++index) {
+    pushFrame(index, Vector2d(10.0, 10.0), 0);
+  }
+
+  // Press exactly on the group's bottom-right selection corner. The hit
+  // checkpoint selects #g first (the state a conversion leaves behind), so
+  // the same press lands on the freshly computed transform handle.
+  repro::ReproEvent mouseDown;
+  mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  mouseDown.mouseButton = 0;
+  mouseDown.hit = repro::ReproHit{.id = "g", .tag = "g"};
+  pushFrame(6, Vector2d(100.0, 120.0), 1, {}, {mouseDown});
+
+  // Drag the corner to (130,150) in 5-unit steps, then hold one frame.
+  for (int step = 1; step <= 6; ++step) {
+    pushFrame(6 + static_cast<std::uint64_t>(step),
+              Vector2d(100.0 + 5.0 * step, 120.0 + 5.0 * step), 1);
+  }
+  pushFrame(13, Vector2d(130.0, 150.0), 1);
+
+  repro::ReproEvent mouseUp;
+  mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  mouseUp.mouseButton = 0;
+  pushFrame(14, Vector2d(130.0, 150.0), 0, {}, {mouseUp});
+  for (std::uint64_t index = 15; index <= 40; ++index) {
+    pushFrame(index, Vector2d(130.0, 150.0), 0);
   }
 
   const std::filesystem::path replayPath = outputDir / std::string(name);
@@ -2406,6 +2496,112 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
       << "a live canvas click with the Text tool must open an editing session; "
          "the committed text element must remain selected after Escape";
   EXPECT_EQ(*finalFrame->selectedTextContent, "Hi");
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+/// Inclusive pixel bounds of the bright-red pixels in @p bitmap, or nullopt
+/// when none are present.
+struct RedPixelBounds {
+  int minX = 0;
+  int minY = 0;
+  int maxX = 0;
+  int maxY = 0;
+};
+std::optional<RedPixelBounds> BrightRedPixelBounds(const svg::RendererBitmap& source) {
+  const svg::RendererBitmap bitmap = NormalizeBitmap(source);
+  std::optional<RedPixelBounds> bounds;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::size_t offset =
+          (static_cast<std::size_t>(y) * static_cast<std::size_t>(bitmap.dimensions.x) +
+           static_cast<std::size_t>(x)) *
+          4u;
+      const std::uint8_t r = bitmap.pixels[offset];
+      const std::uint8_t g = bitmap.pixels[offset + 1];
+      const std::uint8_t b = bitmap.pixels[offset + 2];
+      if (r < 150 || g > 80 || b > 80) {
+        continue;
+      }
+      if (!bounds.has_value()) {
+        bounds = RedPixelBounds{x, y, x, y};
+      } else {
+        bounds->minX = std::min(bounds->minX, x);
+        bounds->minY = std::min(bounds->minY, y);
+        bounds->maxX = std::max(bounds->maxX, x);
+        bounds->maxY = std::max(bounds->maxY, y);
+      }
+    }
+  }
+  return bounds;
+}
+
+TEST(GlRnrReplayTest, FirstResizeOfFreshlySelectedGroupKeepsContentLockstepWithOverlay) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "group_first_resize";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteGroupFirstResizeReplay(outputDir, "group_first_resize.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(5);
+  options.captureFrames.insert(13);
+  options.captureFrames.insert(23);
+  options.captureFrames.insert(40);
+  options.maxFrame = 40;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.contentOnlyCapture = true;
+  options.driveDocumentSpaceInput = true;
+  // The worker lags a couple of frames, like a real machine mid-gesture: the
+  // presenter has to bridge with cached tiles + the drag's affine transform.
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 2;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  // Calibrate canvasFromDoc from the settled pre-drag frame: the red rect
+  // occupies (40,40)-(100,80) in document space.
+  const std::optional<svg::RendererBitmap> baseline = LoadCaptureBitmap(result, 5);
+  ASSERT_TRUE(baseline.has_value());
+  const std::optional<RedPixelBounds> baselineRed = BrightRedPixelBounds(*baseline);
+  ASSERT_TRUE(baselineRed.has_value()) << "red rect not visible in the settled pre-drag frame";
+  const double scaleX = (baselineRed->maxX - baselineRed->minX + 1) / 60.0;
+  const double scaleY = (baselineRed->maxY - baselineRed->minY + 1) / 40.0;
+  const double offsetX = baselineRed->minX - scaleX * 40.0;
+  const double offsetY = baselineRed->minY - scaleY * 40.0;
+
+  // The bottom-right corner handle was dragged from (100,120) to (130,150),
+  // anchored at the opposite corner (40,40): scale 1.5 in x, 1.375 in y. The
+  // red rect (40,40)-(100,80) must therefore present at (40,40)-(130,95) —
+  // both mid-drag (bridged from the cached tile) and settled.
+  const auto expectRedBoundsNear = [&](std::uint64_t frameIndex, std::string_view label) {
+    const std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, frameIndex);
+    ASSERT_TRUE(capture.has_value());
+    const std::optional<RedPixelBounds> red = BrightRedPixelBounds(*capture);
+    ASSERT_TRUE(red.has_value()) << label << ": red rect not visible";
+    const double tolerancePx = 6.0;
+    EXPECT_NEAR(red->minX, offsetX + scaleX * 40.0, tolerancePx) << label;
+    EXPECT_NEAR(red->minY, offsetY + scaleY * 40.0, tolerancePx) << label;
+    EXPECT_NEAR(red->maxX, offsetX + scaleX * 130.0, tolerancePx)
+        << label << ": presented content is not tracking the resize";
+    EXPECT_NEAR(red->maxY, offsetY + scaleY * 95.0, tolerancePx)
+        << label << ": presented content is not tracking the resize";
+  };
+  // The resize must durably reach the DOM + source: the group carries the
+  // written transform after release.
+  ASSERT_TRUE(result.finalDocumentSource.has_value());
+  EXPECT_THAT(*result.finalDocumentSource, testing::HasSubstr("transform="))
+      << "resize writeback never reached the document source:\n"
+      << *result.finalDocumentSource;
+
+  expectRedBoundsNear(13, "mid-drag frame");
+  expectRedBoundsNear(23, "settled post-release frame");
+  expectRedBoundsNear(40, "long-settled frame");
 
   std::error_code ec;
   std::filesystem::remove_all(outputDir, ec);

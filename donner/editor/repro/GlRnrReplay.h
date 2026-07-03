@@ -232,6 +232,10 @@ struct GlRnrReplayResult {
   std::vector<GlRnrReplayFrameDiagnostics> frameDiagnostics;
   /// Selection label after the last replayed frame.
   std::optional<std::string> finalSelectedElementLabel;
+  /// Document source after the last replayed frame, for asserting that
+  /// gesture writebacks durably reached the DOM + source (nullopt when no
+  /// document was loaded).
+  std::optional<std::string> finalDocumentSource;
   /// True when replay could not run because the host provides no usable GL
   /// context (a headless / GPU-less environment with no software-GL fallback,
   /// e.g. GitHub-hosted macOS). Callers should treat this as "skip" rather than

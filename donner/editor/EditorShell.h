@@ -261,6 +261,10 @@ public:
   void applyReplayActionForTesting(const repro::ReproAction& action);
   /// Current selection label for replay/readback harnesses.
   [[nodiscard]] std::optional<std::string> selectedElementLabelForReadback() const;
+
+  /// Current document source text, for replay/readback harness assertions
+  /// about gesture writebacks (nullopt without a document/source store).
+  [[nodiscard]] std::optional<std::string> documentSourceForReadback() const;
   /// Current layer-inspector freshness status for replay/readback harnesses.
   [[nodiscard]] LayerInspectorStatusReadback layerInspectorStatusForReadback() const;
 
