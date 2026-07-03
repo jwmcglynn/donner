@@ -40,7 +40,7 @@ When debugging bugs — **especially performance or UI bugs** — write an autom
 - **A regression test is only valid if it FAILED on the broken code.** Run the test at HEAD *before* applying the fix, capture the failure output (diff PNG, pixel count, error) and verify it matches the user-reported symptom. Commit the test on its own commit first so CI records a red→green transition. If you can't get the test to fail at HEAD, the test is wrong — not the bug. "Plausible-sounding fix without a red→green transition" is an attempt, not a fix — title the commit `attempt:` / `hypothesis:` and do not mark the issue closed.
 - **User pushback is automatic evidence the test was wrong.** When the user reports a bug is still present after a claimed fix, the default response is "the test that verifies my fix is wrong or missing — writing a new one." Never reply with "I don't see why it would still be broken" or ask the user to re-confirm steps. The user's repro *is* the signal; your test is what needs debugging.
 - **Perf bugs**: the repro must measure the exact latency the user observes (e.g. click-to-first-pixel wall-clock, per-frame time). Put explicit budget assertions in the test (`EXPECT_LT(measured_ms, budget_ms)`) so regressions trip loudly. New perf tests should use `donner_perf_cc_test` so CPU-invariant correctness counters stay on the PR gate while runner-sensitive wall-clock budgets move to nightly `perf` targets. Don't settle for "works on my laptop" — the test itself is the verification.
-- **UI bugs**: if the bug only manifests through the full editor event loop (mouse events, ImGui state, worker-thread ping-pong), write an instrumented UI-layer test that drives the live backend path (`EditorBackendCore` + `CompositorController`) with the exact request-posting sequence the editor uses. Faithfully mirror the event flow — do not fabricate a prewarm phase that the real editor doesn't fire.
+- **UI bugs**: if the bug only manifests through the full editor event loop (mouse events, ImGui state, worker-thread ping-pong), write an instrumented UI-layer test that drives the live backend path (`EditorApp` + `AsyncRenderer` + `CompositorController`) with the exact request-posting sequence the editor uses. Faithfully mirror the event flow — do not fabricate a prewarm phase that the real editor doesn't fire.
 - **Editor visual bugs**: follow [`docs/editor_visual_debugging.md`](docs/editor_visual_debugging.md)
   for `.rnr` replay, Geode direct-texture diagnostics, pixel crops, stack-layer boundaries, and
   failure signatures. Generate reproducible screenshots with
@@ -61,7 +61,7 @@ When debugging bugs — **especially performance or UI bugs** — write an autom
   same presented transform for both, or move both together.
 - **Iterating without a repro** wastes everyone's time. A bug you can't reproduce automatically is a bug you can't fix; a fix you can't verify automatically is a fix you can't ship. Manual "please run it and tell me what you see" cycles are a last resort, not a primary workflow.
 - Reference tests:
-  - `donner/editor/sandbox/tests/EditorBackendGoldenImage_tests.cc`'s `FilterDisappearRepro7*` suite — full thin-client flow (`.rnr` → `EditorBackendCore` → pixelmatch diff vs `svg::Renderer::draw`) with inspectable diff PNGs.
+  - `donner/editor/tests/RnrReplay_tests.cc`'s `FilterDisappearRepro3*` test — full editor replay flow (`.rnr` → `EditorApp` + `AsyncRenderer` → pixelmatch diff vs committed golden PNG) with inspectable diff PNGs.
   - `donner/svg/compositor/CompositorGolden_tests.cc`'s `SplashDrag*` tests — compositor-level perf gates on the real `donner_splash.svg` via the `data` dep.
 
 ## Pixel-Diff Tests
@@ -73,7 +73,7 @@ When debugging bugs — **especially performance or UI bugs** — write an autom
 ## Test Diagnosability: gmock + ToTT-style failures
 
 - **Prioritize gmock matchers (`EXPECT_THAT` + matchers) over hand-rolled `EXPECT_TRUE(a == b)`-style assertions.** A failing test must localize the bug *without a rerun* — `EXPECT_THAT(pixel, RgbaNear(187, 0, 188, 255, 4))` prints the full expected-vs-actual RGBA and names the offending channel; `EXPECT_TRUE(pixel[0] == 187)` prints "false". This is the "Testing on the Toilet" (ToTT) standard: the failure message *is* the diagnostic.
-- **Promote repeated assertion shapes into a named gmock matcher** with a good `DescribeTo` / `result_listener` message (e.g. the `Rgba(...)` / `RgbaNear(...)` / `Alpha(...)` pixel matchers in `RendererGeode_tests.cc`). A repeated `EXPECT_NEAR` per channel is a smell — make one matcher that reports all channels.
+- **Promote repeated assertion shapes into a named gmock matcher** with a good `DescribeTo` / `result_listener` message (e.g. the `Rgba(...)` / `Alpha(...)` pixel matchers in `RendererGeode_tests.cc`, or `RgbaNear(...)` in `donner/editor/tests/RenderElementToBitmap_tests.cc`). A repeated `EXPECT_NEAR` per channel is a smell — make one matcher that reports all channels.
 - Don't churn assertions that are already diagnosable; apply this to new/edited tests and anywhere a failure currently prints a bare boolean.
 
 ## Anti-Aliasing Is Never the Root Cause

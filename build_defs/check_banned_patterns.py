@@ -3,9 +3,9 @@
 Check C++ source files for banned language patterns documented in
 docs/coding_style.md "Language and Library Features".
 
-Catches escapes like PR #415 where `long long` template specialization
-collided with `std::int64_t` on Linux (where int64_t IS long long) but
-not on macOS (where int64_t is long).
+Catches escapes like PR #415 where a `long long` template specialization
+collided with a `std::int64_t` one on macOS (where int64_t IS long long)
+but not on 64-bit Linux (where int64_t is long).
 
 Rules enforced:
   - No `long long` type: use std::int64_t / std::uint64_t / std::size_t
@@ -17,8 +17,8 @@ Rules enforced:
   - No direct TreeComponent structural mutation outside approved low-level code
 
 Usage:
-  python3 tools/check_banned_patterns.py            # Check all files
-  python3 tools/check_banned_patterns.py FILE...    # Check specific files
+  python3 build_defs/check_banned_patterns.py            # Check all files
+  python3 build_defs/check_banned_patterns.py FILE...    # Check specific files
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ _RULES: List[_Rule] = [
         pattern=re.compile(r"\blong\s+long\b"),
         description="`long long` type",
         remediation=(
-            "Use std::int64_t / std::uint64_t (width-portable) — long long is long on macOS but "
-            "long-long on Linux, causing template specialization collisions (see PR #415)."
+            "Use std::int64_t / std::uint64_t (width-portable) — int64_t is long long on macOS "
+            "but long on Linux, causing template specialization collisions (see PR #415)."
         ),
     ),
     _Rule(

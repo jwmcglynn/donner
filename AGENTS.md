@@ -54,7 +54,7 @@ Donner is a dynamic SVG engine (browser-like, not a static renderer). It builds 
 - **Styling** (`Property`, `PropertyRegistry`, `StyleSystem`): Consumes CSS data, implements SVG style model (presentation attributes, cascading, inheritance) → `ComputedStyleComponent`.
 - **Document Model (ECS)**: Built on **EnTT**. Entities = SVG elements, Components = data (`TreeComponent`, `StyleComponent`, `PathComponent`), Systems = logic (`LayoutSystem`, `StyleSystem`, `ShapeSystem`).
 - **API Frontend** (`donner::svg::SVG*Element`): User-facing wrappers around ECS entities/components.
-- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Backends: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`) and **Geode** (`RendererGeode`, in-development GPU backend via Dawn/WebGPU; gated on `--//donner/svg/renderer/geode:enable_geode=true`). `Renderer` is the public facade. Select the default tiny-skia backend or `--config=geode` in Bazel; CMake uses `DONNER_RENDERER_BACKEND` where supported.
+- **Rendering**: `RendererDriver` traverses the ECS and emits drawing commands via `RendererInterface`. Backends: **TinySkia** (`RendererTinySkia`, default — lightweight software rasterizer from `third_party/tiny-skia-cpp`) and **Geode** (`RendererGeode`, in-development GPU backend via wgpu-native/WebGPU; gated on `--//donner/svg/renderer/geode:enable_geode=true`). `Renderer` is the public facade. Select the default tiny-skia backend or `--config=geode` in Bazel; CMake uses `DONNER_RENDERER_BACKEND` where supported.
 - **Base Library** (`donner::base`): Common utilities (`RcString`, `Vector2`, `Transform`, `Length`).
 
 ### Rendering Pipeline
@@ -64,8 +64,8 @@ Stages transform components through the ECS:
 1. **Parsing** → Initial ECS tree (`TreeComponent`, `StyleComponent`, `PathComponent`, etc.)
 2. **System Execution** (sequential, dependency-ordered):
    - `StyleSystem`: `StyleComponent` + CSS rules + hierarchy → `ComputedStyleComponent`
-   - `LayoutSystem`: Computes bounding boxes (`ComputedSizedElementComponent`), world transforms (`AbsoluteTransformComponent`), viewport/viewBox handling
-   - `ShapeSystem`: `PathComponent`/`RectComponent` + computed styles → `ComputedPathComponent` (with `PathSpline`). Handles SVG2 CSS-defined geometry.
+   - `LayoutSystem`: Computes bounding boxes (`ComputedSizedElementComponent`), world transforms (`ComputedAbsoluteTransformComponent`), viewport/viewBox handling
+   - `ShapeSystem`: `PathComponent`/`RectComponent` + computed styles → `ComputedPathComponent` (with `Path`). Handles SVG2 CSS-defined geometry.
    - `TextSystem`: `TextComponent` → `ComputedTextComponent` (laid-out text)
    - `ShadowTreeSystem`: Instantiates shadow trees for `<use>`, `<pattern>`, `<mask>`, `<marker>` → `ShadowTreeComponent`, `ComputedShadowTreeComponent` (main + offscreen branches)
    - `FilterSystem`: `FilterComponent` → `ComputedFilterComponent`
@@ -91,8 +91,8 @@ When creating a pull request:
 2. **Run `bazel test //...`** before opening the PR. This is the single source of truth for local validation — it covers:
    - Unit tests across the default config AND the `tiny` / `text_full` / `geode` variant lanes (auto-emitted as `*_tiny` / `*_text_full` / `*_geode` wrappers by `donner_cc_test(variants=…)`).
    - The per-library banned-patterns lint (`*_lint` py_tests auto-emitted by `donner_cc_library`/`_test`/`_binary`). Catches `long long`, `std::aligned_storage`, user-defined literal operators at test time.
-   On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
-   Also run, separately:
+     On Intel Arc Xe hosts the Geode lane needs `--test_env=VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json --test_env=XDG_RUNTIME_DIR=/tmp` to fall back to llvmpipe.
+     Also run, separately:
    - `python3 tools/cmake/gen_cmakelists.py --check` (CMake generator + output validator; runs outside bazel because it uses `bazel query`).
    - **`clang-format -i` on every modified C/C++ file** before committing — `git clang-format` covers staged changes. The project `.clang-format` is tuned so clang-format 18 and 19 produce identical output, so any locally-installed clang-format works.
 3. **For fuzzer-sensitive changes**, run `bazel test --config=asan-fuzzer <fuzzer target>`. macOS needs this config because Apple Clang lacks `libclang_rt.fuzzer_osx.a`; `--config=asan-fuzzer` activates the LLVM 21 toolchain which provides it.
@@ -172,7 +172,7 @@ Use **destFromSource** naming for every `Transform2d` — locals, fields, parame
 - ✅ `entityFromWorldTransform`, `deviceFromPattern`, `canvasFromDocumentWorldTransform_`, `bitmapEntityFromEntity`, `worldFromPreviousWorld`.
 - ❌ `delta`, `xform`, `transform`, `mat`, `t`, `temp` — and `deviceToLocal` / `worldToEntity` (wrong direction word).
 
-Composition reads right-to-left under donner's post-multiply convention: `A_from_B * B_from_C` produces `A_from_C` (rightmost applied first). If your composition doesn't spell out a valid `dest_from_source` chain when you read the names, the math is wrong.
+Composition reads left-to-right: `Transform2d::operator*` is left-first (`A * B` means "apply A, then B"), so `B_from_A * C_from_B` produces `C_from_A` — the dest of the left factor must equal the source of the right factor (e.g. `worldFromEntityTransform * surfaceFromCanvasTransform_` in `RendererDriver`). If your composition doesn't spell out a valid `dest_from_source` chain when you read the names, the math is wrong.
 
 Inverses get the swapped name: `bitmapEntityFromWorld.inverse()` is `worldFromBitmapEntity`. Don't keep the original name on a local that holds the inverse.
 
@@ -184,27 +184,27 @@ Features are controlled by Bazel flags under `--//donner/svg/renderer:`. Use `--
 
 Flag: `--//donner/svg/renderer:renderer_backend` (default: `tiny_skia`)
 
-| Config | Backend | Notes |
-|--------|---------|-------|
-| (default) | TinySkia (`RendererTinySkia`) | Lightweight software rasterizer, no external deps |
-| `--config=geode` | Geode (`RendererGeode`) | GPU backend (WebGPU + Slug); default in the editor |
+| Config           | Backend                       | Notes                                              |
+| ---------------- | ----------------------------- | -------------------------------------------------- |
+| (default)        | TinySkia (`RendererTinySkia`) | Lightweight software rasterizer, no external deps  |
+| `--config=geode` | Geode (`RendererGeode`)       | GPU backend (WebGPU + Slug); default in the editor |
 
 ### Text Rendering
 
-Text is **off by default**. Two tiers enabled via flags `--//donner/svg/renderer:text` and `--//donner/svg/renderer:text_full`:
+Text is **on by default** (basic tier). Two tiers controlled by flags `--//donner/svg/renderer:text` and `--//donner/svg/renderer:text_full`:
 
-| Config | Layout Engine | Description |
-|--------|--------------|-------------|
-| `--config=text` | stb_truetype (`TextLayout`) | Basic kern-table kerning, glyph outlines |
-| `--config=text-full` | FreeType + HarfBuzz (`TextShaper`) + WOFF2 | Full OpenType shaping (GSUB/GPOS), web fonts |
+| Config               | Layout Engine                                   | Description                                  |
+| -------------------- | ----------------------------------------------- | -------------------------------------------- |
+| (default)            | stb_truetype (`TextBackendSimple`)              | Basic kern-table kerning, glyph outlines     |
+| `--config=text-full` | FreeType + HarfBuzz (`TextBackendFull`) + WOFF2 | Full OpenType shaping (GSUB/GPOS), web fonts |
 
-`text-full` implicitly enables `text`. When making text changes, test all applicable tiers.
+`text-full` implicitly enables `text`. Disable text entirely with `--config=no-text`. When making text changes, test all applicable tiers.
 
 ### Filters
 
 Flag: `--//donner/svg/renderer:filters` (default: `true` — **enabled**)
 
-SVG `<filter>` support (filter graph executor + filter primitives). Disable with `--config=no-filters`. Currently supported in TinySkia backend only.
+SVG `<filter>` support (filter graph executor + filter primitives). Disable with `--config=no-filters`. Supported in both the TinySkia and Geode backends (Geode via `GeodeFilterEngine`).
 
 ### Examples
 
@@ -216,7 +216,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 ## Test Diagnosability (gmock + ToTT)
 
-- **Prioritize gmock (`EXPECT_THAT` + matchers) over `EXPECT_TRUE(a == b)`-style asserts.** A failure must localize the bug without a rerun — match the whole value and print expected-vs-actual, not a bare boolean (the "Testing on the Toilet" standard). Promote repeated assertion shapes into a named matcher with a descriptive failure message (e.g. the `Rgba`/`RgbaNear`/`Alpha` pixel matchers in `RendererGeode_tests.cc`). See CLAUDE.md §"Test Diagnosability".
+- **Prioritize gmock (`EXPECT_THAT` + matchers) over `EXPECT_TRUE(a == b)`-style asserts.** A failure must localize the bug without a rerun — match the whole value and print expected-vs-actual, not a bare boolean (the "Testing on the Toilet" standard). Promote repeated assertion shapes into a named matcher with a descriptive failure message (e.g. the `Rgba`/`Alpha` pixel matchers in `RendererGeode_tests.cc`). See CLAUDE.md §"Test Diagnosability".
 
 ## Pixel Diff & Threshold Philosophy
 
@@ -225,7 +225,7 @@ UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run //donner/svg/renderer
 
 ### Resvg Test Threshold Conventions
 
-- Pixel diffs <100: **omit the entry** — default `Params()` applies via `getTestsWithPrefix`.
+- Pixel diffs <100: **omit the entry** — default `Params()` applies via `getTestsInCategory`.
 - Non-default thresholds require human review.
 - Prefer adjusting the float threshold first (for minor AA/shading diffs).
 - Only add `Params::WithThreshold(threshold, N)` after root-cause investigation.
@@ -255,11 +255,11 @@ Identify relevant resvg tests before implementing a feature, use them as accepta
 ### Triage Quick Reference
 
 ```sh
-bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=*e_text_*'
+bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=*TextLetterSpacing*'
 bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- \
-  '--gtest_filter=*e_text_023*' --gtest_also_run_disabled_tests
-# Examine failing SVG, then fix root cause or add skip:
-{"e-text-023.svg", Params::Skip()},  // Not impl: `letter-spacing`
+  '--gtest_filter=*TextLetterSpacing*filter_bbox*' --gtest_also_run_disabled_tests
+# Examine failing SVG, then fix root cause or add skip (keyed by bare filename within the category):
+{"filter-bbox.svg", Params::Skip("Bug: letter-spacing edge cases")},
 ```
 
 **Skip comment conventions**: `Not impl: <feature>`, `UB: <reason>`, `Bug: <description>`, `Larger threshold due to <reason>`.
@@ -268,15 +268,15 @@ bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- \
 
 The `resvg-test-triage` MCP server provides 8 tools for automated test analysis:
 
-| Tool | Purpose |
-|------|---------|
-| `analyze_test_failure` | Analyze single failure with feature detection |
-| `batch_triage_tests` | Process multiple failures, group by feature |
-| `detect_svg_features` | Parse SVG to identify tested features |
-| `suggest_skip_comment` | Generate formatted skip comments |
-| `suggest_implementation_approach` | Suggest files to modify + implementation hints |
-| `find_related_tests` | Find tests failing for same feature (batch opportunities) |
-| `generate_feature_report` | Progress reports by category |
-| `analyze_visual_diff` | Categorize failure types from diff images |
+| Tool                              | Purpose                                                   |
+| --------------------------------- | --------------------------------------------------------- |
+| `analyze_test_failure`            | Analyze single failure with feature detection             |
+| `batch_triage_tests`              | Process multiple failures, group by feature               |
+| `detect_svg_features`             | Parse SVG to identify tested features                     |
+| `suggest_skip_comment`            | Generate formatted skip comments                          |
+| `suggest_implementation_approach` | Suggest files to modify + implementation hints            |
+| `find_related_tests`              | Find tests failing for same feature (batch opportunities) |
+| `generate_feature_report`         | Progress reports by category                              |
+| `analyze_visual_diff`             | Categorize failure types from diff images                 |
 
 Setup & docs: [tools/mcp-servers/resvg-test-triage/README.md](tools/mcp-servers/resvg-test-triage/README.md)
