@@ -3958,6 +3958,29 @@ void EditorShell::renderRenderPaneContextMenu() {
   if (ImGui::MenuItem("Unbundle Compound Path", nullptr, false, unbundleAvailability.canApply)) {
     selectionChanged = app_.unbundleCompoundPath(unbundleTarget);
   }
+
+  // Convert Text to Outlines: acts on the right-clicked <text>, or on the
+  // current all-text selection when the menu opened over empty canvas.
+  // Reuses the same DOM-level conversion as the menu-bar action.
+  std::optional<svg::SVGElement> convertTextTarget;
+  if (renderContextMenuHitElement_.has_value()) {
+    const svg::SVGElement hitElement = *renderContextMenuHitElement_;
+    const bool hitIsText =
+        hitElement.withReadAccess([&hitElement](svg::DocumentReadAccess&, EntityHandle) {
+          return hitElement.tagName().name == svg::SVGTextElement::Tag;
+        });
+    if (hitIsText) {
+      convertTextTarget = hitElement;
+    }
+  }
+  if (ImGui::MenuItem("Convert Text to Outlines", nullptr, false,
+                      convertTextTarget.has_value() || selectionIsAllText())) {
+    if (convertTextTarget.has_value()) {
+      app_.setSelection(*convertTextTarget);
+    }
+    convertSelectedTextToOutlines();
+    selectionChanged = true;
+  }
   if (referenceHighlightSummary_.totalCount() > 1) {
     if (ImGui::MenuItem("Highlight Refs", nullptr, referenceHighlightActive_)) {
       referenceHighlightActive_ = !referenceHighlightActive_;
