@@ -168,20 +168,20 @@ TEST(TextToOutlines, ConvertsTextToolBoxTextPixelIdentical) {
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
 <text x="10" y="52" font-family="sans-serif" font-size="32" fill="black" font-weight="bold" data-donner-text-box-width="180" data-donner-text-box-height="100"><tspan x="10">Hello</tspan><tspan x="10" dy="38.4">world</tspan></text>
 </svg>)";
-  svg::SVGDocument before = Parse(kToolAuthoredSvg);
-  svg::SVGElement text = TextElement(before);
+  svg::SVGDocument converted = Parse(kToolAuthoredSvg);
+  svg::SVGElement text = TextElement(converted);
 
-  const ConvertTextToOutlinesResult result = convertTextToOutlines(before, text);
+  ConvertTextToOutlinesResult result = convertTextToOutlines(converted, text);
   ASSERT_TRUE(result.ok) << result.error;
+  const std::string mergedSource = ApplyConversion(converted, text, result);
 
-  svg::SVGDocument converted = Parse(result.mergedSource);
   EXPECT_FALSE(converted.querySelector("text").has_value())
       << "converted document must contain no live <text>";
   EXPECT_FALSE(converted.querySelector("tspan").has_value())
       << "converted document must contain no live <tspan>";
 
   svg::SVGDocument beforeFresh = Parse(kToolAuthoredSvg);
-  svg::SVGDocument after = Parse(result.mergedSource);
+  svg::SVGDocument after = Parse(mergedSource);
   const svg::RendererBitmap beforeBitmap = RenderToBitmap(beforeFresh);
   const svg::RendererBitmap afterBitmap = RenderToBitmap(after);
   tests::CompareBitmapToBitmap(afterBitmap, beforeBitmap, "text_to_outlines_tool_box_text",
