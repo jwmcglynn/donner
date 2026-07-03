@@ -784,6 +784,10 @@ bool EditorApp::flushFrame() {
   }
 
   if (!document_.flushFrame()) {
+    // A no-op flush still consumes a deferred source-undo entry: a tool that
+    // flushes per keystroke (a text session) reaches its commit with nothing
+    // queued, and the entry itself compares before/after source.
+    consumePendingDocumentSourceUndo();
     return false;
   }
 
@@ -825,21 +829,26 @@ bool EditorApp::flushFrame() {
     pendingSelectionRestoreTargets_.reset();
   }
 
-  if (pendingDocumentSourceUndo_.has_value()) {
-    if (document_.hasDocument() && document_.document().hasSourceStore()) {
-      std::string sourceAfter(document_.document().source());
-      if (sourceAfter != pendingDocumentSourceUndo_->before.documentSource) {
-        UndoSnapshot after =
-            captureDocumentSourceSnapshot(pendingDocumentSourceUndo_->before.element, sourceAfter);
-        after.selectionTargets = CaptureSelectionTargets(selection_);
-        undoTimeline_.record(pendingDocumentSourceUndo_->label,
-                             std::move(pendingDocumentSourceUndo_->before), std::move(after));
-      }
-    }
-    pendingDocumentSourceUndo_.reset();
-  }
+  consumePendingDocumentSourceUndo();
 
   return true;
+}
+
+void EditorApp::consumePendingDocumentSourceUndo() {
+  if (!pendingDocumentSourceUndo_.has_value()) {
+    return;
+  }
+  if (document_.hasDocument() && document_.document().hasSourceStore()) {
+    std::string sourceAfter(document_.document().source());
+    if (sourceAfter != pendingDocumentSourceUndo_->before.documentSource) {
+      UndoSnapshot after =
+          captureDocumentSourceSnapshot(pendingDocumentSourceUndo_->before.element, sourceAfter);
+      after.selectionTargets = CaptureSelectionTargets(selection_);
+      undoTimeline_.record(pendingDocumentSourceUndo_->label,
+                           std::move(pendingDocumentSourceUndo_->before), std::move(after));
+    }
+  }
+  pendingDocumentSourceUndo_.reset();
 }
 
 bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {

@@ -560,6 +560,11 @@ private:
   /// mutation path.
   void refreshFirstSelectionCache();
 
+  /// Records the entry deferred by \ref recordDocumentSourceUndoOnNextFlush
+  /// (when the source actually changed) and clears it. Called on every
+  /// `flushFrame()`, including no-op flushes with nothing queued.
+  void consumePendingDocumentSourceUndo();
+
   /// Shared tail of the structural-move paths (\ref reorderSelectedElement and
   /// \ref reorderElementBeforeSibling): records an undo snapshot labelled
   /// @p undoLabel and issues the DOM `InsertElementCommand` that repositions
