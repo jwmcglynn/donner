@@ -94,7 +94,6 @@ bottom for completeness.
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
 | B3 | `structure/image` golden kernel-era mismatch | 13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline | 1 | gradient/pattern/`<image>`/text resolve the pivot; `on-text-path` baseline still drops it → [#624](https://github.com/jwmcglynn/donner/issues/624) |
-| F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F7 | `paint-order` rendering | **DONE** (7/8) | Rendered on shapes + text; `on-tspan` residual → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
 | F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`) | 8 | Feature |
@@ -235,11 +234,6 @@ Per-test threshold inflation is not an option.
 ---
 
 ## Unimplemented features (clean single-feature scope)
-
-### F3: `context-fill` / `context-stroke`
-
-**Impact:** 13 tests in `painting/context/`. Parsed but not honored at render.
-Used by markers and `<use>` to inherit the referencing element's paint.
 
 ### F7: `paint-order` rendering
 

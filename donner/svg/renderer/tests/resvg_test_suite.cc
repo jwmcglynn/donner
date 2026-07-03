@@ -652,51 +652,10 @@ INSTANTIATE_TEST_SUITE_P(PaintingColor, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    PaintingContext, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "painting/context",
-            {
-                {"in-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"in-nested-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"in-nested-use-and-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"on-shape-with-zero-size-bbox.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-gradient-and-gradient-transform.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-gradient-in-use.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-gradient-on-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-pattern-and-transform-in-use.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-pattern-in-use.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-pattern-objectBoundingBox-in-use.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-pattern-on-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-text.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(PaintingContext, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("painting/context")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingDisplay, ImageComparisonTestFixture,
