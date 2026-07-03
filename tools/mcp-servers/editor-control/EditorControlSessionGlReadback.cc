@@ -282,6 +282,12 @@ ProcessRunResult RunProcess(std::span<const std::string> args, std::chrono::mill
 
   if (result.timedOut) {
     result.error = "command timed out after " + std::to_string(timeout.count()) + "ms";
+    if (!result.stderrText.empty()) {
+      result.error += "\nstderr:\n" + TailText(result.stderrText, 4096);
+    }
+    if (!result.stdoutText.empty()) {
+      result.error += "\nstdout:\n" + TailText(result.stdoutText, 4096);
+    }
     return result;
   }
   if (result.exitCode != 0) {

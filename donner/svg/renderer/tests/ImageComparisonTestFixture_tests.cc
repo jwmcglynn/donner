@@ -25,6 +25,15 @@ TEST(ImageComparisonTestFixtureTests, ExplicitSkipsUseDisabledGtestName) {
   EXPECT_THAT(name, testing::HasSubstr("embedded_png"));
 }
 
+TEST(ImageComparisonTestFixtureTests, GeodeMaxPixelsOnlyAppliesToGeodeModes) {
+  ImageComparisonParams params;
+  params.withMaxPixelsDifferent(150).withGeodeMaxPixelsDifferent(500);
+
+  EXPECT_EQ(params.effectiveMaxMismatchedPixels(ComparisonMode::TinyGolden), 150);
+  EXPECT_EQ(params.effectiveMaxMismatchedPixels(ComparisonMode::GeodeGolden), 500);
+  EXPECT_EQ(params.effectiveMaxMismatchedPixels(ComparisonMode::GeodeTinyParity), 500);
+}
+
 #ifndef DONNER_TEXT_FULL
 TEST(ImageComparisonTestFixtureTests, TextFullOnlyRunsUseDisabledGtestNameInSimpleTextBuild) {
   ImageComparisonParams params;

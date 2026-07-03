@@ -177,13 +177,13 @@ class EditorControlGlReadbackTests(unittest.TestCase):
                   "gl_output_dir": os.environ.get("TEST_TMPDIR", "/tmp"),
                   "gl_visible": True,
                   "gl_pace": False,
-                  "gl_timeout_ms": 300000,
+                  "gl_timeout_ms": 120000,
                   "include_gl_images": True,
                   "include_frame_results": False,
                   "max_frame_results": 0,
               },
           },
-          timeout_seconds=300.0,
+          timeout_seconds=150.0,
       )
     finally:
       client.close()

@@ -24,14 +24,14 @@ cc_library(
     name = "editor_control_session",
     srcs = [
         "EditorControlSession.cc",
-        "EditorControlSessionInternal.cc",
-        "EditorControlSessionRnr.cc",
         "EditorControlSessionDocument.cc",
         "EditorControlSessionGestures.cc",
         "EditorControlSessionGlReadback.cc",
         "EditorControlSessionGlReadback.h",
+        "EditorControlSessionInternal.cc",
         "EditorControlSessionInternal.h",
         "EditorControlSessionRender.cc",
+        "EditorControlSessionRnr.cc",
     ],
     hdrs = ["EditorControlSession.h"],
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
@@ -98,7 +98,13 @@ py_test(
         "//:donner_splash_v0_8.svg",
         "//:zoom-out-drag-jump.rnr",
     ],
-    tags = ["local"],
+    # This test intentionally exercises the raw bazel-bin MCP launch path, which
+    # runs a nested `bazel run` GL replay helper. Keep it opt-in so `bazel test
+    # //...` does not deadlock waiting on the outer Bazel command lock.
+    tags = [
+        "local",
+        "manual",
+    ],
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
 )
 

@@ -93,6 +93,9 @@ struct ImageComparisonParams {
   /// Override for maxMismatchedPixels when running without HarfBuzz text shaping
   /// (DONNER_TEXT_FULL not defined). -1 means use maxMismatchedPixels for all configs.
   int simpleTextMaxMismatchedPixels = -1;
+  /// Override for maxMismatchedPixels when rendering with Geode. -1 means use
+  /// the active text-config maxMismatchedPixels budget.
+  int geodeMaxMismatchedPixels = -1;
   /// If true, skip this test when running without HarfBuzz (simple text).
   bool skipSimpleText = false;
   /// If true, count anti-aliased pixels as mismatches instead of suppressing them.
@@ -325,6 +328,17 @@ struct ImageComparisonParams {
   }
 
   /**
+   * @brief Sets the max mismatched pixels for Geode comparison modes.
+   *
+   * @param pixels The max mismatched pixels when rendering with Geode.
+   * @return Reference to this ImageComparisonParams object.
+   */
+  ImageComparisonParams& withGeodeMaxPixelsDifferent(int pixels) {
+    geodeMaxMismatchedPixels = pixels;
+    return *this;
+  }
+
+  /**
    * @brief Skips only the `GeodeTinyParity` instance for this test.
    *
    * Use sparingly for a known geode-vs-tiny divergence that should not disable
@@ -355,14 +369,23 @@ struct ImageComparisonParams {
   }
 
   /**
-   * @brief Returns the effective maxMismatchedPixels for the active text config.
+   * @brief Returns the effective maxMismatchedPixels for the active mode and text config.
+   *
+   * @param mode The comparison mode being evaluated.
+   * @return Max mismatched pixels for the active configuration.
    */
-  int effectiveMaxMismatchedPixels() const {
+  int effectiveMaxMismatchedPixels(ComparisonMode mode = ComparisonMode::TinyGolden) const {
 #ifdef DONNER_TEXT_FULL
-    return maxMismatchedPixels;
+    const int textConfigMaxMismatchedPixels = maxMismatchedPixels;
 #else
-    return simpleTextMaxMismatchedPixels >= 0 ? simpleTextMaxMismatchedPixels : maxMismatchedPixels;
+    const int textConfigMaxMismatchedPixels =
+        simpleTextMaxMismatchedPixels >= 0 ? simpleTextMaxMismatchedPixels : maxMismatchedPixels;
 #endif
+    if (BackendForMode(mode) == RendererBackend::Geode && geodeMaxMismatchedPixels >= 0) {
+      return geodeMaxMismatchedPixels;
+    }
+
+    return textConfigMaxMismatchedPixels;
   }
 
   /**
