@@ -27,6 +27,8 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/FailureSignalHandler.h"
+
 namespace {
 
 // 60 s budget by default: tight enough to catch a real driver hang quickly
@@ -108,6 +110,8 @@ private:
 }  // namespace
 
 int main(int argc, char** argv) {
+  donner::InstallFailureSignalHandler();
+
   // Compute the per-case budget BEFORE InitGoogleTest so our private flag gets
   // stripped out first.
   int mutable_argc = argc;
