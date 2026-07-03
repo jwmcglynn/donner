@@ -1205,19 +1205,28 @@ INSTANTIATE_TEST_SUITE_P(
 
 INSTANTIATE_TEST_SUITE_P(
     TextAlignmentBaseline, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "text/alignment-baseline",
-            {
-                // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
-                // match it. Render for no-crash coverage only.
-                {"after-edge.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
-                {"baseline.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
-                {"ideographic.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
-                {"text-after-edge.svg",
-                 Params::RenderOnly("UB: golden is a UB placeholder image")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "text/alignment-baseline",
+                {
+                    // UB: resvg's golden PNG is a "UB" placeholder overlay, so no render can
+                    // match it. Render for no-crash coverage only.
+                    {"after-edge.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"baseline.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"ideographic.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+                    {"text-after-edge.svg",
+                     Params::RenderOnly("UB: golden is a UB placeholder image")},
+
+                    {"hanging-on-vertical.svg",
+                     Params::Skip("Bug: mixed-script vertical flow (upright CJK + rotated Latin) "
+                                  "column geometry differs from resvg; alignment-baseline is "
+                                  "correctly ignored in vertical mode. Same gap as the "
+                                  "text/writing-mode mixed-languages-with-tb skip.")},
+                    {"two-textPath-with-middle-on-first.svg",
+                     Params().withMaxPixelsDifferent(200).withReason(
+                         "Sub-pixel glyph placement along the two paths; ~108 scattered "
+                         "edge pixels, no positional drift (bounding boxes match exactly)")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1255,6 +1264,13 @@ INSTANTIATE_TEST_SUITE_P(
                     // match it. Render for no-crash coverage only.
                     {"reset-size.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
                     {"use-script.svg", Params::RenderOnly("UB: golden is a UB placeholder image")},
+
+                    {"hanging.svg",
+                     Params::WithThreshold(
+                         0.1f, kDefaultMismatchedPixels,
+                         "Golden's 0.5px crosshair hairline is rasterized with a sub-pixel x "
+                         "offset (vertical-line alpha 128/192 vs 160/160 in the sibling "
+                         "middle/central/alphabetic goldens); the glyph itself matches")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

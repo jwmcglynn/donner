@@ -94,7 +94,6 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
   layoutParams.viewBox = params.viewBox;
   layoutParams.fontMetrics = params.fontMetrics;
   layoutParams.textAnchor = params.textAnchor;
-  layoutParams.dominantBaseline = params.dominantBaseline;
   layoutParams.writingMode = params.writingMode;
   layoutParams.letterSpacingPx = params.letterSpacingPx;
   layoutParams.wordSpacingPx = params.wordSpacingPx;

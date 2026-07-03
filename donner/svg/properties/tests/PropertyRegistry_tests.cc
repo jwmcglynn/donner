@@ -700,6 +700,7 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
     const std::pair<const char*, DominantBaseline> cases[] = {
         {"auto", DominantBaseline::Auto},
         {"text-bottom", DominantBaseline::TextBottom},
+        {"text-after-edge", DominantBaseline::TextBottom},
         {"alphabetic", DominantBaseline::Alphabetic},
         {"ideographic", DominantBaseline::Ideographic},
         {"middle", DominantBaseline::Middle},
@@ -707,12 +708,48 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
         {"mathematical", DominantBaseline::Mathematical},
         {"hanging", DominantBaseline::Hanging},
         {"text-top", DominantBaseline::TextTop},
+        {"text-before-edge", DominantBaseline::TextTop},
+        {"use-script", DominantBaseline::UseScript},
+        {"no-change", DominantBaseline::NoChange},
+        {"reset-size", DominantBaseline::ResetSize},
     };
 
     for (const auto& [value, expected] : cases) {
       PropertyRegistry registry;
       registry.parseStyle(std::string("dominant-baseline: ") + value);
       EXPECT_THAT(registry.dominantBaseline.get(), Optional(expected));
+    }
+  }
+
+  {
+    const std::pair<const char*, DominantBaseline> cases[] = {
+        {"auto", DominantBaseline::Auto},
+        {"baseline", DominantBaseline::Auto},
+        {"before-edge", DominantBaseline::TextTop},
+        {"text-before-edge", DominantBaseline::TextTop},
+        {"text-top", DominantBaseline::TextTop},
+        {"middle", DominantBaseline::Middle},
+        {"central", DominantBaseline::Central},
+        {"after-edge", DominantBaseline::TextBottom},
+        {"text-after-edge", DominantBaseline::TextBottom},
+        {"text-bottom", DominantBaseline::TextBottom},
+        {"ideographic", DominantBaseline::Ideographic},
+        {"alphabetic", DominantBaseline::Alphabetic},
+        {"hanging", DominantBaseline::Hanging},
+        {"mathematical", DominantBaseline::Mathematical},
+    };
+
+    for (const auto& [value, expected] : cases) {
+      PropertyRegistry registry;
+      registry.parseStyle(std::string("alignment-baseline: ") + value);
+      EXPECT_THAT(registry.alignmentBaseline.get(), Optional(expected));
+    }
+
+    {
+      // `use-script` / `no-change` / `reset-size` are dominant-baseline-only keywords.
+      PropertyRegistry registry;
+      registry.parseStyle("alignment-baseline: use-script");
+      EXPECT_THAT(registry.alignmentBaseline.get(), Optional(DominantBaseline::Auto));
     }
   }
 

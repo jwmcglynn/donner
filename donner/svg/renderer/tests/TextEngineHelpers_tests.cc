@@ -3,6 +3,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/MockTextBackend.h"
 #include "donner/svg/text/TextEngine.h"
 
@@ -32,10 +35,23 @@ TEST(ComputeBaselineShiftTest, AlphabeticReturnsZero) {
   EXPECT_DOUBLE_EQ(computeBaselineShift(DominantBaseline::Alphabetic, vm, 1.0f), 0.0);
 }
 
-TEST(ComputeBaselineShiftTest, MiddleCentersEmBox) {
+TEST(ComputeBaselineShiftTest, DeprecatedSvg11KeywordsReturnZero) {
   FontVMetrics vm{800, -200, 0};
-  // (800 + (-200)) * 0.5 * 1.0 = 300.0
-  EXPECT_DOUBLE_EQ(computeBaselineShift(DominantBaseline::Middle, vm, 1.0f), 300.0);
+  EXPECT_DOUBLE_EQ(computeBaselineShift(DominantBaseline::UseScript, vm, 1.0f), 0.0);
+  EXPECT_DOUBLE_EQ(computeBaselineShift(DominantBaseline::NoChange, vm, 1.0f), 0.0);
+  EXPECT_DOUBLE_EQ(computeBaselineShift(DominantBaseline::ResetSize, vm, 1.0f), 0.0);
+}
+
+TEST(ComputeBaselineShiftTest, MiddleIsHalfXHeight) {
+  FontVMetrics vm{800, -200, 0, /*xHeight=*/500};
+  // 500 * 0.5 * 1.0 = 250.0
+  EXPECT_DOUBLE_EQ(computeBaselineShift(DominantBaseline::Middle, vm, 1.0f), 250.0);
+}
+
+TEST(ComputeBaselineShiftTest, MiddleFallsBackTo45PercentHeightWithoutXHeight) {
+  FontVMetrics vm{800, -200, 0};  // xHeight = 0 (font has no OS/2 sxHeight).
+  // 0.45 * (800 - (-200)) * 0.5 * 1.0 = 225.0
+  EXPECT_DOUBLE_EQ(computeBaselineShift(DominantBaseline::Middle, vm, 1.0f), 225.0);
 }
 
 TEST(ComputeBaselineShiftTest, CentralCentersEmBox) {
@@ -575,6 +591,63 @@ TEST_F(TextEngineLayoutTest, LetterSpacingAddsSpace) {
   EXPECT_NEAR(runs[0].glyphs[1].xPosition, 15.0, 0.1);
 }
 
+TEST_F(TextEngineLayoutTest, AlignmentBaselineHangingShiftsGlyphsDown) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  components::ComputedTextComponent text;
+  auto span = makeSpan("AB");
+  span.xList.push_back(Lengthd(0.0, Lengthd::Unit::None));
+  span.yList.push_back(Lengthd(50.0, Lengthd::Unit::None));
+  // Effective baseline (dominant-baseline or alignment-baseline override) resolved per span.
+  span.alignmentBaseline = DominantBaseline::Hanging;
+  text.spans.push_back(std::move(span));
+
+  const auto runs = engine_->layout(text, makeParams());
+
+  ASSERT_EQ(runs.size(), 1u);
+  ASSERT_EQ(runs[0].glyphs.size(), 2u);
+  // Hanging shift = 0.8 * ascent(800) * emScale(0.016) = 10.24, added to y (glyphs move down).
+  EXPECT_THAT(runs[0].glyphs[0].yPosition, testing::DoubleNear(60.24, 0.01));
+  EXPECT_THAT(runs[0].glyphs[1].yPosition, testing::DoubleNear(60.24, 0.01));
+}
+
+TEST_F(TextEngineLayoutTest, BaselineAlignmentIsIgnoredInVerticalWritingMode) {
+  ON_CALL(*mockBackend_, shapeRun(testing::_, testing::_, testing::_, testing::_, testing::_,
+                                  testing::_, testing::_, testing::_))
+      .WillByDefault([](FontHandle, float, std::string_view text, size_t offset, size_t length,
+                        bool, FontVariant, bool) {
+        return TextEngineLayoutTest::makeShapedRun(text, offset, length, 10.0);
+      });
+
+  auto layoutFirstGlyphPosition = [&](DominantBaseline effectiveBaseline) {
+    components::ComputedTextComponent text;
+    auto span = makeSpan("AB");
+    span.xList.push_back(Lengthd(100.0, Lengthd::Unit::None));
+    span.yList.push_back(Lengthd(20.0, Lengthd::Unit::None));
+    span.alignmentBaseline = effectiveBaseline;
+    text.spans.push_back(std::move(span));
+
+    auto params = makeParams();
+    params.writingMode = WritingMode::VerticalRl;
+    const auto runs = engine_->layout(text, params);
+    EXPECT_EQ(runs.size(), 1u);
+    EXPECT_EQ(runs[0].glyphs.size(), 2u);
+    return Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);
+  };
+
+  // Matching resvg, dominant/alignment baseline shifts apply only to horizontal text: a
+  // vertical span with `hanging` must lay out exactly like one with `auto`.
+  const Vector2d hangingPosition = layoutFirstGlyphPosition(DominantBaseline::Hanging);
+  const Vector2d autoPosition = layoutFirstGlyphPosition(DominantBaseline::Auto);
+  EXPECT_THAT(hangingPosition.x, testing::DoubleEq(autoPosition.x));
+  EXPECT_THAT(hangingPosition.y, testing::DoubleEq(autoPosition.y));
+}
+
 TEST_F(TextEngineLayoutTest, HiddenSpanProducesEmptyGlyphs) {
   components::ComputedTextComponent text;
   auto span = makeSpan("ABC");
@@ -614,6 +687,127 @@ TEST_F(TextEngineLayoutTest, EmptySpanPreservesPosition) {
   EXPECT_TRUE(runs[0].glyphs.empty());
   ASSERT_EQ(runs[1].glyphs.size(), 1u);
   EXPECT_NEAR(runs[1].glyphs[0].xPosition, 100.0, 0.1);
+}
+
+// ── Effective baseline resolution (resolvePerSpanLayoutStyles) ──────────────
+
+/// Matches a TextSpan whose text is \p expectedText and whose resolved effective baseline
+/// (TextSpan::alignmentBaseline) is \p expectedBaseline. On mismatch, prints the span's text
+/// and effective baseline keyword.
+MATCHER_P2(SpanWithEffectiveBaseline, expectedText, expectedBaseline,
+           std::string("span with text '") + expectedText + "' and effective baseline '" +
+               testing::PrintToString(expectedBaseline) + "'") {
+  const std::string_view spanText(arg.text.data() + arg.start, arg.end - arg.start);
+  if (spanText != expectedText) {
+    *result_listener << "span text is '" << spanText << "'";
+    return false;
+  }
+  if (arg.alignmentBaseline != expectedBaseline) {
+    *result_listener << "effective baseline is '" << arg.alignmentBaseline << "'";
+    return false;
+  }
+  return true;
+}
+
+class EffectiveBaselineResolutionTest : public testing::Test {
+protected:
+  /// Parses \p svg, computes styles and text spans, and runs the per-span layout-style
+  /// resolution that folds dominant-baseline / alignment-baseline into each span's
+  /// effective baseline. Returns the resolved spans of the element with id="t".
+  SmallVector<components::ComputedTextComponent::TextSpan, 1> resolveSpans(std::string_view svg) {
+    ParseWarningSink parseSink;
+    auto maybeResult = parser::SVGParser::ParseSVG(svg, parseSink);
+    EXPECT_FALSE(maybeResult.hasError()) << "SVG parse failed";
+    document_ = std::make_unique<SVGDocument>(std::move(maybeResult).result());
+
+    Registry& registry = document_->registry();
+
+    auto maybeText = document_->querySelector("#t");
+    EXPECT_TRUE(maybeText.has_value()) << "No element with id=\"t\"";
+    const EntityHandle textRootHandle = maybeText->unsafeEntityHandle();
+
+    fontManager_ = std::make_unique<FontManager>(registry);
+    engine_ = std::make_unique<TextEngine>(*fontManager_, registry);
+
+    // Compute styles + text spans through the production path, then resolve per-span
+    // layout styles (the step that folds dominant/alignment-baseline per span).
+    ParseWarningSink warningSink;
+    engine_->prepareForElement(textRootHandle, warningSink);
+
+    auto* computed = registry.try_get<components::ComputedTextComponent>(textRootHandle.entity());
+    EXPECT_NE(computed, nullptr);
+    if (!computed) {
+      return {};
+    }
+
+    engine_->resolvePerSpanLayoutStyles(textRootHandle, *computed);
+    return computed->spans;
+  }
+
+  std::unique_ptr<SVGDocument> document_;
+  std::unique_ptr<FontManager> fontManager_;
+  std::unique_ptr<TextEngine> engine_;
+};
+
+TEST_F(EffectiveBaselineResolutionTest, DominantBaselineInheritsToTspan) {
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20" dominant-baseline="middle"><tspan>A</tspan></text>
+    </svg>
+  )");
+
+  EXPECT_THAT(spans, testing::Contains(SpanWithEffectiveBaseline("A", DominantBaseline::Middle)));
+}
+
+TEST_F(EffectiveBaselineResolutionTest, AlignmentBaselineOverridesDominantBaseline) {
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20" dominant-baseline="middle">
+        <tspan alignment-baseline="hanging">A</tspan>
+      </text>
+    </svg>
+  )");
+
+  EXPECT_THAT(spans, testing::Contains(SpanWithEffectiveBaseline("A", DominantBaseline::Hanging)));
+}
+
+TEST_F(EffectiveBaselineResolutionTest, AlignmentBaselineBaselineKeywordDefersToDominant) {
+  // `alignment-baseline: baseline` parses to Auto, so the span's own dominant-baseline
+  // (here `hanging`, set on the tspan) applies — matching resvg and Chrome.
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20" dominant-baseline="middle">
+        <tspan dominant-baseline="hanging" alignment-baseline="baseline">A</tspan>
+      </text>
+    </svg>
+  )");
+
+  EXPECT_THAT(spans, testing::Contains(SpanWithEffectiveBaseline("A", DominantBaseline::Hanging)));
+}
+
+TEST_F(EffectiveBaselineResolutionTest, NoChangeUsesParentDominantBaseline) {
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20" dominant-baseline="middle">
+        <tspan dominant-baseline="no-change">A</tspan>
+      </text>
+    </svg>
+  )");
+
+  EXPECT_THAT(spans, testing::Contains(SpanWithEffectiveBaseline("A", DominantBaseline::Middle)));
+}
+
+TEST_F(EffectiveBaselineResolutionTest, UseScriptResolvesAsIs) {
+  // `use-script` is deprecated and unsupported; it stays in the effective baseline and
+  // computeBaselineShift() maps it to a zero shift (behaves like auto).
+  const auto spans = resolveSpans(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="20" dominant-baseline="use-script">A</text>
+    </svg>
+  )");
+
+  EXPECT_THAT(spans,
+              testing::Contains(SpanWithEffectiveBaseline("A", DominantBaseline::UseScript)));
 }
 
 }  // namespace

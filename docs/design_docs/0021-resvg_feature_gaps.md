@@ -312,7 +312,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~6 | `writing-mode=tb` with `dx`/`dy`, vertical-lr/rl edge cases |
+| text/writing-mode | ~7 | `writing-mode=tb` with `dx`/`dy`, vertical-lr/rl edge cases, mixed-script (upright CJK + rotated Latin) column geometry (also skips `text/alignment-baseline/hanging-on-vertical`) |
 
 ---
 

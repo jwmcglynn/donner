@@ -328,6 +328,8 @@ donner_cc_test(
         "TextEngineHelpers_tests.cc",
     ],
     deps = [
+        "//donner/svg/components/text:components",
+        "//donner/svg/parser",
         "//donner/svg/text:text_backend",
         "//donner/svg/text:text_engine",
         "//donner/svg/text:text_layout_params",

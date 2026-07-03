@@ -340,8 +340,8 @@ public:
       "text-decoration", []() -> std::optional<TextDecoration> { return TextDecoration::None; }};
 
   /// `dominant-baseline` property, which determines the baseline alignment for text.
-  /// Not inherited. Defaults to \ref DominantBaseline::Auto.
-  Property<DominantBaseline> dominantBaseline{
+  /// Inherited (CSS Inline Layout 3). Defaults to \ref DominantBaseline::Auto.
+  Property<DominantBaseline, PropertyCascade::Inherit> dominantBaseline{
       "dominant-baseline",
       []() -> std::optional<DominantBaseline> { return DominantBaseline::Auto; }};
 
@@ -362,7 +362,8 @@ public:
       "baseline-shift", []() -> std::optional<Lengthd> { return Lengthd(0, Lengthd::Unit::None); }};
 
   /// `alignment-baseline` property. Specifies how an inline element aligns with its parent's
-  /// baseline. Uses the same enum as dominant-baseline. Not inherited.
+  /// baseline. Uses the same enum as dominant-baseline (`baseline` parses to
+  /// \ref DominantBaseline::Auto — both defer to the dominant baseline). Not inherited.
   Property<DominantBaseline> alignmentBaseline{
       "alignment-baseline",
       []() -> std::optional<DominantBaseline> { return DominantBaseline::Auto; }};
