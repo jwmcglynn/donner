@@ -11,7 +11,7 @@ namespace donner::svg {
 namespace {
 
 std::string TagNameForSelector(const SVGElement& element) {
-  return std::string(element.tagName().name);
+  return element.tagName().name.str();
 }
 
 std::string ClassToken(const SVGElement& element) {

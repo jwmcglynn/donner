@@ -105,8 +105,7 @@ std::optional<std::vector<AttributeWritebackPathSegment>> BuildElementPath(
 
     reversedPath.push_back(AttributeWritebackPathSegment{
         childIndex,
-        xml::XMLQualifiedName(RcString(current->tagName().namespacePrefix),
-                              RcString(current->tagName().name)),
+        current->tagName(),
     });
 
     if (parent->type() == xml::XMLNode::Type::Document) {

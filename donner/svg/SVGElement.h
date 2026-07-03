@@ -284,11 +284,11 @@ public:
   /// Get the ElementType if this handle still has SVG element identity.
   std::optional<ElementType> tryType() const;
 
-  /// Get the XML tag name string for this element.
-  xml::XMLQualifiedNameRef tagName() const;
+  /// Get the owning XML qualified tag name for this element.
+  xml::XMLQualifiedName tagName() const;
 
-  /// Get the XML tag name if this handle still has XML tree identity.
-  std::optional<xml::XMLQualifiedNameRef> tryTagName() const;
+  /// Get the owning XML qualified tag name if this handle still has XML tree identity.
+  std::optional<xml::XMLQualifiedName> tryTagName() const;
 
   /// Returns true if this is a known element type, returns false if this is an
   /// \ref donner::svg::SVGUnknownElement.

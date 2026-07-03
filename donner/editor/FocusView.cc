@@ -157,7 +157,7 @@ std::optional<svg::ElementType> SafeElementType(const svg::SVGElement& element) 
   return element.tryType();
 }
 
-std::optional<xml::XMLQualifiedNameRef> SafeTagName(const svg::SVGElement& element) {
+std::optional<xml::XMLQualifiedName> SafeTagName(const svg::SVGElement& element) {
   return element.tryTagName();
 }
 
@@ -712,7 +712,7 @@ bool AddUniqueElement(const svg::SVGElement& element, std::vector<svg::SVGElemen
 bool HasAncestorNamed(const svg::SVGElement& element, std::string_view tagName) {
   for (std::optional<svg::SVGElement> ancestor = SafeParentElement(element); ancestor.has_value();
        ancestor = SafeParentElement(*ancestor)) {
-    const std::optional<xml::XMLQualifiedNameRef> ancestorTagName = SafeTagName(*ancestor);
+    const std::optional<xml::XMLQualifiedName> ancestorTagName = SafeTagName(*ancestor);
     if (ancestorTagName.has_value() && std::string_view(ancestorTagName->name) == tagName) {
       return true;
     }
@@ -722,7 +722,7 @@ bool HasAncestorNamed(const svg::SVGElement& element, std::string_view tagName) 
 }
 
 bool IsReferenceResourceElement(const svg::SVGElement& element) {
-  const std::optional<xml::XMLQualifiedNameRef> tagNameRef = SafeTagName(element);
+  const std::optional<xml::XMLQualifiedName> tagNameRef = SafeTagName(element);
   if (!SafeElementType(element).has_value() || !tagNameRef.has_value()) {
     return false;
   }

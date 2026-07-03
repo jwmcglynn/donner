@@ -3,6 +3,7 @@
 
 #include <ostream>
 
+#include "donner/base/Utils.h"
 #include "donner/css/Declaration.h"
 #include "donner/css/FontFace.h"
 #include "donner/css/Selector.h"
@@ -81,12 +82,12 @@ public:
   /**
    * Get the list of rules in this stylesheet.
    */
-  std::span<const SelectorRule> rules() const { return rules_; }
+  std::span<const SelectorRule> rules() const UTILS_LIFETIME_BOUND { return rules_; }
 
   /**
    * Get the list of `@font-face` rules in this stylesheet.
    */
-  std::span<const FontFace> fontFaces() const { return fontFaces_; }
+  std::span<const FontFace> fontFaces() const UTILS_LIFETIME_BOUND { return fontFaces_; }
 
   /**
    * Output a human-readable representation of the stylesheet to a stream.

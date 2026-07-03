@@ -229,8 +229,8 @@ public:
   /// Get the type of this node.
   Type type() const;
 
-  /// Get the XML tag name string for this node.
-  XMLQualifiedNameRef tagName() const;
+  /// Get the XML qualified tag name for this node.
+  const XMLQualifiedName& tagName() const UTILS_LIFETIME_BOUND;
 
   /// Get the underlying \ref EntityHandle, for advanced use-cases that require direct access to the
   /// ECS.

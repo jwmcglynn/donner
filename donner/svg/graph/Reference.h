@@ -6,6 +6,7 @@
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
+#include "donner/base/Utils.h"
 
 namespace donner::svg {
 
@@ -78,7 +79,7 @@ struct Reference {
    * - `file.svg#elementId` → `"file.svg"`
    * - `path/to/file.svg#id` → `"path/to/file.svg"`
    */
-  std::string_view documentUrl() const;
+  std::string_view documentUrl() const UTILS_LIFETIME_BOUND;
 
   /**
    * Returns the fragment component of the reference (without the `#` prefix), or an empty
@@ -89,7 +90,7 @@ struct Reference {
    * - `file.svg` → `""`
    * - `file.svg#elementId` → `"elementId"`
    */
-  std::string_view fragment() const;
+  std::string_view fragment() const UTILS_LIFETIME_BOUND;
 
   /**
    * Attempts to resolve the reference as a same-document reference using the provided registry.

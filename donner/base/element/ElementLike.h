@@ -25,7 +25,7 @@ concept ElementLike =
       { t.lastChild() } -> std::same_as<std::optional<T>>;
       { t.previousSibling() } -> std::same_as<std::optional<T>>;
       { t.nextSibling() } -> std::same_as<std::optional<T>>;
-      { t.tagName() } -> std::same_as<xml::XMLQualifiedNameRef>;
+      { t.tagName() } -> std::convertible_to<xml::XMLQualifiedNameRef>;
       { t.isKnownType() } -> std::same_as<bool>;
       { t.id() } -> std::same_as<RcString>;
       { t.className() } -> std::same_as<RcString>;
