@@ -42,13 +42,6 @@
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
-#include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/text/ComputedTextComponent.h"
-#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
-#include "donner/svg/components/text/TextComponent.h"
-#include "donner/svg/components/text/TextPositioningComponent.h"
-#include "donner/svg/components/text/TextRootComponent.h"
-#include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -256,7 +249,8 @@ TEST(PreviewSourceCoherence, MatchesAfterEachCommittedOperation) {
     ASSERT_TRUE(result.ok) << result.error;
     std::optional<svg::SVGElement> labelParent = label.parentElement();
     ASSERT_TRUE(labelParent.has_value());
-    async.queue().push(EditorCommand::InsertElementCommand(*labelParent, *result.outlineGroup, label));
+    async.queue().push(
+        EditorCommand::InsertElementCommand(*labelParent, *result.outlineGroup, label));
     for (svg::SVGElement& path : result.outlinePaths) {
       async.queue().push(EditorCommand::InsertElementCommand(*result.outlineGroup, path));
     }

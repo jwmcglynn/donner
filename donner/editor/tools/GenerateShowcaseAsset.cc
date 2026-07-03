@@ -160,18 +160,27 @@ int Run(const std::string& inputPath, const std::string& outputPath) {
     return 1;
   }
 
-  // 3. Convert Text to Outlines (the editor's ConvertTextToOutlines code path).
-  const ConvertTextToOutlinesResult outlines = convertTextToOutlines(textDocument, *textElement);
+  // 3. Convert Text to Outlines (the editor's ConvertTextToOutlines code
+  //    path): build the detached outline group, then apply it as structural
+  //    DOM edits mirroring the shell — insert the group before the <text>,
+  //    insert its paths, delete the <text>.
+  ConvertTextToOutlinesResult outlines = convertTextToOutlines(textDocument, *textElement);
   if (!outlines.ok) {
     std::cerr << "error: convertTextToOutlines failed: " << outlines.error << "\n";
     return 1;
   }
-
-  svg::SVGDocument outlinedDocument;
-  if (!ParseDocument(outlines.mergedSource, outlinedDocument, error)) {
-    std::cerr << "error: failed to parse outlined document: " << error << "\n";
+  std::optional<svg::SVGElement> textParent = textElement->parentElement();
+  if (!textParent.has_value()) {
+    std::cerr << "error: inserted <text> element has no parent\n";
     return 1;
   }
+  (void)textDocument.insertElement(*textParent, *outlines.outlineGroup, *textElement);
+  for (svg::SVGElement& path : outlines.outlinePaths) {
+    (void)textDocument.insertElement(*outlines.outlineGroup, path);
+  }
+  (void)textDocument.removeElement(*textElement);
+
+  svg::SVGDocument& outlinedDocument = textDocument;
   std::optional<svg::SVGElement> outlineGroup =
       outlinedDocument.querySelector("#" + std::string(kOutlineGroupId));
   if (!outlineGroup.has_value()) {
