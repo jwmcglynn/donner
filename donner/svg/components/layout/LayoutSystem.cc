@@ -8,6 +8,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/ElementType.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
@@ -345,9 +346,10 @@ Transform2d LayoutSystem::getEntityContentFromEntityTransform(EntityHandle entit
 
     if (const auto* computedShadowSizedElement =
             entity.try_get<ComputedShadowSizedElementComponent>()) {
-      // If there is no viewBox, we cannot apply scaling, return identity
+      // If there is no viewBox there is no scaling, but the instance viewport's origin (the
+      // `x`/`y` attributes on the referenced `<svg>`/`<symbol>`) still offsets the content.
       if (!overridesViewBox(lightEntity)) {
-        return Transform2d();
+        return Transform2d::Translate(computedShadowSizedElement->bounds.topLeft);
       }
 
       const PreserveAspectRatio& preserveAspectRatio = GetPreserveAspectRatio(lightEntity);
@@ -907,8 +909,16 @@ bool LayoutSystem::createShadowSizedElementComponent(Registry& registry, Entity 
   // Must be sized elements
   const auto* parentSizedElement = useEntity.try_get<SizedElementComponent>();
   const auto* targetSizedElement = registry.try_get<SizedElementComponent>(symbolEntity);
-  if (!parentSizedElement || !targetSizedElement ||
-      !targetSizedElement->canOverrideWidthHeightForSymbol) {
+  if (!parentSizedElement || !targetSizedElement) {
+    return false;
+  }
+
+  // From https://www.w3.org/TR/SVG2/struct.html#UseElement:
+  // > The width and height attributes only have an effect if the referenced element defines a
+  // > viewport (i.e., if it is a 'svg' or 'symbol')
+  const auto* targetElementType = registry.try_get<ElementTypeComponent>(symbolEntity);
+  const bool targetIsSvg = targetElementType && targetElementType->type() == ElementType::SVG;
+  if (!targetSizedElement->canOverrideWidthHeightForSymbol && !targetIsSvg) {
     return false;
   }
 

@@ -35,9 +35,14 @@ struct ShadowedElementAdapter {
   std::optional<ShadowedElementAdapter> parentElement() const {
     const Entity target =
         registry_.get().get<donner::components::TreeComponent>(treeEntity_).parent();
+    if (target == entt::null) {
+      return std::nullopt;
+    }
 
-    const bool isSVGElement =
-        (target != entt::null && registry_.get().all_of<ElementTypeComponent>(target));
+    // Shadow entities don't carry ElementTypeComponent themselves — resolve through the light
+    // (data) entity, otherwise any shadow entity whose parent is also a shadow entity would
+    // appear parentless and incorrectly match `:root`.
+    const bool isSVGElement = registry_.get().all_of<ElementTypeComponent>(resolveData(target));
     return isSVGElement ? std::make_optional(create(target)) : std::nullopt;
   }
 
@@ -70,7 +75,7 @@ struct ShadowedElementAdapter {
   }
 
   bool isKnownType() const {
-    return registry_.get().get<ElementTypeComponent>(treeEntity_).type() !=
+    return registry_.get().get<ElementTypeComponent>(dataEntity_).type() !=
            svg::ElementType::Unknown;
   }
 
@@ -119,10 +124,14 @@ struct ShadowedElementAdapter {
   }
 
 private:
+  /// Resolve a tree entity to its data entity: shadow entities proxy their light entity.
+  Entity resolveData(Entity treeEntity) const {
+    const auto* shadowComponent = registry_.get().try_get<ShadowEntityComponent>(treeEntity);
+    return shadowComponent ? shadowComponent->lightEntity : treeEntity;
+  }
+
   ShadowedElementAdapter create(Entity newTreeEntity) const {
-    const auto* shadowComponent = registry_.get().try_get<ShadowEntityComponent>(newTreeEntity);
-    return ShadowedElementAdapter(registry_.get(), newTreeEntity,
-                                  shadowComponent ? shadowComponent->lightEntity : newTreeEntity);
+    return ShadowedElementAdapter(registry_.get(), newTreeEntity, resolveData(newTreeEntity));
   }
 
   std::reference_wrapper<Registry> registry_;

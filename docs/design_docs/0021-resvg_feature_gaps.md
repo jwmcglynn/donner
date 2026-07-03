@@ -92,6 +92,7 @@ bottom for completeness.
 | ID | Gap | Impact | Kind |
 |---|---|---:|---|
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
+| B3 | `structure/image` golden kernel-era mismatch | 13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline | 1 | gradient/pattern/`<image>`/text resolve the pivot; `on-text-path` baseline still drops it → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
@@ -183,11 +184,54 @@ likely map to already-bundled Noto faces (real diff to chase), while
 the suspected `transformPosition`→`transformVector` (also per-axis percent extent +
 `<marker>` `%` parsing).
 
-**B3 (`<image>` embedded / data-URL sizing) and B4 (`<use>` referencing inline
-`<svg>` elements) are being fixed** — their `structure/image/` and
-`structure/use/` skips are removed; the two external-URL `<image>` tests
-(`url-to-png`, `url-to-svg`) stay skipped because their goldens contain the
-fetched remote images and Donner does not fetch network URLs.
+**B4 (`<use>` referencing inline `<svg>` elements) is now fixed.** Two coupled
+causes: (1) the `<use>` width/height override + viewport machinery
+(`LayoutSystem::createShadowSizedElementComponent`,
+`ComputedShadowSizedElementComponent`) only accepted `<symbol>` targets, never
+`<svg>`, so no instance viewport (clip) was created and the shadow content
+transform dropped the referenced svg's `x`/`y` when it had no viewBox; (2) a CSS
+shadow-tree bug — `ShadowedElementAdapter::parentElement()` looked up
+`ElementTypeComponent` on the raw tree entity, so a shadow entity whose parent
+was *also* a shadow entity appeared parentless, matched `:root`, and the UA
+rule `svg:not(:root) { overflow: hidden }` never clipped nested
+`<use>` → `<use>` → `<svg>` chains (descendant combinators through shadow
+parents were broken generally). 5 tests un-skipped (70k–130k px → pass).
+
+### B3: `structure/image` golden kernel-era mismatch
+
+**Re-triaged (2026-07-03):** the old "embedded data URLs render at wrong size"
+description was wrong. Donner's `<image>` placement, intrinsic sizing
+(no-width/no-height/auto), MIME sniffing, GIF decode, and `preserveAspectRatio`
+alignment are all correct (verified per-test against the goldens: alignment
+diffs are zero-displacement, residuals hug resampled edges only). The real gap:
+the vendored 2023 resvg-test-suite goldens were generated across several resvg
+eras with different `<image>` upscale kernels:
+
+- **Bilinear-era goldens** (external-jpeg/png, embedded-png,
+  embedded-jpeg-as-*, slices, with-transform, odd-numbers, ...): match
+  tiny-skia `Bilinear` — these pass today (the nine former 300-px
+  "slice/on-svg" thresholds now pass at the default 100 and were removed).
+- **Mitchell-era goldens** (`no-height-non-square`,
+  `width-and-height-set-to-auto`): match current resvg, which upscales
+  `<image>` with Mitchell-bicubic (`tiny_skia::FilterQuality::Bicubic`) —
+  verified: both pass when Donner's `drawImage` is switched to `Bicubic`, and
+  current upstream resvg goldens reproduce with a Mitchell kernel to mean
+  |Δ| ≈ 0.2.
+- **Intermediate-era goldens** (no-width/no-height/no-width-and-height,
+  embedded-gif, external-gif, embedded-jpeg-without-mime,
+  preserveAspectRatio=none + the three `*-meet` variants): match **neither**
+  kernel (12.5k px vs Bilinear, 21.8k px vs Bicubic for the no-* group; the
+  deterministic-decode GIF golden rules out decoder differences).
+
+Plus one policy case: `embedded-svg-with-text` — resvg parses `<image>`-embedded
+SVGs with an empty fontdb, so its golden renders no text; Donner renders the
+text (browser-consistent).
+
+**Next step (needs a maintainer decision):** refresh the whole
+`structure/image` golden set from current resvg and adopt Mitchell-bicubic in
+`RendererTinySkia::drawImage`/`drawBitmap` (+ the Geode sampler) to match
+current resvg, or keep bilinear and leave the 13 mismatched-era tests skipped.
+Per-test threshold inflation is not an option.
 
 **B5 (feMorphology degenerate radius) is now fixed** — see
 [Recently fixed](#recently-fixed-prs-608611).
