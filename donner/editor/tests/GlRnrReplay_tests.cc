@@ -704,6 +704,101 @@ std::optional<std::filesystem::path> WriteTextTypingReplay(const std::filesystem
   return replayPath;
 }
 
+// Text-tool session driven through the LIVE ImGui pointer path (screen-space
+// mouse events, no document-space replay input): switch to the text tool,
+// click the canvas, type "Hi" via Char events, then Escape to commit. This is
+// the path the real editor uses; `driveDocumentSpaceInput` bypasses it by
+// parking the ImGui mouse offscreen.
+std::optional<std::filesystem::path> WriteTextTypingLivePointerReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_text_typing_live.svg";
+  file.metadata.svgBasename = "text_typing_live.svg";
+  file.metadata.svgContentHash = "fnv1a64:text-typing-live";
+  file.metadata.svgSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200"></svg>)";
+  file.metadata.windowWidth = 1400;
+  file.metadata.windowHeight = 600;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, double mouseX, double mouseY, int buttons,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseX;
+    frame.mouseY = mouseY;
+    frame.mouseButtonMask = buttons;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  // Screen point inside the render pane (window 1400x600; the render pane
+  // occupies the region right of the source pane, x >= ~560).
+  const double clickX = 800.0;
+  const double clickY = 300.0;
+
+  pushFrame(0, clickX, clickY, 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "text",
+            }});
+  pushFrame(1, clickX, clickY, 0);
+
+  repro::ReproEvent mouseDown;
+  mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  mouseDown.mouseButton = 0;
+  pushFrame(2, clickX, clickY, 1, {}, {mouseDown});
+  // Hold the button across a few frames so the pending click is processed
+  // while the button is still down, like a real click.
+  pushFrame(3, clickX, clickY, 1);
+  pushFrame(4, clickX, clickY, 1);
+  repro::ReproEvent mouseUp;
+  mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  mouseUp.mouseButton = 0;
+  pushFrame(5, clickX, clickY, 0, {}, {mouseUp});
+  pushFrame(6, clickX, clickY, 0);
+
+  std::vector<repro::ReproEvent> typing;
+  for (const char c : std::string_view("Hi")) {
+    repro::ReproEvent event;
+    event.kind = repro::ReproEvent::Kind::Char;
+    event.codepoint = static_cast<std::uint32_t>(c);
+    typing.push_back(event);
+  }
+  pushFrame(7, clickX, clickY, 0, {}, std::move(typing));
+  pushFrame(8, clickX, clickY, 0);
+
+  repro::ReproEvent escapeDown;
+  escapeDown.kind = repro::ReproEvent::Kind::KeyDown;
+  escapeDown.key = static_cast<int>(ImGuiKey_Escape);
+  pushFrame(9, clickX, clickY, 0, {}, {escapeDown});
+  repro::ReproEvent escapeUp;
+  escapeUp.kind = repro::ReproEvent::Kind::KeyUp;
+  escapeUp.key = static_cast<int>(ImGuiKey_Escape);
+  pushFrame(10, clickX, clickY, 0, {}, {escapeUp});
+  for (std::uint64_t index = 11; index <= 14; ++index) {
+    pushFrame(index, clickX, clickY, 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
 // Two pen anchors placed as plain clicks, then Escape. Under the committed
 // contract Escape ends the session keeping the open path (same as Enter);
 // only a segmentless draft is discarded.
@@ -2063,6 +2158,41 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
   ASSERT_TRUE(finalFrame->selectedPathDataAttribute.has_value())
       << "Backspace during a pen draft must not delete the whole in-progress path.";
   EXPECT_EQ(*finalFrame->selectedPathDataAttribute, "M 10 10");
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+// The LIVE ImGui pointer path: a plain canvas click (button held across
+// frames, then released) must open the text session so typing lands in a new
+// <text> element. Reproduces the report that selecting the Text tool and
+// clicking showed nothing — the pending-click path started the gesture but
+// the live pointer path never delivered the release.
+TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "text_typing_live";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteTextTypingLivePointerReplay(outputDir, "text_typing_live.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(14);
+  options.maxFrame = 14;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 14);
+  ASSERT_NE(finalFrame, nullptr);
+  ASSERT_TRUE(finalFrame->selectedTextContent.has_value())
+      << "a live canvas click with the Text tool must open an editing session; "
+         "the committed text element must remain selected after Escape";
+  EXPECT_EQ(*finalFrame->selectedTextContent, "Hi");
 
   std::error_code ec;
   std::filesystem::remove_all(outputDir, ec);
