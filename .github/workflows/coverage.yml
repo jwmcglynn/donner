@@ -277,6 +277,27 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Free hosted runner disk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "::group::Disk before cleanup"
+          df -h
+          echo "::endgroup::"
+
+          sudo rm -rf \
+            /usr/local/lib/android \
+            /usr/local/.ghcup \
+            /usr/share/dotnet \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL
+          docker system prune --all --force || true
+
+          echo "::group::Disk after cleanup"
+          df -h
+          echo "::endgroup::"
+
       - name: Set up JDK 11
         uses: actions/setup-java@v5
         with:
@@ -287,7 +308,9 @@ jobs:
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
           bazelisk-cache: true
-          disk-cache: coverage-${{ runner.os }}-coverage
+          # Coverage already keeps large instrumented objects, profraw files,
+          # and LCOV merge outputs in Bazel's output tree. A second local
+          # disk cache duplicates enough of that data to fill hosted runners.
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
@@ -299,6 +322,7 @@ jobs:
             mesa-vulkan-drivers libvulkan1 libvulkan-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libgl1-mesa-dev libosmesa6-dev
+          sudo apt-get clean
 
       - name: Generate coverage
         shell: bash
@@ -308,6 +332,9 @@ jobs:
           echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
           printf "Coverage targets:\n"
           printf "  %s\n" "${TARGETS[@]}"
+          echo "::group::Disk before coverage"
+          df -h
+          echo "::endgroup::"
           tools/coverage.sh --no-html "${TARGETS[@]}"
 
       - name: Upload coverage to Codecov
