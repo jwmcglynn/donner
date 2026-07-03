@@ -92,8 +92,6 @@ bottom for completeness.
 | ID | Gap | Impact | Kind |
 |---|---|---:|---|
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
-| B3 | `<image>` embedded/data-URL sizing | 13 | Bug — one investigation |
-| B4 | `<use>` → inline `<svg>` sizing | 5 | Bug (shares machinery with B3) |
 | F12 | `transform-origin` on `<textPath>` baseline | 1 | gradient/pattern/`<image>`/text resolve the pivot; `on-text-path` baseline still drops it → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
 | F5 | full `dominant-baseline` keyword set | 14 | Feature |
@@ -185,33 +183,11 @@ likely map to already-bundled Noto faces (real diff to chase), while
 the suspected `transformPosition`→`transformVector` (also per-axis percent extent +
 `<marker>` `%` parsing).
 
-### B3: `<image>` embedded / data-URL sizing
-
-**Impact:** 13 tests in `structure/image/` (plus 2 external-URL `Not impl`, 4 UB
-RenderOnly).
-
-**Symptom:** Embedded images (data URLs, embedded JPEG/GIF/SVG) render
-but at the wrong size; `preserveAspectRatio` modes
-(`none`/`xMin/Mid/Max…-meet`/`slice`) and the `no-width`/`no-height`/`auto` sizing
-cases disagree with the golden.
-
-**Root cause:** needs investigation — `<image>` layout/sizing and
-`preserveAspectRatio` resolution for raster + nested-SVG content.
-
-**Next step:** start with `preserveAspectRatio=none`, then walk the
-no-width/no-height/auto matrix and MIME-sniffing failures. Shares
-`preserveAspectRatio` math with [B6 (fixed)](#recently-fixed-prs-608611)
-and [B4](#b4-use-referencing-inline-svg-elements).
-
-### B4: `<use>` referencing inline `<svg>` elements
-
-**Impact:** 5 tests in `structure/use/`.
-
-**Symptom:** `<use>` of an inline `<svg>` with various `width`/`height`/`viewBox`
-combinations sizes the instance wrong.
-
-**Next step:** likely shares machinery with B3's viewport sizing; investigate
-together if convenient.
+**B3 (`<image>` embedded / data-URL sizing) and B4 (`<use>` referencing inline
+`<svg>` elements) are being fixed** — their `structure/image/` and
+`structure/use/` skips are removed; the two external-URL `<image>` tests
+(`url-to-png`, `url-to-svg`) stay skipped because their goldens contain the
+fetched remote images and Donner does not fetch network URLs.
 
 **B5 (feMorphology degenerate radius) is now fixed** — see
 [Recently fixed](#recently-fixed-prs-608611).

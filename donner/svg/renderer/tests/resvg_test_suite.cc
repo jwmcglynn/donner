@@ -1061,38 +1061,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"url-to-png.svg", Params::Skip("Not impl: External URLs")},
                 {"url-to-svg.svg", Params::Skip("Not impl: External URLs")},
 
-                {"embedded-gif.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"embedded-jpeg-without-mime.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"embedded-svg-with-text.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"external-gif.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"no-height-non-square.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"no-height.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"no-width-and-height.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"no-width.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
                 {"preserveAspectRatio=xMaxYMax-meet-on-svg.svg",
                  WithMaxPixels(300, "Nested image edge AA")},
                 {"preserveAspectRatio=xMaxYMax-slice-on-svg.svg",
@@ -1111,26 +1079,6 @@ INSTANTIATE_TEST_SUITE_P(
                  WithMaxPixels(300, "Nested image edge AA")},
                 {"preserveAspectRatio=xMinYMin-slice.svg",
                  WithMaxPixels(300, "Nested image edge AA")},
-                {"preserveAspectRatio=none.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"preserveAspectRatio=xMaxYMax-meet.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"preserveAspectRatio=xMidYMid-meet.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"preserveAspectRatio=xMinYMin-meet.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
-                {"width-and-height-set-to-auto.svg",
-                 Params::Skip(
-                     "Bug: <image> rendering layout/sizing differs from golden (embedded data URLs "
-                     "render but at wrong size; preserveAspectRatio modes need investigation)")},
             })),
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -1278,22 +1226,6 @@ INSTANTIATE_TEST_SUITE_P(
                 "structure/use",
                 {
                     {"xlink-to-an-external-file.svg", Params::Skip("Not impl: External file.")},
-
-                    {"nested-xlink-to-svg-element-with-rect-and-size.svg",
-                     Params::Skip("Bug: <use> referencing inline <svg> elements with "
-                                  "various width/height/viewBox combinations")},
-                    {"xlink-to-svg-element-with-rect-only-width.svg",
-                     Params::Skip("Bug: <use> referencing inline <svg> elements with "
-                                  "various width/height/viewBox combinations")},
-                    {"xlink-to-svg-element-with-rect.svg",
-                     Params::Skip("Bug: <use> referencing inline <svg> elements with "
-                                  "various width/height/viewBox combinations")},
-                    {"xlink-to-svg-element-with-viewBox.svg",
-                     Params::Skip("Bug: <use> referencing inline <svg> elements with "
-                                  "various width/height/viewBox combinations")},
-                    {"xlink-to-svg-element-with-width-height-on-use.svg",
-                     Params::Skip("Bug: <use> referencing inline <svg> elements with "
-                                  "various width/height/viewBox combinations")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
