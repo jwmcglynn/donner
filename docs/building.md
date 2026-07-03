@@ -108,7 +108,8 @@ tools/coverage.sh --quiet --no-html
 
 ## CMake build {#cmake-build}
 
-Bazel is the primary build system, but CMake support is also available through a Bazel-to-CMake converter. This is for users who want to integrate Donner into their CMake-based projects.
+Bazel is the primary build system, but CMake support is also available through a Bazel-to-CMake
+converter. This is for users who want to integrate Donner into their CMake-based projects.
 
 ```sh
 python3 tools/cmake/gen_cmakelists.py
@@ -126,6 +127,10 @@ ctest --test-dir build
 
 This fetches dependencies via `FetchContent` and builds the libraries. Unit tests are
 not built by default and can be enabled with the `DONNER_BUILD_TESTS` option.
+
+The standalone CMake consumer example under `examples/cmake_consumer/` is a getting-started project
+for linking the exported `donner` target from another CMake project. See \ref GettingStartedCMake
+for the external-consumer setup.
 
 ### CMake configuration options
 

@@ -5,6 +5,7 @@ query. That includes the parser/validator helpers plus the opt-in CMake
 build-validation helper exercised against synthetic source trees.
 """
 
+import os
 import sys
 import tempfile
 import textwrap
@@ -192,6 +193,130 @@ class CqueryBuildOutputTest(unittest.TestCase):
         self.assertFalse(targets[0].compatible)
         self.assertEqual(targets[1].label, "//third_party/roboto:roboto")
         self.assertEqual(targets[1].kind, "embed_resources")
+
+
+class CqueryExpressionTest(unittest.TestCase):
+    def test_query_uses_positive_leaf_dependency_closure(self):
+        self.assertEqual(g._CMAKE_LEAF_TARGET_PATTERNS, ("//:donner",))
+        self.assertIn("deps((", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn(" except ", g._CQUERY_TARGET_EXPRESSION)
+        self.assertIn("//:donner", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn("/...", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn("//donner/svg/renderer/tests:all", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn("//examples:render_test", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn("//examples:svg_viewer", g._CQUERY_TARGET_EXPRESSION)
+        self.assertNotIn("//donner/editor", g._CQUERY_TARGET_EXPRESSION)
+
+    def test_skipped_packages_are_only_dedicated_cmake_packages(self):
+        self.assertTrue(g._is_skipped_package("third_party/stb"))
+        self.assertTrue(g._is_skipped_package("third_party/tiny-skia-cpp"))
+        self.assertFalse(g._is_skipped_package("donner/editor"))
+        self.assertFalse(g._is_skipped_package("donner/svg/renderer/geode"))
+
+
+class GeneratedRootCmakeTest(unittest.TestCase):
+    def test_cmake_consumer_example_is_not_part_of_generated_root(self):
+        root_target = g.CMakeTarget(
+            label="//:donner",
+            package="",
+            name="donner",
+            kind="cc_library",
+            configs=set(g._ALL_CONFIG_NAMES),
+            values=g._target_value_map(),
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(temp_dir)
+                with mock.patch.object(g, "get_fetchcontent_externals", return_value=[]):
+                    with mock.patch.object(
+                        g,
+                        "extract_versions_from_module_bazel",
+                        return_value={},
+                    ):
+                        with mock.patch.object(
+                            g, "get_cmake_targets", return_value={"//:donner": root_target}
+                        ):
+                            g.generate_root()
+                            g.generate_all_packages()
+            finally:
+                os.chdir(previous_cwd)
+
+            contents = (Path(temp_dir) / "CMakeLists.txt").read_text()
+
+        self.assertNotIn("DONNER_BUILD_EXAMPLES", contents)
+        self.assertIn("if(DONNER_BUILD_TESTS)", contents)
+        self.assertIn("add_library(donner INTERFACE)", contents)
+        self.assertNotIn("examples/cmake_consumer", contents)
+
+
+class TinySkiaCmakeGenerationTest(unittest.TestCase):
+    def test_generates_tiny_skia_cmake_from_bazel_sources(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "third_party/tiny-skia-cpp"
+            (root / "src/tiny_skia/filter").mkdir(parents=True)
+            (root / "src/tiny_skia").mkdir(parents=True, exist_ok=True)
+            (root / "src").mkdir(exist_ok=True)
+
+            (root / "src/BUILD.bazel").write_text(
+                textwrap.dedent(
+                    """
+                    cc_library(
+                        name = "tiny_skia_lib",
+                        deps = ["//src/tiny_skia:tiny_skia_core"],
+                    )
+                    """
+                )
+            )
+            (root / "src/tiny_skia/BUILD.bazel").write_text(
+                textwrap.dedent(
+                    """
+                    tiny_skia_cc_library(
+                        name = "tiny_skia_core",
+                        srcs = [
+                            "Canvas.cpp",
+                            "//src/tiny_skia/filter:srcs",
+                        ],
+                        deps = [],
+                    )
+                    """
+                )
+            )
+            (root / "src/tiny_skia/filter/BUILD.bazel").write_text(
+                textwrap.dedent(
+                    """
+                    filegroup(
+                        name = "srcs",
+                        srcs = ["FilterGraph.cpp"],
+                    )
+
+                    tiny_skia_cc_library(
+                        name = "filter",
+                        srcs = ["GaussianBlur.cpp"],
+                        deps = ["//src/tiny_skia:tiny_skia_core"],
+                    )
+                    """
+                )
+            )
+
+            with mock.patch.object(g, "_TINY_SKIA_ROOT", root):
+                sources = g._collect_tiny_skia_sources()
+                g.generate_tiny_skia_cmake()
+
+            cmake = (root / "CMakeLists.txt").read_text()
+
+        self.assertEqual(
+            sources,
+            [
+                "src/tiny_skia/Canvas.cpp",
+                "src/tiny_skia/filter/FilterGraph.cpp",
+                "src/tiny_skia/filter/GaussianBlur.cpp",
+            ],
+        )
+        self.assertIn("Generated by tools/cmake/gen_cmakelists.py - DO NOT EDIT", cmake)
+        self.assertIn("add_tiny_skia_target(tiny_skia ", cmake)
+        self.assertIn("  src/tiny_skia/filter/GaussianBlur.cpp\n", cmake)
 
 
 class ConditionDerivationTest(unittest.TestCase):
