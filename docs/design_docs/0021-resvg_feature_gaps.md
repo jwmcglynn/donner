@@ -40,9 +40,9 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | | Count |
 |---|---:|
-| `Params::Skip(...)` | 218 |
+| `Params::Skip(...)` | 204 (`grep -c 'Params::Skip'`, 2026-07-03) |
 | `Params::RenderOnly(...)` | 52 (render-must-not-crash, no pixel compare) |
-| `WithThreshold` / max-pixel overrides | 77 (~15 still over 1000 px -> masked-bug candidates) |
+| `WithThreshold` / max-pixel overrides | 89 (`grep -cE 'WithThreshold\|WithMaxPixels'`, 2026-07-03; ~15 still over 1000 px -> masked-bug candidates) |
 | Geode-disabled local `Params` entries | 1 analytic-residual + ~9 CPU-only-feature (down from 22; analytic dual-ray landed, see 0041) |
 | Commented-out category blocks | 1 (`filters/filter-functions`) |
 
