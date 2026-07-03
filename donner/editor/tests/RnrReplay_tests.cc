@@ -55,11 +55,6 @@ Entity SelectedGraphicsEntity(EditorApp& app) {
   return app.selectedElement()->unsafeEntityHandle().entity();
 }
 
-std::string ElementId(const svg::SVGElement& element) {
-  return element.withReadAccess(
-      [&element](svg::DocumentReadAccess&, EntityHandle) { return std::string(element.id()); });
-}
-
 constexpr std::size_t kTargetMouseUpCount = 2;
 constexpr char kReplayPath[] = "donner/editor/tests/filter_elm_disappear-3.rnr";
 constexpr char kGoldenPath[] = "donner/editor/tests/testdata/filter_disappear_rnr3_after_mup2.png";

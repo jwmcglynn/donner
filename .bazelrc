@@ -39,6 +39,14 @@ build --features=-layering_check
 build --copt=-fno-exceptions
 build --copt=-fno-rtti
 
+# Keep CI warning output focused on Donner-owned code. These filters are scoped
+# to vendored/external sources and the warning classes they currently emit under
+# the repo's clang configuration.
+build --per_file_copt=external/google_benchmark[+]/.*@-Wno-thread-safety-analysis
+build --per_file_copt=external/glfw[+]/.*@-Wno-enum-enum-conversion
+build --per_file_copt=external/freetype[+]/.*@-Wno-macro-redefined
+build --per_file_copt=external/imgui[+]/.*@-Wno-missing-braces
+
 # Use registered clang toolchain.
 build --incompatible_enable_cc_toolchain_resolution
 
@@ -65,6 +73,12 @@ common:latest_llvm --@rules_python//python/config_settings:bootstrap_impl=script
 # anything. `--jitless` keeps Node in the interpreter-only mode, which
 # emscripten's `compiler.mjs` is happy with.
 common:latest_llvm --action_env=NODE_OPTIONS=--jitless
+# toolchains_llvm selects builtin libc++ with a clang driver argument. On
+# self-hosted Linux, compile-only actions can report that stdlib-selection
+# argument as unused even though the toolchain has already supplied the libc++
+# include paths and link inputs. Suppress that driver-only warning in the LLVM
+# toolchain config so real compiler diagnostics are not buried in CI logs.
+common:latest_llvm --copt=-Qunused-arguments
 
 # Renderer backend selection
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
@@ -135,11 +149,6 @@ build:wasm-geode --cxxopt=-fconstexpr-steps=10000000
 #   bazel build --config=editor-wasm-geode //donner/editor/wasm:wasm
 common:editor-wasm-geode --config=editor-wasm
 
-# Clang with libc++
-build:libc++ --action_env=CXXFLAGS=-stdlib=libc++
-build:libc++ --action_env=LDFLAGS=-stdlib=libc++
-build:libc++ --define force_libcpp=enabled
-
 # C++20
 build:c++20 --cxxopt=-std=c++20
 
@@ -176,7 +185,12 @@ build:macos-binary-size --linkopt=-exported_symbols_list --linkopt=/dev/null
 build:macos-binary-size --copt=-gline-tables-only
 build:macos-binary-size --linkopt=-dead_strip
 
-build --config=libc++ --config=c++20
+# The registered LLVM toolchains select their C++ standard library themselves
+# (`builtin-libc++` for Linux), and Apple clang uses the SDK libc++ by default.
+# Do not inject `-stdlib=libc++` through CXXFLAGS/LDFLAGS here: self-hosted
+# Linux toolchain setup propagates those environment flags into compile actions
+# and clang reports them as unused for every source file.
+build --config=c++20
 
 # Debug builds
 build:debug -c dbg --copt=-O0 --copt=-g --copt=-fdebug-compilation-dir=. --linkopt=-g --strip=never --apple_generate_dsym --spawn_strategy=standalone
