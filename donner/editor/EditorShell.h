@@ -196,6 +196,10 @@ struct LayerInspectorStatusReadback {
   std::optional<std::string> selectedTextContent;
   /// Presentation-cache resource counters captured after the frame.
   PresentationResourceStats presentationResources;
+  /// Presentation coverage (bounded raster + overview infill) after the frame.
+  PresentationCoverageDiagnostics presentationCoverage;
+  /// Number of retained overview tiles available as zoom/pan infill.
+  std::size_t overviewTileCount = 0;
   /// Latest editor rendering cost counters.
   FrameCostBreakdown frameCost;
   /// Active drag transform driving the presenter, if any.

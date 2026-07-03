@@ -1168,6 +1168,86 @@ void PushDonnerDReplayFrame(repro::ReproFile& file, std::uint64_t index,
   file.frames.push_back(std::move(frame));
 }
 
+// High-zoom rapid pan: a solid-green document viewed at zoom 4 (well past the
+// viewport-bounded raster threshold), settled, then panned 400 screen px over
+// 10 frames while completed worker results are withheld 6 polls — the async
+// pipeline lags the gesture like a real high-zoom pan. Every pane pixel maps
+// to a green document point the whole time, so any non-green pane region in a
+// mid-pan capture is presentation clipping (evicted or missing fallback
+// coverage), never actual document transparency.
+std::optional<std::filesystem::path> WriteHighZoomPanReplay(const std::filesystem::path& outputDir,
+                                                            std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_high_zoom_pan.svg";
+  file.metadata.svgBasename = "high_zoom_pan.svg";
+  file.metadata.svgContentHash = "fnv1a64:high-zoom-pan";
+  // Alternating green/blue vertical stripes so panned content visibly moves;
+  // any pane pixel that is neither stripe color is missing coverage.
+  {
+    std::string svg =
+        R"(<svg xmlns="http://www.w3.org/2000/svg" width="892" height="512" viewBox="0 0 892 512">)";
+    for (int x = 0; x < 892; x += 100) {
+      svg += "<rect x=\"" + std::to_string(x) +
+             "\" y=\"0\" width=\"50\" height=\"512\" fill=\"#00cc44\"/>";
+      svg += "<rect x=\"" + std::to_string(x + 50) +
+             "\" y=\"0\" width=\"50\" height=\"512\" fill=\"#2255ee\"/>";
+    }
+    svg += "</svg>";
+    file.metadata.svgSource = svg;
+  }
+  file.metadata.windowWidth = 1600;
+  file.metadata.windowHeight = 900;
+  file.metadata.displayScale = 2.0;
+
+  const auto viewportAt = [&](double zoom, double panScreenX) {
+    repro::ReproViewport viewport = DonnerDViewport(zoom);
+    viewport.panDocX = 446.0;
+    viewport.panDocY = 256.0;
+    viewport.panScreenX = panScreenX;
+    viewport.panScreenY = 460.5;
+    return viewport;
+  };
+  const Vector2d mouseDoc(446.0, 256.0);
+
+  // Settle at the initial viewport so the bounded raster and the overview
+  // infill both land.
+  for (std::uint64_t index = 0; index <= 20; ++index) {
+    PushDonnerDReplayFrame(file, index, viewportAt(4.0, 870.0), mouseDoc, 0);
+  }
+  // Rapid pan: +40 screen px per frame for 10 frames (400 px total, ~3x the
+  // 128 px high-zoom raster margin).
+  for (std::uint64_t index = 21; index <= 30; ++index) {
+    const double panScreenX = 870.0 + 40.0 * static_cast<double>(index - 20);
+    PushDonnerDReplayFrame(file, index, viewportAt(4.0, panScreenX), mouseDoc, 0);
+  }
+  // Hold the final pan viewport briefly (still within the withheld window).
+  for (std::uint64_t index = 31; index <= 33; ++index) {
+    PushDonnerDReplayFrame(file, index, viewportAt(4.0, 1270.0), mouseDoc, 0);
+  }
+  // Rapid zoom out 4.0 -> 2.0 around the same anchor over 8 frames.
+  for (std::uint64_t index = 34; index <= 41; ++index) {
+    const double zoom = 4.0 - 0.25 * static_cast<double>(index - 33);
+    PushDonnerDReplayFrame(file, index, viewportAt(zoom, 1270.0), mouseDoc, 0);
+  }
+  for (std::uint64_t index = 42; index <= 44; ++index) {
+    PushDonnerDReplayFrame(file, index, viewportAt(2.0, 1270.0), mouseDoc, 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
 /// Pen clicks placing three anchors, then a close-path click back on the
 /// first anchor. After closePath() the tool is no longer shaping an anchor,
 /// so the close click exercises the non-drag overlay-refresh path on its
@@ -2158,9 +2238,6 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
   ASSERT_TRUE(finalFrame->selectedPathDataAttribute.has_value())
       << "Backspace during a pen draft must not delete the whole in-progress path.";
   EXPECT_EQ(*finalFrame->selectedPathDataAttribute, "M 10 10");
-
-  std::error_code ec;
-  std::filesystem::remove_all(outputDir, ec);
 }
 
 // The LIVE ImGui pointer path: a plain canvas click (button held across
@@ -2168,6 +2245,94 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
 // <text> element. Reproduces the report that selecting the Text tool and
 // clicking showed nothing — the pending-click path started the gesture but
 // the live pointer path never delivered the release.
+// During a rapid pan at high zoom, every pane pixel must keep showing
+// document content: the still-covered part of the previous bounded raster
+// stays put, and newly-exposed regions fall back to the overview infill
+// until the crisp render catches up. Blank (checkerboard) pane regions are
+// the clipping bug this reproduces.
+TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
+  svg::Renderer probeRenderer;
+  if (!probeRenderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Presented-tile coverage requires the Geode direct presentation path.";
+  }
+
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "high_zoom_pan";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteHighZoomPanReplay(outputDir, "high_zoom_pan.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(20);
+  options.captureFrames.insert(26);
+  options.captureFrames.insert(33);
+  options.captureFrames.insert(38);
+  options.captureFrames.insert(44);
+  options.maxFrame = 44;
+  options.cropMode = repro::GlRnrReplayCropMode::Full;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::HoldFramesBehind;
+  options.holdFramesBehind = 6;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  // Pane rect in device pixels (logical origin 568,29 size 604x863 at DPR 2).
+  // Inset by 8 logical px so pane-border chrome never counts.
+  const auto paneCrop = [&](const svg::RendererBitmap& bitmap) {
+    return CropBitmap(*&bitmap, PixelCrop{.x = (568 + 8) * 2,
+                                          .y = (29 + 8) * 2,
+                                          .width = (604 - 16) * 2,
+                                          .height = (863 - 16) * 2});
+  };
+  // Ratio of pane pixels showing document content (either stripe color).
+  // Non-content pixels are the checkerboard/background plus the in-pane
+  // overlay chrome (toolbar, perf HUD), which stays constant across frames.
+  const auto contentRatio = [&](const svg::RendererBitmap& crop) {
+    int content = 0;
+    int total = 0;
+    for (std::size_t i = 0; i + 3 < crop.pixels.size(); i += 4) {
+      ++total;
+      const std::uint8_t r = crop.pixels[i];
+      const std::uint8_t g = crop.pixels[i + 1];
+      const std::uint8_t b = crop.pixels[i + 2];
+      const bool green = g > 120 && r < 100 && b < 110;
+      const bool blue = b > 150 && r < 110 && g < 130;
+      if (green || blue) {
+        ++content;
+      }
+    }
+    return total > 0 ? static_cast<double>(content) / static_cast<double>(total) : 0.0;
+  };
+
+  // Baseline: the settled pre-pan frame. The in-pane overlay chrome
+  // (toolbar, perf HUD) accounts for ~5% of the crop, so full coverage
+  // measures ~0.95 rather than 1.0; every later frame is held to the same
+  // coverage as this settled baseline (minus a small tolerance).
+  std::optional<svg::RendererBitmap> settled = LoadCaptureBitmap(result, 20);
+  ASSERT_TRUE(settled.has_value());
+  const double settledRatio = contentRatio(paneCrop(*settled));
+  EXPECT_GT(settledRatio, 0.90)
+      << "settled high-zoom frame must show the document across the whole pane";
+
+  const auto expectCovered = [&](std::uint64_t frame, std::string_view what) {
+    std::optional<svg::RendererBitmap> bitmap = LoadCaptureBitmap(result, frame);
+    ASSERT_TRUE(bitmap.has_value());
+    EXPECT_GT(contentRatio(paneCrop(*bitmap)), settledRatio - 0.02)
+        << what << " lost document coverage (clipped): " << FindCapture(result, frame)->path;
+  };
+
+  // Mid-pan and end-of-pan: the pane must stay covered by document content
+  // even though no fresh bounded raster has landed for the new viewport.
+  expectCovered(26, "mid-pan frame");
+  expectCovered(33, "post-pan frame");
+  // Mid-zoom-out and settled zoom-out: same contract while the scale changes.
+  expectCovered(38, "mid-zoom frame");
+  expectCovered(44, "post-zoom frame");
+}
+
 TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "text_typing_live";
   const std::optional<std::filesystem::path> replayPath =

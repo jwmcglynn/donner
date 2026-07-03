@@ -658,6 +658,8 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .selectedPathDataAttribute = layerStatus.selectedPathDataAttribute,
         .selectedTextContent = layerStatus.selectedTextContent,
         .presentationResources = layerStatus.presentationResources,
+        .presentationCoverage = layerStatus.presentationCoverage,
+        .overviewTileCount = layerStatus.overviewTileCount,
         .frameCost = layerStatus.frameCost,
         .activeDragPreview = layerStatus.activeDragPreview,
         .displayedDragPreview = layerStatus.displayedDragPreview,

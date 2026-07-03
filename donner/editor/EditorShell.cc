@@ -915,6 +915,8 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       .pendingSelectedLayerRasterizationVersion =
           renderCoordinator_.pendingSelectedLayerRasterizationVersionForDiagnostics(),
       .presentationResources = textures_.presentationResourceStats(),
+      .presentationCoverage = textures_.coverageDiagnostics(),
+      .overviewTileCount = textures_.overviewTiles().size(),
       .frameCost = frameCost,
   };
   const std::optional<SelectTool::ActiveDragPreview> liveActiveDragPreview =
