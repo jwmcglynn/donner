@@ -194,11 +194,28 @@ components::ResolvedPaintServer resolvePaintServer(Registry& registry, const Pai
 
 /// Resolves renderer-facing per-span style properties from each span's sourceEntity.
 /// Layout-facing span state is delegated to TextEngine.
+///
+/// `contextFill` / `contextStroke` are the text instance's already-resolved paints, substituted
+/// when a span's fill or stroke computes to `context-fill` / `context-stroke` — the render-tree
+/// instantiation resolved the context paints (including any \ref components::PaintContextRemap)
+/// on the instance, and spans share the text element's coordinate space.
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
-                          EntityHandle textRootHandle) {
+                          EntityHandle textRootHandle,
+                          const components::ResolvedPaintServer& contextFill,
+                          const components::ResolvedPaintServer& contextStroke) {
   if (auto* textEngine = registry.ctx().find<TextEngine>()) {
     textEngine->resolvePerSpanLayoutStyles(textRootHandle, text);
   }
+
+  const auto resolveSpanPaint = [&](const PaintServer& paint) -> components::ResolvedPaintServer {
+    if (paint.is<PaintServer::ContextFill>()) {
+      return contextFill;
+    }
+    if (paint.is<PaintServer::ContextStroke>()) {
+      return contextStroke;
+    }
+    return resolvePaintServer(registry, paint);
+  };
 
   for (auto& span : text.spans) {
     if (span.sourceEntity == entt::null) {
@@ -225,8 +242,8 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
     }
 
     if (style && style->properties) {
-      span.resolvedFill = resolvePaintServer(registry, style->properties->fill.get().value());
-      span.resolvedStroke = resolvePaintServer(registry, style->properties->stroke.get().value());
+      span.resolvedFill = resolveSpanPaint(style->properties->fill.get().value());
+      span.resolvedStroke = resolveSpanPaint(style->properties->stroke.get().value());
       span.fillOpacity = style->properties->fillOpacity.get().value();
       span.strokeOpacity = style->properties->strokeOpacity.get().value();
       span.strokeWidth = style->properties->strokeWidth.get().value().toPixels(
@@ -292,9 +309,8 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
             registry.try_get<components::ComputedStyleComponent>(decorationPaintEntity);
         if (decoStyle && decoStyle->properties) {
           const auto& decoProps = decoStyle->properties.value();
-          span.resolvedDecorationFill = resolvePaintServer(registry, decoProps.fill.get().value());
-          span.resolvedDecorationStroke =
-              resolvePaintServer(registry, decoProps.stroke.get().value());
+          span.resolvedDecorationFill = resolveSpanPaint(decoProps.fill.get().value());
+          span.resolvedDecorationStroke = resolveSpanPaint(decoProps.stroke.get().value());
           span.decorationFillOpacity = decoProps.fillOpacity.get().value();
           span.decorationStrokeOpacity = decoProps.strokeOpacity.get().value();
           span.decorationStrokeWidth =
@@ -1126,7 +1142,8 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       }
     }
 
-    const PaintParams paint = toPaintParams(registry, instance, style);
+    PaintParams paint = toPaintParams(registry, instance, style);
+    applyDrawTimeContextRemaps(paint, instance);
     renderer_.setPaint(paint);
 
     if (instance.visible && !filterHidesElement) {
@@ -1138,7 +1155,8 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
+                             paint.stroke);
         renderer_.drawText(registry, *text, textParams);
       } else if (const auto* image =
                      instance.dataHandle(registry).try_get<components::LoadedImageComponent>()) {
@@ -1592,7 +1610,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
       }
     }
 
-    const PaintParams paint = toPaintParams(registry, instance, style);
+    PaintParams paint = toPaintParams(registry, instance, style);
+    applyDrawTimeContextRemaps(paint, instance);
     renderer_.setPaint(paint);
 
     // Viewport + too-small culling. Safe to skip the draw when (a) we're not
@@ -1628,7 +1647,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
+                             paint.stroke);
         renderer_.drawText(registry, *text, textParams);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
@@ -1710,7 +1730,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
+                             paint.stroke);
         renderer_.drawText(registry, *text, textParams);
       }
     }
@@ -1861,7 +1882,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
       }
     }
 
-    const PaintParams paint = toPaintParams(registry, instance, style);
+    PaintParams paint = toPaintParams(registry, instance, style);
+    applyDrawTimeContextRemaps(paint, instance);
     renderer_.setPaint(paint);
 
     // Viewport + too-small culling. Safe to skip the draw when (a) we're not
@@ -1897,7 +1919,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
+                             paint.stroke);
         renderer_.drawText(registry, *text, textParams);
       } else if (const auto* svgImage =
                      instance.dataHandle(registry).try_get<components::LoadedSVGImageComponent>()) {
@@ -1949,7 +1972,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
                      instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
         const auto* textComp = instance.dataHandle(registry).try_get<components::TextComponent>();
         const TextParams textParams = toTextParams(registry, instance, style, textComp);
-        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry));
+        resolvePerSpanStyles(registry, *text, instance.dataHandle(registry), paint.fill,
+                             paint.stroke);
         renderer_.drawText(registry, *text, textParams);
       }
     }
@@ -2004,6 +2028,48 @@ void RendererDriver::skipUntil(RenderingInstanceView& view, Entity endEntity) {
       break;
     }
   }
+}
+
+Transform2d RendererDriver::resolveRemapEntityFromContextTransform(
+    const components::PaintContextRemap& remap, const Transform2d& surfaceFromEntity) const {
+  if (!remap.resolveAtDrawTime) {
+    return remap.entityFromContextTransform;
+  }
+
+  if (markerPaintContexts_.empty()) {
+    // Marker content is being drawn outside a marker placement (should not happen); leave the
+    // paint in the consuming entity's own space.
+    return Transform2d();
+  }
+
+  const MarkerPaintContext& markerContext = markerPaintContexts_.back();
+  const Transform2d& surfaceFromContext = remap.seededFromStroke
+                                              ? markerContext.surfaceFromStrokeContextTransform
+                                              : markerContext.surfaceFromFillContextTransform;
+  // Context space -> surface, then surface -> entity local.
+  return surfaceFromContext * surfaceFromEntity.inverse();
+}
+
+components::ResolvedPaintServer RendererDriver::resolvePaintContextRemap(
+    const components::ResolvedPaintServer& paint, const Transform2d& surfaceFromEntity) const {
+  const auto* ref = std::get_if<components::PaintResolvedReference>(&paint);
+  if (!ref || !ref->contextRemap || !ref->contextRemap->resolveAtDrawTime) {
+    return paint;
+  }
+
+  components::PaintResolvedReference concrete = *ref;
+  concrete.contextRemap->entityFromContextTransform =
+      resolveRemapEntityFromContextTransform(*ref->contextRemap, surfaceFromEntity);
+  concrete.contextRemap->resolveAtDrawTime = false;
+  return concrete;
+}
+
+void RendererDriver::applyDrawTimeContextRemaps(
+    PaintParams& paint, const components::RenderingInstanceComponent& instance) const {
+  const Transform2d surfaceFromEntity =
+      instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
+  paint.fill = resolvePaintContextRemap(paint.fill, surfaceFromEntity);
+  paint.stroke = resolvePaintContextRemap(paint.stroke, surfaceFromEntity);
 }
 
 int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
@@ -2100,12 +2166,13 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
 
 void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& registry,
                                    const components::RenderingInstanceComponent& instance,
-                                   const components::PaintResolvedReference& ref, bool forStroke) {
-  if (!ref.subtreeInfo) {
+                                   const components::PaintResolvedReference& refIn,
+                                   bool forStroke) {
+  if (!refIn.subtreeInfo) {
     return;
   }
 
-  const EntityHandle target = ref.reference.handle;
+  const EntityHandle target = refIn.reference.handle;
   if (!target.valid()) {
     return;
   }
@@ -2115,15 +2182,40 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
     return;
   }
 
+  // Resolve any draw-time context remap (`context-fill` / `context-stroke` inside marker
+  // content) into a concrete transform for this placement.
+  const Transform2d surfaceFromEntity =
+      instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
+  const components::ResolvedPaintServer resolvedPaint =
+      resolvePaintContextRemap(components::ResolvedPaintServer(refIn), surfaceFromEntity);
+  const components::PaintResolvedReference& ref =
+      std::get<components::PaintResolvedReference>(resolvedPaint);
+
+  // A context paint shares the context element's pattern subtree, which sits *before* this
+  // consumer in draw order and has already been consumed from the view; only inline subtrees
+  // (ahead of the cursor) are consumed here.
+  const bool subtreeAhead =
+      registry.get<components::RenderingInstanceComponent>(ref.subtreeInfo->firstRenderedEntity)
+          .drawOrder > instance.drawOrder;
+  const auto skipSubtree = [&]() {
+    if (subtreeAhead) {
+      skipUntil(view, ref.subtreeInfo->lastRenderedEntity);
+    }
+  };
+
   Box2d rect = computedPattern->tileRect;
   if (NearZero(rect.width()) || NearZero(rect.height())) {
-    skipUntil(view, ref.subtreeInfo->lastRenderedEntity);
+    skipSubtree();
     return;
   }
 
   const Box2d viewBox = components::LayoutSystem().getViewBox(instance.dataHandle(registry));
-  const Box2d pathBounds =
-      components::ShapeSystem().getShapeBounds(instance.dataHandle(registry)).value_or(Box2d());
+  // For paints inherited via `context-fill` / `context-stroke`, objectBoundingBox units resolve
+  // against the context element's bounding box instead of the consuming shape's.
+  const Box2d pathBounds = ref.contextRemap ? ref.contextRemap->contextBounds
+                                            : components::ShapeSystem()
+                                                  .getShapeBounds(instance.dataHandle(registry))
+                                                  .value_or(Box2d());
 
   const bool objectBoundingBox = computedPattern->patternUnits == PatternUnits::ObjectBoundingBox;
   const bool patternContentObjectBoundingBox =
@@ -2131,7 +2223,7 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
 
   if (objectBoundingBox) {
     if (NearZero(pathBounds.width()) || NearZero(pathBounds.height())) {
-      skipUntil(view, ref.subtreeInfo->lastRenderedEntity);
+      skipSubtree();
       return;
     }
 
@@ -2163,7 +2255,12 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
                        Transform2d::Translate(origin);
   }
 
-  const Transform2d patternTileFromTarget = Transform2d::Translate(rect.topLeft) * patternTransform;
+  // Context paints are positioned in the context element's user space, then remapped into the
+  // consuming entity's local space.
+  const Transform2d entityFromContextTransform =
+      ref.contextRemap ? ref.contextRemap->entityFromContextTransform : Transform2d();
+  const Transform2d patternTileFromTarget =
+      Transform2d::Translate(rect.topLeft) * patternTransform * entityFromContextTransform;
 
   renderer_.beginPatternTile(rect.toOrigin(), patternTileFromTarget);
 
@@ -2171,8 +2268,18 @@ void RendererDriver::renderPattern(RenderingInstanceView& view, Registry& regist
   const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
   surfaceFromCanvasTransform_ = patternContentFromPatternTile;
 
-  traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
-                ref.subtreeInfo->lastRenderedEntity);
+  if (subtreeAhead) {
+    traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
+                  ref.subtreeInfo->lastRenderedEntity);
+  } else {
+    // Re-render the shared subtree without disturbing the caller's cursor: rewind to the start
+    // of the snapshot so traverseRange can locate the (already-passed) subtree entities.
+    const RenderingInstanceView::SavedState savedPosition = view.save();
+    view.restore(RenderingInstanceView::SavedState{0});
+    traverseRange(view, registry, ref.subtreeInfo->firstRenderedEntity,
+                  ref.subtreeInfo->lastRenderedEntity);
+    view.restore(savedPosition);
+  }
 
   surfaceFromCanvasTransform_ = savedSurfaceFromCanvas;
 
@@ -2247,6 +2354,29 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
     return;
   }
 
+  // The shape referencing the markers is the context element for `context-fill` /
+  // `context-stroke` paints inside the marker content (SVG2). Record where each of the shape's
+  // paints originated — chaining through the shape's own context remap if its paint was itself
+  // inherited — so paint remaps can be resolved per marker placement.
+  const Transform2d surfaceFromShape =
+      instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
+  const auto surfaceFromPaintContext =
+      [&](const components::ResolvedPaintServer& paint) -> Transform2d {
+    if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint);
+        ref && ref->contextRemap) {
+      // Original context -> shape local, then shape local -> surface.
+      return resolveRemapEntityFromContextTransform(*ref->contextRemap, surfaceFromShape) *
+             surfaceFromShape;
+    }
+    return surfaceFromShape;
+  };
+
+  MarkerPaintContext markerContext;
+  markerContext.surfaceFromFillContextTransform = surfaceFromPaintContext(instance.resolvedFill);
+  markerContext.surfaceFromStrokeContextTransform =
+      surfaceFromPaintContext(instance.resolvedStroke);
+  markerPaintContexts_.push_back(markerContext);
+
   const RenderingInstanceView::SavedState viewSnapshot = view.save();
   const std::vector<Path::Vertex> vertices = path.spline.vertices();
 
@@ -2271,13 +2401,40 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
     view.restore(viewSnapshot);
   }
 
-  // Skip past the marker definition entities to avoid double-rendering.
-  if (hasMarkerEnd) {
-    skipUntil(view, instance.markerEnd.value().subtreeInfo->lastRenderedEntity);
-  } else if (hasMarkerMid) {
-    skipUntil(view, instance.markerMid.value().subtreeInfo->lastRenderedEntity);
-  } else if (hasMarkerStart) {
-    skipUntil(view, instance.markerStart.value().subtreeInfo->lastRenderedEntity);
+  markerPaintContexts_.pop_back();
+
+  // Skip past inline marker definition entities to avoid double-rendering. A subtree is inline
+  // when it was instantiated by this shape (drawOrder ahead of the shape); subtrees shared from
+  // an earlier instantiation lie behind the cursor and are left alone. Skip to the furthest
+  // inline subtree.
+  Entity skipToEntity = entt::null;
+  int skipToDrawOrder = instance.drawOrder;
+  const auto considerMarkerSubtree = [&](const std::optional<components::ResolvedMarker>& marker) {
+    if (!marker.has_value() || !marker->subtreeInfo) {
+      return;
+    }
+
+    if (registry
+            .get<components::RenderingInstanceComponent>(marker->subtreeInfo->firstRenderedEntity)
+            .drawOrder <= instance.drawOrder) {
+      return;  // Shared subtree instantiated earlier; not inline.
+    }
+
+    const int lastDrawOrder =
+        registry
+            .get<components::RenderingInstanceComponent>(marker->subtreeInfo->lastRenderedEntity)
+            .drawOrder;
+    if (lastDrawOrder > skipToDrawOrder) {
+      skipToDrawOrder = lastDrawOrder;
+      skipToEntity = marker->subtreeInfo->lastRenderedEntity;
+    }
+  };
+  considerMarkerSubtree(instance.markerStart);
+  considerMarkerSubtree(instance.markerMid);
+  considerMarkerSubtree(instance.markerEnd);
+
+  if (skipToEntity != entt::null) {
+    skipUntil(view, skipToEntity);
   }
 }
 
@@ -2379,8 +2536,15 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   }
 
   if (marker.subtreeInfo) {
+    // The marker subtree may lie *behind* the caller's cursor when it is shared with an earlier
+    // instantiation (e.g. the same shape stamped through several marker branches reuses one
+    // cached offscreen subtree). Rewind to the start of the snapshot so traverseRange can locate
+    // it, then restore the caller's position — drawMarkers consumes inline subtrees separately.
+    const RenderingInstanceView::SavedState savedPosition = view.save();
+    view.restore(RenderingInstanceView::SavedState{0});
     traverseRange(view, registry, marker.subtreeInfo->firstRenderedEntity,
                   marker.subtreeInfo->lastRenderedEntity);
+    view.restore(savedPosition);
   }
 
   if (needsClip) {

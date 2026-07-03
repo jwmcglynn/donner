@@ -458,14 +458,20 @@ struct ResolvedGradientFrame {
 /// center/radius fields they then read from the typed gradient component.
 std::optional<ResolvedGradientFrame> resolveGradientFrame(
     const EntityHandle handle, const components::ComputedGradientComponent& computedGradient,
-    const Box2d& pathBounds, const Box2d& viewBox) {
+    const Box2d& pathBounds, const Box2d& viewBox,
+    const std::optional<components::PaintContextRemap>& contextRemap) {
   const bool objectBoundingBox = computedGradient.gradientUnits == GradientUnits::ObjectBoundingBox;
+
+  // Paints inherited through `context-fill` / `context-stroke` are evaluated in the context
+  // element's space: objectBoundingBox units resolve against the context element's bounding box,
+  // and the gradient is remapped from the context element's user space into path-local space.
+  const Box2d& referenceBounds = contextRemap ? contextRemap->contextBounds : pathBounds;
 
   // Degenerate path bounds disable objectBoundingBox gradients; ditto the
   // other backends, which bail out rather than produce garbage coordinates.
   constexpr double kDegenerateBBoxTolerance = 1e-6;
-  if (objectBoundingBox && (std::abs(pathBounds.width()) < kDegenerateBBoxTolerance ||
-                            std::abs(pathBounds.height()) < kDegenerateBBoxTolerance)) {
+  if (objectBoundingBox && (std::abs(referenceBounds.width()) < kDegenerateBBoxTolerance ||
+                            std::abs(referenceBounds.height()) < kDegenerateBBoxTolerance)) {
     return std::nullopt;
   }
 
@@ -489,12 +495,17 @@ std::optional<ResolvedGradientFrame> resolveGradientFrame(
   if (objectBoundingBox) {
     const Transform2d gradientTransform = resolveGradientTransform(
         handle.try_get<components::ComputedLocalTransformComponent>(), kUnitPathBounds);
-    const Transform2d bboxFromUnit =
-        Transform2d::Scale(pathBounds.size()) * Transform2d::Translate(pathBounds.topLeft);
+    const Transform2d bboxFromUnit = Transform2d::Scale(referenceBounds.size()) *
+                                     Transform2d::Translate(referenceBounds.topLeft);
     pathFromGradient = gradientTransform * bboxFromUnit;
   } else {
     pathFromGradient = resolveGradientTransform(
         handle.try_get<components::ComputedLocalTransformComponent>(), viewBox);
+  }
+
+  if (contextRemap) {
+    // Gradient units -> context element user space, then context -> path local space.
+    pathFromGradient = pathFromGradient * contextRemap->entityFromContextTransform;
   }
 
   if (std::abs(pathFromGradient.determinant()) < 1e-12) {
@@ -606,7 +617,8 @@ std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
     return std::nullopt;
   }
 
-  auto frame = resolveGradientFrame(handle, *computedGradient, pathBounds, viewBox);
+  auto frame =
+      resolveGradientFrame(handle, *computedGradient, pathBounds, viewBox, ref.contextRemap);
   if (!frame.has_value()) {
     return std::nullopt;
   }
@@ -669,7 +681,8 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
     return std::nullopt;
   }
 
-  auto frame = resolveGradientFrame(handle, *computedGradient, pathBounds, viewBox);
+  auto frame =
+      resolveGradientFrame(handle, *computedGradient, pathBounds, viewBox, ref.contextRemap);
   if (!frame.has_value()) {
     // Recognized as radial but frame is degenerate (singular transform, etc).
     // Drop the draw — no meaningful output possible.
@@ -859,6 +872,22 @@ struct RendererGeode::Impl {
   // clip-stack entry type (defined in full further down alongside `clipStack`).
   struct ClipStackEntry;
 
+  /// A completed pattern tile ready to be sampled as fill or stroke paint.
+  struct PatternPaintSlot {
+    geode::ScopedWgpuHandle<wgpu::Texture> tile;
+    Vector2d tileSize;              // In pattern space.
+    Transform2d targetFromPattern;  // destFromSource naming.
+    // `deviceFromLocalTransform` snapshotted at the time the outer element kicked
+    // off `beginPatternTile`. This is the path→device transform that the
+    // SAME outer element will use when its fill draw happens. Used at
+    // pattern-paint build time to strip the canvas-scale / parent-transform
+    // chain back out of the live `deviceFromLocalTransform`, so the resulting
+    // `patternFromPath` matrix compares path-space positions against the
+    // pattern tile's user-space coordinate system instead of accidentally
+    // multiplying them by the viewBox→canvas scale.
+    Transform2d deviceFromPathAtCapture;
+  };
+
   struct PatternStackFrame {
     std::unique_ptr<geode::GeoEncoder> savedEncoder;
     wgpu::Texture savedTarget;
@@ -888,6 +917,13 @@ struct RendererGeode::Impl {
     // active, mapping pattern-tile units to tile-texture pixels so the
     // encoder's viewport math works out.
     Vector2d rasterScale = Vector2d(1.0, 1.0);
+
+    // Pattern paints pending at `beginPatternTile` time, saved so tile-content draws don't
+    // consume the outer element's pattern slots (e.g. a `context-fill` pattern shared between
+    // several consumers re-rendering the same tile subtree). Restored by `endPatternTile`.
+    std::optional<PatternPaintSlot> savedPatternFillPaint;
+    /// @see savedPatternFillPaint
+    std::optional<PatternPaintSlot> savedPatternStrokePaint;
   };
   std::vector<PatternStackFrame> patternStack;
 
@@ -1112,21 +1148,6 @@ struct RendererGeode::Impl {
   };
   std::vector<MaskStackFrame> maskStack;
 
-  /// A completed pattern tile ready to be sampled as fill or stroke paint.
-  struct PatternPaintSlot {
-    geode::ScopedWgpuHandle<wgpu::Texture> tile;
-    Vector2d tileSize;              // In pattern space.
-    Transform2d targetFromPattern;  // destFromSource naming.
-    // `deviceFromLocalTransform` snapshotted at the time the outer element kicked
-    // off `beginPatternTile`. This is the path→device transform that the
-    // SAME outer element will use when its fill draw happens. Used at
-    // pattern-paint build time to strip the canvas-scale / parent-transform
-    // chain back out of the live `deviceFromLocalTransform`, so the resulting
-    // `patternFromPath` matrix compares path-space positions against the
-    // pattern tile's user-space coordinate system instead of accidentally
-    // multiplying them by the viewBox→canvas scale.
-    Transform2d deviceFromPathAtCapture;
-  };
   std::optional<PatternPaintSlot> patternFillPaint;
   std::optional<PatternPaintSlot> patternStrokePaint;
 
@@ -3320,6 +3341,12 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   // restores it before the outer fill that samples the tile.
   frame.savedClipStack = std::move(impl_->clipStack);
   impl_->clipStack.clear();
+  // Tile-content draws must not consume the outer element's pending pattern slots (a shape
+  // inside the tile would otherwise pick them up as its own fill/stroke and release them).
+  frame.savedPatternFillPaint = std::move(impl_->patternFillPaint);
+  frame.savedPatternStrokePaint = std::move(impl_->patternStrokePaint);
+  impl_->patternFillPaint.reset();
+  impl_->patternStrokePaint.reset();
   frame.tileRect = tileRect;
   frame.targetFromPattern = targetFromPattern;
   frame.tileTexture = std::move(tileTexture);
@@ -3471,11 +3498,17 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // at the upcoming fill draw, leaving the pattern sample in the pattern's
   // user-space frame (where `tileSize` is expressed).
   slot.deviceFromPathAtCapture = frame.savedDeviceFromLocalTransform;
-  if (forStroke) {
-    impl_->patternStrokePaint = std::move(slot);
-  } else {
-    impl_->patternFillPaint = std::move(slot);
+
+  // Restore the pattern slots pending at `beginPatternTile`, then overwrite the slot this tile
+  // was recorded for (releasing any stale tile texture it held).
+  impl_->patternFillPaint = std::move(frame.savedPatternFillPaint);
+  impl_->patternStrokePaint = std::move(frame.savedPatternStrokePaint);
+  std::optional<Impl::PatternPaintSlot>& targetSlot =
+      forStroke ? impl_->patternStrokePaint : impl_->patternFillPaint;
+  if (targetSlot.has_value() && targetSlot->tile) {
+    impl_->device->deferDestroy(targetSlot->tile.take());
   }
+  targetSlot = std::move(slot);
 }
 
 void RendererGeode::setPaint(const PaintParams& paint) {

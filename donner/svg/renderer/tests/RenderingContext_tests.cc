@@ -12,6 +12,7 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -599,6 +600,254 @@ TEST_F(RenderingContextTest, FindIntersectingRectReturnsFrontToBackOrder) {
   ASSERT_THAT(hits.size(), Gt(1u));
   EXPECT_EQ(hits.front(), frontEntity);
   EXPECT_THAT(hits, testing::Contains(backEntity));
+}
+
+// --- context-fill / context-stroke resolution ---
+
+/// Matches a ResolvedPaintServer holding a solid color equal to @p expectedColor.
+MATCHER_P(IsSolidPaint, expectedColor, "is solid paint " + testing::PrintToString(expectedColor)) {
+  const auto* solid = std::get_if<PaintServer::Solid>(&arg);
+  if (!solid) {
+    *result_listener << "which is not a solid paint (variant index " << arg.index() << ")";
+    return false;
+  }
+  if (solid->color != expectedColor) {
+    *result_listener << "whose color is " << solid->color;
+    return false;
+  }
+  return true;
+}
+
+/// Matches a ResolvedPaintServer holding PaintServer::None.
+MATCHER(IsNoPaint, "is no paint") {
+  if (!std::holds_alternative<PaintServer::None>(arg)) {
+    *result_listener << "which holds variant index " << arg.index();
+    return false;
+  }
+  return true;
+}
+
+/// Matches a ResolvedPaintServer holding a PaintResolvedReference whose contextRemap matches
+/// @p remapMatcher.
+MATCHER_P(IsPaintReferenceWithRemap, remapMatcher, "is a paint reference with a context remap") {
+  const auto* ref = std::get_if<PaintResolvedReference>(&arg);
+  if (!ref) {
+    *result_listener << "which is not a paint reference (variant index " << arg.index() << ")";
+    return false;
+  }
+  if (!ref->contextRemap.has_value()) {
+    *result_listener << "which has no context remap";
+    return false;
+  }
+  return testing::ExplainMatchResult(remapMatcher, *ref->contextRemap, result_listener);
+}
+
+/// Matches a PaintContextRemap field-by-field: bounds, entityFromContextTransform,
+/// resolveAtDrawTime, seededFromStroke.
+MATCHER_P4(RemapIs, boundsMatcher, entityFromContextMatcher, resolveAtDrawTimeValue,
+           seededFromStrokeValue, "") {
+  bool matched = true;
+  if (!testing::ExplainMatchResult(boundsMatcher, arg.contextBounds, result_listener)) {
+    *result_listener << " (contextBounds " << arg.contextBounds << ") ";
+    matched = false;
+  }
+  if (!testing::ExplainMatchResult(entityFromContextMatcher, arg.entityFromContextTransform,
+                                   result_listener)) {
+    *result_listener << " (entityFromContextTransform " << arg.entityFromContextTransform << ") ";
+    matched = false;
+  }
+  if (arg.resolveAtDrawTime != resolveAtDrawTimeValue) {
+    *result_listener << " (resolveAtDrawTime is " << arg.resolveAtDrawTime << ") ";
+    matched = false;
+  }
+  if (arg.seededFromStroke != seededFromStrokeValue) {
+    *result_listener << " (seededFromStroke is " << arg.seededFromStroke << ") ";
+    matched = false;
+  }
+  return matched;
+}
+
+class RenderingContextContextPaintTest : public RenderingContextTest {
+protected:
+  /// Find the rendering instance whose data entity carries the given id. Prefers shadow
+  /// instances (content instantiated through <use> or markers) over the light instance.
+  const RenderingInstanceComponent* findInstanceByDataId(Registry& registry, std::string_view id) {
+    const RenderingInstanceComponent* result = nullptr;
+    for (const Entity entity : registry.view<RenderingInstanceComponent>()) {
+      const auto& instance = registry.get<RenderingInstanceComponent>(entity);
+      const auto* idComponent = registry.try_get<IdComponent>(instance.dataEntity);
+      if (idComponent && idComponent->id() == id) {
+        if (result == nullptr || instance.isShadow(registry)) {
+          result = &instance;
+        }
+      }
+    }
+    return result;
+  }
+};
+
+TEST_F(RenderingContextContextPaintTest, UseContextSolidPaintsSwapFillAndStroke) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <path id="consumer" fill="context-stroke" stroke="context-fill" d="M 10 10 H 90 V 90 Z"/>
+      </defs>
+      <use href="#consumer" fill="blue" stroke="green"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const auto* instance = findInstanceByDataId(document.registry(), "consumer");
+  ASSERT_THAT(instance, NotNull());
+  EXPECT_THAT(instance->resolvedFill, IsSolidPaint(css::Color(css::RGBA(0, 0x80, 0, 0xFF))));
+  EXPECT_THAT(instance->resolvedStroke, IsSolidPaint(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))));
+}
+
+TEST_F(RenderingContextContextPaintTest, ContextPaintWithoutContextElementResolvesToNone) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <rect id="consumer" x="10" y="10" width="80" height="80"
+            fill="context-fill" stroke="context-stroke"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const auto* instance = findInstanceByDataId(document.registry(), "consumer");
+  ASSERT_THAT(instance, NotNull());
+  EXPECT_THAT(instance->resolvedFill, IsNoPaint());
+  EXPECT_THAT(instance->resolvedStroke, IsNoPaint());
+}
+
+TEST_F(RenderingContextContextPaintTest, UseContextGradientCarriesRemapWithContextBounds) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <linearGradient id="lg">
+        <stop offset="0" stop-color="white"/>
+        <stop offset="1" stop-color="green"/>
+      </linearGradient>
+      <defs>
+        <g id="g1">
+          <rect id="consumer" x="50" y="50" width="100" height="100" fill="context-fill"/>
+          <rect x="30" y="40" width="20" height="20" fill="context-fill"/>
+        </g>
+      </defs>
+      <use href="#g1" fill="url(#lg)"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const auto* instance = findInstanceByDataId(document.registry(), "consumer");
+  ASSERT_THAT(instance, NotNull());
+
+  // The context bounding box is the union of the <use> content in the use's space, and the
+  // consumer shares the use's coordinate space (no transforms), so the remap transform is
+  // identity and is fully determined at instantiation time.
+  EXPECT_THAT(instance->resolvedFill,
+              IsPaintReferenceWithRemap(RemapIs(
+                  BoxEq(Vector2Eq(30.0, 40.0), Vector2Eq(150.0, 150.0)), TransformIsIdentity(),
+                  /*resolveAtDrawTimeValue=*/false, /*seededFromStrokeValue=*/false)));
+}
+
+TEST_F(RenderingContextContextPaintTest, UseContextGradientRemapAccountsForConsumerTransform) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <linearGradient id="lg">
+        <stop offset="0" stop-color="white"/>
+        <stop offset="1" stop-color="green"/>
+      </linearGradient>
+      <defs>
+        <g id="g1" transform="translate(10 20)">
+          <rect id="consumer" x="50" y="50" width="100" height="100" fill="context-fill"/>
+        </g>
+      </defs>
+      <use href="#g1" fill="url(#lg)"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const auto* instance = findInstanceByDataId(document.registry(), "consumer");
+  ASSERT_THAT(instance, NotNull());
+
+  // The consumer sits inside a translate(10 20) group; the paint is evaluated in the use
+  // element's space, so the remap maps use space -> consumer local space: translate(-10, -20).
+  EXPECT_THAT(instance->resolvedFill,
+              IsPaintReferenceWithRemap(
+                  RemapIs(testing::_, TransformEq(Transform2d::Translate(Vector2d(-10.0, -20.0))),
+                          /*resolveAtDrawTimeValue=*/false, /*seededFromStrokeValue=*/false)));
+}
+
+TEST_F(RenderingContextContextPaintTest, MarkerContextPaintsResolveAtDrawTime) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <linearGradient id="lg">
+        <stop offset="0" stop-color="white"/>
+        <stop offset="1" stop-color="green"/>
+      </linearGradient>
+      <marker id="m1" refX="10" refY="10" markerWidth="20" markerHeight="20">
+        <path id="consumer" d="M 10 0 16 20 H 4 Z" fill="context-fill" stroke="context-stroke"/>
+      </marker>
+      <path id="host" fill="url(#lg)" stroke="green" d="M 20 30 L 180 30 L 100 170 Z"
+            marker-start="url(#m1)"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const auto* instance = findInstanceByDataId(document.registry(), "consumer");
+  ASSERT_THAT(instance, NotNull());
+
+  // A gradient inherited into marker content is evaluated against the referencing shape's
+  // bounding box, with the concrete transform substituted per marker placement at draw time.
+  EXPECT_THAT(instance->resolvedFill,
+              IsPaintReferenceWithRemap(
+                  RemapIs(BoxEq(Vector2Eq(20.0, 30.0), Vector2Eq(180.0, 170.0)), testing::_,
+                          /*resolveAtDrawTimeValue=*/true, /*seededFromStrokeValue=*/false)));
+
+  // Solid context paints pass through unchanged.
+  EXPECT_THAT(instance->resolvedStroke, IsSolidPaint(css::Color(css::RGBA(0, 0x80, 0, 0xFF))));
+}
+
+TEST_F(RenderingContextContextPaintTest, NestedUseTakesInnermostContext) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <path id="consumer" stroke="context-fill" fill="context-stroke"
+              d="M 10 10 H 90 V 90 Z"/>
+      </defs>
+      <use id="use2" href="#consumer" stroke="green" fill="blue"/>
+      <use id="use1" href="#use2" stroke="red" fill="yellow"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  // Every instance of the consumer (one per <use>) takes its paints from the *innermost*
+  // referencing <use> (use2): the context element is the element referencing the shadow tree
+  // the consumer was instantiated into.
+  int matched = 0;
+  Registry& registry = document.registry();
+  for (const Entity entity : registry.view<RenderingInstanceComponent>()) {
+    const auto& instance = registry.get<RenderingInstanceComponent>(entity);
+    const auto* idComponent = registry.try_get<IdComponent>(instance.dataEntity);
+    if (!idComponent || idComponent->id() != "consumer" || !instance.isShadow(registry)) {
+      continue;
+    }
+
+    ++matched;
+    EXPECT_THAT(instance.resolvedFill, IsSolidPaint(css::Color(css::RGBA(0, 0x80, 0, 0xFF))));
+    EXPECT_THAT(instance.resolvedStroke, IsSolidPaint(css::Color(css::RGBA(0, 0, 0xFF, 0xFF))));
+  }
+  EXPECT_EQ(matched, 2);
 }
 
 }  // namespace donner::svg::components

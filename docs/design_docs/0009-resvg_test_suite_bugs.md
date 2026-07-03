@@ -99,6 +99,12 @@ noted.
 > "Minor char" cluster is the precedent. Tracked in
 > [0021](0021-resvg_feature_gaps.md).
 
+## Golden artifacts recorded as skips (no override)
+
+| Category | Test | Reason |
+|---|---|---|
+| painting/context | with-pattern-objectBoundingBox-in-use | resvg rasterizes the pattern tile at a rounded integer pixel size; the context bounding box here yields a fractional 56.57px tile that resvg draws as 57px, stretching the tile period by ~0.8%. Donner tiles at the exact period, so the diamond grid drifts up to ~2px at the extremes (~5.3k px of edge diff against the golden). The context-paint resolution itself is exercised (and green) by the other `painting/context` pattern tests, whose tiles land on integer pixel sizes. A `WithGoldenOverride` was deliberately not added: committing a Donner render would turn the conformance test into a snapshot; revisit if resvg regenerates goldens without the rounding. |
+
 ## Parked goldens (2) — filters/filter-functions disabled
 
 `resvg-drop-shadow-function-mm-values.png` and

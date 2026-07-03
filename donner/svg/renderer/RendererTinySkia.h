@@ -259,6 +259,12 @@ private:
     std::vector<Transform2d> savedTransformStack;
     std::optional<tiny_skia::Mask> savedClipMask;
     std::vector<std::optional<tiny_skia::Mask>> savedClipStack;
+    /// Pattern paints pending at `beginPatternTile` time, saved so tile-content draws don't
+    /// consume the outer element's pattern shaders (e.g. a `context-fill` pattern shared between
+    /// several consumers re-rendering the same tile subtree). Restored by `endPatternTile`.
+    std::optional<PatternPaintState> savedPatternFillPaint;
+    /// @see savedPatternFillPaint
+    std::optional<PatternPaintState> savedPatternStrokePaint;
   };
 
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
