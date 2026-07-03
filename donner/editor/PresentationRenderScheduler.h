@@ -21,6 +21,8 @@ struct PresentationRenderScheduleInput {
   std::vector<Entity> selectedExtraEntities;
   /// Current active drag preview, if a drag is in progress.
   std::optional<SelectTool::ActiveDragPreview> activeDragPreview;
+  /// True when the selected layer's cached pixels are known stale.
+  bool forceSelectedLayerRasterization = false;
   /// Current document frame version.
   std::uint64_t currentVersion = 0;
   /// Current output raster canvas size in pixels.

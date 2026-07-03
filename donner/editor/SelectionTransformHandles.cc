@@ -84,7 +84,7 @@ SelectionTransformHandleBoxes SelectionTransformHandleBoxesForBounds(const Box2d
 
 SelectionTransformHandleIntent HitTestSelectionTransformHandles(
     std::span<const Box2d> selectionBoundsDoc, const Vector2d& documentPoint,
-    double pixelsPerDocUnit) {
+    double pixelsPerDocUnit, bool includeRotate) {
   if (selectionBoundsDoc.empty() || !IsFinite(documentPoint)) {
     return {};
   }
@@ -109,6 +109,10 @@ SelectionTransformHandleIntent HitTestSelectionTransformHandles(
           .corner = corner,
       };
     }
+  }
+
+  if (!includeRotate) {
+    return {};
   }
 
   const double innerRadiusDoc = kRotateInnerRadiusPixels / scale;

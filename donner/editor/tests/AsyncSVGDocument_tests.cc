@@ -1,6 +1,9 @@
 #include "donner/editor/AsyncSVGDocument.h"
 
+#include <array>
+
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -15,6 +18,23 @@ constexpr std::string_view kReplacementSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
          <rect id="r2" x="50" y="50" width="20" height="20" fill="blue"/>
        </svg>)";
+
+std::array<std::uint8_t, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
+  const std::size_t offset =
+      static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+  return {
+      bitmap.pixels[offset + 0u],
+      bitmap.pixels[offset + 1u],
+      bitmap.pixels[offset + 2u],
+      bitmap.pixels[offset + 3u],
+  };
+}
+
+svg::RendererBitmap RenderDocument(svg::SVGDocument& document) {
+  svg::Renderer renderer;
+  renderer.draw(document);
+  return renderer.takeSnapshot();
+}
 
 TEST(AsyncSVGDocumentTest, EmptyByDefault) {
   AsyncSVGDocument doc;
@@ -109,6 +129,43 @@ TEST(AsyncSVGDocumentTest, PreserveUndoMetadataSurvivesWritebackReplaceDocument)
   EXPECT_TRUE(doc.lastFlushResult().appliedCommands);
   EXPECT_TRUE(doc.lastFlushResult().replacedDocument);
   EXPECT_TRUE(doc.lastFlushResult().preserveUndoOnReparse);
+}
+
+TEST(AsyncSVGDocumentTest, CommandAfterStructuralWritebackReparseTargetsRemappedElement) {
+  constexpr std::string_view kInitialSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <path id="p" d="M 10 10 L 80 10 L 10 80 Z" style="fill: none; stroke: none"/>
+         </svg>)svg";
+  constexpr std::string_view kWritebackSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <path id="p" d="M 10 10 L 80 10 L 10 80 Z" style="fill: none; stroke: none"/>
+         </svg>)svg";
+
+  AsyncSVGDocument doc;
+  ASSERT_TRUE(doc.loadFromString(kInitialSvg));
+  auto pathBeforeReparse = doc.document().querySelector("#p");
+  ASSERT_TRUE(pathBeforeReparse.has_value());
+
+  doc.applyMutation(EditorCommand::ReplaceDocumentCommand(std::string(kWritebackSvg),
+                                                          /*preserveUndoOnReparse=*/true));
+  doc.applyMutation(EditorCommand::SetAttributeCommand(*pathBeforeReparse, "style",
+                                                       "fill: #ff0000; stroke: none"));
+
+  ASSERT_TRUE(doc.flushFrame());
+  ASSERT_TRUE(doc.lastFlushResult().replacedDocument);
+  ASSERT_TRUE(doc.lastFlushResult().preserveUndoOnReparse);
+
+  auto pathAfterReparse = doc.document().querySelector("#p");
+  ASSERT_TRUE(pathAfterReparse.has_value());
+  EXPECT_EQ(pathAfterReparse->getAttribute("style"), "fill: #ff0000; stroke: none");
+
+  const svg::RendererBitmap rendered = RenderDocument(doc.document());
+  ASSERT_FALSE(rendered.empty());
+  const std::array<std::uint8_t, 4> pixel = PixelAt(rendered, 24, 24);
+  EXPECT_GT(pixel[0], 200u);
+  EXPECT_LT(pixel[1], 40u);
+  EXPECT_LT(pixel[2], 40u);
+  EXPECT_GT(pixel[3], 200u);
 }
 
 TEST(AsyncSVGDocumentTest, StructuralWritebackPreservesCanvasSize) {

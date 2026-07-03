@@ -12,6 +12,24 @@ struct MenuBarState {
   bool canUndo = false;
   bool canRedo = false;
   bool sourceFocusMode = true;
+  /// True when the canvas has one or more selected shapes. Enables shape
+  /// Cut/Copy when the source pane is not focused.
+  bool hasShapeSelection = false;
+  /// True when the shape clipboard holds a paste-able payload. Enables shape
+  /// Paste / Paste in Front when the source pane is not focused.
+  bool hasShapeClipboard = false;
+  /// True when the canvas selection is exactly one or more `<text>` elements,
+  /// the precondition for "Convert Text to Outlines".
+  bool hasTextSelection = false;
+  /// True when the document has at least one selectable element. Enables the canvas "Select All"
+  /// when the source pane is not focused.
+  bool hasSelectableElements = false;
+  /// Current visibility of the Compositor Debug panel (drives the View-menu
+  /// checkmark). Off by default.
+  bool showCompositorDebugPanel = false;
+  /// Current visibility of the render-pane performance overlay (drives the
+  /// View-menu checkmark). On by default.
+  bool showPerfOverlay = true;
 };
 
 struct MenuBarActions {
@@ -19,6 +37,8 @@ struct MenuBarActions {
   bool openFile = false;
   bool saveFile = false;
   bool saveFileAs = false;
+  bool exportViewportSvg = false;
+  bool exportViewportSvgWithOverlay = false;
   bool revertFile = false;
   bool quit = false;
   bool undo = false;
@@ -26,12 +46,35 @@ struct MenuBarActions {
   bool cut = false;
   bool copy = false;
   bool paste = false;
+  bool pasteInFront = false;
+  bool convertTextToOutlines = false;
+  /// Text Select-All in the source/XML pane (fires when the source pane owns keyboard focus).
   bool selectAll = false;
+  /// Canvas Select-All — selects every selectable element (fires when the source pane is not
+  /// focused).
+  bool selectAllCanvas = false;
+  /// Text Deselect in the source/XML pane — collapses the text selection to the caret (fires when
+  /// the source pane owns keyboard focus).
+  bool deselectAll = false;
+  /// Canvas Deselect-All — clears the canvas selection (fires when the source pane is not focused).
+  bool deselectAllCanvas = false;
   bool zoomIn = false;
   bool zoomOut = false;
   bool actualSize = false;
   bool toggleSourceFocusMode = false;
+  /// Set when the user toggles the Compositor Debug panel via the View menu.
+  bool toggleCompositorDebugPanel = false;
+  /// Set when the user toggles the performance overlay via the View menu.
+  bool togglePerfOverlay = false;
 };
+
+/// Apply View-menu visibility toggle actions to persistent UI state.
+///
+/// @param actions Edge-triggered menu actions from \ref MenuBarPresenter::render.
+/// @param showCompositorDebugPanel Current Compositor Debug panel visibility.
+/// @param showPerfOverlay Current performance overlay visibility.
+void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
+                                bool* showPerfOverlay);
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.
 class MenuBarPresenter {

@@ -16,6 +16,7 @@ namespace donner::geode {
 // The full class definitions live in their own headers; including them
 // here would pull the entire Slug / filter compilation graph into every
 // translation unit that only needs a `GeodeDevice*`.
+class GeodeCheckerboardPipeline;
 class GeodePipeline;
 class GeodeGradientPipeline;
 class GeodeImagePipeline;
@@ -111,6 +112,12 @@ public:
    *   \p config.queue is null.
    */
   static std::unique_ptr<GeodeDevice> CreateFromExternal(const GeodeEmbedConfig& config);
+
+  /// Number of \ref CreateHeadless calls made so far in this process. Each
+  /// headless creation stands up a full WebGPU instance/adapter/device, so
+  /// hot paths must share one device instead of re-creating; tests pin that
+  /// sharing by asserting this count stays flat across repeated operations.
+  static int headlessCreationCountForTesting();
 
   /// Destructor releases the device and all GPU resources.
   ~GeodeDevice();
@@ -325,6 +332,10 @@ public:
   /// GPU filter-graph executor. Owns ~15 compute pipelines for SVG
   /// filter primitives.
   GeodeFilterEngine& filterEngine() const;
+  /// Framebuffer checkerboard underlay pipeline used by the editor's direct
+  /// presentation path. Built lazily on first access — only the editor draws
+  /// it, so headless/WASM consumers never pay the compile cost.
+  GeodeCheckerboardPipeline& checkerboardPipeline() const;
   /// @}
 
 private:

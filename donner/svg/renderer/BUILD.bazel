@@ -440,6 +440,9 @@ donner_cc_library(
         ":renderer_driver",
         ":renderer_image_io",
         ":renderer_interface",
+        ":renderer_utils",
+        "//donner/svg",
+        "//donner/svg/components",
     ] + select({
         ":renderer_backend_geode": [":renderer_geode"],
         "//conditions:default": [":renderer_tiny_skia"],

@@ -428,7 +428,7 @@ void runGeodeTinyParityComparison(const RendererBitmap& actual, const RendererBi
 
   std::cout << "PARITY|" << svgFilename.string() << "|" << mismatchedPixels << "\n";
 
-  const int budget = params.effectiveMaxMismatchedPixels();
+  const int budget = params.effectiveMaxMismatchedPixels(ComparisonMode::GeodeTinyParity);
 
   if (mismatchedPixels > budget) {
     std::cout << "FAIL (" << mismatchedPixels << " geode-vs-tiny pixels differ, with " << budget
@@ -562,7 +562,7 @@ const std::vector<ComparisonMode>& ActiveComparisonModes() {
     // Geode builds compare each backend to the reference via TinyGolden /
     // GeodeGolden. GeodeTinyParity (geode-pixel-vs-tiny) was retired in favor
     // of per-backend golden comparison: with Geode's analytic dual-ray Slug
-    // coverage (design doc 0041 §M1), the analytic result legitimately differs
+    // coverage, the analytic result legitimately differs
     // from tiny-skia's finite-sample scan-converter, so a pixel-vs-tiny gate
     // can only be satisfied by degrading Geode to tiny's quantization — the
     // opposite of aligning with Slug. Both backends already gate against the
@@ -882,9 +882,10 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   const int mismatchedPixels = pixelmatch::pixelmatch(goldenImage.data, snapshot.pixels, diffImage,
                                                       width, height, strideInPixels, options);
 
-  if (mismatchedPixels > params.effectiveMaxMismatchedPixels()) {
-    std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with "
-              << params.effectiveMaxMismatchedPixels() << " max)\n";
+  const int maxMismatchedPixels = params.effectiveMaxMismatchedPixels(mode);
+  if (mismatchedPixels > maxMismatchedPixels) {
+    std::cout << "FAIL (" << mismatchedPixels << " pixels differ, with " << maxMismatchedPixels
+              << " max)\n";
 
     const std::filesystem::path actualImagePath =
         TestTempDir() / escapeFilename(effectiveGoldenFilename);
@@ -948,8 +949,8 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
   } else {
     std::cout << "PASS";
     if (mismatchedPixels != 0) {
-      std::cout << " (" << mismatchedPixels << " pixels differ, out of "
-                << params.effectiveMaxMismatchedPixels() << " max)";
+      std::cout << " (" << mismatchedPixels << " pixels differ, out of " << maxMismatchedPixels
+                << " max)";
     }
     std::cout << "\n";
   }

@@ -450,7 +450,9 @@ jobs:
           fi)
 
           fetch_llvm() {
-            bazelisk fetch --config=ci --config=latest_llvm $TARGETS
+            bazelisk fetch --config=ci --config=latest_llvm \
+              $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
+              $TARGETS
           }
 
           cleanup_partial_llvm_fetch() {
@@ -489,6 +491,7 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk build --config=ci --config=latest_llvm \
+            $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_BUILD_FLAGS \
             --profile="$DIAG_DIR/build/profile.gz" \
             --build_event_json_file="$DIAG_DIR/build/bep.json" \
@@ -505,6 +508,7 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk test --config=ci --config=latest_llvm --test_output=errors \
+            $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 
 #include "donner/base/Vector2.h"
@@ -9,6 +10,78 @@ namespace donner::editor {
 
 /// Per-frame cost counters for editor rendering diagnostics.
 struct FrameCostBreakdown {
+  /// Editor-shell work that runs on the UI thread during one `runFrame`.
+  struct MainFrame {
+    /// Early per-frame bookkeeping before polling renderer results.
+    double preparationMs = 0.0;
+    /// Time spent accepting a completed async render result.
+    double renderPollMs = 0.0;
+    /// Time spent flushing queued DOM/source mutations.
+    double documentFlushMs = 0.0;
+    /// Time spent refreshing overlay chrome outside normal pane rendering.
+    double overlayRefreshMs = 0.0;
+    /// Time spent syncing parse markers and pending source writebacks.
+    double documentSyncMs = 0.0;
+    /// Time spent computing editor pane layout and viewport layout.
+    double layoutMs = 0.0;
+    /// Time spent handling global keyboard shortcuts.
+    double shortcutsMs = 0.0;
+    /// Time spent rendering the menu bar and modal dialogs.
+    double menusDialogsMs = 0.0;
+    /// Time spent rendering the XML source pane, including source-focus ropes.
+    double sourcePaneMs = 0.0;
+    /// Time spent rendering the central document pane widgets.
+    double renderPaneMs = 0.0;
+    /// Time spent rendering tree/layer/inspector sidebars.
+    double sidebarsMs = 0.0;
+    /// Time spent rendering pane splitters and the floating layer panel.
+    double splittersMs = 0.0;
+    /// Time spent issuing an end-of-frame document render request.
+    double endRenderRequestMs = 0.0;
+  };
+
+  /// Host-window work bracketing the editor frame.
+  struct HostFrame {
+    /// Time spent starting the current ImGui frame.
+    double beginFrameMs = 0.0;
+    /// Total time spent ending and presenting the previous host frame.
+    double previousEndFrameMs = 0.0;
+    /// Previous end-frame time spent in `ImGui::Render`.
+    double previousImguiRenderMs = 0.0;
+    /// Previous end-frame time spent acquiring the WGPU surface texture.
+    double previousSurfaceAcquireMs = 0.0;
+    /// Previous end-frame time spent in the document underlay direct pass.
+    double previousUnderlayMs = 0.0;
+    /// Previous end-frame time spent issuing ImGui backend draw commands.
+    double previousImguiDrawMs = 0.0;
+    /// Previous end-frame time spent in the overlay/direct append pass.
+    double previousDirectMs = 0.0;
+    /// Previous end-frame time spent reading the framebuffer back to the CPU.
+    double previousReadbackMs = 0.0;
+    /// Previous end-frame time spent presenting or swapping the surface.
+    double previousPresentMs = 0.0;
+  };
+
+  /// Direct WGPU document presentation work completed in the previous host frame.
+  struct DirectPresentation {
+    /// Total time spent inside the document underlay callback.
+    double totalMs = 0.0;
+    /// Time spent drawing the transparent-canvas checkerboard.
+    double checkerboardMs = 0.0;
+    /// Time spent drawing retained overview tiles under active tiles.
+    double overviewTilesMs = 0.0;
+    /// Time spent drawing active document tiles.
+    double activeTilesMs = 0.0;
+    /// Time spent ending the Geode renderer frame.
+    double rendererEndFrameMs = 0.0;
+    /// GPU draws submitted for the transparent-canvas checkerboard.
+    int checkerboardDrawCount = 0;
+    /// Overview tiles drawn.
+    int overviewTileDrawCount = 0;
+    /// Active document tiles drawn.
+    int activeTileDrawCount = 0;
+  };
+
   /// Cost counters for capturing and presenting selection/source-hover chrome.
   struct Overlay {
     /// Milliseconds spent capturing live DOM selection chrome into a snapshot.
@@ -112,6 +185,9 @@ struct FrameCostBreakdown {
     int activeStateCount = 0;
   };
 
+  MainFrame mainFrame;
+  HostFrame hostFrame;
+  DirectPresentation directPresentation;
   Overlay overlay;
   CompositedUpload compositedUpload;
   CompositedRender compositedRender;

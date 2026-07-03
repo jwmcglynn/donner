@@ -393,7 +393,7 @@ void AddIntersection(std::vector<Intersection>* intersections, double t0, double
 
 std::size_t MaxIntersectionSearchSteps(const PathBooleanOptions& options,
                                        std::size_t segmentCount) {
-  constexpr std::size_t kIntersectionSearchMultiplier = 64u;
+  constexpr std::size_t kIntersectionSearchMultiplier = 8u;
   const std::size_t base = std::max(segmentCount, options.maxIntersections);
   if (base > std::numeric_limits<std::size_t>::max() / kIntersectionSearchMultiplier) {
     return std::numeric_limits<std::size_t>::max();

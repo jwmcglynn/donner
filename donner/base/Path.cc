@@ -1515,11 +1515,14 @@ MiterResult computeMiterPoint(const Vector2d& vertex, const Vector2d& prevNormal
 /// \p halfWidth  half the stroke width.
 /// \p join       line-join style for outside turns.
 /// \p miterLimit SVG `stroke-miterlimit` value.
+/// \p prevSegmentLength length of the previous path segment adjacent to the vertex.
+/// \p curSegmentLength  length of the current path segment adjacent to the vertex.
 /// \p builder    the PathBuilder to emit to.
 /// \p isLeftSide whether this is the left (forward) or right (backward) contour.
 void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d& vertex,
               const Vector2d& prevNormal, const Vector2d& curNormal, double halfWidth,
-              LineJoin join, double miterLimit, PathBuilder& builder, bool isLeftSide) {
+              LineJoin join, double miterLimit, double prevSegmentLength, double curSegmentLength,
+              PathBuilder& builder, bool isLeftSide) {
   // Determine the turn direction. The cross product of the two normals tells us
   // whether the join is on the inside or outside of the turn.
   // For a left turn (counter-clockwise), the outside is on the left side.
@@ -1573,7 +1576,20 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
     const MiterResult miter = computeMiterPoint(vertex, prevNormal, curNormal, halfWidth);
     if (miter.valid) {
       const double miterRatio = miter.lengthFromVertex / halfWidth;
-      if (miterRatio >= kSharpInsideMiterRatio) {
+      // The miter point is only the true ribbon boundary while it lies within
+      // BOTH adjacent offset segments' extents. It sits on each offset line
+      // at perpendicular distance `halfWidth` from its segment, so its
+      // distance from the vertex measured ALONG each segment is
+      // `sqrt(lengthFromVertex² − halfWidth²)`. Near-reversal joins (a
+      // segment followed by another heading back within a degree or two —
+      // common where image-traced art butts a tiny connector against a curve)
+      // put the intersection tens or hundreds of units past both segment
+      // ends; emitting it there traces a long thin spike across the canvas
+      // instead of a join.
+      const double alongSegment = std::sqrt(
+          std::max(0.0, miter.lengthFromVertex * miter.lengthFromVertex - halfWidth * halfWidth));
+      const bool withinSegments = alongSegment <= std::min(prevSegmentLength, curSegmentLength);
+      if (miterRatio >= kSharpInsideMiterRatio && withinSegments) {
         builder.lineTo(miter.point);
         return;
       }
@@ -2006,8 +2022,10 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   // Compute per-segment normals (left-side normals, pointing to the left of the direction).
   const size_t numSegments = n - 1;
   std::vector<Vector2d> normals(numSegments);
+  std::vector<double> segmentLengths(numSegments);
   for (size_t i = 0; i < numSegments; ++i) {
     normals[i] = segmentNormal(pts[i], pts[i + 1]);
+    segmentLengths[i] = (pts[i + 1] - pts[i]).length();
   }
 
   // Apply exact tangent normal overrides at curve-command boundary vertices.
@@ -2051,7 +2069,8 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     const Vector2d curStart = pts[i] + normals[i] * halfWidth;
 
     emitJoin(prevEnd, curStart, pts[i], normals[i - 1], normals[i], halfWidth, style.join,
-             style.miterLimit, builder, /*isLeftSide=*/true);
+             style.miterLimit, segmentLengths[i - 1], segmentLengths[i], builder,
+             /*isLeftSide=*/true);
   }
 
   // Emit the end of the LAST segment's offset. For a stroke with a single
@@ -2068,7 +2087,8 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
 
     // The last point should be equal to the first point for closed subpaths.
     emitJoin(prevEnd, curStart, pts[n - 1], normals[numSegments - 1], normals[0], halfWidth,
-             style.join, style.miterLimit, builder, /*isLeftSide=*/true);
+             style.join, style.miterLimit, segmentLengths[numSegments - 1], segmentLengths[0],
+             builder, /*isLeftSide=*/true);
 
     // Now walk the right contour backward.
     // For a closed path, we close the left contour and start a new subpath for the right.
@@ -2089,7 +2109,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
       // points at the right-contour outside.
       emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i - 1].x, -normals[i - 1].y),
                Vector2d(-normals[i].x, -normals[i].y), halfWidth, style.join, style.miterLimit,
-               builder, /*isLeftSide=*/true);
+               segmentLengths[i - 1], segmentLengths[i], builder, /*isLeftSide=*/true);
     }
 
     // NOTE: unlike the OPEN case, closed paths do NOT need a post-loop
@@ -2105,7 +2125,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
       emitJoin(prevEnd, curStart, pts[n - 1],
                Vector2d(-normals[numSegments - 1].x, -normals[numSegments - 1].y),
                Vector2d(-normals[0].x, -normals[0].y), halfWidth, style.join, style.miterLimit,
-               builder, /*isLeftSide=*/true);
+               segmentLengths[numSegments - 1], segmentLengths[0], builder, /*isLeftSide=*/true);
     }
 
     builder.closePath();
@@ -2133,7 +2153,8 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
 
       emitJoin(prevEnd, curStart, pts[i], Vector2d(-normals[i].x, -normals[i].y),
                Vector2d(-normals[i - 1].x, -normals[i - 1].y), halfWidth, style.join,
-               style.miterLimit, builder, /*isLeftSide=*/true);
+               style.miterLimit, segmentLengths[i], segmentLengths[i - 1], builder,
+               /*isLeftSide=*/true);
     }
 
     // End of the final (= seg 0) offset on the right side.

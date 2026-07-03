@@ -1425,6 +1425,7 @@ struct RendererGeode::Impl {
     if (!source) {
       return nullptr;
     }
+    ensureCacheInvalidationWired(*source.registry());
     auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
     if (!cache.fillEncode) {
       device->countPathEncode();
@@ -1556,6 +1557,7 @@ struct RendererGeode::Impl {
                                  const StrokeStyle& strokeStyle) {
     StrokeDerived result;
     if (source) {
+      ensureCacheInvalidationWired(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
       if (!cache.strokeSlot || cache.strokeSlot->strokeKey != strokeStyle) {
         // Miss (or stroke-params changed) — rebuild. De-close zero-area closed

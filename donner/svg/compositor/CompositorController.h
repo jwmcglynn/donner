@@ -368,6 +368,18 @@ public:
   [[nodiscard]] bool isPromoted(Entity entity) const;
 
   /**
+   * Mark an already-promoted layer dirty so the next \ref renderFrame re-rasterizes it.
+   *
+   * This is a targeted editor handoff for affine drag recaptures: the compositor still keeps
+   * transform-only drag frames on the cheap compose-offset path by default, but the editor can ask
+   * for a fresh bitmap when the presented scale has drifted far enough that the cached pixels would
+   * become blurry.
+   *
+   * @param entity Promoted layer root to refresh. No-op when @p entity has no promoted layer.
+   */
+  void markPromotedLayerDirty(Entity entity);
+
+  /**
    * Returns the current bitmap-compose offset for a promoted entity's layer, or identity if the
    * entity is not promoted or has no cached bitmap.
    *
@@ -585,6 +597,9 @@ public:
     int estimatedDrawOps = 0;
     /// Estimated number of path verbs across direct geometry draws.
     int estimatedPathVerbs = 0;
+    /// True when the span fills with a gradient, whose rasterize cost scales with
+    /// covered area; feeds the area term of `estimatedRasterizeMs`.
+    bool estimatedUsesAreaCostlyPaint = false;
     /// True when the span uses effects or resources that force cached-tile presentation.
     bool hasExpensiveEffect = false;
     /// True when the span has a visible, bounded contribution to the canvas.
@@ -595,8 +610,14 @@ public:
     double estimatedRedrawCost = 0.0;
     /// Relative fixed/cache memory cost avoided by immediate presentation.
     double estimatedCacheOverheadCost = 0.0;
-    /// Raster time from the most recent span render.
+    /// Raster time from the most recent span render. Telemetry only — recorded
+    /// so the geometry cost model behind `estimatedRasterizeMs` can be
+    /// recalibrated against real timings. NOT used in the immediate decision.
     double measuredRasterizeMs = 0.0;
+    /// Deterministic geometry estimate (ms) of this span's re-rasterize cost.
+    /// Drives the immediate-vs-cached decision in place of `measuredRasterizeMs`
+    /// so the choice is timing-independent. See `EstimateStaticSpanRasterizeMs`.
+    double estimatedRasterizeMs = 0.0;
     /// Total dynamic immediate-span frame budget for 120 Hz interaction.
     double immediateBudgetMs = 0.0;
     /// Budget charged by this span when it is immediate.
@@ -964,13 +985,28 @@ private:
   /// Compose all layers onto the main render target.
   void composeLayers(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
+  /// Pre-prepare compositor location of one dirty entity.
+  struct DirtyEntityInvalidation {
+    /// Dirty entity whose old cached pixels must be invalidated.
+    Entity entity = entt::null;
+    /// Static segment containing @ref entity before render-tree preparation.
+    std::optional<size_t> staticSegmentIndexBeforePrepare;
+    /// Promoted layers containing @ref entity before render-tree preparation.
+    std::vector<Entity> containingLayerEntitiesBeforePrepare;
+  };
+
+  /// Snapshot cache locations for dirty entities before preparation can remove
+  /// `display:none` entities from the render instance view.
+  std::vector<DirtyEntityInvalidation> captureDirtyEntityInvalidations(
+      const std::vector<Entity>& dirtyEntities) const;
+
   /// Check dirty flags on promoted entities and mark affected layers.
-  /// Translate a pre-captured set of dirty entities (snapshotted before
-  /// `prepareDocumentForRendering` clears `DirtyFlagsComponent`) into
-  /// per-layer `markDirty()` calls. An entity inside a promoted layer's
-  /// range marks just that layer; an entity outside every promoted range
-  /// escalates to `rootDirty_` so the root bitmap / bg / fg rebuild.
-  void consumeDirtyFlags(const std::vector<Entity>& dirtyEntities);
+  /// Translate pre-captured dirty entity cache locations (snapshotted before
+  /// `prepareDocumentForRendering` clears `DirtyFlagsComponent` and rebuilds
+  /// paint order) into per-layer `markDirty()` calls. An entity inside a
+  /// promoted layer's range marks just that layer; an entity outside every
+  /// promoted range marks the static segment that held its previous pixels.
+  void consumeDirtyFlags(const std::vector<DirtyEntityInvalidation>& dirtyInvalidations);
 
   /// Refresh cached render ranges and fallback metadata after render-tree preparation.
   void refreshLayerMetadata();

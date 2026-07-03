@@ -159,6 +159,14 @@ public:
   void appendText(std::string_view text);
 
   /**
+   * Replace this element's direct text content with @p text, discarding any
+   * existing direct text and intervening text chunks.
+   *
+   * @param text New text content.
+   */
+  void setTextContent(std::string_view text);
+
+  /**
    * Start a new direct-text chunk after an intervening child element.
    *
    * This preserves the ordering of mixed text and child elements for layout.

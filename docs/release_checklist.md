@@ -15,6 +15,10 @@ the version number.
   - `--config=text-full`
 - [ ] **Fuzzers run** — Execute all fuzz targets for a reasonable duration. Check for new crashes.
 - [ ] **CMake build verified** — Build and test with the CMake path.
+- [ ] **Showcase asset loads and renders** — The checked-in v0.8 showcase SVG must parse and render
+  in Donner. This is gated by the reference test target
+  `//donner/editor/tests:showcase_asset_tests`, which loads the showcase fixture and fails if it is
+  missing or invalid. (Applies from the v0.8 "Donner SVG Editor & Toolkit" release onward.)
 
 ## Pre-Release: Documentation
 

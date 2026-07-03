@@ -12,10 +12,12 @@
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
 #include "donner/editor/AttributeWriteback.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/TextPatch.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/core/Stroke.h"
 #include "donner/svg/properties/PaintServer.h"
 
@@ -226,14 +228,12 @@ std::vector<svg::SVGElement> SortSelectionByPaintOrder(const svg::SVGDocument& d
   std::vector<svg::SVGElement> result;
   result.reserve(selection.size());
 
-  document.withReadAccess([&](svg::DocumentReadAccess&) {
-    auto visit = [&](const svg::SVGElement& element) {
-      if (std::find(selection.begin(), selection.end(), element) != selection.end()) {
-        result.push_back(element);
-      }
-    };
-    ForEachElement(document.svgElement(), visit);
-  });
+  auto visit = [&](const svg::SVGElement& element) {
+    if (std::find(selection.begin(), selection.end(), element) != selection.end()) {
+      result.push_back(element);
+    }
+  };
+  ForEachElement(document.svgElement(), visit);
   return result;
 }
 
@@ -242,19 +242,11 @@ PathOperationSelection CollectPathOperationSelection(std::span<const svg::SVGEle
   result.inputs.reserve(selection.size());
 
   for (const svg::SVGElement& element : selection) {
-    std::optional<svg::SVGGeometryElement> maybeGeometry =
-        element.withReadAccess([&element](svg::DocumentReadAccess&,
-                                          EntityHandle) -> std::optional<svg::SVGGeometryElement> {
-          if (!element.isa<svg::SVGGeometryElement>()) {
-            return std::nullopt;
-          }
-          return element.cast<svg::SVGGeometryElement>();
-        });
-    if (!maybeGeometry.has_value()) {
+    if (!element.isa<svg::SVGGeometryElement>()) {
       continue;
     }
 
-    const svg::SVGGeometryElement geometry = *maybeGeometry;
+    const svg::SVGGeometryElement geometry = element.cast<svg::SVGGeometryElement>();
     std::optional<Path> spline = geometry.computedSpline();
     if (!spline.has_value() || spline->empty()) {
       continue;
@@ -582,6 +574,160 @@ void ApplyTimelineSnapshot(EditorApp& app, AsyncSVGDocument& document,
   }
 }
 
+/// Characters allowed in an SVG id (matches the clipboard id scanner).
+bool IsIdChar(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
+         c == '_' || c == ':' || c == '.';
+}
+
+/// If @p value references @p oldId via `url(#oldId)` or a whole-value `#oldId`
+/// (an `href` target), return the value with every such reference repointed to
+/// @p newId; otherwise return `std::nullopt` (no reference, no change).
+std::optional<std::string> RewriteIdReferenceInValue(std::string_view value, std::string_view oldId,
+                                                     std::string_view newId) {
+  // Whole-value local reference, e.g. href="#oldId".
+  if (value.size() == oldId.size() + 1u && value.front() == '#' && value.substr(1) == oldId) {
+    return "#" + std::string(newId);
+  }
+
+  // url(#oldId) occurrences anywhere in the value (covers presentation
+  // attributes and inline `style="fill:url(#oldId)"`).
+  std::string out;
+  bool changed = false;
+  std::size_t i = 0;
+  while (i < value.size()) {
+    if (value.compare(i, 5, "url(#") == 0) {
+      const std::size_t start = i + 5;
+      std::size_t end = start;
+      while (end < value.size() && IsIdChar(value[end])) {
+        ++end;
+      }
+      if (value.substr(start, end - start) == oldId) {
+        out.append("url(#").append(newId);
+        i = end;
+        changed = true;
+        continue;
+      }
+    }
+    out.push_back(value[i]);
+    ++i;
+  }
+  return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
+}
+
+/// Rewrite `#oldId` CSS id tokens to `#newId` inside a `<style>` element's
+/// text content, in the positions where a `#token` can actually reference the
+/// element: id selectors (selector preludes, including inside conditional
+/// group rules like `@media`) and `url(#id)` references inside declaration
+/// values. A `#token` elsewhere in a declaration value is a hex color literal
+/// (an id like `abc` is also a valid color), so it is left untouched, as are
+/// comments and quoted strings. A match requires the exact token: `#` +
+/// @p oldId + a non-id-character boundary, so `#oldIdSuffix` never matches.
+/// Returns the rewritten text if anything changed, otherwise `std::nullopt`.
+std::optional<std::string> RewriteIdSelectorInStyle(std::string_view value, std::string_view oldId,
+                                                    std::string_view newId) {
+  std::string out;
+  bool changed = false;
+  std::size_t i = 0;
+  // Stack of open blocks: `true` = the block holds nested rules (an at-rule
+  // body such as `@media { ... }`), so `#token`s inside it are back in
+  // selector position; `false` = a qualified rule's declaration block.
+  std::vector<bool> blockHoldsRules;
+  // True when the current block context is selector/prelude position.
+  const auto inSelectorPosition = [&]() {
+    return blockHoldsRules.empty() || blockHoldsRules.back();
+  };
+  // Whether the prelude currently being scanned starts with '@' (an at-rule,
+  // whose `{` opens a rule-holding block rather than declarations).
+  bool preludeIsAtRule = false;
+  bool preludeSeenNonSpace = false;
+
+  while (i < value.size()) {
+    const char c = value[i];
+    // Comments copy through verbatim.
+    if (c == '/' && i + 1 < value.size() && value[i + 1] == '*') {
+      const std::size_t end = value.find("*/", i + 2);
+      const std::size_t stop = end == std::string_view::npos ? value.size() : end + 2;
+      out.append(value.substr(i, stop - i));
+      i = stop;
+      continue;
+    }
+    // Quoted strings copy through verbatim (backslash escapes respected).
+    if (c == '"' || c == '\'') {
+      std::size_t end = i + 1;
+      while (end < value.size() && value[end] != c) {
+        end += (value[end] == '\\' && end + 1 < value.size()) ? 2 : 1;
+      }
+      const std::size_t stop = std::min(end + 1, value.size());
+      out.append(value.substr(i, stop - i));
+      i = stop;
+      continue;
+    }
+    if (c == '{') {
+      blockHoldsRules.push_back(inSelectorPosition() && preludeIsAtRule);
+      preludeIsAtRule = false;
+      preludeSeenNonSpace = false;
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+    if (c == '}') {
+      if (!blockHoldsRules.empty()) {
+        blockHoldsRules.pop_back();
+      }
+      preludeIsAtRule = false;
+      preludeSeenNonSpace = false;
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+    if (c == ';') {
+      preludeIsAtRule = false;
+      preludeSeenNonSpace = false;
+      out.push_back(c);
+      ++i;
+      continue;
+    }
+    if (!preludeSeenNonSpace && !std::isspace(static_cast<unsigned char>(c))) {
+      preludeSeenNonSpace = true;
+      preludeIsAtRule = c == '@';
+    }
+    if (c == '#' && value.compare(i + 1, oldId.size(), oldId) == 0) {
+      const std::size_t after = i + 1 + oldId.size();
+      const bool tokenBoundary = after >= value.size() || !IsIdChar(value[after]);
+      // Inside a declaration block, only a `url(#id)` functional reference
+      // repoints; a bare `#token` there is a color literal.
+      bool isUrlReference = false;
+      if (!inSelectorPosition()) {
+        std::size_t back = out.size();
+        while (back > 0 && std::isspace(static_cast<unsigned char>(out[back - 1]))) {
+          --back;
+        }
+        isUrlReference = back >= 4 && out.compare(back - 4, 4, "url(") == 0;
+      }
+      if (tokenBoundary && (inSelectorPosition() || isUrlReference)) {
+        out.push_back('#');
+        out.append(newId);
+        i = after;
+        changed = true;
+        continue;
+      }
+    }
+    out.push_back(c);
+    ++i;
+  }
+  return changed ? std::optional<std::string>(std::move(out)) : std::nullopt;
+}
+
+/// Depth-first list of every element in the document tree rooted at @p root.
+void CollectElements(const svg::SVGElement& root, std::vector<svg::SVGElement>& out) {
+  out.push_back(root);
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    CollectElements(*child, out);
+  }
+}
+
 }  // namespace
 
 EditorApp::EditorApp() = default;
@@ -701,7 +847,24 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
     return false;
   }
 
-  const std::vector<svg::SVGElement> selected = selection_;
+  // Locked elements are protected from deletion. Filter them out before ANY
+  // delete side effect — source undo, remove writebacks, selection change.
+  // Gating only the DOM command (applyMutation's IsLockGatedCommand check)
+  // would still let the already-enqueued remove writeback splice the locked
+  // element out of the source text.
+  std::vector<svg::SVGElement> selected;
+  std::vector<svg::SVGElement> lockedSelection;
+  selected.reserve(selection_.size());
+  for (const auto& element : selection_) {
+    if (IsLocked(element)) {
+      lockedSelection.push_back(element);
+    } else {
+      selected.push_back(element);
+    }
+  }
+  if (selected.empty()) {
+    return false;
+  }
   std::vector<std::optional<AttributeWritebackTarget>> writebackTargets;
   writebackTargets.reserve(selected.size());
 
@@ -727,7 +890,12 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
                          captureDocumentSourceSnapshot(selected.front(), sourceAfterDelete));
   }
 
-  setSelection(std::nullopt);
+  // Locked elements survive the delete and stay selected.
+  if (lockedSelection.empty()) {
+    setSelection(std::nullopt);
+  } else {
+    setSelection(std::move(lockedSelection));
+  }
   for (std::size_t i = 0; i < selected.size(); ++i) {
     if (writebackTargets[i].has_value()) {
       enqueueElementRemoveWriteback(CompletedElementRemoveWriteback{
@@ -737,6 +905,206 @@ bool EditorApp::deleteSelectionWithUndo(std::string_view currentSourceText) {
     applyMutation(EditorCommand::DeleteElementCommand(selected[i]));
   }
 
+  return true;
+}
+
+bool EditorApp::reorderSelectedElement(ZOrder direction) {
+  if (selection_.size() != 1u) {
+    return false;
+  }
+  svg::SVGElement element = selection_.front();
+  if (IsLocked(element)) {
+    return false;  // Locked elements (or descendants of a locked group) don't move.
+  }
+  const std::optional<svg::SVGElement> parentOpt = element.parentElement();
+  if (!parentOpt.has_value()) {
+    return false;  // The document root has no siblings to reorder among.
+  }
+  const svg::SVGElement parent = *parentOpt;
+
+  // Compute the insert-before reference sibling for the requested move.
+  // `std::nullopt` reference means "append" (move to the last sibling). SVG
+  // paints in document order, so the last sibling is on top.
+  std::optional<svg::SVGElement> referenceElement;
+  bool moves = false;
+  switch (direction) {
+    case ZOrder::BringToFront:
+      moves = element.nextSibling().has_value();  // no-op if already last.
+      referenceElement = std::nullopt;
+      break;
+    case ZOrder::SendToBack: {
+      const std::optional<svg::SVGElement> first = parent.firstChild();
+      moves = first.has_value() && *first != element;  // no-op if already first.
+      referenceElement = first;
+      break;
+    }
+    case ZOrder::BringForward:
+      if (const std::optional<svg::SVGElement> next = element.nextSibling(); next.has_value()) {
+        referenceElement = next->nextSibling();  // move after `next` (nullopt -> append).
+        moves = true;
+      }
+      break;
+    case ZOrder::SendBackward:
+      if (const std::optional<svg::SVGElement> prev = element.previousSibling(); prev.has_value()) {
+        referenceElement = prev;  // move before the previous sibling.
+        moves = true;
+      }
+      break;
+  }
+  if (!moves) {
+    return false;
+  }
+
+  return applyElementMove(element, parent, referenceElement, "Reorder element");
+}
+
+bool EditorApp::reorderElementBeforeSibling(svg::SVGElement element,
+                                            std::optional<svg::SVGElement> referenceSibling) {
+  if (IsLocked(element)) {
+    return false;  // Locked elements (or descendants of a locked group) don't move.
+  }
+  const std::optional<svg::SVGElement> parentOpt = element.parentElement();
+  if (!parentOpt.has_value()) {
+    return false;  // The document root has no siblings to reorder among.
+  }
+  const svg::SVGElement parent = *parentOpt;
+
+  if (referenceSibling.has_value()) {
+    if (*referenceSibling == element) {
+      return false;  // Inserting before yourself is a no-op.
+    }
+    const std::optional<svg::SVGElement> refParent = referenceSibling->parentElement();
+    if (!refParent.has_value() || *refParent != parent) {
+      return false;  // Cross-parent moves are unsupported here.
+    }
+  }
+  // No-op when the element already sits immediately before the reference (or is
+  // already the last child when appending).
+  if (element.nextSibling() == referenceSibling) {
+    return false;
+  }
+
+  return applyElementMove(element, parent, referenceSibling, "Reorder element");
+}
+
+bool EditorApp::applyElementMove(svg::SVGElement element, svg::SVGElement parent,
+                                 std::optional<svg::SVGElement> referenceElement,
+                                 std::string_view undoLabel) {
+  svg::SVGDocument& doc = document_.document();
+  if (doc.hasSourceStore()) {
+    UndoSnapshot before = captureDocumentSourceSnapshot(element, doc.source());
+    before.selectionTargets = CaptureSelectionTargets(selection_);
+    pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+        .label = std::string(undoLabel),
+        .before = std::move(before),
+    };
+  }
+
+  // A pure DOM move: `insertElement` re-parents/repositions the already-attached
+  // element, and the structured-editing reflection rewrites the source from the
+  // DOM change. No source-text surgery (CLAUDE.md "DOM-Level Editing Only").
+  applyMutation(EditorCommand::InsertElementCommand(parent, element, referenceElement));
+  return true;
+}
+
+bool EditorApp::renameSelectedElement(std::string_view newId) {
+  if (selection_.size() != 1u) {
+    return false;
+  }
+  svg::SVGElement element = selection_.front();
+  if (IsLocked(element)) {
+    return false;
+  }
+  const std::string oldId(element.id().str());
+  const std::string newIdStr(newId);
+  if (newIdStr.empty() || newIdStr == oldId) {
+    return false;
+  }
+
+  svg::SVGDocument& doc = document_.document();
+  // Reject a collision with a DIFFERENT element (renaming to your own id is the
+  // no-op above; an empty oldId means nothing references it yet, which is fine).
+  if (const std::optional<svg::SVGElement> existing = doc.querySelector("#" + newIdStr);
+      existing.has_value() && *existing != element) {
+    return false;
+  }
+
+  // Collect every reference that must be repointed, DOM-level: walk all elements
+  // and every attribute value, rewriting `url(#oldId)` / `href="#oldId"`. Only
+  // meaningful when the element already had an id for things to reference.
+  struct PendingAttr {
+    svg::SVGElement element;
+    std::string name;
+    std::string value;
+  };
+  struct PendingStyle {
+    svg::SVGStyleElement element;
+    std::string text;
+  };
+  std::vector<PendingAttr> referenceUpdates;
+  std::vector<PendingStyle> styleUpdates;
+  if (!oldId.empty()) {
+    std::vector<svg::SVGElement> all;
+    CollectElements(doc.svgElement(), all);
+    for (const svg::SVGElement& candidate : all) {
+      for (const xml::XMLQualifiedNameRef& attrName : candidate.attributes()) {
+        // We round-trip the rewritten attribute through SetAttributeCommand,
+        // which only carries an unprefixed local name. The references we care
+        // about (url(#…) in presentation/style attributes, SVG2 `href`) are all
+        // in the default namespace; skip prefixed attributes (e.g. legacy
+        // `xlink:href`) rather than risk dropping their prefix.
+        if (!attrName.namespacePrefix.empty()) {
+          continue;
+        }
+        const std::optional<RcString> attrValue = candidate.getAttribute(attrName);
+        if (!attrValue.has_value()) {
+          continue;
+        }
+        if (std::optional<std::string> rewritten =
+                RewriteIdReferenceInValue(attrValue->str(), oldId, newIdStr);
+            rewritten.has_value()) {
+          referenceUpdates.push_back(PendingAttr{
+              .element = candidate,
+              .name = std::string(attrName.name.str()),
+              .value = std::move(*rewritten),
+          });
+        }
+      }
+
+      // Repoint `#oldId` CSS id selectors inside any `<style>` element's text
+      // content (DOM-level: read the live stylesheet text, rewrite the selector
+      // tokens, and write it back via a SetTextContent command).
+      if (candidate.isa<svg::SVGStyleElement>()) {
+        svg::SVGStyleElement style = candidate.cast<svg::SVGStyleElement>();
+        if (std::optional<std::string> rewritten =
+                RewriteIdSelectorInStyle(style.textContent().str(), oldId, newIdStr);
+            rewritten.has_value()) {
+          styleUpdates.push_back(PendingStyle{
+              .element = style,
+              .text = std::move(*rewritten),
+          });
+        }
+      }
+    }
+  }
+
+  if (doc.hasSourceStore()) {
+    UndoSnapshot before = captureDocumentSourceSnapshot(element, doc.source());
+    before.selectionTargets = CaptureSelectionTargets(selection_);
+    pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+        .label = "Rename element",
+        .before = std::move(before),
+    };
+  }
+
+  applyMutation(EditorCommand::SetAttributeCommand(element, "id", newIdStr));
+  for (PendingAttr& update : referenceUpdates) {
+    applyMutation(EditorCommand::SetAttributeCommand(update.element, std::move(update.name),
+                                                     std::move(update.value)));
+  }
+  for (PendingStyle& update : styleUpdates) {
+    applyMutation(EditorCommand::SetTextContentCommand(update.element, std::move(update.text)));
+  }
   return true;
 }
 
@@ -751,6 +1119,45 @@ void EditorApp::setSelection(std::optional<svg::SVGElement> element) {
 void EditorApp::setSelection(std::vector<svg::SVGElement> elements) {
   selection_ = std::move(elements);
   refreshFirstSelectionCache();
+}
+
+bool IsLockGatedCommand(const EditorCommand& command) {
+  // Only geometry-changing / destructive mutations are gated. A SetTransform or
+  // DeleteElement targeting a locked element (or a descendant of a locked
+  // group, via `IsLocked`'s ancestor walk) is dropped. Visibility/lock
+  // attribute toggles flow through SetAttribute and are intentionally never
+  // gated, so a locked layer can still be shown/hidden and unlocked.
+  switch (command.kind) {
+    case EditorCommand::Kind::SetTransform:
+    case EditorCommand::Kind::DeleteElement:
+      return command.element.has_value() && IsLocked(*command.element);
+    default: return false;
+  }
+}
+
+void EditorApp::setElementVisible(const svg::SVGElement& element, bool visible) {
+  // Toggle the `display` presentation attribute. Hiding writes
+  // `display="none"`; showing writes `display="inline"` (a definitively
+  // visible value) so the change is observable through the computed-style
+  // visibility check regardless of whether the surrounding stylesheet sets
+  // display.
+  applyMutation(
+      EditorCommand::SetAttributeCommand(element, "display", visible ? "inline" : "none"));
+}
+
+void EditorApp::setElementLocked(const svg::SVGElement& element, bool locked) {
+  // Toggle the `data-donner-locked` marker. Locking writes `"true"`; unlocking
+  // *removes* the attribute entirely (rather than leaving `data-donner-locked
+  // ="false"` behind), so an unlocked element looks the same as one that was
+  // never locked. This mutation is never lock-gated (see `IsLockGatedCommand`)
+  // so a locked layer can always be unlocked.
+  if (locked) {
+    applyMutation(EditorCommand::SetAttributeCommand(element, std::string(kLockedAttributeName),
+                                                     std::string(kLockedAttributeValue)));
+  } else {
+    applyMutation(
+        EditorCommand::RemoveAttributeCommand(element, std::string(kLockedAttributeName)));
+  }
 }
 
 void EditorApp::toggleInSelection(const svg::SVGElement& element) {
@@ -884,19 +1291,11 @@ bool EditorApp::applyPathOperation(PathOperationKind operation) {
   }
 
   const svg::SVGElement baseElement = BaseElementForPathOperation(operation, selected);
-  svg::SVGElement parent = document.withReadAccess([&](svg::DocumentReadAccess&) {
-    return baseElement.parentElement().value_or(document.svgElement());
-  });
+  svg::SVGElement parent = baseElement.parentElement().value_or(document.svgElement());
   Transform2d parentFromDocument;
-  std::optional<svg::SVGGraphicsElement> parentGraphics = parent.withReadAccess(
-      [&parent](svg::DocumentReadAccess&, EntityHandle) -> std::optional<svg::SVGGraphicsElement> {
-        if (!parent.isa<svg::SVGGraphicsElement>()) {
-          return std::nullopt;
-        }
-        return parent.cast<svg::SVGGraphicsElement>();
-      });
-  if (parentGraphics.has_value()) {
-    const Transform2d documentFromParent = parentGraphics->elementFromWorld();
+  if (parent.isa<svg::SVGGraphicsElement>()) {
+    const Transform2d documentFromParent =
+        parent.cast<svg::SVGGraphicsElement>().elementFromWorld();
     parentFromDocument = documentFromParent.inverse();
   }
 
@@ -1017,6 +1416,15 @@ bool EditorApp::unbundleCompoundPath(std::optional<svg::SVGElement> target) {
   return true;
 }
 
+void EditorApp::recordDocumentSourceUndoOnNextFlush(std::string label,
+                                                    svg::SVGElement anchorElement,
+                                                    std::string beforeSource) {
+  pendingDocumentSourceUndo_ = PendingDocumentSourceUndo{
+      .label = std::move(label),
+      .before = captureDocumentSourceSnapshot(anchorElement, beforeSource),
+  };
+}
+
 void EditorApp::refreshFirstSelectionCache() {
   if (selection_.empty()) {
     cachedFirstSelection_.reset();
@@ -1094,6 +1502,30 @@ std::vector<svg::SVGGeometryElement> EditorApp::hitTestRect(const Box2d& documen
     ForEachGeometryElement(root, visit);
   });
   return hits;
+}
+
+std::vector<svg::SVGElement> EditorApp::selectableElements() {
+  std::vector<svg::SVGElement> selectable;
+  if (!document_.hasDocument()) {
+    return selectable;
+  }
+
+  // Mirror `hitTestRect`'s traversal exactly so the "Select All" set and marquee selection agree on
+  // what is selectable: every `SVGGeometryElement` in the tree, in document order. Non-geometry
+  // nodes (`<defs>`, gradients, plain containers, XML text nodes) are skipped by
+  // `ForEachGeometryElement`.
+  //
+  // §concurrent-dom: like `hitTestRect`, the DOM reads (isa / firstChild / nextSibling) need a
+  // scoped access guard against the live ConcurrentDom document.
+  svg::SVGDocument doc = document_.document();
+  doc.withWriteAccess([&](svg::DocumentWriteAccess&) {
+    const svg::SVGElement root = doc.svgElement();
+    auto visit = [&](const svg::SVGGeometryElement& geometry) {
+      selectable.emplace_back(geometry);
+    };
+    ForEachGeometryElement(root, visit);
+  });
+  return selectable;
 }
 
 }  // namespace donner::editor

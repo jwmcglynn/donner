@@ -1,6 +1,6 @@
 // Slug fill pipeline: analytic dual-ray coverage at 1 sample/pixel.
 //
-// Algorithm (docs/design_docs/0041-geode_analytical_aa.md §1, §8):
+// Algorithm:
 //   1. The path is decomposed on the CPU into horizontal bands (Y-monotonic
 //      curves, for the horizontal ray) AND vertical bands (X-monotonic curves,
 //      for the vertical ray). Dense band grids map a sample position to its
@@ -197,7 +197,8 @@ fn load_v_curve(index: u32) -> Quadratic {
 
 // Solve at² + bt + c = 0 for roots in [0, 1]. Returns two t values; invalid
 // roots are set to -1. Numerically-stable Citardauq form (matches the Slug
-// reference); see the design doc / prior commentary for the rationale.
+// reference): dividing by the larger-magnitude root avoids catastrophic
+// cancellation when |4ac| << b².
 fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
   var roots = vec2f(-1.0, -1.0);
 

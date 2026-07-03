@@ -134,9 +134,9 @@ license(
 license(
     name = "emscripten-glfw",
     package_name = "emscripten-glfw",
-    package_url = "https://github.com/pongasoft/emscripten-glfw",
     license_kinds = ["@rules_license//licenses/spdx:Apache-2.0"],
     license_text = "//third_party/emscripten-glfw:LICENSE.txt",
+    package_url = "https://github.com/pongasoft/emscripten-glfw",
 )
 
 # Roboto — UI font embedded in //donner/editor. Apache-2.0 per Google Fonts.
@@ -156,6 +156,16 @@ license(
     license_kinds = ["@rules_license//licenses/spdx:OFL-1.1"],
     license_text = "fira-code.LICENSE.txt",
     package_url = "https://github.com/tonsky/FiraCode",
+)
+
+# Bootstrap Icons — UI icons embedded in //donner/editor.
+license(
+    name = "bootstrap-icons",
+    package_name = "Bootstrap Icons",
+    license_kinds = ["@rules_license//licenses/spdx:MIT"],
+    license_text = "//third_party/bootstrap-icons:LICENSE",
+    package_url = "https://github.com/twbs/icons",
+    package_version = "905f2607f0af16a54a82be8d150788092e3dad93",
 )
 
 # Canonical per-variant license lists. These match the build-report
@@ -193,6 +203,7 @@ ALL_KNOWN_LICENSES = [
     ":emscripten-glfw",
     ":roboto",
     ":fira-code",
+    ":bootstrap-icons",
     "@libpng//:license",
     "@zlib//:license",
 ]
@@ -217,10 +228,10 @@ donner_notice_file(
 
 donner_notice_file_auto(
     name = "notice_editor",
-    variant = "editor (auto-detected from current build)",
+    available_licenses = ALL_KNOWN_LICENSES,
     target = select({
         "//donner/editor/wasm:wasm_enabled": "//donner/editor/wasm:notice_inputs",
         "//conditions:default": "//donner/editor:editor_notice_inputs",
     }),
-    available_licenses = ALL_KNOWN_LICENSES,
+    variant = "editor (auto-detected from current build)",
 )

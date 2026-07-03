@@ -15,6 +15,20 @@
 
 namespace donner::editor {
 
+namespace {
+
+/// In-memory clipboard backing for the test ImGui context. ImGui's default
+/// clipboard handler can fall back to a host service (window-server pasteboard)
+/// that is absent under sandboxed / remote test execution, which left `copy()`
+/// / `paste()` round-trips empty on RE workers. Backing the context's clipboard
+/// with a plain string makes the round-trip deterministic on every host.
+std::string& TestClipboardStorage() {
+  static std::string storage;
+  return storage;
+}
+
+}  // namespace
+
 /// Fixture for `TextEditor` tests. Creates a per-test ImGui context so
 /// calls that route through ImGui's clipboard (`copy()`, `cut()`,
 /// `paste()`, `GetClipboardText()`) don't crash. The context is
@@ -34,6 +48,18 @@ protected:
     // modifier on every host OS instead of failing on macOS runners.
     io.ConfigMacOSXBehaviors = false;
     io.Fonts->Build();
+
+    // Route the context's clipboard through an in-memory string so copy/paste
+    // are deterministic and host-independent (see TestClipboardStorage). Start
+    // each test with an empty clipboard.
+    TestClipboardStorage().clear();
+    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+    platformIo.Platform_SetClipboardTextFn = [](ImGuiContext*, const char* text) {
+      TestClipboardStorage() = text != nullptr ? text : "";
+    };
+    platformIo.Platform_GetClipboardTextFn = [](ImGuiContext*) -> const char* {
+      return TestClipboardStorage().c_str();
+    };
   }
 
   void TearDown() override {
@@ -858,6 +884,32 @@ TEST_F(TextEditorTests, SelectAllSelectsEntireBuffer) {
   editor.selectAll();
   EXPECT_EQ(editor.getSelectedText(), "Hello world")
       << "selectAll should select entire buffer content";
+}
+
+TEST_F(TextEditorTests, ClearSelectionCollapsesActiveSelection) {
+  editor.setText("Hello world");
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
+  editor.setCursorPosition(Coordinates(0, 5));
+  ASSERT_TRUE(editor.hasSelection()) << "precondition: a selection exists";
+
+  editor.clearSelection();
+
+  EXPECT_FALSE(editor.hasSelection())
+      << "clearSelection should collapse the active text selection to the caret";
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 5))
+      << "clearSelection should leave the cursor where it was";
+}
+
+TEST_F(TextEditorTests, ClearSelectionIsNoOpWhenEmpty) {
+  editor.setText("Hello world");
+  editor.setCursorPosition(Coordinates(0, 3));
+  ASSERT_FALSE(editor.hasSelection()) << "precondition: no selection";
+
+  editor.clearSelection();
+
+  EXPECT_FALSE(editor.hasSelection()) << "clearSelection should be a no-op with no selection";
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 3))
+      << "clearSelection should not move the cursor when there is nothing to clear";
 }
 
 TEST_F(TextEditorTests, ShiftRightExpandsSelection) {

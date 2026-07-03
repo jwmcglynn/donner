@@ -1,8 +1,22 @@
 #include "donner/editor/RenderPanePresenter.h"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <optional>
+#include <span>
+#include <sstream>
+#include <string>
+#include <vector>
 
+#include "donner/base/Path.h"
+#include "donner/base/Vector2.h"
+#include "donner/editor/EditorApp.h"
+#include "donner/editor/OverlayRenderer.h"
+#include "donner/editor/ViewportState.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -112,6 +126,31 @@ TEST(RenderPanePresenterTest, SelectionPrewarmLayerMatchesGroupedActiveDragPrevi
       << "Grouped selection prewarm tiles are valid drag targets as soon as the active drag "
          "starts, "
          "even though the worker did not mark them as drag targets during the idle prewarm.";
+}
+
+TEST(RenderPanePresenterTest, OverviewTilesAreOnlyPresentedUnderViewportBoundedActiveTiles) {
+  GlTextureCache::TileView overviewTile;
+  overviewTile.texture = static_cast<ImTextureID>(static_cast<std::uintptr_t>(7));
+
+  const std::array<GlTextureCache::TileView, 1> overviewTiles{overviewTile};
+
+  EXPECT_TRUE(ShouldPresentOverviewTiles(/*activeTilesViewportBounded=*/true, overviewTiles));
+  EXPECT_FALSE(ShouldPresentOverviewTiles(/*activeTilesViewportBounded=*/false, overviewTiles))
+      << "A retained overview is a fallback for viewport-bounded active tiles only. Drawing it "
+         "under a full-document active tile set can show stale pre-drag pixels underneath a "
+         "rerendered transform target.";
+}
+
+TEST(RenderPanePresenterTest, EmptyOverviewTileSetIsNotPresented) {
+  EXPECT_FALSE(ShouldPresentOverviewTiles(
+      /*activeTilesViewportBounded=*/true, std::span<const GlTextureCache::TileView>()));
+}
+
+TEST(RenderPanePresenterTest, FramebufferCheckerboardMatchesCanvasCheckerSize) {
+  EXPECT_DOUBLE_EQ(kFramebufferCheckerboardSize, 16.0)
+      << "The direct framebuffer presenter must use the same checkerboard cell size as the "
+         "regular canvas presenter, otherwise deleting an opaque background switches the visible "
+         "checkerboard scale when direct WGPU presentation takes over.";
 }
 
 TEST(RenderPanePresenterTest, PresentedTileQuadIntersectingPaneIsVisible) {

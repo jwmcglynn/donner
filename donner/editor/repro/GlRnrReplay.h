@@ -14,6 +14,7 @@
 #include "donner/editor/FrameCostBreakdown.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/LayerInspectorDiagnostics.h"
+#include "donner/editor/SelectTool.h"
 
 namespace donner::editor::repro {
 
@@ -55,6 +56,8 @@ struct GlRnrReplayOptions {
   int holdFramesBehind = 0;
   /// Replay-only fixed render delay injected into the async worker.
   int workerRenderDelayMsForTesting = 0;
+  /// Drive canvas tool input from recorded document coordinates instead of GUI screen hit-testing.
+  bool driveDocumentSpaceInput = false;
   /// Suppress non-document render-pane chrome when writing captures.
   bool contentOnlyCapture = false;
   /// Show the native editor window while replaying.
@@ -91,8 +94,18 @@ struct GlRnrReplayTileDiagnostics {
   Vector2d dragTranslationDoc = Vector2d::Zero();
   /// Effective drag translation used by the render-pane presenter this frame.
   Vector2d presentedDragTranslationDoc = Vector2d::Zero();
+  /// Affine transform represented by the presented tile.
+  Transform2d documentFromCachedDocument = Transform2d();
+  /// Effective affine transform used by the render-pane presenter this frame.
+  Transform2d presentedDocumentFromCachedDocument = Transform2d();
   /// Backend texture/view handle, represented as an integer for diagnostics.
   std::uint64_t textureHandle = 0;
+  /// Number of green pixels found when the retained texture snapshot is rendered for diagnostics.
+  int textureGreenPixels = 0;
+  /// Number of nontransparent pixels found in the retained texture snapshot.
+  int textureNonTransparentPixels = 0;
+  /// True when a renderer texture snapshot was available for pixel diagnostics.
+  bool hasTextureSnapshot = false;
   /// True when the tile reused an existing texture with metadata-only geometry.
   bool metadataOnly = false;
   /// True when this tile represents the active drag target.
@@ -101,6 +114,32 @@ struct GlRnrReplayTileDiagnostics {
 
 /// Per-frame diagnostics captured during GL replay.
 struct GlRnrReplayFrameDiagnostics {
+  /// One Layers-panel row thumbnail exposed to replay diagnostics.
+  struct RowThumbnail {
+    /// Visible row label.
+    std::string displayName;
+    /// Stable row id used for thumbnail texture cache keys.
+    std::uint64_t stableId = 0;
+    /// Cached thumbnail bitmap dimensions, or zero when the row has no raster thumbnail.
+    Vector2i bitmapDimsPx = Vector2i::Zero();
+  };
+
+  /// Layers-panel thumbnail refresh diagnostics.
+  struct ThumbnailRefreshStats {
+    /// Document frame version observed during the refresh.
+    std::uint64_t documentFrameVersion = 0;
+    /// Visible row count after refreshing the model.
+    std::size_t rowCount = 0;
+    /// Number of row thumbnails rasterized through Donner during this refresh.
+    std::size_t renderedCount = 0;
+    /// Number of cached row thumbnails reused during this refresh.
+    std::size_t reusedCount = 0;
+    /// Number of rows skipped because the canvas render tree had pending invalidation.
+    std::size_t skippedForCanvasInvalidationCount = 0;
+    /// Wall time spent in thumbnail rasterization work.
+    double renderMs = 0.0;
+  };
+
   /// Repro frame index.
   std::uint64_t frameIndex = 0;
   /// Canvas freshness classification used by the layer inspector.
@@ -117,14 +156,46 @@ struct GlRnrReplayFrameDiagnostics {
   int metadataOnlyMissCount = 0;
   /// Duplicate live texture handles found across different tile ids.
   int duplicateLiveTextureCount = 0;
-  /// Overlay texture dimensions in pixels.
-  Vector2i overlayDimsPx = Vector2i::Zero();
-  /// Backend overlay texture/view handle, represented as an integer for diagnostics.
-  std::uint64_t overlayTextureHandle = 0;
+  /// Current live document frame version.
+  std::uint64_t documentFrameVersion = 0;
+  /// Last document frame version published to the presentation.
+  std::uint64_t displayedDocVersion = 0;
+  /// Document version represented by the current immediate overlay snapshot, if any.
+  std::optional<std::uint64_t> immediateOverlayDocumentVersion;
+  /// Selected entity eligible for composited presentation, or entt::null.
+  Entity selectedCompositedEntity = entt::null;
+  /// Whether the last document flush applied commands.
+  bool lastFlushAppliedCommands = false;
+  /// Whether the last document flush replaced the document.
+  bool lastFlushReplacedDocument = false;
+  /// Whether the last document flush removed any element.
+  bool lastFlushRemovedElements = false;
+  /// Entities whose cached composited pixels were invalidated by the last flush.
+  std::vector<Entity> lastFlushCacheInvalidatedElements;
+  /// True when the shell is carrying a render request into a later frame.
+  bool requestRenderAtEndOfFrame = false;
+  /// Selected entity whose promoted pixels are known stale, or entt::null.
+  Entity pendingSelectedLayerRasterizationEntity = entt::null;
+  /// Document version at which the selected-layer rasterization was requested.
+  std::uint64_t pendingSelectedLayerRasterizationVersion = 0;
+  /// Selected element's raw `style` attribute, if present.
+  std::optional<std::string> selectedStyleAttribute;
+  /// Selected element's parsed local style fill, if present.
+  std::optional<std::string> selectedLocalStyleFill;
+  /// Selected element's existing computed fill, if present.
+  std::optional<std::string> selectedComputedFill;
+  /// Selected element's renderer-instance resolved fill, if present.
+  std::optional<std::string> selectedRenderingInstanceFill;
+  /// Selected element's raw `d` attribute, if present.
+  std::optional<std::string> selectedPathDataAttribute;
   /// Presentation-cache resource counters captured after the frame.
   PresentationResourceStats presentationResources;
   /// Latest editor rendering cost counters.
   FrameCostBreakdown frameCost;
+  /// Active drag transform driving the presenter, if any.
+  std::optional<SelectTool::ActiveDragPreview> activeDragPreview;
+  /// Drag transform represented by the displayed cached content, if any.
+  std::optional<SelectTool::ActiveDragPreview> displayedDragPreview;
   /// Replay worker scheduling mode used for this frame.
   GlRnrReplayWorkerScheduling replayWorkerScheduling = GlRnrReplayWorkerScheduling::Realtime;
   /// Replay-only worker render delay in milliseconds.
@@ -137,6 +208,10 @@ struct GlRnrReplayFrameDiagnostics {
   bool replayResultWithheld = false;
   /// Paint-order texture state currently visible to the presenter.
   std::vector<GlRnrReplayTileDiagnostics> tiles;
+  /// Layers-panel row thumbnail bitmaps currently cached by the shell.
+  std::vector<RowThumbnail> rowThumbnails;
+  /// Layers-panel thumbnail refresh diagnostics.
+  ThumbnailRefreshStats thumbnailRefreshStats;
 };
 
 /// Result of a GL replay run.

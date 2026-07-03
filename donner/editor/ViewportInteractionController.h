@@ -18,6 +18,50 @@ constexpr std::size_t kFrameHistoryCapacity = 120;
 
 /// Render-pane profiler costs aligned with one UI frame-history sample.
 struct FrameProfilerSample {
+  /// Time spent starting the current ImGui frame.
+  float hostBeginFrameMs = 0.0f;
+  /// Time spent ending and presenting the previous host frame.
+  float hostPreviousEndFrameMs = 0.0f;
+  /// Previous host end-frame time spent in `ImGui::Render`.
+  float hostPreviousImguiRenderMs = 0.0f;
+  /// Previous host end-frame time spent acquiring the WGPU surface texture.
+  float hostPreviousSurfaceAcquireMs = 0.0f;
+  /// Previous host end-frame time spent in the document underlay direct pass.
+  float hostPreviousUnderlayMs = 0.0f;
+  /// Previous host end-frame time spent issuing ImGui backend draw commands.
+  float hostPreviousImguiDrawMs = 0.0f;
+  /// Previous host end-frame time spent in the overlay/direct append pass.
+  float hostPreviousDirectMs = 0.0f;
+  /// Previous host end-frame time spent reading the framebuffer back to the CPU.
+  float hostPreviousReadbackMs = 0.0f;
+  /// Previous host end-frame time spent presenting or swapping the surface.
+  float hostPreviousPresentMs = 0.0f;
+  /// Early editor-frame bookkeeping before polling renderer results.
+  float mainPreparationMs = 0.0f;
+  /// Time spent accepting a completed async render result.
+  float mainRenderPollMs = 0.0f;
+  /// Time spent flushing queued DOM/source mutations.
+  float mainDocumentFlushMs = 0.0f;
+  /// Time spent refreshing overlay chrome outside normal pane rendering.
+  float mainOverlayRefreshMs = 0.0f;
+  /// Time spent syncing parse markers and pending source writebacks.
+  float mainDocumentSyncMs = 0.0f;
+  /// Time spent computing editor pane layout and viewport layout.
+  float mainLayoutMs = 0.0f;
+  /// Time spent handling global keyboard shortcuts.
+  float mainShortcutsMs = 0.0f;
+  /// Time spent rendering the menu bar and modal dialogs.
+  float mainMenusDialogsMs = 0.0f;
+  /// Time spent rendering the XML source pane.
+  float mainSourcePaneMs = 0.0f;
+  /// Time spent rendering the central document pane widgets.
+  float mainRenderPaneMs = 0.0f;
+  /// Time spent rendering tree/layer/inspector sidebars.
+  float mainSidebarsMs = 0.0f;
+  /// Time spent rendering pane splitters and the floating layer panel.
+  float mainSplittersMs = 0.0f;
+  /// Time spent issuing an end-of-frame document render request.
+  float mainEndRenderRequestMs = 0.0f;
   /// Time spent collecting overlay chrome geometry.
   float overlayCaptureMs = 0.0f;
   /// Time spent drawing overlay chrome into a retained overlay payload.
@@ -113,6 +157,14 @@ struct PendingClick {
   MouseModifiers modifiers;
 };
 
+/// Result of consuming render-pane scroll events for one UI frame.
+struct ScrollConsumptionResult {
+  /// True if at least one event changed the viewport mapping.
+  bool viewportChanged = false;
+  /// True if at least one consumed event changed the zoom level.
+  bool zoomChanged = false;
+};
+
 /**
  * Return whether the render pane should show the pan-mode cursor.
  *
@@ -137,16 +189,30 @@ public:
   void updatePaneLayout(const Vector2d& paneOrigin, const Vector2d& paneSize,
                         const std::optional<Box2d>& documentViewBox);
   void updateDevicePixelRatio(double devicePixelRatio);
-  void resetToActualSize();
-  void applyZoom(double factor, const Vector2d& focalScreen);
+  /// Reset the viewport to 100%.
+  ///
+  /// @return True if the viewport mapping changed.
+  [[nodiscard]] bool resetToActualSize();
+  /// Apply a multiplicative zoom around a screen-space focal point.
+  ///
+  /// @param factor Zoom multiplier.
+  /// @param focalScreen Screen-space point that remains anchored.
+  /// @return True if the viewport mapping changed.
+  [[nodiscard]] bool applyZoom(double factor, const Vector2d& focalScreen);
 
-  void updatePanState(bool paneHovered, bool spaceHeld, bool middleDown, bool leftDown,
-                      const ImVec2& mousePosition);
+  /// Update mouse-drag pan state.
+  ///
+  /// @return True if the viewport mapping changed.
+  [[nodiscard]] bool updatePanState(bool paneHovered, bool spaceHeld, bool middleDown,
+                                    bool leftDown, const ImVec2& mousePosition);
   [[nodiscard]] bool panning() const { return panning_; }
 
-  void consumeScrollEvents(std::vector<RenderPaneScrollEvent>& events, const Box2d& paneRect,
-                           bool modalCapturingInput, double wheelZoomStep,
-                           double panPixelsPerScrollUnit);
+  /// Consume queued trackpad/wheel events.
+  ///
+  /// @return Viewport mutation summary for the consumed events.
+  [[nodiscard]] ScrollConsumptionResult consumeScrollEvents(
+      std::vector<RenderPaneScrollEvent>& events, const Box2d& paneRect, bool modalCapturingInput,
+      double wheelZoomStep, double panPixelsPerScrollUnit);
 
   void bufferPendingClick(const Vector2d& documentPoint, MouseModifiers modifiers);
   [[nodiscard]] const std::optional<PendingClick>& pendingClick() const { return pendingClick_; }

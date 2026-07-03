@@ -10,9 +10,11 @@
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/LockState.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/editor/TextEditor.h"
+#include "donner/svg/SVGTextElement.h"
 #include "donner/svg/core/Display.h"
 
 namespace donner::editor {
@@ -426,6 +428,99 @@ TEST_F(DocumentSyncControllerTest, UiDeleteUndoRestoresDeletedElementAndSourceTe
 
   EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
   EXPECT_EQ(textEditor.getText().find("id=\"r1\""), std::string::npos);
+}
+
+TEST_F(DocumentSyncControllerTest, DeleteSelectionSkipsLockedElementsInSourceToo) {
+  constexpr std::string_view kLockedRectSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="locked" data-donner-locked="true" x="0" y="0" width="10" height="10"/>
+         <rect id="free" x="20" y="0" width="10" height="10"/>
+       </svg>)";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kLockedRectSvg)};
+
+  ASSERT_TRUE(app.loadFromString(kLockedRectSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kLockedRectSvg);
+  textEditor.setText(kLockedRectSvg);
+  textEditor.resetTextChanged();
+
+  auto locked = app.document().document().querySelector("#locked");
+  ASSERT_TRUE(locked.has_value());
+
+  // Deleting a selection that is entirely locked is a no-op: no undo entry,
+  // no removal writeback, and the element survives in both DOM and source.
+  app.setSelection(*locked);
+  EXPECT_FALSE(app.deleteSelectionWithUndo(textEditor.getText()));
+  EXPECT_FALSE(app.canUndo());
+  app.flushFrame();
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_TRUE(app.document().document().querySelector("#locked").has_value());
+  EXPECT_NE(textEditor.getText().find("id=\"locked\""), std::string::npos)
+      << "deleting a locked element must not splice it out of the source text";
+
+  // A mixed selection deletes only the unlocked element; the locked one
+  // survives in DOM and source and stays selected.
+  auto free = app.document().document().querySelector("#free");
+  ASSERT_TRUE(free.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*locked, *free});
+  ASSERT_TRUE(app.deleteSelectionWithUndo(textEditor.getText()));
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  EXPECT_FALSE(app.document().document().querySelector("#free").has_value());
+  EXPECT_EQ(textEditor.getText().find("id=\"free\""), std::string::npos);
+  EXPECT_TRUE(app.document().document().querySelector("#locked").has_value());
+  EXPECT_NE(textEditor.getText().find("id=\"locked\""), std::string::npos);
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_TRUE(IsLocked(app.selectedElements().front()));
+}
+
+TEST_F(DocumentSyncControllerTest, SetTextContentMirrorsIntoSourceText) {
+  constexpr std::string_view kTextSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <text id="t" x="10" y="20">old</text>
+       </svg>)";
+
+  EditorApp app;
+  TextEditor textEditor;
+  SelectTool tool;
+  DocumentSyncController controller{std::string(kTextSvg)};
+
+  ASSERT_TRUE(app.loadFromString(kTextSvg));
+  app.setCurrentFilePath("test.svg");
+  app.setCleanSourceText(kTextSvg);
+  textEditor.setText(kTextSvg);
+  textEditor.resetTextChanged();
+
+  auto text = app.document().document().querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  app.applyMutation(EditorCommand::SetTextContentCommand(*text, "updated content"));
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+
+  // The live DOM, the document source, and the source pane all reflect the
+  // edit — text content edits are structural DOM edits like any other, so
+  // they must not be lost on save or on the next source reparse.
+  EXPECT_EQ(text->cast<svg::SVGTextElement>().textContent(), "updated content");
+  EXPECT_NE(std::string(app.document().document().source()).find("updated content"),
+            std::string::npos)
+      << "SetTextContent must emit source deltas; got source:\n"
+      << std::string(app.document().document().source());
+  EXPECT_NE(textEditor.getText().find("updated content"), std::string::npos);
+  EXPECT_EQ(textEditor.getText(), app.document().document().source());
+
+  // Clearing the content removes the text node from the source too.
+  app.applyMutation(EditorCommand::SetTextContentCommand(*text, ""));
+  ASSERT_TRUE(app.flushFrame());
+  controller.applyPendingWritebacks(app, tool, textEditor);
+  EXPECT_EQ(textEditor.getText().find("updated content"), std::string::npos);
+  EXPECT_NE(textEditor.getText().find("<text"), std::string::npos);
 }
 
 TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTrailingNewline) {

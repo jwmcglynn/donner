@@ -891,6 +891,35 @@ TEST_F(SVGInvalidationTests, InsertElementAppendsSourceBackedProgrammaticChild) 
   EXPECT_TRUE(hasDirtyFlags(newChild, DirtyFlagsComponent::All));
 }
 
+TEST_F(SVGInvalidationTests, SetElementTextContentRewritesSourceText) {
+  const std::string input = R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <text id="t" x="10" y="20">old</text>
+    </svg>
+  )";
+
+  auto doc = parseSVG(input);
+  ASSERT_TRUE(doc.hasSourceStore());
+  simulateRenderComplete(doc);
+
+  auto text = doc.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  xml::ApplySourceEditResult result = doc.setElementTextContent(*text, "updated");
+
+  expectNoDiagnostic(result);
+  EXPECT_TRUE(result.applied);
+  EXPECT_NE(doc.source().find(">updated</text>"), std::string_view::npos)
+      << "source: " << doc.source();
+  EXPECT_EQ(doc.source().find(">old<"), std::string_view::npos);
+
+  // Clearing the content removes the text node from the source.
+  xml::ApplySourceEditResult cleared = doc.setElementTextContent(*text, "");
+  expectNoDiagnostic(cleared);
+  EXPECT_TRUE(cleared.applied);
+  EXPECT_EQ(doc.source().find("updated"), std::string_view::npos) << "source: " << doc.source();
+}
+
 TEST_F(SVGInvalidationTests, AppendChildUpdatesSourceThroughXMLDocument) {
   const std::string input = R"(
     <svg xmlns="http://www.w3.org/2000/svg">

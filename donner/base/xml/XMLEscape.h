@@ -47,4 +47,21 @@ namespace donner::xml {
  */
 std::optional<RcString> EscapeAttributeValue(std::string_view value, char quoteChar = '"');
 
+/**
+ * Escape a string for use as XML element text content (character data), producing text
+ * that round-trips through \ref donner::xml::XMLParser::Parse to recover the original
+ * bytes.
+ *
+ * Escape rules: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`. Whitespace (including tabs and
+ * newlines) passes through unchanged — character data preserves it. Valid multi-byte
+ * UTF-8 passes through unchanged.
+ *
+ * Returns `std::nullopt` for input that cannot be represented in well-formed XML
+ * character data (same reject list as \ref EscapeAttributeValue: NUL, C0 controls other
+ * than tab/LF/CR, lone surrogates, U+FFFE/U+FFFF, malformed UTF-8).
+ *
+ * @param value Raw unescaped text content.
+ */
+std::optional<RcString> EscapeTextContent(std::string_view value);
+
 }  // namespace donner::xml

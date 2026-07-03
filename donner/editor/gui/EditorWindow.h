@@ -84,6 +84,28 @@ struct EditorWindowOptions {
   bool enableFramebufferReadback = false;
 };
 
+/// Host-frame timing captured by `EditorWindow`.
+struct EditorWindowFrameTiming {
+  /// Time spent starting the current ImGui frame.
+  double beginFrameMs = 0.0;
+  /// Total time spent ending and presenting the previous host frame.
+  double endFrameMs = 0.0;
+  /// End-frame time spent in `ImGui::Render`.
+  double imguiRenderMs = 0.0;
+  /// End-frame time spent acquiring the WGPU surface texture.
+  double surfaceAcquireMs = 0.0;
+  /// End-frame time spent in the document underlay direct pass.
+  double underlayMs = 0.0;
+  /// End-frame time spent issuing ImGui backend draw commands.
+  double imguiDrawMs = 0.0;
+  /// End-frame time spent in the overlay/direct append pass.
+  double directMs = 0.0;
+  /// End-frame time spent reading the framebuffer back to the CPU.
+  double readbackMs = 0.0;
+  /// End-frame time spent presenting or swapping the surface.
+  double presentMs = 0.0;
+};
+
 /// ImGui input state to inject for deterministic editor replay.
 struct EditorWindowInputOverride {
   /// Seconds advanced by this frame.
@@ -109,13 +131,16 @@ struct EditorWindowInputOverride {
 };
 
 #ifdef DONNER_EDITOR_WGPU
-/// Host framebuffer target exposed to direct Geode append passes after ImGui has rendered.
+/// Host framebuffer target exposed to direct Geode passes against the editor surface.
 struct EditorWindowWgpuRenderTarget {
   /// Current swapchain texture. Valid only for the duration of the callback.
   wgpu::Texture texture;
   /// Framebuffer dimensions in physical pixels.
   Vector2i framebufferSizePx = Vector2i::Zero();
 };
+
+/// Callback invoked before ImGui renders, after the surface has been cleared.
+using WgpuUnderlayRenderCallback = std::function<void(const EditorWindowWgpuRenderTarget& target)>;
 
 /// Callback invoked after ImGui has submitted its draw data and before the surface is presented.
 using WgpuDirectRenderCallback = std::function<void(const EditorWindowWgpuRenderTarget& target)>;
@@ -219,6 +244,14 @@ public:
   /// Effective UI display scale used for ImGui fonts and framebuffer coordinates.
   [[nodiscard]] double displayScale() const { return uiScaleConfig_.displayScale; }
 
+  /// Timing for the most recent `beginFrame` call.
+  [[nodiscard]] double lastBeginFrameMs() const { return lastBeginFrameMs_; }
+
+  /// Timing for the most recent completed `endFrame` call.
+  [[nodiscard]] const EditorWindowFrameTiming& lastEndFrameTiming() const {
+    return lastEndFrameTiming_;
+  }
+
   /// Install a GLFW user pointer on the wrapped window.
   void setUserPointer(void* pointer);
 
@@ -236,6 +269,9 @@ public:
   /// Single-sample Geode device for direct append passes into the editor framebuffer.
   [[nodiscard]] std::shared_ptr<geode::GeodeDevice> geodeFramebufferDevice() const;
 
+  /// Set the direct framebuffer underlay callback for the next and subsequent frames.
+  void setWgpuUnderlayRenderCallback(WgpuUnderlayRenderCallback callback);
+
   /// Set the direct framebuffer render callback for the next and subsequent frames.
   void setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback);
 #endif
@@ -250,12 +286,15 @@ private:
   GLFWwindow* window_ = nullptr;
   std::unique_ptr<WgpuState> wgpuState_;
 #ifdef DONNER_EDITOR_WGPU
+  WgpuUnderlayRenderCallback wgpuUnderlayRenderCallback_;
   WgpuDirectRenderCallback wgpuDirectRenderCallback_;
 #endif
   uint32_t textureId_ = 0;
   int textureWidth_ = 0;
   int textureHeight_ = 0;
   UiScaleConfig uiScaleConfig_;
+  double lastBeginFrameMs_ = 0.0;
+  EditorWindowFrameTiming lastEndFrameTiming_;
   /// When > 0, the content scale to force into ImGui's `DisplayFramebufferScale`
   /// every frame because the windowless null platform reports no HiDPI scale of
   /// its own (and `ImGui_ImplGlfw_NewFrame` would otherwise reset it to 1).

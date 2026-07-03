@@ -185,6 +185,17 @@ public:
   bool hasSourceStore() const;
 
   /**
+   * Return true when the document carries render invalidation that the renderer has not yet
+   * consumed: per-entity dirty flags, or a queued full render-tree rebuild / style recompute.
+   * Always false before the render tree has been built for the first time.
+   *
+   * UI surfaces that prepare the document for auxiliary rendering (for example the editor's
+   * layer-thumbnail refresh) use this to avoid consuming pending invalidation ahead of the
+   * canvas renderer.
+   */
+  bool hasPendingRenderInvalidation() const;
+
+  /**
    * Return the current XML source text owned by this parsed SVG document.
    *
    * Programmatically-created documents may not have source text; in that case this returns an
@@ -244,6 +255,21 @@ public:
    * @param element Element to remove.
    */
   xml::ApplySourceEditResult removeElement(const SVGElement& element);
+
+  /**
+   * Replace an element's text content through this document and update owned source text.
+   *
+   * This is the DOM-side structured editing entry point for text-content writes: it removes the
+   * element's existing text-like XML child nodes and (for non-empty @p text) inserts a single data
+   * node holding @p text, applying every change through \ref xml::XMLSourceStore so source deltas
+   * are emitted. Element children (e.g. `<tspan>`) are preserved. Callers remain responsible for
+   * updating any component-level text mirror (e.g. `SVGTextContentElement::setTextContent`).
+   *
+   * @param element Element whose text content to replace.
+   * @param text New text content (raw, unescaped).
+   */
+  xml::ApplySourceEditResult setElementTextContent(const SVGElement& element,
+                                                   std::string_view text);
 
   /// Get the root ECS Entity of the document, for advanced use.
   EntityHandle rootEntityHandle() const;

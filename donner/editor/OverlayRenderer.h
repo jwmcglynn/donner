@@ -31,8 +31,10 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/FillRule.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
+#include "donner/css/Color.h"
 #include "donner/svg/SVGElement.h"
 
 namespace donner::svg {
@@ -52,10 +54,23 @@ struct SelectionChromeBoundsPreview {
   Transform2d documentFromStartDocument = Transform2d();
 };
 
+/// Locked-rejection flash input for `OverlayRenderer::captureChromeSnapshot`. Carries the rejected
+/// (locked) element whose outline should flash red plus the current fade intensity. Kept as a
+/// dedicated struct (rather than a dependency on `SelectTool::LockedRejectionFlash`) so the overlay
+/// renderer stays decoupled from the tool layer.
+struct LockedRejectionFlashInput {
+  /// The element whose selection was rejected because it (or an ancestor group) is locked.
+  svg::SVGElement element;
+  /// Fade intensity in (0, 1]; scales the red stroke's alpha at draw time.
+  float intensity = 0.0f;
+};
+
 /// Detail level used when capturing selection chrome.
 enum class SelectionChromeDetail {
   /// Capture visible path outlines plus selection bounds.
   Full,
+  /// Capture visible path outlines only, skipping selection bounds and transform handles.
+  PathOutlinesOnly,
   /// Capture only the combined selection bounds, skipping path extraction.
   CombinedBoundsOnly,
 };
@@ -94,6 +109,82 @@ struct SelectionChromeSnapshot {
   std::vector<PathItem> paths;
   /// Transient source-hover path outlines. Drawn as soft hover chrome before selection chrome.
   std::vector<PathItem> hoverPaths;
+
+  /// Document-space Bezier handle guide line for selected SVG paths.
+  struct PathControlLine {
+    /// Anchor endpoint of the control line.
+    Vector2d anchorDoc = Vector2d();
+    /// Control-point endpoint of the control line.
+    Vector2d controlDoc = Vector2d();
+  };
+
+  /// Anchor squares for selected SVG path vertices, sized in document units at capture time.
+  std::vector<Box2d> pathAnchorBoxesDoc;
+  /// Control-point guide lines for selected SVG paths.
+  std::vector<PathControlLine> pathControlLinesDoc;
+  /// Control-point squares for selected SVG paths, sized in document units at capture time.
+  std::vector<Box2d> pathControlPointBoxesDoc;
+
+  /// Transient "this element is locked, you can't select it" feedback. When present, the rejected
+  /// (locked) element's outline is stroked in red with alpha scaled by `intensity` (1 → 0 as the
+  /// flash fades). Captured from `SelectTool::lockedRejectionFlash()`.
+  struct LockedFlash {
+    /// Document-space path of the rejected (locked) element, sampled at capture time — same
+    /// document-space convention as `PathItem::pathDoc`.
+    Path pathDoc;
+    /// Fade intensity in (0, 1]; scales the red stroke's alpha.
+    float intensity = 0.0f;
+  };
+  /// The active locked-rejection flash, or nullopt when no element is being rejected.
+  std::optional<LockedFlash> lockedFlash;
+
+  /// Live document-geometry preview of the path the Pen tool is actively
+  /// authoring or point-editing. Drawn beneath the selection chrome with the
+  /// path's own resolved solid paint, so the presented pixels for the edited
+  /// path come from the same post-flush DOM capture as the chrome — they never
+  /// wait for the async raster of the new geometry. While this is present the
+  /// presenter suppresses the path's stale composited layer tile
+  /// (`ShouldPresentCompositedTile`), otherwise the old geometry would show
+  /// through underneath the preview.
+  ///
+  /// Only solid (or none) fill/stroke paints are representable; capture skips
+  /// the preview (leaving nullopt) for gradients/patterns, `currentColor`, or
+  /// elements carrying filter/clip-path/mask, and the presenter then falls
+  /// back to the normal composited raster. The preview composes above all
+  /// cached tiles, which matches pen authoring (new paths are appended last in
+  /// paint order).
+  struct LivePathPreview {
+    /// Entity of the previewed path — the presenter suppresses this entity's
+    /// composited layer tile while the preview is drawn.
+    Entity entity = entt::null;
+    /// Document-space path geometry sampled at capture time.
+    Path pathDoc;
+    /// Fill rule for the preview fill.
+    FillRule fillRule = FillRule::NonZero;
+    /// Resolved solid fill color, or nullopt for `fill: none`.
+    std::optional<css::RGBA> fillColor;
+    /// Resolved solid stroke color, or nullopt for `stroke: none`.
+    std::optional<css::RGBA> strokeColor;
+    /// Stroke width in document units.
+    double strokeWidthDoc = 1.0;
+    /// `opacity` (group opacity) multiplier.
+    double opacity = 1.0;
+    /// `fill-opacity` multiplier.
+    double fillOpacity = 1.0;
+    /// `stroke-opacity` multiplier.
+    double strokeOpacity = 1.0;
+  };
+  /// The active pen live-geometry preview, or nullopt when the Pen tool is not
+  /// editing a path (or its paint is not representable as a solid preview).
+  std::optional<LivePathPreview> livePathPreview;
+
+  /// Rubber-band preview of the segment the Pen tool would commit at the
+  /// current pointer (document space). Stroked with the control-line chrome
+  /// style so the pending segment reads as guidance, not committed geometry.
+  std::optional<Path> penPreviewSegmentDoc;
+  /// Close-path hover affordance: when set, the first anchor at this document
+  /// point is highlighted (the pointer is within closing range).
+  std::optional<Vector2d> penCloseAffordanceDoc;
 
   /// Per-element AABBs in document space (from
   /// `SnapshotSelectionWorldBounds`). Drawn with `canvasFromDoc`
@@ -197,10 +288,18 @@ public:
   /// fully outside that document-space rect are skipped before draw.
   /// `CombinedBoundsOnly` skips selected path extraction and stores one
   /// combined bounds box for low-latency large-selection feedback.
+  /// @param devicePixelRatio Viewport framebuffer scale used to convert
+  ///   logical UI stroke widths into device pixels.
   ///
   /// Design doc 0033 §M7. Returned snapshot is movable and self-
   /// contained: it holds no registry pointers and survives any
   /// subsequent registry mutation.
+  /// @param livePathPreviewElement When set, the element the Pen tool is
+  ///   actively editing: its live document-space geometry and resolved solid
+  ///   paint are captured into `SelectionChromeSnapshot::livePathPreview` so
+  ///   the draw phase can present the edited path from the same DOM capture as
+  ///   the chrome. Skipped (nullopt in the snapshot) when the element's paint
+  ///   cannot be represented as a solid preview.
   [[nodiscard]] static SelectionChromeSnapshot captureChromeSnapshot(
       std::span<const svg::SVGElement> selection, const std::optional<Box2d>& marqueeRectDoc,
       const Transform2d& canvasFromDoc,
@@ -208,7 +307,10 @@ public:
       std::span<const svg::SVGElement> sourceHover = {},
       const std::optional<Box2d>& cullRectDoc = std::nullopt,
       SelectionChromeDetail selectionDetail = SelectionChromeDetail::Full,
-      const Transform2d& representedDocumentFromLiveDocument = Transform2d());
+      const Transform2d& representedDocumentFromLiveDocument = Transform2d(),
+      const std::optional<LockedRejectionFlashInput>& lockedFlash = std::nullopt,
+      double devicePixelRatio = 1.0,
+      const std::optional<svg::SVGElement>& livePathPreviewElement = std::nullopt);
 
   /// Race-free chrome rasterize: reads only the snapshot, never the
   /// registry. Safe to call while the async-renderer worker is

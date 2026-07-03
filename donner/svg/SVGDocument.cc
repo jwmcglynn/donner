@@ -585,6 +585,21 @@ bool SVGDocument::operator==(const SVGDocument& other) const {
   return documentState_ == other.documentState_;
 }
 
+bool SVGDocument::hasPendingRenderInvalidation() const {
+  [[maybe_unused]] DocumentReadAccess access = readAccess();
+  const Registry& registry = documentState_->registry();
+  const auto* state = registry.ctx().find<components::RenderTreeState>();
+  if (state == nullptr || !state->hasBeenBuilt) {
+    return false;
+  }
+
+  const auto dirtyView = registry.view<const components::DirtyFlagsComponent>();
+  if (dirtyView.begin() != dirtyView.end()) {
+    return true;
+  }
+  return state->needsFullRebuild || state->needsFullStyleRecompute;
+}
+
 bool SVGDocument::hasSourceStore() const {
   if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
     return false;
@@ -779,6 +794,45 @@ xml::ApplySourceEditResult SVGDocument::removeElement(const SVGElement& element)
   }
   components::TreeMutation::Remove(element.handle_);
   return xml::ApplySourceEditResult();
+}
+
+xml::ApplySourceEditResult SVGDocument::setElementTextContent(const SVGElement& element,
+                                                              std::string_view text) {
+  // §concurrent-dom: this is a mutation entry point. Acquire write access up front so the implicit
+  // `EntityHandle` conversions of `element.handle_` below don't fire the scoped-access assert
+  // under ThreadingMode::ConcurrentDom.
+  [[maybe_unused]] DocumentWriteAccess access = writeAccess();
+  xml::ApplySourceEditResult result;
+  result.scope = xml::ReparseScope::TextNode;
+  if (!hasSourceStore()) {
+    return result;
+  }
+
+  std::optional<xml::XMLNode> elementNode = xml::XMLNode::TryCast(element.handle_);
+  if (!elementNode.has_value()) {
+    result.diagnostic = ParseDiagnostic::Error(
+        "Cannot set text content on an element without XML source identity", FallbackRange());
+    return result;
+  }
+
+  // Text-only content: replacing the tracked text range under an element with
+  // element children (`<tspan>`) would splice only the leading chunk while the
+  // component mirror carries the full text. Callers that need the source
+  // mirrored clear element children first (the editor's SetTextContent flows
+  // do); otherwise the edit stays component-only, matching the pre-structured
+  // behavior, and is reported as unapplied without a diagnostic.
+  if (element.firstChild().has_value()) {
+    return result;
+  }
+
+  result = xmlDocument().setElementText(*elementNode, text);
+  for (const xml::XMLMutation& mutation : result.mutations) {
+    std::optional<ParseDiagnostic> projectionDiagnostic = applyXMLMutation(mutation);
+    if (projectionDiagnostic.has_value() && !result.diagnostic.has_value()) {
+      result.diagnostic = std::move(projectionDiagnostic);
+    }
+  }
+  return result;
 }
 
 std::optional<SVGElement> SVGDocument::querySelector(std::string_view str) {

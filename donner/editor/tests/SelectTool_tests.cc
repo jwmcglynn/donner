@@ -56,6 +56,12 @@ constexpr std::string_view kResizeRectSvg =
          <rect id="target" x="20" y="20" width="40" height="20" fill="red"/>
        </svg>)";
 
+constexpr std::string_view kRotateRingNeighborSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+         <rect id="target" x="10" y="10" width="20" height="20" fill="red"/>
+         <rect id="nearby" x="40" y="16" width="12" height="12" fill="blue"/>
+       </svg>)";
+
 class SelectToolTest : public ::testing::Test {
 protected:
   void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
@@ -90,6 +96,15 @@ protected:
     return *selection == elementById(id);
   }
 
+  bool selectionContainsId(std::string_view id) const {
+    for (const svg::SVGElement& selected : app.selectedElements()) {
+      if (selected.id() == id) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   void quickClick(const Vector2d& point) {
     tool.onMouseDown(app, point, MouseModifiers{});
     tool.onMouseUp(app, point);
@@ -112,6 +127,82 @@ TEST_F(SelectToolTest, ClickInsideElementSelectsIt) {
   EXPECT_TRUE(app.hasSelection());
   EXPECT_TRUE(selectionIs("#r1"));
   EXPECT_FALSE(tool.isDragging());
+}
+
+TEST_F(SelectToolTest, LockedElementCannotBeSelectedAndFlashesRejection) {
+  loadSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+    <rect id="locked" data-donner-locked="true" x="10" y="10" width="40" height="40" fill="red"/>
+  </svg>)");
+
+  EXPECT_FALSE(tool.lockedRejectionFlash().has_value());
+  quickClick(Vector2d(20.0, 20.0));
+
+  EXPECT_FALSE(app.hasSelection()) << "a locked element must not be selectable";
+  ASSERT_TRUE(tool.lockedRejectionFlash().has_value()) << "rejected click should flash red";
+  EXPECT_EQ(tool.lockedRejectionFlash()->element.id(), "locked");
+  EXPECT_GT(tool.lockedRejectionFlash()->intensity, 0.0f);
+
+  // The flash fades out and clears after its duration.
+  tool.tickLockedRejectionFlash(1.0f);
+  EXPECT_FALSE(tool.lockedRejectionFlash().has_value());
+}
+
+TEST_F(SelectToolTest, ElementInLockedGroupCannotBeSelected) {
+  loadSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+    <g id="grp" data-donner-locked="true">
+      <rect id="child" x="10" y="10" width="40" height="40" fill="red"/>
+    </g>
+  </svg>)");
+
+  quickClick(Vector2d(20.0, 20.0));
+  EXPECT_FALSE(app.hasSelection()) << "a child of a locked group must not be selectable";
+  ASSERT_TRUE(tool.lockedRejectionFlash().has_value());
+  // The flash targets the entire locked layer (the `<g>` that carries the lock
+  // marker), not the clicked leaf — so the overlay outline and the Layers-panel
+  // row both highlight the whole group.
+  EXPECT_EQ(tool.lockedRejectionFlash()->element.id(), "grp")
+      << "clicking a leaf inside a locked group must flash the locked group, not the leaf";
+}
+
+TEST_F(SelectToolTest, PlainClickOnLockedElementClearsExistingSelection) {
+  loadSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120">
+    <rect id="free" x="80" y="10" width="40" height="40" fill="blue"/>
+    <g id="locked_group" data-donner-locked="true">
+      <rect id="locked_child" x="10" y="10" width="40" height="40" fill="red"/>
+    </g>
+  </svg>)");
+
+  app.setSelection(elementById("#free"));
+  ASSERT_TRUE(app.hasSelection());
+
+  quickClick(Vector2d(20.0, 20.0));
+
+  EXPECT_FALSE(app.hasSelection())
+      << "a locked rejected click should still act like a non-select deselect";
+  ASSERT_TRUE(tool.lockedRejectionFlash().has_value());
+  EXPECT_EQ(tool.lockedRejectionFlash()->element.id(), "locked_group");
+}
+
+TEST_F(SelectToolTest, ShiftClickInLockedGroupFlashesLockedAncestor) {
+  loadSvg(R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+    <g id="grp" data-donner-locked="true">
+      <g id="inner">
+        <rect id="child" x="10" y="10" width="40" height="40" fill="red"/>
+      </g>
+    </g>
+  </svg>)");
+
+  MouseModifiers shift;
+  shift.shift = true;
+  tool.onMouseDown(app, Vector2d(20.0, 20.0), shift);
+  tool.onMouseUp(app, Vector2d(20.0, 20.0));
+
+  EXPECT_FALSE(app.hasSelection()) << "shift+click on a locked descendant must be rejected";
+  ASSERT_TRUE(tool.lockedRejectionFlash().has_value());
+  // Resolve past the un-marked intermediate `<g id="inner">` to the marked
+  // `<g id="grp">`.
+  EXPECT_EQ(tool.lockedRejectionFlash()->element.id(), "grp")
+      << "flash must walk to the nearest locked ancestor, skipping unmarked groups";
 }
 
 TEST_F(SelectToolTest, ClickInEmptySpaceClearsSelection) {
@@ -460,6 +551,26 @@ TEST_F(SelectToolTest, ShiftClickDoesNotStartDrag) {
   EXPECT_DOUBLE_EQ(transformOf("#r2").data[5], 0.0);
 }
 
+TEST_F(SelectToolTest, ShiftClickInRotateRingAddsNearbyElementInsteadOfRotating) {
+  loadSvg(kRotateRingNeighborSvg);
+  app.setSelection(elementById("#target"));
+
+  MouseModifiers shift;
+  shift.shift = true;
+  tool.onMouseDown(app, Vector2d(44.0, 20.0), shift);
+  tool.onMouseMove(app, Vector2d(20.0, 44.0), /*buttonHeld=*/true, shift);
+  tool.onMouseUp(app, Vector2d(20.0, 44.0));
+
+  EXPECT_FALSE(tool.activeGesturePreview().has_value());
+  ASSERT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_TRUE(selectionContainsId("target"));
+  EXPECT_TRUE(selectionContainsId("nearby"));
+  EXPECT_DOUBLE_EQ(transformOf("#target").data[0], 1.0);
+  EXPECT_DOUBLE_EQ(transformOf("#target").data[1], 0.0);
+  EXPECT_DOUBLE_EQ(transformOf("#nearby").data[0], 1.0);
+  EXPECT_DOUBLE_EQ(transformOf("#nearby").data[1], 0.0);
+}
+
 TEST_F(SelectToolTest, ClickOnEmptySpaceStartsMarquee) {
   // r1 lives at (10..30, 10..30); (60, 60) is a clean miss.
   tool.onMouseDown(app, Vector2d(60.0, 60.0), MouseModifiers{});
@@ -512,6 +623,24 @@ TEST_F(SelectToolTest, ClickHitsCurrentSelectionIncludesSelectedDescendants) {
       << "Unselected element hits remain eligible for the delayed marquee path.";
 }
 
+TEST_F(SelectToolTest, LockedHitsAreNotImmediateSelectionTargets) {
+  loadSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+                  <g id="locked_group" data-donner-locked="true">
+                    <rect id="locked_child" x="10" y="10" width="40" height="40" fill="red"/>
+                  </g>
+                  <rect id="free" x="80" y="80" width="30" height="30" fill="blue"/>
+                </svg>)svg");
+
+  EXPECT_FALSE(tool.clickHitsImmediatelySelectableElement(app, Vector2d(20.0, 20.0)))
+      << "locked canvas hits should be eligible for delayed marquee rather than blocking it";
+  EXPECT_TRUE(tool.clickHitsImmediatelySelectableElement(app, Vector2d(90.0, 90.0)));
+  EXPECT_FALSE(tool.clickHitsImmediatelySelectableElement(app, Vector2d(160.0, 160.0)));
+
+  app.setSelection(elementById("#locked_group"));
+  EXPECT_FALSE(tool.clickHitsCurrentSelection(app, Vector2d(20.0, 20.0)))
+      << "a selected locked layer still cannot start an immediate canvas drag";
+}
+
 TEST_F(SelectToolTest, QuickClickOnUnselectedBackgroundStillSelectsIt) {
   loadSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
                   <rect id="background" x="0" y="0" width="200" height="200" fill="white"/>
@@ -535,6 +664,21 @@ TEST_F(SelectToolTest, MarqueeUsesShapeIntersectionNotShapeBounds) {
 
   EXPECT_TRUE(app.selectedElements().empty())
       << "The marquee overlaps the triangle AABB but not the filled triangle.";
+}
+
+TEST_F(SelectToolTest, MarqueeReleaseSkipsLockedElements) {
+  loadSvg(R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="140" height="140">
+                  <rect id="locked" data-donner-locked="true"
+                        x="0" y="0" width="60" height="60" fill="red"/>
+                  <rect id="target" x="80" y="80" width="30" height="30" fill="blue"/>
+                </svg>)svg");
+
+  tool.beginMarquee(app, Vector2d(20.0, 20.0), /*additive=*/false);
+  tool.onMouseMove(app, Vector2d(120.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(120.0, 120.0));
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "target");
 }
 
 TEST_F(SelectToolTest, MarqueeDoesNotSelectShapeThatContainsDragBox) {
@@ -603,6 +747,51 @@ TEST_F(SelectToolTest, MarqueeReleaseSelectsZeroWhenEmpty) {
   tool.onMouseMove(app, Vector2d(80.0, 80.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(80.0, 80.0));
   EXPECT_TRUE(app.selectedElements().empty());
+}
+
+TEST_F(SelectToolTest, PlainDragFromEmptySpaceWithExistingSelectionStartsMarquee) {
+  app.setSelection(elementById("#r1"));
+  ASSERT_TRUE(app.hasSelection());
+
+  tool.onMouseDown(app, Vector2d(60.0, 60.0), MouseModifiers{});
+  EXPECT_TRUE(tool.isMarqueeing());
+  ASSERT_TRUE(tool.marqueeRect().has_value());
+  EXPECT_FALSE(app.hasSelection()) << "plain non-additive marquee clears the existing selection";
+
+  tool.onMouseMove(app, Vector2d(140.0, 140.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(140.0, 140.0));
+
+  EXPECT_FALSE(tool.isMarqueeing());
+  EXPECT_FALSE(tool.marqueeRect().has_value());
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements()[0].id(), "r2");
+}
+
+TEST_F(SelectToolTest, PlainDragStartingOnSelectedShapeDoesNotStartMarquee) {
+  app.setSelection(elementById("#r1"));
+  ASSERT_TRUE(app.hasSelection());
+
+  tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+
+  EXPECT_TRUE(tool.isDragging());
+  EXPECT_FALSE(tool.isMarqueeing());
+  EXPECT_FALSE(tool.marqueeRect().has_value());
+}
+
+TEST_F(SelectToolTest, BeginMarqueeWithExistingSelectionClearsAndStartsNonAdditive) {
+  app.setSelection(elementById("#r1"));
+  ASSERT_TRUE(app.hasSelection());
+
+  tool.beginMarquee(app, Vector2d(60.0, 60.0), /*additive=*/false);
+  EXPECT_TRUE(tool.isMarqueeing());
+  ASSERT_TRUE(tool.marqueeRect().has_value());
+  EXPECT_FALSE(app.hasSelection());
+
+  app.setSelection(elementById("#r1"));
+  tool.beginMarquee(app, Vector2d(60.0, 60.0), /*additive=*/true);
+  EXPECT_TRUE(tool.isMarqueeing());
+  ASSERT_TRUE(tool.marqueeRect().has_value());
+  EXPECT_TRUE(app.hasSelection());
 }
 
 TEST_F(SelectToolTest, ShiftMarqueeAppendsToSelection) {

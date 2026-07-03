@@ -2153,6 +2153,114 @@ ApplySourceEditResult XMLDocument::removeNode(XMLNode node) {
   return result;
 }
 
+ApplySourceEditResult XMLDocument::setElementText(XMLNode element, std::string_view text) {
+  ApplySourceEditResult result;
+  result.scope = ReparseScope::TextNode;
+
+  const SourceRange diagnosticRange = MakeNodeDiagnosticRange(element);
+  if (!IsDocumentNode(*this, element)) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot set text on a node from another document", diagnosticRange);
+    return result;
+  }
+
+  XMLSourceStore* store = sourceStore();
+  if (store == nullptr) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot set text on a node without source text", diagnosticRange);
+    return result;
+  }
+
+  if (element.type() != XMLNode::Type::Element) {
+    result.diagnostic =
+        MakeEditDiagnostic("Cannot set text on a non-element node", diagnosticRange);
+    return result;
+  }
+
+  const std::optional<RcString> escaped = EscapeTextContent(text);
+  if (!escaped.has_value()) {
+    result.diagnostic = MakeEditDiagnostic("Text content cannot be represented in well-formed XML",
+                                           diagnosticRange);
+    return result;
+  }
+
+  const auto emitValueChanged = [&]() {
+    result.mutations.push_back(XMLMutation{
+        .kind = XMLMutation::Kind::NodeValueChanged,
+        .node = element,
+        .attributeName = XMLQualifiedName(""),
+        .value = RcString(text),
+        .scope = ReparseScope::TextNode,
+    });
+  };
+
+  // Existing text content: replace the tracked value range in place.
+  if (std::optional<SourceRange> valueLocation = element.getValueLocation();
+      valueLocation.has_value()) {
+    std::optional<SourceEditRange> valueRange = ResolveEditRange(*valueLocation, source());
+    if (!valueRange.has_value()) {
+      result.diagnostic =
+          MakeEditDiagnostic("Cannot set text on a node without a value range", diagnosticRange);
+      return result;
+    }
+
+    std::optional<XMLSourceDelta> delta = store->replace(
+        valueRange->start, valueRange->end - valueRange->start, std::string_view(*escaped));
+    if (!delta.has_value()) {
+      result.diagnostic =
+          MakeEditDiagnostic("Invalid source replacement for text content", diagnosticRange);
+      return result;
+    }
+
+    result.applied = true;
+    result.sourceDeltas.push_back(*delta);
+    element.setValue(RcString(text));
+    if (text.empty()) {
+      element.clearValueLocation();
+    } else {
+      element.setValueLocation(
+          SourceRange{FileOffset::Offset(valueRange->start),
+                      FileOffset::Offset(valueRange->start + escaped->size())});
+    }
+    emitValueChanged();
+    return result;
+  }
+
+  // No existing text. Clearing is a no-op; otherwise insert before the closing
+  // tag, expanding a self-closing tag when needed.
+  if (text.empty()) {
+    return result;
+  }
+
+  std::optional<NodeInsertionPlan> plan =
+      GetNodeInsertionPlan(*this, element, std::nullopt, std::string_view(*escaped));
+  if (!plan.has_value()) {
+    result.diagnostic = MakeEditDiagnostic(
+        "Cannot set text on a node without a source insertion point", diagnosticRange);
+    return result;
+  }
+
+  const std::string replacement = plan->prefix + std::string(*escaped) + plan->suffix;
+  std::optional<XMLSourceDelta> delta =
+      store->replace(plan->replacementOffset, plan->replacementLength, replacement);
+  if (!delta.has_value()) {
+    result.diagnostic =
+        MakeEditDiagnostic("Invalid source replacement for text content", diagnosticRange);
+    return result;
+  }
+
+  result.applied = true;
+  result.sourceDeltas.push_back(*delta);
+  ApplyParentInsertionPlan(element, *plan);
+  element.setValue(RcString(text));
+  element.setValueLocation(SourceRange{
+      FileOffset::Offset(plan->insertedNodeOffset),
+      FileOffset::Offset(plan->insertedNodeOffset + escaped->size()),
+  });
+  emitValueChanged();
+  return result;
+}
+
 void XMLDocument::setSource(std::string source) {
   XMLDocumentContext& context = registry_->ctx().get<XMLDocumentContext>();
   context.sourceStore = std::make_shared<XMLSourceStore>(std::move(source));

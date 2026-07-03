@@ -2,15 +2,20 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <limits>
+#include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
 
 #include "donner/base/xml/XMLNode.h"
+#include "donner/editor/EmbeddedSvgIcon.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "embed_resources/BootstrapIcons.h"
 
 namespace donner::editor {
 
@@ -120,7 +125,7 @@ struct PathOperationButton {
   const char* tooltip;
 };
 
-constexpr std::array<PathOperationButton, 5> kPathOperationButtons = {{
+constexpr std::array<PathOperationButton, 4> kPathOperationButtons = {{
     {.operation = PathOperationKind::Union, .id = "##path_operation_union", .tooltip = "Union"},
     {.operation = PathOperationKind::Intersect,
      .id = "##path_operation_intersect",
@@ -128,73 +133,116 @@ constexpr std::array<PathOperationButton, 5> kPathOperationButtons = {{
     {.operation = PathOperationKind::SubtractFront,
      .id = "##path_operation_subtract_front",
      .tooltip = "Subtract Front"},
-    {.operation = PathOperationKind::SubtractBack,
-     .id = "##path_operation_subtract_back",
-     .tooltip = "Subtract Back"},
     {.operation = PathOperationKind::Exclude,
      .id = "##path_operation_exclude",
      .tooltip = "Exclude"},
 }};
 
-void RenderPathOperationIcon(PathOperationKind operation, ImVec2 min, ImVec2 max, ImU32 iconColor) {
-  ImDrawList* drawList = ImGui::GetWindowDrawList();
-  const float w = max.x - min.x;
-  const float h = max.y - min.y;
-  const float left = min.x + w * 0.28f;
-  const float top = min.y + h * 0.28f;
-  const float right = min.x + w * 0.60f;
-  const float bottom = min.y + h * 0.60f;
-  const ImVec2 a0(left, top);
-  const ImVec2 a1(right, bottom);
-  const ImVec2 b0(min.x + w * 0.42f, min.y + h * 0.42f);
-  const ImVec2 b1(min.x + w * 0.74f, min.y + h * 0.74f);
-  const ImVec2 overlap0(b0.x, b0.y);
-  const ImVec2 overlap1(a1.x, a1.y);
-  const float strokeWidth = 1.6f;
+constexpr float kPathOperationIconSize = 18.0f;
+constexpr int kPathOperationIconRasterSizePx = 48;
+constexpr ImVec2 kPathOperationButtonFramePadding(6.0f, 4.0f);
 
+std::uint64_t PathOperationIconTextureKey(PathOperationKind operation) {
+  constexpr std::uint64_t kIconTextureKeyBase = 0xf600000000000000ull;
   switch (operation) {
-    case PathOperationKind::Union: {
-      const std::array<ImVec2, 8> unionOutline = {
-          a0, ImVec2(a1.x, a0.y), ImVec2(a1.x, b0.y), ImVec2(b1.x, b0.y),
-          b1, ImVec2(b0.x, b1.y), ImVec2(b0.x, a1.y), ImVec2(a0.x, a1.y),
-      };
-      drawList->AddPolyline(unionOutline.data(), static_cast<int>(unionOutline.size()), iconColor,
-                            ImDrawFlags_Closed, strokeWidth);
-      break;
-    }
-    case PathOperationKind::Intersect:
-      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddRectFilled(overlap0, overlap1, iconColor, 1.0f);
-      break;
-    case PathOperationKind::SubtractFront:
-      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddLine(ImVec2(b0.x + 1.0f, b0.y), ImVec2(b1.x - 1.0f, b1.y), iconColor,
-                        strokeWidth);
-      break;
-    case PathOperationKind::SubtractBack:
-      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddLine(ImVec2(a0.x + 1.0f, a0.y), ImVec2(a1.x - 1.0f, a1.y), iconColor,
-                        strokeWidth);
-      break;
-    case PathOperationKind::Exclude:
-      drawList->AddRect(a0, a1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddRect(b0, b1, iconColor, 2.0f, 0, strokeWidth);
-      drawList->AddLine(overlap0, overlap1, iconColor, strokeWidth);
-      drawList->AddLine(ImVec2(overlap1.x, overlap0.y), ImVec2(overlap0.x, overlap1.y), iconColor,
-                        strokeWidth);
-      break;
+    case PathOperationKind::Union: return kIconTextureKeyBase + 1u;
+    case PathOperationKind::Intersect: return kIconTextureKeyBase + 2u;
+    case PathOperationKind::SubtractFront: return kIconTextureKeyBase + 3u;
+    case PathOperationKind::SubtractBack: return kIconTextureKeyBase + 4u;
+    case PathOperationKind::Exclude: return kIconTextureKeyBase + 5u;
   }
+  return kIconTextureKeyBase;
 }
 
-bool RenderPathOperationsPanel(EditorApp* liveApp) {
+std::span<const unsigned char> BootstrapSvgForPathOperation(PathOperationKind operation) {
+  switch (operation) {
+    case PathOperationKind::Union: return embedded::kBootstrapUnionSvg;
+    case PathOperationKind::Intersect: return embedded::kBootstrapIntersectSvg;
+    case PathOperationKind::SubtractFront: return embedded::kBootstrapSubtractSvg;
+    case PathOperationKind::SubtractBack: return embedded::kBootstrapSubtractSvg;
+    case PathOperationKind::Exclude: return embedded::kBootstrapExcludeSvg;
+  }
+  return embedded::kBootstrapUnionSvg;
+}
+
+const std::optional<svg::RendererBitmap>& CachedPathOperationIconBitmap(
+    PathOperationKind operation) {
+  switch (operation) {
+    case PathOperationKind::Union: {
+      static const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgIcon(
+          BootstrapSvgForPathOperation(PathOperationKind::Union), kPathOperationIconRasterSizePx);
+      return bitmap;
+    }
+    case PathOperationKind::Intersect: {
+      static const std::optional<svg::RendererBitmap> bitmap =
+          RenderEmbeddedSvgIcon(BootstrapSvgForPathOperation(PathOperationKind::Intersect),
+                                kPathOperationIconRasterSizePx);
+      return bitmap;
+    }
+    case PathOperationKind::SubtractFront: {
+      static const std::optional<svg::RendererBitmap> bitmap =
+          RenderEmbeddedSvgIcon(BootstrapSvgForPathOperation(PathOperationKind::SubtractFront),
+                                kPathOperationIconRasterSizePx);
+      return bitmap;
+    }
+    case PathOperationKind::SubtractBack: {
+      static const std::optional<svg::RendererBitmap> bitmap =
+          RenderEmbeddedSvgIcon(BootstrapSvgForPathOperation(PathOperationKind::SubtractBack),
+                                kPathOperationIconRasterSizePx);
+      return bitmap;
+    }
+    case PathOperationKind::Exclude: {
+      static const std::optional<svg::RendererBitmap> bitmap = RenderEmbeddedSvgIcon(
+          BootstrapSvgForPathOperation(PathOperationKind::Exclude), kPathOperationIconRasterSizePx);
+      return bitmap;
+    }
+  }
+
+  static const std::optional<svg::RendererBitmap> empty;
+  return empty;
+}
+
+bool RenderPathOperationIconButton(const PathOperationButton& button, bool canApply,
+                                   const SidebarPresenter::IconTextureProvider& provider) {
+  const ImVec2 iconSize(kPathOperationIconSize, kPathOperationIconSize);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, kPathOperationButtonFramePadding);
+  const auto popStyle = []() { ImGui::PopStyleVar(); };
+
+  if (provider) {
+    const std::optional<svg::RendererBitmap>& bitmap =
+        CachedPathOperationIconBitmap(button.operation);
+    if (bitmap.has_value()) {
+      const SidebarPresenter::IconTexture iconTexture =
+          provider(PathOperationIconTextureKey(button.operation), *bitmap);
+      if (iconTexture.texture != 0) {
+        const ImVec2 uvTopLeft(0.0f, 0.0f);
+        const ImVec2 uvBottomRight(static_cast<float>(iconTexture.uvBottomRight.x),
+                                   static_cast<float>(iconTexture.uvBottomRight.y));
+        const ImVec4 tint = canApply ? ImGui::GetStyleColorVec4(ImGuiCol_Text)
+                                     : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+        const bool pressed =
+            ImGui::ImageButton(button.id, iconTexture.texture, iconSize, uvTopLeft, uvBottomRight,
+                               ImVec4(0.0f, 0.0f, 0.0f, 0.0f), tint);
+        popStyle();
+        return pressed;
+      }
+    }
+  }
+
+  const ImGuiStyle& style = ImGui::GetStyle();
+  const ImVec2 buttonSize(iconSize.x + style.FramePadding.x * 2.0f,
+                          iconSize.y + style.FramePadding.y * 2.0f);
+  const bool pressed = ImGui::InvisibleButton(button.id, buttonSize);
+  popStyle();
+  return pressed;
+}
+
+bool RenderPathOperationsPanel(EditorApp* liveApp,
+                               const SidebarPresenter::IconTextureProvider& iconTextureProvider) {
   ImGui::Separator();
   ImGui::TextUnformatted("Path Operations");
 
   bool queuedMutation = false;
-  const ImVec2 buttonSize(30.0f, 26.0f);
   for (std::size_t i = 0; i < kPathOperationButtons.size(); ++i) {
     const PathOperationButton& button = kPathOperationButtons[i];
     const PathOperationAvailability availability =
@@ -209,8 +257,8 @@ bool RenderPathOperationsPanel(EditorApp* liveApp) {
     if (!availability.canApply) {
       ImGui::BeginDisabled();
     }
-    if (ImGui::Button(button.id, buttonSize) && liveApp != nullptr &&
-        liveApp->applyPathOperation(button.operation)) {
+    if (RenderPathOperationIconButton(button, availability.canApply, iconTextureProvider) &&
+        liveApp != nullptr && liveApp->applyPathOperation(button.operation)) {
       queuedMutation = true;
     }
     if (!availability.canApply) {
@@ -224,11 +272,6 @@ bool RenderPathOperationsPanel(EditorApp* liveApp) {
         ImGui::SetTooltip("%s: %s", button.tooltip, availability.reason.c_str());
       }
     }
-
-    const ImU32 iconColor = availability.canApply ? ImGui::GetColorU32(ImGuiCol_Text)
-                                                  : ImGui::GetColorU32(ImGuiCol_TextDisabled);
-    RenderPathOperationIcon(button.operation, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                            iconColor);
   }
 
   return queuedMutation;
@@ -415,17 +458,18 @@ void SidebarPresenter::renderTreeView(EditorApp* liveApp, TreeViewState& state) 
   renderTreeNode(liveApp, *treeSnapshot_, state);
 }
 
-bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& viewport) const {
+bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& viewport,
+                                       const IconTextureProvider& iconTextureProvider) const {
   bool queuedMutation = false;
   if (!inspectorSnapshot_.hasSelection) {
     if (liveApp != nullptr && liveApp->selectedElements().size() > 1u) {
       ImGui::Text("%zu elements selected", liveApp->selectedElements().size());
       queuedMutation = RenderStrokeControlsPanel(liveApp);
-      queuedMutation = RenderPathOperationsPanel(liveApp) || queuedMutation;
+      queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
     } else {
       ImGui::TextDisabled("Select a single element to inspect attributes.");
       queuedMutation = RenderStrokeControlsPanel(liveApp);
-      queuedMutation = RenderPathOperationsPanel(liveApp) || queuedMutation;
+      queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
     }
   } else {
     ImGui::TextUnformatted(inspectorSnapshot_.titleText.c_str());
@@ -444,7 +488,7 @@ bool SidebarPresenter::renderInspector(EditorApp* liveApp, const ViewportState& 
                            inspectorSnapshot_.xmlAttributes);
     RenderInspectorSection("Computed style", "##inspector_computed_style",
                            inspectorSnapshot_.computedStyle);
-    queuedMutation = RenderPathOperationsPanel(liveApp) || queuedMutation;
+    queuedMutation = RenderPathOperationsPanel(liveApp, iconTextureProvider) || queuedMutation;
   }
   ImGui::Separator();
   ImGui::Text("Zoom: %.0f%%", viewport.zoom * 100.0);
