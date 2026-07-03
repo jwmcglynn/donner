@@ -57,8 +57,9 @@ bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- \
 ```
 
 This is the default way to generate editor screenshots for QA debugging. The
-replay writes PNGs under `--out-dir` with names like
-`gl_replay_frame_79_frame_document_canvas.png`, and the JSON output lists the
+replay writes PNGs under `--out-dir` named
+`gl_replay_frame_<N>_<explicit|left_mousedown_K>[_<crop>].png` (do not guess names), and the
+JSON output lists the
 absolute path for each capture. Attach or display those generated PNGs when a
 user asks to see a repro.
 
@@ -140,8 +141,8 @@ the replay harness. It is useful for proving presentation state:
 - `compositorCanvas`
 - `metadataOnlyMissCount`
 - `duplicateLiveTextureCount`
-- `overlayDimsPx`
-- `overlayTextureHandle`
+- `activeDragPreview` / `displayedDragPreview`
+- `immediateOverlayDocumentVersion`
 - paint-order tile list with tile kind, generation, dimensions, offsets,
   drag translation, texture handle, metadata-only flag, and drag-target flag
 
@@ -184,8 +185,10 @@ Useful proof:
 
 - compare the active drag frame to the immediate mouse-up frame with a tight
   crop,
-- assert `overlayDimsPx` is compatible with `viewportDesiredCanvas` before
-  publishing a current overlay over split tiles.
+- assert the overlay raster's canvas size is compatible with
+  `viewportDesiredCanvas` (compare against `compositorCanvas` and the per-tile
+  dimensions in the readback) before publishing a current overlay over split
+  tiles.
 
 ### Checkerboard or Missing Background
 
