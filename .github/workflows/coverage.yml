@@ -29,11 +29,14 @@ concurrency:
 # runner or seeing the Codecov secret there. Everyone else stays on hosted
 # Ubuntu.
 #
-# EXCEPTION: pushes to main always stay GitHub-hosted, matching main.yml; PRs
-# still route to the self-hosted lane.
+# Main coverage stays GitHub-hosted. PR coverage uses the self-hosted lane
+# only when the trusted runner gate passes; hosted Ubuntu remains the PR
+# fallback for untrusted actors, unavailable self-hosted runners, and
+# `ci:full-test` fanout runs.
 jobs:
   determine-targets:
     runs-on: ubuntu-24.04
+    if: ${{ github.ref == 'refs/heads/main' || github.event_name == 'pull_request' }}
     env:
       BAZEL_DIFF_TAG: "v18.1.0"
       FULL_COVERAGE_TARGETS: "//donner/base/... //donner/css/... //donner/svg/... //donner/editor/..."
@@ -272,10 +275,31 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     needs: determine-targets
-    if: ${{ github.ref == 'refs/heads/main' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn' }}
+    if: ${{ github.ref == 'refs/heads/main' || (github.event_name == 'pull_request' && (needs.determine-targets.outputs.fallback_reason == 'full_test_label' || vars.SELFHOSTED_LINUX_RUNNER != 'true' || github.actor != 'jwmcglynn' || github.triggering_actor != 'jwmcglynn')) }}
 
     steps:
       - uses: actions/checkout@v7
+
+      - name: Free hosted runner disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Disk before cleanup"
+          df -h /
+          echo "::endgroup::"
+
+          sudo rm -rf \
+            /opt/ghc \
+            /usr/local/.ghcup \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/share/dotnet \
+            /usr/share/swift
+          sudo apt-get clean
+
+          echo "::group::Disk after cleanup"
+          df -h /
+          echo "::endgroup::"
 
       - name: Set up JDK 11
         uses: actions/setup-java@v5
@@ -308,13 +332,20 @@ jobs:
           echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
           printf "Coverage targets:\n"
           printf "  %s\n" "${TARGETS[@]}"
+          echo "::group::Disk before coverage"
+          df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          echo "::endgroup::"
           tools/coverage.sh --no-html "${TARGETS[@]}"
+          echo "::group::Disk after coverage"
+          df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          echo "::endgroup::"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage-report/filtered_report.dat
+          disable_search: true
           flags: unittests
           fail_ci_if_error: true
           verbose: true
@@ -322,7 +353,7 @@ jobs:
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: determine-targets
-    if: ${{ github.ref != 'refs/heads/main' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ github.event_name == 'pull_request' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Keep
       # coverage resilient when the private gRPC endpoint is down
@@ -421,7 +452,7 @@ jobs:
   upload-self-hosted-coverage:
     needs: coverage-self-hosted
     runs-on: ubuntu-24.04
-    if: ${{ github.ref != 'refs/heads/main' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
+    if: ${{ github.event_name == 'pull_request' && vars.SELFHOSTED_LINUX_RUNNER == 'true' && github.actor == 'jwmcglynn' && github.triggering_actor == 'jwmcglynn' }}
 
     steps:
       - uses: actions/checkout@v7
