@@ -867,6 +867,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   if (!requestOverviewInfill && schedule.dragPreview.has_value()) {
     req.dragPreview = *schedule.dragPreview;
   }
+  ++lastFrameCostBreakdown_.renderRequestsPosted;
   renderWorker_.asyncRenderer.requestRender(req);
 }
 
