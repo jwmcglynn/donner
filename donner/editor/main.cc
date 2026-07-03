@@ -10,11 +10,12 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
+
+#include "donner/editor/EditorSplash.h"
 #else
 #include "donner/base/FailureSignalHandler.h"
 #endif
 
-#include "donner/editor/EditorIcon.h"
 #include "donner/editor/EditorShell.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/TracyWrapper.h"
@@ -49,8 +50,8 @@ int main(int argc, char** argv) {
   std::optional<std::string> initialPath;
   std::optional<std::string> reproOutputPath;
 #ifdef __EMSCRIPTEN__
-  initialSource = EmbeddedBytesToString(donner::embedded::kEditorIconSvg);
-  initialPath = std::string("donner_icon.svg");
+  initialSource = EmbeddedBytesToString(donner::embedded::kEditorSplashSvg);
+  initialPath = std::string("donner_splash.svg");
 #else
   constexpr std::string_view kUsage =
       "Usage: donner-editor [--experimental] [--save-repro <path>] <filename>\n";

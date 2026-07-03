@@ -7,11 +7,13 @@
 #define WEBGPU_CPP_IMPLEMENTATION
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
 
 #include "donner/base/StringUtils.h"
+#include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
@@ -131,6 +133,8 @@ struct GeodeDevice::Impl {
   // are at the bottom of Impl so they destruct before the wgpu::Device
   // at the top of GeodeDevice (reverse-declaration order).
   std::unique_ptr<GeodePipeline> pipeline;
+  /// Built lazily on first `checkerboardPipeline()` access — see the header.
+  std::unique_ptr<GeodeCheckerboardPipeline> checkerboardPipeline;
   std::unique_ptr<GeodeGradientPipeline> gradientPipeline;
   std::unique_ptr<GeodeImagePipeline> imagePipeline;
   /// Built lazily on first `maskPipeline()` access — see the header.
@@ -141,7 +145,18 @@ struct GeodeDevice::Impl {
 GeodeDevice::GeodeDevice() : impl_(std::make_unique<Impl>()) {}
 GeodeDevice::~GeodeDevice() = default;
 
+namespace {
+/// Process-wide count of CreateHeadless calls, for tests that pin device
+/// sharing. Monotonic; never reset.
+std::atomic<int> gHeadlessCreationCount{0};
+}  // namespace
+
+int GeodeDevice::headlessCreationCountForTesting() {
+  return gHeadlessCreationCount.load(std::memory_order_relaxed);
+}
+
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless() {
+  gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
   auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
 
   // 1. Create the WebGPU instance. wgpu-native's `wgpuCreateInstance`
@@ -311,6 +326,16 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
 }
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
+}
+GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
+  if (!impl_->checkerboardPipeline) {
+    // Lazy: only the editor's direct framebuffer presentation draws the
+    // checkerboard underlay; other consumers should not pay the
+    // pipeline-compile cost at startup.
+    impl_->checkerboardPipeline =
+        std::make_unique<GeodeCheckerboardPipeline>(device_, textureFormat_);
+  }
+  return *impl_->checkerboardPipeline;
 }
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedConfig& config) {

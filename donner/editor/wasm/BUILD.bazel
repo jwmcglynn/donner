@@ -21,7 +21,7 @@ config_setting(
 
 _EDITOR_WASM_BINARY_DEPS = [
     "//donner/editor:editor_shell",
-    "//donner/editor:editor_icon",
+    "//donner/editor:editor_splash",
     "//donner/editor/gui:editor_window",
 ]
 
@@ -61,8 +61,8 @@ cc_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        "//donner/editor:editor_icon",
         "//donner/editor:editor_shell",
+        "//donner/editor:editor_splash",
     ],
 )
 

@@ -53,7 +53,12 @@ donner_cc_test(
 donner_cc_test(
     name = "editor_window_tests",
     srcs = ["EditorWindow_tests.cc"],
-    data = ["//:donner_splash.svg"],
+    data = [
+        "//:donner_splash.svg",
+    ] + glob(
+        ["testdata/layer_thumbnails/*.png"],
+        allow_empty = True,
+    ),
     defines = select({
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
         "//conditions:default": [],
@@ -63,12 +68,20 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/base:base_test_utils",
             "//donner/editor:async_renderer",
+            "//donner/editor:document_sync_controller",
+            "//donner/editor:editor_app",
             "//donner/editor:gl_texture_cache",
+            "//donner/editor:layers_panel",
+            "//donner/editor:pen_tool",
+            "//donner/editor:select_tool",
+            "//donner/editor:text_editor",
             "//donner/svg/parser",
             "//donner/svg/renderer",
             "//donner/svg/renderer:renderer_geode",
             "//donner/svg/renderer:renderer_image_io",
+            "//donner/svg/renderer/tests:renderer_image_test_utils",
             "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [],
@@ -80,6 +93,15 @@ donner_cc_test(
     srcs = ["KeyboardShortcutPolicy_tests.cc"],
     deps = [
         "//donner/editor:keyboard_shortcut_policy",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "view_menu_visibility_tests",
+    srcs = ["ViewMenuVisibility_tests.cc"],
+    deps = [
+        "//donner/editor:menu_bar_presenter",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -262,9 +284,16 @@ donner_cc_test(
 donner_cc_test(
     name = "render_pane_presenter_tests",
     srcs = ["RenderPanePresenter_tests.cc"],
+    data = ["//:donner_splash_v0_8_editable.svg"],
     deps = [
+        "//donner/base",
+        "//donner/editor:editor_app",
+        "//donner/editor:overlay_renderer",
         "//donner/editor:render_pane_presenter",
+        "//donner/editor:viewport_state",
+        "//donner/svg",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )
 
@@ -338,6 +367,7 @@ donner_cc_test(
     deps = [
         "//donner/editor:async_svg_document",
         "//donner/svg",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -581,16 +611,31 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "text_tool_tests",
+    srcs = ["TextTool_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:command_queue",
+        "//donner/editor:editor_app",
+        "//donner/editor:text_tool",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "pen_tool_tests",
     srcs = ["PenTool_tests.cc"],
     data = ["//:donner_splash.svg"],
     deps = [
         "//donner/editor:document_sync_controller",
         "//donner/editor:editor_app",
+        "//donner/editor:overlay_renderer",
         "//donner/editor:pen_tool",
         "//donner/editor:select_tool",
         "//donner/editor:text_editor",
         "//donner/svg",
+        "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -646,17 +691,6 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "change_classifier_tests",
-    srcs = ["ChangeClassifier_tests.cc"],
-    deps = [
-        "//donner/editor:change_classifier",
-        "//donner/svg",
-        "//donner/svg/parser",
-        "@com_google_gtest//:gtest_main",
-    ],
-)
-
-donner_cc_test(
     name = "attribute_writeback_tests",
     srcs = ["AttributeWriteback_tests.cc"],
     deps = [
@@ -682,6 +716,18 @@ donner_cc_test(
     srcs = ["TextEditor_tests.cc"],
     deps = [
         "//donner/editor:text_editor",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+donner_cc_test(
+    name = "text_inspector_panel_tests",
+    srcs = ["TextInspectorPanel_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:text_inspector_panel",
+        "//donner/svg",
         "@com_google_gtest//:gtest_main",
         "@imgui",
     ],
@@ -714,6 +760,7 @@ donner_cc_binary(
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
+        "pen-fill.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
         "//:zoom-out-drag-jump.rnr",
@@ -737,10 +784,19 @@ donner_cc_test(
     # with the offending test-case name instead of a silent target timeout.
     timeout = "long",
     srcs = ["GlRnrReplay_tests.cc"],
+    # The Realtime-scheduling zoom/drag replays measure worker/presentation
+    # races against wall-clock frame pacing and need a real, unloaded GL host:
+    # on shared remote executors they fail spuriously (clicks deferred past
+    # the replay window, budget overruns). Under --config=geode on a
+    # remote-exec-by-default setup, run with --strategy=TestRunner=local.
+    # (A no-remote-exec tag would express this in the target, but tag-forced
+    # local execution currently trips a duplicate-SDKROOT action-env crash
+    # when remote execution is the default.)
     data = [
         "drag_start_hang_repro.rnr",
         "filter_post_drag_jump.rnr",
         "geode_drag_zoom_o_pop.rnr",
+        "pen-fill.rnr",
         ":filtered_element_flash_after_drags_2_rnr",
         "//:donner_splash.svg",
         "//:zoom-out-drag-jump.rnr",
@@ -821,6 +877,217 @@ donner_cc_test(
     srcs = ["ClipboardInterface_tests.cc"],
     deps = [
         "//donner/editor:clipboard_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "tool_keybinding_tests",
+    srcs = ["ToolKeybinding_tests.cc"],
+    deps = [
+        "//donner/editor:tool_keybinding",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Embedded-SVG icon rasterizer: alpha-mask output plus (geode builds) the
+# shared-renderer guarantee — a fresh renderer per icon would create a full
+# WebGPU instance/adapter/device per icon.
+donner_cc_test(
+    name = "embedded_svg_icon_tests",
+    srcs = ["EmbeddedSvgIcon_tests.cc"],
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_GEODE_BACKEND_AVAILABLE"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/editor:embedded_svg_icon",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ] + select({
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer/geode:geode_device",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+# Showcase asset fixture for the v0.8 release. Asserts the editable
+# splash parses with a non-empty viewBox, and the final outlined
+# splash (generated by //donner/editor/tools:generate_showcase_asset) parses,
+# contains outlined <path> geometry and the converted-from-text marker, has no
+# live <text>, and carries the exported donner-editor-overlay chrome group.
+donner_cc_test(
+    name = "showcase_asset_tests",
+    srcs = ["ShowcaseAssetFixture_tests.cc"],
+    data = [
+        "//:donner_splash_v0_8.svg",
+        "//:donner_splash_v0_8_editable.svg",
+    ],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Viewport SVG export.
+donner_cc_test(
+    name = "viewport_svg_export_tests",
+    srcs = ["ViewportSvgExport_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base",
+        "//donner/editor:overlay_renderer",
+        "//donner/editor:viewport_state",
+        "//donner/editor:viewport_svg_export",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "layer_tree_model_tests",
+    srcs = ["LayerTreeModel_tests.cc"],
+    deps = [
+        "//donner/editor:editor_app",
+        "//donner/editor:layer_tree_model",
+        "//donner/svg",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Shape clipboard. Exercises the pure Copy/Paste/Paste-in-Front helpers and
+# the headered clipboard payload round-trip.
+donner_cc_test(
+    name = "shape_clipboard_tests",
+    srcs = ["ShapeClipboard_tests.cc"],
+    deps = [
+        "//donner/editor:shape_clipboard_commands",
+        "//donner/editor:shape_clipboard_payload",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "render_element_to_bitmap_tests",
+    srcs = ["RenderElementToBitmap_tests.cc"],
+    data = ["//:donner_splash.svg"],
+    variants = ["geode"],
+    deps = [
+        "//donner/base:base_test_utils",
+        "//donner/editor:editor_app",
+        "//donner/editor:layer_tree_model",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "layer_thumbnail_golden_tests",
+    srcs = ["LayerThumbnailGolden_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+    ] + glob(
+        ["testdata/layer_thumbnails/*.png"],
+        allow_empty = True,
+    ),
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "lock_state_tests",
+    srcs = ["LockState_tests.cc"],
+    deps = [
+        "//donner/base",
+        "//donner/editor:lock_state",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "layers_panel_tests",
+    srcs = ["LayersPanel_tests.cc"],
+    data = [
+        "//:donner_splash.svg",
+    ] + glob(["testdata/layer_thumbnails/*.png"]),
+    defines = select({
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    variants = ["geode"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
+        "//donner/editor:command_queue",
+        "//donner/editor:compositor_debug_panel",
+        "//donner/editor:editor_app",
+        "//donner/editor:layer_tree_model",
+        "//donner/editor:layers_panel",
+        "//donner/editor:lock_state",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/tests:render_tree_test_utils",
+        "@com_google_gtest//:gtest_main",
+        "@imgui",
+    ],
+)
+
+# Convert Text to Outlines. Covers
+# the pure conversion helper, the structural-replace apply path through
+# AsyncSVGDocument, undo restoration, the empty-outline failure path, a
+# before/after pixel-compare, and the three-glyph performance budget. Runs in
+# the default basic-text (stb_truetype) configuration using the embedded
+# fallback font, so no checked-in font or `--config=text-full` is required.
+donner_cc_test(
+    name = "text_outline_tests",
+    srcs = ["TextToOutlines_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base",
+        "//donner/editor:async_svg_document",
+        "//donner/editor:command_queue",
+        "//donner/editor:text_to_outlines",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Preview-vs-source save/reload coherence: after each committed editor op, the
+# live preview (rendering `AsyncSVGDocument::document()`) must be pixel-identical
+# to a save->reload (reparse `document().source()`) of the current source.
+donner_cc_test(
+    name = "preview_source_coherence_tests",
+    srcs = ["PreviewSourceCoherence_tests.cc"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base",
+        "//donner/editor:async_svg_document",
+        "//donner/editor:command_queue",
+        "//donner/editor:text_to_outlines",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",
     ],
 )

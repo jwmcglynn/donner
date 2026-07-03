@@ -171,9 +171,6 @@ public:
 
   void initialize();
 
-  void uploadOverlay(const svg::RendererBitmap& bitmap);
-  /// Register an overlay texture snapshot without CPU readback/upload.
-  void uploadOverlayTexture(std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
   /// Upload the worker's tile snapshot into per-tile GL textures.
   /// Allocates/reuses one texture per tile id; bumps a per-tile
   /// upload-generation so identity uploads short-circuit; evicts
@@ -188,25 +185,38 @@ public:
   /// handles have aged past the backend's frames-in-flight window.
   void advancePresentationFrame();
 
-  void clearOverlay();
   void resetComposited();
 
-  [[nodiscard]] ImTextureID overlayTexture() const;
+  /// Upload a Layers-panel preview thumbnail bitmap into a per-row GL/WGPU
+  /// texture and return its ImGui texture handle.
+  ///
+  /// Reuses the same Donner-bitmap -> texture path as the render pane
+  /// (`UploadBitmap` / `uploadBitmapToWgpu`). One texture is owned per @p key
+  /// (the Layers row stable id); it is reuploaded only when the bitmap's
+  /// dimensions or a cheap content fingerprint change, so calling this every
+  /// frame with an unchanged thumbnail does not re-upload. Donner renders the
+  /// thumbnail pixels; this only blits them to a texture -- see CLAUDE.md "No
+  /// Rendering Vector Graphics With ImGui".
+  ///
+  /// @param key Stable id of the Layers row the thumbnail belongs to.
+  /// @param bitmap Donner-rendered RGBA thumbnail bitmap.
+  /// @return ImGui texture handle plus the UV range that contains the valid
+  ///   payload, or an empty view if the texture could not be created.
+  struct ThumbnailTextureView {
+    ImTextureID texture = 0;                      ///< ImGui texture handle.
+    Vector2d uvBottomRight = Vector2d(1.0, 1.0);  ///< Bottom-right valid payload UV.
+  };
+  ThumbnailTextureView uploadThumbnail(std::uint64_t key, const svg::RendererBitmap& bitmap);
 
-  [[nodiscard]] int overlayWidth() const { return overlayWidth_; }
-  [[nodiscard]] int overlayHeight() const { return overlayHeight_; }
-  /// Bottom-right UV for sampling the valid overlay payload from its backing texture.
-  [[nodiscard]] const Vector2d& overlayUvBottomRight() const { return overlayUvBottomRight_; }
-  /// Screen rect for viewport-space overlay textures.
+  /// Evict every cached thumbnail texture whose key is not in @p liveKeys,
+  /// freeing the backing GL/WGPU texture. Called after each Layers-panel render
+  /// so thumbnails for removed rows do not leak across refreshes.
   ///
-  /// Nullopt means the overlay texture uses the legacy document-viewBox
-  /// placement path.
-  [[nodiscard]] const std::optional<Box2d>& overlayScreenRect() const { return overlayScreenRect_; }
-  /// Record the screen-space placement for the currently uploaded overlay.
-  ///
-  /// @param screenRect ImGui screen rect covered by the overlay texture, or nullopt to use the
-  ///   legacy document-viewBox placement path.
-  void setOverlayScreenRect(std::optional<Box2d> screenRect);
+  /// @param liveKeys Stable ids of the rows currently shown by the panel.
+  void retainThumbnailsOnly(const std::vector<std::uint64_t>& liveKeys);
+
+  /// Number of thumbnail textures currently retained (testing/diagnostics).
+  [[nodiscard]] std::size_t thumbnailTextureCount() const { return thumbnailTextures_.size(); }
 
   /// One composite-tile entry as the presenter sees it: the GL
   /// texture handle (resolved from the upload cache) plus the
@@ -222,6 +232,7 @@ public:
     Vector2d canvasOffsetDoc = Vector2d::Zero();
     Vector2d bitmapDimsDoc = Vector2d::Zero();
     Vector2d dragTranslationDoc = Vector2d::Zero();
+    std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot;
     Vector2d uvBottomRight = Vector2d(1.0, 1.0);
     Transform2d documentFromCachedDocument = Transform2d();
     bool metadataOnly = false;
@@ -245,10 +256,6 @@ public:
   /// Cost counters for the most recent composited upload.
   [[nodiscard]] const FrameCostBreakdown::CompositedUpload& lastCompositedUploadCost() const {
     return lastCompositedUploadCost_;
-  }
-  /// Cost counters for the most recent overlay upload or clear.
-  [[nodiscard]] const FrameCostBreakdown::Overlay& lastOverlayUploadCost() const {
-    return lastOverlayUploadCost_;
   }
   /// Resource counters for the textures currently retained by this cache.
   [[nodiscard]] PresentationResourceStats presentationResourceStats() const;
@@ -310,19 +317,6 @@ private:
   std::shared_ptr<::donner::geode::GeodeDevice> geodeDevice_;
 #endif
 
-  NativeTextureHandle overlayTexture_ = 0;
-  std::shared_ptr<const svg::RendererTextureSnapshot> overlayTextureSnapshot_;
-#ifdef DONNER_EDITOR_WGPU
-  std::shared_ptr<WgpuUploadedTexture> overlayUploadedTexture_;
-#endif
-
-  int overlayWidth_ = 0;
-  int overlayHeight_ = 0;
-  int overlayAllocatedWidth_ = 0;
-  int overlayAllocatedHeight_ = 0;
-  Vector2d overlayUvBottomRight_ = Vector2d(1.0, 1.0);
-  std::optional<Box2d> overlayScreenRect_;
-
   /// Tile texture cache keyed on `CompositedTile::id`. Entries
   /// persist across frames so identical tiles re-use the same GL
   /// texture (only re-uploaded when their `generation` advances).
@@ -331,6 +325,13 @@ private:
   /// high-zoom uploads may reuse the same tile ids at a smaller raster
   /// size, so overview textures cannot share the active cache entries.
   std::unordered_map<std::string, CachedTextureEntry> overviewTileTextures_;
+
+  /// Layers-panel thumbnail texture cache keyed on the row stable id. Each
+  /// entry owns one GL/WGPU texture, reuploaded only when the row's thumbnail
+  /// bitmap changes (tracked via `CachedTextureEntry::uploadedGeneration`
+  /// holding a content fingerprint plus the cached width/height). Evicted by
+  /// `retainThumbnailsOnly` when a row leaves the panel.
+  std::unordered_map<std::uint64_t, CachedTextureEntry> thumbnailTextures_;
 
   /// Paint-order view of the most recent `uploadComposited` call.
   /// Rebuilt every upload (cheap — N tiles, plain values).
@@ -345,7 +346,6 @@ private:
   int metadataOnlyMissCount_ = 0;
   int duplicateLiveTextureCount_ = 0;
   FrameCostBreakdown::CompositedUpload lastCompositedUploadCost_;
-  FrameCostBreakdown::Overlay lastOverlayUploadCost_;
   mutable std::uint64_t peakTrackedResourceBytes_ = 0;
 
 #ifdef DONNER_EDITOR_WGPU

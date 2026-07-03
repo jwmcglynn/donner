@@ -40,6 +40,8 @@ public:
     bool preserveUndoOnReparse = false;
     /// True when at least one flushed command removed an element from the live document.
     bool removedElements = false;
+    /// Entities whose existing rendered pixels may have changed because of an incremental command.
+    std::vector<Entity> cacheInvalidatedElements;
     std::vector<xml::XMLSourceDelta> sourceDeltas;
   };
 
@@ -169,6 +171,9 @@ private:
   // LayoutSystem::setRawEntityFromParentTransform; ReplaceDocument
   // re-parses the bytes into a fresh SVGDocument and replaces `document_`.
   void applyOne(const EditorCommand& command);
+
+  /// Remap any element handles in `command` through a structural writeback replacement.
+  void remapCommandTargets(EditorCommand* command, const std::unordered_map<Entity, Entity>& remap);
 
   std::optional<svg::SVGDocument> document_;
   CommandQueue queue_;

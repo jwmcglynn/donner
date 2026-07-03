@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Path.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/CompositedPresentation.h"
@@ -39,6 +40,44 @@ class SelectTool;
  */
 [[nodiscard]] bool ShouldPresentCompositedPreviewForViewport(
     const RenderResult::CompositedPreview& preview, const Vector2i& viewportDesiredCanvas);
+
+/**
+ * Return the document version a released drag must settle against.
+ *
+ * @param currentFrameVersion Last flushed document frame version at mouse-up.
+ * @param hasPendingMutations True when the release left DOM mutations queued for the next flush.
+ */
+[[nodiscard]] std::uint64_t PostReleaseSettleTargetVersion(std::uint64_t currentFrameVersion,
+                                                           bool hasPendingMutations);
+
+/**
+ * Return true when selected-layer prewarm can wait for the viewport to settle.
+ *
+ * @param selectedEntity Selected compositable entity, or entt::null.
+ * @param hasActiveDrag True while a drag preview is active.
+ * @param currentVersion Current document frame version.
+ * @param displayedDocVersion Document frame version currently presented.
+ * @param hasCachedSelectedTexture True when a selected-layer texture is already cached.
+ * @param rasterViewportSettled True when the viewport has passed the commit delay.
+ * @param needsOverviewInfill True when a bounded viewport still needs overview coverage.
+ * @param pendingSelectedLayerRasterization True when selected-layer pixels are known stale.
+ */
+[[nodiscard]] bool ShouldDeferSelectedViewportRefresh(
+    Entity selectedEntity, bool hasActiveDrag, std::uint64_t currentVersion,
+    std::uint64_t displayedDocVersion, bool hasCachedSelectedTexture, bool rasterViewportSettled,
+    bool needsOverviewInfill, bool pendingSelectedLayerRasterization);
+
+/**
+ * Return true when a render result satisfies a pending selected-layer rasterization.
+ *
+ * @param representedDragPreview Drag-preview metadata carried by the completed render result.
+ * @param pendingEntity Selected entity whose stale layer pixels must be refreshed.
+ * @param resultVersion Document frame version represented by the completed render result.
+ * @param pendingVersion Document frame version at which the pending refresh was requested.
+ */
+[[nodiscard]] bool ShouldClearPendingSelectedLayerRasterization(
+    const std::optional<RenderRequest::DragPreview>& representedDragPreview, Entity pendingEntity,
+    std::uint64_t resultVersion, std::uint64_t pendingVersion);
 
 /**
  * Return the drag transform that overlay chrome should represent in the current presentation frame.
@@ -100,28 +139,57 @@ public:
   }
   /// Clear the per-frame cost accumulator before a new UI frame starts.
   void beginFrameCostTracking() { lastFrameCostBreakdown_ = FrameCostBreakdown{}; }
-  /// Add immediate presenter-side overlay draw-list time to the current frame counters.
-  ///
-  /// @param drawMs Milliseconds spent issuing immediate overlay draw-list commands.
-  void addImmediateOverlayDrawCost(double drawMs) {
-    lastFrameCostBreakdown_.overlay.drawMs += drawMs;
-  }
   /// Replace transient source-hover chrome elements.
   ///
   /// @param elements Elements to highlight as source-hover preview chrome.
   /// @return true if the hover preview changed.
   bool setSourceHoverElements(std::vector<svg::SVGElement> elements);
 
+  /// Update the transient locked-rejection flash to draw on the next overlay capture. The flash
+  /// fades as `SelectTool` ticks it; this should be pushed once per frame from the editor's
+  /// per-frame path with `selectTool.lockedRejectionFlash()`.
+  ///
+  /// @param flash Active flash (element + intensity), or nullopt when no element is being rejected.
+  void setLockedRejectionFlash(std::optional<SelectTool::LockedRejectionFlash> flash);
+
+  /// @return true when a locked-rejection flash is currently stored (still fading).
+  [[nodiscard]] bool hasLockedRejectionFlash() const {
+    return lockedRejectionFlash_.has_value() && lockedRejectionFlash_->intensity > 0.0f;
+  }
+
+  /// Set (or clear) the path element the Pen tool is actively editing. While
+  /// set, every overlay capture also snapshots the element's live
+  /// document-space geometry + solid paint into
+  /// `SelectionChromeSnapshot::livePathPreview`, so the presented frame shows
+  /// the edited path from the same DOM capture as the chrome instead of the
+  /// stale async raster.
+  void setPenLivePreviewElement(std::optional<svg::SVGElement> element) {
+    penLivePreviewElement_ = std::move(element);
+  }
+  /// @return the active pen live-preview element, if any.
+  [[nodiscard]] const std::optional<svg::SVGElement>& penLivePreviewElement() const {
+    return penLivePreviewElement_;
+  }
+
+  /// Set (or clear) the Pen tool's hover chrome for the next overlay capture:
+  /// the rubber-band preview of the segment a click would commit, and the
+  /// close-path affordance point when the pointer is within closing range.
+  void setPenHoverChrome(std::optional<Path> previewSegmentDoc,
+                         std::optional<Vector2d> closeAffordanceDoc) {
+    penHoverPreviewSegmentDoc_ = std::move(previewSegmentDoc);
+    penHoverCloseAffordanceDoc_ = closeAffordanceDoc;
+  }
+
   void resetForLoadedDocument();
   void refreshSelectionBoundsCache(EditorApp& app);
   void promoteSelectionBoundsIfReady();
   /// Capture the editor chrome (path outlines, selection AABBs, marquee) for immediate
   /// presentation. `marqueeRectDoc` is the active marquee rectangle in document space (nullopt when
-  /// the user isn't marquee-dragging). The snapshot is drawn directly by \ref RenderPanePresenter
-  /// so selected chrome does not allocate, rasterize, snapshot, or upload an overlay texture.
+  /// the user isn't marquee-dragging). The snapshot is drawn directly by Donner's OverlayRenderer
+  /// straight onto the Geode framebuffer, so selected chrome does not allocate, rasterize,
+  /// snapshot, or upload an overlay texture.
   bool rasterizeOverlayForCurrentSelection(
-      EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
-      const std::optional<Box2d>& marqueeRectDoc,
+      EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
       std::optional<SelectTool::ActiveDragPreview> representedDragPreview = std::nullopt,
       std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview = std::nullopt,
       std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,
@@ -134,7 +202,9 @@ public:
   bool rasterizeOverlayForPresentation(
       EditorApp& app, SelectTool& selectTool, const ViewportState& viewport,
       GlTextureCache& textures, std::optional<SelectTool::ActiveDragPreview> activeDragPreview,
-      std::optional<SelectTool::ActiveDragPreview> representedDragPreview);
+      std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
+      std::optional<SelectionChromeDetail> selectionDetail = std::nullopt,
+      bool allowLiveGeometryOverlay = false);
   /// Drain the latest async-render result into the editor's UI state.
   /// If a `frameHistory` is supplied, its latest slot is stamped with
   /// the backend (worker) ms reported by `AsyncRenderer` so the frame
@@ -148,6 +218,12 @@ public:
   ///
   /// @param flushResult Metadata from the just-flushed editor command batch.
   void invalidatePresentationAfterDocumentFlush(const AsyncSVGDocument::FlushResult& flushResult);
+  /// Record document-flush invalidation that depends on the live selected element.
+  ///
+  /// @param app Editor application state containing the live selection.
+  /// @param flushResult Metadata from the just-flushed editor command batch.
+  void invalidatePresentationAfterDocumentFlush(EditorApp& app,
+                                                const AsyncSVGDocument::FlushResult& flushResult);
   /**
    * Return the selected layer whose cached pixels should be hidden while editor chrome remains
    * visible. This is used when the live selected element is `display:none`: hit-testing and the
@@ -167,6 +243,30 @@ public:
   /// Latest race-free overlay chrome snapshot for immediate screen-space presentation.
   [[nodiscard]] const std::optional<SelectionChromeSnapshot>& immediateOverlaySnapshot() const {
     return immediateOverlaySnapshot_;
+  }
+  /// Document version represented by \ref immediateOverlaySnapshot, if one is currently cached.
+  [[nodiscard]] std::optional<std::uint64_t> immediateOverlayDocumentVersionForDiagnostics() const {
+    if (!immediateOverlaySnapshot_.has_value() ||
+        lastOverlayVersion_ == std::numeric_limits<std::uint64_t>::max()) {
+      return std::nullopt;
+    }
+    return lastOverlayVersion_;
+  }
+  /// Pending selected-layer rasterization entity for replay diagnostics.
+  [[nodiscard]] Entity pendingSelectedLayerRasterizationEntityForDiagnostics() const {
+    return pendingSelectedLayerRasterizationEntity_;
+  }
+  /// Pending selected-layer rasterization document version for replay diagnostics.
+  [[nodiscard]] std::uint64_t pendingSelectedLayerRasterizationVersionForDiagnostics() const {
+    return pendingSelectedLayerRasterizationVersion_;
+  }
+  /// Last document version published to the visible presentation for replay diagnostics.
+  [[nodiscard]] std::uint64_t displayedDocVersionForDiagnostics() const {
+    return displayedDocVersion_;
+  }
+  /// Selected entity eligible for composited presentation for replay diagnostics.
+  [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const {
+    return selectedCompositedEntity(app);
   }
 
 private:
@@ -193,6 +293,9 @@ private:
 
   std::vector<svg::SVGElement> lastOverlaySelectionVec_;
   std::vector<svg::SVGElement> sourceHoverElements_;
+  /// Active locked-rejection flash pushed by the editor each frame, drawn red on the next overlay
+  /// capture and fading toward zero intensity. nullopt when no element is being rejected.
+  std::optional<SelectTool::LockedRejectionFlash> lockedRejectionFlash_;
   std::vector<svg::SVGElement> lastOverlaySourceHoverVec_;
   Vector2i lastOverlayRasterSize_ = Vector2i::Zero();
   std::optional<Box2d> lastOverlayScreenRect_;
@@ -208,12 +311,31 @@ private:
   /// Active rotation bounds captured into the immediate overlay snapshot, or nullopt when the last
   /// overlay used normal axis-aligned selection bounds.
   std::optional<SelectTool::ActiveTransformBoundsPreview> lastOverlayActiveBoundsPreview_;
+  /// Path element the Pen tool is actively editing; captured as
+  /// `SelectionChromeSnapshot::livePathPreview` on every overlay capture.
+  std::optional<svg::SVGElement> penLivePreviewElement_;
+  /// Pen live-preview element baked into the current immediate overlay snapshot. Used to
+  /// invalidate cached chrome when the preview target appears/changes/clears.
+  std::optional<svg::SVGElement> lastOverlayPenLivePreviewElement_;
+  /// Pen hover chrome pushed by the shell each frame: rubber-band segment
+  /// preview + close-path affordance (document space).
+  std::optional<Path> penHoverPreviewSegmentDoc_;
+  std::optional<Vector2d> penHoverCloseAffordanceDoc_;
+  /// Pen hover chrome baked into the current immediate overlay snapshot;
+  /// hover moves must re-capture even though the document version is
+  /// unchanged.
+  std::optional<Path> lastOverlayPenHoverPreviewSegmentDoc_;
+  std::optional<Vector2d> lastOverlayPenHoverCloseAffordanceDoc_;
 
   PresentationRenderScheduler renderScheduler_;
   /// Live selected display:none entity whose stale promoted layer is currently hidden.
   Entity displayNoneSuppressedSelectionEntity_ = entt::null;
   /// Cached promoted layer entity hidden for \ref displayNoneSuppressedSelectionEntity_.
   Entity displayNoneSuppressedLayerEntity_ = entt::null;
+  /// Selected layer whose cached pixels must be re-rasterized on the next landed prewarm.
+  Entity pendingSelectedLayerRasterizationEntity_ = entt::null;
+  /// Document version that dirtied \ref pendingSelectedLayerRasterizationEntity_.
+  std::uint64_t pendingSelectedLayerRasterizationVersion_ = 0;
   /// Most recent desired canvas size requested by `maybeRequestRender`.
   /// Used to debounce continuous pinch-zoom before committing through
   /// `SVGDocument::setCanvasSize`.

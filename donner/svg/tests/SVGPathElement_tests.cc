@@ -113,6 +113,32 @@ TEST(SVGPathElementTests, DAttributeAndSetters) {
                   ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1})));
 }
 
+TEST(SVGPathElementTests, SetAttributeDInvalidatesComputedSpline) {
+  auto fragment = instantiateSubtreeElementAs<SVGPathElement>(R"(<path d="M 0 0 L 3 4" />)");
+
+  // Instantiate the computed spline from the original path data.
+  ASSERT_TRUE(fragment->computedSpline().has_value());
+  EXPECT_THAT(fragment->computedSpline().value(),
+              PointsAndCommandsAre(
+                  ElementsAre(Vector2d(0, 0), Vector2d(3, 4)),
+                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1})));
+
+  // Setting "d" through the generic attribute path — the same route the editor's
+  // structured-editing commands use — must invalidate the cached computed spline,
+  // matching setD(). A stale spline here is what made editor overlay chrome lag one
+  // gesture behind the live path.
+  fragment->setAttribute("d", "M 1 1 L 2 2");
+  ASSERT_TRUE(fragment->computedSpline().has_value());
+  EXPECT_THAT(fragment->computedSpline().value(),
+              PointsAndCommandsAre(
+                  ElementsAre(Vector2d(1, 1), Vector2d(2, 2)),
+                  ElementsAre(Command{CommandType::MoveTo, 0}, Command{CommandType::LineTo, 1})));
+
+  ASSERT_TRUE(fragment->worldBounds().has_value());
+  EXPECT_EQ(fragment->worldBounds()->topLeft, Vector2d(1, 1));
+  EXPECT_EQ(fragment->worldBounds()->bottomRight, Vector2d(2, 2));
+}
+
 TEST(SVGPathElementTests, DReturnsEmptyWhenPathComponentRemoved) {
   SVGDocument document;
   SVGPathElement path = SVGPathElement::Create(document);

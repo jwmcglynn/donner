@@ -1,7 +1,9 @@
 #include "donner/editor/PresentedFrameComposer.h"
 
+#include <array>
 #include <limits>
 #include <optional>
+#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "gtest/gtest.h"
@@ -139,6 +141,73 @@ TEST(PresentedFrameComposerTest, RepresentedAffineTransformDoesNotDoubleApply) {
   EXPECT_EQ(quad->bottomRight, Vector2d(20.0, 20.0));
 }
 
+// A re-captured (baked) drag tile carries its content at the `represented`
+// transform with `documentFromCachedDocument == identity` (the worker bakes the
+// transform into the pixels and resets canvasFromBitmap). To present that bitmap
+// at the live `active` transform, applying the returned transform to represented
+// points must land them on the same points transformed by `active`.
+TEST(PresentedFrameComposerTest, BakedTileRebasesOntoActiveForNonCommutingDrag) {
+  // Rotated non-uniform scales: represented and active do NOT commute.
+  const Transform2d representedDocumentFromStartDocument =
+      Transform2d::Scale(Vector2d(2.0, 1.0)) * Transform2d::Rotate(0.3);
+  const Transform2d activeDocumentFromStartDocument =
+      Transform2d::Scale(Vector2d(2.5, 1.0)) * Transform2d::Rotate(0.6);
+
+  PresentedFrameTileGeometry tile;
+  tile.canvasOffsetDoc = Vector2d(0.0, 0.0);
+  tile.bitmapDimsDoc = Vector2d(10.0, 10.0);
+  tile.documentFromCachedDocument = Transform2d();  // identity: a fresh bake
+  tile.isDragTarget = true;
+
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedDocumentFromCachedDocument = representedDocumentFromStartDocument,
+      .activeDocumentFromCachedDocument = activeDocumentFromStartDocument,
+  };
+
+  const Transform2d activeDocumentFromRepresentedDocument =
+      ResolvePresentedTileDocumentTransform(PresentedFrameTileGeometry{tile}, baseline);
+
+  for (const Vector2d point : {Vector2d(0.0, 0.0), Vector2d(10.0, 4.0), Vector2d(6.0, 12.0)}) {
+    const Vector2d presented = activeDocumentFromRepresentedDocument.transformPosition(
+        representedDocumentFromStartDocument.transformPosition(point));
+    const Vector2d live = activeDocumentFromStartDocument.transformPosition(point);
+    EXPECT_NEAR(presented.x, live.x, 1e-9) << "x mismatch at " << point;
+    EXPECT_NEAR(presented.y, live.y, 1e-9) << "y mismatch at " << point;
+  }
+}
+
+TEST(PresentedFrameComposerTest, BakedTileTransformsRepresentedPointsOntoActiveDrag) {
+  const Transform2d representedDocumentFromStartDocument =
+      Transform2d::Translate(Vector2d(10.0, 5.0)) * Transform2d::Scale(Vector2d(1.5, 0.8)) *
+      Transform2d::Rotate(0.25);
+  const Transform2d activeDocumentFromStartDocument = Transform2d::Translate(Vector2d(18.0, -3.0)) *
+                                                      Transform2d::Scale(Vector2d(2.2, 1.1)) *
+                                                      Transform2d::Rotate(0.6);
+
+  PresentedFrameTileGeometry tile;
+  tile.canvasOffsetDoc = Vector2d(0.0, 0.0);
+  tile.bitmapDimsDoc = Vector2d(10.0, 10.0);
+  tile.documentFromCachedDocument = Transform2d();
+  tile.isDragTarget = true;
+
+  const std::optional<PresentedDragBaseline> baseline = PresentedDragBaseline{
+      .entity = Entity{123},
+      .representedDocumentFromCachedDocument = representedDocumentFromStartDocument,
+      .activeDocumentFromCachedDocument = activeDocumentFromStartDocument,
+  };
+
+  const Transform2d activeDocumentFromRepresentedDocument =
+      ResolvePresentedTileDocumentTransform(tile, baseline);
+  for (const Vector2d point : {Vector2d(0.0, 0.0), Vector2d(10.0, 4.0), Vector2d(6.0, 12.0)}) {
+    const Vector2d presented = activeDocumentFromRepresentedDocument.transformPosition(
+        representedDocumentFromStartDocument.transformPosition(point));
+    const Vector2d live = activeDocumentFromStartDocument.transformPosition(point);
+    EXPECT_NEAR(presented.x, live.x, 1e-9) << "x mismatch at " << point;
+    EXPECT_NEAR(presented.y, live.y, 1e-9) << "y mismatch at " << point;
+  }
+}
+
 TEST(PresentedFrameComposerTest, ComputesTileRectFromNonZeroCanvasOrigin) {
   PresentedFrameTileGeometry tile;
   tile.canvasOffsetDoc = Vector2d(12.25, 24.75);
@@ -193,6 +262,21 @@ TEST(PresentedFrameComposerTest, RoundsPresentedRectToPixelRect) {
                                                          .width = 31,
                                                          .height = 39,
                                                      }));
+}
+
+TEST(PresentedFrameComposerTest, SubtractsCoveredTileBoundsFromOverviewClip) {
+  const Box2d clip = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0);
+  const std::array<Box2d, 1> covered{Box2d::FromXYWH(25.0, 25.0, 50.0, 50.0)};
+
+  const std::vector<Box2d> uncovered = SubtractPresentedTileBoundsFromClip(clip, covered);
+
+  const std::vector<Box2d> expected{
+      Box2d::FromXYWH(0.0, 0.0, 100.0, 25.0),
+      Box2d::FromXYWH(0.0, 75.0, 100.0, 25.0),
+      Box2d::FromXYWH(0.0, 25.0, 25.0, 50.0),
+      Box2d::FromXYWH(75.0, 25.0, 25.0, 50.0),
+  };
+  EXPECT_EQ(uncovered, expected);
 }
 
 }  // namespace

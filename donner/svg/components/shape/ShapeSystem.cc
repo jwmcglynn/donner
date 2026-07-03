@@ -462,7 +462,11 @@ ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::strin
     if (maybeError) {
       return std::move(maybeError).value();
     } else {
-      // Property found and parsed successfully.
+      // Property found and parsed successfully. Drop any previously instantiated
+      // computed path so on-demand readers (computedSpline, worldBounds, editor
+      // overlay chrome) see the new geometry instead of a stale cache — matching
+      // SVGPathElement::setD().
+      handle.remove<ComputedPathComponent>();
       return true;
     }
   }

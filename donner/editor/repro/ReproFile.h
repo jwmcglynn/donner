@@ -58,6 +58,10 @@
 ///   - `svg_base`: basename of the originally opened filename
 ///   - `svg_hash`: stable content hash of `svg_src`
 ///   - `svg_src`: optional embedded SVG source text
+///
+/// Since v4 frame records can also carry semantic editor actions:
+///   - `a`: ordered action objects for tool/paint operations that are not raw
+///     pointer input.
 
 #include <cstdint>
 #include <filesystem>
@@ -74,7 +78,8 @@ namespace donner::editor::repro {
 /// - v2: adds doc-space mouse coords, viewport snapshots, and
 ///   mouse-down hit-test checkpoints
 /// - v3: adds optional embedded SVG source snapshots
-constexpr int kReproFileVersion = 3;
+/// - v4: adds semantic frame actions (`a`)
+constexpr int kReproFileVersion = 4;
 
 /// Maximum number of mouse buttons recorded. Matches ImGui's
 /// `ImGuiMouseButton_COUNT`.
@@ -113,6 +118,28 @@ struct ReproHit {
   bool empty = false;
 
   friend bool operator==(const ReproHit&, const ReproHit&) = default;
+};
+
+/// One semantic editor action that fired within a frame. MCP-generated repros
+/// use actions for deterministic operations that are not raw pointer input,
+/// such as selecting the Pen tool or changing active paint.
+struct ReproAction {
+  enum class Kind {
+    SetActiveTool,
+    SetStyleProperty,
+    CommitPenPath,
+  };
+
+  /// Action kind.
+  Kind kind = Kind::SetActiveTool;
+  /// Tool id for \ref Kind::SetActiveTool, e.g. `"select"` or `"pen"`.
+  std::string tool;
+  /// CSS property name for \ref Kind::SetStyleProperty, e.g. `"fill"`.
+  std::string propertyName;
+  /// CSS property value for \ref Kind::SetStyleProperty, e.g. `"#ff0000"`.
+  std::string propertyValue;
+
+  friend bool operator==(const ReproAction&, const ReproAction&) = default;
 };
 
 /// One discrete event that fired within a frame. Frame-state
@@ -176,6 +203,8 @@ struct ReproFrame {
   int modifiers = 0;
   /// Viewport snapshot captured for this frame.
   std::optional<ReproViewport> viewport;
+  /// Semantic editor actions applied at the start of this frame.
+  std::vector<ReproAction> actions;
   /// Discrete events that fired during this frame, in arrival order.
   std::vector<ReproEvent> events;
 };

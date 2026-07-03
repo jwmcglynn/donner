@@ -70,7 +70,7 @@ inline constexpr FallbackReason& operator|=(FallbackReason& a, FallbackReason b)
 
 /// Immediate-mode eligibility and timing diagnostics for a promoted layer.
 struct ImmediateLayerPlan {
-  /// True when editor-facing presentation treats the layer as a transient immediate tile.
+  /// True when the layer should be presented as transient direct/immediate content.
   bool immediate = false;
   /// True when the static cost heuristic chose immediate presentation.
   bool staticHeuristicImmediate = false;
@@ -84,6 +84,9 @@ struct ImmediateLayerPlan {
   int estimatedDrawOps = 0;
   /// Estimated number of path verbs across direct geometry draws.
   int estimatedPathVerbs = 0;
+  /// True when the layer fills with a gradient, whose rasterize cost scales with
+  /// covered area; feeds the area term of `estimatedRasterizeMs`.
+  bool estimatedUsesAreaCostlyPaint = false;
   /// True when the layer uses effects or resources that force cached presentation.
   bool hasExpensiveEffect = false;
   /// True when the layer has a visible, bounded contribution to the canvas.
@@ -94,8 +97,13 @@ struct ImmediateLayerPlan {
   double estimatedRedrawCost = 0.0;
   /// Relative fixed/cache memory cost avoided by immediate presentation.
   double estimatedCacheOverheadCost = 0.0;
-  /// Raster time from the most recent layer render.
+  /// Raster time from the most recent layer render. Telemetry only — NOT used in
+  /// the immediate decision (see `estimatedRasterizeMs`).
   double measuredRasterizeMs = 0.0;
+  /// Deterministic geometry estimate (ms) of this layer's re-rasterize cost.
+  /// Drives the immediate decision in place of `measuredRasterizeMs` so the
+  /// choice is timing-independent. See `EstimateStaticSpanRasterizeMs`.
+  double estimatedRasterizeMs = 0.0;
   /// Total dynamic immediate-layer frame budget for 120 Hz interaction.
   double immediateBudgetMs = 0.0;
   /// Budget charged by this layer when it is immediate.
@@ -298,7 +306,7 @@ public:
   /// Set immediate-mode eligibility and timing diagnostics for this layer.
   void setImmediatePlan(ImmediateLayerPlan plan) { immediatePlan_ = plan; }
 
-  /// Returns true when editor-facing presentation treats this layer as a transient immediate tile.
+  /// Returns true when this layer should be rendered as transient direct/immediate content.
   [[nodiscard]] bool isImmediate() const { return immediatePlan_.immediate; }
 
   /// Set the `canvasFromBitmap` transform used during blitting.

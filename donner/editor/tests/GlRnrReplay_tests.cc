@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -167,6 +168,13 @@ constexpr std::string_view kStaticContentOnlySvg =
     "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"200\" height=\"120\" "
     "viewBox=\"0 0 200 120\"><rect width=\"200\" height=\"120\" "
     "fill=\"#102030\"/></svg>";
+constexpr std::string_view kDocumentSpaceDragSvg =
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"80\" "
+    "viewBox=\"0 0 120 80\"><rect id=\"target\" x=\"10\" y=\"10\" width=\"20\" "
+    "height=\"20\" fill=\"#00ff00\"/></svg>";
+constexpr std::string_view kBlankPenCanvasSvg =
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"80\" "
+    "viewBox=\"0 0 80 80\"></svg>";
 
 std::optional<std::filesystem::path> WriteStaticContentReplay(
     const std::filesystem::path& outputDir, std::string_view name, std::uint64_t lastFrame) {
@@ -194,6 +202,677 @@ std::optional<std::filesystem::path> WriteStaticContentReplay(
     frame.mouseX = 320.0;
     frame.mouseY = 240.0;
     file.frames.push_back(frame);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+std::optional<std::filesystem::path> WriteDocumentSpaceDragReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_document_space_drag.svg";
+  file.metadata.svgBasename = "document_space_drag.svg";
+  file.metadata.svgContentHash = "fnv1a64:document-space-drag";
+  file.metadata.svgSource = std::string(kDocumentSpaceDragSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto addFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                            std::vector<repro::ReproEvent> events) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  repro::ReproEvent mouseDown;
+  mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  mouseDown.mouseButton = 0;
+  mouseDown.hit = repro::ReproHit{.id = "target", .tag = "rect"};
+  addFrame(0, Vector2d(15.0, 15.0), /*mouseButtonMask=*/1, {mouseDown});
+  addFrame(1, Vector2d(35.0, 25.0), /*mouseButtonMask=*/1, {});
+  repro::ReproEvent mouseUp;
+  mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  mouseUp.mouseButton = 0;
+  addFrame(2, Vector2d(35.0, 25.0), /*mouseButtonMask=*/0, {mouseUp});
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+std::optional<std::filesystem::path> WriteDirectPresentationDragReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_direct_presentation_drag.svg";
+  file.metadata.svgBasename = "direct_presentation_drag.svg";
+  file.metadata.svgContentHash = "fnv1a64:direct-presentation-drag";
+  file.metadata.svgSource = std::string(kDocumentSpaceDragSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto addFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                            std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  const Vector2d kStartDoc(15.0, 15.0);
+  for (std::uint64_t frame = 0; frame <= 8; ++frame) {
+    addFrame(frame, kStartDoc, 0);
+  }
+
+  repro::ReproEvent mouseDown;
+  mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  mouseDown.mouseButton = 0;
+  mouseDown.hit = repro::ReproHit{.id = "target", .tag = "rect"};
+  addFrame(9, kStartDoc, 1, {mouseDown});
+
+  for (std::uint64_t frame = 10; frame <= 20; ++frame) {
+    const double step = static_cast<double>(frame - 9);
+    addFrame(frame, kStartDoc + Vector2d(step * 4.0, step * 2.0), 1);
+  }
+
+  repro::ReproEvent mouseUp;
+  mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  mouseUp.mouseButton = 0;
+  addFrame(21, kStartDoc + Vector2d(48.0, 24.0), 0, {mouseUp});
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+std::optional<std::filesystem::path> WriteSemanticPenPaintReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_semantic_pen_paint.svg";
+  file.metadata.svgBasename = "semantic_pen_paint.svg";
+  file.metadata.svgContentHash = "fnv1a64:semantic-pen-paint";
+  file.metadata.svgSource = std::string(kBlankPenCanvasSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions,
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "pen",
+            }});
+  pushFrame(1, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "fill",
+                .propertyValue = "#ff0000",
+            }});
+  pushFrame(2, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "stroke",
+                .propertyValue = "black",
+            }});
+
+  const auto pushClick = [&](std::uint64_t downFrame, Vector2d mouseDoc) {
+    repro::ReproEvent mouseDown;
+    mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+    mouseDown.mouseButton = 0;
+    pushFrame(downFrame, mouseDoc, 1, {}, {mouseDown});
+
+    repro::ReproEvent mouseUp;
+    mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+    mouseUp.mouseButton = 0;
+    pushFrame(downFrame + 1, mouseDoc, 0, {}, {mouseUp});
+  };
+
+  pushClick(3, Vector2d(10.0, 10.0));
+  pushClick(5, Vector2d(70.0, 10.0));
+  pushClick(7, Vector2d(40.0, 70.0));
+  pushClick(9, Vector2d(10.0, 10.0));
+  for (std::uint64_t index = 11; index <= 20; ++index) {
+    pushFrame(index, Vector2d::Zero(), 0, {});
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+std::optional<std::filesystem::path> WritePenDragReplay(const std::filesystem::path& outputDir,
+                                                        std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_pen_drag.svg";
+  file.metadata.svgBasename = "pen_drag.svg";
+  file.metadata.svgContentHash = "fnv1a64:pen-drag";
+  file.metadata.svgSource = std::string(kBlankPenCanvasSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "pen",
+            }});
+  pushFrame(1, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "fill",
+                .propertyValue = "none",
+            }});
+  pushFrame(2, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "stroke",
+                .propertyValue = "#ff0000",
+            }});
+
+  repro::ReproEvent firstMouseDown;
+  firstMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  firstMouseDown.mouseButton = 0;
+  pushFrame(3, Vector2d(10.0, 10.0), 1, {}, {firstMouseDown});
+  repro::ReproEvent firstMouseUp;
+  firstMouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  firstMouseUp.mouseButton = 0;
+  pushFrame(4, Vector2d(10.0, 10.0), 0, {}, {firstMouseUp});
+  pushFrame(5, Vector2d(10.0, 10.0), 0);
+
+  repro::ReproEvent secondMouseDown;
+  secondMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  secondMouseDown.mouseButton = 0;
+  pushFrame(6, Vector2d(40.0, 10.0), 1, {}, {secondMouseDown});
+  pushFrame(7, Vector2d(40.0, 30.0), 1);
+  pushFrame(8, Vector2d(40.0, 30.0), 1);
+  pushFrame(9, Vector2d(40.0, 30.0), 1);
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+// Two pen anchors placed as plain clicks, then a single key press (frame 5
+// down / frame 6 up), then idle frames through 10. Shared by the Escape and
+// Backspace contract tests.
+std::optional<std::filesystem::path> WritePenTwoAnchorsThenKeyReplay(
+    const std::filesystem::path& outputDir, std::string_view name, int imguiKey) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_pen_key.svg";
+  file.metadata.svgBasename = "pen_key.svg";
+  file.metadata.svgContentHash = "fnv1a64:pen-key";
+  file.metadata.svgSource = std::string(kBlankPenCanvasSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "pen",
+            }});
+
+  const auto pushClick = [&](std::uint64_t downFrame, Vector2d mouseDoc) {
+    repro::ReproEvent mouseDown;
+    mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+    mouseDown.mouseButton = 0;
+    pushFrame(downFrame, mouseDoc, 1, {}, {mouseDown});
+
+    repro::ReproEvent mouseUp;
+    mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+    mouseUp.mouseButton = 0;
+    pushFrame(downFrame + 1, mouseDoc, 0, {}, {mouseUp});
+  };
+
+  pushClick(1, Vector2d(10.0, 10.0));
+  pushClick(3, Vector2d(40.0, 10.0));
+
+  repro::ReproEvent keyDown;
+  keyDown.kind = repro::ReproEvent::Kind::KeyDown;
+  keyDown.key = imguiKey;
+  pushFrame(5, Vector2d(40.0, 10.0), 0, {}, {keyDown});
+  repro::ReproEvent keyUp;
+  keyUp.kind = repro::ReproEvent::Kind::KeyUp;
+  keyUp.key = imguiKey;
+  pushFrame(6, Vector2d(40.0, 10.0), 0, {}, {keyUp});
+  for (std::uint64_t index = 7; index <= 10; ++index) {
+    pushFrame(index, Vector2d(40.0, 10.0), 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+// Two pen anchors placed as plain clicks, then Escape. Under the committed
+// contract Escape ends the session keeping the open path (same as Enter);
+// only a segmentless draft is discarded.
+std::optional<std::filesystem::path> WritePenEscapeReplay(const std::filesystem::path& outputDir,
+                                                          std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_pen_escape.svg";
+  file.metadata.svgBasename = "pen_escape.svg";
+  file.metadata.svgContentHash = "fnv1a64:pen-escape";
+  file.metadata.svgSource = std::string(kBlankPenCanvasSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "pen",
+            }});
+
+  const auto pushClick = [&](std::uint64_t downFrame, Vector2d mouseDoc) {
+    repro::ReproEvent mouseDown;
+    mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+    mouseDown.mouseButton = 0;
+    pushFrame(downFrame, mouseDoc, 1, {}, {mouseDown});
+
+    repro::ReproEvent mouseUp;
+    mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+    mouseUp.mouseButton = 0;
+    pushFrame(downFrame + 1, mouseDoc, 0, {}, {mouseUp});
+  };
+
+  pushClick(1, Vector2d(10.0, 10.0));
+  pushClick(3, Vector2d(40.0, 10.0));
+
+  repro::ReproEvent escapeDown;
+  escapeDown.kind = repro::ReproEvent::Kind::KeyDown;
+  escapeDown.key = static_cast<int>(ImGuiKey_Escape);
+  pushFrame(5, Vector2d(40.0, 10.0), 0, {}, {escapeDown});
+  repro::ReproEvent escapeUp;
+  escapeUp.kind = repro::ReproEvent::Kind::KeyUp;
+  escapeUp.key = static_cast<int>(ImGuiKey_Escape);
+  pushFrame(6, Vector2d(40.0, 10.0), 0, {}, {escapeUp});
+  for (std::uint64_t index = 7; index <= 10; ++index) {
+    pushFrame(index, Vector2d(40.0, 10.0), 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+// One pen anchor placed at (10, 40), then the mouse hovers (no buttons) to
+// (70, 40) and rests there. Used to pin the rubber-band preview of the
+// segment that a click would commit.
+std::optional<std::filesystem::path> WritePenHoverReplay(const std::filesystem::path& outputDir,
+                                                         std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_pen_hover.svg";
+  file.metadata.svgBasename = "pen_hover.svg";
+  file.metadata.svgContentHash = "fnv1a64:pen-hover";
+  file.metadata.svgSource = std::string(kBlankPenCanvasSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "pen",
+            }});
+  repro::ReproEvent mouseDown;
+  mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  mouseDown.mouseButton = 0;
+  pushFrame(1, Vector2d(10.0, 40.0), 1, {}, {mouseDown});
+  repro::ReproEvent mouseUp;
+  mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  mouseUp.mouseButton = 0;
+  pushFrame(2, Vector2d(10.0, 40.0), 0, {}, {mouseUp});
+  pushFrame(3, Vector2d(30.0, 40.0), 0);
+  pushFrame(4, Vector2d(50.0, 40.0), 0);
+  for (std::uint64_t index = 5; index <= 10; ++index) {
+    pushFrame(index, Vector2d(70.0, 40.0), 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+// Pen click-drag that shapes a Bezier segment with a large downward bulge:
+// first anchor at (10, 40), second anchor mouse-down at (70, 40), then the
+// held drag to (70, 0) mirrors the in-handle to (70, 80) so the fill bulges
+// down to y≈58 — a region no earlier geometry version touches.
+std::optional<std::filesystem::path> WritePenCurveDragReplay(const std::filesystem::path& outputDir,
+                                                             std::string_view name,
+                                                             std::uint64_t trailingHoldFrames) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_pen_curve_drag.svg";
+  file.metadata.svgBasename = "pen_curve_drag.svg";
+  file.metadata.svgContentHash = "fnv1a64:pen-curve-drag";
+  file.metadata.svgSource = std::string(kBlankPenCanvasSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "pen",
+            }});
+  pushFrame(1, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "fill",
+                .propertyValue = "#ff0000",
+            }});
+  pushFrame(2, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "stroke",
+                .propertyValue = "#ff0000",
+            }});
+
+  repro::ReproEvent firstMouseDown;
+  firstMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  firstMouseDown.mouseButton = 0;
+  pushFrame(3, Vector2d(10.0, 40.0), 1, {}, {firstMouseDown});
+  repro::ReproEvent firstMouseUp;
+  firstMouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  firstMouseUp.mouseButton = 0;
+  pushFrame(4, Vector2d(10.0, 40.0), 0, {}, {firstMouseUp});
+  pushFrame(5, Vector2d(10.0, 40.0), 0);
+
+  repro::ReproEvent secondMouseDown;
+  secondMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  secondMouseDown.mouseButton = 0;
+  pushFrame(6, Vector2d(70.0, 40.0), 1, {}, {secondMouseDown});
+  pushFrame(7, Vector2d(70.0, 0.0), 1);
+  for (std::uint64_t index = 0; index < trailingHoldFrames; ++index) {
+    pushFrame(8 + index, Vector2d(70.0, 0.0), 1);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
+std::optional<std::filesystem::path> WriteSemanticPenFillAfterCommitReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_semantic_pen_fill_after_commit.svg";
+  file.metadata.svgBasename = "semantic_pen_fill_after_commit.svg";
+  file.metadata.svgContentHash = "fnv1a64:semantic-pen-fill-after-commit";
+  file.metadata.svgSource = std::string(kBlankPenCanvasSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  const auto pushClick = [&](std::uint64_t downFrame, Vector2d mouseDoc) {
+    repro::ReproEvent mouseDown;
+    mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+    mouseDown.mouseButton = 0;
+    pushFrame(downFrame, mouseDoc, 1, {}, {mouseDown});
+
+    repro::ReproEvent mouseUp;
+    mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+    mouseUp.mouseButton = 0;
+    pushFrame(downFrame + 1, mouseDoc, 0, {}, {mouseUp});
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "pen",
+            }});
+  pushFrame(1, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "fill",
+                .propertyValue = "none",
+            }});
+  pushFrame(2, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "stroke",
+                .propertyValue = "black",
+            }});
+  pushClick(3, Vector2d(10.0, 10.0));
+  pushClick(5, Vector2d(70.0, 10.0));
+  pushClick(7, Vector2d(40.0, 70.0));
+  pushClick(9, Vector2d(10.0, 10.0));
+  for (std::uint64_t index = 11; index < 18; ++index) {
+    pushFrame(index, Vector2d::Zero(), 0);
+  }
+  pushFrame(18, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetStyleProperty,
+                .propertyName = "fill",
+                .propertyValue = "#36c317",
+            }});
+  for (std::uint64_t index = 19; index <= 42; ++index) {
+    pushFrame(index, Vector2d::Zero(), 0);
   }
 
   const std::filesystem::path replayPath = outputDir / std::string(name);
@@ -237,7 +916,8 @@ Vector2d ScreenFromDoc(const repro::ReproViewport& viewport, const Vector2d& doc
 
 void PushDonnerDReplayFrame(repro::ReproFile& file, std::uint64_t index,
                             const repro::ReproViewport& viewport, const Vector2d& mouseDoc,
-                            int mouseButtonMask, std::vector<repro::ReproEvent> events = {}) {
+                            int mouseButtonMask, std::vector<repro::ReproEvent> events = {},
+                            std::vector<repro::ReproAction> actions = {}) {
   const Vector2d mouseScreen = ScreenFromDoc(viewport, mouseDoc);
   repro::ReproFrame frame;
   frame.index = index;
@@ -250,7 +930,78 @@ void PushDonnerDReplayFrame(repro::ReproFile& file, std::uint64_t index,
   frame.mouseButtonMask = mouseButtonMask;
   frame.viewport = viewport;
   frame.events = std::move(events);
+  frame.actions = std::move(actions);
   file.frames.push_back(std::move(frame));
+}
+
+/// Pen clicks placing three anchors, then a close-path click back on the
+/// first anchor. After closePath() the tool is no longer shaping an anchor,
+/// so the close click exercises the non-drag overlay-refresh path on its
+/// flush frame. Driven through document-space input with deterministic
+/// worker draining: the Realtime scheduling this replay originally used
+/// dropped the clicks entirely on loaded executors (the worker never went
+/// idle inside the replay's 40 frames), making the test
+/// environment-sensitive.
+std::optional<std::filesystem::path> WritePenClosePathClickReplay(
+    const std::filesystem::path& outputDir, std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "donner_splash.svg";
+  file.metadata.svgBasename = "donner_splash.svg";
+  file.metadata.svgContentHash = "fnv1a64:donner-splash-runfile";
+  file.metadata.windowWidth = 1600;
+  file.metadata.windowHeight = 900;
+  file.metadata.displayScale = 2.0;
+
+  const repro::ReproViewport viewport = DonnerDViewport(2.0);
+  const Vector2d kAnchor1Doc(302.0, 390.0);
+  const Vector2d kAnchor2Doc(322.0, 400.0);
+  const Vector2d kAnchor3Doc(302.0, 410.0);
+
+  PushDonnerDReplayFrame(file, 0, viewport, kAnchor1Doc, 0, {},
+                         {repro::ReproAction{
+                             .kind = repro::ReproAction::Kind::SetActiveTool,
+                             .tool = "pen",
+                         }});
+  for (std::uint64_t index = 1; index <= 20; ++index) {
+    PushDonnerDReplayFrame(file, index, viewport, kAnchor1Doc, 0);
+  }
+
+  const auto pushClick = [&](std::uint64_t pressFrame, const Vector2d& mouseDoc) {
+    repro::ReproEvent mouseDown;
+    mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+    mouseDown.mouseButton = 0;
+    PushDonnerDReplayFrame(file, pressFrame, viewport, mouseDoc, 1, {mouseDown});
+    repro::ReproEvent mouseUp;
+    mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+    mouseUp.mouseButton = 0;
+    PushDonnerDReplayFrame(file, pressFrame + 1, viewport, mouseDoc, 0, {mouseUp});
+  };
+
+  pushClick(21, kAnchor1Doc);
+  PushDonnerDReplayFrame(file, 23, viewport, kAnchor2Doc, 0);
+  pushClick(24, kAnchor2Doc);
+  PushDonnerDReplayFrame(file, 26, viewport, kAnchor3Doc, 0);
+  pushClick(27, kAnchor3Doc);
+  PushDonnerDReplayFrame(file, 29, viewport, kAnchor1Doc, 0);
+  // Close-path click back on the first anchor.
+  pushClick(30, kAnchor1Doc);
+  for (std::uint64_t index = 32; index <= 40; ++index) {
+    PushDonnerDReplayFrame(file, index, viewport, kAnchor1Doc, 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
 }
 
 std::optional<std::filesystem::path> WriteDonnerDDragZoomReplay(
@@ -271,8 +1022,8 @@ std::optional<std::filesystem::path> WriteDonnerDDragZoomReplay(
   file.metadata.displayScale = 2.0;
   file.metadata.expect = repro::ReproExpectation{
       .proofKind = repro::ReproExpectationProofKind::Selection,
-      .leftMouseDownOrdinal = 2,
-      .frameOffsetAfterLeftMouseDown = 19,
+      .leftMouseDownOrdinal = 1,
+      .frameOffsetAfterLeftMouseDown = 18,
       .minFrameIndex = 40,
       .maxFrameIndex = 40,
       .targetSelector = "#Donner_D",
@@ -281,28 +1032,7 @@ std::optional<std::filesystem::path> WriteDonnerDDragZoomReplay(
   };
 
   const Vector2d kDonnerDLeftStemDoc(282.0, 390.0);
-  for (std::uint64_t frame = 0; frame <= 4; ++frame) {
-    PushDonnerDReplayFrame(file, frame, DonnerDViewport(2.0), kDonnerDLeftStemDoc, 0);
-  }
-
-  repro::ReproEvent selectMouseDown;
-  selectMouseDown.kind = repro::ReproEvent::Kind::MouseDown;
-  selectMouseDown.mouseButton = 0;
-  selectMouseDown.hit = repro::ReproHit{
-      .id = "Donner_D",
-      .tag = "path",
-  };
-  PushDonnerDReplayFrame(file, 5, DonnerDViewport(2.0), kDonnerDLeftStemDoc, 1, {selectMouseDown});
-  repro::ReproEvent selectMouseUp;
-  selectMouseUp.kind = repro::ReproEvent::Kind::MouseUp;
-  selectMouseUp.mouseButton = 0;
-  selectMouseUp.hit = repro::ReproHit{
-      .id = "Donner_D",
-      .tag = "path",
-  };
-  PushDonnerDReplayFrame(file, 6, DonnerDViewport(2.0), kDonnerDLeftStemDoc, 0, {selectMouseUp});
-
-  for (std::uint64_t frame = 7; frame <= 20; ++frame) {
+  for (std::uint64_t frame = 0; frame <= 20; ++frame) {
     PushDonnerDReplayFrame(file, frame, DonnerDViewport(2.0), kDonnerDLeftStemDoc, 0);
   }
 
@@ -543,8 +1273,7 @@ std::string CanonicalReplayDiagnostics(const repro::GlRnrReplayResult& result,
     out << ";compositor=";
     writeVec(frame.compositorCanvas);
     out << ";metadata_miss=" << frame.metadataOnlyMissCount
-        << ";duplicate_textures=" << frame.duplicateLiveTextureCount << ";overlay_dims=";
-    writeVec(frame.overlayDimsPx);
+        << ";duplicate_textures=" << frame.duplicateLiveTextureCount;
     out << ";scheduling=" << static_cast<int>(frame.replayWorkerScheduling)
         << ";hold=" << frame.replayHoldFramesBehind
         << ";withheld=" << frame.replayResultHoldPollsThisFrame << ";tiles=" << frame.tiles.size();
@@ -667,6 +1396,119 @@ int CountBrightGreenPixels(const svg::RendererBitmap& bitmap) {
   return count;
 }
 
+int CountPenFillGreenPixelsInDocumentCanvas(const svg::RendererBitmap& bitmap) {
+  int count = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+      const std::uint8_t red = bitmap.pixels[offset];
+      const std::uint8_t green = bitmap.pixels[offset + 1];
+      const std::uint8_t blue = bitmap.pixels[offset + 2];
+      const std::uint8_t alpha = bitmap.pixels[offset + 3];
+      if (alpha > 180 && green > 135 && red < 135 && blue < 120 && green > red + 45 &&
+          green > blue + 60) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+int CountBrightRedPixels(const svg::RendererBitmap& bitmap) {
+  int count = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+      const std::uint8_t red = bitmap.pixels[offset];
+      const std::uint8_t green = bitmap.pixels[offset + 1];
+      const std::uint8_t blue = bitmap.pixels[offset + 2];
+      const std::uint8_t alpha = bitmap.pixels[offset + 3];
+      if (alpha > 200 && red > 200 && green < 40 && blue < 40) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+// Counts bright-red pixels in the capture rows strictly below the given
+// document-space Y threshold. The document-canvas crop maps the 80x80 pen
+// canvas onto the full bitmap, so the row cutoff is `docY / 80` of the height.
+int CountBrightRedPixelsBelowDocY(const svg::RendererBitmap& bitmap, double docY) {
+  int count = 0;
+  const int firstRow =
+      static_cast<int>(std::ceil(static_cast<double>(bitmap.dimensions.y) * (docY / 80.0)));
+  for (int y = firstRow; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+      const std::uint8_t red = bitmap.pixels[offset];
+      const std::uint8_t green = bitmap.pixels[offset + 1];
+      const std::uint8_t blue = bitmap.pixels[offset + 2];
+      const std::uint8_t alpha = bitmap.pixels[offset + 3];
+      if (alpha > 200 && red > 200 && green < 40 && blue < 40) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+// Counts cyan-tinted chrome pixels in the horizontal corridor doc-x in
+// [xMinDoc, xMaxDoc], doc-y within ±2 of yDoc, on the 80x80 pen canvas
+// mapped over the full capture. Matches the semi-transparent cyan the pen
+// rubber-band preview strokes with, over any checkerboard shade.
+int CountPenPreviewCyanPixelsInCorridor(const svg::RendererBitmap& bitmap, double xMinDoc,
+                                        double xMaxDoc, double yDoc) {
+  const auto docToPxX = [&](double x) {
+    return static_cast<int>(std::lround(static_cast<double>(bitmap.dimensions.x) * (x / 80.0)));
+  };
+  const auto docToPxY = [&](double y) {
+    return static_cast<int>(std::lround(static_cast<double>(bitmap.dimensions.y) * (y / 80.0)));
+  };
+  int count = 0;
+  const int y0 = std::max(0, docToPxY(yDoc - 2.0));
+  const int y1 = std::min(bitmap.dimensions.y - 1, docToPxY(yDoc + 2.0));
+  const int x0 = std::max(0, docToPxX(xMinDoc));
+  const int x1 = std::min(bitmap.dimensions.x - 1, docToPxX(xMaxDoc));
+  for (int y = y0; y <= y1; ++y) {
+    for (int x = x0; x <= x1; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+      const std::uint8_t red = bitmap.pixels[offset];
+      const std::uint8_t green = bitmap.pixels[offset + 1];
+      const std::uint8_t blue = bitmap.pixels[offset + 2];
+      // The 0xa0-alpha cyan stroke blends over the dark canvas checkerboard
+      // to roughly (15-25, 140-150, 175-185).
+      if (blue > 120 && green > 100 && red < 100 && blue > red + 80 && green > red + 60) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
+int CountLegacyBluePenPixels(const svg::RendererBitmap& bitmap) {
+  int count = 0;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+      const std::uint8_t red = bitmap.pixels[offset];
+      const std::uint8_t green = bitmap.pixels[offset + 1];
+      const std::uint8_t blue = bitmap.pixels[offset + 2];
+      const std::uint8_t alpha = bitmap.pixels[offset + 3];
+      if (alpha > 120 && red < 80 && green >= 60 && green < 170 && blue > 180 &&
+          blue > green + 70) {
+        ++count;
+      }
+    }
+  }
+  return count;
+}
+
 TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth) {
   const std::filesystem::path outputDir = DiagnosticOutputDir() / "content_only_ground_truth";
   const std::optional<std::filesystem::path> replayPath =
@@ -700,6 +1542,483 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
 
   std::error_code ec;
   std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackground) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "direct_document_not_dimmed";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteStaticContentReplay(outputDir, "direct_document_not_dimmed.rnr", 1);
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(1);
+  options.maxFrame = 1;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.contentOnlyCapture = false;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 1);
+  ASSERT_TRUE(actual.has_value());
+  ASSERT_GT(actual->dimensions.x, 0);
+  ASSERT_GT(actual->dimensions.y, 0);
+
+  const int centerX = actual->dimensions.x / 2;
+  const int centerY = actual->dimensions.y / 2;
+  const std::size_t centerOffset =
+      static_cast<std::size_t>(centerY) * actual->rowBytes + static_cast<std::size_t>(centerX) * 4u;
+  EXPECT_NEAR(static_cast<int>(actual->pixels[centerOffset]), 0x10, 3);
+  EXPECT_NEAR(static_cast<int>(actual->pixels[centerOffset + 1]), 0x20, 3);
+  EXPECT_NEAR(static_cast<int>(actual->pixels[centerOffset + 2]), 0x30, 3)
+      << "Direct framebuffer document presentation must not sit behind an opaque ImGui render-pane "
+         "background.";
+  EXPECT_EQ(actual->pixels[centerOffset + 3], 255);
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, DirectFramebufferCheckerboardUsesSingleDrawDuringDrag) {
+  svg::Renderer renderer;
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Direct framebuffer presentation requires the Geode renderer backend.";
+  }
+
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "direct_checkerboard_single_draw";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteDirectPresentationDragReplay(outputDir, "direct_checkerboard_single_draw.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(20);
+  options.maxFrame = 20;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  int directDragFrames = 0;
+  for (const repro::GlRnrReplayFrameDiagnostics& diagnostics : result.frameDiagnostics) {
+    if (!diagnostics.frameCost.overlay.hasLiveDragPreview ||
+        diagnostics.frameCost.directPresentation.totalMs <= 0.0) {
+      continue;
+    }
+
+    ++directDragFrames;
+    EXPECT_EQ(diagnostics.frameCost.directPresentation.checkerboardDrawCount, 1)
+        << "frame " << diagnostics.frameIndex
+        << " should render the direct framebuffer checkerboard with one GPU draw";
+  }
+  EXPECT_GT(directDragFrames, 0) << "test setup must exercise direct drag presentation";
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, DocumentSpaceInputDrivesCanvasSelectionThroughEditorShell) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "document_space_input";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteDocumentSpaceDragReplay(outputDir, "document_space_input.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(2);
+  options.maxFrame = 2;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  ASSERT_TRUE(result.finalSelectedElementLabel.has_value());
+  EXPECT_EQ(*result.finalSelectedElementLabel, "<rect> #target");
+  ASSERT_EQ(result.captures.size(), 1u);
+  EXPECT_EQ(result.captures.front().frameIndex, 2u);
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, SemanticPenPaintActionsRenderThroughEditorShell) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "semantic_pen_paint";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteSemanticPenPaintReplay(outputDir, "semantic_pen_paint.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(20);
+  options.maxFrame = 20;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 20);
+  ASSERT_TRUE(actual.has_value());
+  EXPECT_GT(CountBrightRedPixels(*actual), 500)
+      << "Semantic .rnr PenTool and paint actions must create a visible filled path through the "
+         "real EditorShell replay path.";
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, PenDragUpdatesSelectedPathDataBeforeMouseUp) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "pen_drag_live_path";
+  const std::optional<std::filesystem::path> replayPath =
+      WritePenDragReplay(outputDir, "pen_drag_live_path.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(7);
+  options.maxFrame = 7;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, 7);
+  ASSERT_NE(diagnostics, nullptr);
+  ASSERT_TRUE(diagnostics->selectedPathDataAttribute.has_value());
+  EXPECT_EQ(*diagnostics->selectedPathDataAttribute, "M 10 10 C 10 10 40 -10 40 10")
+      << "The live EditorShell path data should reflect the in-progress pen drag before mouseup.";
+  EXPECT_TRUE(diagnostics->lastFlushAppliedCommands);
+  EXPECT_FALSE(diagnostics->lastFlushCacheInvalidatedElements.empty());
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, PenDragUsesCyanOverlayWithoutLegacyBluePath) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "pen_drag_cyan_overlay";
+  const std::optional<std::filesystem::path> replayPath =
+      WritePenDragReplay(outputDir, "pen_drag_cyan_overlay.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames = {7, 9};
+  options.maxFrame = 9;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  const repro::GlRnrReplayFrameDiagnostics* dragFrame = FindFrameDiagnostics(result, 7);
+  ASSERT_NE(dragFrame, nullptr);
+  EXPECT_GT(dragFrame->documentFrameVersion, dragFrame->displayedDocVersion)
+      << "The drag frame should model the real async gap: DOM path data has advanced before the "
+         "matching document pixels are presented.";
+  ASSERT_TRUE(dragFrame->immediateOverlayDocumentVersion.has_value());
+  EXPECT_EQ(*dragFrame->immediateOverlayDocumentVersion, dragFrame->documentFrameVersion)
+      << "Active PenTool drags should use the renderer-backed cyan path overlay for the live path "
+         "without drawing a second legacy blue path.";
+
+  std::optional<svg::RendererBitmap> dragCapture = LoadCaptureBitmap(result, 7);
+  ASSERT_TRUE(dragCapture.has_value());
+  EXPECT_EQ(CountLegacyBluePenPixels(*dragCapture), 0)
+      << "The document-canvas capture should contain no legacy blue PenTool path pixels.";
+
+  // The moving-drag frame (7) defers its crisp render — the live preview
+  // presents that geometry — so the raster catches up one hold frame after
+  // the pointer pauses: frame 8 issues the request, frame 9 presents it.
+  const repro::GlRnrReplayFrameDiagnostics* presentedFrame = FindFrameDiagnostics(result, 9);
+  ASSERT_NE(presentedFrame, nullptr);
+  ASSERT_TRUE(presentedFrame->immediateOverlayDocumentVersion.has_value());
+  EXPECT_EQ(*presentedFrame->immediateOverlayDocumentVersion, presentedFrame->displayedDocVersion);
+  EXPECT_EQ(presentedFrame->documentFrameVersion, presentedFrame->displayedDocVersion)
+      << "Holding the mouse at the same drag point should not queue another identical path "
+         "mutation after the previous drag render lands; otherwise the overlay gate never catches "
+         "up to the presented shape.";
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, PenClosePathClickRefreshesOverlayOnFlushFrame) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "pen_close_path_click";
+  const std::optional<std::filesystem::path> replayPath =
+      WritePenClosePathClickReplay(outputDir, "pen_close_path_click.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.svgPathOverride = RunfilePath("donner_splash.svg");
+  options.outputDir = outputDir;
+  options.captureFrames.insert(40);
+  options.maxFrame = 40;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  // Find the frame where the close-path click committed the trailing Z.
+  const repro::GlRnrReplayFrameDiagnostics* closeFrame = nullptr;
+  std::string frameDump;
+  for (const repro::GlRnrReplayFrameDiagnostics& diagnostics : result.frameDiagnostics) {
+    frameDump += "frame " + std::to_string(diagnostics.frameIndex) +
+                 ": docVersion=" + std::to_string(diagnostics.documentFrameVersion) +
+                 " displayed=" + std::to_string(diagnostics.displayedDocVersion) +
+                 " overlayVersion=" +
+                 (diagnostics.immediateOverlayDocumentVersion.has_value()
+                      ? std::to_string(*diagnostics.immediateOverlayDocumentVersion)
+                      : std::string("none")) +
+                 " d=" + diagnostics.selectedPathDataAttribute.value_or("(none)") + "\n";
+    if (closeFrame == nullptr && diagnostics.selectedPathDataAttribute.has_value() &&
+        diagnostics.selectedPathDataAttribute->find(" Z") != std::string::npos) {
+      closeFrame = &diagnostics;
+    }
+  }
+  SCOPED_TRACE(frameDump);
+  ASSERT_NE(closeFrame, nullptr) << "The close-path click never committed the trailing Z.";
+
+  // Closing the contour ends the anchor drag before the flush runs, so this
+  // pins the non-drag pen flush path: the same frame that flushed the close
+  // must re-capture overlay chrome from the closed geometry. A stale snapshot
+  // here is the user-visible "overlay only updates on the next mousemove" bug.
+  ASSERT_TRUE(closeFrame->immediateOverlayDocumentVersion.has_value())
+      << "Overlay snapshot was dropped on the close-path flush frame instead of being refreshed.";
+  EXPECT_EQ(*closeFrame->immediateOverlayDocumentVersion, closeFrame->documentFrameVersion)
+      << "Overlay chrome must be re-captured on the same frame the close-path click flushed, "
+         "even though the pen is no longer shaping an anchor after closePath().";
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, PenEscapeCommitsOpenPathInsteadOfDiscarding) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "pen_escape_commits";
+  const std::optional<std::filesystem::path> replayPath =
+      WritePenEscapeReplay(outputDir, "pen_escape_commits.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(10);
+  options.maxFrame = 10;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  // Escape ends the pen session by committing the placed anchors as an open
+  // path — the placed segment must survive as a normal selected <path>, not
+  // be discarded. (Only a segmentless single-anchor draft is discarded.)
+  const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 10);
+  ASSERT_NE(finalFrame, nullptr);
+  ASSERT_TRUE(finalFrame->selectedPathDataAttribute.has_value())
+      << "Escape must keep (and leave selected) the committed open path; the draft was discarded.";
+  EXPECT_EQ(*finalFrame->selectedPathDataAttribute, "M 10 10 L 40 10");
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, PenHoverShowsRubberBandSegmentPreview) {
+  svg::Renderer renderer;
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Chrome pixels require the Geode direct presentation path.";
+  }
+
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "pen_hover_preview";
+  const std::optional<std::filesystem::path> replayPath =
+      WritePenHoverReplay(outputDir, "pen_hover_preview.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(10);
+  options.maxFrame = 10;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  // With one anchor placed at (10, 40) and the pointer resting at (70, 40),
+  // the presented frame must preview the segment a click would commit: a
+  // rubber-band stroke through the corridor between them. The corridor
+  // window starts past the anchor chrome so anchor boxes cannot satisfy it.
+  std::optional<svg::RendererBitmap> capture = LoadCaptureBitmap(result, 10);
+  ASSERT_TRUE(capture.has_value());
+  EXPECT_GT(CountPenPreviewCyanPixelsInCorridor(*capture, 25.0, 55.0, 40.0), 20)
+      << "hovering after placing an anchor must rubber-band the pending segment. Capture: "
+      << FindCapture(result, 10)->path;
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "pen_backspace";
+  const std::optional<std::filesystem::path> replayPath = WritePenTwoAnchorsThenKeyReplay(
+      outputDir, "pen_backspace.rnr", static_cast<int>(ImGuiKey_Backspace));
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(10);
+  options.maxFrame = 10;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  // Backspace while drafting removes only the LAST placed anchor — the draft
+  // path (which is the selection) must survive with its remaining anchor, not
+  // fall through to delete-selection and vanish wholesale.
+  const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 10);
+  ASSERT_NE(finalFrame, nullptr);
+  ASSERT_TRUE(finalFrame->selectedPathDataAttribute.has_value())
+      << "Backspace during a pen draft must not delete the whole in-progress path.";
+  EXPECT_EQ(*finalFrame->selectedPathDataAttribute, "M 10 10");
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, PenAnchorHandleDragPresentsLiveGeometryInLockstep) {
+  svg::Renderer renderer;
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "Presented-pixels lockstep requires the Geode direct presentation path.";
+  }
+
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "pen_drag_lockstep";
+  const std::optional<std::filesystem::path> replayPath =
+      WritePenCurveDragReplay(outputDir, "pen_drag_lockstep.rnr", /*trailingHoldFrames=*/2);
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames = {7, 9};
+  options.maxFrame = 9;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  // Frame 7 is the drag frame: the DOM has flushed the dragged curve while the
+  // async raster of that geometry has not landed yet. The presented frame must
+  // still show the live curve — the path pixels and the overlay chrome are
+  // captured from the same post-flush DOM, never from a stale raster.
+  const repro::GlRnrReplayFrameDiagnostics* dragFrame = FindFrameDiagnostics(result, 7);
+  ASSERT_NE(dragFrame, nullptr);
+  EXPECT_GT(dragFrame->documentFrameVersion, dragFrame->displayedDocVersion)
+      << "Test setup: the drag frame must model the real async gap.";
+  ASSERT_TRUE(dragFrame->immediateOverlayDocumentVersion.has_value());
+  EXPECT_EQ(*dragFrame->immediateOverlayDocumentVersion, dragFrame->documentFrameVersion);
+
+  std::optional<svg::RendererBitmap> dragCapture = LoadCaptureBitmap(result, 7);
+  ASSERT_TRUE(dragCapture.has_value());
+  EXPECT_GT(CountBrightRedPixelsBelowDocY(*dragCapture, 45.0), 150)
+      << "Mid-drag presented pixels must show the live dragged curve (red fill bulge below "
+         "y=45), not the stale pre-drag raster. The overlay chrome tracks the live DOM, so a "
+         "stale raster underneath reads as the outline detaching from the shape. Capture: "
+      << FindCapture(result, 7)->path;
+
+  // Sanity: once the pointer holds still, the crisp composited raster catches
+  // up and renders the same bulge without the live preview.
+  const repro::GlRnrReplayFrameDiagnostics* settledFrame = FindFrameDiagnostics(result, 9);
+  ASSERT_NE(settledFrame, nullptr);
+  EXPECT_EQ(settledFrame->documentFrameVersion, settledFrame->displayedDocVersion)
+      << "Holding the pointer still must let the async raster catch up to the drag geometry.";
+  std::optional<svg::RendererBitmap> settledCapture = LoadCaptureBitmap(result, 9);
+  ASSERT_TRUE(settledCapture.has_value());
+  EXPECT_GT(CountBrightRedPixelsBelowDocY(*settledCapture, 45.0), 150)
+      << "The settled post-drag frame should render the same bulge through the composited "
+         "raster. Capture: "
+      << FindCapture(result, 9)->path;
+}
+
+TEST(GlRnrReplayTest, ColorPickerFillOnPenPathRerendersGeodePromotedLayer) {
+  svg::Renderer renderer;
+  if (!renderer.requiresTextureSnapshotPresentation()) {
+    GTEST_SKIP() << "This regression exercises Geode texture-snapshot presentation.";
+  }
+
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "semantic_pen_fill_after_commit";
+  constexpr std::uint64_t kCaptureFrame = 42;
+  const std::optional<std::filesystem::path> replayPath =
+      WriteSemanticPenFillAfterCommitReplay(outputDir, "semantic_pen_fill_after_commit.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(kCaptureFrame);
+  options.maxFrame = kCaptureFrame;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kCaptureFrame);
+  ASSERT_TRUE(actual.has_value());
+  EXPECT_GT(CountPenFillGreenPixelsInDocumentCanvas(*actual), 500)
+      << "Changing fill through the paint UI action on a Pen-created, selected path must refresh "
+         "the Geode promoted layer texture. A low green-pixel count means the canvas is still "
+         "presenting the stale no-fill layer. Capture: "
+      << FindCapture(result, kCaptureFrame)->path;
 }
 
 TEST(GlRnrReplayTest, DrainEachFrameContentCaptureIsDeterministicAcrossPaceAndDelay) {
@@ -877,26 +2196,15 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
   mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
   mouseUp.mouseButton = 0;
   pushFrame(2, 30.0, 70.0, 0, 0, {mouseUp});
-  pushFrame(3, 30.0, 70.0, 0, 0);
-  repro::ReproEvent ctrlDown;
-  ctrlDown.kind = repro::ReproEvent::Kind::KeyDown;
-  ctrlDown.key = static_cast<int>(ImGuiKey_LeftCtrl);
-  ctrlDown.modifiers = 1 << 0;
-  pushFrame(4, 30.0, 70.0, 0, 1 << 0, {ctrlDown});
   repro::ReproEvent selectAllDown;
   selectAllDown.kind = repro::ReproEvent::Kind::KeyDown;
   selectAllDown.key = static_cast<int>(ImGuiKey_A);
   selectAllDown.modifiers = 1 << 0;
-  pushFrame(5, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
+  pushFrame(3, 30.0, 70.0, 0, 1 << 0, {selectAllDown});
   repro::ReproEvent selectAllUp;
   selectAllUp.kind = repro::ReproEvent::Kind::KeyUp;
   selectAllUp.key = static_cast<int>(ImGuiKey_A);
-  selectAllUp.modifiers = 1 << 0;
-  pushFrame(6, 30.0, 70.0, 0, 1 << 0, {selectAllUp});
-  repro::ReproEvent ctrlUp;
-  ctrlUp.kind = repro::ReproEvent::Kind::KeyUp;
-  ctrlUp.key = static_cast<int>(ImGuiKey_LeftCtrl);
-  pushFrame(7, 30.0, 70.0, 0, 0, {ctrlUp});
+  pushFrame(4, 30.0, 70.0, 0, 0, {selectAllUp});
 
   std::vector<repro::ReproEvent> characterEvents;
   for (const unsigned char c : kEditedSource) {
@@ -905,8 +2213,8 @@ TEST(GlRnrReplayTest, ReplaysSourcePaneCharacterInput) {
     event.codepoint = c;
     characterEvents.push_back(event);
   }
-  pushFrame(8, 30.0, 70.0, 0, 0, std::move(characterEvents));
-  for (std::uint64_t index = 9; index <= 60; ++index) {
+  pushFrame(5, 30.0, 70.0, 0, 0, std::move(characterEvents));
+  for (std::uint64_t index = 6; index <= 60; ++index) {
     pushFrame(index, 30.0, 70.0, 0, 0);
   }
 
@@ -1085,6 +2393,8 @@ TEST(GlRnrReplayTest, GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame
         << "Selection path overlay was not rebuilt for presented zoom frame " << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.handleCount, 4)
         << "Selection transform handles were not rebuilt for presented zoom frame " << frame;
+    EXPECT_GT(diagnostics->frameCost.overlay.payloadBytes, 0u)
+        << "Overlay payload did not refresh for presented zoom frame " << frame;
   }
 }
 

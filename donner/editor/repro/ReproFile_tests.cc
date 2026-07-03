@@ -192,6 +192,32 @@ TEST(ReproFileTest, RoundTripExtendedExpectationMetadata) {
   std::filesystem::remove(path, ec);
 }
 
+TEST(ReproFileTest, RoundTripSemanticActions) {
+  ReproFile file = MakeFileWithOneFrame();
+  file.frames[0].actions.push_back(ReproAction{
+      .kind = ReproAction::Kind::SetActiveTool,
+      .tool = "pen",
+  });
+  file.frames[0].actions.push_back(ReproAction{
+      .kind = ReproAction::Kind::SetStyleProperty,
+      .propertyName = "fill",
+      .propertyValue = "#ff0000",
+  });
+  file.frames[0].actions.push_back(ReproAction{
+      .kind = ReproAction::Kind::CommitPenPath,
+  });
+
+  const auto path = TempFile("semantic_actions");
+  ASSERT_TRUE(WriteReproFile(path, file));
+  auto loaded = ReadReproFile(path);
+  ASSERT_TRUE(loaded.has_value());
+  ASSERT_EQ(loaded->frames.size(), 1u);
+  EXPECT_EQ(loaded->frames[0].actions, file.frames[0].actions);
+
+  std::error_code ec;
+  std::filesystem::remove(path, ec);
+}
+
 TEST(ReproFileTest, ExpectationMetadataDefaultsProofKindForOldFixtures) {
   const auto path = TempFile("expect_metadata_old");
   {

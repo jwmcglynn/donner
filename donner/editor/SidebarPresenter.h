@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -10,8 +12,11 @@
 #include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Vector2.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/ViewportState.h"
+#include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::editor {
 
@@ -33,6 +38,22 @@ struct TreeViewState {
 /// can't race the worker.
 class SidebarPresenter {
 public:
+  /// Maps a static path-operation icon bitmap to an ImGui texture handle for
+  /// display. The icon bitmaps are rendered from embedded Bootstrap SVG resources
+  /// through Donner; ImGui only receives the final raster texture for the image
+  /// button.
+  ///
+  /// @param stableId Stable id of the static icon resource being uploaded.
+  /// @param bitmap The Donner-rendered RGBA icon bitmap.
+  /// @return An ImGui texture handle plus the valid payload UV range, or an
+  ///   empty texture if upload failed.
+  struct IconTexture {
+    ImTextureID texture = 0;                      ///< ImGui texture handle.
+    Vector2d uvBottomRight = Vector2d(1.0, 1.0);  ///< Bottom-right valid payload UV.
+  };
+  using IconTextureProvider =
+      std::function<IconTexture(std::uint64_t stableId, const svg::RendererBitmap& bitmap)>;
+
   /// Refresh the tree / inspector snapshot from live app state. Safe to
   /// call only when the async renderer is idle.
   void refreshSnapshot(const EditorApp& app);
@@ -49,9 +70,13 @@ public:
    * @param liveApp Live editor app for button actions, or null while the
    *   renderer owns the document.
    * @param viewport Viewport state diagnostics.
+   * @param iconTextureProvider Uploads static Donner-rendered path operation
+   *   icon bitmaps to ImGui textures for display, or null to keep blank hit
+   *   areas in headless tests.
    * @return true if an inspector action queued a document mutation.
    */
-  bool renderInspector(EditorApp* liveApp, const ViewportState& viewport) const;
+  bool renderInspector(EditorApp* liveApp, const ViewportState& viewport,
+                       const IconTextureProvider& iconTextureProvider = {}) const;
 
   [[nodiscard]] bool inspectorHasSelectionForTesting() const {
     return inspectorSnapshot_.hasSelection;

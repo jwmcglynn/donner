@@ -4023,6 +4023,14 @@ void TextEditor::selectAll() {
   core_.selectAll();
 }
 
+void TextEditor::clearSelection() {
+  // Collapse the selection to the caret so the cursor stays put. setSelection() with an empty
+  // range is the same canonical path the editor already uses to drop a selection (e.g. after a
+  // click), so the selection-dependent UI (highlight, copy/cut enablement) updates consistently.
+  const Coordinates cursor = getCursorPosition();
+  setSelection(cursor, cursor);
+}
+
 bool TextEditor::hasSelection() const {
   return core_.hasSelection();
 }

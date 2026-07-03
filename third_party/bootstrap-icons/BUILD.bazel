@@ -1,0 +1,31 @@
+load("//build_defs:embed_resources.bzl", "embed_resources")
+
+embed_resources(
+    name = "bootstrap_icons",
+    header_output = "embed_resources/BootstrapIcons.h",
+    resources = {
+        "kBootstrapExcludeSvg": "icons/exclude.svg",
+        "kBootstrapEyeSlashSvg": "icons/eye-slash.svg",
+        "kBootstrapEyeSvg": "icons/eye.svg",
+        "kBootstrapIntersectSvg": "icons/intersect.svg",
+        "kBootstrapLockSvg": "icons/lock.svg",
+        "kBootstrapSubtractSvg": "icons/subtract.svg",
+        "kBootstrapUnionSvg": "icons/union.svg",
+        "kBootstrapUnlockSvg": "icons/unlock.svg",
+    },
+    visibility = [
+        "//donner:__subpackages__",
+    ],
+)
+
+exports_files([
+    "LICENSE",
+    "icons/exclude.svg",
+    "icons/eye-slash.svg",
+    "icons/eye.svg",
+    "icons/intersect.svg",
+    "icons/lock.svg",
+    "icons/subtract.svg",
+    "icons/union.svg",
+    "icons/unlock.svg",
+])

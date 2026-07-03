@@ -13,6 +13,7 @@
 #include "donner/svg/components/shape/EllipseComponent.h"
 #include "donner/svg/components/shape/RectComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
+#include "donner/svg/components/text/TextPositioningPresentation.h"
 #include "donner/svg/parser/Number2dParser.h"
 
 namespace donner::svg::parser {
@@ -139,6 +140,11 @@ ParseResult<bool> ParsePresentationAttribute(ElementType type, EntityHandle hand
     case ElementType::Path: return components::ParsePathPresentationAttribute(handle, name, params);
 
     case ElementType::Stop: return components::ParseStopPresentationAttribute(handle, name, params);
+
+    case ElementType::Text:
+    case ElementType::TSpan:
+    case ElementType::TextPath:
+      return components::ParseTextPositioningPresentationAttribute(handle, name, params);
 
     case ElementType::FeFlood:
       return components::ParseFeFloodPresentationAttribute(handle, name, params);

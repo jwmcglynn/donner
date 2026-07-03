@@ -24,10 +24,14 @@ class EditorApp;
 /// callsites that don't care about modifiers source-compatible.
 struct MouseModifiers {
   /// Shift held — used by `SelectTool` to toggle/extend selection
-  /// rather than replacing it.
+  /// rather than replacing it, and by `PenTool` for 45-degree constraints.
   bool shift = false;
-  /// Option/Alt held — used by transform handles to resize from center.
+  /// Option/Alt held — used by transform handles to resize from center and
+  /// by `PenTool` to break smooth-handle coupling.
   bool option = false;
+  /// Cmd (macOS) / Ctrl held — used by `PenTool` to restrict a gesture to
+  /// point editing (drag anchors/handles only, never place anchors).
+  bool command = false;
   /// Current viewport scale used for screen-pixel-stable hit testing.
   double pixelsPerDocUnit = 1.0;
 };

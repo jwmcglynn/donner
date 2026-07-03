@@ -70,6 +70,22 @@ std::optional<ReproEvent::Kind> ParseEventKind(std::string_view tag) {
   return std::nullopt;
 }
 
+const char* ActionKindTag(ReproAction::Kind kind) {
+  switch (kind) {
+    case ReproAction::Kind::SetActiveTool: return "active_tool";
+    case ReproAction::Kind::SetStyleProperty: return "style";
+    case ReproAction::Kind::CommitPenPath: return "commit_pen_path";
+  }
+  return "unknown";
+}
+
+std::optional<ReproAction::Kind> ParseActionKind(std::string_view tag) {
+  if (tag == "active_tool") return ReproAction::Kind::SetActiveTool;
+  if (tag == "style") return ReproAction::Kind::SetStyleProperty;
+  if (tag == "commit_pen_path") return ReproAction::Kind::CommitPenPath;
+  return std::nullopt;
+}
+
 const char* ProofKindTag(ReproExpectationProofKind kind) {
   switch (kind) {
     case ReproExpectationProofKind::PresentedPixels: return "presented-pixels";
@@ -132,6 +148,24 @@ void WriteEvent(std::ostream& os, const ReproEvent& ev) {
   if (ev.hit.has_value()) {
     os << ',';
     WriteHit(os, *ev.hit);
+  }
+  os << '}';
+}
+
+void WriteAction(std::ostream& os, const ReproAction& action) {
+  os << "{\"k\":\"" << ActionKindTag(action.kind) << '"';
+  switch (action.kind) {
+    case ReproAction::Kind::SetActiveTool:
+      os << ",\"tool\":";
+      WriteQuotedJsonString(os, action.tool);
+      break;
+    case ReproAction::Kind::SetStyleProperty:
+      os << ",\"p\":";
+      WriteQuotedJsonString(os, action.propertyName);
+      os << ",\"v\":";
+      WriteQuotedJsonString(os, action.propertyValue);
+      break;
+    case ReproAction::Kind::CommitPenPath: break;
   }
   os << '}';
 }
@@ -223,6 +257,14 @@ void WriteFrameLine(std::ostream& os, const ReproFrame& frame) {
   if (frame.viewport.has_value()) {
     os << ',';
     WriteViewport(os, *frame.viewport);
+  }
+  if (!frame.actions.empty()) {
+    os << ",\"a\":[";
+    for (std::size_t i = 0; i < frame.actions.size(); ++i) {
+      if (i > 0) os << ',';
+      WriteAction(os, frame.actions[i]);
+    }
+    os << ']';
   }
   if (!frame.events.empty()) {
     os << ",\"e\":[";
@@ -468,6 +510,44 @@ std::optional<ReproEvent> ParseEventObject(std::string_view& cursor) {
   return ev;
 }
 
+// Parses an action object starting at `cursor` pointing just past the `{`.
+// Advances `cursor` past the matching `}`. Returns nullopt on malformed input.
+std::optional<ReproAction> ParseActionObject(std::string_view& cursor) {
+  std::string_view body;
+  if (!ExtractBalancedObject(cursor, body)) return std::nullopt;
+
+  ReproAction action;
+  auto rest = FindKey(body, "k");
+  if (rest.empty()) return std::nullopt;
+  auto kindStr = ReadString(rest);
+  if (!kindStr.has_value()) return std::nullopt;
+  auto kind = ParseActionKind(*kindStr);
+  if (!kind.has_value()) return std::nullopt;
+  action.kind = *kind;
+
+  const auto readStringField = [&](std::string_view key, std::string& out) {
+    auto r = FindKey(body, key);
+    if (r.empty()) return false;
+    auto value = ReadString(r);
+    if (!value.has_value()) return false;
+    out = std::move(*value);
+    return true;
+  };
+
+  switch (action.kind) {
+    case ReproAction::Kind::SetActiveTool:
+      if (!readStringField("tool", action.tool)) return std::nullopt;
+      break;
+    case ReproAction::Kind::SetStyleProperty:
+      if (!readStringField("p", action.propertyName)) return std::nullopt;
+      if (!readStringField("v", action.propertyValue)) return std::nullopt;
+      break;
+    case ReproAction::Kind::CommitPenPath: break;
+  }
+
+  return action;
+}
+
 std::optional<ReproViewport> ParseViewportObject(std::string_view body) {
   ReproViewport viewport;
   const auto readField = [&](std::string_view key, double& out) {
@@ -659,6 +739,28 @@ std::optional<ReproFrame> ParseFrameLine(std::string_view line) {
       return std::nullopt;
     }
     frame.viewport = std::move(*viewport);
+  }
+
+  auto actionsStart = FindKey(line, "a");
+  if (!actionsStart.empty()) {
+    // Find the opening '[' then parse objects separated by commas until ']'.
+    std::size_t p = 0;
+    while (p < actionsStart.size() && actionsStart[p] != '[') ++p;
+    if (p >= actionsStart.size()) return std::nullopt;
+    std::string_view cursor = actionsStart.substr(p + 1);
+    while (!cursor.empty()) {
+      std::size_t q = 0;
+      while (q < cursor.size() && (cursor[q] == ' ' || cursor[q] == ',' || cursor[q] == '\t')) {
+        ++q;
+      }
+      if (q >= cursor.size()) break;
+      if (cursor[q] == ']') break;
+      if (cursor[q] != '{') return std::nullopt;
+      cursor.remove_prefix(q + 1);
+      auto action = ParseActionObject(cursor);
+      if (!action.has_value()) return std::nullopt;
+      frame.actions.push_back(*action);
+    }
   }
 
   auto eventsStart = FindKey(line, "e");

@@ -1,16 +1,25 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <optional>
+#include <span>
+#include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/Path.h"
+#include "donner/base/Vector2.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentedFrameComposer.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportInteractionController.h"
+#include "donner/editor/ViewportState.h"
 
 namespace donner::editor {
+
+inline constexpr double kRenderPaneCheckerboardSize = 16.0;
+inline constexpr double kFramebufferCheckerboardSize = kRenderPaneCheckerboardSize;
 
 struct RenderPanePresenterState {
   const ViewportState& viewport;
@@ -22,15 +31,8 @@ struct RenderPanePresenterState {
   Vector2d contentRegion = Vector2d::Zero();
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
-  bool showOverlay = true;
-  bool drawImmediateOverlay = true;
+  bool documentPresentedDirectly = false;
   bool showFrameGraph = true;
-};
-
-/// CPU cost counters produced while presenting the render pane.
-struct RenderPanePresenterCost {
-  /// Milliseconds spent issuing immediate overlay draw-list commands.
-  double immediateOverlayDrawMs = 0.0;
 };
 
 /**
@@ -74,6 +76,19 @@ struct RenderPanePresenterCost {
     Entity suppressedLayerEntity, bool suppressDragTargetTiles = false);
 
 /**
+ * Return true when retained overview tiles should be drawn behind the active tile set.
+ *
+ * Overview infill is only coherent under viewport-bounded active tiles. Full-document active tiles
+ * already represent the current presentation, so drawing an older retained overview underneath can
+ * reintroduce stale pixels during a transform drag.
+ *
+ * @param activeTilesViewportBounded True when the active tile set covers only the viewport.
+ * @param overviewTiles Retained full-document overview tiles.
+ */
+[[nodiscard]] bool ShouldPresentOverviewTiles(
+    bool activeTilesViewportBounded, std::span<const GlTextureCache::TileView> overviewTiles);
+
+/**
  * Return true when a presented tile quad has visible overlap with a screen rect.
  *
  * @param tileQuad Output-space tile quad from \ref ComputePresentedTileQuad.
@@ -94,12 +109,15 @@ struct RenderPanePresenterCost {
 class RenderPanePresenter {
 public:
   /**
-   * Draw the advanced editor render pane's image, overlay chrome, and frame graph.
+   * Draw the advanced editor render pane's composited document tiles and frame graph.
+   *
+   * Selection chrome is not drawn here: it is rendered by Donner's OverlayRenderer
+   * straight onto the Geode framebuffer (see
+   * EditorShell::DrawImmediateOverlaySnapshotToFramebuffer).
    *
    * @param state Presentation inputs for the current UI frame.
-   * @return CPU cost counters for work issued by the presenter.
    */
-  [[nodiscard]] RenderPanePresenterCost render(const RenderPanePresenterState& state) const;
+  void render(const RenderPanePresenterState& state) const;
 };
 
 }  // namespace donner::editor

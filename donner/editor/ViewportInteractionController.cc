@@ -4,10 +4,40 @@
 
 namespace donner::editor {
 
+namespace {
+
+bool ViewportMappingChanged(const ViewportState& before, const ViewportState& after) {
+  return before.zoom != after.zoom || before.panDocPoint != after.panDocPoint ||
+         before.panScreenPoint != after.panScreenPoint;
+}
+
+float MainFrameProfiledMs(const FrameProfilerSample& sample) {
+  return sample.mainPreparationMs + sample.mainRenderPollMs + sample.mainDocumentFlushMs +
+         sample.mainOverlayRefreshMs + sample.mainDocumentSyncMs + sample.mainLayoutMs +
+         sample.mainShortcutsMs + sample.mainMenusDialogsMs + sample.mainSourcePaneMs +
+         sample.mainRenderPaneMs + sample.mainSidebarsMs + sample.mainSplittersMs +
+         sample.mainEndRenderRequestMs;
+}
+
+float HostFrameProfiledMs(const FrameProfilerSample& sample) {
+  return sample.hostBeginFrameMs + sample.hostPreviousEndFrameMs;
+}
+
+float LegacyUiProfiledMs(const FrameProfilerSample& sample) {
+  return sample.overlayCaptureMs + sample.overlayDrawMs + sample.overlaySnapshotMs +
+         sample.overlayUploadMs + sample.compositedUploadMs + sample.sourceRopeLayoutMs +
+         sample.sourceRopeUpdateMs + sample.sourceRopeDrawMs;
+}
+
+}  // namespace
+
 float FrameProfilerSample::totalProfiledMs() const {
-  return overlayCaptureMs + overlayDrawMs + overlaySnapshotMs + overlayUploadMs +
-         compositedUploadMs + compositedRenderImmediateMs + compositedRenderCachedMs +
-         sourceRopeLayoutMs + sourceRopeUpdateMs + sourceRopeDrawMs;
+  const float topLevelMs = HostFrameProfiledMs(*this) + MainFrameProfiledMs(*this);
+  if (topLevelMs > 0.0f) {
+    return topLevelMs;
+  }
+
+  return LegacyUiProfiledMs(*this);
 }
 
 void FrameHistory::push(float ms) {
@@ -41,6 +71,28 @@ void FrameHistory::setLatestFrameCost(const FrameCostBreakdown& cost) {
 
   const std::size_t latestIdx = (writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
   profiler[latestIdx] = FrameProfilerSample{
+      .hostBeginFrameMs = static_cast<float>(cost.hostFrame.beginFrameMs),
+      .hostPreviousEndFrameMs = static_cast<float>(cost.hostFrame.previousEndFrameMs),
+      .hostPreviousImguiRenderMs = static_cast<float>(cost.hostFrame.previousImguiRenderMs),
+      .hostPreviousSurfaceAcquireMs = static_cast<float>(cost.hostFrame.previousSurfaceAcquireMs),
+      .hostPreviousUnderlayMs = static_cast<float>(cost.hostFrame.previousUnderlayMs),
+      .hostPreviousImguiDrawMs = static_cast<float>(cost.hostFrame.previousImguiDrawMs),
+      .hostPreviousDirectMs = static_cast<float>(cost.hostFrame.previousDirectMs),
+      .hostPreviousReadbackMs = static_cast<float>(cost.hostFrame.previousReadbackMs),
+      .hostPreviousPresentMs = static_cast<float>(cost.hostFrame.previousPresentMs),
+      .mainPreparationMs = static_cast<float>(cost.mainFrame.preparationMs),
+      .mainRenderPollMs = static_cast<float>(cost.mainFrame.renderPollMs),
+      .mainDocumentFlushMs = static_cast<float>(cost.mainFrame.documentFlushMs),
+      .mainOverlayRefreshMs = static_cast<float>(cost.mainFrame.overlayRefreshMs),
+      .mainDocumentSyncMs = static_cast<float>(cost.mainFrame.documentSyncMs),
+      .mainLayoutMs = static_cast<float>(cost.mainFrame.layoutMs),
+      .mainShortcutsMs = static_cast<float>(cost.mainFrame.shortcutsMs),
+      .mainMenusDialogsMs = static_cast<float>(cost.mainFrame.menusDialogsMs),
+      .mainSourcePaneMs = static_cast<float>(cost.mainFrame.sourcePaneMs),
+      .mainRenderPaneMs = static_cast<float>(cost.mainFrame.renderPaneMs),
+      .mainSidebarsMs = static_cast<float>(cost.mainFrame.sidebarsMs),
+      .mainSplittersMs = static_cast<float>(cost.mainFrame.splittersMs),
+      .mainEndRenderRequestMs = static_cast<float>(cost.mainFrame.endRenderRequestMs),
       .overlayCaptureMs = static_cast<float>(cost.overlay.captureMs),
       .overlayDrawMs = static_cast<float>(cost.overlay.drawMs),
       .overlaySnapshotMs = static_cast<float>(cost.overlay.snapshotMs),
@@ -117,17 +169,22 @@ void ViewportInteractionController::updateDevicePixelRatio(double devicePixelRat
   viewport_.devicePixelRatio = devicePixelRatio;
 }
 
-void ViewportInteractionController::resetToActualSize() {
+bool ViewportInteractionController::resetToActualSize() {
+  const ViewportState before = viewport_;
   viewport_.resetTo100Percent();
+  return ViewportMappingChanged(before, viewport_);
 }
 
-void ViewportInteractionController::applyZoom(double factor, const Vector2d& focalScreen) {
+bool ViewportInteractionController::applyZoom(double factor, const Vector2d& focalScreen) {
+  const ViewportState before = viewport_;
   viewport_.zoomAround(viewport_.zoom * factor, focalScreen);
+  return ViewportMappingChanged(before, viewport_);
 }
 
-void ViewportInteractionController::updatePanState(bool paneHovered, bool spaceHeld,
+bool ViewportInteractionController::updatePanState(bool paneHovered, bool spaceHeld,
                                                    bool middleDown, bool leftDown,
                                                    const ImVec2& mousePosition) {
+  const ViewportState before = viewport_;
   if (paneHovered && (spaceHeld || middleDown) && leftDown && !panning_) {
     panning_ = true;
     lastPanMouse_ = mousePosition;
@@ -137,7 +194,7 @@ void ViewportInteractionController::updatePanState(bool paneHovered, bool spaceH
   }
 
   if (!panning_) {
-    return;
+    return false;
   }
 
   viewport_.panBy(Vector2d(mousePosition.x - lastPanMouse_.x, mousePosition.y - lastPanMouse_.y));
@@ -145,13 +202,14 @@ void ViewportInteractionController::updatePanState(bool paneHovered, bool spaceH
   if (!leftDown && !middleDown) {
     panning_ = false;
   }
+
+  return ViewportMappingChanged(before, viewport_);
 }
 
-void ViewportInteractionController::consumeScrollEvents(std::vector<RenderPaneScrollEvent>& events,
-                                                        const Box2d& paneRect,
-                                                        bool modalCapturingInput,
-                                                        double wheelZoomStep,
-                                                        double panPixelsPerScrollUnit) {
+ScrollConsumptionResult ViewportInteractionController::consumeScrollEvents(
+    std::vector<RenderPaneScrollEvent>& events, const Box2d& paneRect, bool modalCapturingInput,
+    double wheelZoomStep, double panPixelsPerScrollUnit) {
+  ScrollConsumptionResult result;
   if (!modalCapturingInput) {
     const RenderPaneGestureContext gestureContext{
         .paneRect = paneRect,
@@ -163,11 +221,17 @@ void ViewportInteractionController::consumeScrollEvents(std::vector<RenderPaneSc
       if (!action.has_value()) {
         continue;
       }
+      const ViewportState before = viewport_;
       ApplyRenderPaneGesture(viewport_, *action);
+      const bool viewportChanged = ViewportMappingChanged(before, viewport_);
+      result.viewportChanged = result.viewportChanged || viewportChanged;
+      result.zoomChanged = result.zoomChanged ||
+                           (viewportChanged && action->type == RenderPaneGestureActionType::Zoom);
     }
   }
 
   events.clear();
+  return result;
 }
 
 void ViewportInteractionController::bufferPendingClick(const Vector2d& documentPoint,

@@ -253,6 +253,41 @@ bool ShouldPresentCompositedPreviewForViewport(const RenderResult::CompositedPre
   return true;
 }
 
+std::uint64_t PostReleaseSettleTargetVersion(std::uint64_t currentFrameVersion,
+                                             bool hasPendingMutations) {
+  if (hasPendingMutations && currentFrameVersion < std::numeric_limits<std::uint64_t>::max()) {
+    return currentFrameVersion + 1u;
+  }
+  return currentFrameVersion;
+}
+
+bool ShouldDeferSelectedViewportRefresh(Entity selectedEntity, bool hasActiveDrag,
+                                        std::uint64_t currentVersion,
+                                        std::uint64_t displayedDocVersion,
+                                        bool hasCachedSelectedTexture, bool rasterViewportSettled,
+                                        bool needsOverviewInfill,
+                                        bool pendingSelectedLayerRasterization) {
+  return selectedEntity != entt::null && !hasActiveDrag && currentVersion == displayedDocVersion &&
+         hasCachedSelectedTexture && !rasterViewportSettled && !needsOverviewInfill &&
+         !pendingSelectedLayerRasterization;
+}
+
+bool ShouldClearPendingSelectedLayerRasterization(
+    const std::optional<RenderRequest::DragPreview>& representedDragPreview, Entity pendingEntity,
+    std::uint64_t resultVersion, std::uint64_t pendingVersion) {
+  return pendingEntity != entt::null && resultVersion >= pendingVersion &&
+         representedDragPreview.has_value() && representedDragPreview->entity == pendingEntity &&
+         representedDragPreview->forceLayerRasterization;
+}
+
+bool CompositedPreviewClearsPendingSelectedLayerRasterization(
+    const RenderResult::CompositedPreview& preview, Entity pendingEntity,
+    std::uint64_t resultVersion, std::uint64_t pendingVersion) {
+  return preview.entity == pendingEntity &&
+         ShouldClearPendingSelectedLayerRasterization(preview.representedDragPreview, pendingEntity,
+                                                      resultVersion, pendingVersion);
+}
+
 std::optional<SelectTool::ActiveDragPreview> OverlayRepresentedDragPreviewForPresentation(
     const std::optional<SelectTool::ActiveDragPreview>& activeDragPreview,
     const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
@@ -289,8 +324,8 @@ Transform2d OverlayRepresentedDocumentFromLiveDocument(
     return Transform2d();
   }
 
-  return representedDragPreview->documentFromCachedDocument *
-         liveDragPreview->documentFromCachedDocument.inverse();
+  return liveDragPreview->documentFromCachedDocument.inverse() *
+         representedDragPreview->documentFromCachedDocument;
 }
 
 std::optional<SelectTool::ActiveGesturePreview> OverlayGesturePreviewForPresentation(
@@ -327,6 +362,7 @@ void RenderCoordinator::resetForLoadedDocument() {
   displayedDocVersion_ = 0;
   lastOverlaySelectionVec_.clear();
   sourceHoverElements_.clear();
+  lockedRejectionFlash_.reset();
   lastOverlaySourceHoverVec_.clear();
   immediateOverlaySnapshot_.reset();
   lastOverlayRasterSize_ = Vector2i::Zero();
@@ -338,9 +374,17 @@ void RenderCoordinator::resetForLoadedDocument() {
   lastOverlayVersion_ = std::numeric_limits<std::uint64_t>::max();
   lastOverlayMarqueeRectDoc_.reset();
   lastOverlayActiveBoundsPreview_.reset();
+  penLivePreviewElement_.reset();
+  lastOverlayPenLivePreviewElement_.reset();
+  penHoverPreviewSegmentDoc_.reset();
+  penHoverCloseAffordanceDoc_.reset();
+  lastOverlayPenHoverPreviewSegmentDoc_.reset();
+  lastOverlayPenHoverCloseAffordanceDoc_.reset();
   renderScheduler_.reset();
   displayNoneSuppressedSelectionEntity_ = entt::null;
   displayNoneSuppressedLayerEntity_ = entt::null;
+  pendingSelectedLayerRasterizationEntity_ = entt::null;
+  pendingSelectedLayerRasterizationVersion_ = 0;
   pendingCanvasSize_ = Vector2i::Zero();
   pendingCanvasSizeSince_ = std::chrono::steady_clock::time_point{};
   pendingRasterViewport_.reset();
@@ -356,6 +400,11 @@ bool RenderCoordinator::setSourceHoverElements(std::vector<svg::SVGElement> elem
 
   sourceHoverElements_ = std::move(elements);
   return true;
+}
+
+void RenderCoordinator::setLockedRejectionFlash(
+    std::optional<SelectTool::LockedRejectionFlash> flash) {
+  lockedRejectionFlash_ = std::move(flash);
 }
 
 void RenderCoordinator::refreshSelectionBoundsCache(EditorApp& app) {
@@ -374,8 +423,7 @@ void RenderCoordinator::promoteSelectionBoundsIfReady() {
 }
 
 bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
-    EditorApp& app, const ViewportState& viewport, GlTextureCache& textures,
-    const std::optional<Box2d>& marqueeRectDoc,
+    EditorApp& app, const ViewportState& viewport, const std::optional<Box2d>& marqueeRectDoc,
     std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
     std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview,
     std::optional<SelectionChromeDetail> selectionDetail,
@@ -383,7 +431,6 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   ZoneScopedN("RenderCoordinator::rasterizeOverlay");
   if (!app.hasDocument()) {
     immediateOverlaySnapshot_.reset();
-    textures.clearOverlay();
     return false;
   }
 
@@ -396,9 +443,13 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   const auto& overlaySelection = app.selectedElements();
   const std::optional<SelectTool::ActiveDragPreview> effectiveLiveDragPreview =
       liveDragPreview.has_value() ? liveDragPreview : representedDragPreview;
+  // An active locked-rejection flash fades every frame, so it must force a fresh overlay capture
+  // (defeating the "geometry unchanged → reuse cached overlay" fast path below) until it expires.
+  const bool lockedFlashActive =
+      lockedRejectionFlash_.has_value() && lockedRejectionFlash_->intensity > 0.0f;
   const bool overlayInteractionActive =
       effectiveLiveDragPreview.has_value() || representedDragPreview.has_value() ||
-      marqueeRectDoc.has_value() || activeBoundsPreview.has_value();
+      marqueeRectDoc.has_value() || activeBoundsPreview.has_value() || lockedFlashActive;
   const bool overlayGeometryDiffers =
       overlaySelection != lastOverlaySelectionVec_ ||
       sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
@@ -409,7 +460,10 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
       !SameTransform(currentOverlayCanvasFromDocument, *lastOverlayCanvasFromDocument_) ||
       !SameActiveBoundsPreview(activeBoundsPreview, lastOverlayActiveBoundsPreview_) ||
       currentVersion != lastOverlayVersion_ ||
-      overlayInteractionActive != lastOverlayInteractionActive_;
+      overlayInteractionActive != lastOverlayInteractionActive_ ||
+      penLivePreviewElement_ != lastOverlayPenLivePreviewElement_ ||
+      penHoverPreviewSegmentDoc_ != lastOverlayPenHoverPreviewSegmentDoc_ ||
+      penHoverCloseAffordanceDoc_ != lastOverlayPenHoverCloseAffordanceDoc_;
   if (!selectionDetail.has_value()) {
     if (overlayGeometryDiffers || IsUnsetTimePoint(overlayStableSince_)) {
       overlayStableSince_ = now;
@@ -422,8 +476,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
 
   if (!overlayInteractionActive && !overlayGeometryDiffers &&
       resolvedSelectionDetail == lastOverlaySelectionDetail_ &&
-      (immediateOverlaySnapshot_.has_value() ||
-       (textures.overlayWidth() > 0 && textures.overlayHeight() > 0))) {
+      immediateOverlaySnapshot_.has_value()) {
     FrameCostBreakdown::Overlay overlayCost;
     overlayCost.canvasSize = currentOverlayRasterSize;
     overlayCost.selectedElementCount = static_cast<int>(overlaySelection.size());
@@ -462,11 +515,23 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   // outlines. `selectionBoundsCache_` is maintained only for main-loop
   // selection-change detection and does not gate overlay geometry.
   const auto captureStart = std::chrono::steady_clock::now();
-  const SelectionChromeSnapshot chromeSnapshot = OverlayRenderer::captureChromeSnapshot(
+  std::optional<LockedRejectionFlashInput> lockedFlashInput;
+  if (lockedFlashActive) {
+    lockedFlashInput = LockedRejectionFlashInput{
+        .element = lockedRejectionFlash_->element,
+        .intensity = lockedRejectionFlash_->intensity,
+    };
+  }
+  SelectionChromeSnapshot chromeSnapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(overlaySelection), marqueeRectDoc,
       currentOverlayCanvasFromDocument, chromeBoundsPreview,
       std::span<const svg::SVGElement>(sourceHoverElements_), currentOverlayCullRectDoc,
-      resolvedSelectionDetail, representedDocumentFromLiveDocument);
+      resolvedSelectionDetail, representedDocumentFromLiveDocument, lockedFlashInput,
+      viewport.devicePixelRatio, penLivePreviewElement_);
+  // Pen hover chrome is pushed state (no registry reads), stamped onto the
+  // snapshot after capture.
+  chromeSnapshot.penPreviewSegmentDoc = penHoverPreviewSegmentDoc_;
+  chromeSnapshot.penCloseAffordanceDoc = penHoverCloseAffordanceDoc_;
   overlayCost.captureMs = MillisecondsSince(captureStart);
   overlayCost.pathCount = static_cast<int>(chromeSnapshot.paths.size());
   overlayCost.hoverPathCount = static_cast<int>(chromeSnapshot.hoverPaths.size());
@@ -474,8 +539,28 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   overlayCost.hoverAabbCount = static_cast<int>(chromeSnapshot.hoverAabbsDoc.size());
   overlayCost.handleCount = static_cast<int>(chromeSnapshot.handleBoxesDoc.size());
   overlayCost.hasMarquee = chromeSnapshot.marqueeDoc.has_value();
+  // Report the overlay payload this frame so the metric is non-zero whenever the
+  // overlay was re-rasterized with content — independent of presentation
+  // backend. The TinySkia path uploads the overlay raster texture (its
+  // `payloadBytes` is that texture's bytes); the Geode/WGPU path renders the
+  // snapshot direct to the framebuffer with no upload, so without this the
+  // metric would read 0 even though the overlay was rebuilt every frame
+  // (gl_rnr GeodeDragZoomRerasterizes...). Mirror the upload metric: the overlay
+  // raster bytes, gated on the snapshot actually having something to draw.
+  const bool overlayHasContent =
+      !chromeSnapshot.paths.empty() || !chromeSnapshot.hoverPaths.empty() ||
+      !chromeSnapshot.handleBoxesDoc.empty() || !chromeSnapshot.aabbsDoc.empty() ||
+      !chromeSnapshot.pathAnchorBoxesDoc.empty() || !chromeSnapshot.pathControlLinesDoc.empty() ||
+      !chromeSnapshot.pathControlPointBoxesDoc.empty() || chromeSnapshot.marqueeDoc.has_value() ||
+      chromeSnapshot.orientedBoundsDoc.has_value() || chromeSnapshot.livePathPreview.has_value() ||
+      chromeSnapshot.penPreviewSegmentDoc.has_value() ||
+      chromeSnapshot.penCloseAffordanceDoc.has_value();
+  overlayCost.payloadBytes =
+      overlayHasContent
+          ? static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.x)) *
+                static_cast<std::uint64_t>(std::max(0, currentOverlayRasterSize.y)) * 4u
+          : 0u;
   immediateOverlaySnapshot_ = chromeSnapshot;
-  textures.clearOverlay();
 
   lastOverlaySelectionVec_ = overlaySelection;
   lastOverlaySourceHoverVec_ = sourceHoverElements_;
@@ -487,6 +572,9 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
   lastOverlayVersion_ = currentVersion;
   lastOverlayMarqueeRectDoc_ = marqueeRectDoc;
   lastOverlayActiveBoundsPreview_ = activeBoundsPreview;
+  lastOverlayPenLivePreviewElement_ = penLivePreviewElement_;
+  lastOverlayPenHoverPreviewSegmentDoc_ = penHoverPreviewSegmentDoc_;
+  lastOverlayPenHoverCloseAffordanceDoc_ = penHoverCloseAffordanceDoc_;
   lastFrameCostBreakdown_.overlay = overlayCost;
   return true;
 }
@@ -494,7 +582,8 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
 bool RenderCoordinator::rasterizeOverlayForPresentation(
     EditorApp& app, SelectTool& selectTool, const ViewportState& viewport, GlTextureCache& textures,
     std::optional<SelectTool::ActiveDragPreview> activeDragPreview,
-    std::optional<SelectTool::ActiveDragPreview> representedDragPreview) {
+    std::optional<SelectTool::ActiveDragPreview> representedDragPreview,
+    std::optional<SelectionChromeDetail> selectionDetail, bool allowLiveGeometryOverlay) {
   ZoneScopedN("RenderCoordinator::rasterizeOverlayForPresentation");
   if (!app.hasDocument() || viewport.paneSize.x <= 0.0 || viewport.paneSize.y <= 0.0) {
     return false;
@@ -504,9 +593,35 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
       selectTool.activeDragPreview();
   const std::optional<SelectTool::ActiveDragPreview> liveDragPreview =
       liveActiveDragPreview.has_value() ? liveActiveDragPreview : activeDragPreview;
-  return rasterizeOverlayForCurrentSelection(
-      app, viewport, textures, selectTool.marqueeRect(), representedDragPreview,
-      selectTool.activeTransformBoundsPreview(), std::nullopt, liveDragPreview);
+  const std::optional<SelectTool::ActiveTransformBoundsPreview> activeBoundsPreview =
+      selectTool.activeTransformBoundsPreview();
+  const bool hasPresentationProjection = liveDragPreview.has_value() ||
+                                         representedDragPreview.has_value() ||
+                                         activeBoundsPreview.has_value();
+  const std::uint64_t currentVersion = app.document().currentFrameVersion();
+  // Non-transforming geometry edits usually have no presenter-side projection that can make live
+  // chrome line up with older document pixels. Active PenTool drags are the exception: the selected
+  // path is itself the live interaction surface, so the renderer-backed path chrome must track the
+  // live path directly.
+  if (displayedDocVersion_ != 0u && currentVersion > displayedDocVersion_ &&
+      !hasPresentationProjection && !allowLiveGeometryOverlay) {
+    if (immediateOverlaySnapshot_.has_value() && lastOverlayVersion_ > displayedDocVersion_) {
+      immediateOverlaySnapshot_.reset();
+    }
+
+    FrameCostBreakdown::Overlay overlayCost;
+    overlayCost.canvasSize = OverlayRasterSizeForViewport(viewport);
+    overlayCost.selectedElementCount = static_cast<int>(app.selectedElements().size());
+    overlayCost.sourceHoverElementCount = static_cast<int>(sourceHoverElements_.size());
+    overlayCost.selectionBoundsOnly = selectionDetail.has_value() &&
+                                      *selectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
+    lastFrameCostBreakdown_.overlay = overlayCost;
+    return false;
+  }
+
+  return rasterizeOverlayForCurrentSelection(app, viewport, selectTool.marqueeRect(),
+                                             representedDragPreview, activeBoundsPreview,
+                                             selectionDetail, liveDragPreview);
 }
 
 void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& viewport,
@@ -575,6 +690,12 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     compositedPresentation_.noteCachedTextures(
         result.compositedPreview->entity, result.version, resultCanvasSize,
         DragPreviewFromRenderRequest(result.compositedPreview->representedDragPreview));
+    if (CompositedPreviewClearsPendingSelectedLayerRasterization(
+            *result.compositedPreview, pendingSelectedLayerRasterizationEntity_, result.version,
+            pendingSelectedLayerRasterizationVersion_)) {
+      pendingSelectedLayerRasterizationEntity_ = entt::null;
+      pendingSelectedLayerRasterizationVersion_ = 0;
+    }
   }
 
   displayedDocVersion_ = result.version;
@@ -586,8 +707,8 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
     // chrome-refresh path. Composited drag lands here; SelectTool isn't
     // reachable, so we reuse whatever the most recent main-thread
     // rasterize baked in.
-    rasterizeOverlayForCurrentSelection(app, viewport, textures, lastOverlayMarqueeRectDoc_,
-                                        std::nullopt, std::nullopt, lastOverlaySelectionDetail_);
+    rasterizeOverlayForCurrentSelection(app, viewport, lastOverlayMarqueeRectDoc_, std::nullopt,
+                                        std::nullopt, lastOverlaySelectionDetail_);
     compositedPresentation_.noteChromeRefreshCompleted(displayedDocVersion_);
   }
   promoteSelectionBoundsIfReady();
@@ -639,11 +760,12 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const bool needsOverviewInfill =
       rasterViewport.viewportBounded && !dragPreview.has_value() && textures != nullptr &&
       (!coverageDiagnostics.overviewInfillAvailable || pendingDocumentMutationOverviewRefresh_);
-  const bool canDeferSelectedViewportRefresh = prewarmEntity != entt::null &&
-                                               !dragPreview.has_value() &&
-                                               currentVersion == displayedDocVersion_;
-  const bool deferSelectedViewportRefresh =
-      canDeferSelectedViewportRefresh && !rasterViewportSettled;
+  const bool pendingSelectedLayerRasterization =
+      prewarmEntity != entt::null && prewarmEntity == pendingSelectedLayerRasterizationEntity_;
+  const bool deferSelectedViewportRefresh = ShouldDeferSelectedViewportRefresh(
+      prewarmEntity, dragPreview.has_value(), currentVersion, displayedDocVersion_,
+      compositedPresentation_.hasCachedTexturesForEntity(prewarmEntity), rasterViewportSettled,
+      needsOverviewInfill, pendingSelectedLayerRasterization);
   if (deferSelectedViewportRefresh && !needsOverviewInfill) {
     if (renderWorker_.asyncRenderer.isBusy()) {
       renderWorker_.asyncRenderer.cancelInFlight();
@@ -658,6 +780,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
   const std::vector<Entity> prewarmExtraEntities =
       requestOverviewInfill ? std::vector<Entity>{}
                             : selectedCompositedExtraEntities(app, prewarmEntity);
+  const bool forceSelectedLayerRasterization = pendingSelectedLayerRasterization;
   const bool useSelectedPrewarmRasterViewport =
       !requestOverviewInfill && prewarmEntity != entt::null && !dragPreview.has_value() &&
       rasterViewport.viewportBounded;
@@ -694,6 +817,7 @@ void RenderCoordinator::maybeRequestRender(EditorApp& app, SelectTool& selectToo
           .selectedEntity = requestOverviewInfill ? entt::null : prewarmEntity,
           .selectedExtraEntities = prewarmExtraEntities,
           .activeDragPreview = dragPreview,
+          .forceSelectedLayerRasterization = forceSelectedLayerRasterization,
           .currentVersion = currentVersion,
           .currentCanvasSize = currentCanvasSize,
           .currentRasterViewport = requestRasterViewport,
@@ -736,6 +860,24 @@ void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
   pendingDocumentMutationOverviewRefresh_ = true;
 }
 
+void RenderCoordinator::invalidatePresentationAfterDocumentFlush(
+    EditorApp& app, const AsyncSVGDocument::FlushResult& flushResult) {
+  invalidatePresentationAfterDocumentFlush(flushResult);
+
+  const Entity selectedEntity = selectedCompositedEntity(app);
+  if (selectedEntity == entt::null) {
+    return;
+  }
+
+  if (std::find(flushResult.cacheInvalidatedElements.begin(),
+                flushResult.cacheInvalidatedElements.end(),
+                selectedEntity) != flushResult.cacheInvalidatedElements.end()) {
+    pendingSelectedLayerRasterizationEntity_ = selectedEntity;
+    pendingSelectedLayerRasterizationVersion_ = app.document().currentFrameVersion();
+    compositedPresentation_.discardCachedTexturesForEntity(selectedEntity);
+  }
+}
+
 Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
   const std::optional<svg::SVGElement> selected = SelectedGraphicsElement(app);
   if (!selected.has_value()) {
@@ -757,7 +899,7 @@ std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp
   }
 
   for (const svg::SVGElement& selected : app.selectedElements()) {
-    if (!IsGraphicsElement(selected) || IsDisplayNone(selected)) {
+    if (!selected.isa<svg::SVGGraphicsElement>() || IsDisplayNone(selected)) {
       continue;
     }
 

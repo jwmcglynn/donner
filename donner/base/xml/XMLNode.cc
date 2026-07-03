@@ -44,22 +44,6 @@ struct SourceOffsetComponent {
   std::uint64_t anchorSourceVersion = 0;
 };
 
-/// Escape text content (Data nodes): escape `<`, `>`, and `&`, but not quotes since
-/// we are not in an attribute context.
-std::string EscapeTextContent(std::string_view text) {
-  std::string out;
-  out.reserve(text.size() + 8);
-  for (const char ch : text) {
-    switch (ch) {
-      case '<': out.append("&lt;"); break;
-      case '>': out.append("&gt;"); break;
-      case '&': out.append("&amp;"); break;
-      default: out.push_back(ch); break;
-    }
-  }
-  return out;
-}
-
 /// Serialize an XMLQualifiedNameRef to XML syntax (ns:name or just name).
 void AppendQualifiedName(std::string& out, const XMLQualifiedNameRef& qname) {
   if (!qname.namespacePrefix.empty()) {
@@ -750,7 +734,14 @@ RcString XMLNode::serializeToString(int indentLevel, bool prettyPrint) const {
       const std::optional<RcString> val = value();
       if (val.has_value()) {
         out.append(indent);
-        out.append(EscapeTextContent(*val));
+        if (std::optional<RcString> escaped = donner::xml::EscapeTextContent(*val);
+            escaped.has_value()) {
+          out.append(*escaped);
+        } else {
+          // Best-effort serialization for values that are not representable in
+          // well-formed XML character data.
+          out.append(*val);
+        }
       }
       break;
     }

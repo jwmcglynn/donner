@@ -1329,6 +1329,41 @@ TEST(Path, StrokeToFillCurves) {
   EXPECT_FALSE(filled.empty());
 }
 
+TEST(Path, StrokeToFillNearReversalJoinDoesNotSpike) {
+  // A short line followed by a curve whose initial tangent nearly reverses
+  // the line's direction (~179° turn) — extracted from an image-traced
+  // lightning shape in the Donner splash. The inside-turn miter intersection
+  // for such a join is nearly parallel offset lines meeting far beyond both
+  // segments' extents (halfWidth / cos(halfAngle) ≈ 100+ units). Emitting
+  // that point produced a long thin diagonal spike across the canvas — the
+  // editor's selection-outline "flare". The join must fall back to the naive
+  // connector when the intersection lies beyond either adjacent segment.
+  Path path = PathBuilder()
+                  .moveTo({330, 210})
+                  .lineTo({327, 213})
+                  .curveTo({328.49, 211.45}, {329.76, 209.64}, {330.6, 207.58})
+                  .build();
+  StrokeStyle style;
+  style.width = 1.5;
+  style.join = LineJoin::Miter;
+  style.miterLimit = 4.0;
+  const Path filled = path.strokeToFill(style);
+  ASSERT_FALSE(filled.empty());
+
+  // Every outline point must stay within the input's bounds expanded by the
+  // worst-case legal join extent (miterLimit * halfWidth).
+  const Box2d inputBounds = path.bounds();
+  const double maxExtentFromPath = style.miterLimit * style.width * 0.5;
+  const Box2d allowed(inputBounds.topLeft - Vector2d(maxExtentFromPath, maxExtentFromPath),
+                      inputBounds.bottomRight + Vector2d(maxExtentFromPath, maxExtentFromPath));
+  for (const Vector2d& point : filled.points()) {
+    EXPECT_TRUE(allowed.contains(point))
+        << "stroke outline point (" << point.x << ", " << point.y
+        << ") escapes the stroke envelope [" << allowed.topLeft.x << ", " << allowed.topLeft.y
+        << " .. " << allowed.bottomRight.x << ", " << allowed.bottomRight.y << "]";
+  }
+}
+
 // -----------------------------------------------------------------------------
 // Dashed strokes
 // -----------------------------------------------------------------------------

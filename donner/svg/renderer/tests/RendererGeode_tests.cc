@@ -11,14 +11,18 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
+#include "donner/base/ParseWarningSink.h"
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
 #include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep — provides UnpremultiplyRgba
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -307,6 +311,19 @@ protected:
     renderer.endFrame();
     return renderer.takeSnapshot();
   }
+
+  RendererBitmap drawPreparedEntityRange(RendererGeode& renderer, SVGDocument& document,
+                                         Entity entity) {
+    ParseWarningSink warningSink;
+    RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+    RenderViewport viewport;
+    viewport.size = Vector2d(100.0, 100.0);
+    viewport.devicePixelRatio = 1.0;
+    RendererDriver driver(renderer);
+    driver.drawEntityRange(document.registry(), entity, entity, viewport, Transform2d());
+    return renderer.takeSnapshot();
+  }
 };
 
 // ----------------------------------------------------------------------------
@@ -324,6 +341,26 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
 
   auto pixel = pixelAt(snap, 32, 32);
   EXPECT_EQ(pixel[3], 0u) << "Empty frame should be transparent";
+}
+
+TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+
+  RendererBitmap opaqueSnap = renderer.takeSnapshot();
+  ASSERT_FALSE(opaqueSnap.empty());
+  EXPECT_THAT(pixelAt(opaqueSnap, 32, 32), RgbaEq(255, 0, 0, 255));
+
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  RendererBitmap transparentSnap = renderer.takeSnapshot();
+  ASSERT_FALSE(transparentSnap.empty());
+  EXPECT_THAT(pixelAt(transparentSnap, 32, 32), IsTransparent())
+      << "A same-size Geode frame with no draws must clear pixels from the previous frame.";
 }
 
 /// Width/height should reflect the viewport's device-pixel size after
@@ -399,6 +436,90 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
   EXPECT_EQ(pixelAt(actual, 32, 32), pixelAt(expected, 32, 32))
       << "Texture snapshots are premultiplied render-target pixels. The blit shader must not "
          "premultiply them again.";
+}
+
+TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransform) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  RendererGeode source = createRenderer();
+  beginFrame(source);
+  source.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  source.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  source.endFrame();
+
+  std::shared_ptr<const RendererTextureSnapshot> texture = source.takeTextureSnapshot();
+  ASSERT_TRUE(texture != nullptr);
+
+  RendererGeode composited = createRenderer();
+  beginFrame(composited);
+  composited.setTransform(Transform2d::Translate(Vector2d(24.0, 24.0)));
+  ASSERT_TRUE(composited.drawTextureSnapshot(*texture, Box2d({0.0, 0.0}, {16.0, 16.0})));
+  composited.endFrame();
+
+  const RendererBitmap actual = composited.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(pixelAt(actual, 8, 8), IsTransparent())
+      << "The texture snapshot must be translated out of its local-space source rect.";
+  EXPECT_THAT(pixelAt(actual, 32, 32), RgbaEq(0, 255, 0, 255))
+      << "drawTextureSnapshot must apply the renderer's current transform like other draw calls.";
+}
+
+TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransformWithClip) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  RendererGeode source = createRenderer();
+  beginFrame(source);
+  source.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  source.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  source.endFrame();
+
+  std::shared_ptr<const RendererTextureSnapshot> texture = source.takeTextureSnapshot();
+  ASSERT_TRUE(texture != nullptr);
+
+  RendererGeode composited = createRenderer();
+  beginFrame(composited);
+  ResolvedClip clip;
+  clip.clipRect = Box2d({20.0, 20.0}, {48.0, 48.0});
+  composited.pushClip(clip);
+  composited.setTransform(Transform2d::Translate(Vector2d(24.0, 24.0)));
+  ASSERT_TRUE(composited.drawTextureSnapshot(*texture, Box2d({0.0, 0.0}, {16.0, 16.0})));
+  composited.popClip();
+  composited.endFrame();
+
+  const RendererBitmap actual = composited.takeSnapshot();
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(pixelAt(actual, 8, 8), IsTransparent());
+  EXPECT_THAT(pixelAt(actual, 32, 32), RgbaEq(0, 255, 0, 255))
+      << "Texture-snapshot presentation must still draw when the document-image clip is active.";
+}
+
+TEST_F(RendererGeodeTest, DrawEntityRangeInvalidatesCachedFillEncodeAfterPathMutation) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+             <path id="p" d="M 10 10 L 80 10" style="fill: none; stroke: black; stroke-width: 1"/>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+  auto path = document.querySelector("#p");
+  ASSERT_TRUE(path.has_value());
+  const Entity pathEntity = path->unsafeEntityHandle().entity();
+
+  RendererGeode renderer = createRenderer();
+  const RendererBitmap before = drawPreparedEntityRange(renderer, document, pathEntity);
+  ASSERT_FALSE(before.empty());
+  EXPECT_THAT(pixelAt(before, 24, 24), IsTransparent());
+
+  path->setAttribute("d", "M 10 10 L 80 10 L 10 80 Z");
+  path->setAttribute("style", "fill: #00ff00; stroke: none");
+
+  const RendererBitmap after = drawPreparedEntityRange(renderer, document, pathEntity);
+  ASSERT_FALSE(after.empty());
+  EXPECT_THAT(pixelAt(after, 24, 24),
+              Rgba(testing::Lt(20), testing::Gt(220), testing::Lt(20), testing::Gt(220)))
+      << "drawEntityRange must not reuse a Geode fill encode cached before the path's `d` "
+         "attribute changed.";
 }
 
 TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {

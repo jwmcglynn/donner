@@ -13,6 +13,9 @@ donner_cc_library(
     srcs = [
         "ComplexityBucketer.cc",
         "CompositorController.cc",
+        "CompositorControllerInternal.cc",
+        "CompositorControllerInternal.h",
+        "CompositorControllerRasterize.cc",
         "CompositorLayer.cc",
         "DragSession.cc",
         "LayerResolver.cc",

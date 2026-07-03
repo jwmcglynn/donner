@@ -13,6 +13,7 @@
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/CompositedPresentation.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/editor/PenTool.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -64,6 +65,8 @@ public:
     bool includeFinalFrame = false;
     /// Attach each split compositor tile as an MCP PNG image.
     bool includeTileImages = false;
+    /// Attach the composed display frame as an MCP PNG image.
+    bool includeDisplayFrame = false;
     /// Also embed PNG base64 in the JSON text payload.
     bool embedPngBase64 = false;
   };
@@ -90,6 +93,7 @@ public:
     Vector2d canvasOffsetDoc = Vector2d::Zero();
     Vector2d bitmapDimsDoc = Vector2d::Zero();
     Vector2d dragTranslationDoc = Vector2d::Zero();
+    Transform2d documentFromCachedDocument = Transform2d();
     bool isDragTarget = false;
     bool reusedPreviousTexture = false;
     std::string contentHash;
@@ -117,7 +121,12 @@ private:
   ToolCallResult getSvgSource(const nlohmann::json& arguments) const;
   ToolCallResult editSvgSource(const nlohmann::json& arguments);
   ToolCallResult selectBySelector(const nlohmann::json& arguments);
+  ToolCallResult clickLayerButton(const nlohmann::json& arguments);
+  ToolCallResult setActiveTool(const nlohmann::json& arguments);
+  ToolCallResult setStyleProperty(const nlohmann::json& arguments);
+  ToolCallResult penPath(const nlohmann::json& arguments);
   ToolCallResult dragSelector(const nlohmann::json& arguments);
+  ToolCallResult transformSelector(const nlohmann::json& arguments);
   ToolCallResult renderFrameTool(const nlohmann::json& arguments);
   ToolCallResult sessionState(const nlohmann::json& arguments) const;
   ToolCallResult startRnrRecording(const nlohmann::json& arguments);
@@ -157,16 +166,27 @@ private:
 
   [[nodiscard]] bool renderCurrentFrame(std::vector<CapturedRenderResult>* results,
                                         std::string* error);
+  [[nodiscard]] std::optional<svg::RendererBitmap> composeDisplayFrameBitmap(
+      const DisplayFrameSnapshot& display) const;
   DisplayFrameSnapshot recordDisplayFrame(const RenderResult& result);
   [[nodiscard]] DisplayFrameSnapshot currentDisplayFrame() const;
-  void appendRnrFrame(const Vector2d& documentPoint, int mouseButtonMask,
+  void appendRnrFrame(const Vector2d& documentPoint, int mouseButtonMask, int modifierMask,
                       std::vector<repro::ReproEvent> events);
+  void appendRnrActionFrame(repro::ReproAction action);
   [[nodiscard]] repro::ReproViewport currentReproViewport() const;
   [[nodiscard]] Vector2d currentRecordingScreenPoint(const Vector2d& documentPoint) const;
   [[nodiscard]] std::optional<std::filesystem::path> resolveRnrSvgPath(
       const std::filesystem::path& rnrPath, std::string_view recordingSvgPath) const;
   [[nodiscard]] bool syncCanvasSize(const ViewportState& viewport);
   [[nodiscard]] bool drainPendingWritebacks();
+  void syncSourceTextFromDocumentIfChanged();
+  [[nodiscard]] bool setActiveToolForReplay(std::string_view tool, std::string* error);
+  [[nodiscard]] bool applyStylePropertyForReplay(std::string_view propertyName,
+                                                 std::string_view propertyValue);
+  [[nodiscard]] bool applyReproAction(const repro::ReproAction& action, std::string* error);
+  void replayMouseDown(const Vector2d& documentPoint, MouseModifiers modifiers);
+  void replayMouseMove(const Vector2d& documentPoint, bool buttonHeld, MouseModifiers modifiers);
+  void replayMouseUp(const Vector2d& documentPoint);
   [[nodiscard]] std::optional<svg::SVGElement> querySelector(std::string_view selector);
   [[nodiscard]] std::optional<Box2d> elementWorldBounds(const svg::SVGElement& element) const;
   [[nodiscard]] nlohmann::json selectedElementJson() const;
@@ -176,6 +196,12 @@ private:
 
   EditorApp app_;
   std::unique_ptr<SelectTool> selectTool_;
+  PenTool penTool_;
+  enum class ActiveReplayTool : std::uint8_t {
+    Select,
+    Pen,
+  };
+  ActiveReplayTool activeReplayTool_ = ActiveReplayTool::Select;
   svg::Renderer renderer_;
   AsyncRenderer asyncRenderer_;
   CompositedPresentation displayPresentation_;

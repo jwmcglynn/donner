@@ -162,4 +162,45 @@ std::optional<RcString> EscapeAttributeValue(std::string_view value, char quoteC
   return RcString(std::move(out));
 }
 
+std::optional<RcString> EscapeTextContent(std::string_view value) {
+  std::string out;
+  out.reserve(value.size() + 8);
+
+  const auto* const bytes = reinterpret_cast<const std::uint8_t*>(value.data());
+  const std::size_t size = value.size();
+  std::size_t i = 0;
+
+  while (i < size) {
+    const std::uint8_t lead = bytes[i];
+
+    if (lead < 0x80) {
+      const int codepoint = static_cast<int>(lead);
+      if (!IsValidXmlAttributeCodepoint(codepoint)) {
+        return std::nullopt;
+      }
+      switch (lead) {
+        case '<': out.append("&lt;"); break;
+        case '>': out.append("&gt;"); break;
+        case '&': out.append("&amp;"); break;
+        default: out.push_back(static_cast<char>(lead)); break;
+      }
+      ++i;
+      continue;
+    }
+
+    const int seqLen = Utf8SequenceLength(lead);
+    if (seqLen == 0 || i + static_cast<std::size_t>(seqLen) > size) {
+      return std::nullopt;
+    }
+    const std::int32_t codepoint = DecodeUtf8(bytes + i, seqLen);
+    if (!IsValidXmlAttributeCodepoint(codepoint)) {
+      return std::nullopt;
+    }
+    out.append(value.substr(i, seqLen));
+    i += static_cast<std::size_t>(seqLen);
+  }
+
+  return RcString(std::move(out));
+}
+
 }  // namespace donner::xml

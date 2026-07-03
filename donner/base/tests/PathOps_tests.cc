@@ -127,6 +127,28 @@ Path NearCoincidentCubicTimeoutRhsPath() {
       .build();
 }
 
+Path FuzzerTimeoutCubicDifferenceLhsPath() {
+  const Vector2d a = FuzzerPoint(0x6e6e, 0x6e6e);
+  const Vector2d b = FuzzerPoint(0xffff, 0xffff);
+
+  return PathBuilder().moveTo(a).curveTo({a.x, b.y}, b, b).lineTo(b).lineTo(b).closePath().build();
+}
+
+Path FuzzerTimeoutCubicDifferenceRhsPath() {
+  const Vector2d a = FuzzerPoint(0x6e6e, 0x6e6e);
+  const Vector2d b = FuzzerPoint(0xffff, 0xffff);
+  const Vector2d shiftedControl = FuzzerPoint(0x6e49, 0xffff);
+  const Vector2d shiftedEnd = FuzzerPoint(0xffff, 0xff6e);
+
+  return PathBuilder()
+      .moveTo(a)
+      .curveTo(shiftedControl, b, b)
+      .lineTo(b)
+      .lineTo(shiftedEnd)
+      .closePath()
+      .build();
+}
+
 Path QuadraticCapPath() {
   return PathBuilder()
       .moveTo({0, 0})
@@ -1279,6 +1301,23 @@ TEST(PathOpsTest, DegenerateCubicIntersectionSearchReturnsTooComplex) {
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Difference, inputs, options);
 
   EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
+  EXPECT_TRUE(result.paths.empty());
+  EXPECT_FALSE(result.diagnostics.empty());
+}
+
+TEST(PathOpsTest, FuzzerTimeoutCubicDifferenceReturnsTooComplex) {
+  PathBooleanOptions options;
+  options.maxCurveCount = 64;
+  options.maxIntersections = 256;
+  options.maxOutputCommands = 512;
+  const std::array<PathBooleanInput, 2> inputs = {
+      Input(FuzzerTimeoutCubicDifferenceLhsPath()),
+      Input(FuzzerTimeoutCubicDifferenceRhsPath()),
+  };
+
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Difference, inputs, options);
+
+  EXPECT_EQ(result.status, PathBooleanStatus::TooComplex) << Diagnostics(result);
   EXPECT_TRUE(result.paths.empty());
   EXPECT_FALSE(result.diagnostics.empty());
 }

@@ -25,6 +25,12 @@ class ParseResult;
 
 }  // namespace donner
 
+namespace donner::editor {
+
+class AsyncSVGDocument;
+
+}  // namespace donner::editor
+
 namespace donner::svg {
 
 // Forward declaration, #include "donner/svg/SVGDocument.h"
@@ -240,6 +246,7 @@ private:
  * @see \ref SVGDocument
  */
 class SVGElement {
+  friend class donner::editor::AsyncSVGDocument;
   friend class parser::AttributeParser;
   friend class DonnerController;
   friend class SVGDocument;
@@ -671,6 +678,36 @@ public:
    * (fill, stroke, font-size, etc.).
    */
   const PropertyRegistry& getComputedStyle() const;
+
+  /**
+   * The element's own specified style properties — the parsed `style` attribute plus presentation
+   * attributes, before the CSS cascade and inheritance — or `nullptr` when the element carries no
+   * style data.
+   *
+   * Unlike \ref getComputedStyle this never computes anything, making it suitable for diagnostics
+   * that must observe style state without mutating it.
+   */
+  const PropertyRegistry* specifiedStyle() const;
+
+  /**
+   * The cascaded computed style if it has already been computed (by rendering or a prior
+   * \ref getComputedStyle call), otherwise `nullptr`.
+   *
+   * Unlike \ref getComputedStyle this never triggers style computation, making it suitable for
+   * diagnostics that must observe whether — and with which values — the style cascade has run.
+   */
+  const PropertyRegistry* computedStyleIfPresent() const;
+
+  /**
+   * The renderer-resolved fill paint from this element's prepared rendering instance, or
+   * `std::nullopt` when the render tree has not been built or this element has no rendering
+   * instance.
+   *
+   * Resolved paint-server references are reported as \ref PaintServer::ElementReference carrying
+   * the referenced element's `#id` href (empty href if the target has no id) and the resolved
+   * fallback color. Never computes anything; diagnostics-safe.
+   */
+  std::optional<PaintServer> resolvedFillPaint() const;
 
 protected:
   /**

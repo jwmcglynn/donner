@@ -71,6 +71,7 @@ std::optional<std::size_t> StylesheetSourceMap::mapToLocalCssOffset(
 }
 
 void StylesheetComponent::parseStylesheet(const RcStringOrRef& str) {
+  text = RcString(str);
   sourceMap = StylesheetSourceMap();
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   stylesheet = donner::css::parser::StylesheetParser::Parse(str, disabled);
@@ -78,6 +79,7 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str) {
 
 void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
                                           StylesheetSourceMap newSourceMap) {
+  text = RcString(str);
   sourceMap = std::move(newSourceMap);
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   stylesheet = donner::css::parser::StylesheetParser::Parse(str, disabled);
