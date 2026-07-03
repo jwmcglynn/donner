@@ -12,12 +12,14 @@
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::ElementsAre;
 using testing::Gt;
 using testing::NotNull;
+using testing::Optional;
 
 namespace donner::svg::components {
 
@@ -28,6 +30,26 @@ protected:
     auto maybeResult = parser::SVGParser::ParseSVG(input, parseSink);
     EXPECT_THAT(maybeResult, NoParseError());
     return std::move(maybeResult).result();
+  }
+
+  /**
+   * Find the render-tree instance of the shadow entity instantiated for \p lightHandle (the
+   * element in the document tree that a `<use>` shadow instance mirrors). Expects exactly one
+   * shadow instance; returns nullptr if none exists.
+   */
+  static const RenderingInstanceComponent* findShadowInstance(Registry& registry,
+                                                              EntityHandle lightHandle) {
+    const RenderingInstanceComponent* result = nullptr;
+    for (auto view = registry.view<RenderingInstanceComponent>(); auto entity : view) {
+      const auto& instance = view.get<RenderingInstanceComponent>(entity);
+      if (instance.dataEntity == lightHandle.entity() && entity != lightHandle.entity()) {
+        EXPECT_THAT(result, testing::IsNull())
+            << "Multiple shadow instances found for the same light entity";
+        result = &instance;
+      }
+    }
+
+    return result;
   }
 
   ParseWarningSink warningSink_;
@@ -275,6 +297,163 @@ TEST_F(RenderingContextTest, DirtyUseRebuildRecomputesShadowTreeStyles) {
         << "entity " << int(entt::to_integral(entity))
         << " kept an uncomputed style after dirty shadow-tree rebuild";
   }
+}
+
+// --- <use> referencing an inline <svg> (resvg structure/use/xlink-to-svg-element-*) ---
+
+/**
+ * `<use>` of an inline `<svg>` with `width`/`height` on the use element: the use's size overrides
+ * the referenced svg's, the svg's own `x`/`y` offset the instance viewport, and the viewport
+ * clips (UA style `overflow: hidden`). Mirrors resvg `structure/use/xlink-to-svg-element-with-
+ * rect.svg`.
+ */
+TEST_F(RenderingContextTest, UseOfInlineSvgOverridesSizeAndClips) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <svg id="inner" x="40" y="40" width="80" height="80">
+          <circle cx="100" cy="100" r="120" fill="green"/>
+        </svg>
+      </defs>
+      <use href="#inner" width="100" height="150"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const RenderingInstanceComponent* instance =
+      findShadowInstance(document.registry(), document.querySelector("#inner")->entityHandle());
+  ASSERT_THAT(instance, NotNull());
+
+  // Viewport: x/y from the referenced <svg>, width/height overridden by the <use>.
+  EXPECT_THAT(instance->clipRect, Optional(Box2d(Vector2d(40.0, 40.0), Vector2d(140.0, 190.0))));
+  EXPECT_THAT(instance->worldFromEntityTransform,
+              TransformEq(Transform2d::Translate({40.0, 40.0})));
+}
+
+/**
+ * `<use>` of an inline `<svg viewBox="...">`: the instance viewport takes the use's size and the
+ * viewBox maps into it with preserveAspectRatio (xMidYMid meet). Mirrors resvg
+ * `structure/use/xlink-to-svg-element-with-viewBox.svg`.
+ */
+TEST_F(RenderingContextTest, UseOfInlineSvgWithViewBoxScalesContent) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <svg id="inner" viewBox="0 0 200 200">
+          <circle cx="100" cy="100" r="80" fill="green"/>
+        </svg>
+      </defs>
+      <use href="#inner" width="100" height="150"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const RenderingInstanceComponent* instance =
+      findShadowInstance(document.registry(), document.querySelector("#inner")->entityHandle());
+  ASSERT_THAT(instance, NotNull());
+
+  EXPECT_THAT(instance->clipRect, Optional(Box2d(Vector2d(0.0, 0.0), Vector2d(100.0, 150.0))));
+
+  // viewBox 200x200 into 100x150 with xMidYMid meet: scale 0.5, centered vertically (+25 on y).
+  EXPECT_THAT(instance->worldFromEntityTransform,
+              TransformEq(Transform2d::Scale({0.5, 0.5}) * Transform2d::Translate({0.0, 25.0})));
+}
+
+/**
+ * `<use>` of an inline `<svg>` with no size of its own: the use's width/height define the clip
+ * viewport and content renders unscaled. Mirrors resvg
+ * `structure/use/xlink-to-svg-element-with-width-height-on-use.svg`.
+ */
+TEST_F(RenderingContextTest, UseOfInlineSvgSizeFromUseOnly) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <svg id="inner">
+          <circle cx="100" cy="100" r="80" fill="green"/>
+        </svg>
+      </defs>
+      <use href="#inner" width="100" height="150"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const RenderingInstanceComponent* instance =
+      findShadowInstance(document.registry(), document.querySelector("#inner")->entityHandle());
+  ASSERT_THAT(instance, NotNull());
+
+  EXPECT_THAT(instance->clipRect, Optional(Box2d(Vector2d(0.0, 0.0), Vector2d(100.0, 150.0))));
+  EXPECT_THAT(instance->worldFromEntityTransform, TransformEq(Transform2d()));
+}
+
+/**
+ * Nested `<use>` chain: `use1 -> use2 -> <svg>`. The inner use's `height` overrides the svg's,
+ * while the outer use's `width` has no effect (its target is a `<use>`, which does not establish
+ * a viewport). Mirrors resvg
+ * `structure/use/nested-xlink-to-svg-element-with-rect-and-size.svg`.
+ */
+TEST_F(RenderingContextTest, NestedUseOfUseOfInlineSvgIgnoresOuterUseSize) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <svg id="inner" x="40" y="40" width="80" height="80">
+          <circle cx="100" cy="100" r="120" fill="green"/>
+        </svg>
+        <use id="use2" href="#inner" height="100"/>
+      </defs>
+      <use id="use1" href="#use2" width="200"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  const RenderingInstanceComponent* instance =
+      findShadowInstance(document.registry(), document.querySelector("#inner")->entityHandle());
+  ASSERT_THAT(instance, NotNull());
+
+  // Width stays 80 (from the svg), height 100 (from use2); use1's width="200" is ignored.
+  EXPECT_THAT(instance->clipRect, Optional(Box2d(Vector2d(40.0, 40.0), Vector2d(120.0, 140.0))));
+  EXPECT_THAT(instance->worldFromEntityTransform,
+              TransformEq(Transform2d::Translate({40.0, 40.0})));
+}
+
+/**
+ * A descendant selector must keep matching through shadow-entity parents. Regression test:
+ * ShadowedElementAdapter::parentElement() looked up ElementTypeComponent on the raw tree entity,
+ * so a shadow entity whose parent was also a shadow entity appeared parentless (matching `:root`
+ * and breaking descendant combinators; the UA rule `svg:not(:root) { overflow: hidden }` also
+ * failed to clip nested `<use>` -> `<svg>` viewports).
+ */
+TEST_F(RenderingContextTest, ShadowTreeDescendantSelectorMatchesThroughShadowParents) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <style>g rect { fill: rgb(1, 2, 3); }</style>
+      <defs>
+        <g id="template"><rect id="r" width="10" height="10"/></g>
+      </defs>
+      <use href="#template"/>
+    </svg>
+  )svg");
+
+  RenderingContext ctx(document.registry());
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  // The shadow rect's parent is the shadow <g>: the `g rect` selector only matches if ancestor
+  // traversal resolves shadow entities to their light data entities.
+  const RenderingInstanceComponent* instance =
+      findShadowInstance(document.registry(), document.querySelector("#r")->entityHandle());
+  ASSERT_THAT(instance, NotNull());
+
+  const auto& style = instance->styleHandle(document.registry()).get<ComputedStyleComponent>();
+  ASSERT_TRUE(style.properties.has_value());
+  EXPECT_EQ(style.properties->fill.get().value(),
+            PaintServer(PaintServer::Solid(css::Color(css::RGBA(1, 2, 3, 0xFF)))));
 }
 
 TEST_F(RenderingContextTest, FilterElement) {

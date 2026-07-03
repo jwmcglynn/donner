@@ -833,6 +833,87 @@ TEST_F(LayoutSystemTest, CreateShadowSizedElementComponent) {
   EXPECT_EQ(shadowSized.bounds, Box2d(Vector2d(1, 2), Vector2d(51, 27)));
 }
 
+/**
+ * `<use>` referencing an inline `<svg>`: the svg's own `x`/`y` are kept, its `width`/`height`
+ * are overridden by the use element's. Mirrors resvg
+ * `structure/use/xlink-to-svg-element-with-rect.svg`.
+ */
+TEST_F(LayoutSystemTest, CreateShadowSizedElementComponentForSvgTarget) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <svg id="inner" x="40" y="40" width="80" height="80"/>
+      </defs>
+      <use id="u" href="#inner" width="100" height="150"/>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, document.querySelector("#u")->entityHandle(),
+      document.querySelector("#inner")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
+
+  const auto& shadowSized = registry.get<ComputedShadowSizedElementComponent>(shadowEntity);
+  EXPECT_EQ(shadowSized.bounds, Box2d(Vector2d(40, 40), Vector2d(140, 190)));
+}
+
+/**
+ * `<use>` referencing an inline `<svg>` with only `width` on the use: the svg's `height` is
+ * kept. Mirrors resvg `structure/use/xlink-to-svg-element-with-rect-only-width.svg`.
+ */
+TEST_F(LayoutSystemTest, CreateShadowSizedElementComponentForSvgTargetPartialOverride) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <svg id="inner" x="40" y="40" width="80" height="80"/>
+      </defs>
+      <use id="u" href="#inner" width="100"/>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+
+  EXPECT_TRUE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, document.querySelector("#u")->entityHandle(),
+      document.querySelector("#inner")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
+
+  const auto& shadowSized = registry.get<ComputedShadowSizedElementComponent>(shadowEntity);
+  EXPECT_EQ(shadowSized.bounds, Box2d(Vector2d(40, 40), Vector2d(140, 120)));
+}
+
+/**
+ * A `<use>` target that does not establish a viewport (here another `<use>`) must not receive a
+ * shadow sized element: width/height on the referencing use have no effect per SVG2.
+ */
+TEST_F(LayoutSystemTest, CreateShadowSizedElementComponentReturnsFalseForNonViewportTarget) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <defs>
+        <svg id="inner" width="80" height="80"/>
+        <use id="use2" href="#inner" height="100"/>
+      </defs>
+      <use id="use1" href="#use2" width="200"/>
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  const Entity shadowEntity = registry.create();
+  ParseWarningSink warningSink;
+
+  EXPECT_FALSE(layoutSystem.createShadowSizedElementComponent(
+      registry, shadowEntity, document.querySelector("#use1")->entityHandle(),
+      document.querySelector("#use2")->unsafeEntityHandle().entity(), ShadowBranchType::Main,
+      warningSink));
+  EXPECT_FALSE(registry.all_of<ComputedShadowSizedElementComponent>(shadowEntity));
+}
+
 TEST_F(LayoutSystemTest, CreateShadowSizedElementComponentReturnsFalseWhenNotMainBranch) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
