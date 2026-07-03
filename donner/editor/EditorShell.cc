@@ -612,9 +612,9 @@ bool ContainsElement(std::span<const svg::SVGElement> elements, const svg::SVGEl
 
 std::string ElementContextMenuLabel(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
-    const std::string_view tagName = element.tagName().name;
+    const std::string tagName(element.tagName().name);
     std::string label = "<";
-    label.append(tagName.data(), tagName.size());
+    label.append(tagName);
     label.push_back('>');
 
     const RcString id = element.id();
