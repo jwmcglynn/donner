@@ -354,6 +354,12 @@ private:
   void renderReferenceHighlightChip();
   [[nodiscard]] SelectionChromeDetail selectionChromeDetailForActiveTool() const;
   bool flushQueuedMutationAndRefreshOverlay();
+  /// Re-run the post-flush presentation refresh after a tool that flushes the
+  /// document internally (the text tool's wrap measurement).
+  void refreshAfterToolDrivenFlush();
+  /// Keyboard handling while the in-canvas text editing session is active:
+  /// typing, caret movement, Cmd+B/I/U style toggles, Escape commit.
+  void handleTextEditingKeyboard();
   /// Point the render coordinator's pen live-geometry preview at the path the
   /// Pen tool is actively editing (or keep it alive after a session ends
   /// until the async raster of the final geometry lands), clearing it

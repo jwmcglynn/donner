@@ -713,7 +713,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       snapshot.pathControlLinesDoc.empty() && snapshot.pathControlPointBoxesDoc.empty() &&
       !snapshot.marqueeDoc.has_value() && !snapshot.lockedFlash.has_value() &&
       !snapshot.livePathPreview.has_value() && !snapshot.penPreviewSegmentDoc.has_value() &&
-      !snapshot.penCloseAffordanceDoc.has_value()) {
+      !snapshot.penCloseAffordanceDoc.has_value() && !snapshot.textCaretDoc.has_value() &&
+      !snapshot.textBoxDoc.has_value()) {
     return;
   }
 
@@ -808,6 +809,28 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     renderer.drawRect(Box2d(*snapshot.penCloseAffordanceDoc - halfSize,
                             *snapshot.penCloseAffordanceDoc + halfSize),
                       affordancePaint.strokeParams);
+  }
+
+  // Text-editing chrome: the box frame reads as guidance (hover-bounds
+  // style); the caret is a solid vertical bar in the selection stroke style.
+  if (snapshot.textBoxDoc.has_value()) {
+    const svg::PaintParams boxPaint = MakeSourceHoverBoundsPaint(snapshot.hoverStrokeWidthWorld);
+    renderer.setPaint(boxPaint);
+    renderer.setTransform(snapshot.canvasFromDoc);
+    renderer.drawRect(*snapshot.textBoxDoc, boxPaint.strokeParams);
+  }
+  if (snapshot.textCaretDoc.has_value()) {
+    const svg::PaintParams caretPaint =
+        MakeSelectionStrokePaint(snapshot.selectionStrokeWidthWorld * 1.5);
+    renderer.setPaint(caretPaint);
+    renderer.setTransform(snapshot.canvasFromDoc);
+    PathBuilder caretBuilder;
+    caretBuilder.moveTo(snapshot.textCaretDoc->topDoc);
+    caretBuilder.lineTo(snapshot.textCaretDoc->bottomDoc);
+    svg::PathShape caretShape;
+    caretShape.path = caretBuilder.build();
+    caretShape.parentFromEntity = Transform2d();
+    renderer.drawPath(caretShape, caretPaint.strokeParams);
   }
 
   if (!snapshot.pathControlLinesDoc.empty()) {

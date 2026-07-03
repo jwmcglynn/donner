@@ -827,10 +827,19 @@ void EditorShell::applyReplayActionForTesting(const repro::ReproAction& action) 
         if (penTool_.commitOpenPath(app_)) {
           flushQueuedMutationAndRefreshOverlay();
         }
+        if (textTool_.commit(app_)) {
+          refreshAfterToolDrivenFlush();
+        }
         activeTool_ = ActiveTool::Select;
       } else if (action.tool == "pen") {
+        if (textTool_.commit(app_)) {
+          refreshAfterToolDrivenFlush();
+        }
         activeTool_ = ActiveTool::Pen;
       } else if (action.tool == "text") {
+        if (penTool_.commitOpenPath(app_)) {
+          flushQueuedMutationAndRefreshOverlay();
+        }
         activeTool_ = ActiveTool::Text;
       }
       break;
@@ -1042,7 +1051,6 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
       flushQueuedMutationAndRefreshOverlay();
     } else if (activeTool_ == ActiveTool::Text) {
       textTool_.onMouseDown(app_, input.documentPoint, input.modifiers);
-      activeTool_ = ActiveTool::Select;
       flushQueuedMutationAndRefreshOverlay();
     } else {
       selectTool_.onMouseDown(app_, input.documentPoint, input.modifiers);
@@ -1053,6 +1061,8 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     if (app_.document().hasPendingMutations() && flushQueuedMutationAndRefreshOverlay()) {
       penDragFlushedThisFrame_ = true;
     }
+  } else if (input.leftMouseDown && activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
+    textTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true);
   } else if (input.leftMouseDown && (selectTool_.isDragging() || selectTool_.isMarqueeing())) {
     selectTool_.onMouseMove(app_, input.documentPoint, /*buttonHeld=*/true, input.modifiers);
     if (!renderCoordinator_.asyncRenderer().isBusy()) {
@@ -1062,6 +1072,11 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
   }
 
   if (input.leftMouseReleased) {
+    if (activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
+      textTool_.onMouseUp(app_, input.documentPoint);
+      refreshAfterToolDrivenFlush();
+      return;
+    }
     if (activeTool_ == ActiveTool::Pen) {
       penTool_.onMouseUp(app_, input.documentPoint);
       lastPostedScreenPoint_.reset();
@@ -1098,6 +1113,20 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
         penTool_.wouldCloseAt(input.documentPoint, input.modifiers)
             ? std::make_optional(penTool_.draftStartPoint())
             : std::nullopt);
+  }
+
+  // Text-editing chrome for document-space input, mirroring the live-pointer
+  // update in renderRenderPane.
+  if (activeTool_ == ActiveTool::Text && textTool_.isDraggingBox()) {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
+  } else if (activeTool_ == ActiveTool::Text && textTool_.isEditing()) {
+    if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
+      renderCoordinator_.setTextEditingChrome(
+          SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc, textChrome->caretBottomDoc},
+          textChrome->boxDoc);
+    }
+  } else if (activeTool_ == ActiveTool::Text) {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
   }
 }
 
@@ -1522,6 +1551,16 @@ void EditorShell::handleGlobalShortcuts() {
                             ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/false);
   const bool sourcePaneFocused = sourcePaneVisible_ && textEditor_.isFocused();
 
+  // An in-canvas text editing session captures the keyboard: typing, caret
+  // movement, style toggles, and Escape all act on the session, and no
+  // global shortcut may fire underneath it (Backspace would otherwise
+  // delete the text element being edited).
+  if (activeTool_ == ActiveTool::Text && textTool_.isEditing() && !anyPopupOpen &&
+      !sourcePaneFocused) {
+    handleTextEditingKeyboard();
+    return;
+  }
+
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
@@ -1594,12 +1633,17 @@ void EditorShell::handleGlobalShortcuts() {
     // command instead of discarding it.
     penTool_.commitOpenPath(app_);
     flushQueuedMutationAndRefreshOverlay();
+    if (textTool_.commit(app_)) {
+      refreshAfterToolDrivenFlush();
+    }
     activeTool_ = ActiveTool::Select;
-    textTool_.cancel();
   }
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_P, /*repeat=*/false)) {
+    if (textTool_.commit(app_)) {
+      refreshAfterToolDrivenFlush();
+    }
     activeTool_ = ActiveTool::Pen;
   }
 
@@ -1614,6 +1658,9 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!sourcePaneFocused && !anyPopupOpen && !cmd &&
       ImGui::IsKeyPressed(ImGuiKey_T, /*repeat=*/false)) {
+    if (penTool_.commitOpenPath(app_)) {
+      flushQueuedMutationAndRefreshOverlay();
+    }
     activeTool_ = ActiveTool::Text;
   }
 
@@ -1633,7 +1680,11 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!anyPopupOpen && ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false) &&
       activeTool_ == ActiveTool::Text) {
-    textTool_.cancel();
+    // Escape commits the in-canvas text session (an empty session deletes the
+    // element) and returns to Select.
+    if (textTool_.commit(app_)) {
+      refreshAfterToolDrivenFlush();
+    }
     activeTool_ = ActiveTool::Select;
     return;
   }
@@ -2132,12 +2183,13 @@ void EditorShell::renderToolPalette(const ImVec2& paneOrigin, const ImVec2& cont
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.14f, 0.35f, 0.78f, 1.0f));
     }
     if (ImGui::Button(label, ImVec2(kToolPaletteButtonSize, kToolPaletteButtonSize))) {
-      if (tool == ActiveTool::Select) {
-        // Leaving the Pen tool commits any in-progress path as one undoable
-        // command rather than dropping it.
-        if (penTool_.commitOpenPath(app_)) {
-          flushQueuedMutationAndRefreshOverlay();
-        }
+      // Leaving a tool commits its in-progress session as one undoable
+      // command rather than dropping it.
+      if (tool != ActiveTool::Pen && penTool_.commitOpenPath(app_)) {
+        flushQueuedMutationAndRefreshOverlay();
+      }
+      if (tool != ActiveTool::Text && textTool_.commit(app_)) {
+        refreshAfterToolDrivenFlush();
       }
       activeTool_ = tool;
     }
@@ -2503,6 +2555,21 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
             interactionController_.clearPendingClick();
             break;
           }
+        } else if (penToolActive) {
+          penTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+          if (!leftMouseDown && penTool_.isDraggingAnchor()) {
+            penTool_.onMouseUp(app_, pendingClick.documentPoint);
+          }
+          queuedMutationForNextFrame = true;
+        } else if (textToolActive) {
+          textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
+          if (!leftMouseDown) {
+            // Click already released: complete it as point text and open the
+            // editing session. The tool flushes internally, so refresh the
+            // presentation directly instead of through the queued-flush helper.
+            textTool_.onMouseUp(app_, pendingClick.documentPoint);
+            refreshAfterToolDrivenFlush();
+          }
         }
         break;
       }
@@ -2627,6 +2694,20 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
                                              : std::nullopt);
   } else {
     renderCoordinator_.setPenHoverChrome(std::nullopt, std::nullopt);
+  }
+
+  // Text-editing chrome: caret + box frame while a session is active, or the
+  // live rectangle while a text box is being dragged out.
+  if (textToolActive && textTool_.isDraggingBox()) {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, textTool_.dragBoxDoc());
+  } else if (textToolActive && textTool_.isEditing()) {
+    if (const auto textChrome = textTool_.editingChrome(app_); textChrome.has_value()) {
+      renderCoordinator_.setTextEditingChrome(
+          SelectionChromeSnapshot::TextCaret{textChrome->caretTopDoc, textChrome->caretBottomDoc},
+          textChrome->boxDoc);
+    }
+  } else {
+    renderCoordinator_.setTextEditingChrome(std::nullopt, std::nullopt);
   }
 
   applyPendingDocumentSpaceReplayInputForTesting();
@@ -3537,6 +3618,99 @@ void EditorShell::updatePenLivePreviewTarget() {
     }
   }
   renderCoordinator_.setPenLivePreviewElement(std::move(target));
+}
+
+void EditorShell::handleTextEditingKeyboard() {
+  ImGuiIO& io = ImGui::GetIO();
+  const bool cmd = io.KeyCtrl || io.KeySuper;
+  bool edited = false;
+
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape, /*repeat=*/false)) {
+    if (textTool_.commit(app_)) {
+      refreshAfterToolDrivenFlush();
+    }
+    activeTool_ = ActiveTool::Select;
+    return;
+  }
+
+  if (cmd) {
+    if (ImGui::IsKeyPressed(ImGuiKey_B, /*repeat=*/false)) {
+      textTool_.toggleBold(app_);
+      edited = true;
+    } else if (ImGui::IsKeyPressed(ImGuiKey_I, /*repeat=*/false)) {
+      textTool_.toggleItalic(app_);
+      edited = true;
+    } else if (ImGui::IsKeyPressed(ImGuiKey_U, /*repeat=*/false)) {
+      textTool_.toggleUnderline(app_);
+      edited = true;
+    }
+    // Other Cmd shortcuts are swallowed while editing.
+    if (edited) {
+      refreshAfterToolDrivenFlush();
+    }
+    return;
+  }
+
+  if (ImGui::IsKeyPressed(ImGuiKey_Enter, /*repeat=*/true) ||
+      ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, /*repeat=*/true)) {
+    textTool_.insertNewline(app_);
+    edited = true;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Backspace, /*repeat=*/true)) {
+    textTool_.backspace(app_);
+    edited = true;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Delete, /*repeat=*/true)) {
+    textTool_.deleteForward(app_);
+    edited = true;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow, /*repeat=*/true)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::Left);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_RightArrow, /*repeat=*/true)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::Right);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, /*repeat=*/true)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::Up);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, /*repeat=*/true)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::Down);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Home, /*repeat=*/false)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineStart);
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_End, /*repeat=*/false)) {
+    textTool_.moveCaret(app_, TextTool::CaretMove::LineEnd);
+  }
+
+  for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
+    const ImWchar character = io.InputQueueCharacters[i];
+    textTool_.insertCodepoint(app_, static_cast<char32_t>(character));
+    edited = true;
+  }
+  io.InputQueueCharacters.resize(0);
+
+  if (edited) {
+    refreshAfterToolDrivenFlush();
+  }
+}
+
+void EditorShell::refreshAfterToolDrivenFlush() {
+  // TextTool flushes internally (its wrap measurement needs the flushed DOM),
+  // so the usual flush helper's early-return would skip presentation
+  // invalidation. Re-run the post-flush refresh unconditionally.
+  app_.flushFrame();
+  renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_,
+                                                              app_.document().lastFlushResult());
+  documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
+  renderCoordinator_.refreshSelectionBoundsCache(app_);
+  updatePenLivePreviewTarget();
+  renderCoordinator_.rasterizeOverlayForCurrentSelection(
+      app_, interactionController_.viewport(), selectTool_.marqueeRect(),
+      selectTool_.activeDragPreview(), selectTool_.activeTransformBoundsPreview(),
+      selectionChromeDetailForActiveTool());
+  requestRenderAtEndOfFrame_ = true;
+  window_.wakeEventLoop();
 }
 
 bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
