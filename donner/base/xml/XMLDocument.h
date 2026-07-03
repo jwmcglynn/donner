@@ -147,7 +147,7 @@ public:
    * Documents created programmatically may not have source text; in that case this returns an
    * empty view.
    */
-  std::string_view source() const;
+  std::string_view source() const UTILS_LIFETIME_BOUND;
 
   /// Return the source version, or 0 for documents without a source store.
   std::uint64_t sourceVersion() const;

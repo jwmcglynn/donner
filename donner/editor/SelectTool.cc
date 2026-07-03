@@ -106,7 +106,7 @@ std::optional<Transform2d> RotateTransform(const Vector2d& center, double startA
 /// `<defs>` block doesn't prevent a top-level `<g>` from being recognised
 /// as the sole render child.
 bool IsNonRenderChild(const svg::SVGElement& element) {
-  const auto tag = element.tagName().name;
+  const RcString tag = element.tagName().name;
   return tag == RcString("defs") || tag == RcString("title") || tag == RcString("desc") ||
          tag == RcString("metadata") || tag == RcString("style") || tag == RcString("script");
 }
@@ -157,7 +157,7 @@ svg::SVGElement DeepestWrappingContainer(svg::SVGElement root) {
     // Stop at non-`<g>` children (terminal geometry) and at `<g>`s that
     // carry semantic attributes — a `<g id="Foo">` or `<g filter="…">`
     // is itself a top-level object, not a wrapper.
-    const auto tag = soleRenderChild->tagName().name;
+    const RcString tag = soleRenderChild->tagName().name;
     if (tag != RcString("g")) {
       return current;
     }

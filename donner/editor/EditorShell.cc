@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "GLFW/glfw3.h"
+#include "donner/base/RcString.h"
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DocumentSave.h"

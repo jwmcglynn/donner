@@ -7,6 +7,7 @@
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Utils.h"
 #include "donner/css/Stylesheet.h"
 
 namespace donner::svg::components {
@@ -59,7 +60,9 @@ public:
   /**
    * Get the stored mapping segments.
    */
-  std::span<const StylesheetSourceMapSegment> segments() const { return segments_; }
+  std::span<const StylesheetSourceMapSegment> segments() const UTILS_LIFETIME_BOUND {
+    return segments_;
+  }
 
 private:
   std::optional<FileOffset> mapOffset(const FileOffset& localOffset) const;

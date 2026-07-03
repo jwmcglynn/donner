@@ -60,7 +60,8 @@ public:
    *
    * @param value Input string to reference.
    */
-  /* implicit */ constexpr RcStringOrRef(std::string_view value) : value_(value) {}
+  /* implicit */ constexpr RcStringOrRef(std::string_view value UTILS_LIFETIME_BOUND)
+      : value_(value) {}
 
   /**
    * Constructs a new RcStringOrRef containing a transferrable RcString.
@@ -76,7 +77,7 @@ public:
    * @param len Length of the string, or npos to automatically measure, which requires that \ref
    *   data is null-terminated.
    */
-  /* implicit */ constexpr RcStringOrRef(const char* value, size_t len = npos)
+  /* implicit */ constexpr RcStringOrRef(const char* value UTILS_LIFETIME_BOUND, size_t len = npos)
       : RcStringOrRef(len == npos ? std::string_view(value) : std::string_view(value, len)) {}
 
   /// Copy constructor.

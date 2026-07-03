@@ -12,6 +12,7 @@ Rules enforced:
   - No `std::aligned_storage`: use alignas(T) on a byte buffer
   - No `std::aligned_union`: same reason
   - No user-defined literal operators (operator"" _foo): use named helpers
+  - No `XMLQualifiedNameRef` / `RcStringOrRef` return types: return owning values instead
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
   - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
@@ -197,6 +198,85 @@ def _strip_comments_and_strings(text: str) -> str:
 
 _NOLINT_RE = re.compile(r"//\s*NOLINT\(banned_patterns(?::[^)]*)?\)")
 
+_REF_RETURN_RE = re.compile(
+    r"""
+    ^\s*
+    (?:\[\[[^\]]+\]\]\s*)*
+    (?:(?:static|inline|constexpr|friend|virtual)\s+)*
+    (?P<type>
+      (?:std::optional\s*<\s*)?
+      (?:(?:[A-Za-z_][A-Za-z0-9_]*)::)*(?:XMLQualifiedNameRef|RcStringOrRef)
+      (?:\s*>)?
+    )
+    \s+
+    (?P<name>(?:(?:[A-Za-z_][A-Za-z0-9_]*)::)*[A-Za-z_][A-Za-z0-9_]*)
+    \s*\((?P<params>[^;{}]*)\)
+    (?P<suffix>\s*(?:const\s*)?(?:noexcept\s*)?(?:override\s*)?(?:final\s*)?(?:;|\{))
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+
+_REF_RETURN_EXEMPT_PATHS = (
+    # RcStringOrRef is the view/owning bridge type itself. Its substring helper intentionally
+    # preserves the input lifetime model.
+    "donner/base/RcStringOrRef.h",
+)
+
+
+def _looks_like_parameter_list(params: str) -> bool:
+    """Return true if `params` looks like C++ parameter declarations, not ctor arguments."""
+    params = params.strip()
+    if not params:
+        return True
+    if any(token in params for token in ('"', "'", "(", ")")):
+        return False
+
+    # Function signatures contain parameter types. Local direct-initialization false positives
+    # usually contain literals, variable names, or function calls instead.
+    return bool(
+        re.search(
+            r"\b(?:const|std::|donner::|xml::|svg::|RcString|XMLQualifiedName|"
+            r"XMLQualifiedNameRef|RcStringOrRef|string_view|size_t|int|bool|char|auto)\b|[&*]",
+            params,
+        )
+    )
+
+
+def _check_ref_return_types(
+    stripped: str, raw_lines: List[str], posix_path: str
+) -> List[Tuple[int, str, str]]:
+    if any(prefix in posix_path for prefix in _REF_RETURN_EXEMPT_PATHS):
+        return []
+
+    errors: List[Tuple[int, str, str]] = []
+    for m in _REF_RETURN_RE.finditer(stripped):
+        if not _looks_like_parameter_list(m.group("params")):
+            continue
+
+        line = stripped.count("\n", 0, m.start()) + 1
+        suppressed = False
+        for offset in (0, 1, 2):
+            idx = line - 1 + offset
+            if 0 <= idx < len(raw_lines) and _NOLINT_RE.search(raw_lines[idx]):
+                suppressed = True
+                break
+        if suppressed:
+            continue
+
+        errors.append(
+            (
+                line,
+                f"`{m.group('type').strip()}` return type",
+                (
+                    "Return an owning value such as XMLQualifiedName or RcString instead. "
+                    "`*Ref` types are for input parameters; returning them makes it easy to "
+                    "bind a view to storage owned by a temporary."
+                ),
+            )
+        )
+
+    return errors
+
 
 def check_file(path: Path) -> List[Tuple[int, str, str]]:
     """Check a single file; return list of (line_number, description, remediation).
@@ -230,6 +310,8 @@ def check_file(path: Path) -> List[Tuple[int, str, str]]:
             if suppressed:
                 continue
             errors.append((line, rule.description, rule.remediation))
+
+    errors.extend(_check_ref_return_types(stripped, raw_lines, posix_path))
 
     return sorted(errors)
 

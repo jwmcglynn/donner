@@ -30,7 +30,7 @@ public:
    *
    * @param sv The string_view to initialize with.
    */
-  explicit ChunkedString(std::string_view sv) { append(sv); }
+  explicit ChunkedString(std::string_view sv UTILS_LIFETIME_BOUND) { append(sv); }
 
   /**
    * Constructor from an RcString.
@@ -51,7 +51,7 @@ public:
    *
    * @param str The C-style string to initialize with.
    */
-  explicit ChunkedString(const char* str) { append(std::string_view(str)); }
+  explicit ChunkedString(const char* str UTILS_LIFETIME_BOUND) { append(std::string_view(str)); }
 
   /**
    * Copy constructor from another ChunkedString.
@@ -195,7 +195,7 @@ public:
   /**
    * Return the first chunk as a string_view.
    */
-  std::string_view firstChunk() const {
+  std::string_view firstChunk() const UTILS_LIFETIME_BOUND {
     if (pieces_.empty()) {
       return std::string_view();
     }

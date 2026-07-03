@@ -320,12 +320,12 @@ std::optional<ElementType> SVGElement::tryType() const {
   return handle_.get<components::ElementTypeComponent>().type();
 }
 
-xml::XMLQualifiedNameRef SVGElement::tagName() const {
+xml::XMLQualifiedName SVGElement::tagName() const {
   [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
   return handle_.get<donner::components::TreeComponent>().tagName();
 }
 
-std::optional<xml::XMLQualifiedNameRef> SVGElement::tryTagName() const {
+std::optional<xml::XMLQualifiedName> SVGElement::tryTagName() const {
   if (!handle_) {
     return std::nullopt;
   }

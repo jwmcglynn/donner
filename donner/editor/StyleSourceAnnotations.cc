@@ -91,7 +91,7 @@ struct FragmentReference {
 }
 
 [[nodiscard]] std::string TagNameForElement(const svg::SVGElement& element) {
-  if (std::optional<xml::XMLQualifiedNameRef> tagName = element.tryTagName()) {
+  if (std::optional<xml::XMLQualifiedName> tagName = element.tryTagName()) {
     return std::string(tagName->name);
   }
 
@@ -101,7 +101,7 @@ struct FragmentReference {
 [[nodiscard]] bool HasAncestorNamed(const svg::SVGElement& element, std::string_view tagName) {
   for (std::optional<svg::SVGElement> ancestor = element.parentElement(); ancestor.has_value();
        ancestor = ancestor->parentElement()) {
-    if (std::optional<xml::XMLQualifiedNameRef> ancestorTagName = ancestor->tryTagName();
+    if (std::optional<xml::XMLQualifiedName> ancestorTagName = ancestor->tryTagName();
         ancestorTagName.has_value() && std::string_view(ancestorTagName->name) == tagName) {
       return true;
     }

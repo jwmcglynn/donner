@@ -454,6 +454,38 @@ for (std::string_view part : StringUtils::Split("a,b,c", ',')) {
 }
 ```
 
+#### View and Ref Lifetimes
+
+- `*Ref` types such as `XMLQualifiedNameRef` and `RcStringOrRef` are input parameter types.
+  Return owning values (`XMLQualifiedName`, `RcString`) from public APIs so callers can safely
+  store the result.
+- Returning `XMLQualifiedNameRef` or `RcStringOrRef` is banned by the per-target
+  `banned_patterns` lint. The only exemption is the view type implementation itself.
+- `std::string_view` and `std::span` return values are allowed only when the backing storage is
+  obvious from the API and stable for the documented lifetime, such as object-owned buffers,
+  static tables, or views into an input parameter.
+- Data members that store non-owning views need an explicit local lifetime contract. Prefer owning
+  members unless there is a measured parser/storage reason to keep a view.
+
+Audit classification for the current view-returning APIs:
+
+- `SVGElement::tagName()` and `SVGElement::tryTagName()` return owning `XMLQualifiedName` values
+  because the public SVG API crosses the concurrent DOM read-access boundary. These were risky as
+  `XMLQualifiedNameRef` returns because callers could bind `tagName().name` to a dangling
+  `std::string_view`.
+- `XMLNode::tagName()` and `TreeComponent::tagName()` return `const XMLQualifiedName&` annotated
+  with `UTILS_LIFETIME_BOUND`; their lifetimes are tied to the underlying XML tree storage.
+- Attribute-name list APIs (`AttributesComponent::attributes()`,
+  `AttributesComponent::findMatchingAttributes()`, `XMLNode::attributes()`, and
+  `SVGElement::findMatchingAttributes()`) return copied `XMLQualifiedNameRef` entries whose
+  `RcStringOrRef` members own copied `RcString` storage.
+- `Reference::documentUrl()`, `Reference::fragment()`, `XMLDocument::source()`,
+  `XMLSourceStore::source()`, parser token text helpers, and enum/name helpers return views into
+  object storage, input parameters, or static strings. The caller must not outlive that backing
+  storage.
+- `ChunkedString` stores `RcStringOrRef` pieces for the XML parser. Its non-owning pieces point
+  into `XMLParserImpl::str_`, and parser-created replacement pieces are owning `RcString`s.
+
 ### Limit Use of auto
 
 `auto` should only be used when the type is visible on the same source line, or if the type is well-understood, such as for iterators (`auto it = ...`).

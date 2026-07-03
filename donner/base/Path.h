@@ -10,6 +10,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/FillRule.h"
 #include "donner/base/Transform.h"
+#include "donner/base/Utils.h"
 #include "donner/base/Vector2.h"
 
 namespace donner {
@@ -137,10 +138,10 @@ public:
   /// @{
 
   /// Returns the points array.
-  std::span<const Vector2d> points() const { return points_; }
+  std::span<const Vector2d> points() const UTILS_LIFETIME_BOUND { return points_; }
 
   /// Returns the commands array.
-  std::span<const Command> commands() const { return commands_; }
+  std::span<const Command> commands() const UTILS_LIFETIME_BOUND { return commands_; }
 
   /// Returns true if the path has no commands.
   bool empty() const { return commands_.empty(); }

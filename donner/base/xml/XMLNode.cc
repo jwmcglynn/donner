@@ -299,7 +299,7 @@ XMLNode::Type XMLNode::type() const {
   return handle_.get<XMLNodeTypeComponent>().type();
 }
 
-XMLQualifiedNameRef XMLNode::tagName() const {
+const XMLQualifiedName& XMLNode::tagName() const {
   return handle_.get<TreeComponent>().tagName();
 }
 

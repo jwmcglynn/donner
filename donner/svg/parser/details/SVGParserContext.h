@@ -3,6 +3,7 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Utils.h"
 #include "donner/base/parser/LineOffsets.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
@@ -39,7 +40,7 @@ public:
    * @param warningSink Sink to collect warnings encountered during parsing.
    * @param options Options for parsing.
    */
-  SVGParserContext(std::string_view input, ParseWarningSink& warningSink,
+  SVGParserContext(std::string_view input UTILS_LIFETIME_BOUND, ParseWarningSink& warningSink,
                    const SVGParser::Options& options)
       : input_(input), lineOffsets_(input), warningSink_(warningSink), options_(options) {}
 
@@ -54,7 +55,7 @@ public:
   void setNamespacePrefix(const RcString& namespacePrefix) { namespacePrefix_ = namespacePrefix; }
 
   /// Get the XML document's default namespace prefix, such as "http://www.w3.org/2000/svg".
-  std::string_view namespacePrefix() const { return namespacePrefix_; }
+  std::string_view namespacePrefix() const UTILS_LIFETIME_BOUND { return namespacePrefix_; }
 
   /**
    * Remap a parse error from a subparser back to the original input string, translating the line
