@@ -328,6 +328,12 @@ bug vs. out-of-scope:
 - `text/font-family/fallback-1`: fallback from invalid family
 - `masking/clip/simple-case`: CSS2 `clip` property (`rect()` clipping on viewport
   elements, deprecated) — not implemented, 76k px diff
+- `filters/feImage/empty.svg`: `std::bad_alloc` **crash** on Linux CI runners
+  (passes on macOS; enabled briefly on 2026-07-03 and reverted after the Linux
+  lane crashed in all variants). Likely shares a resource-loading root cause
+  with [#576](https://github.com/jwmcglynn/donner/issues/576) — a failed/corrupt
+  load yielding garbage dimensions would explain the giant allocation. Crash =
+  "never crash on untrusted input" violation; root-cause on a Linux x86_64 env.
 
 ---
 

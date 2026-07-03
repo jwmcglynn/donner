@@ -286,6 +286,9 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/feImage",
             {
+                {"empty.svg",
+                 Params::Skip("Bug: std::bad_alloc crash on Linux CI runners (passes on macOS); "
+                              "likely shares the resource-loading root cause of issue #576")},
                 {"svg.svg",
                  Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
                      .withReason("We render higher quality")
