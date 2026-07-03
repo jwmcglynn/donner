@@ -437,6 +437,29 @@ def _split_build_attrs(body: str) -> Dict[str, Any]:
     return attrs
 
 
+def _parse_build_rules(path: Path, allowed_rule_names: Set[str]) -> Dict[str, Dict[str, Any]]:
+    """Parse simple Bazel rule calls from a BUILD file."""
+    text = path.read_text()
+    pattern = re.compile(
+        r"^([A-Za-z0-9_]+)\(\n(.*?)^\)\n",
+        re.MULTILINE | re.DOTALL,
+    )
+    rules: Dict[str, Dict[str, Any]] = {}
+    for match in pattern.finditer(text):
+        rule_name = match.group(1)
+        if rule_name not in allowed_rule_names:
+            continue
+
+        attrs = _split_build_attrs(match.group(2))
+        name = str(attrs.get("name", ""))
+        if not name:
+            continue
+        attrs["__rule_name"] = rule_name
+        rules[name] = attrs
+
+    return rules
+
+
 def _package_from_build_comment(comment: str, workspace: Path) -> Optional[str]:
     """Extract a Bazel package path from a cquery `# /path/BUILD.bazel` comment."""
     location = comment.removeprefix("# ").split(":", 1)[0]
@@ -555,6 +578,115 @@ def _record_values(
     dest = target.values[attr]
     for value in values:
         dest.setdefault(value, set()).add(config_name)
+
+
+_TINY_SKIA_ROOT = Path("third_party/tiny-skia-cpp")
+_TINY_SKIA_ENTRY_LABELS = (
+    "//src:tiny_skia_lib",
+    "//src/tiny_skia/filter:filter",
+)
+_TINY_SKIA_BUILD_RULES = {
+    "cc_library",
+    "filegroup",
+    "tiny_skia_cc_library",
+}
+
+
+def _tiny_skia_build_file(package: str) -> Path:
+    return _TINY_SKIA_ROOT / package / "BUILD.bazel"
+
+
+def _split_tiny_skia_label(label: str, current_package: str) -> Optional[Tuple[str, str]]:
+    if label.startswith("@"):
+        return None
+    if label.startswith(":"):
+        return current_package, label.removeprefix(":")
+    if label.startswith("//"):
+        rest = label.removeprefix("//")
+        if ":" not in rest:
+            return rest, Path(rest).name
+        package, name = rest.split(":", 1)
+        return package, name
+    return None
+
+
+def _load_tiny_skia_rules(package: str) -> Dict[str, Dict[str, Any]]:
+    return _parse_build_rules(_tiny_skia_build_file(package), _TINY_SKIA_BUILD_RULES)
+
+
+def _collect_tiny_skia_sources_for_label(
+    label: str,
+    *,
+    current_package: str = "",
+    visited_targets: Optional[Set[Tuple[str, str]]] = None,
+    seen_sources: Optional[Set[str]] = None,
+) -> List[str]:
+    """Collect transitive tiny-skia C++ sources from Bazel rules."""
+    if visited_targets is None:
+        visited_targets = set()
+    if seen_sources is None:
+        seen_sources = set()
+
+    split = _split_tiny_skia_label(label, current_package)
+    if split is None:
+        return []
+
+    package, name = split
+    target_key = (package, name)
+    if target_key in visited_targets:
+        return []
+    visited_targets.add(target_key)
+
+    rules = _load_tiny_skia_rules(package)
+    attrs = rules.get(name)
+    if attrs is None:
+        raise RuntimeError(f"tiny-skia Bazel target not found: //{package}:{name}")
+
+    sources: List[str] = []
+    for src in _list_attr(attrs, "srcs"):
+        src_label = _split_tiny_skia_label(src, package)
+        if src_label is not None:
+            for resolved in _collect_tiny_skia_sources_for_label(
+                src,
+                current_package=package,
+                visited_targets=visited_targets,
+                seen_sources=seen_sources,
+            ):
+                sources.append(resolved)
+            continue
+
+        if not src.endswith((".cc", ".cpp", ".cxx")):
+            continue
+        source_path = (Path(package) / src).as_posix()
+        if source_path not in seen_sources:
+            seen_sources.add(source_path)
+            sources.append(source_path)
+
+    for dep in _list_attr(attrs, "deps"):
+        for resolved in _collect_tiny_skia_sources_for_label(
+            dep,
+            current_package=package,
+            visited_targets=visited_targets,
+            seen_sources=seen_sources,
+        ):
+            sources.append(resolved)
+
+    return sources
+
+
+def _collect_tiny_skia_sources() -> List[str]:
+    sources: List[str] = []
+    visited_targets: Set[Tuple[str, str]] = set()
+    seen_sources: Set[str] = set()
+    for label in _TINY_SKIA_ENTRY_LABELS:
+        sources.extend(
+            _collect_tiny_skia_sources_for_label(
+                label,
+                visited_targets=visited_targets,
+                seen_sources=seen_sources,
+            )
+        )
+    return sources
 
 
 _MANUALLY_HANDLED_CMAKE_PACKAGES = {
@@ -961,6 +1093,52 @@ def write_library(f, name: str, srcs: List[str], hdrs: List[str]) -> None:
         f.write(f"target_compile_options({name} INTERFACE -fno-exceptions)\n")
 
 
+def generate_tiny_skia_cmake() -> None:
+    """Create the generated CMakeLists.txt for the vendored tiny-skia-cpp package."""
+    sources = _collect_tiny_skia_sources()
+    path = _TINY_SKIA_ROOT / "CMakeLists.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    with path.open("w") as f:
+        f.write("##\n")
+        f.write("## Generated by tools/cmake/gen_cmakelists.py - DO NOT EDIT\n")
+        f.write("##\n\n")
+        f.write("cmake_minimum_required(VERSION 3.20)\n")
+        f.write("project(tiny-skia-cpp LANGUAGES CXX)\n\n")
+
+        f.write("set(TINY_SKIA_SOURCES\n")
+        for source in sources:
+            f.write(f"  {source}\n")
+        f.write(")\n\n")
+
+        f.write("function(add_tiny_skia_target TARGET_NAME SIMD_DEFINE)\n")
+        f.write("  add_library(${TARGET_NAME} STATIC ${TINY_SKIA_SOURCES})\n")
+        f.write("  target_include_directories(${TARGET_NAME} PUBLIC\n")
+        f.write("    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>\n")
+        f.write("  )\n")
+        f.write("  target_compile_features(${TARGET_NAME} PUBLIC cxx_std_20)\n")
+        f.write("  target_compile_definitions(${TARGET_NAME} PRIVATE ${SIMD_DEFINE})\n\n")
+        f.write("  if(CMAKE_CXX_COMPILER_ID MATCHES \"Clang|GNU\")\n")
+        f.write("    target_compile_options(${TARGET_NAME} PRIVATE -Wall -ffp-contract=off)\n")
+        f.write("  elseif(MSVC)\n")
+        f.write("    target_compile_options(${TARGET_NAME} PRIVATE /W3 /fp:precise)\n")
+        f.write("  endif()\n\n")
+        f.write("  if(SIMD_DEFINE STREQUAL \"TINYSKIA_CFG_IF_SIMD_NATIVE=1\")\n")
+        f.write("    if(CMAKE_CXX_COMPILER_ID MATCHES \"Clang|GNU\")\n")
+        f.write("      if(CMAKE_SYSTEM_PROCESSOR MATCHES \"x86_64|AMD64|amd64\")\n")
+        f.write("        target_compile_options(${TARGET_NAME} PRIVATE -mavx2 -mfma)\n")
+        f.write("      endif()\n")
+        f.write("    elseif(MSVC)\n")
+        f.write("      if(CMAKE_SYSTEM_PROCESSOR MATCHES \"AMD64\")\n")
+        f.write("        target_compile_options(${TARGET_NAME} PRIVATE /arch:AVX2)\n")
+        f.write("      endif()\n")
+        f.write("    endif()\n")
+        f.write("  endif()\n")
+        f.write("endfunction()\n\n")
+        f.write("add_tiny_skia_target(tiny_skia \"TINYSKIA_CFG_IF_SIMD_NATIVE=1\")\n")
+        f.write("add_tiny_skia_target(tiny_skia_scalar \"TINYSKIA_CFG_IF_SIMD_SCALAR=1\")\n")
+
+
 #
 # Step 1: top-level CMakeLists.txt
 #
@@ -1026,8 +1204,7 @@ def generate_root() -> None:
         # libraries and resolved at binary link time (like Bazel).
         f.write("set(BUILD_SHARED_LIBS OFF CACHE BOOL \"\" FORCE)\n\n")
         f.write("include(FetchContent)\n")
-        f.write("option(DONNER_BUILD_TESTS \"Build Donner tests\" OFF)\n")
-        f.write("option(DONNER_BUILD_EXAMPLES \"Build Donner CMake examples\" OFF)\n\n")
+        f.write("option(DONNER_BUILD_TESTS \"Build Donner tests\" OFF)\n\n")
 
         # ── Feature options (mirror Bazel flags) ───────────────────────
         f.write("# Feature options (mirror Bazel flags)\n")
@@ -1149,7 +1326,7 @@ def generate_root() -> None:
 
         # Optional test enable switch
         f.write("\n")
-        f.write("if(DONNER_BUILD_TESTS OR DONNER_BUILD_EXAMPLES)\n")
+        f.write("if(DONNER_BUILD_TESTS)\n")
         f.write("  enable_testing()\n")
         f.write("endif()\n\n")
 
@@ -1572,10 +1749,6 @@ def generate_all_packages() -> None:
                     f.write(f"    target_link_libraries(donner INTERFACE {resolution.value})\n")
                     f.write("  endif()\n")
         f.write("endif()\n")
-        f.write("\n")
-        f.write("if(DONNER_BUILD_EXAMPLES AND CMAKE_SOURCE_DIR STREQUAL PROJECT_SOURCE_DIR)\n")
-        f.write("  add_subdirectory(examples/cmake_consumer)\n")
-        f.write("endif()\n")
 
 #
 # Entry point
@@ -1842,12 +2015,10 @@ def main() -> None:
         # after validation so the workspace is unchanged on exit.
         workspace = Path.cwd()
 
-        # Vendored third-party dirs that ship with their own CMakeLists.txt and
-        # are NOT touched by gen_cmakelists.py. These are excluded from both
-        # cleanup and validation.
+        # CMakeLists.txt files that are handwritten instead of generated. These
+        # are excluded from both cleanup and generated-output validation.
         vendored_prefixes = (
             "bazel-",
-            "third_party/tiny-skia-cpp",
             "third_party/stb",
             "third_party/frozen",
             "third_party/css-parsing-tests",
@@ -1876,6 +2047,7 @@ def main() -> None:
         build_error: Optional[str] = None
         try:
             generate_root()
+            generate_tiny_skia_cmake()
             generate_all_packages()
 
             # Track which files were actually generated (so the validator only
@@ -1943,6 +2115,7 @@ def main() -> None:
         print("This may take a while, please wait...\n")
 
         generate_root()
+        generate_tiny_skia_cmake()
         generate_all_packages()
 
         if _unmapped_deps:

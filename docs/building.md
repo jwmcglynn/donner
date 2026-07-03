@@ -128,8 +128,9 @@ ctest --test-dir build
 This fetches dependencies via `FetchContent` and builds the libraries. Unit tests are
 not built by default and can be enabled with the `DONNER_BUILD_TESTS` option.
 
-The standalone CMake consumer example under `examples/cmake_consumer/` demonstrates linking the
-exported `donner` target from another CMake project.
+The standalone CMake consumer example under `examples/cmake_consumer/` is a getting-started project
+for linking the exported `donner` target from another CMake project. See \ref GettingStartedCMake
+for the external-consumer setup.
 
 ### CMake configuration options
 
@@ -140,7 +141,6 @@ exported `donner` target from another CMake project.
 | `DONNER_TEXT_WOFF2` | `ON` | Enable WOFF2 web font loading |
 | `DONNER_FILTERS` | `ON` | Enable SVG filter effects |
 | `DONNER_BUILD_TESTS` | `OFF` | Build unit tests (adds googletest dependency) |
-| `DONNER_BUILD_EXAMPLES` | `OFF` | Build CMake examples when configuring Donner directly |
 
 ### Bazel configuration options
 

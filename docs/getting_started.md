@@ -29,6 +29,63 @@ donner_cc_binary(
 )
 ```
 
+## Adding to Your CMake Project {#GettingStartedCMake}
+
+CMake support is generated from Donner's Bazel build metadata. Start from a Donner source checkout
+and generate the CMake files once before configuring your application:
+
+```sh
+cd /path/to/donner
+python3 tools/cmake/gen_cmakelists.py
+```
+
+Then add Donner to your own `CMakeLists.txt` with `add_subdirectory()` and link the exported
+`donner` target:
+
+```cmake
+cmake_minimum_required(VERSION 3.20)
+project(my_svg_app LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(DONNER_SOURCE_DIR "/path/to/donner" CACHE PATH "Path to a Donner source checkout")
+add_subdirectory("${DONNER_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/_deps/donner")
+
+add_executable(my_svg_app main.cc)
+target_link_libraries(my_svg_app PRIVATE donner)
+```
+
+Use the same public headers as the Bazel build:
+
+```cpp
+#include "donner/svg/SVG.h"
+#include "donner/svg/renderer/Renderer.h"
+```
+
+The complete runnable example is under `examples/cmake_consumer/`. It parses a small SVG, queries
+the DOM, renders it, and exits non-zero if any step fails. From the Donner checkout:
+
+```sh
+python3 tools/cmake/gen_cmakelists.py
+cmake -S examples/cmake_consumer -B build/cmake-consumer
+cmake --build build/cmake-consumer --target donner_cmake_consumer
+ctest --test-dir build/cmake-consumer --output-on-failure
+```
+
+From another source tree, pass the Donner checkout explicitly:
+
+```sh
+cmake -S /path/to/donner/examples/cmake_consumer -B build/cmake-consumer \
+  -DDONNER_SOURCE_DIR=/path/to/donner
+cmake --build build/cmake-consumer --target donner_cmake_consumer
+ctest --test-dir build/cmake-consumer --output-on-failure
+```
+
+Regenerate the CMake files after updating Donner or changing its Bazel build graph. Generated
+`CMakeLists.txt` files are intentionally ignored by Git; handwritten examples under `examples/`
+are the exception.
+
 ## Loading an SVG
 
 First include the core SVG module with:
