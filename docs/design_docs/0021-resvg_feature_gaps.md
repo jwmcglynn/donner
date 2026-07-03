@@ -95,8 +95,6 @@ bottom for completeness.
 | B3 | `structure/image` golden kernel-era mismatch | 13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline | 1 | gradient/pattern/`<image>`/text resolve the pivot; `on-text-path` baseline still drops it → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F3 | `context-fill` / `context-stroke` | 13 | Feature |
-| F5 | full `dominant-baseline` keyword set | 14 | Feature |
-| F6 | full `alignment-baseline` keyword set | 10 | Feature |
 | F7 | `paint-order` rendering | **DONE** (7/8) | Rendered on shapes + text; `on-tspan` residual → [#624](https://github.com/jwmcglynn/donner/issues/624) |
 | F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
 | F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`) | 8 | Feature |
@@ -242,16 +240,6 @@ Per-test threshold inflation is not an option.
 
 **Impact:** 13 tests in `painting/context/`. Parsed but not honored at render.
 Used by markers and `<use>` to inherit the referencing element's paint.
-
-### F5: full `dominant-baseline` keyword set
-
-**Impact:** 14 tests in `text/dominant-baseline/`. Missing `before-edge`,
-`after-edge`, `no-change`, `reset-size`, `use-script`, etc.
-
-### F6: full `alignment-baseline` keyword set
-
-**Impact:** 10 tests in `text/alignment-baseline/`. Full keyword set + tspan
-baseline alignment.
 
 ### F7: `paint-order` rendering
 
