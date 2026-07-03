@@ -934,29 +934,32 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
       PresentedBaselineFromDragPreviews(activeDragPreview, displayedDragPreview);
   if (const std::optional<svg::SVGElement>& selected = app_.selectedElement();
       selected.has_value()) {
-    if (const std::optional<RcString> style = selected->getAttribute("style"); style.has_value()) {
-      readback.selectedStyleAttribute = std::string(std::string_view(*style));
-    }
-    if (const svg::PropertyRegistry* specifiedStyle = selected->specifiedStyle()) {
-      if (const std::optional<svg::PaintServer> fill = specifiedStyle->fill.get();
-          fill.has_value()) {
-        readback.selectedLocalStyleFill = PaintServerForDiagnostics(*fill);
+    selected->withReadAccess([&readback, &selected](svg::DocumentReadAccess&, EntityHandle) {
+      if (const std::optional<RcString> style = selected->getAttribute("style");
+          style.has_value()) {
+        readback.selectedStyleAttribute = std::string(std::string_view(*style));
       }
-    }
-    if (const svg::PropertyRegistry* computedStyle = selected->computedStyleIfPresent()) {
-      if (const std::optional<svg::PaintServer> fill = computedStyle->fill.get();
-          fill.has_value()) {
-        readback.selectedComputedFill = PaintServerForDiagnostics(*fill);
+      if (const svg::PropertyRegistry* specifiedStyle = selected->specifiedStyle()) {
+        if (const std::optional<svg::PaintServer> fill = specifiedStyle->fill.get();
+            fill.has_value()) {
+          readback.selectedLocalStyleFill = PaintServerForDiagnostics(*fill);
+        }
       }
-    }
-    if (const std::optional<svg::PaintServer> resolvedFill = selected->resolvedFillPaint();
-        resolvedFill.has_value()) {
-      readback.selectedRenderingInstanceFill = PaintServerForDiagnostics(*resolvedFill);
-    }
-    if (const std::optional<RcString> pathData = selected->getAttribute("d");
-        pathData.has_value()) {
-      readback.selectedPathDataAttribute = std::string(std::string_view(*pathData));
-    }
+      if (const svg::PropertyRegistry* computedStyle = selected->computedStyleIfPresent()) {
+        if (const std::optional<svg::PaintServer> fill = computedStyle->fill.get();
+            fill.has_value()) {
+          readback.selectedComputedFill = PaintServerForDiagnostics(*fill);
+        }
+      }
+      if (const std::optional<svg::PaintServer> resolvedFill = selected->resolvedFillPaint();
+          resolvedFill.has_value()) {
+        readback.selectedRenderingInstanceFill = PaintServerForDiagnostics(*resolvedFill);
+      }
+      if (const std::optional<RcString> pathData = selected->getAttribute("d");
+          pathData.has_value()) {
+        readback.selectedPathDataAttribute = std::string(std::string_view(*pathData));
+      }
+    });
   }
   readback.activeDragPreview = activeDragPreview;
   readback.displayedDragPreview = displayedDragPreview;

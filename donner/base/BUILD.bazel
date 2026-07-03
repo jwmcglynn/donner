@@ -101,6 +101,7 @@ donner_cc_library(
     srcs = ["tests/GtestTimeoutMain.cc"],
     visibility = ["//visibility:public"],
     deps = [
+        ":failure_signal_handler",
         "@com_google_gtest//:gtest",
     ],
     alwayslink = 1,
