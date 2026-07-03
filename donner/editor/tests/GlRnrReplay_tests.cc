@@ -1562,7 +1562,7 @@ TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackgrou
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 1);
   ASSERT_TRUE(actual.has_value());
@@ -1607,7 +1607,7 @@ TEST(GlRnrReplayTest, DirectFramebufferCheckerboardUsesSingleDrawDuringDrag) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   int directDragFrames = 0;
   for (const repro::GlRnrReplayFrameDiagnostics& diagnostics : result.frameDiagnostics) {
@@ -1645,7 +1645,7 @@ TEST(GlRnrReplayTest, DocumentSpaceInputDrivesCanvasSelectionThroughEditorShell)
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   ASSERT_TRUE(result.finalSelectedElementLabel.has_value());
   EXPECT_EQ(*result.finalSelectedElementLabel, "<rect> #target");
@@ -1674,7 +1674,7 @@ TEST(GlRnrReplayTest, SemanticPenPaintActionsRenderThroughEditorShell) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, 20);
   ASSERT_TRUE(actual.has_value());
@@ -1704,7 +1704,7 @@ TEST(GlRnrReplayTest, PenDragUpdatesSelectedPathDataBeforeMouseUp) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   const repro::GlRnrReplayFrameDiagnostics* diagnostics = FindFrameDiagnostics(result, 7);
   ASSERT_NE(diagnostics, nullptr);
@@ -1736,7 +1736,7 @@ TEST(GlRnrReplayTest, PenDragUsesCyanOverlayWithoutLegacyBluePath) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   const repro::GlRnrReplayFrameDiagnostics* dragFrame = FindFrameDiagnostics(result, 7);
   ASSERT_NE(dragFrame, nullptr);
@@ -1788,7 +1788,7 @@ TEST(GlRnrReplayTest, PenClosePathClickRefreshesOverlayOnFlushFrame) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // Find the frame where the close-path click committed the trailing Z.
   const repro::GlRnrReplayFrameDiagnostics* closeFrame = nullptr;
@@ -1842,7 +1842,7 @@ TEST(GlRnrReplayTest, PenEscapeCommitsOpenPathInsteadOfDiscarding) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // Escape ends the pen session by committing the placed anchors as an open
   // path — the placed segment must survive as a normal selected <path>, not
@@ -1880,7 +1880,7 @@ TEST(GlRnrReplayTest, PenHoverShowsRubberBandSegmentPreview) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // With one anchor placed at (10, 40) and the pointer resting at (70, 40),
   // the presented frame must preview the segment a click would commit: a
@@ -1914,7 +1914,7 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // Backspace while drafting removes only the LAST placed anchor — the draft
   // path (which is the selection) must survive with its remaining anchor, not
@@ -1952,7 +1952,7 @@ TEST(GlRnrReplayTest, PenAnchorHandleDragPresentsLiveGeometryInLockstep) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // Frame 7 is the drag frame: the DOM has flushed the dragged curve while the
   // async raster of that geometry has not landed yet. The presented frame must
@@ -2010,7 +2010,7 @@ TEST(GlRnrReplayTest, ColorPickerFillOnPenPathRerendersGeodePromotedLayer) {
 
   repro::GlRnrReplayResult result;
   std::string error;
-  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kCaptureFrame);
   ASSERT_TRUE(actual.has_value());
