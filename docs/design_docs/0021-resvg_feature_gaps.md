@@ -247,9 +247,10 @@ render order (fill/stroke/markers) is not reordered. On shapes, text, and tspan.
 
 ### F9: `textLength` + `lengthAdjust`
 
-**Impact:** ~8 (`text/textLength` 4 + `text/lengthAdjust` 3 + `text/text-decoration`
+**Impact:** ~6 (`text/textLength` 2 + `text/lengthAdjust` 3 + `text/text-decoration`
 interaction). Text stretching/compressing to a target length (`spacing` and
-`spacingAndGlyphs`), including the Arabic cases.
+`spacingAndGlyphs`). The `arabic`/`arabic-with-lengthAdjust` cases pass on
+text-full builds and are enabled with `.onlyTextFull()`.
 
 ### F10: `textPath` SVG2 attributes
 

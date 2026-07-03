@@ -1682,10 +1682,9 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/textLength",
                 {
                     {"arabic-with-lengthAdjust.svg",
-                     Params::Skip("Not impl: textLength + lengthAdjust attribute (text "
-                                  "stretching/compressing)")},
-                    {"arabic.svg", Params::Skip("Not impl: textLength + lengthAdjust attribute "
-                                                "(text stretching/compressing)")},
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
+                    {"arabic.svg",
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                     {"on-a-single-tspan.svg",
                      Params::Skip("Not impl: textLength + lengthAdjust attribute (text "
                                   "stretching/compressing)")},
@@ -1873,7 +1872,8 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/writing-mode",
                 {
-                    {"arabic-with-rl.svg", Params::Skip("Non-ascii text").onlyTextFull()},
+                    {"arabic-with-rl.svg",
+                     Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                     {"inheritance.svg", Params().withMaxPixelsDifferent(1500).withReason(
                                             "Bug: Baseline is ~2px off compared to resvg")},
                     {"japanese-with-tb.svg",
