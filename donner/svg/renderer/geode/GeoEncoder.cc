@@ -38,6 +38,13 @@ constexpr uint64_t kStorageOffsetAlignment = 256u;
 // wgpu-native backends (`minUniformBufferOffsetAlignment`).
 constexpr uint64_t kUniformOffsetAlignment = 256u;
 
+template <typename Handle>
+void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
+  if (handle) {
+    handle.get().destroy();
+  }
+}
+
 /// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
 ///
 /// WGSL struct layout requires the total size to be a multiple of the largest
@@ -242,6 +249,32 @@ struct GeoEncoder::Impl {
   /// `InstanceTransform` struct. Alignment uses `kStorageOffsetAlignment`
   /// since the binding is storage read-only.
   Arena instanceTransformArena;
+
+  void destroyArenaBackings(Arena& arena) {
+    DestroyResourceBacking(arena.buffer);
+    arena.buffer.reset();
+    for (ScopedWgpuHandle<wgpu::Buffer>& buffer : arena.retired) {
+      DestroyResourceBacking(buffer);
+      buffer.reset();
+    }
+    arena.retired.clear();
+  }
+
+  void destroyOwnedResourceBackings() {
+    pass.reset();
+    maskPass.reset();
+
+    destroyArenaBackings(vertexArena);
+    destroyArenaBackings(bandArena);
+    destroyArenaBackings(curveArena);
+    destroyArenaBackings(uniformArena);
+    destroyArenaBackings(vBandArena);
+    destroyArenaBackings(vCurveArena);
+    destroyArenaBackings(hGridArena);
+    destroyArenaBackings(vGridArena);
+    destroyArenaBackings(instanceTransformArena);
+    transientResources.destroyBackings();
+  }
 
   // When true, this encoder owns its `commandEncoder` and `finish()`
   // calls `commandEncoder.finish()` + `queue().submit()`. When false
@@ -760,7 +793,11 @@ GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
   finalizeImpl(*impl_);
 }
 
-GeoEncoder::~GeoEncoder() = default;
+GeoEncoder::~GeoEncoder() {
+  if (impl_) {
+    impl_->destroyOwnedResourceBackings();
+  }
+}
 GeoEncoder::GeoEncoder(GeoEncoder&&) noexcept = default;
 GeoEncoder& GeoEncoder::operator=(GeoEncoder&&) noexcept = default;
 

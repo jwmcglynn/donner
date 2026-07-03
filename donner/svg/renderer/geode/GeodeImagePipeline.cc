@@ -57,18 +57,18 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   bglDesc.label = wgpuLabel("GeodeImageBlitBGL");
   bglDesc.entryCount = 7;
   bglDesc.entries = entries;
-  bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
+  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
 
   // ----- Pipeline layout -----
   wgpu::PipelineLayoutDescriptor plDesc = {};
   plDesc.label = wgpuLabel("GeodeImageBlitPL");
   plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_};
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
   plDesc.bindGroupLayouts = layouts;
-  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
+  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
 
   // ----- Shader module -----
-  wgpu::ShaderModule shader = createImageBlitShader(device);
+  ScopedWgpuHandle<wgpu::ShaderModule> shader(createImageBlitShader(device));
 
   // ----- Fragment / blending -----
   // Same premultiplied-source-over as the Slug fill pipeline. The fragment
@@ -88,7 +88,7 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   colorTarget.writeMask = wgpu::ColorWriteMask::All;
 
   wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader;
+  fragmentState.module = shader.get();
   fragmentState.entryPoint = wgpuLabel("fs_main");
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
@@ -97,8 +97,8 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   // No vertex buffers — the shader generates corners from vertex_index.
   wgpu::RenderPipelineDescriptor rpDesc = {};
   rpDesc.label = wgpuLabel("GeodeImageBlit");
-  rpDesc.layout = pipelineLayout;
-  rpDesc.vertex.module = shader;
+  rpDesc.layout = pipelineLayout.get();
+  rpDesc.vertex.module = shader.get();
   rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
   rpDesc.vertex.bufferCount = 0;
   rpDesc.vertex.buffers = nullptr;
@@ -112,7 +112,7 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  pipeline_ = device.createRenderPipeline(rpDesc);
+  pipeline_.reset(device.createRenderPipeline(rpDesc));
 
   // ----- Samplers -----
   // Linear (bilinear) sampler — the default for SVG's "smooth" image
@@ -127,13 +127,13 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   linearDesc.magFilter = wgpu::FilterMode::Linear;
   linearDesc.minFilter = wgpu::FilterMode::Linear;
   linearDesc.maxAnisotropy = 1;
-  linearSampler_ = device.createSampler(linearDesc);
+  linearSampler_.reset(device.createSampler(linearDesc));
 
   // Nearest sampler — for `image-rendering: pixelated`.
   wgpu::SamplerDescriptor nearestDesc{wgpu::Default};
   nearestDesc.label = wgpuLabel("GeodeImageBlitNearest");
   nearestDesc.maxAnisotropy = 1;
-  nearestSampler_ = device.createSampler(nearestDesc);
+  nearestSampler_.reset(device.createSampler(nearestDesc));
 
   wgpu::SamplerDescriptor clipMaskDesc{wgpu::Default};
   clipMaskDesc.label = wgpuLabel("GeodeImageBlitClipMask");
@@ -142,7 +142,7 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   clipMaskDesc.magFilter = wgpu::FilterMode::Linear;
   clipMaskDesc.minFilter = wgpu::FilterMode::Linear;
   clipMaskDesc.maxAnisotropy = 1;
-  clipMaskSampler_ = device.createSampler(clipMaskDesc);
+  clipMaskSampler_.reset(device.createSampler(clipMaskDesc));
 }
 
 }  // namespace donner::geode

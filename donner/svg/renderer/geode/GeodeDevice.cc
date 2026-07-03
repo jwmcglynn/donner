@@ -100,6 +100,45 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
   return wgpu::createInstance();
 }
 
+void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) {
+  if (!device || !queue) {
+    return;
+  }
+
+  struct WorkDoneState {
+    bool done = false;
+  } state;
+
+  wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
+  callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
+                             void* /*userdata2*/) {
+    WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
+    state->done = true;
+  };
+  callbackInfo.userdata1 = &state;
+  callbackInfo.userdata2 = nullptr;
+
+  queue.onSubmittedWorkDone(callbackInfo);
+  for (int pollIter = 0; !state.done && pollIter < 2000; ++pollIter) {
+    device.poll(true, nullptr);
+  }
+}
+
+template <typename Handle>
+void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
+  if (handle) {
+    handle.get().destroy();
+  }
+}
+
+template <typename Handle>
+void DestroyResourceBackings(std::vector<ScopedWgpuHandle<Handle>>& handles) {
+  for (ScopedWgpuHandle<Handle>& handle : handles) {
+    DestroyResourceBacking(handle);
+  }
+}
+
 }  // namespace
 
 /// PIMPL struct: holds the wgpu::Instance so its lifetime is tied to
@@ -107,6 +146,12 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
 /// directly on the outer class. In embedded mode, `instance` is null
 /// because the host owns the instance.
 struct GeodeDevice::Impl {
+  ~Impl() {
+    DestroyResourceBacking(dummyPatternTexture);
+    DestroyResourceBacking(dummyClipMaskTexture);
+    DestroyResourceBacking(identityInstanceTransformBuffer);
+  }
+
   wgpu::Instance instance;
 
   // Shared dummies used by every GeoEncoder's bind groups — see
@@ -143,7 +188,38 @@ struct GeodeDevice::Impl {
 };
 
 GeodeDevice::GeodeDevice() : impl_(std::make_unique<Impl>()) {}
-GeodeDevice::~GeodeDevice() = default;
+GeodeDevice::~GeodeDevice() {
+  // Release all resources that were created from the device before releasing the
+  // root queue/device/adapter/instance handles. `webgpu.hpp` handles are raw
+  // wrappers: their destructors do not release native references.
+  WaitForSubmittedWork(device_, queue_);
+  wgpu::Instance instance;
+  if (!external_ && impl_) {
+    instance = impl_->instance;
+    impl_->instance = wgpu::Instance();
+  }
+  drainDeferredDestroys();
+  impl_.reset();
+  if (device_) {
+    device_.poll(true, nullptr);
+    WaitForSubmittedWork(device_, queue_);
+  }
+
+  if (external_) {
+    queue_ = wgpu::Queue();
+    device_ = wgpu::Device();
+    adapter_ = wgpu::Adapter();
+    return;
+  }
+
+  ReleaseWgpuHandle(queue_);
+  if (device_) {
+    device_.destroy();
+  }
+  ReleaseWgpuHandle(device_);
+  ReleaseWgpuHandle(adapter_);
+  ReleaseWgpuHandle(instance);
+}
 
 namespace {
 /// Process-wide count of CreateHeadless calls, for tests that pin device
@@ -491,6 +567,8 @@ void GeodeDevice::deferDestroy(wgpu::Texture texture) {
 }
 
 void GeodeDevice::drainDeferredDestroys() {
+  DestroyResourceBackings(pendingBuffers_);
+  DestroyResourceBackings(pendingTextures_);
   pendingBuffers_.clear();
   pendingTextures_.clear();
 }

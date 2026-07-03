@@ -809,12 +809,28 @@ struct RendererGeode::Impl {
       device->queue().submit(1, &cb.get());
       device->countSubmit();
     }
+    frameFinishedEncoders.clear();
     wgpu::CommandEncoderDescriptor desc = {};
     desc.label = wgpuLabel("RendererGeodeFrameCE");
     frameCommandEncoder.reset(device->device().createCommandEncoder(desc));
   }
 
   std::unique_ptr<geode::GeoEncoder> encoder;
+  std::vector<std::unique_ptr<geode::GeoEncoder>> frameFinishedEncoders;
+
+  void retireFinishedEncoder(std::unique_ptr<geode::GeoEncoder> finishedEncoder) {
+    if (finishedEncoder) {
+      frameFinishedEncoders.push_back(std::move(finishedEncoder));
+    }
+  }
+
+  void retireActiveEncoder() {
+    if (!encoder) {
+      return;
+    }
+    encoder->finish();
+    retireFinishedEncoder(std::move(encoder));
+  }
 
   // Reusable scratch storage for gradient stop vectors — keeps the
   // per-fillPath allocation counts down and lets the `std::span` in
@@ -1003,6 +1019,7 @@ struct RendererGeode::Impl {
     wgpu::TextureDescriptor desc;
   };
   std::vector<PendingRelease> framePendingReleases;
+  std::vector<geode::ScopedWgpuHandle<wgpu::TextureView>> framePendingTextureViewReleases;
 
   void releaseTextureAtFrameEnd(wgpu::Texture texture, const wgpu::TextureDescriptor& desc) {
     if (!texture) {
@@ -1011,7 +1028,18 @@ struct RendererGeode::Impl {
     framePendingReleases.push_back({std::move(texture), desc});
   }
 
+  void releaseTextureViewsAtFrameEnd(
+      std::vector<geode::ScopedWgpuHandle<wgpu::TextureView>>& views) {
+    for (auto& view : views) {
+      if (view) {
+        framePendingTextureViewReleases.push_back(std::move(view));
+      }
+    }
+    views.clear();
+  }
+
   void drainPendingReleases() {
+    framePendingTextureViewReleases.clear();
     for (auto& pending : framePendingReleases) {
       releaseTexture(std::move(pending.texture), pending.desc);
     }
@@ -1139,8 +1167,11 @@ struct RendererGeode::Impl {
     /// `maskResolveView`; the intermediate layer textures are parked
     /// in `maskLayerTextures` so their wgpu::Texture ownership
     /// persists until `popClip`.
-    wgpu::Texture maskMsaaTexture;
     wgpu::Texture maskResolveTexture;
+    /// Owned texture views created for each nested mask layer. Released after
+    /// the frame command buffer is submitted because recorded bind groups may
+    /// still reference them after `popClip`.
+    std::vector<geode::ScopedWgpuHandle<wgpu::TextureView>> maskLayerViews;
     wgpu::TextureView maskResolveView;
     /// Paired (texture, descriptor) entries. Every clip-mask texture
     /// allocated by `pushClip` (across all nested layers) lives here
@@ -1735,17 +1766,115 @@ struct RendererGeode::Impl {
     }
   }
 
-  // No custom destructor: the M2 cache-invalidation listener is a
-  // free function with no dependency on `this`, so the natural entt
-  // lifecycle is correct — connections die with the `Registry` they
-  // live on. Calling `.disconnect<&fn>()` from a dtor would UB when
-  // the registry is destroyed BEFORE the renderer (common in tests
-  // where an `SVGDocument` is declared after its `Renderer` in the
-  // same scope, so the document destructs first). Leaving the
-  // connection attached is harmless: either the registry is alive
-  // and a subsequent geometry change fires `remove<GeodePathCacheComponent>`
-  // (which is a no-op if the component isn't present), or the
-  // registry is gone and no signal will ever fire again.
+  // The M2 cache-invalidation listener is a free function with no dependency
+  // on `this`, so Impl teardown intentionally leaves it attached. Connections
+  // die with the `Registry` they live on, and calling `.disconnect<&fn>()` from
+  // a renderer dtor would UB when the registry was destroyed first.
+
+  static void destroyTextureBacking(geode::ScopedWgpuHandle<wgpu::Texture>& texture) {
+    if (texture) {
+      texture.get().destroy();
+    }
+  }
+
+  static void destroyAndReleaseTexture(wgpu::Texture& texture) {
+    if (texture) {
+      texture.destroy();
+      geode::ReleaseWgpuHandle(texture);
+    }
+  }
+
+  static void destroyPendingTexture(PendingRelease& release) {
+    destroyAndReleaseTexture(release.texture);
+  }
+
+  static void destroyClipStackTextures(std::vector<ClipStackEntry>& entries) {
+    for (ClipStackEntry& entry : entries) {
+      entry.maskLayerViews.clear();
+      for (PendingRelease& release : entry.maskLayerTextures) {
+        destroyPendingTexture(release);
+      }
+      entry.maskLayerTextures.clear();
+      entry.maskResolveTexture = wgpu::Texture();
+      entry.maskResolveView = wgpu::TextureView();
+    }
+    entries.clear();
+  }
+
+  void destroyTexturePool() {
+    for (auto& [unusedKey, bucket] : texturePool) {
+      (void)unusedKey;
+      for (geode::ScopedWgpuHandle<wgpu::Texture>& texture : bucket.free) {
+        destroyTextureBacking(texture);
+      }
+    }
+    texturePool.clear();
+  }
+
+  ~Impl() {
+    encoder.reset();
+    frameCommandEncoder.reset();
+    frameFinishedEncoders.clear();
+
+    if (device && device->device()) {
+      device->device().poll(true, nullptr);
+    }
+
+    framePendingTextureViewReleases.clear();
+    for (PendingRelease& release : framePendingReleases) {
+      destroyPendingTexture(release);
+    }
+    framePendingReleases.clear();
+
+    for (LayerStackFrame& frame : layerStack) {
+      destroyAndReleaseTexture(frame.layerTexture);
+      destroyAndReleaseTexture(frame.layerMsaaTexture);
+    }
+    layerStack.clear();
+
+    for (MaskStackFrame& frame : maskStack) {
+      destroyAndReleaseTexture(frame.maskTexture);
+      destroyAndReleaseTexture(frame.maskMsaaTexture);
+      destroyAndReleaseTexture(frame.contentTexture);
+      destroyAndReleaseTexture(frame.contentMsaaTexture);
+    }
+    maskStack.clear();
+
+    destroyClipStackTextures(clipStack);
+    for (FilterStackFrame& frame : filterStack) {
+      destroyAndReleaseTexture(frame.layerTexture);
+      destroyAndReleaseTexture(frame.layerMsaaTexture);
+      destroyClipStackTextures(frame.savedClipStack);
+    }
+    filterStack.clear();
+
+    for (PatternStackFrame& frame : patternStack) {
+      destroyTextureBacking(frame.tileTexture);
+      destroyTextureBacking(frame.tileMsaaTexture);
+    }
+    patternStack.clear();
+    if (patternFillPaint.has_value()) {
+      destroyTextureBacking(patternFillPaint->tile);
+    }
+    if (patternStrokePaint.has_value()) {
+      destroyTextureBacking(patternStrokePaint->tile);
+    }
+    patternFillPaint.reset();
+    patternStrokePaint.reset();
+
+    destroyTextureBacking(ownedTarget);
+    ownedTarget.reset();
+    destroyTextureBacking(ownedMsaaTarget);
+    ownedMsaaTarget.reset();
+    destroyTexturePool();
+
+    if (device) {
+      device->drainDeferredDestroys();
+      if (device->device()) {
+        device->device().poll(true, nullptr);
+      }
+    }
+  }
 
   /// Wire up per-renderer state against the shared GeodeDevice. Before
   /// issue #575's fix each renderer constructed its own pipelines
@@ -1891,6 +2020,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->deviceFromLocalTransformStack.clear();
   impl_->paint = PaintParams();
   impl_->encoder.reset();
+  impl_->frameFinishedEncoders.clear();
 
   // M4.2: stamp each frame with a monotonic index and age out pool
   // buckets that haven't been touched in the last
@@ -2034,8 +2164,7 @@ void RendererGeode::endFrame() {
 
   if (impl_->encoder) {
     // Ends the open render pass without submitting — shared-mode.
-    impl_->encoder->finish();
-    impl_->encoder.reset();
+    impl_->retireActiveEncoder();
   }
 
   // Finalise and submit the single frame-wide CommandEncoder. After
@@ -2049,6 +2178,7 @@ void RendererGeode::endFrame() {
       impl_->device->countSubmit();
     }
     impl_->frameCommandEncoder.reset();
+    impl_->frameFinishedEncoders.clear();
   }
 
   // Now that the command buffer is submitted, it's safe to return the
@@ -2301,7 +2431,11 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       impl_->encoder->endMaskPass();
 
       nestedMaskTexture = resolveTexture;
-      nestedMaskView = resolveTexture.createView();
+      geode::ScopedWgpuHandle<wgpu::TextureView> resolveView(resolveTexture.createView());
+      nestedMaskView = resolveView.get();
+      if (resolveView) {
+        entry.maskLayerViews.push_back(std::move(resolveView));
+      }
 
       // Keep the intermediate textures alive until popClip, paired
       // with their descs for M4.2 pool release.
@@ -2339,6 +2473,7 @@ void RendererGeode::popClip() {
     // recycling mid-frame could hand the texture to a later acquire
     // before the submit.
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
+    impl_->releaseTextureViewsAtFrameEnd(entry.maskLayerViews);
     for (auto& release : entry.maskLayerTextures) {
       impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
     }
@@ -2447,8 +2582,9 @@ void RendererGeode::popIsolatedLayer() {
 
   // Finish the layer's render pass so the texture contents are ready.
   if (impl_->encoder) {
-    impl_->encoder->finish();
+    impl_->retireActiveEncoder();
   }
+  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
 
   // Restore outer target references.
   impl_->target = frame.savedTarget;
@@ -2634,13 +2770,13 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   frame.deviceFromFilter = impl_->deviceFromLocalTransform;
   frame.filterBufferOffsetX = filterBufferOffsetX;
   frame.filterBufferOffsetY = filterBufferOffsetY;
-  frame.savedClipStack = impl_->clipStack;
+  frame.savedClipStack = std::move(impl_->clipStack);
 
   // SVG 2 §15.5: the SourceGraphic that feeds the filter graph must be
   // UNCLIPPED (paint → filter → clip → mask → opacity). Clear the outer
   // clip stack so inner draws into the filter layer aren't gated by the
-  // outer clip-path. The outer mask textures stay alive in
-  // frame.savedClipStack (copy preserves refcounts), and popFilterLayer
+  // outer clip-path. The outer mask textures and views stay alive in
+  // frame.savedClipStack, and popFilterLayer
   // restores the stack and re-binds the mask before the composite blit.
   impl_->clipStack.clear();
 
@@ -2681,7 +2817,7 @@ void RendererGeode::popFilterLayer() {
   }
   Impl::FilterStackFrame frame = std::move(impl_->filterStack.back());
   impl_->filterStack.pop_back();
-  impl_->clipStack = frame.savedClipStack;
+  impl_->clipStack = std::move(frame.savedClipStack);
 
   if (!frame.layerTexture) {
     return;  // Placeholder frame from the headless/error path.
@@ -2689,8 +2825,9 @@ void RendererGeode::popFilterLayer() {
 
   // Finish the filter layer's render pass so the texture is ready.
   if (impl_->encoder) {
-    impl_->encoder->finish();
+    impl_->retireActiveEncoder();
   }
+  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
 
   // The filter engine runs on its own CommandEncoder + submit, so the
   // layer-texture writes we just recorded into `frameCommandEncoder`
@@ -2824,6 +2961,9 @@ void RendererGeode::popFilterLayer() {
                                     Box2d::FromXYWH(0.0, 0.0, static_cast<double>(localWidth),
                                                     static_cast<double>(localHeight)),
                                     1.0, /*pixelated=*/false);
+        if (localFiltered && localFiltered != localTexture) {
+          impl_->device->deferDestroy(std::move(localFiltered));
+        }
         impl_->encoder->setTransform(Transform2d());
 
         impl_->releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
@@ -3011,7 +3151,7 @@ void RendererGeode::transitionMaskToContent() {
 
   // Flush the mask-capture encoder so the mask texture is ready to
   // sample in popMask.
-  impl_->encoder->finish();
+  impl_->retireActiveEncoder();
 
   impl_->target = frame.contentTexture;
   impl_->msaaTarget = frame.contentMsaaTexture;
@@ -3039,8 +3179,9 @@ void RendererGeode::popMask() {
 
   // Finish the content encoder so its resolve is ready to sample.
   if (impl_->encoder) {
-    impl_->encoder->finish();
+    impl_->retireActiveEncoder();
   }
+  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
 
   // Restore the outer target and reopen a new encoder with load-
   // preserve on the saved MSAA state.
@@ -3243,8 +3384,9 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // Finish the tile's render pass so the texture contents are available
   // for sampling by subsequent draws.
   if (impl_->encoder) {
-    impl_->encoder->finish();
+    impl_->retireActiveEncoder();
   }
+  impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
   if (frame.tileMsaaTexture) {
     impl_->device->deferDestroy(frame.tileMsaaTexture.take());
   }

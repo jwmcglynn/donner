@@ -42,6 +42,20 @@ namespace donner::geode {
 }
 
 /**
+ * Release a raw WebGPU handle and reset the wrapper to null.
+ *
+ * @tparam Handle A `wgpu::` handle type with `operator bool()` and `release()`.
+ * @param handle Owned raw handle to release.
+ */
+template <typename Handle>
+void ReleaseWgpuHandle(Handle& handle) {
+  if (handle) {
+    handle.release();
+    handle = Handle();
+  }
+}
+
+/**
  * Move-only RAII owner for a single WebGPU handle.
  *
  * @tparam Handle A `wgpu::` handle type with `operator bool()` and `release()`.
@@ -97,8 +111,8 @@ public:
 
   /// Release the current handle and optionally take ownership of a replacement.
   void reset(Handle handle = Handle()) noexcept {
-    if (handle_) {
-      handle_.release();
+    if (handle_) {  // Keep the release counter scoped to RAII-owned resources.
+      ReleaseWgpuHandle(handle_);
       releaseCount_.fetch_add(1, std::memory_order_relaxed);
     }
     handle_ = std::move(handle);
@@ -152,6 +166,12 @@ public:
     return retainImpl(bindGroups_, std::move(handle));
   }
 
+  /// Destroy backing storage for retained buffers/textures before release.
+  void destroyBackings() {
+    destroyBackingsImpl(buffers_);
+    destroyBackingsImpl(textures_);
+  }
+
 private:
   template <typename Handle>
   static Handle retainImpl(std::vector<ScopedWgpuHandle<Handle>>& storage, Handle handle) {
@@ -161,6 +181,17 @@ private:
     Handle borrowed = handle;
     storage.push_back(ScopedWgpuHandle<Handle>(std::move(handle)));
     return borrowed;
+  }
+
+  template <typename Handle>
+  static void destroyBackingsImpl(std::vector<ScopedWgpuHandle<Handle>>& storage) {
+    for (ScopedWgpuHandle<Handle>& handle : storage) {
+      if (handle) {
+        handle.get().destroy();
+        handle.reset();
+      }
+    }
+    storage.clear();
   }
 
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;

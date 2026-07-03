@@ -4,6 +4,8 @@
 
 #include <webgpu/webgpu.hpp>
 
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+
 namespace donner::geode {
 
 /**
@@ -54,18 +56,18 @@ public:
   GeodePipeline& operator=(GeodePipeline&&) noexcept = default;
 
   /// The compiled render pipeline.
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
+  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
 
   /// The bind group layout used by the pipeline.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
 
   /// Color format the pipeline was built for.
   wgpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:
   wgpu::TextureFormat colorFormat_;
-  wgpu::BindGroupLayout bindGroupLayout_;
-  wgpu::RenderPipeline pipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
+  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
 };
 
 /**
@@ -99,16 +101,16 @@ public:
   GeodeGradientPipeline& operator=(GeodeGradientPipeline&&) noexcept = default;
 
   /// The compiled render pipeline.
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
+  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
   /// The bind group layout used by the pipeline.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
   /// Color format the pipeline was built for.
   wgpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:
   wgpu::TextureFormat colorFormat_;
-  wgpu::BindGroupLayout bindGroupLayout_;
-  wgpu::RenderPipeline pipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
+  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
 };
 
 /**
@@ -151,14 +153,14 @@ public:
   GeodeMaskPipeline(GeodeMaskPipeline&&) noexcept = default;
   GeodeMaskPipeline& operator=(GeodeMaskPipeline&&) noexcept = default;
 
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
+  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
   /// The color format the pipeline targets. Always `RGBA8Unorm`.
   wgpu::TextureFormat colorFormat() const { return wgpu::TextureFormat::RGBA8Unorm; }
 
 private:
-  wgpu::BindGroupLayout bindGroupLayout_;
-  wgpu::RenderPipeline pipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
+  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
 };
 
 }  // namespace donner::geode
