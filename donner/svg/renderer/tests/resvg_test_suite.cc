@@ -131,14 +131,7 @@ INSTANTIATE_TEST_SUITE_P(
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeBlend, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory(
-                                     "filters/feBlend",
-                                     {
-                                         {"with-subregion-on-input-1.svg",
-                                          Params::Skip("Not impl: primitive subregion clipping")},
-                                         {"with-subregion-on-input-2.svg",
-                                          Params::Skip("Not impl: primitive subregion clipping")},
-                                     })),
+                         Combine(ValuesIn(getTestsInCategory("filters/feBlend")),
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
@@ -193,24 +186,10 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeComponentTransfer, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeComposite, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "filters/feComposite",
-                {
-                    {"default-operator.svg",
-                     Params::Skip("Not impl: primitive subregion clipping (feFlood subregion)")},
-                    {"invalid-operator.svg",
-                     Params::Skip("Not impl: primitive subregion clipping (feFlood subregion)")},
-                    {"operator=over.svg",
-                     Params::Skip("Not impl: primitive subregion clipping (feFlood subregion)")},
-                    {"with-subregion-on-input-1.svg",
-                     Params::Skip("Not impl: primitive subregion clipping")},
-                    {"with-subregion-on-input-2.svg",
-                     Params::Skip("Not impl: primitive subregion clipping")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeComposite, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/feComposite")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFeConvolveMatrix, ImageComparisonTestFixture,
@@ -307,8 +286,6 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/feImage",
             {
-                {"empty.svg", Params::Skip("Linux CI: std::bad_alloc in test setup.")},
-                {"simple-case.svg", Params::Skip("External file reference (no ResourceLoader)")},
                 {"svg.svg",
                  Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
                      .withReason("We render higher quality")
@@ -500,7 +477,9 @@ INSTANTIATE_TEST_SUITE_P(
     MaskingClip, ImageComparisonTestFixture,
     Combine(ValuesIn(getTestsInCategory("masking/clip",
                                         {
-                                            {"simple-case.svg", Params::Skip()},
+                                            {"simple-case.svg",
+                                             Params::Skip("Not impl: CSS2 `clip` property "
+                                                          "(rect() clipping, deprecated)")},
                                         })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
@@ -529,7 +508,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"on-the-root-svg-without-size.svg",
                  Params::RenderOnly("UB: on root `<svg>` without size")},
                 {"switch-is-not-a-valid-child.svg", Params::Skip("Not impl: <switch>")},
-                {"with-use-child.svg", Params::Skip("Not impl: <use> child")},
 
                 {"circle-shorthand-with-stroke-box.svg",
                  Params::Skip("Bug: clipPath edge cases beyond core support")},
@@ -548,8 +526,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {
                     {"color-interpolation=linearRGB.svg",
                      Params::Skip("Not implemented: color-interpolation linearRGB")},
-                    {"mask-on-self.svg",
-                     Params::Skip("Non-text mask regression kept out of text stack")},
                     {"recursive-on-child.svg", Params::RenderOnly("UB: Recursive on child")},
                     {"on-a-small-object.svg", WithMaxPixels(120, "Small mask edge AA")},
                     {"with-image.svg",
@@ -636,8 +612,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "paint-servers/radialGradient",
                 {
-                    {"focal-point-correction.svg",
-                     Params::Skip("Test suite bug? In SVG2 this was changed to draw")},
                     {"fr=-1.svg", Params::RenderOnly("UB: fr=-1 (SVG 2)")},
                     {"fr=0.5.svg", Params::RenderOnly("UB: fr=0.5 (SVG 2)")},
                     {"fr=0.7.svg", Params::Skip("Test suite bug? fr > default value of")},
@@ -786,7 +760,6 @@ INSTANTIATE_TEST_SUITE_P(
                 {"marker-on-circle.svg", WithMaxPixels(160,
                                                        "Circle stroke edge: cross-GPU coverage "
                                                        "fringe, 122px on Mesa lavapipe vs golden")},
-                {"marker-on-text.svg", Params::Skip("Not impl: `text`")},
                 {"orient=auto-on-M-C-C-4.svg",
                  Params::WithGoldenOverride(
                      "donner/svg/renderer/testdata/golden/resvg-orient=auto-on-M-C-C-4.png")
@@ -821,16 +794,10 @@ INSTANTIATE_TEST_SUITE_P(PaintingMixBlendMode, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    PaintingOpacity, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory(
-                "painting/opacity",
-                {
-                    {"50percent.svg",
-                     Params::Skip("Changed in css-color-4 to allow percentage in")},
-                })),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(PaintingOpacity, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("painting/opacity")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingOverflow, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("painting/overflow")),
@@ -1163,18 +1130,11 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "structure/svg",
                 {
-                    {"attribute-value-via-ENTITY-reference.svg",
-                     Params::Skip("Bug/Not impl? XML Entity references")},
-                    {"elements-via-ENTITY-reference-2.svg",
-                     Params::Skip("Bug/Not impl? XML Entity references")},
-                    {"elements-via-ENTITY-reference-3.svg",
-                     Params::Skip("Bug/Not impl? XML Entity references")},
                     {"funcIRI-parsing.svg", Params::RenderOnly("UB: FuncIRI parsing")},
                     {"funcIRI-with-invalid-characters.svg",
                      Params::RenderOnly("UB: FuncIRI with invalid chars")},
                     {"invalid-id-attribute-1.svg", Params::RenderOnly("UB: Invalid id attribute")},
                     {"invalid-id-attribute-2.svg", Params::RenderOnly("UB: Invalid id attribute")},
-                    {"mixed-namespaces.svg", Params::Skip("Bug? mixed namespaces")},
                     {"no-size.svg", Params::Skip("Not impl: Computed bounds from content")},
                     {"not-UTF-8-encoding.svg", Params::Skip("Bug/Not impl? Non-UTF8 encoding")},
                     {"preserveAspectRatio-with-viewBox-not-at-zero-pos.svg",
@@ -1721,9 +1681,6 @@ INSTANTIATE_TEST_SUITE_P(
     Combine(ValuesIn(getTestsInCategory(
                 "text/textLength",
                 {
-                    {"on-text-and-tspan.svg",
-                     Params::Skip("Bug? We compress slightly more than the golden")},
-
                     {"arabic-with-lengthAdjust.svg",
                      Params::Skip("Not impl: textLength + lengthAdjust attribute (text "
                                   "stretching/compressing)")},
@@ -1877,9 +1834,6 @@ INSTANTIATE_TEST_SUITE_P(
                 "text/tspan",
                 {
                     {"bidi-reordering.svg", Params::Skip("Not impl: BIDI reordering")},
-                    {"mixed-font-size.svg",
-                     Params::Skip("Bug: Handling kerning with font size changes")},
-                    {"mixed-xml-space-3.svg", Params::Skip("Whitespace-only text nodes lost in")},
                     {"nested-rotate.svg",
                      Params::Skip("Bug: Applying rotation indices across nested tspans")},
                     {"nested-whitespaces.svg", Params().withMaxPixelsDifferent(400).withReason(
