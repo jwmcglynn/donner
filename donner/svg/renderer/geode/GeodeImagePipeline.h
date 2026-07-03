@@ -4,6 +4,8 @@
 
 #include <webgpu/webgpu.hpp>
 
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+
 namespace donner::geode {
 
 /**
@@ -50,33 +52,33 @@ public:
   GeodeImagePipeline& operator=(GeodeImagePipeline&&) noexcept = default;
 
   /// The compiled render pipeline.
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
+  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
 
   /// Bind group layout used by the pipeline.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
 
   /// Bilinear (mag/min filter = Linear) sampler, clamped to edge.
   /// Used for the default `image-rendering` and the SVG spec's
   /// "smooth" image sampling.
-  const wgpu::Sampler& linearSampler() const { return linearSampler_; }
+  const wgpu::Sampler& linearSampler() const { return linearSampler_.get(); }
 
   /// Nearest-neighbor sampler, clamped to edge. Used when
   /// `ImageParams::imageRenderingPixelated` is true.
-  const wgpu::Sampler& nearestSampler() const { return nearestSampler_; }
+  const wgpu::Sampler& nearestSampler() const { return nearestSampler_.get(); }
 
   /// Linear clamp-to-edge sampler used for Phase 3b clip-mask textures.
-  const wgpu::Sampler& clipMaskSampler() const { return clipMaskSampler_; }
+  const wgpu::Sampler& clipMaskSampler() const { return clipMaskSampler_.get(); }
 
   /// Color format the pipeline was built for.
   wgpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:
   wgpu::TextureFormat colorFormat_;
-  wgpu::BindGroupLayout bindGroupLayout_;
-  wgpu::RenderPipeline pipeline_;
-  wgpu::Sampler linearSampler_;
-  wgpu::Sampler nearestSampler_;
-  wgpu::Sampler clipMaskSampler_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
+  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
+  ScopedWgpuHandle<wgpu::Sampler> linearSampler_;
+  ScopedWgpuHandle<wgpu::Sampler> nearestSampler_;
+  ScopedWgpuHandle<wgpu::Sampler> clipMaskSampler_;
 };
 
 }  // namespace donner::geode

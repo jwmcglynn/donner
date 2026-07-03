@@ -1,3 +1,7 @@
+#include <gtest/gtest.h>
+
+#include <memory>
+
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
@@ -6,6 +10,16 @@ namespace donner::svg {
 
 namespace {
 
+struct SharedGeodeBackendState {
+  std::shared_ptr<geode::GeodeDevice> device;
+  std::unique_ptr<RendererGeode> renderer;
+};
+
+SharedGeodeBackendState& SharedTestBackendState() {
+  static SharedGeodeBackendState state;
+  return state;
+}
+
 /// Returns a process-wide shared GeodeDevice, created on first access.
 ///
 /// Sharing a single device across all test-constructed renderers avoids the
@@ -13,12 +27,14 @@ namespace {
 /// WebGPU device creations in a single process — the driver state doesn't
 /// reclaim cleanly and the process eventually deadlocks.
 std::shared_ptr<geode::GeodeDevice> SharedTestDevice() {
-  static auto device = [] {
+  SharedGeodeBackendState& state = SharedTestBackendState();
+  if (!state.device) {
     auto d = geode::GeodeDevice::CreateHeadless();
     // Wrap the unique_ptr in a shared_ptr for lifetime sharing.
-    return std::shared_ptr<geode::GeodeDevice>(std::move(d));
-  }();
-  return device;
+    state.device = std::shared_ptr<geode::GeodeDevice>(std::move(d));
+  }
+
+  return state.device;
 }
 
 bool GeodeSupportsFeature(RendererBackendFeature feature) {
@@ -74,11 +90,30 @@ std::unique_ptr<RendererInterface> GeodeCreateInstance(bool verbose) {
 /// resets per-frame state, so a shared renderer behaves identically to a
 /// fresh one as long as each `draw()` call is self-contained (no carried
 /// layer / clip / filter stack), which the image-comparison fixture
-/// guarantees.
+/// guarantees. The gtest environment below destroys this renderer before
+/// LeakSanitizer performs its process-exit leak check.
 RendererGeode& SharedTestRenderer(bool verbose = false) {
-  static auto* renderer = new RendererGeode(SharedTestDevice(), verbose);
-  return *renderer;
+  SharedGeodeBackendState& state = SharedTestBackendState();
+  if (!state.renderer) {
+    state.renderer = std::make_unique<RendererGeode>(SharedTestDevice(), verbose);
+  }
+
+  return *state.renderer;
 }
+
+void ResetSharedTestBackendState() {
+  SharedGeodeBackendState& state = SharedTestBackendState();
+  state.renderer.reset();
+  state.device.reset();
+}
+
+class GeodeBackendEnvironment : public ::testing::Environment {
+public:
+  void TearDown() override { ResetSharedTestBackendState(); }
+};
+
+[[maybe_unused]] const ::testing::Environment* const geodeBackendEnvironment =
+    ::testing::AddGlobalTestEnvironment(new GeodeBackendEnvironment);
 
 RendererBitmap GeodeRender(SVGDocument& document, bool verbose) {
   RendererGeode& renderer = SharedTestRenderer(verbose);

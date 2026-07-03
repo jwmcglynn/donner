@@ -18,6 +18,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg::components {
 struct FilterGraph;
@@ -354,80 +355,80 @@ private:
   GeodeDevice& device_;
 
   // Gaussian blur pipeline (reused from Phase 7 initial scope).
-  wgpu::ComputePipeline gaussianBlurPipeline_;
-  wgpu::BindGroupLayout blurBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> gaussianBlurPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> blurBindGroupLayout_;
 
   // feOffset pipeline.
-  wgpu::ComputePipeline offsetPipeline_;
-  wgpu::BindGroupLayout offsetBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> offsetPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> offsetBindGroupLayout_;
 
   // feColorMatrix pipeline.
-  wgpu::ComputePipeline colorMatrixPipeline_;
-  wgpu::BindGroupLayout colorMatrixBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> colorMatrixPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> colorMatrixBindGroupLayout_;
 
   // feFlood pipeline.
-  wgpu::ComputePipeline floodPipeline_;
-  wgpu::BindGroupLayout floodBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> floodPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> floodBindGroupLayout_;
 
   // feMerge alpha-over blit pipeline.
-  wgpu::ComputePipeline mergePipeline_;
-  wgpu::BindGroupLayout mergeBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> mergePipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> mergeBindGroupLayout_;
 
   // feComposite Porter-Duff pipeline (two inputs + output + uniform).
-  wgpu::ComputePipeline compositePipeline_;
-  wgpu::BindGroupLayout compositeBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> compositePipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> compositeBindGroupLayout_;
 
   // feBlend W3C blend-mode pipeline (two inputs + output + uniform).
-  wgpu::ComputePipeline blendPipeline_;
-  wgpu::BindGroupLayout blendBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> blendPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> blendBindGroupLayout_;
 
   // feMorphology erode/dilate pipeline (input + output + uniform).
-  wgpu::ComputePipeline morphologyPipeline_;
-  wgpu::BindGroupLayout morphologyBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> morphologyPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> morphologyBindGroupLayout_;
 
   // feComponentTransfer LUT pipeline (input + output + storage buffer).
-  wgpu::ComputePipeline componentTransferPipeline_;
-  wgpu::BindGroupLayout componentTransferBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> componentTransferPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> componentTransferBindGroupLayout_;
 
   // feConvolveMatrix kernel pipeline (input + output + uniform).
-  wgpu::ComputePipeline convolveMatrixPipeline_;
-  wgpu::BindGroupLayout convolveMatrixBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> convolveMatrixPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> convolveMatrixBindGroupLayout_;
 
   // feTurbulence noise pipeline (output + storage buffer, no input texture).
-  wgpu::ComputePipeline turbulencePipeline_;
-  wgpu::BindGroupLayout turbulenceBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> turbulencePipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> turbulenceBindGroupLayout_;
 
   // feDisplacementMap pipeline (two inputs + output + uniform).
-  wgpu::ComputePipeline displacementMapPipeline_;
-  wgpu::BindGroupLayout displacementMapBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> displacementMapPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> displacementMapBindGroupLayout_;
 
   // feDiffuseLighting pipeline (input + output + storage buffer).
-  wgpu::ComputePipeline diffuseLightingPipeline_;
-  wgpu::BindGroupLayout diffuseLightingBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> diffuseLightingPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> diffuseLightingBindGroupLayout_;
 
   // feSpecularLighting pipeline (input + output + storage buffer).
-  wgpu::ComputePipeline specularLightingPipeline_;
-  wgpu::BindGroupLayout specularLightingBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> specularLightingPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> specularLightingBindGroupLayout_;
 
   // feDropShadow compose pipeline (two inputs + output + uniform).
-  wgpu::ComputePipeline dropShadowPipeline_;
-  wgpu::BindGroupLayout dropShadowBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> dropShadowPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> dropShadowBindGroupLayout_;
 
   // feImage placement pipeline (input texture + output + uniform).
-  wgpu::ComputePipeline imagePipeline_;
-  wgpu::BindGroupLayout imageBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> imagePipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> imageBindGroupLayout_;
 
   // feTile wraparound pipeline (input + output + uniform).
-  wgpu::ComputePipeline tilePipeline_;
-  wgpu::BindGroupLayout tileBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> tilePipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> tileBindGroupLayout_;
 
   // Per-primitive subregion clipping pipeline (input + output + uniform).
-  wgpu::ComputePipeline subregionClipPipeline_;
-  wgpu::BindGroupLayout subregionClipBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> subregionClipPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> subregionClipBindGroupLayout_;
 
   // sRGB↔linearRGB color space conversion pipeline (input + output + uniform).
-  wgpu::ComputePipeline colorSpaceConvertPipeline_;
-  wgpu::BindGroupLayout colorSpaceConvertBindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> colorSpaceConvertPipeline_;
+  ScopedWgpuHandle<wgpu::BindGroupLayout> colorSpaceConvertBindGroupLayout_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;

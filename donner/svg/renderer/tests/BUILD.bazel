@@ -93,6 +93,7 @@ donner_cc_library(
         "//donner/svg/renderer",
         # The tiny-skia renderer is linked in every build (pure CPU, no wgpu).
         "//donner/svg/renderer:renderer_tiny_skia",
+        "@com_google_gtest//:gtest",
     ] + select({
         "//donner/svg/renderer:renderer_backend_geode": [
             "//donner/svg/renderer:renderer_geode",

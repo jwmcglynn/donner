@@ -90,21 +90,21 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   bglDesc.label = wgpuLabel("GeodeSlugFillBGL");
   bglDesc.entryCount = 12;
   bglDesc.entries = entries;
-  bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
+  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
 
   // ----- Pipeline layout -----
   wgpu::PipelineLayoutDescriptor plDesc = {};
   plDesc.label = wgpuLabel("GeodeSlugFillPL");
   plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_};
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
   plDesc.bindGroupLayouts = layouts;
-  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
+  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
 
   // ----- Shader module -----
   // The fill shader is always the analytic dual-ray variant (0041 §8); it runs
   // at sampleCount=1 on every adapter, so there is no alpha-coverage variant.
   (void)useAlphaCoverageShader;
-  wgpu::ShaderModule shader = createSlugFillShader(device);
+  ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugFillShader(device));
 
   // ----- Vertex buffer layout -----
   // Matches EncodedPath::Vertex: pos (vec2f) + normal (vec2f) + bandIndex (u32)
@@ -144,7 +144,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   colorTarget.writeMask = wgpu::ColorWriteMask::All;
 
   wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader;
+  fragmentState.module = shader.get();
   fragmentState.entryPoint = wgpuLabel("fs_main");
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
@@ -152,9 +152,9 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   // ----- Render pipeline -----
   wgpu::RenderPipelineDescriptor rpDesc = {};
   rpDesc.label = wgpuLabel("GeodeSlugFill");
-  rpDesc.layout = pipelineLayout;
+  rpDesc.layout = pipelineLayout.get();
 
-  rpDesc.vertex.module = shader;
+  rpDesc.vertex.module = shader.get();
   rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
   rpDesc.vertex.bufferCount = 1;
   rpDesc.vertex.buffers = &vbLayout;
@@ -169,7 +169,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  pipeline_ = device.createRenderPipeline(rpDesc);
+  pipeline_.reset(device.createRenderPipeline(rpDesc));
 }
 
 // ============================================================================
@@ -225,18 +225,18 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   bglDesc.label = wgpuLabel("GeodeSlugGradientBGL");
   bglDesc.entryCount = 9;
   bglDesc.entries = entries;
-  bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
+  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
 
   wgpu::PipelineLayoutDescriptor plDesc = {};
   plDesc.label = wgpuLabel("GeodeSlugGradientPL");
   plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_};
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
   plDesc.bindGroupLayouts = layouts;
-  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
+  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
 
   // Always the analytic dual-ray gradient shader (0041 §8); sampleCount=1.
   (void)useAlphaCoverageShader;
-  wgpu::ShaderModule shader = createSlugGradientShader(device);
+  ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugGradientShader(device));
 
   // Same vertex buffer layout as the solid-fill pipeline.
   wgpu::VertexAttribute vertexAttribs[3] = {};
@@ -272,16 +272,16 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   colorTarget.writeMask = wgpu::ColorWriteMask::All;
 
   wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader;
+  fragmentState.module = shader.get();
   fragmentState.entryPoint = wgpuLabel("fs_main");
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
 
   wgpu::RenderPipelineDescriptor rpDesc = {};
   rpDesc.label = wgpuLabel("GeodeSlugGradient");
-  rpDesc.layout = pipelineLayout;
+  rpDesc.layout = pipelineLayout.get();
 
-  rpDesc.vertex.module = shader;
+  rpDesc.vertex.module = shader.get();
   rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
   rpDesc.vertex.bufferCount = 1;
   rpDesc.vertex.buffers = &vbLayout;
@@ -294,7 +294,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  pipeline_ = device.createRenderPipeline(rpDesc);
+  pipeline_.reset(device.createRenderPipeline(rpDesc));
 }
 
 // ============================================================================
@@ -346,18 +346,18 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   bglDesc.label = wgpuLabel("GeodeSlugMaskBGL");
   bglDesc.entryCount = 9;
   bglDesc.entries = entries;
-  bindGroupLayout_ = device.createBindGroupLayout(bglDesc);
+  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
 
   wgpu::PipelineLayoutDescriptor plDesc = {};
   plDesc.label = wgpuLabel("GeodeSlugMaskPL");
   plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_};
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
   plDesc.bindGroupLayouts = layouts;
-  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
+  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
 
   // Always the analytic dual-ray mask shader (0041 §8); sampleCount=1.
   (void)useAlphaCoverageShader;
-  wgpu::ShaderModule shader = createSlugMaskShader(device);
+  ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugMaskShader(device));
 
   // Same vertex buffer layout as the fill pipelines: pos (vec2f) +
   // normal (vec2f) + bandIndex (u32) = 20 bytes per vertex.
@@ -398,16 +398,16 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   colorTarget.writeMask = wgpu::ColorWriteMask::All;
 
   wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader;
+  fragmentState.module = shader.get();
   fragmentState.entryPoint = wgpuLabel("fs_main");
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
 
   wgpu::RenderPipelineDescriptor rpDesc = {};
   rpDesc.label = wgpuLabel("GeodeSlugMask");
-  rpDesc.layout = pipelineLayout;
+  rpDesc.layout = pipelineLayout.get();
 
-  rpDesc.vertex.module = shader;
+  rpDesc.vertex.module = shader.get();
   rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
   rpDesc.vertex.bufferCount = 1;
   rpDesc.vertex.buffers = &vbLayout;
@@ -420,7 +420,7 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCo
   rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  pipeline_ = device.createRenderPipeline(rpDesc);
+  pipeline_.reset(device.createRenderPipeline(rpDesc));
 }
 
 }  // namespace donner::geode

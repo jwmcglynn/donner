@@ -16,6 +16,24 @@ struct FakeWgpuHandle {
   int* releaseCount = nullptr;
 };
 
+TEST(WgpuHandleTest, ReleaseWgpuHandleReleasesAndResetsOwnedHandle) {
+  int releaseCount = 0;
+  FakeWgpuHandle handle(&releaseCount);
+
+  ReleaseWgpuHandle(handle);
+
+  EXPECT_EQ(releaseCount, 1);
+  EXPECT_FALSE(handle);
+}
+
+TEST(WgpuHandleTest, ReleaseWgpuHandleIgnoresNullHandle) {
+  FakeWgpuHandle handle;
+
+  ReleaseWgpuHandle(handle);
+
+  EXPECT_FALSE(handle);
+}
+
 TEST(ScopedWgpuHandleTest, ReleasesOwnedHandleOnScopeExit) {
   int releaseCount = 0;
   {

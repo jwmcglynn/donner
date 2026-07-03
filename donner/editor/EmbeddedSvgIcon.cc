@@ -41,8 +41,8 @@ void NormalizeIconBitmapToTintableAlphaMask(svg::RendererBitmap* bitmap) {
 /// showed up as a stream of duplicate "[Geode/wgpu-native] Adapter:" logs at
 /// editor startup.
 svg::Renderer& SharedIconRenderer() {
-  static svg::Renderer* renderer = new svg::Renderer();
-  return *renderer;
+  static svg::Renderer renderer;
+  return renderer;
 }
 
 }  // namespace
