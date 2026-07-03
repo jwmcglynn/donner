@@ -46,7 +46,32 @@ TEST(ViewportInteractionControllerTest, FrameHistoryTracksProfilerCostForLatestF
   EXPECT_FLOAT_EQ(profiler.sourceRopeLayoutMs, 0.25f);
   EXPECT_FLOAT_EQ(profiler.sourceRopeUpdateMs, 0.125f);
   EXPECT_FLOAT_EQ(profiler.sourceRopeDrawMs, 0.375f);
-  EXPECT_FLOAT_EQ(profiler.totalProfiledMs(), 10.75f);
+  EXPECT_FLOAT_EQ(profiler.totalProfiledMs(), 6.75f);
+}
+
+TEST(ViewportInteractionControllerTest, TopLevelFrameCostOverridesNestedRendererDetails) {
+  ViewportInteractionController controller;
+
+  controller.noteFrameDelta(16.0f);
+  FrameCostBreakdown cost;
+  cost.hostFrame.beginFrameMs = 1.0;
+  cost.hostFrame.previousEndFrameMs = 6.0;
+  cost.mainFrame.renderPaneMs = 4.0;
+  cost.mainFrame.sidebarsMs = 2.0;
+  cost.overlay.captureMs = 100.0;
+  cost.compositedRender.cachedMs = 50.0;
+  controller.frameHistory().setLatestFrameCost(cost);
+
+  const std::size_t latestIdx =
+      (controller.frameHistory().writeIndex + kFrameHistoryCapacity - 1) % kFrameHistoryCapacity;
+  const FrameProfilerSample& profiler = controller.frameHistory().profiler[latestIdx];
+  EXPECT_FLOAT_EQ(profiler.hostBeginFrameMs, 1.0f);
+  EXPECT_FLOAT_EQ(profiler.hostPreviousEndFrameMs, 6.0f);
+  EXPECT_FLOAT_EQ(profiler.mainRenderPaneMs, 4.0f);
+  EXPECT_FLOAT_EQ(profiler.mainSidebarsMs, 2.0f);
+  EXPECT_FLOAT_EQ(profiler.overlayCaptureMs, 100.0f);
+  EXPECT_FLOAT_EQ(profiler.compositedRenderCachedMs, 50.0f);
+  EXPECT_FLOAT_EQ(profiler.totalProfiledMs(), 13.0f);
 }
 
 TEST(ViewportInteractionControllerTest, NewFrameClearsProfilerCostSlot) {
@@ -128,15 +153,33 @@ TEST(ViewportInteractionControllerTest, ApplyZoomUsesViewportCenterMath) {
   controller.viewport().paneOrigin = Vector2d::Zero();
   controller.viewport().paneSize = Vector2d(200.0, 200.0);
   controller.viewport().documentViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0);
-  controller.resetToActualSize();
+  EXPECT_TRUE(controller.resetToActualSize());
 
   const Vector2d focal(100.0, 100.0);
   const Vector2d documentBefore = controller.viewport().screenToDocument(focal);
-  controller.applyZoom(2.0, focal);
+  EXPECT_TRUE(controller.applyZoom(2.0, focal));
   const Vector2d documentAfter = controller.viewport().screenToDocument(focal);
 
   EXPECT_NEAR(documentBefore.x, documentAfter.x, 1e-9);
   EXPECT_NEAR(documentBefore.y, documentAfter.y, 1e-9);
+}
+
+TEST(ViewportInteractionControllerTest, MousePanReportsViewportChange) {
+  ViewportInteractionController controller;
+  controller.viewport().paneOrigin = Vector2d::Zero();
+  controller.viewport().paneSize = Vector2d(200.0, 200.0);
+  controller.viewport().documentViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0);
+  EXPECT_TRUE(controller.resetToActualSize());
+
+  EXPECT_FALSE(controller.updatePanState(/*paneHovered=*/true, /*spaceHeld=*/true,
+                                         /*middleDown=*/false, /*leftDown=*/true,
+                                         ImVec2(10.0f, 10.0f)));
+  EXPECT_TRUE(controller.updatePanState(/*paneHovered=*/true, /*spaceHeld=*/true,
+                                        /*middleDown=*/false, /*leftDown=*/true,
+                                        ImVec2(18.0f, 6.0f)));
+
+  EXPECT_NEAR(controller.viewport().panScreenPoint.x, 108.0, 1e-9);
+  EXPECT_NEAR(controller.viewport().panScreenPoint.y, 96.0, 1e-9);
 }
 
 TEST(ViewportInteractionControllerTest, PanCursorShowsForSpacePanModeOrActivePan) {
@@ -155,7 +198,7 @@ TEST(ViewportInteractionControllerTest, ConsumeScrollEventsAppliesPanAndZoom) {
   controller.viewport().paneOrigin = Vector2d::Zero();
   controller.viewport().paneSize = Vector2d(200.0, 200.0);
   controller.viewport().documentViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0);
-  controller.resetToActualSize();
+  EXPECT_TRUE(controller.resetToActualSize());
 
   std::vector<RenderPaneScrollEvent> panEvents = {
       RenderPaneScrollEvent{
@@ -165,9 +208,12 @@ TEST(ViewportInteractionControllerTest, ConsumeScrollEventsAppliesPanAndZoom) {
       },
   };
 
-  controller.consumeScrollEvents(panEvents, Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0),
-                                 /*modalCapturingInput=*/false, /*wheelZoomStep=*/1.1,
-                                 /*panPixelsPerScrollUnit=*/10.0);
+  const ScrollConsumptionResult panResult =
+      controller.consumeScrollEvents(panEvents, Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0),
+                                     /*modalCapturingInput=*/false, /*wheelZoomStep=*/1.1,
+                                     /*panPixelsPerScrollUnit=*/10.0);
+  EXPECT_TRUE(panResult.viewportChanged);
+  EXPECT_FALSE(panResult.zoomChanged);
 
   EXPECT_TRUE(panEvents.empty());
   EXPECT_NEAR(controller.viewport().panScreenPoint.y, 120.0, 1e-9);
@@ -180,12 +226,41 @@ TEST(ViewportInteractionControllerTest, ConsumeScrollEventsAppliesPanAndZoom) {
       },
   };
 
-  controller.consumeScrollEvents(zoomEvents, Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0),
-                                 /*modalCapturingInput=*/false, /*wheelZoomStep=*/1.1,
-                                 /*panPixelsPerScrollUnit=*/10.0);
+  const ScrollConsumptionResult zoomResult =
+      controller.consumeScrollEvents(zoomEvents, Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0),
+                                     /*modalCapturingInput=*/false, /*wheelZoomStep=*/1.1,
+                                     /*panPixelsPerScrollUnit=*/10.0);
+  EXPECT_TRUE(zoomResult.viewportChanged);
+  EXPECT_TRUE(zoomResult.zoomChanged);
 
   EXPECT_TRUE(zoomEvents.empty());
   EXPECT_NEAR(controller.viewport().zoom, 1.1, 1e-9);
+}
+
+TEST(ViewportInteractionControllerTest, ConsumeScrollEventsReportsNoChangeWhenModalCapturesInput) {
+  ViewportInteractionController controller;
+  controller.viewport().paneOrigin = Vector2d::Zero();
+  controller.viewport().paneSize = Vector2d(200.0, 200.0);
+  controller.viewport().documentViewBox = Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0);
+  EXPECT_TRUE(controller.resetToActualSize());
+
+  std::vector<RenderPaneScrollEvent> panEvents = {
+      RenderPaneScrollEvent{
+          .scrollDelta = Vector2d(0.0, 2.0),
+          .cursorScreen = Vector2d(100.0, 100.0),
+          .zoomModifierHeld = false,
+      },
+  };
+
+  const ScrollConsumptionResult result =
+      controller.consumeScrollEvents(panEvents, Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0),
+                                     /*modalCapturingInput=*/true, /*wheelZoomStep=*/1.1,
+                                     /*panPixelsPerScrollUnit=*/10.0);
+  EXPECT_FALSE(result.viewportChanged);
+  EXPECT_FALSE(result.zoomChanged);
+
+  EXPECT_TRUE(panEvents.empty());
+  EXPECT_NEAR(controller.viewport().panScreenPoint.y, 100.0, 1e-9);
 }
 
 TEST(ViewportInteractionControllerTest, PendingClickBuffersAndClears) {

@@ -562,7 +562,7 @@ const std::vector<ComparisonMode>& ActiveComparisonModes() {
     // Geode builds compare each backend to the reference via TinyGolden /
     // GeodeGolden. GeodeTinyParity (geode-pixel-vs-tiny) was retired in favor
     // of per-backend golden comparison: with Geode's analytic dual-ray Slug
-    // coverage (design doc 0041 §M1), the analytic result legitimately differs
+    // coverage, the analytic result legitimately differs
     // from tiny-skia's finite-sample scan-converter, so a pixel-vs-tiny gate
     // can only be satisfied by degrading Geode to tiny's quantization — the
     // opposite of aligning with Slug. Both backends already gate against the

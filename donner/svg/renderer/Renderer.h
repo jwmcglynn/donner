@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
 namespace donner::geode {
@@ -64,6 +65,36 @@ public:
    * @param document The SVG document to render.
    */
   void draw(SVGDocument& document) override;
+
+  /**
+   * Rasterize a single \ref SVGElement and its descendant subtree to an RGBA
+   * bitmap fitted into a target box.
+   *
+   * This renders just the given element + its descendants through an isolated
+   * offscreen instance of this renderer, scaled and centered into @p sizePx with
+   * a transparent background. The requested size is a maximum thumbnail extent:
+   * the returned bitmap dimensions are computed from the element's nonzero-
+   * opacity painted geometry bounds and may be narrower or shorter than
+   * @p sizePx. Layers whose visible bounds cover the root SVG viewBox fit the
+   * canvas-visible bounds into the preview cell. The element's own paint and
+   * transform are honored. The bounds are clipped to the root SVG viewBox when
+   * present so thumbnails show the document-canvas-visible part of a layer;
+   * other ancestor clips and opacity are intentionally ignored so the preview
+   * shows the element's own artwork rather than how it happens to be clipped in
+   * context.
+   *
+   * The element's owning document is prepared for rendering under write access
+   * for this isolated draw, then its pending render invalidation state is
+   * restored so previews do not consume dirty flags needed by another renderer.
+   *
+   * @param element Element whose subtree should be rasterized.
+   * @param sizePx Maximum bitmap dimensions in device pixels. Both axes must be
+   *   positive; otherwise an empty bitmap is returned.
+   * @return The rendered RGBA bitmap with a transparent background, or an empty
+   *   \ref RendererBitmap when the element has no renderable geometry or the
+   *   inputs are degenerate.
+   */
+  [[nodiscard]] RendererBitmap renderElementToBitmap(SVGElement element, Vector2i sizePx);
 
   /**
    * Begins a render pass for the given viewport.

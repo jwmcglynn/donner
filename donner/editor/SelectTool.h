@@ -131,14 +131,31 @@ public:
                                               std::span<const Box2d> selectionBoundsDoc,
                                               std::span<const Box2d> occludingBoundsDoc = {});
 
-  /// Returns true when live hit-testing at @p documentPoint hits the current selection or one of
-  /// its renderable descendants.
+  /// Returns true when live hit-testing at @p documentPoint hits the current selectable selection
+  /// or one of its renderable descendants.
   ///
   /// This reads the live document through \ref EditorApp::hitTest, so callers must only use it when
   /// the async renderer is idle. EditorShell uses this to keep clicks on already-selected elements
-  /// on the immediate drag path instead of converting a held press into a marquee.
+  /// on the immediate drag path instead of converting a held press into a marquee. Locked selected
+  /// elements return false because they cannot start an immediate canvas drag.
+  ///
+  /// @param editor Editor state used for hit-testing and the current selection.
+  /// @param documentPoint Pointer location in SVG document coordinates.
+  /// @return true when the point hits an unlocked selected element or selected descendant.
   [[nodiscard]] bool clickHitsCurrentSelection(EditorApp& editor,
                                                const Vector2d& documentPoint) const;
+
+  /// Returns true when live hit-testing at @p documentPoint hits an element that can be selected
+  /// immediately by a canvas press.
+  ///
+  /// Locked layers and descendants of locked layers return false: they may still flash rejection on
+  /// a click, but they should not block the shell's delayed marquee path.
+  ///
+  /// @param editor Editor state used for hit-testing.
+  /// @param documentPoint Pointer location in SVG document coordinates.
+  /// @return true when the point hits an unlocked geometry element.
+  [[nodiscard]] bool clickHitsImmediatelySelectableElement(EditorApp& editor,
+                                                           const Vector2d& documentPoint) const;
 
   /// Whether a drag is currently in progress (button is held after a
   /// successful hit-test on mouse-down).
@@ -174,6 +191,22 @@ public:
 
   /// Returns active oriented-bounds chrome for in-progress rotation.
   [[nodiscard]] std::optional<ActiveTransformBoundsPreview> activeTransformBoundsPreview() const;
+
+  /// A transient "this element is locked, you can't select it" flash on the
+  /// rejected element's outline. `intensity` fades from 1 → 0 over the flash
+  /// duration.
+  struct LockedRejectionFlash {
+    svg::SVGElement element;  ///< The element whose selection was rejected.
+    float intensity = 0.0f;   ///< Fade intensity in (0, 1].
+  };
+
+  /// The active locked-selection rejection flash, or `std::nullopt`. The overlay
+  /// renderer draws this as a red outline on the rejected (locked) element.
+  [[nodiscard]] std::optional<LockedRejectionFlash> lockedRejectionFlash() const;
+
+  /// Advance the locked-rejection flash fade by @p deltaSeconds, clearing it
+  /// once fully faded. Called once per frame by the editor shell.
+  void tickLockedRejectionFlash(float deltaSeconds);
 
 private:
   /// Per-element bookkeeping for one participant in a drag. Carries the
@@ -243,10 +276,20 @@ private:
     bool additive = false;
   };
 
+  /// Begin a locked-selection rejection flash on @p element.
+  void requestLockedRejectionFlash(const svg::SVGElement& element);
+
+  /// Duration of the locked-selection rejection flash.
+  static constexpr float kLockedRejectionFlashSeconds = 0.5f;
+
   std::optional<DragState> dragState_;
   std::optional<MarqueeState> marqueeState_;
   std::optional<CompletedDragWriteback> completedDragWriteback_;
   std::uint64_t nextDragGeneration_ = 1;
+  /// Element whose selection was rejected for being locked, flashed red.
+  std::optional<svg::SVGElement> lockedFlashElement_;
+  /// Remaining flash time in seconds; counts down to 0 then clears.
+  float lockedFlashRemainingSeconds_ = 0.0f;
 };
 
 }  // namespace donner::editor

@@ -22,7 +22,17 @@ cc_library(
 
 cc_library(
     name = "editor_control_session",
-    srcs = ["EditorControlSession.cc"],
+    srcs = [
+        "EditorControlSession.cc",
+        "EditorControlSessionInternal.cc",
+        "EditorControlSessionRnr.cc",
+        "EditorControlSessionDocument.cc",
+        "EditorControlSessionGestures.cc",
+        "EditorControlSessionGlReadback.cc",
+        "EditorControlSessionGlReadback.h",
+        "EditorControlSessionInternal.h",
+        "EditorControlSessionRender.cc",
+    ],
     hdrs = ["EditorControlSession.h"],
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
     deps = [
@@ -30,9 +40,12 @@ cc_library(
         "//donner/editor:async_renderer",
         "//donner/editor:composited_presentation",
         "//donner/editor:editor_app",
+        "//donner/editor:layers_panel",
+        "//donner/editor:pen_tool",
         "//donner/editor:presentation_render_scheduler",
         "//donner/editor:presented_frame_composer",
         "//donner/editor:select_tool",
+        "//donner/editor:selection_transform_handles",
         "//donner/editor:viewport_state",
         "//donner/editor/repro:gl_rnr_replay",
         "//donner/editor/repro:repro_file",
@@ -74,6 +87,19 @@ cc_test(
         "@com_google_gtest//:gtest_main",
         "@nlohmann_json//:json",
     ],
+)
+
+py_test(
+    name = "editor_control_gl_readback_tests",
+    timeout = "long",
+    srcs = ["editor_control_gl_readback_tests.py"],
+    data = [
+        ":editor_control_mcp_server",
+        "//:donner_splash_v0_8.svg",
+        "//:zoom-out-drag-jump.rnr",
+    ],
+    tags = ["local"],
+    target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
 )
 
 py_test(

@@ -5,6 +5,7 @@
 
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/EcsRegistry.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/parser/LengthPercentageParser.h"
 
 namespace donner::svg::components {
@@ -77,7 +78,11 @@ ParseResult<bool> ParseCirclePresentationAttribute(EntityHandle handle, std::str
     if (maybeError) {
       return std::move(maybeError).value();
     } else {
-      // Property found and parsed successfully.
+      // Property found and parsed successfully. Drop stale computed geometry so
+      // on-demand readers (computedSpline, worldBounds, editor overlay chrome)
+      // see the new values — matching SVGCircleElement::invalidate().
+      handle.remove<ComputedCircleComponent>();
+      handle.remove<ComputedPathComponent>();
       return true;
     }
   }

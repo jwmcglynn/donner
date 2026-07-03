@@ -13,6 +13,7 @@ Rules enforced:
   - No `std::aligned_union`: same reason
   - No user-defined literal operators (operator"" _foo): use named helpers
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
+  - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
 
 Usage:
@@ -107,6 +108,15 @@ _RULES: List[_Rule] = [
         exempt_path_prefixes=("donner/svg/", "donner/base/"),
     ),
     _Rule(
+        pattern=re.compile(r"\bAddImageQuad\s*\("),
+        description="ImGui AddImageQuad texture presentation",
+        remediation=(
+            "Do not present document textures through ImGui quadrilateral draws. Compose document "
+            "pixels through the editor's direct framebuffer path or into an explicit intermediate "
+            "texture so document pixels and direct overlays share the same presentation space."
+        ),
+    ),
+    _Rule(
         pattern=re.compile(r"\.createRenderPipeline\b|\.createComputePipeline\b"),
         description="wgpu pipeline construction outside GeodeDevice",
         remediation=(
@@ -131,6 +141,7 @@ _RULES: List[_Rule] = [
             "donner/svg/renderer/geode/GeodePipeline.cc",
             "donner/svg/renderer/geode/GeodeImagePipeline.cc",
             "donner/svg/renderer/geode/GeodeFilterEngine.cc",
+            "donner/svg/renderer/geode/GeodeCheckerboardPipeline.cc",
             "donner/svg/renderer/geode/tests/GeoEncoder_tests.cc",
             "donner/svg/renderer/geode/tests/GeodeShaders_tests.cc",
         ),

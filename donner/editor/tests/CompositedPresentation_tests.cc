@@ -109,7 +109,13 @@ TEST(CompositedPresentationTest, PureTranslationActiveDragWithMatchingCacheSuppr
          "canvas refresh happens after drag settles.";
 }
 
-TEST(CompositedPresentationTest, AffineActiveDragWithUnrepresentedCacheRequestsCapture) {
+// A large affine scale drift past the threshold re-captures a crisp bitmap — the
+// intentional anti-blur re-capture. The worker bakes the live transform into the
+// fresh bitmap and `represented` is updated to that baked transform, so the
+// presentation (`effective = represented^-1 * active`) compensates for the
+// swapped-in image and the shape stays continuous (no pop). The seamless-swap
+// behavior itself is pinned by the .rnr replay test.
+TEST(CompositedPresentationTest, LargeAffineScaleDriftRequestsCrispRecapture) {
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/3, Vector2i(100, 100));
 
@@ -117,13 +123,51 @@ TEST(CompositedPresentationTest, AffineActiveDragWithUnrepresentedCacheRequestsC
       .entity = Entity(7),
       .translation = Vector2d(6.0, 2.0),
       .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
+          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(2.0),
       .dragGeneration = 8,
   };
 
   EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/4, Vector2i(100, 100)))
-      << "Affine resize/rotate previews should opportunistically refresh the drag bitmap instead "
-         "of stretching the original elevated layer for the whole gesture.";
+      << "Scaling 2x past the crisp-recapture threshold should request a fresh, sharper bitmap.";
+}
+
+// A small affine change below the scale threshold must NOT re-capture — the
+// presentation quad tracks it against the cached bitmap with no worker round-trip.
+TEST(CompositedPresentationTest, SmallAffineScaleDriftTracksWithoutRecapture) {
+  const SelectTool::ActiveDragPreview represented{
+      .entity = Entity(7),
+      .translation = Vector2d(6.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(6.0, 2.0)) * Transform2d::Scale(1.25),
+      .dragGeneration = 8,
+  };
+  const SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .translation = Vector2d(7.0, 2.0),
+      .documentFromCachedDocument =
+          Transform2d::Translate(Vector2d(7.0, 2.0)) * Transform2d::Scale(1.45),
+      .dragGeneration = 8,
+  };
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
+
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
+      << "Continuing an affine manipulation must not re-capture; the presentation quad tracks it.";
+}
+
+// Pure rotation likewise tracks via the presentation quad with no re-capture.
+TEST(CompositedPresentationTest, PureRotationDoesNotRecapture) {
+  CompositedPresentation state;
+  state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100));
+
+  const SelectTool::ActiveDragPreview active{
+      .entity = Entity(7),
+      .documentFromCachedDocument = Transform2d::Rotate(0.6),
+      .dragGeneration = 8,
+  };
+
+  EXPECT_FALSE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
+      << "Rotation (and any affine) tracks purely through the presentation quad.";
 }
 
 TEST(CompositedPresentationTest, MatchingAffineRepresentedPreviewSuppressesCaptureLoop) {
@@ -155,15 +199,15 @@ TEST(CompositedPresentationTest, ChangedAffineActiveDragRequestsNextCapture) {
       .entity = Entity(7),
       .translation = Vector2d(7.0, 2.0),
       .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(7.0, 2.0)) * Transform2d::Scale(1.35),
+          Transform2d::Translate(Vector2d(7.0, 2.0)) * Transform2d::Scale(2.0),
       .dragGeneration = 8,
   };
   CompositedPresentation state;
   state.noteCachedTextures(Entity(7), /*version=*/4, Vector2i(100, 100), represented);
 
   EXPECT_TRUE(state.needsCompositedLayerCapture(active, /*currentVersion=*/5, Vector2i(100, 100)))
-      << "Continuing an affine manipulation after a previous opportunistic capture should request "
-         "the next sharper bitmap when the worker is free.";
+      << "Continuing an affine manipulation past the scale-drift threshold (1.25x -> 2.0x) should "
+         "request the next sharper bitmap when the worker is free.";
 }
 
 TEST(CompositedPresentationTest, PureTranslationAfterAffineCaptureRequestsCrispReset) {

@@ -41,9 +41,17 @@ build before the first proxied request after startup.
   parsed revision.
 - `select_by_selector`: Select an element by CSS selector and optionally prewarm
   the compositor.
+- `click_layer_button`: Find a Layers-panel row by CSS selector and click its
+  visibility or lock button through the same shared handler used by the UI.
+  Returns the immediate presented display before the settled render, plus the
+  optional settled frame.
 - `drag_selector`: Find an element by CSS selector, synthesize click/drag frames
   through `SelectTool`, and return per-frame compositor and presentation tile
   metadata.
+- `transform_selector`: Find an element by CSS selector, synthesize a scale
+  corner-handle or rotate-ring drag through `SelectTool`, and return per-frame
+  compositor and presentation tile metadata. Use `mode: "scale"` or
+  `mode: "rotate"` with a `corner` such as `bottom_right`.
 - `render_frame`: Render the current editor state and return the final frame
   plus split compositor and presentation tile metadata.
 - `session_state`: Inspect selection, canvas, and compositor diagnostic state.
@@ -56,8 +64,12 @@ build before the first proxied request after startup.
   `SelectTool`, and optionally return per-render compositor/presentation
   metadata. Pass `gl_readback: true` with `gl_capture_frame` or
   `gl_capture_left_mousedown` to replay through the real OpenGL editor shell and
-  return framebuffer PNGs; `gl_crop: "document-canvas"` hides source and side
-  panels in the capture.
+  return framebuffer PNGs; `gl_drive_document_input: true` uses recorded
+  document-space mouse coordinates for MCP-generated replays, and
+  `gl_crop: "document-canvas"` hides source and side panels in the capture. Raw
+  `bazel-bin` MCP launches route GL readback through `bazel run
+  //donner/editor/tests:editor_rnr_gl_replay` so macOS Cocoa/GL initialization
+  happens in the same environment as the replay helper.
 - `editor_control_wrapper_state`: Inspect the Python wrapper, child process, and
   last build result.
 - `restart_editor_control_server`: Restart the child C++ MCP server, optionally
@@ -65,9 +77,9 @@ build before the first proxied request after startup.
 - `rebuild_editor_control_server`: Run the Bazel build for the child C++ MCP
   server and restart it by default after a successful build.
 
-`render_frame` and `drag_selector` can attach the final frame as PNG MCP image
-content. Tile PNGs are opt-in because the split layer list can be large on the
-splash SVG.
+`render_frame`, `drag_selector`, and `transform_selector` can attach the final
+frame as PNG MCP image content. Tile PNGs are opt-in because the split layer
+list can be large on the splash SVG.
 
 Source editing is revision-guarded: pass `expected_source_revision` to
 `edit_svg_source` after a `get_svg_source` call to avoid applying offsets to a
@@ -85,6 +97,10 @@ Drag frames also include `display_before_render`, which captures the
 presentation state immediately after the synthetic input event and before the
 next async render result lands. This is the frame that catches stale cached-tile
 handoff bugs during drag-target switches.
+Transform previews include both `translation_doc` and
+`document_from_cached_document`, plus each presentation tile's
+`effective_document_from_cached_document`, so MCP clients can validate affine
+scale/rotate handoffs instead of only translation drags.
 When `include_display_diff` is enabled, `differing_pixels` is the
 pixelmatch mismatch count. Any emitted `diff_*` PNG is the pixelmatch visual
 diff for the same comparison.

@@ -109,7 +109,7 @@ std::vector<CurveWithRange> extractCurves(const Path& monoPath) {
       case Path::Verb::CurveTo: {
         // INVARIANT: cubic-free input. All callers run cubicToQuadratic first, which
         // lowers every CurveTo into QuadTo. A raw cubic here is a hard-fail rather than
-        // a silent flatten that produces wrong fill geometry (D2; design doc 0040).
+        // a silent flatten that produces wrong fill geometry.
         UTILS_RELEASE_ASSERT_MSG(false,
                                  "GeodePathEncoder::encode requires cubic-free input: run "
                                  "cubicToQuadratic before encoding (raw CurveTo reached the "

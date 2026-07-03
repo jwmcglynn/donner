@@ -2,11 +2,35 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/XMLQualifiedName.h"
+#include "donner/editor/EditorParseOptions.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/SVGStyleElement.h"
+#include "donner/svg/SVGTextContentElement.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {
+
+namespace {
+
+bool InvalidatesExistingCompositedPixels(const EditorCommand& command) {
+  switch (command.kind) {
+    case EditorCommand::Kind::SetAttribute:
+    case EditorCommand::Kind::RemoveAttribute:
+    case EditorCommand::Kind::SetTextContent: return command.element.has_value();
+
+    case EditorCommand::Kind::SetTransform:
+    case EditorCommand::Kind::ReplaceDocument:
+    case EditorCommand::Kind::InsertElement:
+    case EditorCommand::Kind::DeleteElement:
+    case EditorCommand::Kind::CutShapes:
+    case EditorCommand::Kind::PasteShapes:
+    case EditorCommand::Kind::InsertText: return false;
+  }
+  return false;
+}
+
+}  // namespace
 
 AsyncSVGDocument::AsyncSVGDocument() = default;
 
@@ -71,32 +95,67 @@ bool AsyncSVGDocument::flushFrame() {
     return false;
   }
 
-  const auto queueFlush = queue_.flush();
+  auto queueFlush = queue_.flush();
   if (queueFlush.effectiveCommands.empty()) {
     return false;
-  }
-
-  bool removedElements = false;
-  for (const EditorCommand& command : queueFlush.effectiveCommands) {
-    if (command.kind == EditorCommand::Kind::DeleteElement) {
-      removedElements = true;
-      break;
-    }
   }
 
   lastFlushResult_ = FlushResult{
       .appliedCommands = true,
       .replacedDocument = queueFlush.hadReplaceDocument,
       .preserveUndoOnReparse = queueFlush.preserveUndoOnReparse,
-      .removedElements = removedElements,
   };
 
-  for (const auto& cmd : queueFlush.effectiveCommands) {
+  std::unordered_map<Entity, Entity> activeStructuralRemap;
+  for (EditorCommand& cmd : queueFlush.effectiveCommands) {
+    if (!activeStructuralRemap.empty()) {
+      remapCommandTargets(&cmd, activeStructuralRemap);
+    }
+
+    if (cmd.kind == EditorCommand::Kind::DeleteElement) {
+      lastFlushResult_.removedElements = true;
+    }
+    if (InvalidatesExistingCompositedPixels(cmd)) {
+      lastFlushResult_.cacheInvalidatedElements.push_back(
+          cmd.element->unsafeEntityHandle().entity());
+    }
+
     applyOne(cmd);
+    if (cmd.kind == EditorCommand::Kind::ReplaceDocument ||
+        cmd.kind == EditorCommand::Kind::CutShapes ||
+        cmd.kind == EditorCommand::Kind::PasteShapes) {
+      activeStructuralRemap = pendingStructuralRemap_;
+    }
   }
 
   frameVersion_.fetch_add(1, std::memory_order_release);
   return true;
+}
+
+void AsyncSVGDocument::remapCommandTargets(EditorCommand* command,
+                                           const std::unordered_map<Entity, Entity>& remap) {
+  if (!document_.has_value() || command == nullptr) {
+    return;
+  }
+
+  Registry& registry = document_->unsafeRegistry();
+  auto remapElement = [&](std::optional<svg::SVGElement>* element) {
+    if (element == nullptr || !element->has_value()) {
+      return;
+    }
+
+    const Entity oldEntity = (*element)->unsafeEntityHandle().entity();
+    auto it = remap.find(oldEntity);
+    if (it == remap.end() || it->second == entt::null || !registry.valid(it->second)) {
+      return;
+    }
+
+    *element = svg::SVGElement(EntityHandle(registry, it->second));
+  };
+
+  remapElement(&command->element);
+  remapElement(&command->parentElement);
+  remapElement(&command->referenceElement);
 }
 
 xml::ApplySourceEditResult AsyncSVGDocument::applySourceEdit(const xml::XMLEditIntent& intent) {
@@ -124,7 +183,7 @@ xml::ApplySourceEditResult AsyncSVGDocument::applySourceEdit(const xml::XMLEditI
 
 bool AsyncSVGDocument::loadFromString(std::string_view svgBytes) {
   ParseWarningSink sink;
-  auto result = svg::parser::SVGParser::ParseSVG(svgBytes, sink);
+  auto result = svg::parser::SVGParser::ParseSVG(svgBytes, sink, EditorParseOptions());
   if (result.hasError()) {
     // Stash the diagnostic so the source pane can show a line marker.
     // Leave the existing document in place — the user can keep editing
@@ -178,7 +237,7 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // `loadFromString` path — they genuinely replace the entity space.
       if (command.preserveUndoOnReparse) {
         ParseWarningSink sink;
-        auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink);
+        auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
         if (result.hasError()) {
           lastParseError_ = std::move(result.error());
           return;
@@ -204,6 +263,20 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       svg::SVGElement element = *command.element;
       xml::ApplySourceEditResult result = document_->setElementAttribute(
           element, xml::XMLQualifiedNameRef(command.attributeName), command.attributeValue);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
+      break;
+    }
+
+    case EditorCommand::Kind::RemoveAttribute: {
+      if (!command.element.has_value()) {
+        return;
+      }
+      // DOM-level attribute removal via the same structured-editing path as
+      // SetAttribute, so the source reflection drops the attribute too.
+      svg::SVGElement element = *command.element;
+      xml::ApplySourceEditResult result = document_->removeElementAttribute(
+          element, xml::XMLQualifiedNameRef(command.attributeName));
       lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
                                            result.sourceDeltas.begin(), result.sourceDeltas.end());
       break;
@@ -237,6 +310,86 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       xml::ApplySourceEditResult result = document_->removeElement(element);
       lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
                                            result.sourceDeltas.begin(), result.sourceDeltas.end());
+      break;
+    }
+
+    case EditorCommand::Kind::CutShapes:
+    case EditorCommand::Kind::PasteShapes: {
+      // Shape-clipboard structural replaces reparse `bytes` into a fresh
+      // document, exactly like ReplaceDocument(preserveUndoOnReparse=true).
+      // The kind discriminator is preserved at this layer purely for
+      // labelling — undo entries are recorded by the orchestrator
+      // (EditorShell), not here. On parse failure we leave the existing
+      // document in place and surface a diagnostic.
+      ParseWarningSink sink;
+      auto result = svg::parser::SVGParser::ParseSVG(command.bytes, sink, EditorParseOptions());
+      if (result.hasError()) {
+        lastParseError_ = std::move(result.error());
+        return;
+      }
+      (void)setDocumentMaybeStructural(std::move(result).result());
+      break;
+    }
+
+    case EditorCommand::Kind::InsertText: {
+      if (!command.parentElement.has_value() || !command.element.has_value()) {
+        return;
+      }
+      // Insert the element first, then set its text content. `insertElement`
+      // re-projects the element's XML subtree (which has no data child yet),
+      // so setting the text before insertion would be overwritten by the
+      // projection. Setting it afterward leaves the live DOM with the text.
+      svg::SVGElement textElement = *command.element;
+      xml::ApplySourceEditResult result =
+          document_->insertElement(*command.parentElement, textElement, command.referenceElement);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
+      if (result.diagnostic.has_value()) {
+        lastParseError_ = std::move(result.diagnostic);
+      }
+      if (textElement.isa<svg::SVGTextContentElement>()) {
+        // Mirror the initial content into the XML tree/source as well: the
+        // insertion above serialized the element without its text (the
+        // component-level setTextContent below touches only TextComponent).
+        if (!command.textContent.empty()) {
+          xml::ApplySourceEditResult textResult =
+              document_->setElementTextContent(textElement, command.textContent);
+          lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                               textResult.sourceDeltas.begin(),
+                                               textResult.sourceDeltas.end());
+          if (textResult.diagnostic.has_value() && !lastParseError_.has_value()) {
+            lastParseError_ = std::move(textResult.diagnostic);
+          }
+        }
+        textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
+      }
+      break;
+    }
+
+    case EditorCommand::Kind::SetTextContent: {
+      if (!command.element.has_value()) {
+        return;
+      }
+      svg::SVGElement textElement = *command.element;
+      // Text-content edits are structural DOM edits: replace the element's
+      // XML text node through the structured-editing path so source deltas
+      // are emitted (the source pane mirrors them and a save persists them),
+      // then update the component-level mirror so the renderer and inspector
+      // reflect the new content immediately. `<style>` text lives in the
+      // element's Data child nodes / parsed stylesheet rather than a
+      // TextComponent, so it takes the SVGStyleElement path.
+      xml::ApplySourceEditResult result =
+          document_->setElementTextContent(textElement, command.textContent);
+      lastFlushResult_.sourceDeltas.insert(lastFlushResult_.sourceDeltas.end(),
+                                           result.sourceDeltas.begin(), result.sourceDeltas.end());
+      if (result.diagnostic.has_value() && !lastParseError_.has_value()) {
+        lastParseError_ = std::move(result.diagnostic);
+      }
+      if (textElement.isa<svg::SVGTextContentElement>()) {
+        textElement.cast<svg::SVGTextContentElement>().setTextContent(command.textContent);
+      } else if (textElement.isa<svg::SVGStyleElement>()) {
+        textElement.cast<svg::SVGStyleElement>().setTextContent(command.textContent);
+      }
       break;
     }
   }

@@ -248,6 +248,20 @@ public:
   ApplySourceEditResult removeNode(XMLNode node);
 
   /**
+   * Replace an element's text content through this document and update owned source text.
+   *
+   * Replaces the element's tracked text value range when it has one, otherwise inserts the
+   * escaped text before the element's closing tag (expanding a self-closing tag). Element
+   * children are not touched, so this only supports elements whose content is text-only —
+   * mixed-content elements replace just the tracked leading text chunk. Emits an
+   * \ref XMLMutation::Kind::NodeValueChanged mutation on success.
+   *
+   * @param element Element whose text content to replace.
+   * @param text New raw (unescaped) text content; empty clears the content.
+   */
+  ApplySourceEditResult setElementText(XMLNode element, std::string_view text);
+
+  /**
    * Install owned source text for this document.
    *
    * @param source XML source text to own.

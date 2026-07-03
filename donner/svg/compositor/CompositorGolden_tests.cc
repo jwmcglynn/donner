@@ -147,6 +147,204 @@ TEST_F(CompositorGoldenTest, TranslationOnlyDragProducesCorrectPixels) {
   EXPECT_THAT(getPixel(flat, 35, 35), IsWhite()) << "Original position now vacated";
 }
 
+// Composited output of a rotate drag matches a full re-render. Under the
+// lockstep fix (#6/#7) the promoted drag layer REUSES its cached bitmap and
+// carries the rotation in `canvasFromBitmap` (see
+// RotationDragCarriesAffineInCanvasFromBitmapForLockstep), so the composite is
+// that cached bitmap transformed as a rotated quad. For a solid fill that
+// composites identically to a crisp re-render in the interior; pixelmatch
+// excludes the AA edge band. DualPathVerifier requires an exact match, guarding
+// that the reused affine quad lands on the right pixels.
+TEST_F(CompositorGoldenTest, RotationDragProducesCorrectPixels) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="70" y="30" width="60" height="40" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  // First frame rasterizes the cached bitmap at the identity transform.
+  compositor.renderFrame(viewport_);
+
+  // Rotate ~28.6° about the rect center — a non-translation gesture frame.
+  const Vector2d center(100.0, 50.0);
+  const Transform2d documentFromElement =
+      Transform2d::Translate(center) * Transform2d::Rotate(0.5) * Transform2d::Translate(-center);
+  target->cast<SVGGraphicsElement>().setTransform(documentFromElement);
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+}
+
+// Scale analog of RotationDragProducesCorrectPixels: a scale drag also reuses
+// the cached bitmap with an affine `canvasFromBitmap`, and the composited output
+// matches a full re-render of the scaled DOM for a solid fill.
+TEST_F(CompositorGoldenTest, ScaleDragProducesCorrectPixels) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="70" y="30" width="60" height="40" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  compositor.renderFrame(viewport_);
+
+  const Vector2d center(100.0, 50.0);
+  const Transform2d documentFromElement = Transform2d::Translate(center) *
+                                          Transform2d::Scale(1.5, 1.5) *
+                                          Transform2d::Translate(-center);
+  target->cast<SVGGraphicsElement>().setTransform(documentFromElement);
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+}
+
+// Editor-reported QA regression (#3, "hiding a layer leaves a ghost"): toggling
+// an element to display:none must drop its pixels from the next composited
+// frame. The bug: the cached static segment / layer holding the element's
+// pixels was not invalidated by the `display` attribute change, so the hidden
+// element persisted as a ghost over the (now transparent) area. DualPathVerifier
+// compares the composite against a full re-render — which correctly omits a
+// display:none element — so a stale tile shows up as a non-zero mismatch.
+TEST_F(CompositorGoldenTest, HidingElementClearsItsPixelsFromComposite) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  // First frame bakes the red rect into the composite.
+  compositor.renderFrame(viewport_);
+  EXPECT_THAT(getPixel(renderer_.takeSnapshot(), 35, 35), IsRed())
+      << "red rect should be visible before hiding";
+
+  // Hide it — mirrors EditorApp::setElementVisible(false).
+  target->setAttribute(xml::XMLQualifiedNameRef("display"), "none");
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+  EXPECT_TRUE(result.isExact()) << result;
+  EXPECT_EQ(result.mismatchCount, 0u);
+  EXPECT_THAT(getPixel(renderer_.takeSnapshot(), 35, 35), IsWhite())
+      << "hidden rect must not leave a ghost";
+}
+
+// The composite-pixels test above proves the compositor renders the hidden
+// state correctly, but the editor's GL texture cache only re-uploads a tile when
+// its generation changes (and reuses the cached texture for a metadata-only /
+// unchanged-generation tile). So if hiding an element changes the visible
+// composite WITHOUT changing the published (tileId, generation) set, the editor
+// keeps drawing the stale texture — the reported "ghost". This pins the
+// invariant that a visible content change must change the published tile set.
+TEST_F(CompositorGoldenTest, HidingElementChangesPublishedTileGenerations) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="10" y="10" width="50" height="50" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  compositor.renderFrame(viewport_);
+
+  const auto tileIdentitySet = [&]() {
+    std::set<std::pair<uint64_t, uint64_t>> ids;
+    for (const auto& tile : compositor.snapshotTilesForUpload()) {
+      if (tile.bitmapDims.x > 0 && tile.bitmapDims.y > 0) {
+        ids.emplace(tile.tileId, tile.generation);
+      }
+    }
+    return ids;
+  };
+
+  const std::set<std::pair<uint64_t, uint64_t>> before = tileIdentitySet();
+
+  target->setAttribute(xml::XMLQualifiedNameRef("display"), "none");
+  compositor.renderFrame(viewport_);
+
+  const std::set<std::pair<uint64_t, uint64_t>> after = tileIdentitySet();
+
+  EXPECT_NE(before, after)
+      << "hiding an element changed the composite but left the published "
+         "(tileId, generation) set identical — the editor's GL cache would keep "
+         "drawing the stale tile (the hide-layer ghost).";
+}
+
+// Lockstep rotate/scale preview (#6/#7): an ActiveDrag layer under a
+// NON-translation drag delta (rotate/scale) must carry the affine in
+// `canvasFromBitmap` and REUSE the cached bitmap — exactly like the translation
+// fast path slides it — so the presentation transforms the cached pixels as a
+// live quad in lockstep with the overlay. Re-rasterizing instead (baking the
+// rotation so canvasFromBitmap collapses to ~identity) drops the shape off the
+// live-tracking path: the presented quad then only carries the incremental
+// (represented->active) delta and snaps back as the worker republishes — the
+// "shape lags / doesn't move in lockstep" QA report.
+TEST_F(CompositorGoldenTest, RotationDragCarriesAffineInCanvasFromBitmapForLockstep) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect id="target" x="70" y="30" width="60" height="40" fill="red"/>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));  // ActiveDrag hint
+  compositor.renderFrame(viewport_);              // bake the cached bitmap at identity
+
+  const auto dragLayerCanvasFromBitmap = [&]() -> std::optional<Transform2d> {
+    for (const auto& tile : compositor.snapshotTilesForUpload()) {
+      if (tile.layerEntity == entity) {
+        return tile.canvasFromBitmap;
+      }
+    }
+    return std::nullopt;
+  };
+
+  // Rotate ~28.6° about the rect center — a non-translation gesture frame.
+  const Vector2d center(100.0, 50.0);
+  const Transform2d documentFromElement =
+      Transform2d::Translate(center) * Transform2d::Rotate(0.5) * Transform2d::Translate(-center);
+  target->cast<SVGGraphicsElement>().setTransform(documentFromElement);
+  compositor.renderFrame(viewport_);
+
+  const std::optional<Transform2d> canvasFromBitmap = dragLayerCanvasFromBitmap();
+  ASSERT_TRUE(canvasFromBitmap.has_value()) << "drag-layer tile must be present after a drag frame";
+  EXPECT_FALSE(canvasFromBitmap->isTranslation())
+      << "rotation drag must carry the affine in canvasFromBitmap so the cached bitmap is "
+         "transformed as a live quad in lockstep with the overlay, not re-rasterized off the "
+         "live-tracking path. canvasFromBitmap=\n"
+      << *canvasFromBitmap;
+}
+
 // Editor-reported regression: when the compositor has a promoted layer
 // and the DOM transform changes by a pure translation, the fast path
 // should update `canvasFromBitmap` (cheap, ~50 µs) and NOT re-
@@ -236,6 +434,71 @@ TEST_F(CompositorGoldenTest, DraggingFilterGroupSubtreeEngagesFastPath) {
   ASSERT_TRUE(canvasFromBitmap.isTranslation());
   EXPECT_NEAR(canvasFromBitmap.translation().x, 10.0, 1e-6);
   EXPECT_NEAR(canvasFromBitmap.translation().y, 0.0, 1e-6);
+}
+
+// Lockstep rotate/scale for a FILTERED group (#6/#7, e.g. #Lighting_glow_dark).
+// A filter group is a subtree layer (its cached bitmap is the whole filtered
+// result), so it must reuse that cached bitmap and carry the rotate/scale affine
+// in `canvasFromBitmap` — transforming the filtered result as a live quad —
+// rather than re-rendering the (expensive) filter every frame. Re-rendering each
+// frame is what makes a filtered element "glitchy" during resize/rotate: the
+// subtree fast-path gate disqualified non-translation deltas and fell back to a
+// full prepare+re-render. This pins that a filter-group rotate drag reuses the
+// cached bitmap (stamp unchanged) and carries the affine.
+TEST_F(CompositorGoldenTest, FilterGroupRotationDragReusesCachedBitmapForLockstep) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="200" viewBox="0 0 200 200">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="4"/></filter>
+      </defs>
+      <rect width="200" height="200" fill="white"/>
+      <g id="target" filter="url(#blur)">
+        <rect x="60" y="60" width="40" height="20" fill="red"/>
+        <rect x="60" y="100" width="40" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity, InteractionHint::ActiveDrag));
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(200, 200);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+
+  const CompositorLayer* warm = compositor.findLayerForTest(entity);
+  ASSERT_NE(warm, nullptr);
+  ASSERT_TRUE(warm->hasValidBitmap());
+  const std::optional<Transform2d> stampAfterWarm = warm->bitmapEntityFromWorldTransform();
+  ASSERT_TRUE(stampAfterWarm.has_value());
+
+  // Rotate the filter group about its center — a non-translation gesture frame.
+  const Vector2d center(80.0, 90.0);
+  const Transform2d documentFromElement =
+      Transform2d::Translate(center) * Transform2d::Rotate(0.4) * Transform2d::Translate(-center);
+  target->cast<SVGGraphicsElement>().setTransform(documentFromElement);
+  compositor.renderFrame(viewport);
+
+  const CompositorLayer* afterDrag = compositor.findLayerForTest(entity);
+  ASSERT_NE(afterDrag, nullptr);
+  ASSERT_TRUE(afterDrag->hasValidBitmap());
+
+  // The cached filtered bitmap must be reused (stamp unchanged) — not re-filtered.
+  const std::optional<Transform2d> stampAfterDrag = afterDrag->bitmapEntityFromWorldTransform();
+  ASSERT_TRUE(stampAfterDrag.has_value());
+  EXPECT_NEAR(stampAfterDrag->data[4], stampAfterWarm->data[4], 1e-9)
+      << "filter group re-filtered during a rotate drag instead of reusing the cached bitmap";
+  EXPECT_NEAR(stampAfterDrag->data[5], stampAfterWarm->data[5], 1e-9);
+
+  // And the rotation is carried as an affine compose offset (live quad), not baked.
+  EXPECT_FALSE(afterDrag->canvasFromBitmap().isTranslation())
+      << "filter-group rotate drag must carry the affine in canvasFromBitmap for lockstep. got\n"
+      << afterDrag->canvasFromBitmap();
 }
 
 TEST_F(CompositorGoldenTest, TranslationDragEngagesFastPathAtMultipleCanvasScales) {
@@ -1068,14 +1331,13 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
   checkClose(baselineGlowC, dragGlowC, "glow_foreground (further after drag target)");
 }
 
-// Translation-only drag must not re-rasterize retained static segment /
-// non-drag-layer tiles between frames. Post §M2C the editor blits segments
-// and non-drag layers directly — if retained generations bumped per frame,
-// the editor would re-upload N textures every pointer move (the equivalent of
-// the pre-M2C "bg/fg flatten on every frame" regression). Immediate tiles are
-// intentionally transient and may advance every frame.
+// Translation-only drag must not re-rasterize the static segment / non-
+// drag-layer tiles between frames. Post §M2C the editor blits segments
+// and non-drag layers directly — if their generations bumped per frame,
+// the editor would re-upload N textures every pointer move (the
+// equivalent of the pre-M2C "bg/fg flatten on every frame" regression).
 // We probe `snapshotTilesForUpload` and assert generations are stable
-// for retained non-drag tiles across translation-only drag frames.
+// for non-drag tiles across translation-only drag frames.
 TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) {
   SVGDocument document = parseDocument(R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
@@ -1105,14 +1367,14 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(1.0, 0.0)));
   compositor.renderFrame(viewport_);
 
-  // Capture per-tile generations after the first drag frame, keyed on the stable `tileId`. The
-  // drag-target layer's generation is allowed to bump (its `canvasFromBitmap` updates each
-  // fast-path frame), and immediate tiles are transient. Every retained non-drag tile must stay
-  // stable.
+  // Capture per-tile generations after the first drag frame, keyed on the
+  // stable `tileId`. The drag-target layer's generation is allowed to bump
+  // (its `canvasFromBitmap` updates each fast-path frame); every other tile
+  // must stay stable.
   auto tilesAfterFirstDrag = compositor.snapshotTilesForUpload();
   std::unordered_map<uint64_t, uint64_t> nonDragGenerations;
   for (const auto& tile : tilesAfterFirstDrag) {
-    if (!tile.isDragTarget && !tile.immediate) {
+    if (!tile.isDragTarget) {
       nonDragGenerations[tile.tileId] = tile.generation;
     }
   }
@@ -1126,7 +1388,7 @@ TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) 
 
   const auto tilesAfterFinalDrag = compositor.snapshotTilesForUpload();
   for (const auto& tile : tilesAfterFinalDrag) {
-    if (tile.isDragTarget || tile.immediate) {
+    if (tile.isDragTarget) {
       continue;
     }
     auto it = nonDragGenerations.find(tile.tileId);
@@ -1228,10 +1490,9 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
   }
   ASSERT_FALSE(preDragRetainedGenerations.empty());
 
-  // Starting an active drag on an already-elevated target changes only presentation geometry: the
-  // target's cached pixels are reused through canvasFromBitmap, and unrelated retained
-  // elevated/filter tiles plus static segments keep their existing textures. Immediate static
-  // tiles are transient and may legitimately advance.
+  // Starting an active drag on an already-elevated target changes only presentation
+  // geometry: the target's cached pixels are reused through canvasFromBitmap, and unrelated
+  // elevated/filter tiles plus static segments keep their existing textures.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(Vector2d(12.0, 0.0)));
   ASSERT_TRUE(compositor.promoteEntity(targetEntity, InteractionHint::ActiveDrag).promotedLayer());
   compositor.renderFrame(viewport_);
@@ -1257,6 +1518,10 @@ TEST_F(CompositorGoldenTest, SelectionToActiveDragDoesNotAdvanceUnchangedTileGen
     EXPECT_EQ(tile.generation, it->second)
         << "tile " << tile.tileId
         << " advanced generation even though drag start changed only presentation geometry";
+    if (tile.layerEntity == targetEntity) {
+      sawTargetLayer = true;
+      EXPECT_TRUE(tile.isDragTarget);
+    }
   }
   EXPECT_TRUE(sawTargetLayer);
 }
@@ -1570,15 +1835,12 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
       << "expected 2 segments (before/after the promoted layer) + 1 layer tile";
   std::uint64_t segment0GenBefore = 0;
   std::uint64_t segment1GenBefore = 0;
-  bool segment0ImmediateBefore = false;
   for (const auto& tile : tilesBefore) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0) {
+      if (tile.paintOrderIndex == 0)
         segment0GenBefore = tile.generation;
-        segment0ImmediateBefore = tile.immediate;
-      } else {
+      else
         segment1GenBefore = tile.generation;
-      }
     }
   }
 
@@ -1590,23 +1852,18 @@ TEST_F(CompositorGoldenTest, NonPromotedMutationInvalidatesOnlyContainingSegment
   const auto tilesAfter = compositor.snapshotTilesForUpload();
   std::uint64_t segment0GenAfter = 0;
   std::uint64_t segment1GenAfter = 0;
-  bool segment0ImmediateAfter = false;
   for (const auto& tile : tilesAfter) {
     if (tile.layerEntity == entt::null) {
-      if (tile.paintOrderIndex == 0) {
+      if (tile.paintOrderIndex == 0)
         segment0GenAfter = tile.generation;
-        segment0ImmediateAfter = tile.immediate;
-      } else {
+      else
         segment1GenAfter = tile.generation;
-      }
     }
   }
-  if (!segment0ImmediateBefore && !segment0ImmediateAfter) {
-    EXPECT_EQ(segment0GenBefore, segment0GenAfter)
-        << "retained segment[0] re-rasterized even though the mutation lived in segment[1] — "
-           "Phase B per-segment dirty tracking regressed. `rootDirty_` escalation "
-           "has crept back in somewhere in consumeDirtyFlags.";
-  }
+  EXPECT_EQ(segment0GenBefore, segment0GenAfter)
+      << "segment[0] re-rasterized even though the mutation lived in segment[1] — "
+         "Phase B per-segment dirty tracking regressed. `rootDirty_` escalation "
+         "has crept back in somewhere in consumeDirtyFlags.";
   EXPECT_NE(segment1GenBefore, segment1GenAfter)
       << "segment[1] did NOT re-rasterize even though `after` (the mutated entity) "
          "lives in it. The dirty cascade lost the segment-dirty flag somewhere "
@@ -2294,7 +2551,7 @@ TEST_F(CompositorGoldenTest, TightBoundsWithRotatingGradientNoDrift) {
 // Rotations don't commute, so the final CTM pushed rotated paths off
 // the tight bitmap entirely, leaving only the surrounding background.
 TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
-  auto makeDoc = []() {
+  auto makeDoc = [this]() {
     return parseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="900" height="400">
         <defs>

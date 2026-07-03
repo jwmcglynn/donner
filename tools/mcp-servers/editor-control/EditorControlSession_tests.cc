@@ -7,6 +7,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/tests/TestTempDir.h"
@@ -17,6 +18,18 @@
 
 namespace donner::editor::mcp {
 namespace {
+
+// Writable scratch directory for tests that round-trip a file. Prefer bazel's
+// `TEST_TMPDIR` (always writable, including under sandboxed / remote execution)
+// over `std::filesystem::temp_directory_path()`, which resolves to a read-only
+// `/tmp` on remote-execution workers and fails the file rename.
+std::filesystem::path TestScratchDir() {
+  if (const char* testTmpDir = std::getenv("TEST_TMPDIR");
+      testTmpDir != nullptr && testTmpDir[0] != '\0') {
+    return std::filesystem::path(testTmpDir);
+  }
+  return std::filesystem::temp_directory_path();
+}
 
 using nlohmann::json;
 using ::testing::ElementsAreArray;
@@ -39,19 +52,9 @@ constexpr std::string_view kFilteredScene = R"svg(
 )svg";
 
 std::string TileSignature(const json& tile) {
-  std::string result = tile.value("id", "");
-  if (tile.value("kind", "") == "immediate") {
-    // Immediate tile ids include a per-frame generation suffix; paint-order assertions only need
-    // the stable compositor tile id.
-    constexpr std::string_view kImmediatePrefix = "immediate:";
-    if (result.starts_with(kImmediatePrefix)) {
-      result.erase(0, kImmediatePrefix.size());
-      const size_t generationSeparator = result.rfind(':');
-      if (generationSeparator != std::string::npos) {
-        result.erase(generationSeparator);
-      }
-    }
-  }
+  std::string result = tile.value("kind", "");
+  result += ":";
+  result += tile.value("id", "");
   if (tile.value("is_drag_target", false)) {
     result += "*";
   }
@@ -91,6 +94,27 @@ std::vector<std::string> PreviewTileGenerationSignature(const json& preview) {
     signature.push_back(TileGenerationSignature(tile));
   }
   return signature;
+}
+
+Vector2d TransformJsonPoint(const json& transformJson, const Vector2d& point) {
+  const json& matrix = transformJson["matrix"];
+  return Vector2d(matrix[0].get<double>() * point.x + matrix[2].get<double>() * point.y +
+                      matrix[4].get<double>(),
+                  matrix[1].get<double>() * point.x + matrix[3].get<double>() * point.y +
+                      matrix[5].get<double>());
+}
+
+void ExpectNearTransformJson(std::string_view label, const json& actual, const json& expected) {
+  ASSERT_TRUE(actual["matrix"].is_array()) << label << " actual=" << actual.dump(2);
+  ASSERT_TRUE(expected["matrix"].is_array()) << label << " expected=" << expected.dump(2);
+  ASSERT_EQ(actual["matrix"].size(), 6u) << label << " actual=" << actual.dump(2);
+  ASSERT_EQ(expected["matrix"].size(), 6u) << label << " expected=" << expected.dump(2);
+
+  for (std::size_t i = 0; i < 6; ++i) {
+    EXPECT_NEAR(actual["matrix"][i].get<double>(), expected["matrix"][i].get<double>(), 1e-6)
+        << label << " matrix index " << i << " actual=" << actual.dump(2)
+        << " expected=" << expected.dump(2);
+  }
 }
 
 json ExpectedEffectiveDragTranslation(const json& frame, const json& tile) {
@@ -296,21 +320,166 @@ void ExpectPresentedFrameMatchesFinalAfterClick(const json& frames,
 TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   const json tools = EditorControlSession::toolList();
 
+  const json* replayTool = nullptr;
   auto hasTool = [&](std::string_view name) {
     for (const json& tool : tools) {
-      if (tool.value("name", "") == name) return true;
+      if (tool.value("name", "") == name) {
+        if (name == "replay_rnr") {
+          replayTool = &tool;
+        }
+        return true;
+      }
     }
     return false;
   };
 
   EXPECT_TRUE(hasTool("select_by_selector"));
+  EXPECT_TRUE(hasTool("click_layer_button"));
   EXPECT_TRUE(hasTool("drag_selector"));
+  EXPECT_TRUE(hasTool("transform_selector"));
   EXPECT_TRUE(hasTool("render_frame"));
   EXPECT_TRUE(hasTool("get_svg_source"));
   EXPECT_TRUE(hasTool("edit_svg_source"));
+  EXPECT_TRUE(hasTool("set_active_tool"));
+  EXPECT_TRUE(hasTool("set_style_property"));
+  EXPECT_TRUE(hasTool("pen_path"));
   EXPECT_TRUE(hasTool("start_rnr_recording"));
   EXPECT_TRUE(hasTool("stop_rnr_recording"));
   EXPECT_TRUE(hasTool("replay_rnr"));
+  ASSERT_NE(replayTool, nullptr);
+  EXPECT_TRUE((*replayTool)["inputSchema"]["properties"].contains("gl_drive_document_input"));
+}
+
+TEST(EditorControlSessionTest, ClickLayerVisibilityButtonCapturesImmediateAndSettledFrames) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
+  <rect id="Background" width="40" height="20" fill="red"/>
+  <rect id="Foreground" x="12" y="4" width="16" height="12" fill="blue"/>
+</svg>)svg";
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 40},
+                                                                {"canvas_height", 20},
+                                                                {"render_after_load", true}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult click =
+      session.handleToolCall("click_layer_button", json{{"selector", "#Background"},
+                                                        {"button", "visibility"},
+                                                        {"include_display_before_render", true},
+                                                        {"include_final_frame", true},
+                                                        {"include_display_frame", true}});
+
+  ASSERT_TRUE(click.body.value("ok", false)) << click.body.dump(2);
+  EXPECT_TRUE(click.body.value("mutation_queued", false));
+  EXPECT_TRUE(click.body["before"].value("visible", false));
+  ASSERT_TRUE(click.body["after"].is_object()) << click.body.dump(2);
+  EXPECT_FALSE(click.body["after"].value("visible", true));
+  EXPECT_EQ(click.body["display_before_render"].value("path", ""), "tiles");
+  EXPECT_GT(click.body["display_before_render"].value("tile_count", 0), 0);
+  EXPECT_TRUE(click.body["display_before_render_bitmap"].is_object()) << click.body.dump(2);
+  ASSERT_TRUE(click.body["render_stages"].is_array()) << click.body.dump(2);
+  ASSERT_FALSE(click.body["render_stages"].empty()) << click.body.dump(2);
+  EXPECT_GT(click.body.value("attached_image_count", 0), 0);
+
+  ToolCallResult source = session.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(source.body.value("ok", false)) << source.body.dump(2);
+  EXPECT_NE(source.body.value("text", "").find(R"(display="none")"), std::string::npos);
+}
+
+TEST(EditorControlSessionTest, HidingSplashBackgroundDropsGhostPixelsFromSettledFrame) {
+  std::ifstream splash("donner_splash.svg", std::ios::binary);
+  if (!splash.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream buffer;
+  buffer << splash.rdbuf();
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", buffer.str()},
+                                                                {"canvas_width", 892},
+                                                                {"canvas_height", 512},
+                                                                {"render_after_load", true}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult click =
+      session.handleToolCall("click_layer_button", json{{"selector", "#Background"},
+                                                        {"button", "visibility"},
+                                                        {"include_display_before_render", true},
+                                                        {"include_final_frame", true},
+                                                        {"include_display_frame", true}});
+
+  ASSERT_TRUE(click.body.value("ok", false)) << click.body.dump(2);
+  ASSERT_TRUE(click.body["after"].is_object()) << click.body.dump(2);
+  EXPECT_FALSE(click.body["after"].value("visible", true));
+  ASSERT_TRUE(click.body["display_before_render_bitmap"]["alpha"].is_object())
+      << click.body.dump(2);
+  EXPECT_EQ(click.body["display_before_render_bitmap"]["alpha"]["corner_samples"]["top_left"]["a"],
+            255)
+      << "The immediate display capture documents the confirmed stale pre-render frame.";
+
+  ASSERT_TRUE(click.body["render_stages"].is_array()) << click.body.dump(2);
+  ASSERT_FALSE(click.body["render_stages"].empty()) << click.body.dump(2);
+  const json& finalBitmap = click.body["render_stages"].back()["bitmap"];
+  ASSERT_TRUE(finalBitmap["alpha"].is_object()) << click.body.dump(2);
+  EXPECT_EQ(finalBitmap["alpha"]["corner_samples"]["top_left"]["a"], 0)
+      << "After #Background is hidden and the render settles, the splash corner should be "
+         "transparent instead of retaining the old full-canvas background tile.";
+  EXPECT_GT(finalBitmap["alpha"].value("transparent_pixels", 0u), 0u) << finalBitmap.dump(2);
+
+  ASSERT_TRUE(click.body.contains("display_after_render")) << click.body.dump(2);
+  ASSERT_TRUE(click.body.contains("display_after_render_bitmap")) << click.body.dump(2);
+  const json& displayAfterBitmap = click.body.at("display_after_render_bitmap");
+  ASSERT_TRUE(displayAfterBitmap.at("alpha").is_object()) << click.body.dump(2);
+  EXPECT_EQ(displayAfterBitmap.at("alpha").at("corner_samples").at("top_left").at("a"), 0)
+      << "The presented frame after hiding #Background must match the settled render. A nonzero "
+         "corner alpha here is a stale texture/cache pixel, even when the renderer bitmap is "
+         "already transparent.";
+  EXPECT_GT(displayAfterBitmap.at("alpha").value("transparent_pixels", 0u), 0u)
+      << displayAfterBitmap.dump(2);
+}
+
+TEST(EditorControlSessionTest, DraggingSplashBackgroundDropsGhostPixelsFromPresentedFrame) {
+  std::ifstream splash("donner_splash.svg", std::ios::binary);
+  if (!splash.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream buffer;
+  buffer << splash.rdbuf();
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", buffer.str()},
+                                                                {"canvas_width", 892},
+                                                                {"canvas_height", 512},
+                                                                {"render_after_load", true}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult drag =
+      session.handleToolCall("drag_selector", json{{"selector", "#Background"},
+                                                   {"delta_x", 96.0},
+                                                   {"delta_y", 0.0},
+                                                   {"frames", 1},
+                                                   {"release", false},
+                                                   {"include_final_frame", false},
+                                                   {"include_display_frame", true}});
+
+  ASSERT_TRUE(drag.body.value("ok", false)) << drag.body.dump(2);
+  ASSERT_TRUE(drag.body["frames"].is_array()) << drag.body.dump(2);
+  ASSERT_GE(drag.body["frames"].size(), 2u) << drag.body.dump(2);
+  const json& moveFrame = drag.body["frames"][1];
+  ASSERT_EQ(moveFrame.value("label", ""), "move_1") << moveFrame.dump(2);
+  ASSERT_TRUE(moveFrame["display_before_render_bitmap"]["alpha"].is_object()) << moveFrame.dump(2);
+  EXPECT_EQ(moveFrame["display_before_render_bitmap"]["alpha"]["corner_samples"]["top_left"]["a"],
+            0)
+      << "The immediate held-drag display capture should expose transparent canvas at the old "
+         "left edge before the next render result lands.";
+  ASSERT_TRUE(moveFrame["display_after_render_bitmap"]["alpha"].is_object()) << moveFrame.dump(2);
+  EXPECT_EQ(moveFrame["display_after_render_bitmap"]["alpha"]["corner_samples"]["top_left"]["a"], 0)
+      << "After #Background moves right during an active drag, the presented frame should expose "
+         "transparent canvas at the old left edge instead of keeping stale background pixels.";
+  EXPECT_GT(moveFrame["display_after_render_bitmap"]["alpha"].value("transparent_pixels", 0u), 0u)
+      << moveFrame["display_after_render_bitmap"].dump(2);
 }
 
 TEST(EditorControlSessionTest, InvalidToolCallReturnsErrorResult) {
@@ -486,6 +655,167 @@ TEST(EditorControlSessionTest, SelectsBySelectorAndDragsThroughCompositedPreview
   EXPECT_TRUE(sawCompositedPreview);
 }
 
+TEST(EditorControlSessionTest, TransformSelectorResizesThroughHandleAndExposesAffinePreview) {
+  constexpr std::string_view kScene = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 80" width="100" height="80">
+  <rect width="100" height="80" fill="white"/>
+  <rect id="target" x="20" y="20" width="40" height="20" fill="blue"/>
+</svg>
+)svg";
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 100},
+                                                                {"canvas_height", 80},
+                                                                {"render_after_load", true}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult resize =
+      session.handleToolCall("transform_selector", json{{"selector", "#target"},
+                                                        {"mode", "scale"},
+                                                        {"corner", "bottom_right"},
+                                                        {"delta_x", 20.0},
+                                                        {"delta_y", 10.0},
+                                                        {"frames", 2},
+                                                        {"release", false},
+                                                        {"include_final_frame", false}});
+  ASSERT_TRUE(resize.body.value("ok", false)) << resize.body.dump(2);
+  EXPECT_EQ(resize.body.value("gesture_kind", ""), "resize");
+  EXPECT_EQ(resize.body.value("corner", ""), "bottom_right");
+
+  const json& lastFrame = resize.body["frames"].back();
+  ASSERT_TRUE(lastFrame["active_gesture_preview"].is_object()) << lastFrame.dump(2);
+  EXPECT_EQ(lastFrame["active_gesture_preview"].value("kind", ""), "resize");
+  const json& activePreview = lastFrame["display_before_render"]["active_drag_preview"];
+  ASSERT_TRUE(activePreview.is_object()) << lastFrame.dump(2);
+  ASSERT_TRUE(activePreview["document_from_cached_document"].is_object()) << activePreview.dump(2);
+  EXPECT_FALSE(activePreview["document_from_cached_document"].value("is_translation", true));
+
+  const Vector2d anchoredCorner =
+      TransformJsonPoint(activePreview["document_from_cached_document"], Vector2d(20.0, 20.0));
+  const Vector2d activeCorner =
+      TransformJsonPoint(activePreview["document_from_cached_document"], Vector2d(60.0, 40.0));
+  EXPECT_NEAR(anchoredCorner.x, 20.0, 1e-6);
+  EXPECT_NEAR(anchoredCorner.y, 20.0, 1e-6);
+  EXPECT_NEAR(activeCorner.x, 80.0, 1e-6);
+  EXPECT_NEAR(activeCorner.y, 50.0, 1e-6);
+
+  bool sawAffinePresentationTile = false;
+  for (const json& tile : lastFrame["display_before_render"]["tiles"]) {
+    if (!tile.value("is_drag_target", false)) {
+      continue;
+    }
+    ASSERT_TRUE(tile["effective_document_from_cached_document"].is_object()) << tile.dump(2);
+    EXPECT_FALSE(tile["effective_document_from_cached_document"].value("is_translation", true));
+    sawAffinePresentationTile = true;
+  }
+  EXPECT_TRUE(sawAffinePresentationTile) << lastFrame["display_before_render"].dump(2);
+}
+
+TEST(EditorControlSessionTest, LargeScaleDragKeepsPresentedTileTransformAlignedWithHandle) {
+  std::ifstream splash("donner_splash.svg", std::ios::binary);
+  if (!splash.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream buffer;
+  buffer << splash.rdbuf();
+
+  EditorControlSession session;
+  ASSERT_TRUE(session
+                  .handleToolCall("load_svg", json{{"svg_source", buffer.str()},
+                                                   {"canvas_width", 892},
+                                                   {"canvas_height", 512},
+                                                   {"render_after_load", true}})
+                  .body.value("ok", false));
+
+  ToolCallResult select = session.handleToolCall("select_by_selector",
+                                                 json{{"selector", "#Donner_D"}, {"render", true}});
+  ASSERT_TRUE(select.body.value("ok", false)) << select.body.dump(2);
+  ASSERT_TRUE(select.body["selection_bounds_doc"].is_object()) << select.body.dump(2);
+  const json& bounds = select.body["selection_bounds_doc"];
+  const double deltaX = bounds["size"].value("x", 0.0) * 2.0;
+  const double deltaY = bounds["size"].value("y", 0.0) * 2.0;
+
+  ToolCallResult scale =
+      session.handleToolCall("transform_selector", json{{"selector", "#Donner_D"},
+                                                        {"mode", "scale"},
+                                                        {"corner", "bottom_right"},
+                                                        {"delta_x", deltaX},
+                                                        {"delta_y", deltaY},
+                                                        {"frames", 8},
+                                                        {"release", false},
+                                                        {"include_final_frame", false}});
+  ASSERT_TRUE(scale.body.value("ok", false)) << scale.body.dump(2);
+
+  bool sawRecapturedDragTargetTile = false;
+  for (const json& frame : scale.body["frames"]) {
+    SCOPED_TRACE(frame.value("label", ""));
+    const json& display = frame["display_before_render"];
+    ASSERT_TRUE(display["active_drag_preview"].is_object()) << display.dump(2);
+    const json& activeTransform = display["active_drag_preview"]["document_from_cached_document"];
+
+    for (const json& tile : display["tiles"]) {
+      if (!tile.value("is_drag_target", false)) {
+        continue;
+      }
+
+      if (!tile["document_from_cached_document"].value("is_identity", true)) {
+        sawRecapturedDragTargetTile = true;
+      }
+      ExpectNearTransformJson("effective drag-target tile transform",
+                              tile["effective_document_from_cached_document"], activeTransform);
+    }
+  }
+
+  EXPECT_TRUE(sawRecapturedDragTargetTile) << scale.body.dump(2);
+}
+
+TEST(EditorControlSessionTest, TransformSelectorRotatesThroughHandleAndExposesAffinePreview) {
+  constexpr std::string_view kScene = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="80" height="80">
+  <rect width="80" height="80" fill="white"/>
+  <rect id="target" x="20" y="20" width="20" height="20" fill="blue"/>
+</svg>
+)svg";
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 80},
+                                                                {"canvas_height", 80},
+                                                                {"render_after_load", true}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult rotate =
+      session.handleToolCall("transform_selector", json{{"selector", "#target"},
+                                                        {"mode", "rotate"},
+                                                        {"corner", "top_right"},
+                                                        {"delta_x", 0.0},
+                                                        {"delta_y", 48.0},
+                                                        {"frames", 2},
+                                                        {"release", false},
+                                                        {"include_final_frame", false}});
+  ASSERT_TRUE(rotate.body.value("ok", false)) << rotate.body.dump(2);
+  EXPECT_EQ(rotate.body.value("gesture_kind", ""), "rotate");
+  EXPECT_EQ(rotate.body.value("corner", ""), "top_right");
+
+  const json& lastFrame = rotate.body["frames"].back();
+  ASSERT_TRUE(lastFrame["active_gesture_preview"].is_object()) << lastFrame.dump(2);
+  EXPECT_EQ(lastFrame["active_gesture_preview"].value("kind", ""), "rotate");
+  const json& activePreview = lastFrame["display_before_render"]["active_drag_preview"];
+  ASSERT_TRUE(activePreview.is_object()) << lastFrame.dump(2);
+  ASSERT_TRUE(activePreview["document_from_cached_document"].is_object()) << activePreview.dump(2);
+  EXPECT_FALSE(activePreview["document_from_cached_document"].value("is_translation", true));
+
+  const Vector2d center =
+      TransformJsonPoint(activePreview["document_from_cached_document"], Vector2d(30.0, 30.0));
+  const Vector2d topRight =
+      TransformJsonPoint(activePreview["document_from_cached_document"], Vector2d(40.0, 20.0));
+  EXPECT_NEAR(center.x, 30.0, 1e-6);
+  EXPECT_NEAR(center.y, 30.0, 1e-6);
+  EXPECT_NEAR(topRight.x, 40.0, 1e-6);
+  EXPECT_NEAR(topRight.y, 40.0, 1e-6);
+}
+
 TEST(EditorControlSessionTest, SplashOThenRDragKeepsStableSplitLayerPaintOrder) {
   std::ifstream splash("donner_splash.svg", std::ios::binary);
   if (!splash.is_open()) {
@@ -517,38 +847,38 @@ TEST(EditorControlSessionTest, SplashOThenRDragKeepsStableSplitLayerPaintOrder) 
   ASSERT_TRUE(rDrag.body.value("ok", false));
 
   const std::vector<std::string> expectedODragOrder = {
-      "640",
-      "9223372036854776448",
-      "2748779070096",
-      "9223372036854776464*",
-      "2817498546848",
-      "9223372036854776480",
-      "9223372036854776485",
-      "2907692860200",
-      "9223372036854776616",
-      "9223372036854776618",
-      "9223372036854776623",
-      "3500398347071",
-      "9223372036854776639",
-      "3569117822976",
+      "segment:640",
+      "layer:9223372036854776448",
+      "segment:2748779070096",
+      "layer:9223372036854776464*",
+      "segment:2817498546848",
+      "layer:9223372036854776480",
+      "layer:9223372036854776485",
+      "segment:2907692860200",
+      "layer:9223372036854776616",
+      "layer:9223372036854776618",
+      "layer:9223372036854776623",
+      "segment:3500398347071",
+      "layer:9223372036854776639",
+      "segment:3569117822976",
   };
   const std::vector<std::string> expectedRDragOrder = {
-      "640",
-      "9223372036854776448",
-      "2748779070096",
-      "9223372036854776464",
-      "2817498546840",
-      "9223372036854776472*",
-      "2851858285216",
-      "9223372036854776480",
-      "9223372036854776485",
-      "2907692860200",
-      "9223372036854776616",
-      "9223372036854776618",
-      "9223372036854776623",
-      "3500398347071",
-      "9223372036854776639",
-      "3569117822976",
+      "segment:640",
+      "layer:9223372036854776448",
+      "segment:2748779070096",
+      "layer:9223372036854776464",
+      "segment:2817498546840",
+      "layer:9223372036854776472*",
+      "segment:2851858285216",
+      "layer:9223372036854776480",
+      "layer:9223372036854776485",
+      "segment:2907692860200",
+      "layer:9223372036854776616",
+      "layer:9223372036854776618",
+      "layer:9223372036854776623",
+      "segment:3500398347071",
+      "layer:9223372036854776639",
+      "segment:3569117822976",
   };
 
   ExpectEveryStageHasTileOrder("O drag worker", oDrag, "composited_preview",
@@ -793,6 +1123,142 @@ TEST(EditorControlSessionTest, RecordsInMemoryRnrWithEmbeddedSource) {
 
   std::error_code removeError;
   std::filesystem::remove(rnrPath, removeError);
+}
+
+TEST(EditorControlSessionTest, RecordsAndReplaysPenPathPaintActions) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="80" height="80">
+</svg>)svg";
+  const std::filesystem::path tempDir = TestScratchDir();
+  const std::filesystem::path rnrPath = tempDir / "donner_editor_control_pen_paint.rnr";
+
+  EditorControlSession session;
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                                {"canvas_width", 80},
+                                                                {"canvas_height", 80},
+                                                                {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  ToolCallResult start =
+      session.handleToolCall("start_rnr_recording", json{{"output_path", rnrPath.string()}});
+  ASSERT_TRUE(start.body.value("ok", false)) << start.body.dump(2);
+
+  ToolCallResult tool = session.handleToolCall("set_active_tool", json{{"tool", "pen"}});
+  ASSERT_TRUE(tool.body.value("ok", false)) << tool.body.dump(2);
+
+  ToolCallResult fill = session.handleToolCall(
+      "set_style_property",
+      json{{"property", "fill"}, {"value", "#ff0000"}, {"render_after_set", false}});
+  ASSERT_TRUE(fill.body.value("ok", false)) << fill.body.dump(2);
+  EXPECT_FALSE(fill.body.value("queued_selection_mutation", true));
+
+  ToolCallResult pen =
+      session.handleToolCall("pen_path", json{{"points", json::array({
+                                                             json{{"x", 10.0}, {"y", 10.0}},
+                                                             json{{"x", 70.0}, {"y", 10.0}},
+                                                             json{{"x", 40.0}, {"y", 70.0}},
+                                                         })},
+                                              {"close", true},
+                                              {"include_final_frame", true}});
+  ASSERT_TRUE(pen.body.value("ok", false)) << pen.body.dump(2);
+  ASSERT_TRUE(pen.body["selection"].is_object()) << pen.body.dump(2);
+
+  ToolCallResult stop = session.handleToolCall("stop_rnr_recording", json::object());
+  ASSERT_TRUE(stop.body.value("ok", false)) << stop.body.dump(2);
+  EXPECT_GT(stop.body.value("frame_count", 0), 0);
+
+  std::optional<repro::ReproFile> recorded = repro::ReadReproFile(rnrPath);
+  ASSERT_TRUE(recorded.has_value());
+  bool sawPenToolAction = false;
+  bool sawFillAction = false;
+  for (const repro::ReproFrame& frame : recorded->frames) {
+    for (const repro::ReproAction& action : frame.actions) {
+      if (action.kind == repro::ReproAction::Kind::SetActiveTool && action.tool == "pen") {
+        sawPenToolAction = true;
+      }
+      if (action.kind == repro::ReproAction::Kind::SetStyleProperty &&
+          action.propertyName == "fill" && action.propertyValue == "#ff0000") {
+        sawFillAction = true;
+      }
+    }
+  }
+  EXPECT_TRUE(sawPenToolAction);
+  EXPECT_TRUE(sawFillAction);
+
+  EditorControlSession replaySession;
+  ToolCallResult replay =
+      replaySession.handleToolCall("replay_rnr", json{{"rnr_path", rnrPath.string()},
+                                                      {"render_each_frame", false},
+                                                      {"include_frame_results", false}});
+  ASSERT_TRUE(replay.body.value("ok", false)) << replay.body.dump(2);
+
+  ToolCallResult source = replaySession.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(source.body.value("ok", false)) << source.body.dump(2);
+  const std::string text = source.body.value("text", "");
+  EXPECT_NE(text.find("<path"), std::string::npos) << text;
+  EXPECT_NE(text.find("fill: #ff0000"), std::string::npos) << text;
+  EXPECT_NE(text.find(" Z"), std::string::npos) << text;
+
+  std::error_code removeError;
+  std::filesystem::remove(rnrPath, removeError);
+}
+
+TEST(EditorControlSessionTest, ChangingFillOnNewPenPathUpdatesSettledFrame) {
+  constexpr std::string_view kScene =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80" width="80" height="80">
+</svg>)svg";
+
+  EditorControlSession session;
+  ASSERT_TRUE(session
+                  .handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                                   {"canvas_width", 80},
+                                                   {"canvas_height", 80},
+                                                   {"render_after_load", false}})
+                  .body.value("ok", false));
+
+  ASSERT_TRUE(
+      session.handleToolCall("set_active_tool", json{{"tool", "pen"}}).body.value("ok", false));
+  ASSERT_TRUE(session
+                  .handleToolCall(
+                      "set_style_property",
+                      json{{"property", "fill"}, {"value", "none"}, {"render_after_set", false}})
+                  .body.value("ok", false));
+  ASSERT_TRUE(session
+                  .handleToolCall(
+                      "set_style_property",
+                      json{{"property", "stroke"}, {"value", "none"}, {"render_after_set", false}})
+                  .body.value("ok", false));
+
+  ToolCallResult pen =
+      session.handleToolCall("pen_path", json{{"points", json::array({
+                                                             json{{"x", 10.0}, {"y", 10.0}},
+                                                             json{{"x", 70.0}, {"y", 10.0}},
+                                                             json{{"x", 40.0}, {"y", 70.0}},
+                                                         })},
+                                              {"close", true},
+                                              {"include_final_frame", true}});
+  ASSERT_TRUE(pen.body.value("ok", false)) << pen.body.dump(2);
+  ASSERT_TRUE(pen.body["render_stages"].is_array()) << pen.body.dump(2);
+  const json& beforeBitmap = pen.body["render_stages"].back()["bitmap"];
+  ASSERT_TRUE(beforeBitmap["alpha"].is_object()) << beforeBitmap.dump(2);
+  EXPECT_EQ(beforeBitmap["alpha"]["center_sample"]["a"], 0) << beforeBitmap.dump(2);
+
+  ToolCallResult fill = session.handleToolCall(
+      "set_style_property",
+      json{{"property", "fill"}, {"value", "#ff0000"}, {"include_final_frame", true}});
+  ASSERT_TRUE(fill.body.value("ok", false)) << fill.body.dump(2);
+  ASSERT_TRUE(fill.body["render_stages"].is_array()) << fill.body.dump(2);
+  const json& afterBitmap = fill.body["render_stages"].back()["bitmap"];
+  ASSERT_TRUE(afterBitmap["alpha"].is_object()) << afterBitmap.dump(2);
+  const json& center = afterBitmap["alpha"]["center_sample"];
+  EXPECT_GT(center.value("r", 0), 220) << afterBitmap.dump(2);
+  EXPECT_LT(center.value("g", 255), 40) << afterBitmap.dump(2);
+  EXPECT_LT(center.value("b", 255), 40) << afterBitmap.dump(2);
+  EXPECT_GT(center.value("a", 0), 220) << afterBitmap.dump(2);
+
+  ToolCallResult source = session.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(source.body.value("ok", false)) << source.body.dump(2);
+  EXPECT_NE(source.body.value("text", "").find("fill: #ff0000"), std::string::npos);
 }
 
 }  // namespace

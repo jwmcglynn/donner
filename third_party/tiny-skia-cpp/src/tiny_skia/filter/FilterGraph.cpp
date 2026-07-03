@@ -142,7 +142,12 @@ void applySubregionClipping(FloatPixmap& output, const PixelRect& sr, int w, int
     return;
   }
 
-  // Axis-aligned fast path.
+  // Axis-aligned fast path. Clamp the kept-rect origin to the pixmap bounds as well as the far
+  // edge: clamping rx0/ry0 only at the low end (max(0, ...)) leaves them able to exceed w/h when
+  // the subregion maps entirely past the right/bottom edge, and the per-row "clear the left border
+  // [0, rx0)" fill would then write rx0*4 bytes into a w*4-byte row and walk past the buffer.
+  // Clamping to [0, w]/[0, h] keeps every fill in bounds; a fully-outside subregion collapses to an
+  // empty kept rect (rx0 == rx1 or ry0 == ry1) so the whole pixmap is cleared.
   const int rx0 = std::clamp(static_cast<int>(std::floor(sr.x)), 0, w);
   const int ry0 = std::clamp(static_cast<int>(std::floor(sr.y)), 0, h);
   const int rx1 = std::clamp(static_cast<int>(std::ceil(sr.x + sr.w)), 0, w);

@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -23,6 +24,10 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
+#ifdef DONNER_EDITOR_WGPU
+#include "donner/svg/renderer/RendererGeode.h"
+#endif
+
 namespace donner::editor::repro {
 namespace {
 
@@ -35,6 +40,11 @@ struct PixelRect {
   int y = 0;
   int width = 0;
   int height = 0;
+};
+
+struct TexturePixelStats {
+  int greenPixels = 0;
+  int nonTransparentPixels = 0;
 };
 
 enum class PixelSnapMode {
@@ -163,6 +173,72 @@ struct ReproSvgInput {
   return input;
 }
 
+void QueueRecordedScrollEvents(EditorShell& shell, const ReproFrame& frame) {
+  const bool zoomModifierHeld =
+      (frame.modifiers & (1 << 0)) != 0 || (frame.modifiers & (1 << 3)) != 0;
+  for (const ReproEvent& event : frame.events) {
+    if (event.kind != ReproEvent::Kind::Wheel) {
+      continue;
+    }
+
+    shell.queueScrollEventForReplayForTesting(RenderPaneScrollEvent{
+        .scrollDelta = Vector2d(event.wheelDeltaX, event.wheelDeltaY),
+        .cursorScreen = Vector2d(frame.mouseX, frame.mouseY),
+        .zoomModifierHeld = zoomModifierHeld,
+    });
+  }
+}
+
+[[nodiscard]] bool HasLeftMouseEvent(const ReproFrame& frame, ReproEvent::Kind kind) {
+  return std::ranges::any_of(frame.events, [&](const ReproEvent& event) {
+    return event.kind == kind && event.mouseButton == 0;
+  });
+}
+
+[[nodiscard]] std::optional<std::string> LeftMouseDownHitElementId(const ReproFrame& frame) {
+  for (const ReproEvent& event : frame.events) {
+    if (event.kind == ReproEvent::Kind::MouseDown && event.mouseButton == 0 &&
+        event.hit.has_value() && !event.hit->id.empty()) {
+      return event.hit->id;
+    }
+  }
+
+  return std::nullopt;
+}
+
+[[nodiscard]] MouseModifiers MouseModifiersFromFrame(const ReproFrame& frame) {
+  MouseModifiers modifiers;
+  modifiers.shift = (frame.modifiers & (1 << 1)) != 0;
+  modifiers.option = (frame.modifiers & (1 << 2)) != 0;
+  modifiers.command = (frame.modifiers & ((1 << 0) | (1 << 3))) != 0;
+  modifiers.pixelsPerDocUnit =
+      frame.viewport.has_value() && frame.viewport->zoom > 0.0 ? frame.viewport->zoom : 1.0;
+  return modifiers;
+}
+
+[[nodiscard]] std::optional<EditorShellDocumentReplayInput> DocumentReplayInputFromFrame(
+    const ReproFrame& frame) {
+  if (!frame.mouseDocX.has_value() || !frame.mouseDocY.has_value()) {
+    return std::nullopt;
+  }
+
+  return EditorShellDocumentReplayInput{
+      .documentPoint = Vector2d(*frame.mouseDocX, *frame.mouseDocY),
+      .leftMouseDown = (frame.mouseButtonMask & 1) != 0,
+      .leftMousePressed = HasLeftMouseEvent(frame, ReproEvent::Kind::MouseDown),
+      .leftMouseReleased = HasLeftMouseEvent(frame, ReproEvent::Kind::MouseUp),
+      .modifiers = MouseModifiersFromFrame(frame),
+      .hitElementId = LeftMouseDownHitElementId(frame),
+  };
+}
+
+[[nodiscard]] EditorWindowInputOverride NonCanvasInputFromFrame(const ReproFrame& frame) {
+  EditorWindowInputOverride input = InputFromFrame(frame);
+  input.mousePosition = Vector2d(-10000.0, -10000.0);
+  input.mouseDown.fill(false);
+  return input;
+}
+
 [[nodiscard]] ViewportState ViewportFromReproViewport(const ReproViewport& recordedViewport) {
   ViewportState viewport;
   viewport.paneOrigin = Vector2d(recordedViewport.paneOriginX, recordedViewport.paneOriginY);
@@ -277,6 +353,59 @@ struct ReproSvgInput {
   const std::optional<PixelRect> cropRect = CropRectForMode(cropMode, viewport, bitmap);
   return cropRect.has_value() ? CropBitmap(bitmap, *cropRect) : bitmap;
 }
+
+#ifdef DONNER_EDITOR_WGPU
+std::optional<TexturePixelStats> TexturePixelStatsForSnapshot(
+    const std::shared_ptr<const svg::RendererTextureSnapshot>& textureSnapshot,
+    const std::shared_ptr<geode::GeodeDevice>& device) {
+  if (textureSnapshot == nullptr || device == nullptr ||
+      textureSnapshot->backend() != svg::RendererTextureSnapshotBackend::Geode) {
+    return std::nullopt;
+  }
+
+  const Vector2i dims = textureSnapshot->dimensions();
+  if (dims.x <= 0 || dims.y <= 0) {
+    return std::nullopt;
+  }
+
+  svg::RendererGeode renderer(device);
+  svg::RenderViewport viewport;
+  viewport.size = Vector2d(static_cast<double>(dims.x), static_cast<double>(dims.y));
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+  if (!renderer.drawTextureSnapshot(
+          *textureSnapshot, Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(dims.x),
+                                                             static_cast<double>(dims.y))))) {
+    renderer.endFrame();
+    return std::nullopt;
+  }
+  renderer.endFrame();
+
+  const svg::RendererBitmap bitmap = renderer.takeSnapshot();
+  if (bitmap.empty()) {
+    return std::nullopt;
+  }
+
+  TexturePixelStats stats;
+  for (int y = 0; y < bitmap.dimensions.y; ++y) {
+    for (int x = 0; x < bitmap.dimensions.x; ++x) {
+      const std::size_t offset =
+          static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+      const std::uint8_t r = bitmap.pixels[offset + 0u];
+      const std::uint8_t g = bitmap.pixels[offset + 1u];
+      const std::uint8_t b = bitmap.pixels[offset + 2u];
+      const std::uint8_t a = bitmap.pixels[offset + 3u];
+      if (a > 16u) {
+        ++stats.nonTransparentPixels;
+      }
+      if (r < 95u && g > 145u && b < 90u && a > 180u) {
+        ++stats.greenPixels;
+      }
+    }
+  }
+  return stats;
+}
+#endif
 
 [[nodiscard]] bool WriteCapture(const svg::RendererBitmap& bitmap,
                                 const std::filesystem::path& path, std::string* error) {
@@ -463,9 +592,21 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
 
     const std::uint64_t holdPollCountBefore = replayRenderer.replayResultHoldPollCountForTesting();
     window.pollEvents();
-    window.beginFrameWithInput(InputFromFrame(frame));
-    if (frame.viewport.has_value()) {
+    window.beginFrameWithInput(options.driveDocumentSpaceInput ? NonCanvasInputFromFrame(frame)
+                                                               : InputFromFrame(frame));
+    if (frame.viewport.has_value() && !options.driveDocumentSpaceInput) {
       shell.overrideViewportForReplay(ViewportFromReproViewport(*frame.viewport));
+    }
+    if (options.driveDocumentSpaceInput) {
+      const std::optional<EditorShellDocumentReplayInput> documentInput =
+          DocumentReplayInputFromFrame(frame);
+      if (documentInput.has_value()) {
+        shell.queueDocumentSpaceReplayInputForTesting(*documentInput);
+      }
+    }
+    QueueRecordedScrollEvents(shell, frame);
+    for (const ReproAction& action : frame.actions) {
+      shell.applyReplayActionForTesting(action);
     }
     shell.setContentOnlyCaptureForNextFrameForReplay(options.contentOnlyCapture &&
                                                      captureReason.has_value());
@@ -482,10 +623,28 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .compositorCanvas = layerStatus.compositorCanvas,
         .metadataOnlyMissCount = layerStatus.metadataOnlyMissCount,
         .duplicateLiveTextureCount = layerStatus.duplicateLiveTextureCount,
-        .overlayDimsPx = layerStatus.overlayDimsPx,
-        .overlayTextureHandle = layerStatus.overlayTextureHandle,
+        .documentFrameVersion = layerStatus.documentFrameVersion,
+        .displayedDocVersion = layerStatus.displayedDocVersion,
+        .immediateOverlayDocumentVersion = layerStatus.immediateOverlayDocumentVersion,
+        .selectedCompositedEntity = layerStatus.selectedCompositedEntity,
+        .lastFlushAppliedCommands = layerStatus.lastFlushAppliedCommands,
+        .lastFlushReplacedDocument = layerStatus.lastFlushReplacedDocument,
+        .lastFlushRemovedElements = layerStatus.lastFlushRemovedElements,
+        .lastFlushCacheInvalidatedElements = layerStatus.lastFlushCacheInvalidatedElements,
+        .requestRenderAtEndOfFrame = layerStatus.requestRenderAtEndOfFrame,
+        .pendingSelectedLayerRasterizationEntity =
+            layerStatus.pendingSelectedLayerRasterizationEntity,
+        .pendingSelectedLayerRasterizationVersion =
+            layerStatus.pendingSelectedLayerRasterizationVersion,
+        .selectedStyleAttribute = layerStatus.selectedStyleAttribute,
+        .selectedLocalStyleFill = layerStatus.selectedLocalStyleFill,
+        .selectedComputedFill = layerStatus.selectedComputedFill,
+        .selectedRenderingInstanceFill = layerStatus.selectedRenderingInstanceFill,
+        .selectedPathDataAttribute = layerStatus.selectedPathDataAttribute,
         .presentationResources = layerStatus.presentationResources,
         .frameCost = layerStatus.frameCost,
+        .activeDragPreview = layerStatus.activeDragPreview,
+        .displayedDragPreview = layerStatus.displayedDragPreview,
         .replayWorkerScheduling = options.workerScheduling,
         .replayWorkerRenderDelayMsForTesting = options.workerRenderDelayMsForTesting,
         .replayHoldFramesBehind = options.holdFramesBehind,
@@ -494,6 +653,18 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     };
     frameDiagnostics.tiles.reserve(layerStatus.tiles.size());
     for (const LayerInspectorStatusReadback::Tile& tile : layerStatus.tiles) {
+      int textureGreenPixels = 0;
+      int textureNonTransparentPixels = 0;
+      bool hasTextureSnapshot = tile.textureSnapshot != nullptr;
+#ifdef DONNER_EDITOR_WGPU
+      if (const std::optional<TexturePixelStats> stats =
+              TexturePixelStatsForSnapshot(tile.textureSnapshot, window.geodeFramebufferDevice());
+          stats.has_value()) {
+        textureGreenPixels = stats->greenPixels;
+        textureNonTransparentPixels = stats->nonTransparentPixels;
+        hasTextureSnapshot = true;
+      }
+#endif
       frameDiagnostics.tiles.push_back(GlRnrReplayTileDiagnostics{
           .id = tile.id,
           .kind = tile.kind,
@@ -504,11 +675,33 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
           .bitmapDimsDoc = tile.bitmapDimsDoc,
           .dragTranslationDoc = tile.dragTranslationDoc,
           .presentedDragTranslationDoc = tile.presentedDragTranslationDoc,
+          .documentFromCachedDocument = tile.documentFromCachedDocument,
+          .presentedDocumentFromCachedDocument = tile.presentedDocumentFromCachedDocument,
           .textureHandle = tile.textureHandle,
+          .textureGreenPixels = textureGreenPixels,
+          .textureNonTransparentPixels = textureNonTransparentPixels,
+          .hasTextureSnapshot = hasTextureSnapshot,
           .metadataOnly = tile.metadataOnly,
           .isDragTarget = tile.isDragTarget,
       });
     }
+    frameDiagnostics.rowThumbnails.reserve(layerStatus.rowThumbnails.size());
+    for (const LayerInspectorStatusReadback::RowThumbnail& thumbnail : layerStatus.rowThumbnails) {
+      frameDiagnostics.rowThumbnails.push_back(GlRnrReplayFrameDiagnostics::RowThumbnail{
+          .displayName = thumbnail.displayName,
+          .stableId = thumbnail.stableId,
+          .bitmapDimsPx = thumbnail.bitmapDimsPx,
+      });
+    }
+    frameDiagnostics.thumbnailRefreshStats = GlRnrReplayFrameDiagnostics::ThumbnailRefreshStats{
+        .documentFrameVersion = layerStatus.thumbnailRefreshStats.documentFrameVersion,
+        .rowCount = layerStatus.thumbnailRefreshStats.rowCount,
+        .renderedCount = layerStatus.thumbnailRefreshStats.renderedCount,
+        .reusedCount = layerStatus.thumbnailRefreshStats.reusedCount,
+        .skippedForCanvasInvalidationCount =
+            layerStatus.thumbnailRefreshStats.skippedForCanvasInvalidationCount,
+        .renderMs = layerStatus.thumbnailRefreshStats.renderMs,
+    };
     result->frameDiagnostics.push_back(std::move(frameDiagnostics));
 
     if (captureReason.has_value()) {

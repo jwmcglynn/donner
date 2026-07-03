@@ -19,8 +19,53 @@ struct Contributor {
   double ms = 0.0;
 };
 
+double MainFrameMs(const FrameCostBreakdown& cost) {
+  return cost.mainFrame.preparationMs + cost.mainFrame.renderPollMs +
+         cost.mainFrame.documentFlushMs + cost.mainFrame.overlayRefreshMs +
+         cost.mainFrame.documentSyncMs + cost.mainFrame.layoutMs + cost.mainFrame.shortcutsMs +
+         cost.mainFrame.menusDialogsMs + cost.mainFrame.sourcePaneMs + cost.mainFrame.renderPaneMs +
+         cost.mainFrame.sidebarsMs + cost.mainFrame.splittersMs + cost.mainFrame.endRenderRequestMs;
+}
+
+double HostFrameMs(const FrameCostBreakdown& cost) {
+  return cost.hostFrame.beginFrameMs + cost.hostFrame.previousEndFrameMs;
+}
+
+double HostProfiledEndMs(const FrameCostBreakdown& cost) {
+  return cost.hostFrame.previousSurfaceAcquireMs + cost.hostFrame.previousUnderlayMs +
+         cost.hostFrame.previousImguiRenderMs + cost.hostFrame.previousImguiDrawMs +
+         cost.hostFrame.previousDirectMs + cost.hostFrame.previousReadbackMs +
+         cost.hostFrame.previousPresentMs;
+}
+
+double HostEndOtherMs(const FrameCostBreakdown& cost) {
+  return std::max(0.0, cost.hostFrame.previousEndFrameMs - HostProfiledEndMs(cost));
+}
+
+double HostImguiMs(const FrameCostBreakdown& cost) {
+  return cost.hostFrame.beginFrameMs + cost.hostFrame.previousImguiRenderMs +
+         cost.hostFrame.previousImguiDrawMs;
+}
+
+double HostPresentMs(const FrameCostBreakdown& cost) {
+  return cost.hostFrame.previousSurfaceAcquireMs + cost.hostFrame.previousPresentMs;
+}
+
+double MainMiscMs(const FrameCostBreakdown& cost) {
+  return cost.mainFrame.preparationMs + cost.mainFrame.renderPollMs +
+         cost.mainFrame.documentFlushMs + cost.mainFrame.overlayRefreshMs +
+         cost.mainFrame.documentSyncMs + cost.mainFrame.layoutMs + cost.mainFrame.shortcutsMs +
+         cost.mainFrame.menusDialogsMs + cost.mainFrame.splittersMs +
+         cost.mainFrame.endRenderRequestMs;
+}
+
 double SourceRopesMs(const FrameCostBreakdown& cost) {
   return cost.sourceRopes.layoutMs + cost.sourceRopes.updateMs + cost.sourceRopes.drawMs;
+}
+
+double LegacyUiFrameMs(const FrameCostBreakdown& cost) {
+  return cost.overlay.captureMs + cost.overlay.drawMs + cost.overlay.snapshotMs +
+         cost.overlay.uploadMs + cost.compositedUpload.uploadMs + SourceRopesMs(cost);
 }
 
 double KnownProfilerCostMs(const FrameCostBreakdown& cost) {
@@ -75,6 +120,39 @@ void AddContributor(std::array<Contributor, Size>* contributors, std::size_t* co
 }
 
 void WriteCostDetails(std::ostream& out, const FrameCostBreakdown& cost) {
+  out << "\"main_frame\":{\"preparation_ms\":" << cost.mainFrame.preparationMs
+      << ",\"render_poll_ms\":" << cost.mainFrame.renderPollMs
+      << ",\"document_flush_ms\":" << cost.mainFrame.documentFlushMs
+      << ",\"overlay_refresh_ms\":" << cost.mainFrame.overlayRefreshMs
+      << ",\"document_sync_ms\":" << cost.mainFrame.documentSyncMs
+      << ",\"layout_ms\":" << cost.mainFrame.layoutMs
+      << ",\"shortcuts_ms\":" << cost.mainFrame.shortcutsMs
+      << ",\"menus_dialogs_ms\":" << cost.mainFrame.menusDialogsMs
+      << ",\"source_pane_ms\":" << cost.mainFrame.sourcePaneMs
+      << ",\"render_pane_ms\":" << cost.mainFrame.renderPaneMs
+      << ",\"sidebars_ms\":" << cost.mainFrame.sidebarsMs
+      << ",\"splitters_ms\":" << cost.mainFrame.splittersMs
+      << ",\"end_render_request_ms\":" << cost.mainFrame.endRenderRequestMs << "},";
+
+  out << "\"host_frame\":{\"begin_frame_ms\":" << cost.hostFrame.beginFrameMs
+      << ",\"previous_end_frame_ms\":" << cost.hostFrame.previousEndFrameMs
+      << ",\"previous_imgui_render_ms\":" << cost.hostFrame.previousImguiRenderMs
+      << ",\"previous_surface_acquire_ms\":" << cost.hostFrame.previousSurfaceAcquireMs
+      << ",\"previous_underlay_ms\":" << cost.hostFrame.previousUnderlayMs
+      << ",\"previous_imgui_draw_ms\":" << cost.hostFrame.previousImguiDrawMs
+      << ",\"previous_direct_ms\":" << cost.hostFrame.previousDirectMs
+      << ",\"previous_readback_ms\":" << cost.hostFrame.previousReadbackMs
+      << ",\"previous_present_ms\":" << cost.hostFrame.previousPresentMs << "},";
+
+  out << "\"direct_presentation\":{\"total_ms\":" << cost.directPresentation.totalMs
+      << ",\"checkerboard_ms\":" << cost.directPresentation.checkerboardMs
+      << ",\"overview_tiles_ms\":" << cost.directPresentation.overviewTilesMs
+      << ",\"active_tiles_ms\":" << cost.directPresentation.activeTilesMs
+      << ",\"renderer_end_frame_ms\":" << cost.directPresentation.rendererEndFrameMs
+      << ",\"checkerboard_draws\":" << cost.directPresentation.checkerboardDrawCount
+      << ",\"overview_tile_draws\":" << cost.directPresentation.overviewTileDrawCount
+      << ",\"active_tile_draws\":" << cost.directPresentation.activeTileDrawCount << "},";
+
   out << "\"overlay\":{\"capture_ms\":" << cost.overlay.captureMs
       << ",\"draw_ms\":" << cost.overlay.drawMs << ",\"snapshot_ms\":" << cost.overlay.snapshotMs
       << ",\"upload_ms\":" << cost.overlay.uploadMs
@@ -166,8 +244,12 @@ const char* FrameBudgetMissName(FrameBudgetMiss miss) {
 }
 
 double KnownUiFrameCostMs(const FrameCostBreakdown& cost) {
-  return cost.overlay.captureMs + cost.overlay.drawMs + cost.overlay.snapshotMs +
-         cost.overlay.uploadMs + cost.compositedUpload.uploadMs + SourceRopesMs(cost);
+  const double topLevelMs = HostFrameMs(cost) + MainFrameMs(cost);
+  if (topLevelMs > 0.0) {
+    return topLevelMs;
+  }
+
+  return LegacyUiFrameMs(cost);
 }
 
 double KnownAsyncWorkerCostMs(const FrameCostBreakdown& cost) {
@@ -185,28 +267,49 @@ std::string BuildFrameMissTelemetryJson(const FrameMissTelemetryInput& input) {
   const double knownProfilerMs = KnownProfilerCostMs(input.frameCost);
   const double otherUiMs = std::max(0.0, input.frameMs - knownUiMs);
 
-  std::array<Contributor, 12> contributors;
+  std::array<Contributor, 16> contributors;
   std::size_t contributorCount = 0;
   AddContributor(&contributors, &contributorCount, "other", otherUiMs);
-  AddContributor(&contributors, &contributorCount, "overlay-capture",
-                 input.frameCost.overlay.captureMs);
-  AddContributor(&contributors, &contributorCount, "overlay-draw", input.frameCost.overlay.drawMs);
-  AddContributor(&contributors, &contributorCount, "overlay-snapshot",
-                 input.frameCost.overlay.snapshotMs);
-  AddContributor(&contributors, &contributorCount, "overlay-upload",
-                 input.frameCost.overlay.uploadMs);
-  AddContributor(&contributors, &contributorCount, "composited-upload",
-                 input.frameCost.compositedUpload.uploadMs);
+  if (HostFrameMs(input.frameCost) + MainFrameMs(input.frameCost) > 0.0) {
+    AddContributor(&contributors, &contributorCount, "host-rest", HostEndOtherMs(input.frameCost));
+    AddContributor(&contributors, &contributorCount, "host-present",
+                   HostPresentMs(input.frameCost));
+    AddContributor(&contributors, &contributorCount, "host-direct",
+                   input.frameCost.hostFrame.previousDirectMs);
+    AddContributor(&contributors, &contributorCount, "host-underlay",
+                   input.frameCost.hostFrame.previousUnderlayMs);
+    AddContributor(&contributors, &contributorCount, "host-readback",
+                   input.frameCost.hostFrame.previousReadbackMs);
+    AddContributor(&contributors, &contributorCount, "host-imgui", HostImguiMs(input.frameCost));
+    AddContributor(&contributors, &contributorCount, "ui-misc", MainMiscMs(input.frameCost));
+    AddContributor(&contributors, &contributorCount, "source-pane",
+                   input.frameCost.mainFrame.sourcePaneMs);
+    AddContributor(&contributors, &contributorCount, "render-pane",
+                   input.frameCost.mainFrame.renderPaneMs);
+    AddContributor(&contributors, &contributorCount, "sidebars",
+                   input.frameCost.mainFrame.sidebarsMs);
+  } else {
+    AddContributor(&contributors, &contributorCount, "overlay-capture",
+                   input.frameCost.overlay.captureMs);
+    AddContributor(&contributors, &contributorCount, "overlay-draw",
+                   input.frameCost.overlay.drawMs);
+    AddContributor(&contributors, &contributorCount, "overlay-snapshot",
+                   input.frameCost.overlay.snapshotMs);
+    AddContributor(&contributors, &contributorCount, "overlay-upload",
+                   input.frameCost.overlay.uploadMs);
+    AddContributor(&contributors, &contributorCount, "composited-upload",
+                   input.frameCost.compositedUpload.uploadMs);
+    AddContributor(&contributors, &contributorCount, "source-rope-layout",
+                   input.frameCost.sourceRopes.layoutMs);
+    AddContributor(&contributors, &contributorCount, "source-rope-update",
+                   input.frameCost.sourceRopes.updateMs);
+    AddContributor(&contributors, &contributorCount, "source-rope-draw",
+                   input.frameCost.sourceRopes.drawMs);
+  }
   AddContributor(&contributors, &contributorCount, "rnd-imm",
                  input.frameCost.compositedRender.immediateMs);
   AddContributor(&contributors, &contributorCount, "rnd-cache",
                  input.frameCost.compositedRender.cachedMs);
-  AddContributor(&contributors, &contributorCount, "source-rope-layout",
-                 input.frameCost.sourceRopes.layoutMs);
-  AddContributor(&contributors, &contributorCount, "source-rope-update",
-                 input.frameCost.sourceRopes.updateMs);
-  AddContributor(&contributors, &contributorCount, "source-rope-draw",
-                 input.frameCost.sourceRopes.drawMs);
   AddContributor(&contributors, &contributorCount, "backend", input.backendMs);
   SortContributors(&contributors, contributorCount);
 

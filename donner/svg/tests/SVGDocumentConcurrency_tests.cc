@@ -253,6 +253,26 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomAllowsLegacyRawAccessInsideGuards
   EXPECT_TRUE(rect.unsafeEntityHandle().valid());
 }
 
+TEST(SVGDocumentConcurrencyTests, ConcurrentDomPublicReadAccessorsAcquireAccessImplicitly) {
+  SVGDocument document;
+  SVGRectElement rect = SVGRectElement::Create(document);
+  rect.setId("target");
+  rect.setAttribute("fill", "red");
+  document.svgElement().appendChild(rect);
+  document.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  SVGSVGElement root = document.svgElement();
+  std::optional<SVGElement> child = root.firstChild();
+
+  ASSERT_TRUE(child.has_value());
+  EXPECT_TRUE(child->isa<SVGRectElement>());
+  EXPECT_EQ(child->id(), "target");
+  EXPECT_EQ(child->getAttribute("fill"), "red");
+  EXPECT_FALSE(child->nextSibling().has_value());
+  EXPECT_TRUE(child->parentElement().has_value());
+  EXPECT_EQ(child->attributes().size(), 2u);
+}
+
 TEST(SVGDocumentConcurrencyTests, ConcurrentDomSerializesElementHandleCopies) {
   SVGDocument document;
   SVGRectElement rect = SVGRectElement::Create(document);

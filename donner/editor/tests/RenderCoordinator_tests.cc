@@ -13,8 +13,8 @@
 
 // Unit coverage for `RenderCoordinator`'s pure-logic predicates and the
 // GL-free portions of its orchestration. These tests deliberately avoid any
-// path that calls into a live GL/WGPU context: `GlTextureCache::uploadOverlay`
-// / `uploadComposited` emit raw `glGenTextures`/`glBindTexture` in the default
+// path that calls into a live GL/WGPU context: `GlTextureCache::uploadComposited`
+// emits raw `glGenTextures`/`glBindTexture` in the default
 // (tiny-skia) build, so the editor unit-test process — which has no GL context
 // — would crash. The harness therefore:
 //   * uses the default CPU (`tiny-skia`) `svg::Renderer` (no Geode device), and
@@ -124,6 +124,60 @@ TEST(RenderCoordinatorPolicyTest, SplitPreviewPresentableOnlyWhenTileCanvasMatch
   EXPECT_FALSE(ShouldPresentCompositedPreviewForViewport(preview, Vector2i(128, 128)));
   // Degenerate viewport canvas is never presentable for a split preview.
   EXPECT_FALSE(ShouldPresentCompositedPreviewForViewport(preview, Vector2i(0, 0)));
+}
+
+TEST(RenderCoordinatorPolicyTest, ReleaseSettleWaitsForQueuedTransformFlush) {
+  EXPECT_EQ(PostReleaseSettleTargetVersion(/*currentFrameVersion=*/42,
+                                           /*hasPendingMutations=*/false),
+            42u);
+  EXPECT_EQ(PostReleaseSettleTargetVersion(/*currentFrameVersion=*/42,
+                                           /*hasPendingMutations=*/true),
+            43u)
+      << "Mouse-up can queue the final transform while the renderer is busy. A stale in-flight "
+         "render at the already-flushed version must not close the settle window before that "
+         "queued transform is flushed.";
+}
+
+TEST(RenderCoordinatorPolicyTest, PendingSelectedLayerRasterizationBypassesViewportDefer) {
+  const Entity selectedEntity = static_cast<Entity>(7);
+
+  EXPECT_TRUE(ShouldDeferSelectedViewportRefresh(
+      selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
+      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/false));
+  EXPECT_FALSE(ShouldDeferSelectedViewportRefresh(
+      selectedEntity, /*hasActiveDrag=*/false, /*currentVersion=*/8, /*displayedDocVersion=*/8,
+      /*hasCachedSelectedTexture=*/true, /*rasterViewportSettled=*/false,
+      /*needsOverviewInfill=*/false, /*pendingSelectedLayerRasterization=*/true))
+      << "A style/fill edit marks the selected layer pixels stale; the coordinator must request "
+         "the forced layer rasterization immediately instead of deferring forever on an unsettled "
+         "viewport.";
+}
+
+TEST(RenderCoordinatorPolicyTest, OnlyForcedSelectedResultClearsPendingLayerRasterization) {
+  const Entity selectedEntity = static_cast<Entity>(7);
+
+  RenderRequest::DragPreview regularSelectionPreview;
+  regularSelectionPreview.entity = selectedEntity;
+  regularSelectionPreview.interactionKind = svg::compositor::InteractionHint::Selection;
+  regularSelectionPreview.forceLayerRasterization = false;
+
+  EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
+      regularSelectionPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8))
+      << "An already-running selected prewarm can complete at the same document version as a "
+         "queued fill/style flush, but it still contains the old pixels unless the request carried "
+         "forceLayerRasterization.";
+
+  RenderRequest::DragPreview forcedSelectionPreview = regularSelectionPreview;
+  forcedSelectionPreview.forceLayerRasterization = true;
+  EXPECT_TRUE(ShouldClearPendingSelectedLayerRasterization(
+      forcedSelectionPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+  EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
+      forcedSelectionPreview, selectedEntity, /*resultVersion=*/7, /*pendingVersion=*/8));
+
+  forcedSelectionPreview.entity = static_cast<Entity>(8);
+  EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
+      forcedSelectionPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
 }
 
 // ---------------------------------------------------------------------------
@@ -364,11 +418,10 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
 TEST(RenderCoordinatorTest, RasterizeOverlayReturnsFalseWithoutDocument) {
   EditorApp app;
   RenderCoordinator coordinator;
-  GlTextureCache textures;
   ViewportState viewport;
   ASSERT_FALSE(app.hasDocument());
 
-  EXPECT_FALSE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
+  EXPECT_FALSE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
                                                                /*marqueeRectDoc=*/std::nullopt));
 }
 
@@ -376,30 +429,26 @@ TEST(RenderCoordinatorTest, RasterizeOverlayPublishesImmediateSnapshot) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
-  GlTextureCache textures;
   ViewportState viewport = MakeViewport(app);
 
   app.setSelection(QuerySelector(app, "#r1"));
 
   ASSERT_GT(app.document().currentFrameVersion(), coordinator.displayedDocVersion());
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
                                                               /*marqueeRectDoc=*/std::nullopt));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
   EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
-  EXPECT_EQ(textures.overlayWidth(), 0);
-  EXPECT_EQ(textures.overlayHeight(), 0);
 }
 
 TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
   RenderCoordinator coordinator;
-  GlTextureCache textures;
   ViewportState viewport = MakeViewport(app);
 
   // No selection: the overlay still rasterizes (empty chrome) and parks
   // pending against the undisplayed version.
-  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, textures,
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
                                                               /*marqueeRectDoc=*/std::nullopt));
 }
 

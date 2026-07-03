@@ -2,7 +2,10 @@
 /// @file
 
 #include <optional>
+#include <span>
+#include <vector>
 
+#include "donner/base/Box.h"
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
@@ -134,5 +137,18 @@ struct PresentedPixelRect {
  */
 [[nodiscard]] std::optional<PresentedPixelRect> RoundPresentedTileRectToPixelRect(
     const PresentedTileRect& rect);
+
+/**
+ * Split a clip rectangle into regions not covered by current active tile bounds.
+ *
+ * Overview infill is an older, lower-resolution fallback. It must fill areas the active viewport
+ * render does not cover, but it must not show through transparent pixels inside active tiles.
+ *
+ * @param clipRect Output-space clip rectangle to split.
+ * @param coveredRects Output-space active tile bounds that occlude overview infill.
+ * @return Non-overlapping rectangles inside \p clipRect and outside \p coveredRects.
+ */
+[[nodiscard]] std::vector<Box2d> SubtractPresentedTileBoundsFromClip(
+    const Box2d& clipRect, std::span<const Box2d> coveredRects);
 
 }  // namespace donner::editor

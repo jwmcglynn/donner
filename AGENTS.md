@@ -73,6 +73,14 @@ Stages transform components through the ECS:
 3. **Rendering Instantiation** (`RenderingContext`): Traverses computed tree, creates `RenderingInstanceComponent` per visible element with resolved references (paint, clip, mask, marker, filter), offscreen subtrees, layer isolation (opacity < 1, filters, masks), and `drawOrder`.
 4. **Backend** (TinySkia or Geode): `RendererDriver` iterates `RenderingInstanceComponent`s in draw order, emitting commands to a `RendererInterface` implementation — sets canvas state, handles layers, draws shapes, configures paint (including offscreen subtree rendering for patterns/markers).
 
+## Editor: DOM-Level Editing Only
+
+- **All editor operations mutate the DOM (or above), never the source text directly.** Edits go DOM-first; the structured-editing infrastructure reflects the change back into the source (`SVGDocument::insertElement` / `removeElement` / attribute setters return `ApplySourceEditResult` source deltas the reflection layer applies). The source is a *projection* of the DOM, not what edits operate on.
+- **Source-string surgery is banned for structural edits** (reorder/z-order, rename, insert/delete/move element, group/ungroup, attribute change). Reorder = `removeElement` + `insertElement` on the DOM, not a text-span move. Rename = a DOM attribute change with reference updates on the DOM, not find/replace over source.
+- **Even text typing is DOM-aware:** the source/text-editor pane is where the user authors raw characters, but typing should **incrementally reparse and update the live DOM tree in place** (preserving entity identity where possible), not full-replace-and-reparse the document. It never licenses a destructive source-replace, nor structural ops skipping the DOM.
+- Actions issued *from* the text view (e.g. drag-handle reorder) are still DOM operations whose result is reflected back into the text — the text view is just another surface for DOM edits.
+- See the project `CLAUDE.md` § "DOM-Level Editing Only" for the full rule.
+
 ## Pull Request Workflow
 
 **NEVER merge a PR without explicit operator approval.** Agents open, update, monitor, and review PRs — but `gh pr merge` (any flavor) is operator-gated: the operator must approve merging that specific PR in the current conversation. Green CI, passing reviews, or "obviously safe" changes do not substitute for approval.
@@ -116,7 +124,20 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
   ImageMagick, browser screenshots, or resvg unless the task explicitly compares Donner against
   another engine.
 - **Regression tests must fail at HEAD before the fix lands.** Commit the failing test on its own commit first so CI records a red→green transition. See `CLAUDE.md` §"Debugging Discipline" and §"Bug-Fix Commit Discipline".
-- **Editor visual bugs use the visual debugging playbook.** Start with a live `.rnr`/screenshot repro, then work down the editor stack using [`docs/editor_visual_debugging.md`](docs/editor_visual_debugging.md).
+- **Editor visual bugs use the visual debugging playbook.** Start with a live `.rnr`/screenshot
+  repro, then work down the editor stack using
+  [`docs/editor_visual_debugging.md`](docs/editor_visual_debugging.md). Generate reproducible
+  screenshots with `bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- ...`;
+  use `--crop document-canvas` for canvas bugs and `--crop full` for ImGui chrome, sidebars, and
+  layer thumbnails.
+- **Editor QA bugs follow the MCP-first red→green workflow.** Before fixing an editor QA
+  issue, first make the editor-control MCP capable of reproducing the user-visible behavior. If the
+  MCP lacks the needed gesture, viewport, capture, or assertion surface, add the smallest MCP
+  feature first and prove it can drive the repro. Then add an isolated unit/integration regression
+  test that fails at HEAD, fix the underlying editor issue so that test turns green, and finally
+  rerun the MCP repro to verify the actual editor-facing behavior is fixed. Do not stop at a unit
+  test when the user-reported failure is visual or interaction-driven; the MCP verification is the
+  end-to-end guard that the test models the real bug.
 - **Editor path overlays must match the presented shapes below them in the same frame.** During
   pan, zoom, drag, or worker stalls, never show a newer overlay transform over stale document
   pixels; either keep both on the presented transform or move both together.
@@ -166,7 +187,7 @@ Flag: `--//donner/svg/renderer:renderer_backend` (default: `tiny_skia`)
 | Config | Backend | Notes |
 |--------|---------|-------|
 | (default) | TinySkia (`RendererTinySkia`) | Lightweight software rasterizer, no external deps |
-| `--config=geode` | Geode (`RendererGeode`) | Experimental WebGPU + Slug backend |
+| `--config=geode` | Geode (`RendererGeode`) | GPU backend (WebGPU + Slug); default in the editor |
 
 ### Text Rendering
 

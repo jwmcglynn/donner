@@ -9,12 +9,14 @@
 #include <filesystem>
 #include <iostream>
 #include <optional>
+#include <set>
 #include <string_view>
 
 #include "donner/editor/repro/GlRnrReplay.h"
 
 namespace {
 
+using donner::Transform2d;
 using donner::Vector2d;
 using donner::Vector2i;
 using donner::editor::FrameCostBreakdown;
@@ -64,11 +66,13 @@ void PrintUsage(std::string_view argv0) {
                "       [--worker-delay-ms <n>]\n"
                "       [--worker-scheduling realtime|drain-each-frame|hold-frames-behind]\n"
                "       [--hold-frames-behind <n>]\n"
-               "       [--visible] [--no-pace] [--print-diagnostics]\n";
+               "       [--drive-document-input] [--content-only-capture]\n"
+               "       [--visible] [--no-pace] [--print-diagnostics]\n"
+               "       [--diagnostics-frame <n>]...\n";
 }
 
 [[nodiscard]] bool ParseArgs(int argc, char** argv, GlRnrReplayOptions* options,
-                             bool* printDiagnostics) {
+                             bool* printDiagnostics, std::set<std::uint64_t>* diagnosticsFrames) {
   if (options == nullptr) {
     return false;
   }
@@ -175,6 +179,16 @@ void PrintUsage(std::string_view argv0) {
       continue;
     }
 
+    if (arg == "--drive-document-input") {
+      options->driveDocumentSpaceInput = true;
+      continue;
+    }
+
+    if (arg == "--content-only-capture") {
+      options->contentOnlyCapture = true;
+      continue;
+    }
+
     if (arg == "--worker-delay-ms") {
       const std::optional<std::string_view> value = requireValue(arg);
       int delayMs = 0;
@@ -224,6 +238,22 @@ void PrintUsage(std::string_view argv0) {
         return false;
       }
       *printDiagnostics = true;
+      continue;
+    }
+
+    if (arg == "--diagnostics-frame") {
+      const std::optional<std::string_view> value = requireValue(arg);
+      std::uint64_t frame = 0;
+      if (!value.has_value() || !ParseUInt64(*value, &frame)) {
+        std::cerr << "--diagnostics-frame expects a non-negative integer\n";
+        return false;
+      }
+      if (diagnosticsFrames != nullptr) {
+        diagnosticsFrames->insert(frame);
+      }
+      if (printDiagnostics != nullptr) {
+        *printDiagnostics = true;
+      }
       continue;
     }
 
@@ -277,8 +307,72 @@ void PrintVector2d(const Vector2d& value) {
   std::cout << "[" << value.x << "," << value.y << "]";
 }
 
+void PrintEntity(donner::Entity entity) {
+  std::cout << static_cast<std::uint32_t>(entity);
+}
+
+void PrintEntityVector(const std::vector<donner::Entity>& entities) {
+  std::cout << "[";
+  for (std::size_t i = 0; i < entities.size(); ++i) {
+    if (i != 0) {
+      std::cout << ",";
+    }
+    PrintEntity(entities[i]);
+  }
+  std::cout << "]";
+}
+
+void PrintTransform2d(const Transform2d& value) {
+  std::cout << "[" << value.data[0] << "," << value.data[1] << "," << value.data[2] << ","
+            << value.data[3] << "," << value.data[4] << "," << value.data[5] << "]";
+}
+
+void PrintDragPreview(const std::optional<donner::editor::SelectTool::ActiveDragPreview>& preview) {
+  if (!preview.has_value()) {
+    std::cout << "null";
+    return;
+  }
+
+  std::cout << "{\"entity\":" << static_cast<std::uint32_t>(preview->entity)
+            << ",\"translation_doc\":";
+  PrintVector2d(preview->translation);
+  std::cout << ",\"document_from_cached_document\":";
+  PrintTransform2d(preview->documentFromCachedDocument);
+  std::cout << ",\"drag_generation\":" << preview->dragGeneration << "}";
+}
+
 void PrintFrameCost(const FrameCostBreakdown& cost) {
-  std::cout << "{\"overlay\":{\"capture_ms\":" << cost.overlay.captureMs
+  std::cout << "{\"main_frame\":{\"preparation_ms\":" << cost.mainFrame.preparationMs
+            << ",\"render_poll_ms\":" << cost.mainFrame.renderPollMs
+            << ",\"document_flush_ms\":" << cost.mainFrame.documentFlushMs
+            << ",\"overlay_refresh_ms\":" << cost.mainFrame.overlayRefreshMs
+            << ",\"document_sync_ms\":" << cost.mainFrame.documentSyncMs
+            << ",\"layout_ms\":" << cost.mainFrame.layoutMs
+            << ",\"shortcuts_ms\":" << cost.mainFrame.shortcutsMs
+            << ",\"menus_dialogs_ms\":" << cost.mainFrame.menusDialogsMs
+            << ",\"source_pane_ms\":" << cost.mainFrame.sourcePaneMs
+            << ",\"render_pane_ms\":" << cost.mainFrame.renderPaneMs
+            << ",\"sidebars_ms\":" << cost.mainFrame.sidebarsMs
+            << ",\"splitters_ms\":" << cost.mainFrame.splittersMs
+            << ",\"end_render_request_ms\":" << cost.mainFrame.endRenderRequestMs
+            << "},\"host_frame\":{\"begin_frame_ms\":" << cost.hostFrame.beginFrameMs
+            << ",\"previous_end_frame_ms\":" << cost.hostFrame.previousEndFrameMs
+            << ",\"previous_imgui_render_ms\":" << cost.hostFrame.previousImguiRenderMs
+            << ",\"previous_surface_acquire_ms\":" << cost.hostFrame.previousSurfaceAcquireMs
+            << ",\"previous_underlay_ms\":" << cost.hostFrame.previousUnderlayMs
+            << ",\"previous_imgui_draw_ms\":" << cost.hostFrame.previousImguiDrawMs
+            << ",\"previous_direct_ms\":" << cost.hostFrame.previousDirectMs
+            << ",\"previous_readback_ms\":" << cost.hostFrame.previousReadbackMs
+            << ",\"previous_present_ms\":" << cost.hostFrame.previousPresentMs
+            << "},\"direct_presentation\":{\"total_ms\":" << cost.directPresentation.totalMs
+            << ",\"checkerboard_ms\":" << cost.directPresentation.checkerboardMs
+            << ",\"overview_tiles_ms\":" << cost.directPresentation.overviewTilesMs
+            << ",\"active_tiles_ms\":" << cost.directPresentation.activeTilesMs
+            << ",\"renderer_end_frame_ms\":" << cost.directPresentation.rendererEndFrameMs
+            << ",\"checkerboard_draws\":" << cost.directPresentation.checkerboardDrawCount
+            << ",\"overview_tile_draws\":" << cost.directPresentation.overviewTileDrawCount
+            << ",\"active_tile_draws\":" << cost.directPresentation.activeTileDrawCount
+            << "},\"overlay\":{\"capture_ms\":" << cost.overlay.captureMs
             << ",\"draw_ms\":" << cost.overlay.drawMs
             << ",\"snapshot_ms\":" << cost.overlay.snapshotMs
             << ",\"upload_ms\":" << cost.overlay.uploadMs
@@ -312,8 +406,7 @@ void PrintFrameCost(const FrameCostBreakdown& cost) {
             << ",\"texture_payload_tiles\":" << cost.compositedUpload.texturePayloadTileCount
             << ",\"metadata_only_tiles\":" << cost.compositedUpload.metadataOnlyTileCount
             << ",\"immediate_tiles\":" << cost.compositedUpload.immediateTileCount
-            << "},\"composited_render\":{\"immediate_ms\":"
-            << cost.compositedRender.immediateMs
+            << "},\"composited_render\":{\"immediate_ms\":" << cost.compositedRender.immediateMs
             << ",\"cached_ms\":" << cost.compositedRender.cachedMs
             << ",\"immediate_tiles\":" << cost.compositedRender.immediateTileCount
             << ",\"cached_tiles\":" << cost.compositedRender.cachedTileCount
@@ -351,7 +444,8 @@ void PrintPresentationResources(const PresentationResourceStats& resources) {
             << ",\"wgpu_lifetime_buffer_creates\":" << resources.wgpuLifetimeBufferCreates << "}";
 }
 
-void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
+void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics,
+               const std::set<std::uint64_t>& diagnosticsFrames) {
   std::cout << "{\"captures\":[";
   for (std::size_t i = 0; i < result.captures.size(); ++i) {
     const GlRnrReplayCapture& capture = result.captures[i];
@@ -371,11 +465,16 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
   }
   if (printDiagnostics) {
     std::cout << ",\"frame_diagnostics\":[";
-    for (std::size_t i = 0; i < result.frameDiagnostics.size(); ++i) {
-      const GlRnrReplayFrameDiagnostics& frame = result.frameDiagnostics[i];
-      if (i != 0) {
+    bool firstFrame = true;
+    for (const GlRnrReplayFrameDiagnostics& frame : result.frameDiagnostics) {
+      if (!diagnosticsFrames.empty() &&
+          diagnosticsFrames.find(frame.frameIndex) == diagnosticsFrames.end()) {
+        continue;
+      }
+      if (!firstFrame) {
         std::cout << ",";
       }
+      firstFrame = false;
       std::cout << "{\"frame\":" << frame.frameIndex
                 << ",\"freshness\":" << static_cast<int>(frame.canvasFreshness)
                 << ",\"status_suffix\":";
@@ -388,11 +487,54 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
       PrintVector2i(frame.compositorCanvas);
       std::cout << ",\"metadata_only_miss_count\":" << frame.metadataOnlyMissCount
                 << ",\"duplicate_live_texture_count\":" << frame.duplicateLiveTextureCount
-                << ",\"overlay_dims_px\":";
-      PrintVector2i(frame.overlayDimsPx);
-      std::cout << ",\"overlay_texture_handle\":" << frame.overlayTextureHandle
-                << ",\"presentation_resources\":";
+                << ",\"document_frame_version\":" << frame.documentFrameVersion
+                << ",\"displayed_doc_version\":" << frame.displayedDocVersion
+                << ",\"selected_composited_entity\":";
+      PrintEntity(frame.selectedCompositedEntity);
+      if (frame.immediateOverlayDocumentVersion.has_value()) {
+        std::cout << ",\"immediate_overlay_document_version\":"
+                  << *frame.immediateOverlayDocumentVersion;
+      }
+      std::cout << ",\"last_flush_applied_commands\":"
+                << (frame.lastFlushAppliedCommands ? "true" : "false")
+                << ",\"last_flush_replaced_document\":"
+                << (frame.lastFlushReplacedDocument ? "true" : "false")
+                << ",\"last_flush_removed_elements\":"
+                << (frame.lastFlushRemovedElements ? "true" : "false")
+                << ",\"last_flush_cache_invalidated_entities\":";
+      PrintEntityVector(frame.lastFlushCacheInvalidatedElements);
+      std::cout << ",\"request_render_at_end_of_frame\":"
+                << (frame.requestRenderAtEndOfFrame ? "true" : "false")
+                << ",\"pending_selected_layer_rasterization_entity\":";
+      PrintEntity(frame.pendingSelectedLayerRasterizationEntity);
+      std::cout << ",\"pending_selected_layer_rasterization_version\":"
+                << frame.pendingSelectedLayerRasterizationVersion;
+      if (frame.selectedStyleAttribute.has_value()) {
+        std::cout << ",\"selected_style\":";
+        PrintJsonString(*frame.selectedStyleAttribute);
+      }
+      if (frame.selectedLocalStyleFill.has_value()) {
+        std::cout << ",\"selected_local_style_fill\":";
+        PrintJsonString(*frame.selectedLocalStyleFill);
+      }
+      if (frame.selectedComputedFill.has_value()) {
+        std::cout << ",\"selected_computed_fill\":";
+        PrintJsonString(*frame.selectedComputedFill);
+      }
+      if (frame.selectedRenderingInstanceFill.has_value()) {
+        std::cout << ",\"selected_rendering_instance_fill\":";
+        PrintJsonString(*frame.selectedRenderingInstanceFill);
+      }
+      if (frame.selectedPathDataAttribute.has_value()) {
+        std::cout << ",\"selected_d\":";
+        PrintJsonString(*frame.selectedPathDataAttribute);
+      }
+      std::cout << ",\"presentation_resources\":";
       PrintPresentationResources(frame.presentationResources);
+      std::cout << ",\"active_drag_preview\":";
+      PrintDragPreview(frame.activeDragPreview);
+      std::cout << ",\"displayed_drag_preview\":";
+      PrintDragPreview(frame.displayedDragPreview);
       std::cout << ",\"tiles\":[";
       for (std::size_t tileIndex = 0; tileIndex < frame.tiles.size(); ++tileIndex) {
         const GlRnrReplayTileDiagnostics& tile = frame.tiles[tileIndex];
@@ -415,11 +557,41 @@ void PrintJson(const GlRnrReplayResult& result, bool printDiagnostics) {
         PrintVector2d(tile.dragTranslationDoc);
         std::cout << ",\"presented_drag_translation_doc\":";
         PrintVector2d(tile.presentedDragTranslationDoc);
+        std::cout << ",\"document_from_cached_document\":";
+        PrintTransform2d(tile.documentFromCachedDocument);
+        std::cout << ",\"presented_document_from_cached_document\":";
+        PrintTransform2d(tile.presentedDocumentFromCachedDocument);
         std::cout << ",\"texture_handle\":" << tile.textureHandle
+                  << ",\"has_texture_snapshot\":" << (tile.hasTextureSnapshot ? "true" : "false")
+                  << ",\"texture_green_pixels\":" << tile.textureGreenPixels
+                  << ",\"texture_nontransparent_pixels\":" << tile.textureNonTransparentPixels
                   << ",\"metadata_only\":" << (tile.metadataOnly ? "true" : "false")
                   << ",\"is_drag_target\":" << (tile.isDragTarget ? "true" : "false") << "}";
       }
-      std::cout << "],\"frame_cost\":";
+      std::cout << "],\"row_thumbnails\":[";
+      for (std::size_t thumbnailIndex = 0; thumbnailIndex < frame.rowThumbnails.size();
+           ++thumbnailIndex) {
+        const GlRnrReplayFrameDiagnostics::RowThumbnail& thumbnail =
+            frame.rowThumbnails[thumbnailIndex];
+        if (thumbnailIndex != 0) {
+          std::cout << ",";
+        }
+        std::cout << "{\"display_name\":";
+        PrintJsonString(thumbnail.displayName);
+        std::cout << ",\"stable_id\":" << thumbnail.stableId << ",\"bitmap_dims_px\":";
+        PrintVector2i(thumbnail.bitmapDimsPx);
+        std::cout << "}";
+      }
+      const GlRnrReplayFrameDiagnostics::ThumbnailRefreshStats& thumbnailStats =
+          frame.thumbnailRefreshStats;
+      std::cout << "],\"thumbnail_refresh\":{\"document_frame_version\":"
+                << thumbnailStats.documentFrameVersion
+                << ",\"row_count\":" << thumbnailStats.rowCount
+                << ",\"rendered_count\":" << thumbnailStats.renderedCount
+                << ",\"reused_count\":" << thumbnailStats.reusedCount
+                << ",\"skipped_for_canvas_invalidation_count\":"
+                << thumbnailStats.skippedForCanvasInvalidationCount
+                << ",\"render_ms\":" << thumbnailStats.renderMs << "},\"frame_cost\":";
       PrintFrameCost(frame.frameCost);
       std::cout << "}";
     }
@@ -437,7 +609,8 @@ int main(int argc, char** argv) {
 
   GlRnrReplayOptions options;
   bool printDiagnostics = false;
-  if (!ParseArgs(argc, argv, &options, &printDiagnostics)) {
+  std::set<std::uint64_t> diagnosticsFrames;
+  if (!ParseArgs(argc, argv, &options, &printDiagnostics, &diagnosticsFrames)) {
     PrintUsage(argc > 0 ? argv[0] : "editor_rnr_gl_replay");
     return 2;
   }
@@ -449,6 +622,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  PrintJson(result, printDiagnostics);
+  PrintJson(result, printDiagnostics, diagnosticsFrames);
   return 0;
 }

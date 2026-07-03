@@ -171,6 +171,16 @@ void SVGTextContentElement::advanceTextChunk() {
   invalidateTextGeometry();
 }
 
+void SVGTextContentElement::setTextContent(std::string_view text) {
+  DocumentMutationBatch mutation = handle_.mutationBatch();
+  DocumentWriteAccess& access = mutation.access();
+  auto& textComponent = handle_.get_or_emplace<components::TextComponent>(access);
+  textComponent.text = text;
+  textComponent.textChunks.clear();
+  textComponent.textChunks.emplace_back(text);
+  invalidateTextGeometry();
+}
+
 RcString SVGTextContentElement::textContent() const {
   const auto* component = handle_.try_get<components::TextComponent>();
   return component ? component->text : "";

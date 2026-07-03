@@ -52,6 +52,15 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
   const bool needsSettledSelectionRefresh =
       !input.activeDragPreview.has_value() &&
       presentation.needsSettledSelectionRefresh(input.selectedEntity, input.currentVersion);
+  const bool needsSettledLayerRasterization =
+      !input.activeDragPreview.has_value() &&
+      presentation.needsSettledLayerRasterization(input.selectedEntity, input.currentVersion);
+  const bool selectedLayerCacheMissing =
+      !input.activeDragPreview.has_value() && input.selectedEntity != entt::null &&
+      !presentation.hasCachedTexturesForEntity(input.selectedEntity);
+  const bool selectedLayerNeedsForcedRasterization = !input.activeDragPreview.has_value() &&
+                                                     input.selectedEntity != entt::null &&
+                                                     input.forceSelectedLayerRasterization;
   // A selected element needs a selection-hint render whenever the raster window changes. Otherwise
   // a high-zoom pan/zoom regular render can publish a full-canvas fallback and evict the promoted
   // drag-target tile just before the next drag starts.
@@ -59,7 +68,7 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
                                                   !input.activeDragPreview.has_value() &&
                                                   (canvasSizeChanged || rasterViewportChanged);
   decision.needsCompositedPrewarm =
-      needsSettledSelectionRefresh ||
+      needsSettledSelectionRefresh || selectedLayerNeedsForcedRasterization ||
       presentation.shouldPrewarm(input.selectedEntity, input.selectedExtraEntities,
                                  input.currentVersion, input.currentCanvasSize,
                                  /*dragActive=*/input.activeDragPreview.has_value()) ||
@@ -74,12 +83,15 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
         .translation = input.activeDragPreview->translation,
         .documentFromCachedDocument = input.activeDragPreview->documentFromCachedDocument,
         .dragGeneration = input.activeDragPreview->dragGeneration,
+        .forceLayerRasterization = decision.needsCompositedLayerCapture,
     };
   } else if (decision.needsCompositedPrewarm && input.selectedEntity != entt::null) {
     decision.dragPreview = RenderRequest::DragPreview{
         .entity = input.selectedEntity,
         .extraEntities = input.selectedExtraEntities,
         .interactionKind = svg::compositor::InteractionHint::Selection,
+        .forceLayerRasterization = needsSettledLayerRasterization || selectedLayerCacheMissing ||
+                                   selectedLayerNeedsForcedRasterization,
     };
   }
   if (input.activeDragPreview.has_value()) {

@@ -68,7 +68,7 @@ common:latest_llvm --action_env=NODE_OPTIONS=--jitless
 
 # Renderer backend selection
 common:tiny-skia --//donner/svg/renderer:renderer_backend=tiny_skia
-# Geode (experimental WebGPU + Slug). Also toggles enable_geode so that
+# Geode (WebGPU + Slug GPU backend). Also toggles enable_geode so that
 # wgpu-native is compiled; default bazel builds without --config=geode never
 # touch the WebGPU runtime.
 common:geode --//donner/svg/renderer:renderer_backend=geode

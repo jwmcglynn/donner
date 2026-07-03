@@ -1,8 +1,11 @@
 #include "donner/editor/SidebarPresenter.h"
 
+#include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
+#include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/DocumentState.h"
 #include "gtest/gtest.h"
 
@@ -121,6 +124,95 @@ TEST(SidebarPresenterTest, RefreshSnapshotOmitsInspectorDetailsForMultiSelection
   EXPECT_FALSE(presenter.inspectorHasSelectionForTesting());
   EXPECT_TRUE(presenter.inspectorXmlAttributesForTesting().empty());
   EXPECT_TRUE(presenter.inspectorComputedStyleForTesting().empty());
+}
+
+class SidebarPresenterImGuiTest : public ::testing::Test {
+protected:
+  void SetUp() override {
+    IMGUI_CHECKVERSION();
+    ctx_ = ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(400, 300);
+    io.ConfigMacOSXBehaviors = false;
+    io.Fonts->Build();
+  }
+
+  void TearDown() override {
+    if (ctx_ != nullptr) {
+      ImGui::DestroyContext(ctx_);
+      ctx_ = nullptr;
+    }
+  }
+
+  ImGuiContext* ctx_ = nullptr;
+};
+
+TEST_F(SidebarPresenterImGuiTest, PathOperationButtonsRenderSvgBitmapIcons) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" x="0" y="0" width="20" height="20"/>
+    <rect id="b" x="10" y="10" width="20" height="20"/>
+  </svg>)"));
+
+  const std::optional<svg::SVGElement> a = app.document().document().querySelector("#a");
+  const std::optional<svg::SVGElement> b = app.document().document().querySelector("#b");
+  ASSERT_TRUE(a.has_value());
+  ASSERT_TRUE(b.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*a, *b});
+
+  SidebarPresenter presenter;
+  presenter.refreshSnapshot(app);
+
+  constexpr ImTextureID kIconTexture = static_cast<ImTextureID>(0x9876);
+  int providerCalls = 0;
+  int nonEmptyBitmaps = 0;
+  int retinaBitmaps = 0;
+  const SidebarPresenter::IconTextureProvider iconTextureProvider =
+      [&](std::uint64_t, const svg::RendererBitmap& bitmap) {
+        ++providerCalls;
+        if (!bitmap.empty() && bitmap.dimensions.x > 0 && bitmap.dimensions.y > 0) {
+          ++nonEmptyBitmaps;
+        }
+        if (!bitmap.empty() && bitmap.dimensions.x >= 36 && bitmap.dimensions.y >= 36) {
+          ++retinaBitmaps;
+        }
+        return SidebarPresenter::IconTexture{
+            .texture = kIconTexture,
+            .uvBottomRight = Vector2d(1.0, 1.0),
+        };
+      };
+
+  ImGuiIO& io = ImGui::GetIO();
+  io.DisplaySize = ImVec2(400, 300);
+  io.AddMousePosEvent(-1.0f, -1.0f);
+  io.AddMouseButtonEvent(0, false);
+  ImGui::NewFrame();
+  ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+  ImGui::SetNextWindowSize(ImVec2(360, 280), ImGuiCond_Always);
+  ImGui::Begin("##sidebar_path_icons_test", nullptr,
+               ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                   ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+  presenter.renderInspector(&app, ViewportState{}, iconTextureProvider);
+  const ImDrawList* drawList = ImGui::GetWindowDrawList();
+  int imageQuads = 0;
+  for (int cmdIndex = 0; cmdIndex < drawList->CmdBuffer.Size; ++cmdIndex) {
+    const ImDrawCmd& cmd = drawList->CmdBuffer[cmdIndex];
+    if (cmd.GetTexID() == kIconTexture) {
+      imageQuads += static_cast<int>(cmd.ElemCount / 6u);
+    }
+  }
+  ImGui::End();
+  ImGui::Render();
+
+  EXPECT_EQ(providerCalls, 4)
+      << "the path operation UI should request Union, Intersect, Subtract Front, and Exclude "
+         "icon textures";
+  EXPECT_EQ(nonEmptyBitmaps, providerCalls)
+      << "path operation buttons must receive Donner-rendered Bootstrap SVG bitmaps";
+  EXPECT_EQ(retinaBitmaps, providerCalls)
+      << "path operation icons are drawn at 18 logical px and must be rasterized at 2x or "
+         "higher before ImGui scales them";
+  EXPECT_EQ(imageQuads, 4) << "path operation buttons should render as image quads";
 }
 
 }  // namespace

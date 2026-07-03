@@ -21,8 +21,8 @@ namespace donner::svg {
 /**
  * @brief Which renderer output a parameterized image-comparison run compares.
  *
- * The geode-enabled build runs each test under multiple modes (the matrix from
- * docs/design_docs/0017 §Phase 4b); the pure-CPU build runs `TinyGolden` only.
+ * The geode-enabled build runs each test under multiple modes (one golden
+ * comparison per backend); the pure-CPU build runs `TinyGolden` only.
  */
 enum class ComparisonMode : uint8_t {
   /// tiny-skia render vs the committed resvg golden (ground truth; every build).

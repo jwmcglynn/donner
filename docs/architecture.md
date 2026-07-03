@@ -13,7 +13,7 @@ Donner intends to provide browser-level functionality as a standalone C++ librar
 - Instead of simply rendering `.svg` files, Donner constructs a DOM tree that allows inspecting and modifying the file contents in-memory.
 - Donner transforms the document tree into an efficient in-memory representation that can be repeatedly rendered.
 
-Donner ships with two rendering backends behind a single `Renderer` facade: **tiny-skia** (the default, a lightweight software rasterizer vendored from Rust's `tiny-skia` library — no external dependencies) and **Geode** (an experimental GPU backend built on WebGPU + Slug, gated behind `--config=geode`).
+Donner ships with two rendering backends behind a single `Renderer` facade: **tiny-skia** (the library/CLI default, a lightweight software rasterizer vendored from Rust's `tiny-skia` library — no external dependencies) and **Geode** (a GPU backend built on WebGPU + Slug; the editor's default renderer, gated behind `--config=geode` for the library so default builds don't pull in the WebGPU runtime).
 
 ## System Context
 

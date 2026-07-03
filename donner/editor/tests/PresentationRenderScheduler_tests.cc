@@ -23,12 +23,13 @@ PresentationRenderScheduleInput Input(
     Entity selectedEntity, std::uint64_t version = 1,
     std::optional<SelectTool::ActiveDragPreview> activeDragPreview = std::nullopt,
     EditorRasterViewport rasterViewport = RasterViewport(),
-    const Vector2i& currentCanvasSize = kCanvasSize,
-    std::vector<Entity> selectedExtraEntities = {}) {
+    const Vector2i& currentCanvasSize = kCanvasSize, std::vector<Entity> selectedExtraEntities = {},
+    bool forceSelectedLayerRasterization = false) {
   return PresentationRenderScheduleInput{
       .selectedEntity = selectedEntity,
       .selectedExtraEntities = std::move(selectedExtraEntities),
       .activeDragPreview = activeDragPreview,
+      .forceSelectedLayerRasterization = forceSelectedLayerRasterization,
       .currentVersion = version,
       .currentCanvasSize = currentCanvasSize,
       .currentRasterViewport = rasterViewport,
@@ -133,6 +134,7 @@ TEST(PresentationRenderSchedulerTest, ActiveDragWithStaleCacheRequestsDragCaptur
   EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::ActiveDrag);
   EXPECT_EQ(decision.dragPreview->translation, Vector2d(4.0, 0.0));
   EXPECT_EQ(decision.dragPreview->dragGeneration, 9u);
+  EXPECT_TRUE(decision.dragPreview->forceLayerRasterization);
 }
 
 TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheDoesNotUploadAgain) {
@@ -174,7 +176,7 @@ TEST(PresentationRenderSchedulerTest, AffineActiveDragWithMatchingCacheRequestsL
       .entity = Entity(7),
       .translation = Vector2d(9.0, 2.0),
       .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(9.0, 2.0)) * Transform2d::Scale(1.5),
+          Transform2d::Translate(Vector2d(9.0, 2.0)) * Transform2d::Scale(2.0),
       .dragGeneration = 14,
   };
   const PresentationRenderScheduleDecision decision =
@@ -187,6 +189,7 @@ TEST(PresentationRenderSchedulerTest, AffineActiveDragWithMatchingCacheRequestsL
   ASSERT_TRUE(decision.dragPreview.has_value());
   EXPECT_EQ(decision.dragPreview->entity, Entity(7));
   EXPECT_FALSE(decision.dragPreview->documentFromCachedDocument.isTranslation());
+  EXPECT_TRUE(decision.dragPreview->forceLayerRasterization);
 }
 
 TEST(PresentationRenderSchedulerTest, MatchingAffineDragCaptureDoesNotRequestAgain) {
@@ -228,7 +231,7 @@ TEST(PresentationRenderSchedulerTest, ChangedAffineDragRequestsNextLayerCapture)
       .entity = Entity(7),
       .translation = Vector2d(11.0, 2.0),
       .documentFromCachedDocument =
-          Transform2d::Translate(Vector2d(11.0, 2.0)) * Transform2d::Scale(1.75),
+          Transform2d::Translate(Vector2d(11.0, 2.0)) * Transform2d::Scale(2.5),
       .dragGeneration = 14,
   };
   scheduler.noteRenderCompleted(/*completedVersion=*/8, kCanvasSize, RasterViewport());
@@ -240,6 +243,8 @@ TEST(PresentationRenderSchedulerTest, ChangedAffineDragRequestsNextLayerCapture)
   EXPECT_TRUE(decision.shouldRequestRender());
   EXPECT_TRUE(decision.needsCompositedLayerCapture);
   EXPECT_FALSE(decision.needsRegularRender);
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_TRUE(decision.dragPreview->forceLayerRasterization);
 }
 
 TEST(PresentationRenderSchedulerTest, PureTranslationAfterAffineCaptureRequestsCrispLayerCapture) {
@@ -268,6 +273,8 @@ TEST(PresentationRenderSchedulerTest, PureTranslationAfterAffineCaptureRequestsC
   EXPECT_TRUE(decision.shouldRequestRender());
   EXPECT_TRUE(decision.needsCompositedLayerCapture);
   EXPECT_FALSE(decision.needsRegularRender);
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_TRUE(decision.dragPreview->forceLayerRasterization);
 }
 
 TEST(PresentationRenderSchedulerTest, ActiveDragWithMatchingCacheSuppressesMovedRasterViewport) {
@@ -341,6 +348,71 @@ TEST(PresentationRenderSchedulerTest, SettledSelectionRefreshRequestsSelectionHi
   ASSERT_TRUE(decision.dragPreview.has_value());
   EXPECT_EQ(decision.dragPreview->entity, Entity(7));
   EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
+  EXPECT_FALSE(decision.dragPreview->forceLayerRasterization);
+}
+
+TEST(PresentationRenderSchedulerTest, SettledAffineSelectionRefreshForcesLayerRasterization) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+  presentation.noteCachedTextures(Entity(7), /*version=*/3, kCanvasSize);
+  presentation.beginSettling(
+      SelectTool::ActiveDragPreview{
+          .entity = Entity(7),
+          .documentFromCachedDocument =
+              Transform2d::Translate(Vector2d(15.0, -2.0)) * Transform2d::Rotate(0.8),
+      },
+      /*targetVersion=*/4);
+
+  const PresentationRenderScheduleDecision decision =
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/4));
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_TRUE(decision.needsCompositedPrewarm);
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_EQ(decision.dragPreview->entity, Entity(7));
+  EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
+  EXPECT_TRUE(decision.dragPreview->forceLayerRasterization)
+      << "After mouse-up, an affine drag target no longer has a live presenter baseline. The "
+         "settled selection refresh must re-rasterize the selected layer instead of publishing "
+         "the stale cached texture at identity.";
+}
+
+TEST(PresentationRenderSchedulerTest, MissingSelectedCacheForcesLayerRasterization) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+
+  const PresentationRenderScheduleDecision decision =
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/4));
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_TRUE(decision.needsCompositedPrewarm);
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_EQ(decision.dragPreview->entity, Entity(7));
+  EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
+  EXPECT_TRUE(decision.dragPreview->forceLayerRasterization)
+      << "When a selected layer cache was discarded after a paint/style edit, the worker must "
+         "rerasterize the promoted layer instead of reusing metadata for the old texture.";
+}
+
+TEST(PresentationRenderSchedulerTest, StyleInvalidationForcesRasterizationWithCurrentCache) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+  scheduler.noteRenderCompleted(/*completedVersion=*/4, kCanvasSize, RasterViewport());
+  presentation.noteCachedTextures(Entity(7), /*version=*/4, kCanvasSize);
+
+  const PresentationRenderScheduleDecision decision = scheduler.evaluate(
+      presentation, Input(Entity(7), /*version=*/4, std::nullopt, RasterViewport(), kCanvasSize, {},
+                          /*forceSelectedLayerRasterization=*/true));
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_FALSE(decision.needsRegularRender);
+  EXPECT_TRUE(decision.needsCompositedPrewarm);
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_EQ(decision.dragPreview->entity, Entity(7));
+  EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
+  EXPECT_TRUE(decision.dragPreview->forceLayerRasterization)
+      << "A paint/style edit invalidates the selected layer's pixels even when its presentation "
+         "cache already matches the current document version and canvas size.";
 }
 
 TEST(PresentationRenderSchedulerTest, RegularRenderIsSuppressedOnlyAfterCompletion) {

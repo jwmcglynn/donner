@@ -15,8 +15,8 @@ started — no `PathEditTool` exists.
 ## Summary
 
 Donner's editor should support designer-grade path authoring: a centered top toolbar with Select,
-Pen, and Path Edit tools; an Illustrator-like Pen flow for drawing paths; and a Path Edit tool for
-editing anchors, handles, and open-path continuation. The same workstream should add unified
+Pen, and Path Edit tools; a Pen flow that matches established vector design software; and a Path
+Edit tool for editing anchors, handles, and open-path continuation. The same workstream should add unified
 multi-selection across the canvas and source pane, plus right-side pane controls for boolean shape
 operations such as Union, Intersect, Subtract Front, Subtract Back, and Exclude, and arrange controls
 such as Bring Forward and Send to Back.
@@ -162,8 +162,15 @@ can use the same operation engine.
 - Pen-created source must stay rooted inside the current `<svg>` element. A zero-length root child
   insertion is mapped to the current text pane's root close tag, never to a stale absolute offset
   after `</svg>`.
-- Pen placement must refresh selection bounds and overlay chrome in the same frame whenever the
-  async renderer is idle. The AABB cannot lag one placed control point behind the live path.
+- Every Pen gesture that flushes a document mutation — placing an anchor, shaping handles, moving a
+  point, closing the contour, committing the draft — must refresh selection bounds and overlay
+  chrome **in the same presented frame as the flush**, from the post-flush DOM geometry. The
+  overlay never waits for the async raster of the new geometry, and the AABB cannot lag one placed
+  control point behind the live path. Two past regressions this guards against: computed-path
+  caches that are not invalidated when `d` changes through the attribute path (chrome captured the
+  pre-edit spline), and overlay refreshes gated on the displayed-render version for pen flushes
+  that happen outside an active anchor drag (close-path clicks, clicks deferred past mouse-release
+  by a busy worker).
 - Boolean operations must be deterministic for the same input paths, transforms, fill rules, and
   tolerance options. `//donner/base:base_tests` should fail if operation output changes
   unexpectedly.
@@ -332,6 +339,38 @@ Core behaviors:
 - Click the last anchor of the active path: clear that anchor's control handles and convert it to a
   corner point.
 
+#### Direct point editing with the Pen tool
+
+Until the dedicated Path Edit tool ships, the Pen tool itself exposes direct manipulation of the
+visible path-point chrome, matching the workflow of established vector design software. Whenever the
+Pen tool is active and a `<path>` is selected — both mid-draft and after the draft has been
+committed — its anchors and control points are live hit targets:
+
+- Hit-testing uses a screen-stable tolerance (about 6 logical pixels via
+  `MouseModifiers::pixelsPerDocUnit`), slightly larger than the drawn anchor (5 px) and control
+  point (4 px) chrome. Zero-length handles that coincide with their anchor are not grabbable; the
+  anchor wins ties.
+- Drag a control point: reshapes that handle. If the anchor is currently smooth (its handles are
+  collinear), the opposite handle rotates to stay collinear while preserving its own length
+  (aligned coupling). If the anchor is already a corner, only the grabbed handle moves.
+- Alt/Option-drag a control point: moves only the grabbed handle regardless of smoothness
+  (independent coupling).
+- Shift-drag a control point: constrains the handle direction to 45-degree increments around its
+  anchor.
+- Drag an anchor: moves the anchor and both of its handles together. Shift constrains the move
+  direction to 45-degree increments from the drag origin.
+- Click (without dragging) the last anchor of the active draft: retracts that anchor's handles,
+  converting it to a corner point.
+- Click (without dragging) the open endpoint of a selected unclosed path: resumes drafting from
+  that endpoint without adding an anchor; dragging that endpoint moves it instead.
+- Cmd/Ctrl restricts the gesture to point editing: with the modifier held, anchor/handle hits drag
+  as above, and a miss does nothing — no anchor is ever placed.
+- Hit priority while drafting: close-path (first anchor, without Cmd/Ctrl) → control points →
+  anchors → place a new anchor.
+- Point edits on a committed selected path form a self-contained session: mouse-down loads the
+  path's anchors, the drag commits live `d` updates, and mouse-up finalizes exactly one undoable
+  command. Point edits during a draft fold into the draft's single undo entry as usual.
+
 Append mode should support both open endpoints. If the user starts from the first point, the editor
 prepends anchors and reverses segment orientation only as needed to keep serialization simple. The
 selected path remains selected during append mode, and the active endpoint is highlighted.
@@ -373,9 +412,9 @@ Modifier behavior should match common vector design tools while staying learnabl
 
 | Input            | Pen tool behavior                                      | Path Edit behavior                                     |
 | ---------------- | ------------------------------------------------------ | ------------------------------------------------------ |
-| Shift            | Constrain segment/handle angle to 45-degree increments | Constrain anchor/handle drag angle                     |
-| Option/Alt       | Temporarily break handle coupling                      | Temporarily use Independent handles                    |
-| Cmd/Ctrl         | Temporarily switch to Path Edit                        | Temporarily switch to Select for whole-object movement |
+| Shift            | Constrain segment/handle/anchor moves to 45-degree increments | Constrain anchor/handle drag angle              |
+| Option/Alt       | Temporarily break handle coupling (independent handles) | Temporarily use Independent handles                   |
+| Cmd/Ctrl         | Restrict the gesture to point editing (never places anchors) | Temporarily switch to Select for whole-object movement |
 | Space            | Temporarily pan using the existing hand cursor mode    | Temporarily pan                                        |
 | Escape           | Finish current path without closing                    | Clear anchor/handle selection                          |
 | Backspace/Delete | Remove last drafted point                              | Delete selected anchors                                |

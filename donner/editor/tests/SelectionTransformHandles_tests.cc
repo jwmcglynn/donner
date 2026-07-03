@@ -27,6 +27,21 @@ TEST(SelectionTransformHandlesTest, HitTestFindsRotateRingOutsideResizeHandle) {
   EXPECT_EQ(intent.corner, SelectionTransformCorner::TopLeft);
 }
 
+TEST(SelectionTransformHandlesTest, HitTestCanSuppressRotateWithoutSuppressingResize) {
+  const std::array<Box2d, 1> bounds{Box2d::FromXYWH(20.0, 30.0, 80.0, 40.0)};
+
+  EXPECT_EQ(HitTestSelectionTransformHandles(bounds, Vector2d(20.0, 16.0),
+                                             /*pixelsPerDocUnit=*/1.0,
+                                             /*includeRotate=*/false)
+                .kind,
+            SelectionTransformHandleKind::None);
+  EXPECT_EQ(HitTestSelectionTransformHandles(bounds, Vector2d(20.0, 30.0),
+                                             /*pixelsPerDocUnit=*/1.0,
+                                             /*includeRotate=*/false)
+                .kind,
+            SelectionTransformHandleKind::Resize);
+}
+
 TEST(SelectionTransformHandlesTest, ResizeTakesPriorityOverRotate) {
   const std::array<Box2d, 1> bounds{Box2d::FromXYWH(20.0, 30.0, 80.0, 40.0)};
 

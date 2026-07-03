@@ -1,5 +1,6 @@
 #include "donner/editor/PresentedFrameComposer.h"
 
+#include <algorithm>
 #include <cmath>
 
 #include "donner/base/Box.h"
@@ -29,9 +30,36 @@ bool IsValidRect(const Vector2d& topLeft, const Vector2d& bottomRight) {
          bottomRight.y > topLeft.y;
 }
 
+bool IsValidBox(const Box2d& box) {
+  return IsValidRect(box.topLeft, box.bottomRight);
+}
+
 bool IsValidQuad(const PresentedTileQuad& quad) {
   return IsFinite(quad.topLeft) && IsFinite(quad.topRight) && IsFinite(quad.bottomRight) &&
          IsFinite(quad.bottomLeft);
+}
+
+std::optional<Box2d> IntersectBoxes(const Box2d& a, const Box2d& b) {
+  const Box2d intersection(
+      Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
+      Vector2d(std::min(a.bottomRight.x, b.bottomRight.x),
+               std::min(a.bottomRight.y, b.bottomRight.y)));
+  if (!IsValidBox(intersection)) {
+    return std::nullopt;
+  }
+
+  return intersection;
+}
+
+void PushValidBox(std::vector<Box2d>* boxes, const Vector2d& topLeft, const Vector2d& bottomRight) {
+  if (boxes == nullptr) {
+    return;
+  }
+
+  const Box2d box(topLeft, bottomRight);
+  if (IsValidBox(box)) {
+    boxes->push_back(box);
+  }
 }
 
 Transform2d DocumentFromCachedWithTranslationFallback(const Transform2d& documentFromCachedDocument,
@@ -68,6 +96,11 @@ Transform2d ResolvePresentedTileDocumentTransform(
             dragBaseline->representedTranslationDoc);
     const Transform2d activeDocumentFromCachedDocument = DocumentFromCachedWithTranslationFallback(
         dragBaseline->activeDocumentFromCachedDocument, dragBaseline->activeTranslationDoc);
+    // Re-base the cached bitmap onto the live `active` transform. Transform2d
+    // composes in the same order points move through transforms here: first the
+    // tile's cached-to-document placement, then the delta from represented to
+    // active. Reversing this order conjugates scale/rotate around the wrong
+    // frame when a crisp drag recapture lands.
     return tileDocumentFromCachedDocument * representedDocumentFromCachedDocument.inverse() *
            activeDocumentFromCachedDocument;
   }
@@ -160,6 +193,40 @@ std::optional<PresentedPixelRect> RoundPresentedTileRectToPixelRect(const Presen
       .width = width,
       .height = height,
   };
+}
+
+std::vector<Box2d> SubtractPresentedTileBoundsFromClip(const Box2d& clipRect,
+                                                       std::span<const Box2d> coveredRects) {
+  if (!IsValidBox(clipRect)) {
+    return {};
+  }
+
+  std::vector<Box2d> remaining{clipRect};
+  for (const Box2d& coveredRect : coveredRects) {
+    if (!IsValidBox(coveredRect) || remaining.empty()) {
+      continue;
+    }
+
+    std::vector<Box2d> next;
+    next.reserve(remaining.size() * 4u);
+    for (const Box2d& rect : remaining) {
+      const std::optional<Box2d> intersection = IntersectBoxes(rect, coveredRect);
+      if (!intersection.has_value()) {
+        next.push_back(rect);
+        continue;
+      }
+
+      PushValidBox(&next, rect.topLeft, Vector2d(rect.bottomRight.x, intersection->topLeft.y));
+      PushValidBox(&next, Vector2d(rect.topLeft.x, intersection->bottomRight.y), rect.bottomRight);
+      PushValidBox(&next, Vector2d(rect.topLeft.x, intersection->topLeft.y),
+                   Vector2d(intersection->topLeft.x, intersection->bottomRight.y));
+      PushValidBox(&next, Vector2d(intersection->bottomRight.x, intersection->topLeft.y),
+                   Vector2d(rect.bottomRight.x, intersection->bottomRight.y));
+    }
+    remaining = std::move(next);
+  }
+
+  return remaining;
 }
 
 }  // namespace donner::editor

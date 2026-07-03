@@ -111,6 +111,10 @@ struct RenderRequest {
     Transform2d documentFromCachedDocument = Transform2d();
     /// Monotonic id for the active drag gesture. Selection prewarms use zero.
     std::uint64_t dragGeneration = 0;
+    /// True when this request must re-rasterize the promoted drag layer instead of only publishing
+    /// updated compose metadata. Used for scheduler-requested affine recaptures that keep scaled
+    /// drag previews crisp.
+    bool forceLayerRasterization = false;
   };
 
   /**

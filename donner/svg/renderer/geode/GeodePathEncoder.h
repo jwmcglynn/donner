@@ -76,7 +76,7 @@ struct EncodedPath {
   std::vector<Vertex> quadVertices;
 
   /// Vertical (X-monotonic) curve + band data, for the Slug **vertical ray** used by the
-  /// dual-ray analytic coverage (see docs/design_docs/0041). These mirror `curves`/`bands`
+  /// dual-ray analytic coverage. These mirror `curves`/`bands`
   /// but are split at X-extrema and binned into vertical (X-strip) bands. For a vertical
   /// `Band` the field semantics are transposed: `xMin`/`xMax` are the band's X-strip
   /// boundaries and `yMin`/`yMax` are the Y-extent of the curves in the band.

@@ -52,7 +52,21 @@ namespace donner::editor::gui {
 
 namespace {
 
+double ElapsedMs(std::chrono::steady_clock::time_point start) {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+      .count();
+}
+
 void GlfwErrorCallback(int error, const char* description) {
+  // macOS: reading the clipboard when it holds no UTF-8 string (empty, or
+  // non-text content like an image) makes Cocoa's `glfwGetClipboardString` fail
+  // with a benign "Failed to retrieve string from pasteboard". ImGui polls the
+  // clipboard, so this would otherwise spam the console every frame. Drop it.
+  if (description != nullptr &&
+      std::string_view(description).find("retrieve string from pasteboard") !=
+          std::string_view::npos) {
+    return;
+  }
 #ifdef __EMSCRIPTEN__
   // emscripten-glfw surfaces benign shim-limitation messages through the
   // error callback with a `[Warning]` prefix — e.g. ImGui's backend calls
@@ -248,10 +262,10 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   io.AddKeyEvent(ImGuiKey_LeftShift, inputOverride.keyShift);
   io.AddKeyEvent(ImGuiKey_LeftAlt, inputOverride.keyAlt);
   io.AddKeyEvent(ImGuiKey_LeftSuper, inputOverride.keySuper);
-  // ImGui derives modifier state from the dedicated ImGuiMod_* reserved key
-  // slots, which are distinct from ImGuiKey_LeftCtrl/etc. The real GLFW backend
-  // populates them via ImGui_ImplGlfw_UpdateKeyModifiers(); mirror that here so
-  // synthesized shortcuts have the same queued input edges as live input.
+  // ImGui derives io.KeyCtrl/io.KeyMods from the dedicated ImGuiMod_* reserved
+  // key slots, which are distinct from ImGuiKey_LeftCtrl/etc. The real GLFW
+  // backend populates them via ImGui_ImplGlfw_UpdateKeyModifiers(); mirror that
+  // here so synthesized shortcuts (Ctrl+A, Ctrl+C, ...) match in headless replay.
   io.AddKeyEvent(ImGuiMod_Ctrl, inputOverride.keyCtrl);
   io.AddKeyEvent(ImGuiMod_Shift, inputOverride.keyShift);
   io.AddKeyEvent(ImGuiMod_Alt, inputOverride.keyAlt);
@@ -270,18 +284,6 @@ void ApplyInputOverride(const EditorWindowInputOverride& inputOverride) {
   for (const std::uint32_t codepoint : inputOverride.inputCharacters) {
     io.AddInputCharacter(codepoint);
   }
-}
-
-void RestoreInputOverrideModifierSnapshot(const EditorWindowInputOverride& inputOverride) {
-  ImGuiIO& io = ImGui::GetIO();
-  // In the null-window replay path, NewFrame can leave these legacy fields stale
-  // even when the queued ImGuiMod_* events are present. Donner shortcut code reads
-  // io.KeyCtrl/io.KeyShift/etc.; restore only those fields and leave io.KeyMods to
-  // ImGui's processed key state so EndFrame sanity checks remain valid.
-  io.KeyCtrl = inputOverride.keyCtrl;
-  io.KeyShift = inputOverride.keyShift;
-  io.KeyAlt = inputOverride.keyAlt;
-  io.KeySuper = inputOverride.keySuper;
 }
 
 #ifdef __EMSCRIPTEN__
@@ -873,6 +875,10 @@ std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeFramebufferDevice() const
   return wgpuState_ != nullptr ? wgpuState_->framebufferGeodeDevice : nullptr;
 }
 
+void EditorWindow::setWgpuUnderlayRenderCallback(WgpuUnderlayRenderCallback callback) {
+  wgpuUnderlayRenderCallback_ = std::move(callback);
+}
+
 void EditorWindow::setWgpuDirectRenderCallback(WgpuDirectRenderCallback callback) {
   wgpuDirectRenderCallback_ = std::move(callback);
 }
@@ -920,6 +926,7 @@ void EditorWindow::beginFrameWithInput(const EditorWindowInputOverride& inputOve
 
 void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride) {
   ZoneScopedN("EditorWindow::beginFrame");
+  const auto beginFrameStart = std::chrono::steady_clock::now();
 #ifdef DONNER_EDITOR_WGPU
   ImGui_ImplWGPU_NewFrame();
 #else
@@ -953,9 +960,7 @@ void EditorWindow::beginFrameImpl(const EditorWindowInputOverride* inputOverride
     ApplyInputOverride(*inputOverride);
   }
   ImGui::NewFrame();
-  if (inputOverride != nullptr) {
-    RestoreInputOverrideModifierSnapshot(*inputOverride);
-  }
+  lastBeginFrameMs_ = ElapsedMs(beginFrameStart);
 }
 
 void EditorWindow::endFrame() {
@@ -970,9 +975,28 @@ svg::RendererBitmap EditorWindow::endFrameAndReadPixels() {
 
 void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   ZoneScopedN("EditorWindow::endFrame");
+  EditorWindowFrameTiming timing;
+  const auto endFrameStart = std::chrono::steady_clock::now();
+  struct TimingCommit {
+    EditorWindowFrameTiming* destination;
+    EditorWindowFrameTiming* timing;
+    std::chrono::steady_clock::time_point start;
+
+    ~TimingCommit() {
+      timing->endFrameMs = ElapsedMs(start);
+      *destination = *timing;
+    }
+  };
+  TimingCommit timingCommit{
+      .destination = &lastEndFrameTiming_,
+      .timing = &timing,
+      .start = endFrameStart,
+  };
   {
     ZoneScopedN("ImGui::Render");
+    const auto imguiRenderStart = std::chrono::steady_clock::now();
     ImGui::Render();
+    timing.imguiRenderMs = ElapsedMs(imguiRenderStart);
   }
   int displayW = 0;
   int displayH = 0;
@@ -1015,9 +1039,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   wgpu::SurfaceTexture surfaceTexture;
   const auto acquireStart = std::chrono::steady_clock::now();
   wgpuState_->surface.getCurrentTexture(&surfaceTexture);
-  const auto acquireMs =
-      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - acquireStart)
-          .count();
+  const auto acquireMs = ElapsedMs(acquireStart);
+  timing.surfaceAcquireMs = acquireMs;
   if (acquireMs > 250.0) {
     std::fprintf(stderr,
                  "[Editor/WGPU] surface.getCurrentTexture took %.1fms (status=%d, size=%dx%d)\n",
@@ -1048,7 +1071,52 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     readbackBuffer.reset(wgpuState_->device.createBuffer(readbackDesc));
   }
 
+  const bool hasUnderlayRenderCallback = static_cast<bool>(wgpuUnderlayRenderCallback_);
+  if (hasUnderlayRenderCallback) {
+    const auto underlayStart = std::chrono::steady_clock::now();
+    donner::geode::ScopedWgpuHandle<wgpu::TextureView> clearView(target.get().createView());
+    if (!clearView) {
+      return;
+    }
+    donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> clearEncoder(
+        wgpuState_->device.createCommandEncoder());
+    if (!clearEncoder) {
+      return;
+    }
+    wgpu::RenderPassColorAttachment clearColor = {};
+    clearColor.view = clearView.get();
+    clearColor.loadOp = wgpu::LoadOp::Clear;
+    clearColor.storeOp = wgpu::StoreOp::Store;
+    clearColor.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
+                             options_.clearColor[3]};
+    clearColor.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+    wgpu::RenderPassDescriptor clearPassDesc = {};
+    clearPassDesc.colorAttachmentCount = 1;
+    clearPassDesc.colorAttachments = &clearColor;
+    donner::geode::ScopedWgpuHandle<wgpu::RenderPassEncoder> clearPass(
+        clearEncoder.get().beginRenderPass(clearPassDesc));
+    if (!clearPass) {
+      return;
+    }
+    clearPass.get().end();
+    clearPass.reset();
+    donner::geode::ScopedWgpuHandle<wgpu::CommandBuffer> clearCommands(clearEncoder.get().finish());
+    if (!clearCommands) {
+      return;
+    }
+    wgpuState_->queue.submit(1, &clearCommands.get());
+
+    EditorWindowWgpuRenderTarget underlayTarget{
+        .texture = target.get(),
+        .framebufferSizePx = Vector2i(displayW, displayH),
+    };
+    wgpuUnderlayRenderCallback_(underlayTarget);
+    timing.underlayMs = ElapsedMs(underlayStart);
+  }
+
   {
+    const auto imguiDrawStart = std::chrono::steady_clock::now();
     donner::geode::ScopedWgpuHandle<wgpu::TextureView> view(target.get().createView());
     if (!view) {
       return;
@@ -1060,7 +1128,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     }
     wgpu::RenderPassColorAttachment color = {};
     color.view = view.get();
-    color.loadOp = wgpu::LoadOp::Clear;
+    color.loadOp = hasUnderlayRenderCallback ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
     color.storeOp = wgpu::StoreOp::Store;
     color.clearValue = {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
                         options_.clearColor[3]};
@@ -1085,15 +1153,19 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       return;
     }
     wgpuState_->queue.submit(1, &commands.get());
+    timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
   }
   if (wgpuDirectRenderCallback_) {
+    const auto directStart = std::chrono::steady_clock::now();
     EditorWindowWgpuRenderTarget directTarget{
         .texture = target.get(),
         .framebufferSizePx = Vector2i(displayW, displayH),
     };
     wgpuDirectRenderCallback_(directTarget);
+    timing.directMs = ElapsedMs(directStart);
   }
   if (readbackBuffer) {
+    const auto readbackStart = std::chrono::steady_clock::now();
     donner::geode::ScopedWgpuHandle<wgpu::CommandEncoder> encoder(
         wgpuState_->device.createCommandEncoder());
     if (!encoder) {
@@ -1106,9 +1178,11 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       return;
     }
     wgpuState_->queue.submit(1, &commands.get());
+    timing.readbackMs += ElapsedMs(readbackStart);
   }
   if (readbackBuffer &&
       MapReadbackBuffer(wgpuState_->device, readbackBuffer.get(), readbackBufferSize)) {
+    const auto readbackStart = std::chrono::steady_clock::now();
     const uint8_t* mapped = static_cast<const uint8_t*>(
         readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));
     if (mapped != nullptr) {
@@ -1116,13 +1190,18 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
                                 wgpuState_->surfaceFormat, targetReadback);
     }
     readbackBuffer.get().unmap();
+    timing.readbackMs += ElapsedMs(readbackStart);
   }
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   if (publishSmokeReadbackStats && targetReadback != nullptr && !targetReadback->empty()) {
     PublishWgpuReadbackStatsForSmokeTests(*targetReadback);
   }
 #endif
-  presentGuard.present();
+  {
+    const auto presentStart = std::chrono::steady_clock::now();
+    presentGuard.present();
+    timing.presentMs = ElapsedMs(presentStart);
+  }
 #else
   glViewport(0, 0, displayW, displayH);
   glClearColor(options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
@@ -1130,10 +1209,13 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   glClear(GL_COLOR_BUFFER_BIT);
   {
     ZoneScopedN("ImGui_ImplOpenGL3_RenderDrawData");
+    const auto imguiDrawStart = std::chrono::steady_clock::now();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    timing.imguiDrawMs = ElapsedMs(imguiDrawStart);
   }
   if (readback != nullptr && displayW > 0 && displayH > 0) {
     ZoneScopedN("glReadPixels");
+    const auto readbackStart = std::chrono::steady_clock::now();
     constexpr int kChannels = 4;
     const std::size_t rowBytes = static_cast<std::size_t>(displayW) * kChannels;
     std::vector<uint8_t> bottomUp(rowBytes * static_cast<std::size_t>(displayH));
@@ -1151,13 +1233,16 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       uint8_t* dst = readback->pixels.data() + static_cast<std::size_t>(y) * rowBytes;
       std::memcpy(dst, src, rowBytes);
     }
+    timing.readbackMs = ElapsedMs(readbackStart);
   }
 #ifndef __EMSCRIPTEN__
   // emscripten-glfw intentionally doesn't implement `glfwSwapBuffers`;
   // the browser drives presentation via `requestAnimationFrame`.
   {
     ZoneScopedN("glfwSwapBuffers");
+    const auto presentStart = std::chrono::steady_clock::now();
     glfwSwapBuffers(window_);
+    timing.presentMs = ElapsedMs(presentStart);
   }
 #endif
 #endif

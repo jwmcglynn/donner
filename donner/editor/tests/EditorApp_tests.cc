@@ -2,12 +2,18 @@
 
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <vector>
 
 #include "donner/base/Path.h"
+#include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/ViewportGeometry.h"
+#include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/SVGPathElement.h"
+#include "donner/svg/SVGStyleElement.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
@@ -257,6 +263,45 @@ TEST(EditorAppTest, MultiSelectionStoresEveryElement) {
   EXPECT_FALSE(app.selectedElement().has_value());
 }
 
+TEST(EditorAppTest, SelectableElementsReturnsEveryGeometryElement) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  std::optional<svg::SVGElement> r1 = app.document().document().querySelector("#r1");
+  std::optional<svg::SVGElement> r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+
+  // "Select All" returns both rects regardless of position, in document order — the same selectable
+  // set marquee selection uses.
+  const std::vector<svg::SVGElement> selectable = app.selectableElements();
+  ASSERT_EQ(selectable.size(), 2u);
+  EXPECT_EQ(selectable.at(0), *r1);
+  EXPECT_EQ(selectable.at(1), *r2);
+}
+
+TEST(EditorAppTest, SelectableElementsExcludesNonGeometryNodes) {
+  EditorApp app;
+  // <defs> and its gradient never render as geometry, so they are not selectable; only the rect is.
+  ASSERT_TRUE(app.loadFromString(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+           <defs><linearGradient id="grad"/></defs>
+           <rect id="r1" x="10" y="10" width="20" height="20" fill="red"/>
+         </svg>)"));
+
+  std::optional<svg::SVGElement> r1 = app.document().document().querySelector("#r1");
+  ASSERT_TRUE(r1.has_value());
+
+  const std::vector<svg::SVGElement> selectable = app.selectableElements();
+  ASSERT_EQ(selectable.size(), 1u);
+  EXPECT_EQ(selectable.at(0), *r1);
+}
+
+TEST(EditorAppTest, SelectableElementsIsEmptyWithoutDocument) {
+  EditorApp app;
+  EXPECT_TRUE(app.selectableElements().empty());
+}
+
 TEST(EditorAppTest, ToggleInSelectionAddsThenRemoves) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
@@ -436,6 +481,24 @@ TEST(EditorAppTest, PathOperationAvailabilityRequiresMultipleGeometryElements) {
   app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
   EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::Union).canApply);
   EXPECT_TRUE(app.pathOperationAvailability(PathOperationKind::SubtractFront).canApply);
+}
+
+TEST(EditorAppTest, PathOperationAvailabilityUnderConcurrentDomHoldsAccess) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTrivialSvg));
+
+  auto r1 = app.document().document().querySelector("#r1");
+  auto r2 = app.document().document().querySelector("#r2");
+  ASSERT_TRUE(r1.has_value());
+  ASSERT_TRUE(r2.has_value());
+  app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
+
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  const PathOperationAvailability availability =
+      app.pathOperationAvailability(PathOperationKind::Union);
+
+  EXPECT_TRUE(availability.canApply) << availability.reason;
 }
 
 TEST(EditorAppTest, PathOperationUnavailableWhileDocumentMutationIsPending) {
@@ -1328,6 +1391,261 @@ TEST(EditorAppTest, CenterClickOnPaneHitsCenterOfDocumentViewBox) {
   auto hit = app.hitTest(*center);
   ASSERT_TRUE(hit.has_value());
   EXPECT_EQ(hit->id(), "target");
+}
+
+constexpr std::string_view kThreeRects =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <rect id="r1" x="0" y="0" width="10" height="10" fill="red"/>
+         <rect id="r2" x="10" y="0" width="10" height="10" fill="green"/>
+         <rect id="r3" x="20" y="0" width="10" height="10" fill="blue"/>
+       </svg>)";
+
+std::vector<std::string> ChildIds(EditorApp& app) {
+  std::vector<std::string> ids;
+  const svg::SVGElement root = app.document().document().svgElement();
+  for (std::optional<svg::SVGElement> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (const std::optional<RcString> id = child->getAttribute("id"); id.has_value()) {
+      ids.push_back(std::string(id->str()));
+    }
+  }
+  return ids;
+}
+
+void SelectById(EditorApp& app, std::string_view id) {
+  const std::optional<svg::SVGElement> element =
+      app.document().document().querySelector("#" + std::string(id));
+  ASSERT_TRUE(element.has_value()) << "missing #" << id;
+  app.setSelection(*element);
+}
+
+TEST(EditorAppReorderTest, BringForwardMovesElementOneLater) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringForward));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r2", "r1", "r3"));
+}
+
+TEST(EditorAppReorderTest, SendBackwardMovesElementOneEarlier) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r3");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::SendBackward));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r3", "r2"));
+}
+
+TEST(EditorAppReorderTest, BringToFrontMovesElementToLast) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r2", "r3", "r1"));
+}
+
+TEST(EditorAppReorderTest, SendToBackMovesElementToFirst) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r3");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::SendToBack));
+  ASSERT_TRUE(app.flushFrame());
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r3", "r1", "r2"));
+}
+
+TEST(EditorAppReorderTest, ReflectsTheMoveIntoTheSourceText) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r1");
+  EXPECT_TRUE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  ASSERT_TRUE(app.flushFrame());
+  // The DOM move is reflected back into the source by structured editing — the
+  // source order must match the new DOM order (no source-string surgery).
+  const std::string source(app.document().document().source());
+  const std::size_t r1 = source.find("id=\"r1\"");
+  const std::size_t r2 = source.find("id=\"r2\"");
+  const std::size_t r3 = source.find("id=\"r3\"");
+  ASSERT_NE(r1, std::string::npos) << source;
+  ASSERT_NE(r2, std::string::npos) << source;
+  ASSERT_NE(r3, std::string::npos) << source;
+  EXPECT_LT(r2, r3) << source;
+  EXPECT_LT(r3, r1) << source;
+}
+
+TEST(EditorAppReorderTest, NoOpWhenAlreadyAtExtreme) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  SelectById(app, "r3");
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringForward));
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront));
+  SelectById(app, "r1");
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::SendBackward));
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::SendToBack));
+  // No command was queued by the no-op reorders, so the DOM is untouched (and
+  // there is nothing to flush).
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2", "r3"));
+}
+
+TEST(EditorAppReorderTest, NoOpWithoutSingleSelection) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  app.setSelection(std::nullopt);
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringForward));
+}
+
+TEST(EditorAppReorderTest, NoOpWhenElementLocked) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kThreeRects)));
+  {
+    const std::optional<svg::SVGElement> r1 = app.document().document().querySelector("#r1");
+    ASSERT_TRUE(r1.has_value());
+    app.setElementLocked(*r1, true);
+  }
+  ASSERT_TRUE(app.flushFrame());
+
+  SelectById(app, "r1");
+  EXPECT_FALSE(app.reorderSelectedElement(EditorApp::ZOrder::BringToFront))
+      << "a locked element must not reorder";
+  EXPECT_THAT(ChildIds(app), ::testing::ElementsAre("r1", "r2", "r3"));
+}
+
+std::optional<std::string> AttrOf(EditorApp& app, std::string_view id, const char* attr) {
+  const std::optional<svg::SVGElement> el =
+      app.document().document().querySelector("#" + std::string(id));
+  if (!el.has_value()) {
+    return std::nullopt;
+  }
+  const std::optional<RcString> value = el->getAttribute(attr);
+  return value.has_value() ? std::optional<std::string>(std::string(value->str())) : std::nullopt;
+}
+
+constexpr std::string_view kGradientDoc =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <defs><linearGradient id="grad"><stop offset="0" stop-color="red"/></linearGradient></defs>
+         <rect id="r" x="0" y="0" width="50" height="50" fill="url(#grad)"
+               style="stroke:url(#grad)"/>
+         <use id="u" href="#r"/>
+       </svg>)svg";
+
+TEST(EditorAppRenameTest, RenameRepointsUrlAndStyleReferences) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGradientDoc)));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.document().document().querySelector("#g2").has_value());
+  EXPECT_FALSE(app.document().document().querySelector("#grad").has_value());
+  // Both the presentation attribute and the inline style reference are repointed.
+  EXPECT_EQ(AttrOf(app, "r", "fill"), "url(#g2)");
+  EXPECT_EQ(AttrOf(app, "r", "style"), "stroke:url(#g2)");
+}
+
+TEST(EditorAppRenameTest, RenameRepointsHrefReference) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGradientDoc)));
+  SelectById(app, "r");
+  EXPECT_TRUE(app.renameSelectedElement("rect2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.document().document().querySelector("#rect2").has_value());
+  EXPECT_EQ(AttrOf(app, "u", "href"), "#rect2");
+}
+
+// `#grad` appears both as a standalone id selector (must repoint) and as the
+// prefix of `#gradient` (must NOT repoint — different, longer token).
+constexpr std::string_view kStyleSelectorDoc =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#grad { fill: red }
+#gradient { fill: blue }</style>
+         <rect id="grad" x="0" y="0" width="50" height="50"/>
+       </svg>)svg";
+
+std::optional<std::string> StyleTextOf(EditorApp& app) {
+  const std::optional<svg::SVGElement> styleElement =
+      app.document().document().querySelector("style");
+  if (!styleElement.has_value() || !styleElement->isa<svg::SVGStyleElement>()) {
+    return std::nullopt;
+  }
+  return std::string(styleElement->cast<svg::SVGStyleElement>().textContent().str());
+}
+
+TEST(EditorAppRenameTest, RenameRepointsStyleBlockIdSelector) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kStyleSelectorDoc)));
+  // Sanity: the original stylesheet text is readable before the rename.
+  EXPECT_THAT(StyleTextOf(app),
+              ::testing::Optional(std::string("#grad { fill: red }\n#gradient { fill: blue }")));
+  SelectById(app, "grad");
+  EXPECT_TRUE(app.renameSelectedElement("g2"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_TRUE(app.document().document().querySelector("#g2").has_value());
+  // The `#grad` id selector inside <style> is repointed to `#g2`, while the
+  // longer `#gradient` token is left untouched (boundary-correct rewrite). The
+  // whole text is asserted exactly so any stale `#grad` selector trips.
+  EXPECT_THAT(StyleTextOf(app),
+              ::testing::Optional(std::string("#g2 { fill: red }\n#gradient { fill: blue }")));
+}
+
+// Renaming an element whose id is also a valid hex color (`abc`) must only
+// repoint id *selectors* — `#abc` color literals inside declaration blocks,
+// comments, and strings are unrelated CSS and must survive untouched.
+// `url(#abc)` references inside declarations DO repoint (they reference the
+// element).
+TEST(EditorAppRenameTest, RenameLeavesHexColorLiteralsAndCommentsUntouched) {
+  constexpr std::string_view kHexColorDoc =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+         <style>#abc { fill: red }
+.swatch { fill: #abc; stroke: #abc }
+/* #abc historical note */
+.badge { content: "#abc"; clip-path: url(#abc) }
+@media (min-width: 10px) { #abc { opacity: 0.5 } }</style>
+         <rect id="abc" x="0" y="0" width="50" height="50"/>
+       </svg>)svg";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kHexColorDoc)));
+  SelectById(app, "abc");
+  EXPECT_TRUE(app.renameSelectedElement("brandBox"));
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(StyleTextOf(app), ::testing::Optional(std::string(
+                                    R"css(#brandBox { fill: red }
+.swatch { fill: #abc; stroke: #abc }
+/* #abc historical note */
+.badge { content: "#abc"; clip-path: url(#brandBox) }
+@media (min-width: 10px) { #brandBox { opacity: 0.5 } })css")));
+}
+
+TEST(EditorAppRenameTest, RefusesEmptySameAndDuplicateIds) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGradientDoc)));
+  SelectById(app, "r");
+  EXPECT_FALSE(app.renameSelectedElement("")) << "empty id";
+  EXPECT_FALSE(app.renameSelectedElement("r")) << "same id";
+  EXPECT_FALSE(app.renameSelectedElement("grad")) << "id already used by another element";
+  // None of the refusals mutated the document.
+  EXPECT_EQ(AttrOf(app, "r", "fill"), "url(#grad)");
+}
+
+TEST(EditorAppRenameTest, RefusesWithoutSingleSelectionOrWhenLocked) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(std::string(kGradientDoc)));
+  app.setSelection(std::nullopt);
+  EXPECT_FALSE(app.renameSelectedElement("x"));
+
+  {
+    const std::optional<svg::SVGElement> r = app.document().document().querySelector("#r");
+    ASSERT_TRUE(r.has_value());
+    app.setElementLocked(*r, true);
+  }
+  ASSERT_TRUE(app.flushFrame());
+  SelectById(app, "r");
+  EXPECT_FALSE(app.renameSelectedElement("rect2")) << "a locked element must not rename";
+  EXPECT_TRUE(app.document().document().querySelector("#r").has_value());
 }
 
 }  // namespace

@@ -97,6 +97,19 @@ donner_cc_test(
 )
 
 donner_cc_library(
+    name = "render_tree_test_utils",
+    testonly = 1,
+    hdrs = [
+        "RenderTreeTestUtils.h",
+    ],
+    visibility = ["//donner:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
     name = "parser_test_utils",
     testonly = 1,
     srcs = [

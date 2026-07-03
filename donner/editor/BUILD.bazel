@@ -2,7 +2,8 @@
 
 This package is the destination for the editor migration described in
 `docs/design_docs/0020-editor.md`. Milestone 1 landed the package skeleton,
-build-system foundation, and dependency wiring; subsequent milestones add
+build-system foundation, and dependency wiring;
+subsequent milestones add
 the actual editor source.
 
 The editor builds as part of default `bazel test //...` on supported hosts —
@@ -15,11 +16,11 @@ load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
 
-# Editor libraries are public so the //examples:svg_viewer target (in the
-# separate examples Bazel module) can depend on `:text_editor`. BCR
-# consumers cannot transitively use the editor libraries because
-# imgui/glfw/tracy are `dev_dependency = True` in MODULE.bazel and won't
-# resolve outside dev builds.
+#Editor libraries are public so the  // examples:svg_viewer target (in the
+#separate examples Bazel module) can depend on `: text_editor`.BCR
+#consumers cannot transitively use the editor libraries because
+#imgui / glfw / tracy are `dev_dependency = True` in MODULE.bazel and won't
+#resolve outside dev builds.
 package(default_visibility = ["//visibility:public"])
 
 config_setting(
@@ -69,8 +70,8 @@ donner_cc_library(
 )
 
 # Single source of truth for the editor render pane's screen↔document
-# coordinate mapping, including zoom, pan, DPR, and the focal-point-
-# preserving zoom math. See `docs/design_docs/0025-2-editor_ux.md`.
+# coordinate mapping, including zoom, pan, DPR, and the focal-point-preserving
+# zoom math.
 donner_cc_library(
     name = "viewport_state",
     srcs = ["ViewportState.cc"],
@@ -85,6 +86,21 @@ donner_cc_library(
     srcs = ["SelectionAabb.cc"],
     hdrs = ["SelectionAabb.h"],
     deps = [
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+# Viewport SVG export. Content-only: copies source SVG children into a clipped
+# group cropped to the viewport, with an optional overlay group for the
+# serialized selection chrome.
+donner_cc_library(
+    name = "viewport_svg_export",
+    srcs = ["ViewportSvgExport.cc"],
+    hdrs = ["ViewportSvgExport.h"],
+    deps = [
+        ":overlay_renderer",
+        ":viewport_state",
         "//donner/base",
         "//donner/svg",
     ],
@@ -245,6 +261,7 @@ donner_cc_library(
     srcs = ["AsyncSVGDocument.cc"],
     hdrs = ["AsyncSVGDocument.h"],
     deps = [
+        ":editor_parse_options",
         ":command_queue",
         "//donner/base",
         "//donner/svg",
@@ -254,11 +271,57 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "shape_clipboard_payload",
+    srcs = ["ShapeClipboardPayload.cc"],
+    hdrs = ["ShapeClipboardPayload.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/parser",
+    ],
+)
+
+donner_cc_library(
+    name = "shape_clipboard_commands",
+    srcs = ["ShapeClipboardCommands.cc"],
+    hdrs = ["ShapeClipboardCommands.h"],
+    deps = [
+        ":editor_parse_options",
+        ":shape_clipboard_payload",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_library(
+    name = "editor_parse_options",
+    hdrs = ["EditorParseOptions.h"],
+    deps = ["//donner/svg/parser"],
+)
+
+donner_cc_library(
     name = "text_patch",
     srcs = ["TextPatch.cc"],
     hdrs = ["TextPatch.h"],
     deps = [
         "//donner/base",
+    ],
+)
+
+# Convert Text to Outlines. Pure
+# geometry->SVG conversion: resolves placed glyph outlines via the
+# renderer-facing text geometry (`SVGTextElement::convertToPath`) and splices a
+# replacement outline `<g>` into the document source. Editor-command-agnostic so
+# it can be unit-tested headlessly.
+donner_cc_library(
+    name = "text_to_outlines",
+    srcs = ["TextToOutlines.cc"],
+    hdrs = ["TextToOutlines.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
     ],
 )
 
@@ -365,19 +428,6 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "change_classifier",
-    srcs = ["ChangeClassifier.cc"],
-    hdrs = ["ChangeClassifier.h"],
-    deps = [
-        ":command_queue",
-        "//donner/base",
-        "//donner/base/xml",
-        "//donner/svg",
-        "//donner/svg/properties:property_parsing",
-    ],
-)
-
-donner_cc_library(
     name = "imgui_headers",
     hdrs = [
         "ImGuiBackendIncludes.h",
@@ -463,16 +513,32 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "embedded_svg_icon",
+    srcs = ["EmbeddedSvgIcon.cc"],
+    hdrs = ["EmbeddedSvgIcon.h"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_cc_library(
     name = "sidebar_presenter",
     srcs = ["SidebarPresenter.cc"],
     hdrs = ["SidebarPresenter.h"],
     deps = [
         ":editor_app",
+        ":embedded_svg_icon",
         ":imgui_headers",
         ":viewport_state",
         "//donner/base",
         "//donner/base/xml",
         "//donner/svg",
+        "//donner/svg/renderer:renderer_interface",
+        "//third_party/bootstrap-icons:bootstrap_icons",
         "@imgui",
     ],
 )
@@ -488,9 +554,9 @@ donner_cc_library(
 )
 
 donner_cc_library(
-    name = "layer_inspector_panel",
-    srcs = ["LayerInspectorPanel.cc"],
-    hdrs = ["LayerInspectorPanel.h"],
+    name = "compositor_debug_panel",
+    srcs = ["CompositorDebugPanel.cc"],
+    hdrs = ["CompositorDebugPanel.h"],
     defines = select({
         ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
         "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
@@ -599,7 +665,11 @@ donner_cc_library(
 
 donner_cc_library(
     name = "editor_shell",
-    srcs = ["EditorShell.cc"],
+    srcs = [
+        "EditorShell.cc",
+        "EditorShellPresentation.cc",
+        "EditorShellPresentation.h",
+    ],
     hdrs = ["EditorShell.h"],
     defines = select({
         ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
@@ -607,6 +677,9 @@ donner_cc_library(
         "//conditions:default": [],
     }),
     deps = [
+        ":attribute_writeback",
+        ":clipboard_interface",
+        ":compositor_debug_panel",
         ":dialog_presenter",
         ":document_save",
         ":document_sync_controller",
@@ -618,10 +691,12 @@ donner_cc_library(
         ":frame_cost_breakdown",
         ":frame_miss_telemetry",
         ":gl_texture_cache",
+        ":imgui_clipboard",
         ":imgui_headers",
         ":keyboard_shortcut_policy",
         ":layer_inspector_diagnostics",
-        ":layer_inspector_panel",
+        ":layer_tree_model",
+        ":layers_panel",
         ":menu_bar_presenter",
         ":pen_tool",
         ":render_coordinator",
@@ -629,18 +704,27 @@ donner_cc_library(
         ":rotate_cursor_set",
         ":select_tool",
         ":selection_transform_handles",
+        ":shape_clipboard_commands",
+        ":shape_clipboard_payload",
         ":sidebar_presenter",
         ":source_selection",
         ":style_source_annotations",
         ":text_editor",
+        ":text_inspector_panel",
+        ":text_to_outlines",
+        ":text_tool",
+        ":tool_keybinding",
         ":tracy_wrapper",
+        ":undo_timeline",
         ":viewport_interaction_controller",
+        ":viewport_svg_export",
         ":xml_autocomplete",
         "//donner/base",
         "//donner/base/xml",
         "//donner/editor/gui:editor_window",
         "//donner/editor/repro:repro_recorder",
         "//donner/svg",
+        "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
         "//third_party/fira-code",
         "//third_party/roboto",
@@ -673,11 +757,11 @@ donner_cc_library(
     srcs = ["SourceSync.cc"],
     hdrs = ["SourceSync.h"],
     deps = [
-        ":change_classifier",
         ":editor_app",
         ":source_edit_intent",
         "//donner/base",
         "//donner/svg",
+        "//donner/svg/parser",
     ],
 )
 
@@ -689,6 +773,7 @@ donner_cc_library(
         ":async_svg_document",
         ":attribute_writeback",
         ":command_queue",
+        ":lock_state",
         ":undo_timeline",
         "//donner/base",
         "//donner/svg",
@@ -721,6 +806,7 @@ donner_cc_library(
         ":command_queue",
         ":editor_app",
         ":imgui_headers",
+        ":lock_state",
         ":selection_aabb",
         ":selection_transform_handles",
         ":tool",
@@ -745,6 +831,34 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "text_tool",
+    srcs = ["TextTool.cc"],
+    hdrs = ["TextTool.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        ":tool",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "text_inspector_panel",
+    srcs = ["TextInspectorPanel.cc"],
+    hdrs = ["TextInspectorPanel.h"],
+    deps = [
+        ":command_queue",
+        ":editor_app",
+        ":imgui_headers",
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+        "@imgui",
+    ],
+)
+
+donner_cc_library(
     name = "overlay_renderer",
     srcs = ["OverlayRenderer.cc"],
     hdrs = ["OverlayRenderer.h"],
@@ -760,19 +874,19 @@ donner_cc_library(
     ],
 )
 
-# Extracts the notice_editor.txt file from the license aggregation
-# rule so it can be embedded into the editor binary. The rule produces
-# both `.txt` and `.json`; we only want the text for the About dialog.
+#Extracts the notice_editor.txt file from the license aggregation
+#rule so it can be embedded into the editor binary.The rule produces
+#both `.txt` and `.json`; we only want the text for the About dialog.
 filegroup(
     name = "notice_editor_txt",
     srcs = ["//third_party/licenses:notice_editor"],
     output_group = "notice",
 )
 
-# Embed the NOTICE text into the editor binary. `//donner/editor:notice`
-# exposes `donner::embedded::kEditorNoticeText` as a
-# `std::span<const unsigned char>`. The editor's Help → About dialog
-# displays this.
+#Embed the NOTICE text into the editor binary. `  //donner/editor:notice`
+#exposes `donner::embedded::kEditorNoticeText` as a
+# `std::span<const unsigned char>`.The editor's Help → About dialog
+#displays this.
 embed_resources(
     name = "pan_closed_cursor_svg",
     header_output = "donner/editor/PanClosedCursorSvg.h",
@@ -814,14 +928,6 @@ embed_resources(
 )
 
 embed_resources(
-    name = "editor_icon",
-    header_output = "donner/editor/EditorIcon.h",
-    resources = {
-        "kEditorIconSvg": "//:donner_icon.svg",
-    },
-)
-
-embed_resources(
     name = "editor_splash",
     header_output = "donner/editor/EditorSplash.h",
     resources = {
@@ -837,14 +943,13 @@ donner_cc_library(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
-        ":editor_icon",
         ":editor_shell",
     ],
 )
 
-# The full Donner editor implementation. The public `:editor` target below
-# applies the Geode transition so `bazel run //donner/editor` uses the same
-# backend that editor performance work targets without requiring `--config=geode`.
+#The full Donner editor implementation.The public `: editor` target below
+#applies the Geode transition so `bazel run  // donner/editor` uses the same
+#backend that editor performance work targets without requiring `--config = geode`.
 donner_cc_binary(
     name = "editor_impl",
     srcs = ["main.cc"],
@@ -856,7 +961,6 @@ donner_cc_binary(
     }),
     visibility = ["//visibility:private"],
     deps = [
-        ":editor_icon",
         ":editor_shell",
         ":notice",
         ":tracy_wrapper",
@@ -871,12 +975,12 @@ test_suite(
     tests = [":editor_impl_lint"],
 )
 
-# The full Donner editor binary. Wires EditorApp + SelectTool +
-# OverlayRenderer + TextEditor into an ImGui shell with a live source
-# pane and a click-and-drag render pane. The minimal viewer demo lives
-# at `//examples:svg_viewer`.
+#The full Donner editor binary.Wires EditorApp + SelectTool +
+#OverlayRenderer + TextEditor into an ImGui shell with a live source
+#pane and a click - and-drag render pane.The minimal viewer demo lives
+#at `  //examples:svg_viewer`.
 #
-# bazel run //donner/editor -- donner_splash.svg
+#bazel run  // donner/editor -- donner_splash.svg
 donner_multi_transitioned_binary(
     name = "editor",
     dep = ":editor_impl",
@@ -898,9 +1002,8 @@ donner_cc_library(
     ],
 )
 
-# Abstract clipboard interface + header-only InMemoryClipboard. No
-# ImGui dependency — safe to link from headless unit tests. See
-# docs/design_docs/0051-text_editor_refactor.md for the split rationale.
+# Abstract clipboard interface + header-only InMemoryClipboard. No ImGui
+# dependency — safe to link from headless unit tests.
 donner_cc_library(
     name = "clipboard_interface",
     hdrs = [
@@ -910,9 +1013,9 @@ donner_cc_library(
     deps = [],
 )
 
-# Production ClipboardInterface implementation backed by
-# ImGui::GetClipboardText / SetClipboardText. This is the only
-# editor target that touches ImGui clipboard APIs.
+#Production ClipboardInterface implementation backed by
+#ImGui::GetClipboardText / SetClipboardText.This is the only
+#editor target that touches ImGui clipboard APIs.
 donner_cc_library(
     name = "imgui_clipboard",
     srcs = ["ImGuiClipboard.cc"],
@@ -922,6 +1025,15 @@ donner_cc_library(
         ":imgui_headers",
         "@imgui",
     ],
+)
+
+# Tool identity + display label + single-key shortcut table shared by the
+# toolbar buttons, tooltips, and the keyboard shortcut handler. Pure header, no
+# ImGui — unit-testable headlessly.
+donner_cc_library(
+    name = "tool_keybinding",
+    hdrs = ["ToolKeybinding.h"],
+    visibility = ["//visibility:public"],
 )
 
 # Conditional Tracy profiling macros. When `ENABLE_TRACY` is defined, the
@@ -981,5 +1093,47 @@ donner_cc_library(
         ":attribute_writeback",
         "//donner/base",
         "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "lock_state",
+    srcs = ["LockState.cc"],
+    hdrs = ["LockState.h"],
+    deps = [
+        "//donner/base",
+        "//donner/base/xml",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "layer_tree_model",
+    srcs = ["LayerTreeModel.cc"],
+    hdrs = ["LayerTreeModel.h"],
+    deps = [
+        ":editor_app",
+        ":lock_state",
+        "//donner/base",
+        "//donner/svg",
+    ],
+)
+
+donner_cc_library(
+    name = "layers_panel",
+    srcs = ["LayersPanel.cc"],
+    hdrs = ["LayersPanel.h"],
+    deps = [
+        ":editor_app",
+        ":embedded_svg_icon",
+        ":imgui_headers",
+        ":layer_tree_model",
+        ":lock_state",
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_interface",
+        "//third_party/bootstrap-icons:bootstrap_icons",
+        "@imgui",
     ],
 )

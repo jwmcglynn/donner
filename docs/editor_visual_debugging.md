@@ -42,7 +42,7 @@ are not enough for one-frame visual bugs.
 4. Add the smallest diagnostic that distinguishes the candidate hypotheses.
 5. Convert the repro into a unit or replay test at the lowest reliable layer.
 
-Example replay:
+Standard screenshot replay:
 
 ```sh
 bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- \
@@ -56,9 +56,21 @@ bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- \
   --crop document-canvas
 ```
 
-Use `--crop document-canvas` for most visual debugging. Use full-frame capture
-when the failure may involve pane layout, dialogs, sidebars, or framebuffer
-size.
+This is the default way to generate editor screenshots for QA debugging. The
+replay writes PNGs under `--out-dir` with names like
+`gl_replay_frame_79_frame_document_canvas.png`, and the JSON output lists the
+absolute path for each capture. Attach or display those generated PNGs when a
+user asks to see a repro.
+
+Use `--crop document-canvas` for most canvas visual bugs. Use `--crop full` when
+the failure may involve ImGui chrome, pane layout, dialogs, sidebars, layer
+thumbnails, or framebuffer size. Use `--crop render-pane` when the bug is inside
+the center viewport but depends on pan/zoom chrome around the SVG canvas.
+
+Do not use manual OS screenshots as the primary proof for editor visual bugs
+when a `.rnr` repro exists. The replay screenshot is deterministic, captures the
+same frame that tests can assert, and keeps MCP/replay verification aligned with
+the user's visible failure.
 
 Use `--print-diagnostics` only after the bad pixels are already captured. It
 prints per-frame JSON from the replay harness, including canvas freshness,
@@ -75,6 +87,11 @@ bazel run --config=geode //donner/editor/tests:editor_rnr_gl_replay -- \
   --crop document-canvas \
   --print-diagnostics
 ```
+
+When comparing before/after behavior, keep the same `.rnr`, `--svg`,
+`--capture-frame`, `--crop`, and pacing flags. For full-editor UI screenshots
+such as layer thumbnails, prefer `--crop full` and include the captured PNG in
+the response so the crop cannot hide the UI regression being investigated.
 
 For timing-sensitive failures, run both paced and unpaced replays:
 

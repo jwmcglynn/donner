@@ -501,6 +501,12 @@ public:
   void selectAll();
 
   /**
+   * Collapse any active text selection to the caret ("Deselect All" in the source/XML pane).
+   * Leaves the cursor where it is and is a no-op when there is no selection.
+   */
+  void clearSelection();
+
+  /**
    * Check if there is currently selected text.
    * @return true if there is a selection
    */

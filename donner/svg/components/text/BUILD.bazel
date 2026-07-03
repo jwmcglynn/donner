@@ -22,6 +22,27 @@ cc_library(
 )
 
 cc_library(
+    name = "text_positioning_presentation",
+    srcs = [
+        "TextPositioningPresentation.cc",
+    ],
+    hdrs = [
+        "TextPositioningPresentation.h",
+    ],
+    visibility = [
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        ":components",
+        "//donner/base",
+        "//donner/base/xml/components",
+        "//donner/svg/components:components_core",
+        "//donner/svg/parser:parser_core",
+        "//donner/svg/properties:property_parsing",
+    ],
+)
+
+cc_library(
     name = "text_system",
     srcs = [
         "TextSystem.cc",
