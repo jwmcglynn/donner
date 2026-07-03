@@ -5,7 +5,6 @@
 #include <array>
 #include <cmath>
 #include <cstddef>
-#include <cstdint>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -40,13 +39,8 @@ Path NonZeroRectDonutPath() {
       .build();
 }
 
-PathBooleanInput Input(Path path, FillRule fillRule = FillRule::NonZero,
-                       Transform2d outputFromPath = Transform2d()) {
-  return PathBooleanInput{
-      .path = std::move(path),
-      .fillRule = fillRule,
-      .outputFromPath = outputFromPath,
-  };
+PathBooleanInput Input(Path path) {
+  return PathBooleanInput{.path = std::move(path)};
 }
 
 PathBooleanResult Boolean(PathBooleanOp op, std::initializer_list<PathBooleanInput> inputs) {
@@ -89,64 +83,6 @@ std::size_t CommandCount(const Path& path, Path::Verb verb) {
     }
   }
   return count;
-}
-
-double FuzzerCoord(std::uint16_t raw) {
-  return (static_cast<double>(raw) / 65535.0) * 200.0 - 100.0;
-}
-
-Vector2d FuzzerPoint(std::uint16_t x, std::uint16_t y) {
-  return {FuzzerCoord(x), FuzzerCoord(y)};
-}
-
-Path NearCoincidentCubicTimeoutLhsPath() {
-  const Vector2d a = FuzzerPoint(0x5959, 0x5959);
-  const Vector2d b = FuzzerPoint(0x5555, 0x5555);
-
-  return PathBuilder()
-      .moveTo(a)
-      .curveTo(b, b, b)
-      .quadTo(a, a)
-      .curveTo(a, a, a)
-      .curveTo(a, FuzzerPoint(0x59b8, 0x5959), a)
-      .curveTo(FuzzerPoint(0x5959, 0xffff), FuzzerPoint(0xffff, 0xff59), b)
-      .quadTo(b, b)
-      .closePath()
-      .build();
-}
-
-Path NearCoincidentCubicTimeoutRhsPath() {
-  const Vector2d a = FuzzerPoint(0x5959, 0x5959);
-  const Vector2d b = FuzzerPoint(0x5555, 0x5555);
-
-  return PathBuilder()
-      .moveTo(b)
-      .quadTo(b, b)
-      .quadTo(FuzzerPoint(0x5555, 0x5959), a)
-      .closePath()
-      .build();
-}
-
-Path FuzzerTimeoutCubicDifferenceLhsPath() {
-  const Vector2d a = FuzzerPoint(0x6e6e, 0x6e6e);
-  const Vector2d b = FuzzerPoint(0xffff, 0xffff);
-
-  return PathBuilder().moveTo(a).curveTo({a.x, b.y}, b, b).lineTo(b).lineTo(b).closePath().build();
-}
-
-Path FuzzerTimeoutCubicDifferenceRhsPath() {
-  const Vector2d a = FuzzerPoint(0x6e6e, 0x6e6e);
-  const Vector2d b = FuzzerPoint(0xffff, 0xffff);
-  const Vector2d shiftedControl = FuzzerPoint(0x6e49, 0xffff);
-  const Vector2d shiftedEnd = FuzzerPoint(0xffff, 0xff6e);
-
-  return PathBuilder()
-      .moveTo(a)
-      .curveTo(shiftedControl, b, b)
-      .lineTo(b)
-      .lineTo(shiftedEnd)
-      .closePath()
-      .build();
 }
 
 Path QuadraticCapPath() {
@@ -235,6 +171,60 @@ Path RegionAboveStraightCubicSuffixBoundary() {
       .curveTo({43.75, 50}, {81.25, 50}, {100, 50})
       .lineTo({100, 0})
       .lineTo({25, 0})
+      .closePath()
+      .build();
+}
+
+Path FuzzerDegenerateCurveSearchLhsPath() {
+  constexpr double kPoint = -19.215686274509807;
+  constexpr double kNearPoint1 = -19.20042725261311;
+  constexpr double kNearPoint2 = -19.191271839475093;
+  return PathBuilder()
+      .moveTo({kPoint, kPoint})
+      .quadTo({kPoint, kPoint}, {kPoint, kNearPoint1})
+      .curveTo({kPoint, kPoint}, {kPoint, kPoint}, {kPoint, kPoint})
+      .quadTo({kPoint, kPoint}, {kPoint, kPoint})
+      .quadTo({kPoint, kPoint}, {kPoint, kNearPoint2})
+      .quadTo({kPoint, kPoint}, {kPoint, kPoint})
+      .quadTo({kPoint, kPoint}, {kPoint, kPoint})
+      .quadTo({kPoint, kPoint}, {kPoint, kPoint})
+      .quadTo({kPoint, kPoint}, {kPoint, kPoint})
+      .closePath()
+      .build();
+}
+
+Path FuzzerDegenerateCurveSearchRhsPath() {
+  constexpr double kPoint = -19.215686274509807;
+  return PathBuilder()
+      .moveTo({kPoint, kPoint})
+      .quadTo({kPoint, kPoint}, {kPoint, kPoint})
+      .closePath()
+      .build();
+}
+
+Path FuzzerCubicDifferenceSearchLhsPath() {
+  constexpr double kLow = -96.07843137254902;
+  constexpr double kHigh = 96.078431372549;
+  constexpr double kNearX = -96.06317235065232;
+  constexpr double kNearY = 96.85969329365986;
+  return PathBuilder()
+      .moveTo({kLow, kLow})
+      .curveTo({kLow, kLow}, {kLow, kLow}, {kLow, kLow})
+      .curveTo({kLow, kLow}, {kLow, kNearY}, {kHigh, kLow})
+      .curveTo({kLow, kLow}, {kLow, kLow}, {kLow, kLow})
+      .curveTo({kLow, kLow}, {kLow, kLow}, {kLow, kLow})
+      .curveTo({kLow, kLow}, {kLow, kLow}, {kLow, kLow})
+      .curveTo({kLow, kLow}, {kLow, kLow}, {kNearX, kLow})
+      .closePath()
+      .build();
+}
+
+Path FuzzerCubicDifferenceSearchRhsPath() {
+  constexpr double kLow = -96.07843137254902;
+  constexpr double kNearY = -95.96246280613413;
+  return PathBuilder()
+      .moveTo({kLow, kLow})
+      .curveTo({kLow, kNearY}, {kLow, kLow}, {kLow, kLow})
       .closePath()
       .build();
 }
@@ -1287,18 +1277,26 @@ TEST(PathOpsTest, RespectsIntersectionCap) {
   EXPECT_FALSE(result.diagnostics.empty());
 }
 
-TEST(PathOpsTest, DegenerateCubicIntersectionSearchReturnsTooComplex) {
+TEST(PathOpsTest, FuzzerTimeoutDegenerateCurveSearchReturnsTooComplex) {
   PathBooleanOptions options;
   options.maxCurveCount = 64;
   options.maxIntersections = 256;
   options.maxOutputCommands = 512;
-  const Transform2d outputFromPath = Transform2d::SkewX(0.2);
+  const Transform2d outputFromPath = Transform2d::Rotate(0.25);
   const std::array<PathBooleanInput, 2> inputs = {
-      Input(NearCoincidentCubicTimeoutLhsPath(), FillRule::EvenOdd, outputFromPath),
-      Input(NearCoincidentCubicTimeoutRhsPath(), FillRule::EvenOdd, outputFromPath),
+      PathBooleanInput{
+          .path = FuzzerDegenerateCurveSearchLhsPath(),
+          .fillRule = FillRule::EvenOdd,
+          .outputFromPath = outputFromPath,
+      },
+      PathBooleanInput{
+          .path = FuzzerDegenerateCurveSearchRhsPath(),
+          .fillRule = FillRule::EvenOdd,
+          .outputFromPath = outputFromPath,
+      },
   };
 
-  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Difference, inputs, options);
+  const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Xor, inputs, options);
 
   EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
   EXPECT_TRUE(result.paths.empty());
@@ -1311,13 +1309,19 @@ TEST(PathOpsTest, FuzzerTimeoutCubicDifferenceReturnsTooComplex) {
   options.maxIntersections = 256;
   options.maxOutputCommands = 512;
   const std::array<PathBooleanInput, 2> inputs = {
-      Input(FuzzerTimeoutCubicDifferenceLhsPath()),
-      Input(FuzzerTimeoutCubicDifferenceRhsPath()),
+      PathBooleanInput{
+          .path = FuzzerCubicDifferenceSearchLhsPath(),
+          .fillRule = FillRule::EvenOdd,
+      },
+      PathBooleanInput{
+          .path = FuzzerCubicDifferenceSearchRhsPath(),
+          .fillRule = FillRule::EvenOdd,
+      },
   };
 
   const PathBooleanResult result = ApplyPathBoolean(PathBooleanOp::Difference, inputs, options);
 
-  EXPECT_EQ(result.status, PathBooleanStatus::TooComplex) << Diagnostics(result);
+  EXPECT_EQ(result.status, PathBooleanStatus::TooComplex);
   EXPECT_TRUE(result.paths.empty());
   EXPECT_FALSE(result.diagnostics.empty());
 }
