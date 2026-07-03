@@ -484,17 +484,33 @@ flowchart LR
 
 ### Text Authoring
 
-V0.8 text UI should be intentionally small:
+*(Updated 2026-07-02: in-canvas editing sessions shipped, superseding the
+inspector-only plan below.)* The Text tool now follows the standard design-tool
+contract:
 
-- Create text at a clicked document point.
-- Edit the text string in the inspector.
-- Edit font family, font size, fill, stroke, opacity, and transform using existing style controls
-  where possible.
-- Reuse existing selection, drag, resize, rotate, undo, and source-sync behavior.
+- A click places point text; a click-drag draws a text box. Either opens an
+  in-canvas editing session with a live caret (caret + box frame render through
+  `OverlayRenderer` direct to the framebuffer, like the pen chrome).
+- Typing, Enter (hard break), Backspace/Delete, and arrow/Home/End caret
+  movement edit the live `<text>` element through the DOM mutation seam.
+  Multi-line content becomes one `<tspan>` per display line; box text
+  greedy-wraps to the box width using measured character advances
+  (`getStartPositionOfChar`/`getEndPositionOfChar`). The box size is recorded
+  as `data-donner-text-box-width`/`-height` attributes.
+- Cmd+B / Cmd+I / Cmd+U toggle `font-weight` / `font-style` /
+  `text-decoration` on the session's element.
+- Escape, clicking away, or switching tools commits the session as **one**
+  undoable operation; an empty session deletes the element and restores the
+  prior selection.
+- Font family/size editing continues through `TextInspectorPanel` (the
+  session's element stays selected, so the existing style controls apply
+  live). Convert Text to Outlines handles tool-authored tspan/box/bold text
+  (`TextToOutlines` tests cover it).
 
-The created element is a normal SVG `<text>` element. The editor does not need a full in-canvas text
-caret for v0.8; inspector-based content editing is enough for the showcase. A future text tool can
-add direct text editing once source/selection semantics are designed.
+Covered by `TextTool_tests.cc` (session behaviors), the
+`TextToolClickTypeEscapeCommitsTextElement` gl_rnr replay (full shell event
+loop: tool switch → click → Char events → Escape), and
+`TextToOutlines.ConvertsTextToolBoxTextPixelIdentical`.
 
 ### Shape Clipboard
 
@@ -916,10 +932,11 @@ was marked done but is not actually usable.
 ### ✅ Resolved: Text tool (M4) is reachable in the live editor
 
 *(Updated 2026-07-02.)* The Text tool now has a toolbar button (Select / Pen /
-Text palette) and the `T` single-key shortcut; a canvas click inserts a
-`<text>` element and hands off to the inspector for content/style editing.
-Covered by `TextTool_tests.cc` and the toolbar keybinding table
-(`ToolKeybinding.h` + `tool_keybinding_tests`).
+Text palette) and the `T` single-key shortcut; a canvas click (or box drag)
+opens an in-canvas editing session with a live caret — see "Text Authoring"
+above for the full session contract. Covered by `TextTool_tests.cc`, the
+toolbar keybinding table (`ToolKeybinding.h` + `tool_keybinding_tests`), and
+the `TextToolClickTypeEscapeCommitsTextElement` replay.
 
 - [x] Re-audit what M4 delivers end-to-end in the live editor.
 - [x] Add a Text tool toolbar button so the tool is reachable. (No separate

@@ -48,6 +48,7 @@
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -952,6 +953,19 @@ LayerInspectorStatusReadback EditorShell::layerInspectorStatusForReadback() cons
           pathData.has_value()) {
         readback.selectedPathDataAttribute = std::string(std::string_view(*pathData));
       }
+      if (selected->type() == svg::ElementType::Text) {
+        // Concatenate direct text plus per-line <tspan> children so multi-line
+        // sessions read back as one string. Already inside withReadAccess, so
+        // read the children directly.
+        std::string textContent(selected->cast<svg::SVGTextElement>().textContent());
+        for (std::optional<svg::SVGElement> child = selected->firstChild(); child.has_value();
+             child = child->nextSibling()) {
+          if (child->type() == svg::ElementType::TSpan) {
+            textContent += std::string(child->cast<svg::SVGTSpanElement>().textContent());
+          }
+        }
+        readback.selectedTextContent = textContent;
+      }
     });
   }
   readback.activeDragPreview = activeDragPreview;
@@ -1554,9 +1568,10 @@ void EditorShell::handleGlobalShortcuts() {
   // An in-canvas text editing session captures the keyboard: typing, caret
   // movement, style toggles, and Escape all act on the session, and no
   // global shortcut may fire underneath it (Backspace would otherwise
-  // delete the text element being edited).
+  // delete the text element being edited). An active ImGui text widget
+  // (e.g. the inspector's font fields) keeps its own keyboard focus.
   if (activeTool_ == ActiveTool::Text && textTool_.isEditing() && !anyPopupOpen &&
-      !sourcePaneFocused) {
+      !sourcePaneFocused && !ImGui::GetIO().WantTextInput) {
     handleTextEditingKeyboard();
     return;
   }

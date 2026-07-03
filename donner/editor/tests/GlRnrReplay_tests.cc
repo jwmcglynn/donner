@@ -620,6 +620,90 @@ std::optional<std::filesystem::path> WritePenTwoAnchorsThenKeyReplay(
   return replayPath;
 }
 
+// Text-tool session driven end-to-end through the shell event loop: switch
+// to the text tool, click to open a point-text session, type "Hi" via Char
+// events, then press Escape to commit the session.
+std::optional<std::filesystem::path> WriteTextTypingReplay(const std::filesystem::path& outputDir,
+                                                           std::string_view name) {
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  if (createDirError) {
+    ADD_FAILURE() << "failed to create " << outputDir << ": " << createDirError.message();
+    return std::nullopt;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "missing_text_typing.svg";
+  file.metadata.svgBasename = "text_typing.svg";
+  file.metadata.svgContentHash = "fnv1a64:text-typing";
+  file.metadata.svgSource = std::string(kBlankPenCanvasSvg);
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+
+  const auto pushFrame = [&](std::uint64_t index, Vector2d mouseDoc, int mouseButtonMask,
+                             std::vector<repro::ReproAction> actions = {},
+                             std::vector<repro::ReproEvent> events = {}) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = mouseDoc.x;
+    frame.mouseY = mouseDoc.y;
+    frame.mouseDocX = mouseDoc.x;
+    frame.mouseDocY = mouseDoc.y;
+    frame.mouseButtonMask = mouseButtonMask;
+    frame.actions = std::move(actions);
+    frame.events = std::move(events);
+    file.frames.push_back(std::move(frame));
+  };
+
+  pushFrame(0, Vector2d::Zero(), 0,
+            {repro::ReproAction{
+                .kind = repro::ReproAction::Kind::SetActiveTool,
+                .tool = "text",
+            }});
+
+  const Vector2d clickDoc(10.0, 40.0);
+  repro::ReproEvent mouseDown;
+  mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
+  mouseDown.mouseButton = 0;
+  pushFrame(1, clickDoc, 1, {}, {mouseDown});
+  repro::ReproEvent mouseUp;
+  mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
+  mouseUp.mouseButton = 0;
+  pushFrame(2, clickDoc, 0, {}, {mouseUp});
+
+  std::vector<repro::ReproEvent> typing;
+  for (const char c : std::string_view("Hi")) {
+    repro::ReproEvent event;
+    event.kind = repro::ReproEvent::Kind::Char;
+    event.codepoint = static_cast<std::uint32_t>(c);
+    typing.push_back(event);
+  }
+  pushFrame(3, clickDoc, 0, {}, std::move(typing));
+  pushFrame(4, clickDoc, 0);
+
+  repro::ReproEvent escapeDown;
+  escapeDown.kind = repro::ReproEvent::Kind::KeyDown;
+  escapeDown.key = static_cast<int>(ImGuiKey_Escape);
+  pushFrame(5, clickDoc, 0, {}, {escapeDown});
+  repro::ReproEvent escapeUp;
+  escapeUp.kind = repro::ReproEvent::Kind::KeyUp;
+  escapeUp.key = static_cast<int>(ImGuiKey_Escape);
+  pushFrame(6, clickDoc, 0, {}, {escapeUp});
+  for (std::uint64_t index = 7; index <= 12; ++index) {
+    pushFrame(index, clickDoc, 0);
+  }
+
+  const std::filesystem::path replayPath = outputDir / std::string(name);
+  if (!repro::WriteReproFile(replayPath, file)) {
+    ADD_FAILURE() << "failed to write " << replayPath;
+    return std::nullopt;
+  }
+  return replayPath;
+}
+
 // Two pen anchors placed as plain clicks, then Escape. Under the committed
 // contract Escape ends the session keeping the open path (same as Enter);
 // only a segmentless draft is discarded.
@@ -1979,6 +2063,38 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
   ASSERT_TRUE(finalFrame->selectedPathDataAttribute.has_value())
       << "Backspace during a pen draft must not delete the whole in-progress path.";
   EXPECT_EQ(*finalFrame->selectedPathDataAttribute, "M 10 10");
+
+  std::error_code ec;
+  std::filesystem::remove_all(outputDir, ec);
+}
+
+TEST(GlRnrReplayTest, TextToolClickTypeEscapeCommitsTextElement) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "text_typing";
+  const std::optional<std::filesystem::path> replayPath =
+      WriteTextTypingReplay(outputDir, "text_typing.rnr");
+  ASSERT_TRUE(replayPath.has_value());
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = *replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames.insert(12);
+  options.maxFrame = 12;
+  options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+  options.driveDocumentSpaceInput = true;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
+
+  // The click opens an in-canvas session, the Char events type "Hi", and
+  // Escape commits the session leaving the new <text> element selected.
+  const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 12);
+  ASSERT_NE(finalFrame, nullptr);
+  ASSERT_TRUE(finalFrame->selectedTextContent.has_value())
+      << "the committed text element must remain selected after Escape";
+  EXPECT_EQ(*finalFrame->selectedTextContent, "Hi");
 
   std::error_code ec;
   std::filesystem::remove_all(outputDir, ec);

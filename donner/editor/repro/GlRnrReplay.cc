@@ -656,6 +656,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
         .selectedComputedFill = layerStatus.selectedComputedFill,
         .selectedRenderingInstanceFill = layerStatus.selectedRenderingInstanceFill,
         .selectedPathDataAttribute = layerStatus.selectedPathDataAttribute,
+        .selectedTextContent = layerStatus.selectedTextContent,
         .presentationResources = layerStatus.presentationResources,
         .frameCost = layerStatus.frameCost,
         .activeDragPreview = layerStatus.activeDragPreview,

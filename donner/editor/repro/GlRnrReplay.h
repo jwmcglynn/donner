@@ -188,6 +188,8 @@ struct GlRnrReplayFrameDiagnostics {
   std::optional<std::string> selectedRenderingInstanceFill;
   /// Selected element's raw `d` attribute, if present.
   std::optional<std::string> selectedPathDataAttribute;
+  /// Selected element's text content, if it is a `<text>` element.
+  std::optional<std::string> selectedTextContent;
   /// Presentation-cache resource counters captured after the frame.
   PresentationResourceStats presentationResources;
   /// Latest editor rendering cost counters.
