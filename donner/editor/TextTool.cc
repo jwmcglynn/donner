@@ -7,8 +7,10 @@
 #include <vector>
 
 #include "donner/base/FormatNumber.h"
+#include "donner/base/parser/NumberParser.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/LockState.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGTSpanElement.h"
@@ -63,6 +65,81 @@ bool IsInsertableCodepoint(char32_t cp) {
   return cp >= 0x20 && cp != 0x7F;
 }
 
+std::u32string CodepointsFromUtf8(std::string_view utf8) {
+  std::u32string out;
+  out.reserve(utf8.size());
+  std::size_t i = 0;
+  while (i < utf8.size()) {
+    const unsigned char lead = static_cast<unsigned char>(utf8[i]);
+    char32_t cp = 0;
+    std::size_t length = 1;
+    if (lead < 0x80) {
+      cp = lead;
+    } else if ((lead & 0xE0) == 0xC0) {
+      cp = lead & 0x1F;
+      length = 2;
+    } else if ((lead & 0xF0) == 0xE0) {
+      cp = lead & 0x0F;
+      length = 3;
+    } else if ((lead & 0xF8) == 0xF0) {
+      cp = lead & 0x07;
+      length = 4;
+    } else {
+      ++i;  // Skip a stray continuation byte.
+      continue;
+    }
+    if (i + length > utf8.size()) {
+      break;
+    }
+    bool valid = true;
+    for (std::size_t k = 1; k < length; ++k) {
+      const unsigned char continuation = static_cast<unsigned char>(utf8[i + k]);
+      if ((continuation & 0xC0) != 0x80) {
+        valid = false;
+        break;
+      }
+      cp = (cp << 6) | (continuation & 0x3F);
+    }
+    if (!valid) {
+      ++i;
+      continue;
+    }
+    out.push_back(cp);
+    i += length;
+  }
+  return out;
+}
+
+/// Parse @p name as a plain SVG number, or nullopt when absent/malformed.
+std::optional<double> ParseNumericAttribute(const svg::SVGElement& element, std::string_view name) {
+  const std::optional<RcString> value = element.getAttribute(name);
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  const auto result = ::donner::parser::NumberParser::Parse(std::string_view(*value));
+  if (result.hasError()) {
+    return std::nullopt;
+  }
+  return result.result().number;
+}
+
+/// Map a DOM character index (which counts rendered glyphs only) back to a
+/// logical caret index into @p content (which also stores '\n' hard breaks).
+std::size_t LogicalIndexForDomChar(const std::u32string& content, std::size_t domChar) {
+  std::size_t domIndex = 0;
+  std::size_t logical = 0;
+  for (; logical < content.size(); ++logical) {
+    if (content[logical] == U'\n') {
+      continue;
+    }
+    if (domIndex == domChar) {
+      break;
+    }
+    ++domIndex;
+  }
+  return logical;
+}
+
 }  // namespace
 
 void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
@@ -76,37 +153,39 @@ void TextTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 
   if (state_ == State::Editing) {
     // A click inside the session's text moves the caret; a click anywhere
-    // else commits the session and starts a new draft at the click point.
+    // else commits the session before the idle click rules run below.
     if (sessionText_.has_value()) {
-      const long hitChar = sessionText_->withWriteAccess(
-          [this, &documentPoint](svg::DocumentWriteAccess&, EntityHandle) {
-            return sessionText_->getCharNumAtPosition(documentPoint);
-          });
-      if (hitChar >= 0) {
-        // Map the DOM character index back to a logical caret index by
-        // skipping over the hard breaks (which have no DOM character).
-        std::size_t domIndex = 0;
-        std::size_t logical = 0;
-        for (; logical < content_.size(); ++logical) {
-          if (content_[logical] == U'\n') {
-            continue;
-          }
-          if (domIndex == static_cast<std::size_t>(hitChar)) {
-            break;
-          }
-          ++domIndex;
-        }
-        caretIndex_ = logical;
+      if (const std::optional<std::size_t> caret = caretIndexAtPoint(documentPoint);
+          caret.has_value()) {
+        caretIndex_ = *caret;
         return;
       }
     }
     commit(editor);
-    // Fall through to start a new draft from this click.
   }
 
+  // A click on existing (unlocked) text opens an editing session on it with
+  // the caret at the clicked character.
+  if (const std::optional<svg::SVGGraphicsElement> hit = editor.hitTest(documentPoint);
+      hit.has_value() && !IsLocked(*hit)) {
+    const std::optional<svg::SVGTextElement> hitText = hit->withReadAccess(
+        [&hit](svg::DocumentReadAccess&, EntityHandle) -> std::optional<svg::SVGTextElement> {
+          return hit->isa<svg::SVGTextElement>()
+                     ? std::make_optional(hit->cast<svg::SVGTextElement>())
+                     : std::nullopt;
+        });
+    if (hitText.has_value()) {
+      beginEditingSessionForExisting(editor, *hitText, documentPoint);
+      return;
+    }
+  }
+
+  // Empty canvas: start a (potential) box drag. Release decides between box
+  // text (drag), point text (double-click), and nothing (plain click).
   state_ = State::DraggingBox;
   dragStartDoc_ = documentPoint;
   dragBoxDoc_.reset();
+  pendingDoubleClick_ = modifiers.doubleClick;
 }
 
 void TextTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) {
@@ -130,14 +209,21 @@ void TextTool::onMouseUp(EditorApp& editor, const Vector2d& documentPoint) {
   const Vector2d dragDelta = documentPoint - dragStartDoc_;
   const bool isBox = std::hypot(dragDelta.x, dragDelta.y) > dragToleranceDoc_ &&
                      dragBoxDoc_.has_value() && dragBoxDoc_->size().x > dragToleranceDoc_;
+  const bool wantsPointText = pendingDoubleClick_;
+  pendingDoubleClick_ = false;
   if (isBox) {
     // Box text: the origin is the box's top-left with the first baseline one
     // font-size below the top.
     const Box2d box = *dragBoxDoc_;
     beginEditingSession(editor, Vector2d(box.topLeft.x, box.topLeft.y + kDefaultFontSize), box);
-  } else {
-    // Point text: the click point is the first baseline origin.
+  } else if (wantsPointText) {
+    // Double-click on empty canvas: the click point is the first baseline
+    // origin of new point text.
     beginEditingSession(editor, dragStartDoc_, std::nullopt);
+  } else {
+    // A plain click on empty canvas creates nothing (it already committed
+    // any active session on mouse-down).
+    state_ = State::Idle;
   }
   dragBoxDoc_.reset();
 }
@@ -154,7 +240,9 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   text.setAttribute("y", donner::detail::FormatNumberForSVG(originDoc.y));
   text.setAttribute("font-family", std::string(kDefaultFontFamily));
   text.setAttribute("font-size", donner::detail::FormatNumberForSVG(kDefaultFontSize));
-  text.setAttribute("fill", std::string(kDefaultFill));
+  // Fill goes through the style attribute — the same channel the editor's
+  // fill-color picker edits — rather than a presentation attribute.
+  text.setAttribute("style", "fill: " + std::string(kDefaultFill));
   if (boxDoc.has_value()) {
     text.setAttribute("data-donner-text-box-width",
                       donner::detail::FormatNumberForSVG(boxDoc->size().x));
@@ -164,8 +252,10 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
 
   previousSelection_ = editor.selectedElements();
   sessionText_ = text;
-  boxDoc_ = boxDoc;
-  originDoc_ = originDoc;
+  createdBySession_ = true;
+  documentFromText_ = Transform2d();
+  boxText_ = boxDoc;
+  originText_ = originDoc;
   fontSize_ = kDefaultFontSize;
   content_.clear();
   cachedCharWidths_.clear();
@@ -175,6 +265,106 @@ void TextTool::beginEditingSession(EditorApp& editor, const Vector2d& originDoc,
   editor.applyMutation(EditorCommand::InsertTextCommand(parent, text, ""));
   editor.setSelection(text);
   editor.flushFrame();
+}
+
+void TextTool::beginEditingSessionForExisting(EditorApp& editor, const svg::SVGTextElement& text,
+                                              const Vector2d& documentPoint) {
+  beginSessionUndo(editor);
+
+  previousSelection_ = editor.selectedElements();
+  sessionText_ = text;
+  createdBySession_ = false;
+
+  // Every DOM read below (children, text content, attributes, transforms,
+  // character geometry) requires a scoped access; one write scope covers the
+  // whole reconstruction.
+  text.withWriteAccess([this, &text](svg::DocumentWriteAccess&, EntityHandle) {
+    documentFromText_ = text.elementFromWorld();
+
+    // Reconstruct the logical content from the DOM. Tool-authored text is
+    // either a bare text node or one <tspan> per display line, where
+    // soft-wrapped continuation lines carry `data-donner-soft-wrap` (joined
+    // back without a break — the wrap is recomputed). Foreign tspans without
+    // the marker reconstruct as hard line breaks.
+    content_.clear();
+    bool sawTspan = false;
+    for (std::optional<svg::SVGElement> child = text.firstChild(); child.has_value();
+         child = child->nextSibling()) {
+      if (child->type() != svg::ElementType::TSpan) {
+        continue;
+      }
+      const bool softWrap = child->getAttribute("data-donner-soft-wrap").has_value();
+      if (sawTspan && !softWrap) {
+        content_.push_back(U'\n');
+      }
+      content_ += CodepointsFromUtf8(child->cast<svg::SVGTSpanElement>().textContent());
+      sawTspan = true;
+    }
+    if (!sawTspan) {
+      content_ = CodepointsFromUtf8(text.textContent());
+    }
+
+    fontSize_ = ParseNumericAttribute(text, "font-size").value_or(kDefaultFontSize);
+
+    const std::optional<double> xAttr = ParseNumericAttribute(text, "x");
+    const std::optional<double> yAttr = ParseNumericAttribute(text, "y");
+    originText_ = Vector2d(xAttr.value_or(0.0), yAttr.value_or(0.0));
+    if ((!xAttr.has_value() || !yAttr.has_value()) && text.getNumberOfChars() > 0) {
+      // Fall back to the first glyph's pen position for foreign text that
+      // positions itself through tspans instead of root attributes.
+      const Vector2d firstPen = text.getStartPositionOfChar(0);
+      originText_ = Vector2d(xAttr.value_or(firstPen.x), yAttr.value_or(firstPen.y));
+    }
+
+    boxText_.reset();
+    const std::optional<double> boxWidth =
+        ParseNumericAttribute(text, "data-donner-text-box-width");
+    const std::optional<double> boxHeight =
+        ParseNumericAttribute(text, "data-donner-text-box-height");
+    if (boxWidth.has_value() && boxHeight.has_value()) {
+      // Invert the creation rule: the origin sits one font-size below the
+      // box's top-left corner.
+      const Vector2d topLeft(originText_.x, originText_.y - fontSize_);
+      boxText_ = Box2d(topLeft, topLeft + Vector2d(*boxWidth, *boxHeight));
+    }
+  });
+
+  dragBoxDoc_.reset();
+  state_ = State::Editing;
+  cachedCharWidths_ = measureCharacterWidths(editor);
+  caretIndex_ = caretIndexAtPoint(documentPoint).value_or(content_.size());
+
+  editor.setSelection(text);
+  editor.flushFrame();
+}
+
+std::optional<std::size_t> TextTool::caretIndexAtPoint(const Vector2d& documentPoint) const {
+  if (!sessionText_.has_value()) {
+    return std::nullopt;
+  }
+
+  const Vector2d textPoint = documentFromText_.inverse().transformPosition(documentPoint);
+  struct CharHit {
+    long index = -1;
+    bool afterCenter = false;
+  };
+  const CharHit hit = sessionText_->withWriteAccess([this, &textPoint](svg::DocumentWriteAccess&,
+                                                                       EntityHandle) -> CharHit {
+    CharHit result;
+    result.index = sessionText_->getCharNumAtPosition(textPoint);
+    if (result.index >= 0) {
+      const Box2d extent = sessionText_->getExtentOfChar(static_cast<std::size_t>(result.index));
+      result.afterCenter = textPoint.x > (extent.topLeft.x + extent.bottomRight.x) * 0.5;
+    }
+    return result;
+  });
+  if (hit.index < 0) {
+    return std::nullopt;
+  }
+
+  const std::size_t logical = LogicalIndexForDomChar(content_, static_cast<std::size_t>(hit.index));
+  // A click in the trailing half of a glyph places the caret after it.
+  return hit.afterCenter ? std::min(logical + 1u, content_.size()) : logical;
 }
 
 void TextTool::insertCodepoint(EditorApp& editor, char32_t codepoint) {
@@ -313,7 +503,7 @@ bool TextTool::commit(EditorApp& editor) {
   }
 
   const bool empty = content_.empty();
-  if (empty && sessionText_.has_value()) {
+  if (empty && sessionText_.has_value() && createdBySession_) {
     // An empty session leaves the document unchanged: delete the created
     // element (soft delete, no undo entry) and restore the prior selection.
     editor.applyMutation(EditorCommand::DeleteElementCommand(*sessionText_));
@@ -323,8 +513,22 @@ bool TextTool::commit(EditorApp& editor) {
       editor.setSelection(previousSelection_);
     }
     editor.flushFrame();
-  } else if (sessionText_.has_value() && sessionBeforeSource_.has_value()) {
-    editor.recordDocumentSourceUndoOnNextFlush("Insert text", *sessionText_, *sessionBeforeSource_);
+  } else if (empty && sessionText_.has_value()) {
+    // Emptying an existing element deletes it — as a real undoable edit,
+    // since the pre-session document had content here.
+    editor.applyMutation(EditorCommand::DeleteElementCommand(*sessionText_));
+    editor.clearSelection();
+    if (sessionBeforeSource_.has_value()) {
+      editor.recordDocumentSourceUndoOnNextFlush(
+          "Delete text", editor.document().document().svgElement(), *sessionBeforeSource_);
+    }
+    editor.flushFrame();
+  } else if (sessionText_.has_value() && sessionBeforeSource_.has_value() &&
+             editor.document().document().source() != *sessionBeforeSource_) {
+    // Skip the undo entry when the session changed nothing (e.g. the user
+    // clicked into existing text and clicked away without typing).
+    editor.recordDocumentSourceUndoOnNextFlush(createdBySession_ ? "Insert text" : "Edit text",
+                                               *sessionText_, *sessionBeforeSource_);
   }
 
   cancel();
@@ -334,8 +538,11 @@ bool TextTool::commit(EditorApp& editor) {
 void TextTool::cancel() {
   state_ = State::Idle;
   sessionText_.reset();
-  boxDoc_.reset();
+  createdBySession_ = true;
+  documentFromText_ = Transform2d();
+  boxText_.reset();
   dragBoxDoc_.reset();
+  pendingDoubleClick_ = false;
   content_.clear();
   cachedCharWidths_.clear();
   caretIndex_ = 0;
@@ -375,9 +582,16 @@ void TextTool::syncContentToDom(EditorApp& editor) {
       const double lineHeight = fontSize_ * kLineHeightFactor;
       for (std::size_t i = 0; i < lines.size(); ++i) {
         svg::SVGTSpanElement tspan = svg::SVGTSpanElement::Create(document);
-        tspan.setAttribute("x", donner::detail::FormatNumberForSVG(originDoc_.x));
+        tspan.setAttribute("x", donner::detail::FormatNumberForSVG(originText_.x));
         if (i > 0) {
           tspan.setAttribute("dy", donner::detail::FormatNumberForSVG(lineHeight));
+          // A continuation line that did NOT follow a hard break is a soft
+          // wrap; the marker lets a later editing session join it back
+          // without a '\n' and recompute the wrap.
+          const std::u32string& previous = lines[i - 1u];
+          if (previous.empty() || previous.back() != U'\n') {
+            tspan.setAttribute("data-donner-soft-wrap", "true");
+          }
         }
         editor.applyMutation(EditorCommand::InsertTextCommand(
             *sessionText_, tspan, Utf8FromCodepoints(stripHardBreak(lines[i]))));
@@ -392,7 +606,7 @@ void TextTool::syncContentToDom(EditorApp& editor) {
   const std::vector<std::u32string> lines = displayLines(editor);
   rebuild(lines);
   cachedCharWidths_ = measureCharacterWidths(editor);
-  if (boxDoc_.has_value()) {
+  if (boxText_.has_value()) {
     const std::vector<std::u32string> rewrapped = displayLines(editor);
     if (rewrapped != lines) {
       rebuild(rewrapped);
@@ -416,14 +630,14 @@ std::vector<std::u32string> TextTool::displayLines(EditorApp& editor) const {
   }
   hardLines.push_back(std::move(current));
 
-  if (!boxDoc_.has_value() || cachedCharWidths_.empty()) {
+  if (!boxText_.has_value() || cachedCharWidths_.empty()) {
     return hardLines;
   }
 
   // Greedy word wrap against the box width, using the measured width of each
   // non-newline code point. `widthIndex` walks cachedCharWidths_ in lockstep
   // with the non-newline code points of content_.
-  const double boxWidth = boxDoc_->size().x;
+  const double boxWidth = boxText_->size().x;
   std::vector<std::u32string> wrapped;
   std::size_t widthIndex = 0;
   for (const std::u32string& hardLine : hardLines) {
@@ -533,8 +747,9 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
   const auto [line, column] = caretLineColumn(lines);
 
   // Caret X: origin plus the measured widths of the code points before the
-  // caret on its display line. Caret Y: the line's baseline.
-  double caretX = originDoc_.x;
+  // caret on its display line. Caret Y: the line's baseline. Both computed
+  // in the text's local space, then mapped to document space.
+  double caretX = originText_.x;
   std::size_t widthIndex = 0;
   for (std::size_t i = 0; i < line; ++i) {
     for (const char32_t cp : lines[i]) {
@@ -549,14 +764,18 @@ std::optional<TextTool::EditingChrome> TextTool::editingChrome(EditorApp& editor
   }
 
   const double lineHeight = fontSize_ * kLineHeightFactor;
-  const double baselineY = originDoc_.y + static_cast<double>(line) * lineHeight;
+  const double baselineY = originText_.y + static_cast<double>(line) * lineHeight;
 
   EditingChrome chrome;
   // Approximate ascent/descent from the font size; exact metrics are not
   // needed for a caret.
-  chrome.caretTopDoc = Vector2d(caretX, baselineY - fontSize_ * 0.9);
-  chrome.caretBottomDoc = Vector2d(caretX, baselineY + fontSize_ * 0.25);
-  chrome.boxDoc = boxDoc_;
+  chrome.caretTopDoc =
+      documentFromText_.transformPosition(Vector2d(caretX, baselineY - fontSize_ * 0.9));
+  chrome.caretBottomDoc =
+      documentFromText_.transformPosition(Vector2d(caretX, baselineY + fontSize_ * 0.25));
+  chrome.boxDoc = boxText_.has_value()
+                      ? std::make_optional(documentFromText_.transformBox(*boxText_))
+                      : std::nullopt;
   return chrome;
 }
 

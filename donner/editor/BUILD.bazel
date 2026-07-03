@@ -854,8 +854,10 @@ donner_cc_library(
     deps = [
         ":command_queue",
         ":editor_app",
+        ":lock_state",
         ":tool",
         "//donner/base",
+        "//donner/base/parser",
         "//donner/svg",
     ],
 )

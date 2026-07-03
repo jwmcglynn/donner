@@ -2439,6 +2439,7 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     modifiers.shift = ImGui::GetIO().KeyShift;
     modifiers.option = ImGui::GetIO().KeyAlt;
     modifiers.command = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
+    modifiers.doubleClick = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
     modifiers.pixelsPerDocUnit = interactionController_.viewport().pixelsPerDocUnit();
     interactionController_.bufferPendingClick(screenToDocument(ImGui::GetMousePos()), modifiers);
     pendingSelectClickStartSeconds_ = ImGui::GetTime();
@@ -2589,8 +2590,9 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
         } else if (textToolActive) {
           textTool_.onMouseDown(app_, pendingClick.documentPoint, pendingClick.modifiers);
           if (!leftMouseDown) {
-            // Click already released: complete it as point text and open the
-            // editing session. The tool flushes internally, so refresh the
+            // Click already released: finish the gesture (double-click opens
+            // a point-text session; a plain click on empty canvas is a
+            // no-op). The tool flushes internally, so refresh the
             // presentation directly instead of through the queued-flush helper.
             textTool_.onMouseUp(app_, pendingClick.documentPoint);
             refreshAfterToolDrivenFlush();

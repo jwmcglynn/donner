@@ -575,6 +575,9 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   }
 
   int leftMouseDownOrdinal = 0;
+  // Double-click tracking for document-space input (see the frame loop).
+  std::optional<double> lastLeftMousePressSeconds;
+  Vector2d lastLeftMousePressDoc = Vector2d::Zero();
   const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 
   for (const ReproFrame& frame : repro->frames) {
@@ -613,9 +616,24 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
       shell.overrideViewportForReplay(ViewportFromReproViewport(*frame.viewport));
     }
     if (options.driveDocumentSpaceInput) {
-      const std::optional<EditorShellDocumentReplayInput> documentInput =
+      std::optional<EditorShellDocumentReplayInput> documentInput =
           DocumentReplayInputFromFrame(frame);
       if (documentInput.has_value()) {
+        // Mirror the OS double-click contract for document-space input:
+        // a second press close (in time and position) to the previous one
+        // carries the double-click modifier, matching what ImGui's
+        // IsMouseDoubleClicked reports on the live-pointer path.
+        if (documentInput->leftMousePressed) {
+          constexpr double kDoubleClickSeconds = 0.30;
+          constexpr double kDoubleClickMaxDistanceDoc = 6.0;
+          documentInput->modifiers.doubleClick =
+              lastLeftMousePressSeconds.has_value() &&
+              frame.timestampSeconds - *lastLeftMousePressSeconds <= kDoubleClickSeconds &&
+              (documentInput->documentPoint - lastLeftMousePressDoc).length() <=
+                  kDoubleClickMaxDistanceDoc;
+          lastLeftMousePressSeconds = frame.timestampSeconds;
+          lastLeftMousePressDoc = documentInput->documentPoint;
+        }
         shell.queueDocumentSpaceReplayInputForTesting(*documentInput);
       }
     }

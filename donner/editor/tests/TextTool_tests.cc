@@ -5,6 +5,7 @@
 
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/EditorApp.h"
+#include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
@@ -69,9 +70,20 @@ protected:
     return value.has_value() ? std::string(std::string_view(*value)) : std::string();
   }
 
-  /// Click (press + release at the same point) to open a point-text session.
+  /// Plain click (press + release at the same point). Moves the caret on the
+  /// session's text, opens an edit session on existing text, and creates
+  /// nothing on empty canvas.
   void clickAt(const Vector2d& documentPoint) {
     tool.onMouseDown(app, documentPoint, MouseModifiers{});
+    tool.onMouseUp(app, documentPoint);
+  }
+
+  /// Double-click (press + release at the same point) to open a point-text
+  /// session on empty canvas.
+  void doubleClickAt(const Vector2d& documentPoint) {
+    MouseModifiers modifiers;
+    modifiers.doubleClick = true;
+    tool.onMouseDown(app, documentPoint, modifiers);
     tool.onMouseUp(app, documentPoint);
   }
 
@@ -86,8 +98,8 @@ protected:
   TextTool tool;
 };
 
-TEST_F(TextToolTest, ClickOpensPointTextSession) {
-  clickAt(Vector2d(20.0, 30.0));
+TEST_F(TextToolTest, DoubleClickOpensPointTextSession) {
+  doubleClickAt(Vector2d(20.0, 30.0));
 
   EXPECT_TRUE(tool.isEditing());
   ASSERT_TRUE(hasTextElement());
@@ -96,7 +108,10 @@ TEST_F(TextToolTest, ClickOpensPointTextSession) {
   EXPECT_THAT(attr(inserted, "y"), Eq("30"));
   EXPECT_THAT(attr(inserted, "font-family"), Eq("sans-serif"));
   EXPECT_THAT(attr(inserted, "font-size"), Eq("32"));
-  EXPECT_THAT(attr(inserted, "fill"), Eq("black"));
+  // Fill lands in the style attribute (the channel the fill-color picker
+  // edits), not as a presentation attribute.
+  EXPECT_THAT(attr(inserted, "style"), Eq("fill: black"));
+  EXPECT_THAT(attr(inserted, "fill"), Eq(""));
   EXPECT_THAT(attr(inserted, "data-donner-text-box-width"), Eq(""));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
@@ -119,8 +134,17 @@ TEST_F(TextToolTest, DragOpensBoxTextSessionWithBoxAttributes) {
   EXPECT_THAT(attr(inserted, "data-donner-text-box-height"), Eq("100"));
 }
 
-TEST_F(TextToolTest, ShortDragStillPlacesPointText) {
-  tool.onMouseDown(app, Vector2d(20.0, 30.0), MouseModifiers{});
+TEST_F(TextToolTest, PlainClickOnEmptyCanvasCreatesNothing) {
+  clickAt(Vector2d(20.0, 30.0));
+
+  EXPECT_FALSE(tool.isEditing());
+  EXPECT_FALSE(hasTextElement());
+}
+
+TEST_F(TextToolTest, DoubleClickWithShortDragStillPlacesPointText) {
+  MouseModifiers modifiers;
+  modifiers.doubleClick = true;
+  tool.onMouseDown(app, Vector2d(20.0, 30.0), modifiers);
   tool.onMouseMove(app, Vector2d(22.0, 31.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(22.0, 31.0));
 
@@ -130,7 +154,7 @@ TEST_F(TextToolTest, ShortDragStillPlacesPointText) {
 }
 
 TEST_F(TextToolTest, TypingUpdatesTextContentAndCaret) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
 
   EXPECT_EQ(text().textContent(), "Hi");
@@ -139,7 +163,7 @@ TEST_F(TextToolTest, TypingUpdatesTextContentAndCaret) {
 }
 
 TEST_F(TextToolTest, CaretMovesWithinLine) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
 
   tool.moveCaret(app, TextTool::CaretMove::Left);
@@ -155,7 +179,7 @@ TEST_F(TextToolTest, CaretMovesWithinLine) {
 }
 
 TEST_F(TextToolTest, CaretMovesAcrossHardBreakLines) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
   tool.insertNewline(app);
   type("There");
@@ -173,7 +197,7 @@ TEST_F(TextToolTest, CaretMovesAcrossHardBreakLines) {
 }
 
 TEST_F(TextToolTest, InsertAtCaretAfterMove) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Ho");
   tool.moveCaret(app, TextTool::CaretMove::Left);
   type("ell");
@@ -183,7 +207,7 @@ TEST_F(TextToolTest, InsertAtCaretAfterMove) {
 }
 
 TEST_F(TextToolTest, BackspaceDeletesBeforeCaret) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
   tool.backspace(app);
 
@@ -197,7 +221,7 @@ TEST_F(TextToolTest, BackspaceDeletesBeforeCaret) {
 }
 
 TEST_F(TextToolTest, DeleteForwardDeletesAfterCaret) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
   tool.moveCaret(app, TextTool::CaretMove::LineStart);
   tool.deleteForward(app);
@@ -207,7 +231,7 @@ TEST_F(TextToolTest, DeleteForwardDeletesAfterCaret) {
 }
 
 TEST_F(TextToolTest, NewlineCreatesOneTspanPerLine) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("A");
   tool.insertNewline(app);
   type("B");
@@ -230,7 +254,7 @@ TEST_F(TextToolTest, NewlineCreatesOneTspanPerLine) {
 }
 
 TEST_F(TextToolTest, DeletingNewlineCollapsesBackToSingleTextNode) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("A");
   tool.insertNewline(app);
   type("B");
@@ -245,7 +269,7 @@ TEST_F(TextToolTest, DeletingNewlineCollapsesBackToSingleTextNode) {
 }
 
 TEST_F(TextToolTest, ToggleBoldItalicUnderlineSetAndRemoveAttributes) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
 
   tool.toggleBold(app);
@@ -265,7 +289,7 @@ TEST_F(TextToolTest, ToggleBoldItalicUnderlineSetAndRemoveAttributes) {
 }
 
 TEST_F(TextToolTest, CommitKeepsTextAndEndsSession) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
 
   EXPECT_TRUE(tool.commit(app));
@@ -278,7 +302,7 @@ TEST_F(TextToolTest, CommitKeepsTextAndEndsSession) {
 }
 
 TEST_F(TextToolTest, CommitUndoRemovesTheWholeSessionAtOnce) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
   tool.toggleBold(app);
   ASSERT_TRUE(tool.commit(app));
@@ -300,7 +324,7 @@ TEST_F(TextToolTest, EmptyCommitDeletesElementAndRestoresSelection) {
   ASSERT_TRUE(rect.has_value());
   app.setSelection(*rect);
 
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   ASSERT_TRUE(hasTextElement());
 
   EXPECT_TRUE(tool.commit(app));
@@ -310,12 +334,25 @@ TEST_F(TextToolTest, EmptyCommitDeletesElementAndRestoresSelection) {
   EXPECT_EQ(app.selectedElements().front(), *rect);
 }
 
-TEST_F(TextToolTest, ClickAwayCommitsAndStartsNewDraft) {
-  clickAt(Vector2d(20.0, 30.0));
+TEST_F(TextToolTest, ClickAwayCommitsWithoutCreating) {
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
 
-  // A click far from the session's text commits it and starts a new draft.
+  // A plain click far from the session's text commits it and creates nothing.
   clickAt(Vector2d(300.0, 300.0));
+
+  EXPECT_FALSE(tool.isEditing());
+  EXPECT_EQ(textElementCount(), 1);
+  EXPECT_EQ(text().textContent(), "Hi");
+}
+
+TEST_F(TextToolTest, DoubleClickAwayCommitsAndStartsNewDraft) {
+  doubleClickAt(Vector2d(20.0, 30.0));
+  type("Hi");
+
+  // A double-click far from the session's text commits it and starts a new
+  // point-text draft.
+  doubleClickAt(Vector2d(300.0, 300.0));
 
   EXPECT_TRUE(tool.isEditing());
   EXPECT_EQ(tool.sessionContent(), U"");
@@ -362,8 +399,170 @@ TEST_F(TextToolTest, BoxTextWrapsToBoxWidth) {
   EXPECT_EQ(tool.sessionContent(), U"MMMM MMMM");
 }
 
+class TextToolExistingTextTest : public TextToolTest {
+protected:
+  static constexpr std::string_view kSvgWithText =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
+         </svg>)";
+
+  void SetUp() override { ASSERT_TRUE(app.loadFromString(kSvgWithText)); }
+
+  /// A document point inside the glyph cell of character @p charIndex:
+  /// the left or right quarter point of its extent, on the baseline side.
+  Vector2d pointInChar(std::size_t charIndex, bool rightHalf) {
+    svg::SVGTextElement element = text();
+    const Box2d extent =
+        element.withWriteAccess([&element, charIndex](svg::DocumentWriteAccess&, EntityHandle) {
+          return element.getExtentOfChar(charIndex);
+        });
+    EXPECT_FALSE(extent.isEmpty());
+    const double x = rightHalf ? extent.topLeft.x + extent.size().x * 0.75
+                               : extent.topLeft.x + extent.size().x * 0.25;
+    const double y = extent.topLeft.y + extent.size().y * 0.5;
+    return Vector2d(x, y);
+  }
+};
+
+TEST_F(TextToolExistingTextTest, ClickOnExistingTextOpensEditSessionWithCaretAtClick) {
+  clickAt(pointInChar(1, /*rightHalf=*/false));
+
+  EXPECT_TRUE(tool.isEditing());
+  EXPECT_EQ(textElementCount(), 1);
+  EXPECT_EQ(tool.sessionContent(), U"Hello");
+  EXPECT_EQ(tool.caretIndex(), 1u);
+
+  type("X");
+  EXPECT_EQ(text().textContent(), "HXello");
+}
+
+TEST_F(TextToolExistingTextTest, ClickToEditUsesScopedAccessUnderConcurrentDom) {
+  // The live editor runs with ConcurrentDom threading, where every DOM read
+  // (children, textContent, attributes, transforms) must happen inside a
+  // scoped access — the session-open path SIGABRTs on
+  // assertScopedEntityHandleAccessAllowed otherwise.
+  app.document().document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+
+  clickAt(pointInChar(1, /*rightHalf=*/false));
+
+  EXPECT_TRUE(tool.isEditing());
+  EXPECT_EQ(tool.sessionContent(), U"Hello");
+  EXPECT_EQ(tool.caretIndex(), 1u);
+}
+
+TEST_F(TextToolExistingTextTest, ClickInTrailingHalfPlacesCaretAfterCharacter) {
+  clickAt(pointInChar(1, /*rightHalf=*/true));
+
+  EXPECT_TRUE(tool.isEditing());
+  EXPECT_EQ(tool.caretIndex(), 2u);
+}
+
+TEST_F(TextToolExistingTextTest, EditingExistingTextCommitRecordsEditUndo) {
+  clickAt(pointInChar(4, /*rightHalf=*/true));
+  ASSERT_EQ(tool.caretIndex(), 5u);
+  type("!");
+  ASSERT_TRUE(tool.commit(app));
+  app.flushFrame();
+
+  EXPECT_EQ(text().textContent(), "Hello!");
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Edit text");
+
+  app.undo();
+  app.flushFrame();
+  EXPECT_EQ(text().textContent(), "Hello");
+}
+
+TEST_F(TextToolExistingTextTest, ClickInAndAwayWithoutTypingRecordsNoUndo) {
+  clickAt(pointInChar(0, /*rightHalf=*/false));
+  ASSERT_TRUE(tool.isEditing());
+
+  clickAt(Vector2d(300.0, 300.0));
+  app.flushFrame();
+
+  EXPECT_FALSE(tool.isEditing());
+  EXPECT_EQ(text().textContent(), "Hello");
+  EXPECT_FALSE(app.canUndo());
+}
+
+TEST_F(TextToolExistingTextTest, EmptyingExistingTextDeletesItUndoably) {
+  clickAt(pointInChar(4, /*rightHalf=*/true));
+  ASSERT_EQ(tool.caretIndex(), 5u);
+  for (int i = 0; i < 5; ++i) {
+    tool.backspace(app);
+  }
+  ASSERT_TRUE(tool.commit(app));
+  app.flushFrame();
+
+  EXPECT_FALSE(hasTextElement());
+  ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
+  EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Delete text");
+
+  app.undo();
+  app.flushFrame();
+  ASSERT_TRUE(hasTextElement());
+  EXPECT_EQ(text().textContent(), "Hello");
+}
+
+TEST_F(TextToolExistingTextTest, ExistingTspanLinesReconstructAsHardBreaks) {
+  constexpr std::string_view kMultiLineSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+             ><tspan x="50">One</tspan><tspan x="50" dy="24">Two</tspan></text>
+         </svg>)";
+  ASSERT_TRUE(app.loadFromString(kMultiLineSvg));
+
+  clickAt(pointInChar(0, /*rightHalf=*/false));
+
+  EXPECT_TRUE(tool.isEditing());
+  EXPECT_EQ(tool.sessionContent(), U"One\nTwo");
+}
+
+TEST_F(TextToolExistingTextTest, TransformedTextClickMapsThroughElementTransform) {
+  constexpr std::string_view kTransformedSvg =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400">
+           <text id="t" x="50" y="80" font-size="20" font-family="sans-serif"
+                 transform="translate(100 40)">Hello</text>
+         </svg>)svg";
+  ASSERT_TRUE(app.loadFromString(kTransformedSvg));
+
+  // pointInChar reads text-local extents; the click arrives in document
+  // space, offset by the element transform.
+  const Vector2d documentPoint = pointInChar(1, /*rightHalf=*/false) + Vector2d(100.0, 40.0);
+  clickAt(documentPoint);
+
+  EXPECT_TRUE(tool.isEditing());
+  EXPECT_EQ(tool.caretIndex(), 1u);
+
+  // The caret chrome maps back into document space through the transform.
+  const auto chrome = tool.editingChrome(app);
+  ASSERT_TRUE(chrome.has_value());
+  EXPECT_NEAR(chrome->caretBottomDoc.y, 80.0 + 40.0 + 20.0 * 0.25, 1.0);
+  EXPECT_GT(chrome->caretTopDoc.x, 150.0);
+}
+
+TEST_F(TextToolExistingTextTest, BoxTextSoftWrapRoundTripsThroughReedit) {
+  ASSERT_TRUE(app.loadFromString(kEmptySvg));
+
+  // Author box text narrow enough to soft-wrap.
+  tool.onMouseDown(app, Vector2d(10.0, 20.0), MouseModifiers{});
+  tool.onMouseMove(app, Vector2d(70.0, 120.0), /*buttonHeld=*/true);
+  tool.onMouseUp(app, Vector2d(70.0, 120.0));
+  ASSERT_TRUE(tool.isEditing());
+  type("MMMM MMMM");
+  ASSERT_GE(tspanCount(), 2);
+  ASSERT_TRUE(tool.commit(app));
+  app.flushFrame();
+
+  // Re-open the session by clicking the first glyph: soft-wrapped tspans
+  // join back without hard breaks.
+  clickAt(pointInChar(0, /*rightHalf=*/false));
+  EXPECT_TRUE(tool.isEditing());
+  EXPECT_EQ(tool.sessionContent(), U"MMMM MMMM");
+}
+
 TEST_F(TextToolTest, CancelResetsWithoutTouchingDocument) {
-  clickAt(Vector2d(20.0, 30.0));
+  doubleClickAt(Vector2d(20.0, 30.0));
   type("Hi");
 
   tool.cancel();

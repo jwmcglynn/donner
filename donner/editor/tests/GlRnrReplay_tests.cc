@@ -664,15 +664,19 @@ std::optional<std::filesystem::path> WriteTextTypingReplay(const std::filesystem
                 .tool = "text",
             }});
 
+  // Double-click on empty canvas opens the point-text session: two rapid
+  // press/release pairs at the same document point.
   const Vector2d clickDoc(10.0, 40.0);
   repro::ReproEvent mouseDown;
   mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
   mouseDown.mouseButton = 0;
-  pushFrame(1, clickDoc, 1, {}, {mouseDown});
   repro::ReproEvent mouseUp;
   mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
   mouseUp.mouseButton = 0;
+  pushFrame(1, clickDoc, 1, {}, {mouseDown});
   pushFrame(2, clickDoc, 0, {}, {mouseUp});
+  pushFrame(3, clickDoc, 1, {}, {mouseDown});
+  pushFrame(4, clickDoc, 0, {}, {mouseUp});
 
   std::vector<repro::ReproEvent> typing;
   for (const char c : std::string_view("Hi")) {
@@ -681,18 +685,18 @@ std::optional<std::filesystem::path> WriteTextTypingReplay(const std::filesystem
     event.codepoint = static_cast<std::uint32_t>(c);
     typing.push_back(event);
   }
-  pushFrame(3, clickDoc, 0, {}, std::move(typing));
-  pushFrame(4, clickDoc, 0);
+  pushFrame(5, clickDoc, 0, {}, std::move(typing));
+  pushFrame(6, clickDoc, 0);
 
   repro::ReproEvent escapeDown;
   escapeDown.kind = repro::ReproEvent::Kind::KeyDown;
   escapeDown.key = static_cast<int>(ImGuiKey_Escape);
-  pushFrame(5, clickDoc, 0, {}, {escapeDown});
+  pushFrame(7, clickDoc, 0, {}, {escapeDown});
   repro::ReproEvent escapeUp;
   escapeUp.kind = repro::ReproEvent::Kind::KeyUp;
   escapeUp.key = static_cast<int>(ImGuiKey_Escape);
-  pushFrame(6, clickDoc, 0, {}, {escapeUp});
-  for (std::uint64_t index = 7; index <= 12; ++index) {
+  pushFrame(8, clickDoc, 0, {}, {escapeUp});
+  for (std::uint64_t index = 9; index <= 12; ++index) {
     pushFrame(index, clickDoc, 0);
   }
 
@@ -755,19 +759,24 @@ std::optional<std::filesystem::path> WriteTextTypingLivePointerReplay(
             }});
   pushFrame(1, clickX, clickY, 0);
 
+  // Double-click on empty canvas opens the point-text session: two rapid
+  // press/release pairs at the same screen point (well within ImGui's
+  // double-click time/distance thresholds), holding the second press across
+  // a few frames so the pending click is processed while the button is still
+  // down, like a real click.
   repro::ReproEvent mouseDown;
   mouseDown.kind = repro::ReproEvent::Kind::MouseDown;
   mouseDown.mouseButton = 0;
-  pushFrame(2, clickX, clickY, 1, {}, {mouseDown});
-  // Hold the button across a few frames so the pending click is processed
-  // while the button is still down, like a real click.
-  pushFrame(3, clickX, clickY, 1);
-  pushFrame(4, clickX, clickY, 1);
   repro::ReproEvent mouseUp;
   mouseUp.kind = repro::ReproEvent::Kind::MouseUp;
   mouseUp.mouseButton = 0;
-  pushFrame(5, clickX, clickY, 0, {}, {mouseUp});
-  pushFrame(6, clickX, clickY, 0);
+  pushFrame(2, clickX, clickY, 1, {}, {mouseDown});
+  pushFrame(3, clickX, clickY, 0, {}, {mouseUp});
+  pushFrame(4, clickX, clickY, 1, {}, {mouseDown});
+  pushFrame(5, clickX, clickY, 1);
+  pushFrame(6, clickX, clickY, 1);
+  pushFrame(7, clickX, clickY, 0, {}, {mouseUp});
+  pushFrame(8, clickX, clickY, 0);
 
   std::vector<repro::ReproEvent> typing;
   for (const char c : std::string_view("Hi")) {
@@ -776,18 +785,18 @@ std::optional<std::filesystem::path> WriteTextTypingLivePointerReplay(
     event.codepoint = static_cast<std::uint32_t>(c);
     typing.push_back(event);
   }
-  pushFrame(7, clickX, clickY, 0, {}, std::move(typing));
-  pushFrame(8, clickX, clickY, 0);
+  pushFrame(9, clickX, clickY, 0, {}, std::move(typing));
+  pushFrame(10, clickX, clickY, 0);
 
   repro::ReproEvent escapeDown;
   escapeDown.kind = repro::ReproEvent::Kind::KeyDown;
   escapeDown.key = static_cast<int>(ImGuiKey_Escape);
-  pushFrame(9, clickX, clickY, 0, {}, {escapeDown});
+  pushFrame(11, clickX, clickY, 0, {}, {escapeDown});
   repro::ReproEvent escapeUp;
   escapeUp.kind = repro::ReproEvent::Kind::KeyUp;
   escapeUp.key = static_cast<int>(ImGuiKey_Escape);
-  pushFrame(10, clickX, clickY, 0, {}, {escapeUp});
-  for (std::uint64_t index = 11; index <= 14; ++index) {
+  pushFrame(12, clickX, clickY, 0, {}, {escapeUp});
+  for (std::uint64_t index = 13; index <= 16; ++index) {
     pushFrame(index, clickX, clickY, 0);
   }
 
@@ -2381,8 +2390,8 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
   repro::GlRnrReplayOptions options;
   options.rnrPath = *replayPath;
   options.outputDir = outputDir;
-  options.captureFrames.insert(14);
-  options.maxFrame = 14;
+  options.captureFrames.insert(16);
+  options.maxFrame = 16;
   options.cropMode = repro::GlRnrReplayCropMode::DocumentCanvas;
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
@@ -2391,7 +2400,7 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
   std::string error;
   ASSERT_TRUE(repro::RunGlRnrReplay(options, &result, &error)) << error;
 
-  const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 14);
+  const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 16);
   ASSERT_NE(finalFrame, nullptr);
   ASSERT_TRUE(finalFrame->selectedTextContent.has_value())
       << "a live canvas click with the Text tool must open an editing session; "
