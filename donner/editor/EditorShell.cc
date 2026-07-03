@@ -2673,6 +2673,20 @@ void EditorShell::renderRenderPane(const Vector2d& renderPaneOrigin, const Vecto
     pendingSelectClickStartSeconds_.reset();
   }
 
+  // Text-tool live pointer path: the pending-click buffer delivers the
+  // mousedown (starting the box drag), but the drag extension and the release
+  // that opens the editing session come from the live ImGui pointer, exactly
+  // like the pen tool's anchor drag below.
+  if (textToolActive && textTool_.isDraggingBox()) {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
+      textTool_.onMouseMove(app_, screenToDocument(ImGui::GetMousePos()), /*buttonHeld=*/true);
+    }
+    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      textTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
+      refreshAfterToolDrivenFlush();
+    }
+  }
+
   if (penToolActive && penTool_.isDraggingAnchor()) {
     if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !spaceHeld) {
       MouseModifiers dragModifiers;
