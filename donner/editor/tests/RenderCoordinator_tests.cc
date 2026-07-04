@@ -30,7 +30,10 @@
 namespace donner::editor {
 namespace {
 
+using ::testing::ElementsAre;
 using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 // gtest cannot stream the untyped `entt::null_t` sentinel, so compare against a
 // concrete `Entity`-typed null. This keeps EXPECT_EQ's self-diagnosing output
@@ -448,11 +451,10 @@ TEST(RenderCoordinatorTest, RefreshSelectionBoundsCacheCapturesSelection) {
 
   coordinator.refreshSelectionBoundsCache(app);
   const SelectionBoundsCache& cache = coordinator.selectionBoundsCache();
-  ASSERT_EQ(cache.lastSelection.size(), 1u);
-  EXPECT_TRUE(cache.lastSelection.front() == r1);
+  EXPECT_THAT(cache.lastSelection, ElementsAre(r1));
   EXPECT_EQ(cache.lastRefreshVersion, app.document().currentFrameVersion());
   // The single selected rect has renderable geometry → one pending bound.
-  ASSERT_EQ(cache.pendingBoundsDoc.size(), 1u);
+  ASSERT_THAT(cache.pendingBoundsDoc, SizeIs(1u));
   // r1 lives at (10,10..30,30) in document space.
   EXPECT_THAT(cache.pendingBoundsDoc.front().topLeft.x, ::testing::DoubleNear(10.0, 1e-6));
   EXPECT_THAT(cache.pendingBoundsDoc.front().topLeft.y, ::testing::DoubleNear(10.0, 1e-6));
@@ -470,12 +472,12 @@ TEST(RenderCoordinatorTest, PromoteSelectionBoundsNoOpUntilDisplayedVersionCatch
   // document version is >= 1, so the pending bounds cannot promote yet.
   ASSERT_GT(app.document().currentFrameVersion(), 0u);
   ASSERT_EQ(coordinator.displayedDocVersion(), 0u);
-  ASSERT_FALSE(coordinator.selectionBoundsCache().pendingBoundsDoc.empty());
+  ASSERT_THAT(coordinator.selectionBoundsCache().pendingBoundsDoc, Not(IsEmpty()));
 
   coordinator.promoteSelectionBoundsIfReady();
   EXPECT_THAT(coordinator.selectionBoundsCache().displayedBoundsDoc, IsEmpty())
       << "Pending bounds must not promote while displayedDocVersion lags the pending version.";
-  EXPECT_FALSE(coordinator.selectionBoundsCache().pendingBoundsDoc.empty())
+  EXPECT_THAT(coordinator.selectionBoundsCache().pendingBoundsDoc, Not(IsEmpty()))
       << "Unpromoted pending bounds must be retained for a later catch-up.";
 }
 
@@ -495,7 +497,7 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
       QuerySelector(app, "#r1").unsafeEntityHandle().entity(), /*version=*/1, Vector2i(100, 100));
   coordinator.setSourceHoverElements({QuerySelector(app, "#r2")});
 
-  ASSERT_FALSE(coordinator.selectionBoundsCache().lastSelection.empty());
+  ASSERT_THAT(coordinator.selectionBoundsCache().lastSelection, Not(IsEmpty()));
   ASSERT_TRUE(coordinator.compositedPresentation().hasCachedTextures());
 
   coordinator.resetForLoadedDocument();
@@ -536,7 +538,7 @@ TEST(RenderCoordinatorTest, RasterizeOverlayPublishesImmediateSnapshot) {
   EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
                                                               /*marqueeRectDoc=*/std::nullopt));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
+  EXPECT_THAT(coordinator.immediateOverlaySnapshot()->paths, SizeIs(1u));
 }
 
 TEST(RenderCoordinatorTest, RasterizeOverlaySkipsUnchangedImmediateSnapshot) {

@@ -27,6 +27,7 @@
 #include "donner/editor/DragCoalesce.h"
 
 #define IMGUI_DEFINE_MATH_OPERATORS
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <optional>
@@ -37,6 +38,16 @@
 
 namespace donner::editor {
 namespace {
+
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::FloatEq;
+using ::testing::IsEmpty;
+
+auto ImVec2Is(float x, float y) {
+  return AllOf(Field("x", &ImVec2::x, FloatEq(x)), Field("y", &ImVec2::y, FloatEq(y)));
+}
 
 // First post is always allowed: there's no prior position recorded
 // and no in-flight future yet.
@@ -137,28 +148,22 @@ TEST(ShouldPostDragMove, HighRateRemoteStreamPostsAtMostOneMovePerRoundTrip) {
     EXPECT_FALSE(
         maybePost(ImVec2(100.0f + static_cast<float>(i) * 0.1f, 100.0f), /*pending=*/true));
   }
-  EXPECT_TRUE(postedPoints.empty());
+  EXPECT_THAT(postedPoints, IsEmpty());
   ASSERT_TRUE(lastPosted.has_value());
-  EXPECT_FLOAT_EQ(lastPosted->x, 100.0f);
-  EXPECT_FLOAT_EQ(lastPosted->y, 100.0f);
+  EXPECT_THAT(*lastPosted, ImVec2Is(100.0f, 100.0f));
 
   EXPECT_TRUE(maybePost(ImVec2(200.0f, 100.0f), /*pending=*/false));
-  ASSERT_EQ(postedPoints.size(), 1u);
-  EXPECT_FLOAT_EQ(postedPoints.back().x, 200.0f);
-  EXPECT_FLOAT_EQ(postedPoints.back().y, 100.0f);
+  EXPECT_THAT(postedPoints, ElementsAre(ImVec2Is(200.0f, 100.0f)));
 
   for (int i = 1; i <= 1000; ++i) {
     EXPECT_FALSE(
         maybePost(ImVec2(200.0f + static_cast<float>(i) * 0.1f, 100.0f), /*pending=*/true));
   }
-  ASSERT_EQ(postedPoints.size(), 1u);
-  EXPECT_FLOAT_EQ(lastPosted->x, 200.0f);
-  EXPECT_FLOAT_EQ(lastPosted->y, 100.0f);
+  EXPECT_THAT(postedPoints, ElementsAre(ImVec2Is(200.0f, 100.0f)));
+  EXPECT_THAT(*lastPosted, ImVec2Is(200.0f, 100.0f));
 
   EXPECT_TRUE(maybePost(ImVec2(300.0f, 100.0f), /*pending=*/false));
-  ASSERT_EQ(postedPoints.size(), 2u);
-  EXPECT_FLOAT_EQ(postedPoints.back().x, 300.0f);
-  EXPECT_FLOAT_EQ(postedPoints.back().y, 100.0f);
+  EXPECT_THAT(postedPoints, ElementsAre(ImVec2Is(200.0f, 100.0f), ImVec2Is(300.0f, 100.0f)));
 }
 
 }  // namespace
