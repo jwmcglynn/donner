@@ -221,23 +221,34 @@ std::optional<tiny_skia::Shader> instantiateGradientShader(
       computedGradient->gradientUnits == GradientUnits::ObjectBoundingBox;
   const bool numbersArePercent = objectBoundingBox;
 
+  // Paints inherited through `context-fill` / `context-stroke` are evaluated in the context
+  // element's space: objectBoundingBox units resolve against the context element's bounding box,
+  // and the gradient is remapped from the context element's user space into path-local space.
+  const Box2d& referenceBounds = ref.contextRemap ? ref.contextRemap->contextBounds : pathBounds;
+
   constexpr double kDegenerateBBoxTolerance = 1e-6;
-  if (objectBoundingBox && (NearZero(pathBounds.width(), kDegenerateBBoxTolerance) ||
-                            NearZero(pathBounds.height(), kDegenerateBBoxTolerance))) {
+  if (objectBoundingBox && (NearZero(referenceBounds.width(), kDegenerateBBoxTolerance) ||
+                            NearZero(referenceBounds.height(), kDegenerateBBoxTolerance))) {
     return std::nullopt;
   }
 
-  Transform2d gradientFromGradientUnits;
+  Transform2d pathFromGradientUnits;
   if (objectBoundingBox) {
-    gradientFromGradientUnits = resolveGradientTransform(
+    pathFromGradientUnits = resolveGradientTransform(
         handle.try_get<components::ComputedLocalTransformComponent>(), kUnitPathBounds);
 
     const Transform2d objectBoundingBoxFromUnitBox =
-        Transform2d::Scale(pathBounds.size()) * Transform2d::Translate(pathBounds.topLeft);
-    gradientFromGradientUnits = gradientFromGradientUnits * objectBoundingBoxFromUnitBox;
+        Transform2d::Scale(referenceBounds.size()) *
+        Transform2d::Translate(referenceBounds.topLeft);
+    pathFromGradientUnits = pathFromGradientUnits * objectBoundingBoxFromUnitBox;
   } else {
-    gradientFromGradientUnits = resolveGradientTransform(
+    pathFromGradientUnits = resolveGradientTransform(
         handle.try_get<components::ComputedLocalTransformComponent>(), viewBox);
+  }
+
+  if (ref.contextRemap) {
+    // Gradient units -> context element user space, then context -> path local space.
+    pathFromGradientUnits = pathFromGradientUnits * ref.contextRemap->entityFromContextTransform;
   }
 
   const Box2d& bounds = objectBoundingBox ? kUnitPathBounds : viewBox;
@@ -257,7 +268,7 @@ std::optional<tiny_skia::Shader> instantiateGradientShader(
     return tiny_skia::Shader(stops.front().color);
   }
 
-  const tiny_skia::Transform shaderTransform = toTinyTransform(gradientFromGradientUnits);
+  const tiny_skia::Transform shaderTransform = toTinyTransform(pathFromGradientUnits);
 
   if (const auto* linear = handle.try_get<components::ComputedLinearGradientComponent>()) {
     const Vector2d start = resolveGradientCoords(linear->x1, linear->y1, bounds, numbersArePercent);
@@ -1078,6 +1089,13 @@ void RendererTinySkia::beginPatternTile(const Box2d& tileRect,
       frame.targetFromPattern * Transform2d::Scale(1.0 / rasterScale.x, 1.0 / rasterScale.y);
   frame.pixmap = createTransparentPixmap(pixelWidth, pixelHeight);
 
+  // Tile-content draws must not consume the outer element's pending pattern shaders (a shape
+  // inside the tile would otherwise pick them up as its own fill/stroke and reset them).
+  frame.savedPatternFillPaint = std::move(patternFillPaint_);
+  frame.savedPatternStrokePaint = std::move(patternStrokePaint_);
+  patternFillPaint_.reset();
+  patternStrokePaint_.reset();
+
   surfaceStack_.push_back(std::move(frame));
 
   deviceFromLocalTransform_ = surfaceStack_.back().patternRasterFromTile;
@@ -1098,6 +1116,8 @@ void RendererTinySkia::endPatternTile(bool forStroke) {
   deviceFromLocalTransformStack_ = std::move(frame.savedTransformStack);
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
+  patternFillPaint_ = std::move(frame.savedPatternFillPaint);
+  patternStrokePaint_ = std::move(frame.savedPatternStrokePaint);
   PatternPaintState state{std::move(frame.pixmap), frame.targetFromPattern};
   if (forStroke) {
     patternStrokePaint_ = std::move(state);

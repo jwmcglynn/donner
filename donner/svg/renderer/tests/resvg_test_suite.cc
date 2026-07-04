@@ -654,48 +654,17 @@ INSTANTIATE_TEST_SUITE_P(PaintingColor, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingContext, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "painting/context",
-            {
-                {"in-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"in-nested-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"in-nested-use-and-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"on-shape-with-zero-size-bbox.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-gradient-and-gradient-transform.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-gradient-in-use.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-gradient-on-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-pattern-and-transform-in-use.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-pattern-in-use.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-pattern-objectBoundingBox-in-use.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-pattern-on-marker.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-                {"with-text.svg",
-                 Params::Skip(
-                     "Not impl: context-fill / context-stroke (parsed but not honored at render)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "painting/context",
+                {
+                    {"with-pattern-objectBoundingBox-in-use.svg",
+                     Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/"
+                                                "resvg-with-pattern-objectBoundingBox-in-use.png")
+                         .withReason("resvg golden bakes fractional-tile rounding (56.57px tile "
+                                     "rasterized as 57px, ~0.8% period drift); Donner tiles at "
+                                     "the exact computed context box, see doc 0009")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(

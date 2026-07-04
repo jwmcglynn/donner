@@ -198,6 +198,35 @@ private:
   void renderPattern(RenderingInstanceView& view, Registry& registry,
                      const components::RenderingInstanceComponent& instance,
                      const components::PaintResolvedReference& ref, bool forStroke);
+
+  /**
+   * Resolve a context-paint remap's `entityFromContextTransform` for the current draw. Same-world
+   * remaps (from `<use>` shadow trees) already carry a concrete transform; marker-hosted remaps
+   * are resolved against the active \ref MarkerPaintContext, which encodes the per-placement
+   * marker transform.
+   *
+   * @param remap The remap to resolve.
+   * @param surfaceFromEntity Transform mapping the consuming entity's local space to the current
+   *   render surface (`worldFromEntityTransform * surfaceFromCanvasTransform_`).
+   */
+  Transform2d resolveRemapEntityFromContextTransform(const components::PaintContextRemap& remap,
+                                                     const Transform2d& surfaceFromEntity) const;
+
+  /**
+   * Return a copy of @p paint whose context remap (if any) carries a concrete
+   * `entityFromContextTransform` for the current draw, so backends never see
+   * `resolveAtDrawTime` remaps.
+   *
+   * @param paint The paint to resolve.
+   * @param surfaceFromEntity Transform mapping the consuming entity's local space to the current
+   *   render surface.
+   */
+  components::ResolvedPaintServer resolvePaintContextRemap(
+      const components::ResolvedPaintServer& paint, const Transform2d& surfaceFromEntity) const;
+
+  /// Apply \ref resolvePaintContextRemap to the fill and stroke of @p paint for @p instance.
+  void applyDrawTimeContextRemaps(PaintParams& paint,
+                                  const components::RenderingInstanceComponent& instance) const;
   void drawSubDocument(SVGDocument& subDocument, const Box2d& viewportBounds,
                        const PreserveAspectRatio& aspectRatio, double opacity,
                        const Transform2d& parentAbsoluteTransform);
@@ -220,9 +249,25 @@ private:
     int maskDepth = 0;
   };
 
+  /**
+   * Draw-time context-paint state for a marker subtree: maps the coordinate spaces in which the
+   * referencing shape's context paints were defined to the current render surface. Pushed by
+   * \ref drawMarkers around the marker placement loop and consumed by
+   * \ref resolveRemapEntityFromContextTransform for `context-fill` / `context-stroke` paints
+   * inside marker content. A stack, because marker content may itself contain markers.
+   */
+  struct MarkerPaintContext {
+    /// Maps the space of the shape's fill paint's originating context to the surface.
+    Transform2d surfaceFromFillContextTransform;
+    /// Maps the space of the shape's stroke paint's originating context to the surface.
+    Transform2d surfaceFromStrokeContextTransform;
+  };
+
   RendererInterface& renderer_;
   bool verbose_ = false;
   std::vector<DeferredPop> subtreeMarkers_;
+  /// Active marker context-paint frames; see \ref MarkerPaintContext.
+  std::vector<MarkerPaintContext> markerPaintContexts_;
   /// Post-entity transform composed onto the CTM for every entity drawn via
   /// `drawEntityRange`/`traverse`. Named with `destFromSource` convention: it
   /// maps canvas coords to the render surface we're drawing into. For the

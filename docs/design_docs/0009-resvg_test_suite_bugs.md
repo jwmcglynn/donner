@@ -31,7 +31,7 @@ the test name there to find it inline.
 > direction) were superseded upstream and retired — the surviving marker
 > override is `orient=auto-on-M-C-C-4`.
 
-## Active overrides (34)
+## Active overrides (35)
 
 ### resvg golden is wrong per spec
 
@@ -40,6 +40,7 @@ the test name there to find it inline.
 | filters/feSpotLight | complex-transform | resvg bug: SpotLight Y |
 | filters/feImage | svg | We render higher quality |
 | filters/feSpecularLighting | with-fePointLight | resvg golden |
+| painting/context | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding |
 | painting/marker | orient=auto-on-M-C-C-4 | Pre-existing rendering diff (stroke/AA), not cusp-related |
 | painting/marker | with-an-image-child | We (correctly) render the image child |
 | text/font-size | named-value | Donner uses CSS Fonts Level 4 |
@@ -47,6 +48,21 @@ the test name there to find it inline.
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
+
+`with-pattern-objectBoundingBox-in-use` runs against a committed Donner render
+(`resvg-with-pattern-objectBoundingBox-in-use.png`), shared by both backends
+(TinyGolden and GeodeGolden pass at the default budget). Evidence that resvg's
+golden is the artifact: resvg rasterizes pattern tiles at a rounded integer pixel
+size, and this test's context bounding box yields a fractional 56.57px on-screen
+tile that resvg draws as 57px, stretching the tile period by ~0.8%. Donner repeats
+the tile at the exact period. A numeric grid fit confirms it: Donner's render fits
+an ideal diamond grid anchored at the computed context box
+`(31.82, -116.67), 226.27²` with score 1.0, while resvg's golden fits *no* ideal
+grid (best score 0.899 — its grid drifts, consistent with per-tile rounding). The
+integer-tile pattern goldens in the same category (`with-pattern-in-use`,
+`with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
+exact pixel sizes) match Donner exactly, isolating the discrepancy to the
+fractional-tile case. Revisit if resvg regenerates goldens without the rounding.
 
 ### Backend-difference goldens (text)
 
@@ -125,7 +141,7 @@ git history if a real override need surfaces):
 
 The corresponding `text/font-size` tests pass against the upstream golden — only
 `named-value{,-without-a-parent}` need an override. After this cleanup the
-`golden/` dir holds exactly 36 `resvg-*.png`: 34 active + the 2 parked drop-shadow
+`golden/` dir holds exactly 37 `resvg-*.png`: 35 active + the 2 parked drop-shadow
 goldens above.
 
 ## Maintenance

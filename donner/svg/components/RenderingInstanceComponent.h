@@ -33,6 +33,38 @@ struct SubtreeInfo {
 };
 
 /**
+ * Remap information for a paint inherited through the SVG2 `context-fill` / `context-stroke`
+ * keywords (https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint).
+ *
+ * The inherited paint server is evaluated in the context element's user space — the \ref xml_use
+ * element for `<use>` shadow trees, or the shape referencing a \ref xml_marker for marker content:
+ * `objectBoundingBox` paint units resolve against the context element's bounding box, and the
+ * resulting paint is transformed into the consuming entity's local space.
+ */
+struct PaintContextRemap {
+  /// Bounding box of the context element in its own user space, used to resolve
+  /// `objectBoundingBox` paint units. May be empty (e.g. for a zero-size shape), in which case
+  /// `objectBoundingBox` context paints fail to instantiate and render nothing.
+  Box2d contextBounds;
+
+  /// Maps the context element's user space into the consuming entity's local space. When \ref
+  /// resolveAtDrawTime is set this value is not yet meaningful — the renderer driver substitutes
+  /// the concrete per-placement transform before handing the paint to the backend.
+  Transform2d entityFromContextTransform;
+
+  /// True when \ref entityFromContextTransform cannot be precomputed at render-tree instantiation
+  /// time: the consuming entity lives in a marker's offscreen coordinate space, which is placed at
+  /// multiple positions (one per path vertex) at draw time. The renderer driver resolves the
+  /// concrete transform per placement.
+  bool resolveAtDrawTime = false;
+
+  /// For \ref resolveAtDrawTime remaps: identifies which of the referencing shape's paints seeded
+  /// the context (`false` = the shape's fill, `true` = the shape's stroke), so the driver can
+  /// chain through the shape's own context remap if its paint was itself inherited.
+  bool seededFromStroke = false;
+};
+
+/**
  * Contains rendering information for a paint server, such as the subtree needed if it establishes
  * an isolated layer, and where the paint server is located.
  */
@@ -45,6 +77,9 @@ struct PaintResolvedReference {
   /// If this paint server creates a subtree, such as for patterns, contains subtree info to inform
   /// the renderer how to render it.
   std::optional<SubtreeInfo> subtreeInfo;
+  /// Set when this paint was inherited through `context-fill` / `context-stroke`; carries how to
+  /// evaluate the paint in the context element's space. See \ref PaintContextRemap.
+  std::optional<PaintContextRemap> contextRemap;
 };
 
 /**

@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/RenderingContext.h"
 
+#include <map>
 #include <optional>
 #include <set>
 
@@ -67,8 +68,19 @@ RenderTreeState& getRenderTreeState(Registry& registry) {
  * described here: https://www.w3.org/TR/SVG2/painting.html#SpecifyingPaint
  */
 struct ContextPaintServers {
+  /// The context element's resolved fill, substituted for `context-fill`.
   ResolvedPaintServer contextFill = PaintServer::None();
+  /// The context element's resolved stroke, substituted for `context-stroke`.
   ResolvedPaintServer contextStroke = PaintServer::None();
+  /// Maps the context element's local space to the world space of the tree it was instantiated in.
+  Transform2d worldFromContextTransform;
+  /// Bounding box of the context element in its own user space, for resolving `objectBoundingBox`
+  /// paint units of inherited gradients/patterns. Empty when unknown or zero-size.
+  Box2d contextBounds;
+  /// True when this context was established by marker instantiation: consuming instances live in
+  /// the marker's offscreen coordinate space, which is placed per path vertex at draw time, so
+  /// paint remaps must be resolved by the renderer driver at draw time.
+  bool resolveAtDrawTime = false;
 };
 
 /**
@@ -284,7 +296,49 @@ public:
       }
     }
 
+    // Fill and stroke are resolved before markers so marker content can inherit them through
+    // `context-fill` / `context-stroke` (SVG2): the shape referencing the marker is the context
+    // element for the marker's content.
+    const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
+    const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
+
+    if (setsContextColors || (instance.visible && (dataHandle.all_of<ComputedPathComponent>() ||
+                                                   dataHandle.all_of<ComputedTextComponent>()))) {
+      if (auto fill = properties.fill.get()) {
+        instance.resolvedFill = resolvePaint(ShadowBranchType::OffscreenFill, dataHandle,
+                                             fill.value(), instance.worldFromEntityTransform);
+      }
+
+      if (auto stroke = properties.stroke.get()) {
+        instance.resolvedStroke = resolvePaint(ShadowBranchType::OffscreenStroke, dataHandle,
+                                               stroke.value(), instance.worldFromEntityTransform);
+      }
+
+      // Save the current context paint servers if this is a shadow tree host.
+      if (setsContextColors) {
+        savedContextPaintServers = contextPaintServers_;
+        contextPaintServers_.contextFill = instance.resolvedFill;
+        contextPaintServers_.contextStroke = instance.resolvedStroke;
+        contextPaintServers_.worldFromContextTransform = instance.worldFromEntityTransform;
+        contextPaintServers_.contextBounds = computeSubtreeContextBounds(treeEntity);
+        if (verbose_) {
+          std::cout << "Context bounds for " << treeEntity << ": "
+                    << contextPaintServers_.contextBounds << "\n";
+        }
+        contextPaintServers_.resolveAtDrawTime = false;
+      }
+    }
+
     if (isShape) {
+      // The shape is the context element for its markers' content: expose the shape's resolved
+      // paints (and bounding box) while the marker subtrees are instantiated.
+      const ContextPaintServers savedForMarkers = contextPaintServers_;
+      contextPaintServers_.contextFill = instance.resolvedFill;
+      contextPaintServers_.contextStroke = instance.resolvedStroke;
+      contextPaintServers_.worldFromContextTransform = instance.worldFromEntityTransform;
+      contextPaintServers_.contextBounds = dataHandle.get<ComputedPathComponent>().localBounds();
+      contextPaintServers_.resolveAtDrawTime = true;
+
       if (properties.markerStart.get()) {
         if (auto resolved = resolveMarker(EntityHandle(registry_, styleEntity),
                                           properties.markerStart.get().value(),
@@ -311,6 +365,8 @@ public:
           instance.markerEnd = resolved;
         }
       }
+
+      contextPaintServers_ = savedForMarkers;
     }
 
     // Create a new layer if opacity is less than 1 or if there is an effect that requires an
@@ -339,29 +395,6 @@ public:
         properties.isolation.get().value() == Isolation::Isolate) {
       instance.isolatedLayer = true;
       ++layerDepth;
-    }
-
-    const ShadowTreeComponent* shadowTree = dataHandle.try_get<ShadowTreeComponent>();
-    const bool setsContextColors = shadowTree && shadowTree->setsContextColors;
-
-    if (setsContextColors || (instance.visible && (dataHandle.all_of<ComputedPathComponent>() ||
-                                                   dataHandle.all_of<ComputedTextComponent>()))) {
-      if (auto fill = properties.fill.get()) {
-        instance.resolvedFill = resolvePaint(ShadowBranchType::OffscreenFill, dataHandle,
-                                             fill.value(), contextPaintServers_);
-      }
-
-      if (auto stroke = properties.stroke.get()) {
-        instance.resolvedStroke = resolvePaint(ShadowBranchType::OffscreenStroke, dataHandle,
-                                               stroke.value(), contextPaintServers_);
-      }
-
-      // Save the current context paint servers if this is a shadow tree host.
-      if (setsContextColors) {
-        savedContextPaintServers = contextPaintServers_;
-        contextPaintServers_.contextFill = instance.resolvedFill;
-        contextPaintServers_.contextStroke = instance.resolvedStroke;
-      }
     }
 
     lastRenderedEntity_ = styleEntity;
@@ -549,6 +582,11 @@ public:
     // and assertion failures from duplicate RenderingInstanceComponent emplacement. Mask
     // recursion is detected at a higher level by activeMaskElements_ in resolveMask().
     if (registry_.try_get<RenderingInstanceComponent>(firstEntity)) {
+      if (const auto it = offscreenSubtreeLastEntity_.find(firstEntity);
+          it != offscreenSubtreeLastEntity_.end()) {
+        return SubtreeInfo{firstEntity, it->second, 0};
+      }
+
       const auto& rootInst = registry_.get<RenderingInstanceComponent>(firstEntity);
       if (rootInst.subtreeInfo) {
         return SubtreeInfo{firstEntity, rootInst.subtreeInfo->lastRenderedEntity, 0};
@@ -560,6 +598,7 @@ public:
     traverseTree(firstEntity, &lastEntity);
 
     if (lastEntity != entt::null) {
+      offscreenSubtreeLastEntity_[firstEntity] = lastEntity;
       return SubtreeInfo{firstEntity, lastEntity, 0};
     } else {
       // This could happen if the subtree has no nodes.
@@ -568,8 +607,7 @@ public:
   }
 
   ResolvedPaintServer resolvePaint(ShadowBranchType branchType, EntityHandle dataHandle,
-                                   const PaintServer& paint,
-                                   const ContextPaintServers& contextPaintServers) {
+                                   const PaintServer& paint, const Transform2d& worldFromEntity) {
     if (paint.is<PaintServer::Solid>()) {
       return paint.get<PaintServer::Solid>();
     } else if (paint.is<PaintServer::ElementReference>()) {
@@ -581,19 +619,134 @@ public:
       if (auto resolvedRef = ref.reference.resolve(*dataHandle.registry());
           resolvedRef && IsValidPaintServer(resolvedRef->handle)) {
         return PaintResolvedReference{resolvedRef.value(), ref.fallback,
-                                      instantiateOffscreenSubtree(dataHandle, branchType)};
+                                      instantiateOffscreenSubtree(dataHandle, branchType),
+                                      std::nullopt};
       } else if (ref.fallback) {
         return PaintServer::Solid(ref.fallback.value());
       } else {
         return PaintServer::None();
       }
     } else if (paint.is<PaintServer::ContextFill>()) {
-      return contextPaintServers.contextFill;
+      return resolveContextPaint(contextPaintServers_.contextFill, /*seededFromStroke=*/false,
+                                 worldFromEntity);
     } else if (paint.is<PaintServer::ContextStroke>()) {
-      return contextPaintServers.contextStroke;
+      return resolveContextPaint(contextPaintServers_.contextStroke, /*seededFromStroke=*/true,
+                                 worldFromEntity);
     } else {
       return PaintServer::None();
     }
+  }
+
+  /**
+   * Substitute a `context-fill` / `context-stroke` paint with the context element's resolved
+   * paint. Solid colors and `none` pass through unchanged; gradient/pattern references are
+   * augmented with a \ref PaintContextRemap so the renderer evaluates them in the context
+   * element's space (objectBoundingBox units against the context bounding box, coordinates
+   * remapped from the context element's user space into the consuming entity's space).
+   *
+   * @param storedPaint The context element's resolved paint.
+   * @param seededFromStroke True if this paint came from the context element's stroke (used for
+   *   draw-time resolution of marker contexts).
+   * @param worldFromEntity The consuming entity's world transform, in the same tree-world as
+   *   \ref ContextPaintServers::worldFromContextTransform.
+   */
+  ResolvedPaintServer resolveContextPaint(const ResolvedPaintServer& storedPaint,
+                                          bool seededFromStroke,
+                                          const Transform2d& worldFromEntity) {
+    const auto* ref = std::get_if<PaintResolvedReference>(&storedPaint);
+    if (!ref) {
+      return storedPaint;
+    }
+
+    PaintResolvedReference augmented = *ref;
+    if (augmented.contextRemap && augmented.contextRemap->resolveAtDrawTime) {
+      // The stored paint is already tied to a draw-time marker context; the renderer driver
+      // chains through intermediate hops at draw time, so keep the stored remap unchanged.
+      return augmented;
+    }
+
+    if (contextPaintServers_.resolveAtDrawTime) {
+      // Marker context: the consuming entity lives in the marker's offscreen space, which is
+      // placed per path vertex at draw time — the driver computes the concrete transform then.
+      // Preserve the original context bounds if the stored paint was itself inherited.
+      const Box2d contextBounds = augmented.contextRemap ? augmented.contextRemap->contextBounds
+                                                         : contextPaintServers_.contextBounds;
+      augmented.contextRemap = PaintContextRemap{contextBounds, Transform2d(),
+                                                 /*resolveAtDrawTime=*/true, seededFromStroke};
+    } else {
+      // Same-world (<use>) context: the transform is fully determined at instantiation time.
+      const Transform2d entityFromContextTransform =
+          contextPaintServers_.worldFromContextTransform * worldFromEntity.inverse();
+      if (augmented.contextRemap) {
+        // The stored paint was itself inherited from an outer context: keep the original context
+        // bounds and extend the chain originalContext -> contextElement -> thisEntity.
+        augmented.contextRemap->entityFromContextTransform =
+            augmented.contextRemap->entityFromContextTransform * entityFromContextTransform;
+      } else {
+        augmented.contextRemap =
+            PaintContextRemap{contextPaintServers_.contextBounds, entityFromContextTransform,
+                              /*resolveAtDrawTime=*/false, /*seededFromStroke=*/false};
+      }
+    }
+
+    return augmented;
+  }
+
+  /**
+   * Compute the bounding box of a shadow-tree host's content in the host's local space, used as
+   * the context bounding box for `context-fill` / `context-stroke` paints with
+   * `objectBoundingBox` units.
+   *
+   * Accumulates bottom-up: each element's box is the union of its own tight path bounds and its
+   * children's boxes mapped through the child transforms, taking an axis-aligned bounding box at
+   * every level. This matches how resvg computes group bounding boxes (`Group::bounding_box`), so
+   * rotated subtrees produce the same (level-wise AABB) context box as the reference renders.
+   *
+   * @param rootEntity Style/shadow entity of the shadow-tree host (e.g. the \ref xml_use element).
+   */
+  Box2d computeSubtreeContextBounds(Entity rootEntity) {
+    return subtreeBoundsInLocalSpace(rootEntity).value_or(Box2d());
+  }
+
+  /**
+   * Bounds of @p entity's own geometry plus its descendants, in the coordinate space established
+   * by @p entity (i.e. the space its children live in). See \ref computeSubtreeContextBounds.
+   */
+  std::optional<Box2d> subtreeBoundsInLocalSpace(Entity entity) {
+    const auto worldFromEntityOf = [&](Entity target) -> Transform2d {
+      const auto& absoluteTransformComponent =
+          LayoutSystem().getAbsoluteTransformComponent(EntityHandle(registry_, target));
+      return absoluteTransformComponent.worldFromEntity * (absoluteTransformComponent.worldIsCanvas
+                                                               ? canvasFromDocumentWorldTransform_
+                                                               : Transform2d());
+    };
+
+    std::optional<Box2d> bounds;
+    const auto addBox = [&bounds](const Box2d& box) {
+      bounds = bounds ? Box2d::Union(*bounds, box) : box;
+    };
+
+    {
+      const auto* shadowEntityComponent = registry_.try_get<ShadowEntityComponent>(entity);
+      const EntityHandle dataHandle(
+          registry_, shadowEntityComponent ? shadowEntityComponent->lightEntity : entity);
+      if (const auto* path = dataHandle.try_get<ComputedPathComponent>();
+          path && !path->spline.empty()) {
+        addBox(path->localBounds());
+      }
+    }
+
+    const Transform2d entityFromWorld = worldFromEntityOf(entity).inverse();
+    const auto& tree = registry_.get<donner::components::TreeComponent>(entity);
+    for (auto cur = tree.firstChild(); cur != entt::null;
+         cur = registry_.get<donner::components::TreeComponent>(cur).nextSibling()) {
+      if (const std::optional<Box2d> childBounds = subtreeBoundsInLocalSpace(cur)) {
+        const Transform2d entityFromChild = worldFromEntityOf(cur) * entityFromWorld;
+        addBox(entityFromChild.transformBox(*childBounds));
+      }
+    }
+
+    return bounds;
   }
 
   ResolvedClipPath resolveClipPath(EntityHandle dataHandle, const Reference& reference) {
@@ -673,10 +826,18 @@ public:
                               MarkerUnits::Default};
       }
 
-      if (const auto* computedShadow = styleHandle.try_get<ComputedShadowTreeComponent>();
+      // When the style entity is a shadow entity (e.g. a shape instantiated through <use>), the
+      // ComputedShadowTreeComponent holding the offscreen marker branches lives on the
+      // corresponding light entity, not on the shadow entity itself.
+      EntityHandle shadowTreeHost = styleHandle;
+      if (const auto* shadowEntity = styleHandle.try_get<ShadowEntityComponent>()) {
+        shadowTreeHost = EntityHandle(*styleHandle.registry(), shadowEntity->lightEntity);
+      }
+
+      if (const auto* computedShadow = shadowTreeHost.try_get<ComputedShadowTreeComponent>();
           computedShadow && computedShadow->findOffscreenShadow(branchType).has_value()) {
         activeMarkerElements_.insert(markerElement);
-        auto subtree = instantiateOffscreenSubtree(styleHandle, branchType);
+        auto subtree = instantiateOffscreenSubtree(shadowTreeHost, branchType);
         activeMarkerElements_.erase(markerElement);
 
         return ResolvedMarker{resolvedRef.value(), std::move(subtree),
@@ -730,6 +891,12 @@ private:
   /// Tracks marker elements currently being instantiated so recursive marker references stop
   /// after the first level instead of repeatedly expanding the same cycle.
   std::set<Entity> activeMarkerElements_;
+
+  /// The last rendered entity of each offscreen subtree instantiated by \ref
+  /// instantiateOffscreenSubtree, keyed by the subtree's root entity. Used to rebuild a correct
+  /// \ref SubtreeInfo when a later reference shares an already-instantiated subtree (the root's
+  /// own \ref RenderingInstanceComponent::subtreeInfo only exists when the root pushes layers).
+  std::map<Entity, Entity> offscreenSubtreeLastEntity_;
 };
 
 void InstantiatePaintShadowTree(Registry& registry, Entity entity, ShadowBranchType branchType,

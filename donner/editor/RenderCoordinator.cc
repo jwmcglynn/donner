@@ -170,7 +170,15 @@ std::optional<svg::SVGElement> SelectedGraphicsElement(EditorApp& app) {
 }
 
 bool IsDisplayNone(const svg::SVGElement& element) {
-  return element.getComputedStyle().display.get().value() == svg::Display::None;
+  if (const svg::PropertyRegistry* computedStyle = element.computedStyleIfPresent()) {
+    return computedStyle->display.getOr(svg::Display::Inline) == svg::Display::None;
+  }
+
+  if (const svg::PropertyRegistry* specifiedStyle = element.specifiedStyle()) {
+    return specifiedStyle->display.getOr(svg::Display::Inline) == svg::Display::None;
+  }
+
+  return false;
 }
 
 bool SubtreeContainsEntity(const svg::SVGElement& element, Entity entity) {
