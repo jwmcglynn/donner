@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_perf_sensitive_cc_library")
 
 COMPOSITOR_GOLDEN_PERF_TESTS = [
     "CompositorGoldenTest.SplashDragLatencyBudgetsOnRealRenderer",
@@ -8,13 +8,12 @@ COMPOSITOR_GOLDEN_PERF_TESTS = [
     "CompositorGoldenTest.SplashDragEndReplaceDocumentReplayLatency",
 ]
 
-donner_cc_library(
+donner_perf_sensitive_cc_library(
     name = "compositor",
     srcs = [
         "ComplexityBucketer.cc",
         "CompositorController.cc",
         "CompositorControllerInternal.cc",
-        "CompositorControllerInternal.h",
         "CompositorControllerRasterize.cc",
         "CompositorLayer.cc",
         "DragSession.cc",
@@ -25,6 +24,7 @@ donner_cc_library(
     hdrs = [
         "ComplexityBucketer.h",
         "CompositorController.h",
+        "CompositorControllerInternal.h",
         "CompositorHintComponent.h",
         "CompositorLayer.h",
         "ComputedLayerAssignmentComponent.h",

@@ -92,8 +92,10 @@ jobs:
       - name: Test perf-tagged targets
         if: steps.discover.outputs.targets != ''
         run: |
+          # -c opt: budgets assume production-speed codegen, not fastbuild's default.
           bazelisk test \
             --config=ci \
+            -c opt \
             --test_output=errors \
             --build_tag_filters=perf \
             --test_tag_filters=perf \
