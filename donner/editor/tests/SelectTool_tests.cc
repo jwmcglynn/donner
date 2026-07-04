@@ -18,7 +18,10 @@ namespace donner::editor {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::Eq;
+using ::testing::Field;
 using ::testing::IsEmpty;
+using ::testing::Optional;
 using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
 
@@ -83,6 +86,23 @@ Vector2d TranslationDelta(const Transform2d& start, const Transform2d& end) {
 
 auto Vector2NearExact(double x, double y) {
   return Vector2Eq(testing::DoubleNear(x, 1e-6), testing::DoubleNear(y, 1e-6));
+}
+
+MATCHER_P(PendingCommandCountIs, expected,
+          std::string("has ") + testing::PrintToString(expected) +
+              " pending un-coalesced commands") {
+  if (arg.size() == expected) {
+    return true;
+  }
+
+  *result_listener << "pending command count is " << arg.size()
+                   << ", empty=" << testing::PrintToString(arg.empty());
+  return false;
+}
+
+auto CompletedWritebackTargetIdIs(std::string_view id) {
+  return Field("target", &SelectTool::CompletedDragWriteback::target,
+               Field("elementId", &AttributeWritebackTarget::elementId, Optional(RcString(id))));
 }
 
 class SelectToolTest : public ::testing::Test {
@@ -319,7 +339,7 @@ TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
   // reuses the cached drag-layer bitmap via its internal composition
   // transform, but the DOM is kept in sync so the canvas view and the
   // backing document never disagree.
-  EXPECT_EQ(app.document().queue().size(), 1u);
+  EXPECT_THAT(app.document().queue(), PendingCommandCountIs(1u));
 }
 
 TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
@@ -331,7 +351,7 @@ TEST_F(SelectToolTest, MultipleMoveEventsCoalesceToFinalDelta) {
   tool.onMouseUp(app, Vector2d(50.0, 35.0));
 
   // Three SetTransform commands queued, all for the same entity.
-  EXPECT_EQ(app.document().queue().size(), 3u);
+  EXPECT_THAT(app.document().queue(), PendingCommandCountIs(3u));
   ASSERT_TRUE(app.flushFrame());
 
   // After flush, the final transform reflects only the last move's delta:
@@ -348,7 +368,7 @@ TEST_F(SelectToolTest, MoveWithoutButtonHeldIsHover) {
   // Hover after the drag — should NOT translate the element.
   tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/false);
 
-  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_THAT(app.document().queue(), PendingCommandCountIs(0u));
   EXPECT_FALSE(tool.isDragging());
 }
 
@@ -358,7 +378,7 @@ TEST_F(SelectToolTest, MoveWithoutDownIsIgnored) {
   // crash and should not produce any commands.
   tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
 
-  EXPECT_EQ(app.document().queue().size(), 0u);
+  EXPECT_THAT(app.document().queue(), PendingCommandCountIs(0u));
   EXPECT_FALSE(tool.isDragging());
 }
 
@@ -999,7 +1019,7 @@ TEST_F(SelectToolTest, MultiSelectDragProducesWritebackForAllElements) {
   ASSERT_TRUE(writeback.has_value()) << "primary writeback latched";
   // The extras field carries non-primary elements' writebacks so the source
   // sync path can patch every dragged element in one pass.
-  EXPECT_EQ(writeback->extras.size(), 1u) << "one extra writeback for r2";
+  EXPECT_THAT(writeback->extras, ElementsAre(CompletedWritebackTargetIdIs("r2")));
 }
 
 TEST_F(SelectToolTest, MultiSelectDragUsesGroupedCompositedPreview) {
@@ -1014,9 +1034,9 @@ TEST_F(SelectToolTest, MultiSelectDragUsesGroupedCompositedPreview) {
 
   const auto preview = tool.activeDragPreview();
   ASSERT_TRUE(preview.has_value());
-  EXPECT_EQ(preview->entity, elementById("#r1").unsafeEntityHandle().entity());
-  ASSERT_EQ(preview->extraEntities.size(), 1u);
-  EXPECT_EQ(preview->extraEntities.front(), elementById("#r2").unsafeEntityHandle().entity());
+  EXPECT_THAT(preview->entity, Eq(elementById("#r1").unsafeEntityHandle().entity()));
+  EXPECT_THAT(preview->extraEntities,
+              ElementsAre(elementById("#r2").unsafeEntityHandle().entity()));
   EXPECT_EQ(preview->translation, Vector2d(30.0, 30.0));
 
   // The DOM write still lands; the preview exists so presentation can stay responsive while async
@@ -1086,9 +1106,9 @@ TEST_F(SelectToolTest, SelectionClearedDuringDragDoesNotCrashOrGhostWriteback) {
   // exactly one (drag completed against the original target).
   auto completed = tool.consumeCompletedDragWriteback();
   if (completed.has_value()) {
-    EXPECT_EQ(completed->target.elementId, std::optional<RcString>(RcString("r1")))
+    EXPECT_THAT(completed->target.elementId, Optional(RcString("r1")))
         << "completed writeback must target the element the drag actually grabbed";
-    EXPECT_TRUE(completed->extras.empty());
+    EXPECT_THAT(completed->extras, IsEmpty());
   }
 }
 

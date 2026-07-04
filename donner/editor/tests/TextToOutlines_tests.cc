@@ -32,6 +32,8 @@ namespace donner::editor {
 namespace {
 
 using ::testing::HasSubstr;
+using ::testing::IsEmpty;
+using ::testing::SizeIs;
 
 constexpr int kCanvas = 200;
 
@@ -76,7 +78,8 @@ std::string ApplyConversion(svg::SVGDocument& document, svg::SVGElement text,
   std::optional<svg::SVGElement> parent = text.parentElement();
   EXPECT_TRUE(parent.has_value());
   EXPECT_TRUE(result.outlineGroup.has_value());
-  xml::ApplySourceEditResult groupInsert = document.insertElement(*parent, *result.outlineGroup, text);
+  xml::ApplySourceEditResult groupInsert =
+      document.insertElement(*parent, *result.outlineGroup, text);
   EXPECT_FALSE(groupInsert.diagnostic.has_value())
       << groupInsert.diagnostic.value_or(ParseDiagnostic()).reason;
   for (svg::SVGElement& path : result.outlinePaths) {
@@ -128,7 +131,7 @@ TEST(TextToOutlines, EmitsOnePathPerGlyph) {
   ASSERT_TRUE(result.ok) << result.error;
 
   // "SVG" → three glyphs, none of which are whitespace, so three `<path>`s.
-  EXPECT_EQ(result.outlinePaths.size(), 3u);
+  EXPECT_THAT(result.outlinePaths, SizeIs(3u));
 }
 
 // Pixel-compare: rendering the document BEFORE conversion and AFTER conversion
@@ -253,7 +256,7 @@ TEST(TextToOutlines, EmptyOutlineFailureLeavesDocumentUnchanged) {
   EXPECT_FALSE(result.ok);
   EXPECT_THAT(result.error, HasSubstr("outline"));
   EXPECT_FALSE(result.outlineGroup.has_value());
-  EXPECT_TRUE(result.outlinePaths.empty());
+  EXPECT_THAT(result.outlinePaths, IsEmpty());
   // The document source is untouched (convertTextToOutlines never mutates).
   EXPECT_EQ(std::string(document.source()), sourceBefore);
   EXPECT_TRUE(document.querySelector("text").has_value());
