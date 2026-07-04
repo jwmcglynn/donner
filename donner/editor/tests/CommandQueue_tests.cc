@@ -90,6 +90,18 @@ auto CommandBytesIs(std::string_view bytes) {
   return Field("bytes", &EditorCommand::bytes, std::string(bytes));
 }
 
+MATCHER_P(PendingCommandCountIs, expected,
+          std::string("has ") + testing::PrintToString(expected) +
+              " pending un-coalesced commands") {
+  if (arg.size() == expected) {
+    return true;
+  }
+
+  *result_listener << "pending command count is " << arg.size()
+                   << ", empty=" << testing::PrintToString(arg.empty());
+  return false;
+}
+
 class CommandQueueTest : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -117,15 +129,14 @@ protected:
 
 TEST_F(CommandQueueTest, EmptyFlushReturnsNothing) {
   CommandQueue queue;
-  EXPECT_TRUE(queue.empty());
-  EXPECT_EQ(queue.size(), 0u);
+  EXPECT_THAT(queue, PendingCommandCountIs(0u));
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
   EXPECT_THAT(effective, IsEmpty());
   EXPECT_FALSE(flushResult.hadReplaceDocument);
   EXPECT_FALSE(flushResult.preserveUndoOnReparse);
-  EXPECT_TRUE(queue.empty());
+  EXPECT_THAT(queue, PendingCommandCountIs(0u));
 }
 
 TEST_F(CommandQueueTest, SetTransformsForDifferentEntitiesPreserveOrder) {
@@ -138,7 +149,7 @@ TEST_F(CommandQueueTest, SetTransformsForDifferentEntitiesPreserveOrder) {
   const auto& effective = flushResult.effectiveCommands;
   EXPECT_THAT(effective, ElementsAre(CommandElementIdIs("a"), CommandElementIdIs("b"),
                                      CommandElementIdIs("c")));
-  EXPECT_TRUE(queue.empty());
+  EXPECT_THAT(queue, PendingCommandCountIs(0u));
 }
 
 TEST_F(CommandQueueTest, MultipleSetTransformsForSameEntityCollapse) {
@@ -247,10 +258,10 @@ TEST_F(CommandQueueTest, ClearDropsPendingWithoutFlushing) {
   CommandQueue queue;
   queue.push(EditorCommand::SetTransformCommand(*a, MakeTranslation(1.0, 0.0)));
   queue.push(EditorCommand::SetTransformCommand(*b, MakeTranslation(2.0, 0.0)));
-  EXPECT_EQ(queue.size(), 2u);
+  EXPECT_THAT(queue, PendingCommandCountIs(2u));
 
   queue.clear();
-  EXPECT_TRUE(queue.empty());
+  EXPECT_THAT(queue, PendingCommandCountIs(0u));
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
