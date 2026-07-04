@@ -378,6 +378,7 @@ jobs:
           bazelisk build --config=ci $TARGETS
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set -euo pipefail
@@ -402,7 +403,7 @@ jobs:
             //donner/svg/renderer/tests:filter_graph_executor_tests
 
       - name: Upload Bazel test failure artifacts
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -459,6 +460,40 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}" | tr ' ' '\n' > "$DIAG_DIR/target-list.txt"
           fi
           echo "target_count=$(grep -c . "$DIAG_DIR/target-list.txt")" | tee -a "$DIAG_DIR/manifest.txt"
+          cat > "$DIAG_DIR/run_bazel_with_heartbeat.sh" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          log_path="$1"
+          shift
+          started=$SECONDS
+
+          {
+            "$@" &
+            command_pid=$!
+
+            (
+              while kill -0 "$command_pid" 2>/dev/null; do
+                sleep 60
+                if kill -0 "$command_pid" 2>/dev/null; then
+                  echo "::notice::Bazel command still running for $((SECONDS - started))s"
+                fi
+              done
+            ) &
+            heartbeat_pid=$!
+
+            set +e
+            wait "$command_pid"
+            status=$?
+            set -e
+
+            kill "$heartbeat_pid" 2>/dev/null || true
+            wait "$heartbeat_pid" 2>/dev/null || true
+            exit "$status"
+          } 2>&1 | tee "$log_path"
+          exit "${PIPESTATUS[0]}"
+          EOF
+          chmod +x "$DIAG_DIR/run_bazel_with_heartbeat.sh"
 
       - name: Sync Bazel toolchain
         # NixOS injects include paths via NIX_CFLAGS_COMPILE, which Bazel does
@@ -529,7 +564,8 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk build --config=ci --config=latest_llvm \
+          "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/build/console.log" \
+            bazelisk build --config=ci --config=latest_llvm \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_BUILD_FLAGS \
             --profile="$DIAG_DIR/build/profile.gz" \
@@ -538,6 +574,7 @@ jobs:
             $TARGETS
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set -euo pipefail
@@ -546,7 +583,8 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
-          bazelisk test --config=ci --config=latest_llvm --test_output=errors \
+          "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/test/console.log" \
+            bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
             --profile="$DIAG_DIR/test/profile.gz" \
@@ -576,7 +614,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload Bazel test failure artifacts
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -629,6 +667,7 @@ jobs:
           bazelisk build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set -euo pipefail
@@ -644,7 +683,7 @@ jobs:
         # fuzzer code re-trigger that workflow via path filter.
 
       - name: Upload Bazel test failure artifacts
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
@@ -692,6 +731,7 @@ jobs:
           bazelisk --nohome_rc build --config=ci $BAZEL_MACOS_BUILD_FLAGS $TARGETS
 
       - name: Test
+        id: test
         shell: bash
         run: |
           set -euo pipefail
@@ -707,7 +747,7 @@ jobs:
         # fuzzer code re-trigger that workflow via path filter.
 
       - name: Upload Bazel test failure artifacts
-        if: failure()
+        if: failure() && steps.test.outcome == 'failure'
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
