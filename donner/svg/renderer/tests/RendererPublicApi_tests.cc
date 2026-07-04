@@ -11,10 +11,12 @@
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 
 namespace donner::svg {
 namespace {
 
+using test::NonEmptyRendererBitmap;
 using ::testing::_;
 using ::testing::AllOf;
 using ::testing::ElementsAre;
@@ -107,7 +109,7 @@ TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
   EXPECT_EQ(renderer.width(), 8);
   EXPECT_EQ(renderer.height(), 6);
   EXPECT_EQ(snapshot.dimensions, Vector2i(8, 6));
@@ -136,7 +138,7 @@ TEST(RendererPublicApiTest, IncrementalStyleInvalidationMatchesFullRender) {
 
   incrementalRenderer.draw(incrementalDocument);
   const RendererBitmap incrementalSnapshot = NormalizeSnapshot(incrementalRenderer.takeSnapshot());
-  ASSERT_FALSE(incrementalSnapshot.empty());
+  ASSERT_THAT(incrementalSnapshot, NonEmptyRendererBitmap());
 
   SVGDocument fullDocument = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12">
@@ -147,7 +149,7 @@ TEST(RendererPublicApiTest, IncrementalStyleInvalidationMatchesFullRender) {
   Renderer fullRenderer;
   fullRenderer.draw(fullDocument);
   const RendererBitmap fullSnapshot = NormalizeSnapshot(fullRenderer.takeSnapshot());
-  ASSERT_FALSE(fullSnapshot.empty());
+  ASSERT_THAT(fullSnapshot, NonEmptyRendererBitmap());
 
   EXPECT_EQ(incrementalSnapshot.dimensions, fullSnapshot.dimensions);
   EXPECT_EQ(incrementalSnapshot.rowBytes, fullSnapshot.rowBytes);
@@ -176,7 +178,7 @@ TEST(RendererPublicApiTest, TextUsesDocumentTransformForGlyphPlacement) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
   ASSERT_EQ(snapshot.dimensions, Vector2i(500, 500));
 
   const auto pixelAt = [&](int x, int y) -> std::array<uint8_t, 4> {
@@ -204,13 +206,13 @@ TEST(RendererPublicApiTest, DoubleDrawWithoutMutationProducesSameOutput) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap firstSnapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(firstSnapshot.empty());
+  ASSERT_THAT(firstSnapshot, NonEmptyRendererBitmap());
 
   // Second draw without any DOM mutation — exercises the dirty-flag fast path in
   // RenderingContext::instantiateRenderTree().
   renderer.draw(document);
   const RendererBitmap secondSnapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(secondSnapshot.empty());
+  ASSERT_THAT(secondSnapshot, NonEmptyRendererBitmap());
 
   EXPECT_EQ(firstSnapshot.dimensions, secondSnapshot.dimensions);
   EXPECT_EQ(firstSnapshot.pixels, secondSnapshot.pixels);
@@ -263,7 +265,7 @@ TEST(RendererPublicApiTest, DrawBitmapHonorsPaddedRows) {
   renderer.endFrame();
 
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
   ASSERT_EQ(snapshot.dimensions, Vector2i(2, 2));
   EXPECT_THAT(PixelAt(snapshot, 0, 0), Rgba(255, 0, 0, 255));
   EXPECT_THAT(PixelAt(snapshot, 1, 0), Rgba(0, 255, 0, 255));
@@ -301,7 +303,7 @@ TEST(RendererPublicApiTest, ChangeFillColorInvalidatesAndProducesNewOutput) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap before = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(before.empty());
+  ASSERT_THAT(before, NonEmptyRendererBitmap());
 
   auto elem = document.querySelector("#r");
   ASSERT_TRUE(elem.has_value());
@@ -309,7 +311,7 @@ TEST(RendererPublicApiTest, ChangeFillColorInvalidatesAndProducesNewOutput) {
 
   renderer.draw(document);
   const RendererBitmap after = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(after.empty());
+  ASSERT_THAT(after, NonEmptyRendererBitmap());
 
   EXPECT_EQ(before.dimensions, after.dimensions);
   // Pixels must differ because fill changed from red to blue.
@@ -431,7 +433,7 @@ TEST(RendererPublicApiTest, AppendChildInvalidates) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap before = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(before.empty());
+  ASSERT_THAT(before, NonEmptyRendererBitmap());
 
   // Add a filled rect that covers the entire canvas.
   SVGRectElement rect = SVGRectElement::Create(document);
@@ -442,7 +444,7 @@ TEST(RendererPublicApiTest, AppendChildInvalidates) {
 
   renderer.draw(document);
   const RendererBitmap after = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(after.empty());
+  ASSERT_THAT(after, NonEmptyRendererBitmap());
 
   EXPECT_EQ(before.dimensions, after.dimensions);
   EXPECT_NE(before.pixels, after.pixels);
@@ -557,7 +559,7 @@ TEST(RendererPublicApiTest, StrokeRenderingOnRect) {
   EXPECT_EQ(renderer.height(), 50);
 
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // The center of the rect should be transparent (fill=none).
   auto center = PixelAt(snapshot, 25, 25);
@@ -592,8 +594,8 @@ TEST(RendererPublicApiTest, StrokeDasharrayDiffersFromSolid) {
   rDashed.draw(docDashed);
   const RendererBitmap snapDashed = NormalizeSnapshot(rDashed.takeSnapshot());
 
-  ASSERT_FALSE(snapSolid.empty());
-  ASSERT_FALSE(snapDashed.empty());
+  ASSERT_THAT(snapSolid, NonEmptyRendererBitmap());
+  ASSERT_THAT(snapDashed, NonEmptyRendererBitmap());
   EXPECT_EQ(snapSolid.dimensions, snapDashed.dimensions);
   // Pixels must differ because of the dash gaps.
   EXPECT_NE(snapSolid.pixels, snapDashed.pixels);
@@ -610,7 +612,7 @@ TEST(RendererPublicApiTest, ShapeOpacity) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // The pixel should be semi-transparent red (~128 alpha).
   auto px = PixelAt(snapshot, 10, 10);
@@ -630,7 +632,7 @@ TEST(RendererPublicApiTest, FillOpacityAndStrokeOpacity) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Interior should have semi-transparent green fill.
   auto interior = PixelAt(snapshot, 20, 20);
@@ -661,7 +663,7 @@ TEST(RendererPublicApiTest, MarkerRendering) {
   EXPECT_EQ(renderer.width(), 80);
   EXPECT_EQ(renderer.height(), 40);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Sample above the polyline stroke (y=20) where only the marker circle extends.
   // The marker is a red circle with r=5 at markerUnits=strokeWidth (stroke-width=2),
@@ -689,7 +691,7 @@ TEST(RendererPublicApiTest, RecursiveMarkerStopsAtOneLevel) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   EXPECT_THAT(PixelAt(snapshot, 26, 18), IsRedish());
   EXPECT_THAT(PixelAt(snapshot, 34, 18), IsTransparent());
@@ -710,7 +712,7 @@ TEST(RendererPublicApiTest, UseElementRendering) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Both use instances should produce blue pixels.
   auto first = PixelAt(snapshot, 10, 10);
@@ -735,7 +737,7 @@ TEST(RendererPublicApiTest, NestedGroupTransforms) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // The rect should be 20x20 at position (10,10) due to translate + scale(2).
   // Inside the transformed rect (e.g., 20, 20) should be red.
@@ -766,7 +768,7 @@ TEST(RendererPublicApiTest, ViewBoxScaling) {
   EXPECT_EQ(renderer.height(), 50);
 
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // The green rect should fill the entire 50x50 canvas.
   auto corner = PixelAt(snapshot, 0, 0);
@@ -792,7 +794,7 @@ TEST(RendererPublicApiTest, SymbolWithUse) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // The symbol should be rendered at (5,5) with 20x20 size, containing magenta.
   auto inside = PixelAt(snapshot, 15, 15);
@@ -815,7 +817,7 @@ TEST(RendererPublicApiTest, CssClassStyling) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   auto px = PixelAt(snapshot, 10, 10);
   EXPECT_THAT(px, IsRedish());
@@ -832,7 +834,7 @@ TEST(RendererPublicApiTest, InlineStyleOverridesAttribute) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Style should override the fill attribute — result should be red, not blue.
   auto px = PixelAt(snapshot, 10, 10);
@@ -862,7 +864,7 @@ TEST(RendererPublicApiTest, MultipleLinearGradients) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Left rect's left edge should be reddish.
   auto leftEdge = PixelAt(snapshot, 1, 10);
@@ -890,7 +892,7 @@ TEST(RendererPublicApiTest, RadialGradient) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Center should be white (near 255 in all channels).
   auto center = PixelAt(snapshot, 20, 20);
@@ -918,7 +920,7 @@ TEST(RendererPublicApiTest, ImageElementDataUri) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
   EXPECT_EQ(snapshot.dimensions, Vector2i(20, 20));
 
   // The data URI image should be decoded and rendered.  The 2x2 red PNG is scaled
@@ -940,7 +942,7 @@ TEST(RendererPublicApiTest, EmptyDocumentProducesValidOutput) {
   EXPECT_EQ(renderer.height(), 30);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
   EXPECT_EQ(snapshot.dimensions, Vector2i(30, 30));
 
   // All pixels should be transparent.
@@ -959,7 +961,7 @@ TEST(RendererPublicApiTest, CircleElement) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Center should be green.
   auto center = PixelAt(snapshot, 20, 20);
@@ -981,7 +983,7 @@ TEST(RendererPublicApiTest, EllipseElement) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Center should be blue.
   auto center = PixelAt(snapshot, 30, 15);
@@ -1005,7 +1007,7 @@ TEST(RendererPublicApiTest, PatternFill) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // The pattern should produce non-transparent content.
   auto px = PixelAt(snapshot, 2, 2);
@@ -1032,7 +1034,7 @@ TEST(RendererPublicApiTest, ClipPathCropsContent) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Inside clip region should be red.
   auto inside = PixelAt(snapshot, 20, 20);
@@ -1060,7 +1062,7 @@ TEST(RendererPublicApiTest, MaskElement) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Outside the black hole (corner) — mask is white, so green should show.
   auto corner = PixelAt(snapshot, 2, 2);
@@ -1086,7 +1088,7 @@ TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // multiply(#ffff00, #00ffff) = #00ff00 (green)
   auto px = PixelAt(snapshot, 15, 15);
@@ -1104,7 +1106,7 @@ TEST(RendererPublicApiTest, VisibilityHidden) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Hidden element should not render — pixel should be transparent.
   auto px = PixelAt(snapshot, 10, 10);
@@ -1124,7 +1126,7 @@ TEST(RendererPublicApiTest, DisplayNone) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   auto px = PixelAt(snapshot, 10, 10);
   EXPECT_THAT(px, IsTransparent());
@@ -1148,7 +1150,7 @@ TEST(RendererPublicApiTest, GradientWithTransform) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Because of 90-degree rotation, the gradient should go top to bottom.
   auto top = PixelAt(snapshot, 20, 1);
@@ -1168,7 +1170,7 @@ TEST(RendererPublicApiTest, PathElement) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Inside the path should be orange.
   auto inside = PixelAt(snapshot, 20, 20);
@@ -1193,7 +1195,7 @@ TEST(RendererPublicApiTest, GradientUserSpaceOnUse) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // Left edge should be cyan (R=0, G=255, B=255).
   auto left = PixelAt(snapshot, 1, 20);
@@ -1216,7 +1218,7 @@ TEST(RendererPublicApiTest, StrokeOnPath) {
   Renderer renderer;
   renderer.draw(document);
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
-  ASSERT_FALSE(snapshot.empty());
+  ASSERT_THAT(snapshot, NonEmptyRendererBitmap());
 
   // On the line at y=25 should be red.
   auto onLine = PixelAt(snapshot, 25, 25);

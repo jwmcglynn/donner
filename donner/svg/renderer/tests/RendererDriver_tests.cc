@@ -26,15 +26,22 @@
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/RenderingContext.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using ::testing::_;
 using ::testing::AtLeast;
 using ::testing::Eq;
 using ::testing::Field;
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 namespace donner::svg {
 namespace {
+
+using test::NonEmptyRendererBitmap;
+using test::NonNullEntity;
 
 MATCHER_P(Vector2dEq, expected, "matches Vector2d") {
   return arg.x == expected.x && arg.y == expected.y;
@@ -126,7 +133,7 @@ TEST_F(RendererDriverTest, BeginsAndEndsFrameAroundTraversal) {
   driver.draw(document);
 
   const RendererBitmap bitmap = driver.takeSnapshot();
-  EXPECT_FALSE(bitmap.empty());
+  EXPECT_THAT(bitmap, NonEmptyRendererBitmap());
   EXPECT_THAT(bitmap.dimensions, Eq(Vector2i(16, 16)));
 }
 
@@ -287,7 +294,7 @@ TEST_F(RendererDriverTest, EmitsImageDrawCallsWithClipAndTransform) {
                                       Vector2i(10, 8));
 
   auto images = document.registry().view<components::ImageComponent>();
-  ASSERT_FALSE(images.empty());
+  ASSERT_THAT(images, Not(IsEmpty()));
 
   for (const Entity entity : images) {
     auto& loaded = document.registry().emplace<components::LoadedImageComponent>(entity);
@@ -319,7 +326,7 @@ TEST_F(RendererDriverTest, AppliesDefaultPreserveAspectRatioWhenComponentMissing
                                       Vector2i(12, 6));
 
   auto images = document.registry().view<components::ImageComponent>();
-  ASSERT_FALSE(images.empty());
+  ASSERT_THAT(images, Not(IsEmpty()));
 
   std::vector<Transform2d> transforms;
   EXPECT_CALL(renderer, pushTransform(_))
@@ -707,8 +714,8 @@ TEST_F(RendererDriverTest, DrawEntityRangeDefersSubtreeCleanupAndAppliesBaseTran
     }
   }
 
-  ASSERT_TRUE(subtreeRoot != entt::null);
-  ASSERT_TRUE(subtreeLast != entt::null);
+  ASSERT_THAT(subtreeRoot, NonNullEntity());
+  ASSERT_THAT(subtreeLast, NonNullEntity());
 
   std::vector<Transform2d> transforms;
   int pushLayerCount = 0;
@@ -757,7 +764,7 @@ TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGrap
     }
   }
 
-  ASSERT_TRUE(rectEntity != entt::null);
+  ASSERT_THAT(rectEntity, NonNullEntity());
 
   auto& instance = document.registry().get<components::RenderingInstanceComponent>(rectEntity);
   auto& style = document.registry().get<components::ComputedStyleComponent>(rectEntity);
@@ -796,7 +803,7 @@ TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGrap
                     const std::optional<Box2d>& filterRegion) {
         EXPECT_FALSE(filterRegion.has_value());
         EXPECT_EQ(filterGraph.colorInterpolationFilters, ColorInterpolationFilters::SRGB);
-        ASSERT_EQ(filterGraph.nodes.size(), 10u);
+        ASSERT_THAT(filterGraph.nodes, SizeIs(10u));
 
         const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
             &filterGraph.nodes[0].primitive);
@@ -853,7 +860,7 @@ TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGrap
             std::get_if<components::filter_primitive::ColorMatrix>(&filterGraph.nodes[8].primitive);
         ASSERT_NE(sepia, nullptr);
         EXPECT_EQ(sepia->type, components::filter_primitive::ColorMatrix::Type::Matrix);
-        ASSERT_EQ(sepia->values.size(), 20u);
+        ASSERT_THAT(sepia->values, SizeIs(20u));
 
         const auto* dropShadow =
             std::get_if<components::filter_primitive::DropShadow>(&filterGraph.nodes[9].primitive);
@@ -893,7 +900,7 @@ TEST_F(RendererDriverTest, DrawEntityRangeUsesResolvedFilterReferenceObjectBound
       break;
     }
   }
-  ASSERT_TRUE(rectEntity != entt::null);
+  ASSERT_THAT(rectEntity, NonNullEntity());
 
   Entity filterEntity = document.registry().create();
   components::ComputedFilterComponent computedFilter;
@@ -974,7 +981,7 @@ TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph
       break;
     }
   }
-  ASSERT_TRUE(rectEntity != entt::null);
+  ASSERT_THAT(rectEntity, NonNullEntity());
 
   Entity filterEntity = document.registry().create();
   document.registry().emplace<components::IdComponent>(filterEntity, RcString("refFilter"));
@@ -1010,7 +1017,7 @@ TEST_F(RendererDriverTest, DrawEntityRangeCopiesUrlFilterNodesIntoCssFilterGraph
         EXPECT_NEAR(filterRegion->width(), 48.0, 1e-6);
         EXPECT_NEAR(filterRegion->height(), 12.0, 1e-6);
 
-        ASSERT_EQ(filterGraph.nodes.size(), 2u);
+        ASSERT_THAT(filterGraph.nodes, SizeIs(2u));
         const auto* blur = std::get_if<components::filter_primitive::GaussianBlur>(
             &filterGraph.nodes[0].primitive);
         ASSERT_NE(blur, nullptr);

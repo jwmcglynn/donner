@@ -24,6 +24,22 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "renderer_test_matchers",
+    testonly = 1,
+    hdrs = [
+        "RendererTestMatchers.h",
+    ],
+    visibility = [
+        "//donner/editor/tests:__pkg__",
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_image_test_utils",
     testonly = 1,
     srcs = [
@@ -180,6 +196,7 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        ":renderer_test_matchers",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
     ],
@@ -219,6 +236,7 @@ donner_cc_test(
     # of `docs/design_docs/0017-geode_renderer.md`.
     deps = [
         ":image_comparison_test_fixture",
+        ":renderer_test_matchers",
         ":renderer_test_utils",
         "//donner/svg/parser",
         "//donner/svg/resources:sandboxed_file_resource_loader",
@@ -234,6 +252,7 @@ donner_cc_test(
     # self-hosted RE lane (CI baseline, 2026-07-01).
     shard_count = 4,
     deps = [
+        ":renderer_test_matchers",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer",
@@ -258,6 +277,7 @@ donner_cc_test(
     deps = [
         ":mock_renderer_interface",
         ":renderer_test_backend",
+        ":renderer_test_matchers",
         "//donner/svg/renderer",
         "@com_google_gtest//:gtest_main",
     ],
@@ -276,6 +296,7 @@ donner_cc_test(
         "geode",
     ],
     deps = [
+        ":renderer_test_matchers",
         "//donner/svg/parser",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
@@ -411,6 +432,7 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":renderer_test_matchers",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/css:core",
@@ -461,6 +483,7 @@ donner_cc_test(
     ],
     deps = [
         ":mock_renderer_interface",
+        ":renderer_test_matchers",
         "//donner/base:base_test_utils",
         "//donner/svg/renderer:renderer_driver",
         "//donner/svg/renderer:renderer_utils",

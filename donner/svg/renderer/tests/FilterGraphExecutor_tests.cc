@@ -16,8 +16,11 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::Ge;
 using ::testing::Gt;
+using ::testing::IsEmpty;
 using ::testing::Le;
 using ::testing::Lt;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 using Pixel = std::array<std::uint8_t, 4>;
 
@@ -264,7 +267,7 @@ TEST(FilterGraphExecutorTest, RotationDoesNotChangeBlurSigma) {
   const tiny_skia::Pixmap identityBlurred = CreateBlurredDotPixmap(Transform2d());
   const tiny_skia::Pixmap rotatedBlurred = CreateBlurredDotPixmap(Transform2d::Rotate(M_PI / 4.0));
 
-  EXPECT_EQ(identityBlurred.data().size(), rotatedBlurred.data().size());
+  EXPECT_THAT(rotatedBlurred.data(), SizeIs(identityBlurred.data().size()));
   for (std::size_t i = 0; i < identityBlurred.data().size(); ++i) {
     EXPECT_EQ(identityBlurred.data()[i], rotatedBlurred.data()[i]) << "byte index=" << i;
   }
@@ -755,8 +758,8 @@ TEST(FilterGraphExecutorTest, SRGBColorInterpolationProducesDifferentResultThanL
   // Both should produce valid non-empty output. The actual pixel values may or may not differ
   // depending on the blend mode and input colors (Normal blend with premultiplied alpha can
   // produce identical results in both color spaces for some inputs).
-  EXPECT_FALSE(srgbResult.data().empty());
-  EXPECT_FALSE(linearResult.data().empty());
+  EXPECT_THAT(srgbResult.data(), Not(IsEmpty()));
+  EXPECT_THAT(linearResult.data(), Not(IsEmpty()));
 }
 
 TEST(FilterGraphExecutorTest, PerNodeColorInterpolationOverridesGraphDefault) {

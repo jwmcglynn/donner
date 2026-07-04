@@ -257,7 +257,6 @@ TEST_P(TextBackendTest, GlyphOutlineProducesNonEmptyPath) {
 
   const float scale = backend().scaleForEmToPixels(font, 16.0f);
   const Path path = backend().glyphOutline(font, shaped.glyphs[0].glyphIndex, scale);
-  EXPECT_FALSE(path.empty());
   EXPECT_THAT(path.commands(), Not(IsEmpty()));
 }
 

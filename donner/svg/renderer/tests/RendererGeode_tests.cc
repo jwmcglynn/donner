@@ -26,6 +26,7 @@
 #include "donner/svg/renderer/RendererUtils.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
 #include "tiny_skia/Pixmap.h"
@@ -37,10 +38,15 @@ namespace {
 constexpr double kViewportSize = 64.0;
 
 using test::Alpha;
+using test::EmptyRendererBitmap;
 using test::IsTransparent;
 using test::Near;
+using test::NonEmptyRendererBitmap;
 using test::Rgba;
 using test::RgbaEq;
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::NotNull;
 
 struct BitmapDiffStats {
   int differingChannels = 0;
@@ -274,7 +280,7 @@ TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
   EXPECT_EQ(snap.dimensions.x, static_cast<int>(kViewportSize));
   EXPECT_EQ(snap.dimensions.y, static_cast<int>(kViewportSize));
 
@@ -290,14 +296,14 @@ TEST_F(RendererGeodeTest, EmptyFrameAfterOpaqueFrameClearsReusedTarget) {
   renderer.endFrame();
 
   RendererBitmap opaqueSnap = renderer.takeSnapshot();
-  ASSERT_FALSE(opaqueSnap.empty());
+  ASSERT_THAT(opaqueSnap, NonEmptyRendererBitmap());
   EXPECT_THAT(pixelAt(opaqueSnap, 32, 32), RgbaEq(255, 0, 0, 255));
 
   beginFrame(renderer);
   renderer.endFrame();
 
   RendererBitmap transparentSnap = renderer.takeSnapshot();
-  ASSERT_FALSE(transparentSnap.empty());
+  ASSERT_THAT(transparentSnap, NonEmptyRendererBitmap());
   EXPECT_THAT(pixelAt(transparentSnap, 32, 32), IsTransparent())
       << "A same-size Geode frame with no draws must clear pixels from the previous frame.";
 }
@@ -316,7 +322,7 @@ TEST_F(RendererGeodeTest, WidthHeightReflectViewport) {
 }
 
 TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
-  ASSERT_TRUE(sharedDevice() != nullptr);
+  ASSERT_THAT(sharedDevice(), NotNull());
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
   renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
@@ -324,7 +330,7 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   renderer.endFrame();
 
   std::shared_ptr<const RendererTextureSnapshot> texture = renderer.takeTextureSnapshot();
-  ASSERT_TRUE(texture != nullptr);
+  ASSERT_THAT(texture, NotNull());
   EXPECT_EQ(texture->backend(), RendererTextureSnapshotBackend::Geode);
   EXPECT_EQ(texture->dimensions(),
             Vector2i(static_cast<int>(kViewportSize), static_cast<int>(kViewportSize)));
@@ -332,18 +338,19 @@ TEST_F(RendererGeodeTest, TakeTextureSnapshotReturnsTextureAndDetachesTarget) {
   EXPECT_TRUE(static_cast<bool>(geodeTexture->texture()));
   EXPECT_TRUE(static_cast<bool>(geodeTexture->textureView()));
 
-  EXPECT_TRUE(renderer.takeSnapshot().empty()) << "Texture export detaches the internal target so "
-                                                  "presentation cannot be overwritten by readback";
+  EXPECT_THAT(renderer.takeSnapshot(), EmptyRendererBitmap())
+      << "Texture export detaches the internal target so presentation cannot be overwritten by "
+         "readback";
 
   beginFrame(renderer);
   renderer.endFrame();
   std::shared_ptr<const RendererTextureSnapshot> secondTexture = renderer.takeTextureSnapshot();
-  ASSERT_TRUE(secondTexture != nullptr);
+  ASSERT_THAT(secondTexture, NotNull());
   EXPECT_EQ(secondTexture->dimensions(), texture->dimensions());
 }
 
 TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
-  ASSERT_TRUE(sharedDevice() != nullptr);
+  ASSERT_THAT(sharedDevice(), NotNull());
 
   RendererGeode source = createRenderer();
   beginFrame(source);
@@ -352,7 +359,7 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
   source.endFrame();
 
   std::shared_ptr<const RendererTextureSnapshot> texture = source.takeTextureSnapshot();
-  ASSERT_TRUE(texture != nullptr);
+  ASSERT_THAT(texture, NotNull());
   EXPECT_EQ(texture->alphaType(), AlphaType::Premultiplied);
 
   RendererGeode composited = createRenderer();
@@ -369,8 +376,8 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
   reference.endFrame();
   const RendererBitmap expected = reference.takeSnapshot();
 
-  ASSERT_FALSE(actual.empty());
-  ASSERT_FALSE(expected.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
+  ASSERT_THAT(expected, NonEmptyRendererBitmap());
   ASSERT_EQ(actual.dimensions, expected.dimensions);
   EXPECT_EQ(pixelAt(actual, 32, 32), pixelAt(expected, 32, 32))
       << "Texture snapshots are premultiplied render-target pixels. The blit shader must not "
@@ -378,7 +385,7 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
 }
 
 TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransform) {
-  ASSERT_TRUE(sharedDevice() != nullptr);
+  ASSERT_THAT(sharedDevice(), NotNull());
 
   RendererGeode source = createRenderer();
   beginFrame(source);
@@ -387,7 +394,7 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransform) {
   source.endFrame();
 
   std::shared_ptr<const RendererTextureSnapshot> texture = source.takeTextureSnapshot();
-  ASSERT_TRUE(texture != nullptr);
+  ASSERT_THAT(texture, NotNull());
 
   RendererGeode composited = createRenderer();
   beginFrame(composited);
@@ -396,7 +403,7 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransform) {
   composited.endFrame();
 
   const RendererBitmap actual = composited.takeSnapshot();
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   EXPECT_THAT(pixelAt(actual, 8, 8), IsTransparent())
       << "The texture snapshot must be translated out of its local-space source rect.";
   EXPECT_THAT(pixelAt(actual, 32, 32), RgbaEq(0, 255, 0, 255))
@@ -404,7 +411,7 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransform) {
 }
 
 TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransformWithClip) {
-  ASSERT_TRUE(sharedDevice() != nullptr);
+  ASSERT_THAT(sharedDevice(), NotNull());
 
   RendererGeode source = createRenderer();
   beginFrame(source);
@@ -413,7 +420,7 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransformWithClip) {
   source.endFrame();
 
   std::shared_ptr<const RendererTextureSnapshot> texture = source.takeTextureSnapshot();
-  ASSERT_TRUE(texture != nullptr);
+  ASSERT_THAT(texture, NotNull());
 
   RendererGeode composited = createRenderer();
   beginFrame(composited);
@@ -426,7 +433,7 @@ TEST_F(RendererGeodeTest, DrawTextureSnapshotHonorsCurrentTransformWithClip) {
   composited.endFrame();
 
   const RendererBitmap actual = composited.takeSnapshot();
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   EXPECT_THAT(pixelAt(actual, 8, 8), IsTransparent());
   EXPECT_THAT(pixelAt(actual, 32, 32), RgbaEq(0, 255, 0, 255))
       << "Texture-snapshot presentation must still draw when the document-image clip is active.";
@@ -447,14 +454,14 @@ TEST_F(RendererGeodeTest, DrawEntityRangeInvalidatesCachedFillEncodeAfterPathMut
 
   RendererGeode renderer = createRenderer();
   const RendererBitmap before = drawPreparedEntityRange(renderer, document, pathEntity);
-  ASSERT_FALSE(before.empty());
+  ASSERT_THAT(before, NonEmptyRendererBitmap());
   EXPECT_THAT(pixelAt(before, 24, 24), IsTransparent());
 
   path->setAttribute("d", "M 10 10 L 80 10 L 10 80 Z");
   path->setAttribute("style", "fill: #00ff00; stroke: none");
 
   const RendererBitmap after = drawPreparedEntityRange(renderer, document, pathEntity);
-  ASSERT_FALSE(after.empty());
+  ASSERT_THAT(after, NonEmptyRendererBitmap());
   EXPECT_THAT(pixelAt(after, 24, 24),
               Rgba(testing::Lt(20), testing::Gt(220), testing::Lt(20), testing::Gt(220)))
       << "drawEntityRange must not reuse a Geode fill encode cached before the path's `d` "
@@ -463,7 +470,7 @@ TEST_F(RendererGeodeTest, DrawEntityRangeInvalidatesCachedFillEncodeAfterPathMut
 
 TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
-  ASSERT_TRUE(host != nullptr);
+  ASSERT_THAT(host, NotNull());
 
   geode::GeodeEmbedConfig config;
   config.device = host->device();
@@ -487,7 +494,7 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   renderer.endFrame();
 
   std::shared_ptr<const RendererTextureSnapshot> texture = renderer.takeTextureSnapshot();
-  ASSERT_TRUE(texture != nullptr);
+  ASSERT_THAT(texture, NotNull());
   EXPECT_EQ(texture->backend(), RendererTextureSnapshotBackend::Geode);
   EXPECT_EQ(texture->dimensions(),
             Vector2i(static_cast<int>(kViewportSize), static_cast<int>(kViewportSize)));
@@ -495,7 +502,7 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
 
 TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
   std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
-  ASSERT_TRUE(host != nullptr);
+  ASSERT_THAT(host, NotNull());
 
   geode::GeodeEmbedConfig config;
   config.device = host->device();
@@ -513,7 +520,7 @@ TEST_F(RendererGeodeTest, BgraTargetSnapshotReturnsStraightRgba) {
   renderer.endFrame();
 
   const RendererBitmap actual = renderer.takeSnapshot();
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   EXPECT_EQ(actual.alphaType, AlphaType::Unpremultiplied);
 
   const std::array<uint8_t, 4> center = pixelAt(actual, 32, 32);
@@ -538,7 +545,7 @@ TEST_F(RendererGeodeTest, DrawPathWithSolidFill) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // Center should be red, transparent at the corner.
   auto center = pixelAt(snap, 32, 32);
@@ -780,7 +787,7 @@ TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // Top-left quadrant (pixel at ~24, 24) — red.
   auto tl = pixelAt(snap, 24, 24);
@@ -965,7 +972,7 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsSolidFillToLeftHalf) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   auto inside = pixelAt(snap, 16, 32);
   EXPECT_THAT(inside, RgbaEq(0, 0, 255, 255)) << "Inside clip should be blue";
@@ -1000,7 +1007,7 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerComposite) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   auto inside = pixelAt(snap, 16, 32);
   EXPECT_THAT(inside, RgbaEq(0, 0, 255, 255)) << "Inside clip should be blue";
@@ -1034,7 +1041,7 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerCompositeForTriangle) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   auto inside = pixelAt(snap, 32, 40);
   EXPECT_THAT(inside, RgbaEq(0, 0, 255, 255)) << "Inside clip should be blue";
@@ -1068,7 +1075,7 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsFilterLayerCompositeForTriangle) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   auto inside = pixelAt(snap, 32, 40);
   EXPECT_THAT(inside, RgbaEq(0, 0, 255, 255)) << "Inside clip should be blue";
@@ -1134,7 +1141,7 @@ TEST_F(RendererGeodeTest, GaussianBlurSmokes) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // Center pixel should still be red (fully opaque).
   auto center = pixelAt(snap, 32, 32);
@@ -1173,7 +1180,7 @@ TEST_F(RendererGeodeTest, GaussianBlurZeroStdDevPassthrough) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // Center should be green (the blur is a passthrough).
   auto center = pixelAt(snap, 32, 32);
@@ -1208,7 +1215,7 @@ TEST_F(RendererGeodeTest, FilterOffsetShiftsPixels) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // After offset dx=4 dy=4, the rect should shift: center moves from (32,32)
   // to effectively be at (32,32) still red (inside shifted rect), but (16,16)
@@ -1246,7 +1253,7 @@ TEST_F(RendererGeodeTest, FilterColorMatrixLuminanceToAlpha) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // luminanceToAlpha: R'=0, G'=0, B'=0, A'= 0.2126*R + 0.7152*G + 0.0722*B.
   // For pure red (R=1.0): A' = 0.2126 → ~54 in [0, 255].
@@ -1282,7 +1289,7 @@ TEST_F(RendererGeodeTest, FilterSourceAlphaInputExtractsAlphaChannel) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   const auto center = pixelAt(snap, 32, 32);
   EXPECT_THAT(center, RgbaEq(0, 0, 0, 255));
@@ -1314,7 +1321,7 @@ TEST_F(RendererGeodeTest, FilterSpecularLightingExponentBelowOneIsTransparent) {
 
   const Transform2d deviceFromFilter = Transform2d();
   const RendererBitmap actual = renderFlatSourceThroughFilter(graph, deviceFromFilter);
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
 
   // Every pixel must be transparent black (the lighting dispatch is skipped).
   EXPECT_THAT(pixelAt(actual, 32, 32), RgbaEq(0, 0, 0, 0));
@@ -1351,10 +1358,10 @@ TEST_F(RendererGeodeTest, FilterDiffuseLightingSpotLightConeMatchesCpuReference)
 
   const Transform2d deviceFromFilter = Transform2d();
   const RendererBitmap actual = renderFlatSourceThroughFilter(graph, deviceFromFilter);
-  ASSERT_FALSE(actual.empty());
+  ASSERT_THAT(actual, NonEmptyRendererBitmap());
   const std::vector<uint8_t> expected =
       CpuDiffuseLightingReferenceForFlatSource(diffuse, deviceFromFilter);
-  ASSERT_FALSE(expected.empty());
+  ASSERT_THAT(expected, Not(IsEmpty()));
 
   const BitmapDiffStats diff = DiffBitmapAgainstStraightRgba(actual, expected, 1, 1);
   EXPECT_EQ(diff.differingChannels, 0)
@@ -1383,7 +1390,7 @@ TEST_F(RendererGeodeTest, FilterEmptyMergeProducesTransparentBlack) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   EXPECT_THAT(pixelAt(snap, 32, 32), RgbaEq(0, 0, 0, 0));
 }
@@ -1414,7 +1421,7 @@ TEST_F(RendererGeodeTest, FilterFloodFillsSubregion) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // feFlood with red at 50% opacity. The GPU stores premultiplied (128,0,0,128)
   // but takeSnapshot() unpremultiplies to straight alpha: (255,0,0,128).
@@ -1479,7 +1486,7 @@ TEST_F(RendererGeodeTest, FilterMergeCompositesInputs) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // GPU alpha-over of premul red(128,0,0,128) then premul blue(0,0,128,128):
   //   premul result ≈ (64, 0, 128, 192)
@@ -1540,7 +1547,7 @@ TEST_F(RendererGeodeTest, FilterCompositeInOperator) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // in1 premul = (255,0,0,255), in2 premul = (0,128,0,128).
   // operator=in: result = in1 * in2.a = (255,0,0,255) * (128/255) ≈ (128,0,0,128).
@@ -1598,7 +1605,7 @@ TEST_F(RendererGeodeTest, FilterCompositeOverDefault) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // feComposite operates in linearRGB by default (the `color-interpolation-
   // filters` property), matching tiny-skia and the SVG spec. With pure blue
@@ -1670,7 +1677,7 @@ TEST_F(RendererGeodeTest, FilterCompositeArithmetic) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // k1*red*white = red. Expected: (255,0,0,255).
   auto center = pixelAt(snap, 32, 32);
@@ -1727,7 +1734,7 @@ TEST_F(RendererGeodeTest, FilterBlendMultiply) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // Multiply: red(1,0,0)*blue(0,0,1) = (0,0,0), both opaque → black opaque.
   auto center = pixelAt(snap, 32, 32);
@@ -1784,7 +1791,7 @@ TEST_F(RendererGeodeTest, FilterBlendScreen) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // Screen: red+blue-red*blue = (1,0,1) = magenta, opaque.
   auto center = pixelAt(snap, 32, 32);
@@ -1818,7 +1825,7 @@ TEST_F(RendererGeodeTest, FilterMorphologyDilateExpands) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // After dilate r=4, the rect expands by 4 in each direction.
   // Pixel at (22-3, 32) = (19, 32) should be white (inside expanded region).
@@ -1857,7 +1864,7 @@ TEST_F(RendererGeodeTest, FilterMorphologyErodeShrinks) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // After erode r=4, the rect shrinks by 4 inward from each edge.
   // Corner pixel (17, 17) should now be transparent (eroded away).
@@ -1892,7 +1899,7 @@ TEST_F(RendererGeodeTest, FilterComponentTransferIdentityPasses) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   auto center = pixelAt(snap, 32, 32);
   EXPECT_THAT(center, Rgba(Near(128, 2), Near(64, 2), Near(200, 2), Near(255, 1)))
@@ -1927,7 +1934,7 @@ TEST_F(RendererGeodeTest, FilterComponentTransferGammaInverts) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   auto center = pixelAt(snap, 32, 32);
   // R=128/255≈0.502, R²≈0.252, premultiplied: R*A=0.252*1.0=0.252 → ~64.
@@ -1965,7 +1972,7 @@ TEST_F(RendererGeodeTest, FilterConvolveMatrixBoxBlur) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // Center should still be near-white (all neighbours are white).
   auto center = pixelAt(snap, 32, 32);
@@ -2010,7 +2017,7 @@ TEST_F(RendererGeodeTest, FilterConvolveMatrixEdgeDetect) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // Interior pixel (32, 32): all neighbours are identical white, so
   // Laplacian = 4*1 - 4*1 = 0. Output should be near-black/transparent.
@@ -2073,7 +2080,7 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
 
   // (30, 32): inside the clipped region (clip is x<32) but only 2 pixels
   // from the right edge. The blur kernel (stdDev=3) at this x-coordinate

@@ -16,6 +16,7 @@
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 
 using testing::ElementsAre;
 using testing::Gt;
@@ -23,6 +24,9 @@ using testing::NotNull;
 using testing::Optional;
 
 namespace donner::svg::components {
+
+using test::NonNullEntity;
+using test::NullEntity;
 
 class RenderingContextTest : public ::testing::Test {
 protected:
@@ -118,7 +122,7 @@ TEST_F(RenderingContextTest, FindIntersectingHitsRect) {
   ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(50, 50));
-  EXPECT_TRUE(hit != entt::null);
+  EXPECT_THAT(hit, NonNullEntity());
 }
 
 TEST_F(RenderingContextTest, FindIntersectingMissesEmptyArea) {
@@ -132,7 +136,7 @@ TEST_F(RenderingContextTest, FindIntersectingMissesEmptyArea) {
   ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(5, 5));
-  EXPECT_TRUE(hit == entt::null);
+  EXPECT_THAT(hit, NullEntity());
 }
 
 TEST_F(RenderingContextTest, FindAllIntersecting) {
@@ -484,7 +488,7 @@ TEST_F(RenderingContextTest, DisplayNoneNotIntersectable) {
   ctx.instantiateRenderTree(false, warningSink_);
 
   Entity hit = ctx.findIntersecting(Vector2d(50, 50));
-  EXPECT_TRUE(hit == entt::null);
+  EXPECT_THAT(hit, NullEntity());
 }
 
 TEST_F(RenderingContextTest, RectIntersection) {
@@ -552,7 +556,7 @@ TEST_F(RenderingContextTest, PointerEventsPaintedRequiresVisiblePaint) {
   )");
 
   RenderingContext ctx(document.registry());
-  EXPECT_TRUE(ctx.findIntersecting(Vector2d(50, 50)) == entt::null);
+  EXPECT_THAT(ctx.findIntersecting(Vector2d(50, 50)), NullEntity());
 }
 
 TEST_F(RenderingContextTest, PointerEventsVisibleStrokeRequiresVisibility) {
@@ -565,7 +569,7 @@ TEST_F(RenderingContextTest, PointerEventsVisibleStrokeRequiresVisibility) {
   )");
 
   RenderingContext ctx(document.registry());
-  EXPECT_TRUE(ctx.findIntersecting(Vector2d(15, 50)) == entt::null);
+  EXPECT_THAT(ctx.findIntersecting(Vector2d(15, 50)), NullEntity());
 }
 
 TEST_F(RenderingContextTest, PointerEventsStrokeHitsHiddenStrokeGeometry) {
@@ -580,7 +584,7 @@ TEST_F(RenderingContextTest, PointerEventsStrokeHitsHiddenStrokeGeometry) {
   RenderingContext ctx(document.registry());
   const Entity rectEntity = document.querySelector("#r")->unsafeEntityHandle().entity();
   EXPECT_EQ(ctx.findIntersecting(Vector2d(15, 50)), rectEntity);
-  EXPECT_TRUE(ctx.findIntersecting(Vector2d(50, 50)) == entt::null);
+  EXPECT_THAT(ctx.findIntersecting(Vector2d(50, 50)), NullEntity());
 }
 
 TEST_F(RenderingContextTest, FindIntersectingRectReturnsFrontToBackOrder) {

@@ -15,9 +15,15 @@
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 
 namespace donner::svg {
 namespace {
+
+using test::EmptyRendererBitmap;
+using test::NonEmptyRendererBitmap;
+using ::testing::IsEmpty;
+using ::testing::Not;
 
 MATCHER(PngSignaturePrefix, "") {
   constexpr std::array<uint8_t, 8> kPngSignature = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
@@ -58,7 +64,7 @@ TEST(RendererErrorPathsTest, SaveBeforeDrawReturnsFalse) {
 TEST(RendererErrorPathsTest, SnapshotBeforeDrawIsEmpty) {
   Renderer renderer;
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_TRUE(snapshot.empty());
+  EXPECT_THAT(snapshot, EmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, SaveToInvalidPathReturnsFalse) {
@@ -85,7 +91,7 @@ TEST(RendererImageIOTest, WritePngToInvalidPath) {
 TEST(RendererImageIOTest, WritePngToMemory) {
   std::vector<uint8_t> pixels(2 * 2 * 4, 255);  // 2x2 white RGBA
   std::vector<uint8_t> encoded = RendererImageIO::writeRgbaPixelsToPngMemory(pixels, 2, 2, 0);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, Not(IsEmpty()));
   EXPECT_THAT(encoded, PngSignaturePrefix());
 }
 
@@ -103,7 +109,7 @@ TEST(RendererImageIOTest, WritePngWithCustomStride) {
   // The API asserts that rgbaPixels.size() == width * height * 4.
   std::vector<uint8_t> pixels(2 * 2 * 4, 200);  // 2 pixels per row × 2 rows × 4 bytes/pixel
   std::vector<uint8_t> encoded = RendererImageIO::writeRgbaPixelsToPngMemory(pixels, 2, 2, 2);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, Not(IsEmpty()));
 }
 
 // --- Rendering broken/degenerate SVGs ---
@@ -118,7 +124,7 @@ TEST(RendererErrorPathsTest, EmptySvgDocument) {
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
   // Empty document should still produce a valid (transparent) bitmap.
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
   EXPECT_EQ(snapshot.dimensions, Vector2i(8, 8));
 }
 
@@ -134,7 +140,7 @@ TEST(RendererErrorPathsTest, BrokenGradientReference) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, EmptyFilterPrimitive) {
@@ -152,7 +158,7 @@ TEST(RendererErrorPathsTest, EmptyFilterPrimitive) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, ZeroDimensionViewBox) {
@@ -166,7 +172,7 @@ TEST(RendererErrorPathsTest, ZeroDimensionViewBox) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, GradientWithNoStops) {
@@ -183,7 +189,7 @@ TEST(RendererErrorPathsTest, GradientWithNoStops) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, SelfReferencingClipPath) {
@@ -203,7 +209,7 @@ TEST(RendererErrorPathsTest, SelfReferencingClipPath) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, ZeroSizeRect) {
@@ -217,7 +223,7 @@ TEST(RendererErrorPathsTest, ZeroSizeRect) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, NegativeRadiiEllipse) {
@@ -232,7 +238,7 @@ TEST(RendererErrorPathsTest, NegativeRadiiEllipse) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, PatternWithZeroSize) {
@@ -251,7 +257,7 @@ TEST(RendererErrorPathsTest, PatternWithZeroSize) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, MaskWithNoContent) {
@@ -268,7 +274,7 @@ TEST(RendererErrorPathsTest, MaskWithNoContent) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, DisplayNoneElement) {
@@ -282,7 +288,7 @@ TEST(RendererErrorPathsTest, DisplayNoneElement) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, VisibilityHiddenElement) {
@@ -296,7 +302,7 @@ TEST(RendererErrorPathsTest, VisibilityHiddenElement) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, ZeroOpacityElement) {
@@ -310,7 +316,7 @@ TEST(RendererErrorPathsTest, ZeroOpacityElement) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, StrokeWithZeroWidth) {
@@ -324,7 +330,7 @@ TEST(RendererErrorPathsTest, StrokeWithZeroWidth) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 TEST(RendererErrorPathsTest, FillNone) {
@@ -338,7 +344,7 @@ TEST(RendererErrorPathsTest, FillNone) {
   renderer.draw(document);
 
   const RendererBitmap snapshot = renderer.takeSnapshot();
-  EXPECT_FALSE(snapshot.empty());
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap());
 }
 
 }  // namespace
