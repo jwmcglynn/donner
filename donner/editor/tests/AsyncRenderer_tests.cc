@@ -50,8 +50,10 @@ using svg::test::Rgba;
 using ::testing::AllOf;
 using ::testing::Contains;
 using ::testing::DoubleNear;
+using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::Gt;
+using ::testing::SizeIs;
 
 bool IsGraphicsElement(const svg::SVGElement& element) {
   return element.withReadAccess([&element](svg::DocumentReadAccess&, EntityHandle) {
@@ -88,13 +90,70 @@ Entity SelectedGraphicsEntity(EditorApp& app) {
   return app.selectedElement()->unsafeEntityHandle().entity();
 }
 
-std::string ElementId(const svg::SVGElement& element) {
-  return element.withReadAccess(
-      [&element](svg::DocumentReadAccess&, EntityHandle) { return std::string(element.id()); });
-}
-
 bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
   return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
+}
+
+MATCHER_P(DragTargetLayerTileFor, entity,
+          std::string("a drag-target layer tile for entity ") + testing::PrintToString(entity)) {
+  if (arg.isDragTarget && arg.layerEntity == entity) {
+    return true;
+  }
+
+  *result_listener << "id=" << testing::PrintToString(arg.id)
+                   << ", kind=" << static_cast<int>(arg.kind)
+                   << ", layerEntity=" << testing::PrintToString(arg.layerEntity)
+                   << ", isDragTarget=" << testing::PrintToString(arg.isDragTarget);
+  return false;
+}
+
+MATCHER(EmptyRendererBitmap, "an empty renderer bitmap") {
+  if (arg.empty()) {
+    return true;
+  }
+
+  *result_listener << "dimensions=(" << arg.dimensions.x << ", " << arg.dimensions.y
+                   << "), pixels=" << arg.pixels.size() << ", rowBytes=" << arg.rowBytes;
+  return false;
+}
+
+MATCHER(NonEmptyRendererBitmap, "a non-empty renderer bitmap") {
+  if (!arg.empty()) {
+    return true;
+  }
+
+  *result_listener << "dimensions=(" << arg.dimensions.x << ", " << arg.dimensions.y
+                   << "), pixels=" << arg.pixels.size() << ", rowBytes=" << arg.rowBytes;
+  return false;
+}
+
+MATCHER(NullEntity, "a null entity") {
+  if (arg == entt::null) {
+    return true;
+  }
+
+  *result_listener << "entity is " << testing::PrintToString(arg);
+  return false;
+}
+
+MATCHER_P(ByteVectorEq, expected,
+          std::string("byte vector equal to ") + testing::PrintToString(expected.size()) +
+              " bytes") {
+  if (arg.size() != expected.size()) {
+    *result_listener << "size is " << arg.size();
+    return false;
+  }
+
+  const auto mismatch = std::mismatch(arg.begin(), arg.end(), expected.begin());
+  if (mismatch.first == arg.end()) {
+    return true;
+  }
+
+  const auto index = static_cast<std::size_t>(std::distance(arg.begin(), mismatch.first));
+  *result_listener << "first mismatch at byte " << index
+                   << ": actual=" << static_cast<int>(*mismatch.first)
+                   << ", expected=" << static_cast<int>(*mismatch.second);
+  return false;
 }
 
 bool TileCoversDocPoint(const RenderResult::CompositedTile& tile, const Vector2d& point) {
@@ -245,17 +304,10 @@ TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
   ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
-  EXPECT_EQ(result->compositedPreview->representedDragPreview->extraEntities,
-            std::vector<Entity>{r2Entity});
-
-  const auto dragTileFor = [&](Entity entity) {
-    return std::ranges::find_if(result->compositedPreview->tiles,
-                                [entity](const RenderResult::CompositedTile& tile) {
-                                  return tile.isDragTarget && tile.layerEntity == entity;
-                                });
-  };
-  EXPECT_NE(dragTileFor(r1Entity), result->compositedPreview->tiles.end());
-  EXPECT_NE(dragTileFor(r2Entity), result->compositedPreview->tiles.end());
+  EXPECT_THAT(result->compositedPreview->representedDragPreview->extraEntities,
+              ElementsAre(r2Entity));
+  EXPECT_THAT(result->compositedPreview->tiles, Contains(DragTargetLayerTileFor(r1Entity)));
+  EXPECT_THAT(result->compositedPreview->tiles, Contains(DragTargetLayerTileFor(r2Entity)));
 }
 
 TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) {
@@ -272,7 +324,7 @@ TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) 
   ASSERT_TRUE(donnerD.has_value());
   ASSERT_TRUE(app.unbundleCompoundPath(*donnerD));
   ASSERT_TRUE(app.flushFrame());
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(2u));
 
   const std::vector<svg::SVGElement> unbundled = app.selectedElements();
   const Entity firstEntity = unbundled[0].unsafeEntityHandle().entity();
@@ -285,7 +337,7 @@ TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) 
   const std::optional<SelectTool::ActiveDragPreview> activeDrag = selectTool.activeDragPreview();
   ASSERT_TRUE(activeDrag.has_value());
   EXPECT_EQ(activeDrag->entity, firstEntity);
-  EXPECT_EQ(activeDrag->extraEntities, std::vector<Entity>{secondEntity});
+  EXPECT_THAT(activeDrag->extraEntities, ElementsAre(secondEntity));
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
@@ -308,17 +360,10 @@ TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) 
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
   ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value());
-  EXPECT_EQ(result->compositedPreview->representedDragPreview->extraEntities,
-            std::vector<Entity>{secondEntity});
-
-  const auto dragTileFor = [&](Entity entity) {
-    return std::ranges::find_if(result->compositedPreview->tiles,
-                                [entity](const RenderResult::CompositedTile& tile) {
-                                  return tile.isDragTarget && tile.layerEntity == entity;
-                                });
-  };
-  EXPECT_NE(dragTileFor(firstEntity), result->compositedPreview->tiles.end());
-  EXPECT_NE(dragTileFor(secondEntity), result->compositedPreview->tiles.end());
+  EXPECT_THAT(result->compositedPreview->representedDragPreview->extraEntities,
+              ElementsAre(secondEntity));
+  EXPECT_THAT(result->compositedPreview->tiles, Contains(DragTargetLayerTileFor(firstEntity)));
+  EXPECT_THAT(result->compositedPreview->tiles, Contains(DragTargetLayerTileFor(secondEntity)));
 }
 
 TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) {
@@ -346,7 +391,7 @@ TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) 
   const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
-  ASSERT_EQ(result->compositedPreview->tiles.size(), 1u);
+  ASSERT_THAT(result->compositedPreview->tiles, SizeIs(1u));
   const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
   EXPECT_EQ(tile.id, "full-canvas");
   EXPECT_EQ(tile.rasterCanvasSize, Vector2i(400, 320));
@@ -1475,24 +1520,24 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
 
   ASSERT_TRUE(result.has_value());
   ASSERT_TRUE(result->compositedPreview.has_value());
-  ASSERT_EQ(result->compositedPreview->tiles.size(), 1u);
+  ASSERT_THAT(result->compositedPreview->tiles, SizeIs(1u));
   const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
   EXPECT_EQ(tile.kind, RenderResult::CompositedTile::Kind::Segment);
   EXPECT_EQ(tile.id, "full-canvas");
   EXPECT_TRUE(HasPresentationPayload(tile));
   if (renderer.requiresTextureSnapshotPresentation()) {
     ASSERT_NE(tile.textureSnapshot, nullptr);
-    EXPECT_TRUE(tile.bitmap.empty());
+    EXPECT_THAT(tile.bitmap, EmptyRendererBitmap());
     EXPECT_EQ(tile.textureSnapshot->dimensions(), Vector2i(64, 64));
   } else {
-    EXPECT_FALSE(tile.bitmap.empty());
+    EXPECT_THAT(tile.bitmap, NonEmptyRendererBitmap());
     EXPECT_EQ(tile.bitmap.dimensions, Vector2i(64, 64));
   }
   EXPECT_EQ(tile.bitmapDimsPx, Vector2i(64, 64));
   EXPECT_EQ(tile.rasterCanvasSize, Vector2i(64, 64));
   EXPECT_EQ(tile.canvasOffsetDoc, Vector2d::Zero());
   EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(64.0, 64.0));
-  EXPECT_TRUE(result->compositedPreview->entity == entt::null);
+  EXPECT_THAT(result->compositedPreview->entity, NullEntity());
 }
 
 TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
@@ -1586,13 +1631,13 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
 
     ASSERT_TRUE(result.has_value());
     ASSERT_TRUE(result->compositedPreview.has_value()) << svgBody;
-    ASSERT_EQ(result->compositedPreview->tiles.size(), 1u) << svgBody;
+    ASSERT_THAT(result->compositedPreview->tiles, SizeIs(1u)) << svgBody;
     const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
     EXPECT_EQ(tile.id, "full-canvas") << svgBody;
     EXPECT_TRUE(HasPresentationPayload(tile)) << svgBody;
     if (!tile.bitmap.empty()) {
       EXPECT_EQ(tile.bitmap.dimensions, result->bitmap.dimensions) << svgBody;
-      EXPECT_EQ(tile.bitmap.pixels, result->bitmap.pixels) << svgBody;
+      EXPECT_THAT(tile.bitmap.pixels, ByteVectorEq(result->bitmap.pixels)) << svgBody;
     }
     if (tile.textureSnapshot != nullptr) {
       EXPECT_EQ(tile.textureSnapshot->dimensions(), tile.bitmapDimsPx) << svgBody;
@@ -1671,7 +1716,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   const std::vector<uint8_t> promotedPixelsDrag1 = findDragTileBitmap(*drag1->compositedPreview);
   const auto promotedSignatureDrag1 = findDragTileSignature(*drag1->compositedPreview);
   if (!renderer.requiresTextureSnapshotPresentation()) {
-    ASSERT_FALSE(promotedPixelsDrag1.empty());
+    ASSERT_THAT(promotedPixelsDrag1, SizeIs(Gt(0u)));
   } else {
     EXPECT_TRUE(std::get<0>(promotedSignatureDrag1));
   }
@@ -1686,8 +1731,8 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto held = waitForResult();
   ASSERT_TRUE(held.has_value());
   ASSERT_TRUE(held->compositedPreview.has_value());
-  ASSERT_EQ(held->compositedPreview->tiles.size(), 1u);
-  EXPECT_EQ(held->compositedPreview->tiles.front().id, "full-canvas");
+  ASSERT_THAT(held->compositedPreview->tiles,
+              ElementsAre(Field("id", &RenderResult::CompositedTile::id, "full-canvas")));
 
   // Drag frame 2: same entity, same DOM transform (4, 0). If the compositor
   // were torn down between the release and this drag, it would re-rasterize
@@ -1706,7 +1751,7 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   ASSERT_TRUE(drag2.has_value());
   ASSERT_TRUE(drag2->compositedPreview.has_value());
   if (!renderer.requiresTextureSnapshotPresentation()) {
-    EXPECT_EQ(findDragTileBitmap(*drag2->compositedPreview), promotedPixelsDrag1)
+    EXPECT_THAT(findDragTileBitmap(*drag2->compositedPreview), ByteVectorEq(promotedPixelsDrag1))
         << "drag-target tile bitmap should be identical after release -> drag-again";
   } else {
     EXPECT_EQ(findDragTileSignature(*drag2->compositedPreview), promotedSignatureDrag1)
