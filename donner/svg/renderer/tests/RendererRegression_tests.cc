@@ -4,10 +4,12 @@
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 
 namespace donner::svg {
 namespace {
 
+using test::NonEmptyRendererBitmap;
 using Params = ImageComparisonParams;
 
 std::filesystem::path ResvgResourceRoot() {
@@ -71,8 +73,8 @@ TEST_F(RendererRegressionTests, NestedBaselineShiftRedrawIsIdempotent) {
   const RendererBitmap first = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
   const RendererBitmap second = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
 
-  ASSERT_FALSE(first.empty());
-  ASSERT_FALSE(second.empty());
+  ASSERT_THAT(first, NonEmptyRendererBitmap());
+  ASSERT_THAT(second, NonEmptyRendererBitmap());
   ExpectBitmapsIdentical(second, first, "nested_baseline_shift_redraw");
 }
 
@@ -83,8 +85,8 @@ TEST_F(RendererRegressionTests, FeImageFragmentRedrawIsIdempotent) {
   const RendererBitmap first = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
   const RendererBitmap second = RenderDocumentWithBackend(document, RendererBackend::TinySkia);
 
-  ASSERT_FALSE(first.empty());
-  ASSERT_FALSE(second.empty());
+  ASSERT_THAT(first, NonEmptyRendererBitmap());
+  ASSERT_THAT(second, NonEmptyRendererBitmap());
   ExpectBitmapsIdentical(second, first, "feimage_fragment_redraw");
 }
 

@@ -47,10 +47,14 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::svg {
 namespace {
+
+using test::NonEmptyRendererBitmap;
 
 std::string LoadSplash() {
   std::ifstream stream("donner_splash.svg");
@@ -131,7 +135,7 @@ TEST(ZoomFilterRepro, TinyCanvasRendersNonEmptySnapshot) {
   // Sanity: a 100×100 canvas must render. If this fails, something is
   // wrong with the test harness itself, not the cap.
   const RendererBitmap snapshot = RenderAt(kTinySvg, 100, 100, /*outName=*/nullptr);
-  EXPECT_FALSE(snapshot.empty()) << "100×100 canvas produced an empty snapshot";
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap()) << "100×100 canvas produced an empty snapshot";
 }
 
 TEST(ZoomFilterRepro, SquareCanvasAtPriorCapBoundaryRenders) {
@@ -139,7 +143,7 @@ TEST(ZoomFilterRepro, SquareCanvasAtPriorCapBoundaryRenders) {
   // `len.value() > kMaxAllocationBytes` (strict greater-than), so this size
   // is on the boundary and was historically allowed.
   const RendererBitmap snapshot = RenderAt(kTinySvg, 4096, 4096, /*outName=*/nullptr);
-  EXPECT_FALSE(snapshot.empty())
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap())
       << "4096×4096 canvas (64 MiB exactly) failed to render — the cap may have moved.";
 }
 
@@ -157,7 +161,7 @@ TEST(ZoomFilterRepro, SplashAtEditorClampBoundaryRenders) {
   }
   const RendererBitmap snapshot =
       RenderAt(std::string_view{source}, 8192, 4708, "splash_at_editor_clamp_8192x4708.png");
-  EXPECT_FALSE(snapshot.empty())
+  EXPECT_THAT(snapshot, NonEmptyRendererBitmap())
       << "Splash @ 8192×4708 produced an empty snapshot — main pixmap allocation failed. "
          "Check `Pixmap::fromSize` cap in third_party/tiny-skia-cpp.";
   // Renderer preserves the 892:512 viewBox aspect inside the requested canvas,
@@ -181,9 +185,9 @@ TEST(ZoomFilterRepro, SplashHaloSurvivesHighZoom) {
     GTEST_SKIP() << "donner_splash.svg not in runfiles";
   }
   const RendererBitmap lo = RenderAt(std::string_view{source}, 892, 512, "splash_halo_lo.png");
-  ASSERT_FALSE(lo.empty());
+  ASSERT_THAT(lo, NonEmptyRendererBitmap());
   const RendererBitmap hi = RenderAt(std::string_view{source}, 8192, 4708, "splash_halo_hi.png");
-  ASSERT_FALSE(hi.empty());
+  ASSERT_THAT(hi, NonEmptyRendererBitmap());
 
   // Probe inside the Lightning_glow_dark halo on the small bottom bolt
   // (low-zoom doc coords near (478, 440)) — the bright cyan glow that's

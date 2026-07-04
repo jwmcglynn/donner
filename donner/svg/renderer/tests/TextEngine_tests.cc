@@ -163,7 +163,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   const float scale = engine.scaleForEmToPixels(runs[0].font, 64.0f);
   const Path firstGlyphPath =
       engine.glyphOutline(runs[0].font, runs[0].glyphs[0].glyphIndex, scale);
-  ASSERT_FALSE(firstGlyphPath.empty());
+  ASSERT_THAT(firstGlyphPath.commands(), Not(IsEmpty()));
 
   Box2d positionedBounds = firstGlyphPath.bounds();
   positionedBounds += Vector2d(runs[0].glyphs[0].xPosition, runs[0].glyphs[0].yPosition);

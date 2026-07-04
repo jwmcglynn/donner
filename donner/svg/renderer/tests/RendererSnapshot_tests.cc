@@ -19,6 +19,8 @@
 
 using ::testing::_;
 using ::testing::AtLeast;
+using ::testing::IsEmpty;
+using ::testing::Not;
 
 namespace donner::svg {
 namespace {
@@ -71,7 +73,7 @@ TEST(RendererSnapshotTests, ReplayingCapturedSnapshotIgnoresLaterDomMutations) {
 
   driver.draw(snapshot);
 
-  ASSERT_FALSE(replayedFills.empty());
+  ASSERT_THAT(replayedFills, Not(IsEmpty()));
   EXPECT_EQ(replayedFills.back(), css::RGBA(255, 0, 0, 255));
 }
 
@@ -104,7 +106,7 @@ TEST(RendererSnapshotTests, LaterSnapshotObservesLaterDomRevision) {
 
   driver.draw(laterSnapshot);
 
-  ASSERT_FALSE(replayedFills.empty());
+  ASSERT_THAT(replayedFills, Not(IsEmpty()));
   EXPECT_EQ(replayedFills.back(), css::RGBA(0, 0, 255, 255));
 }
 
@@ -192,13 +194,13 @@ TEST(RendererSnapshotTests, GradientPaintReferencesAreSnapshotOwned) {
 
   driver.draw(snapshot);
 
-  ASSERT_FALSE(replayedFillRefs.empty());
+  ASSERT_THAT(replayedFillRefs, Not(IsEmpty()));
   const components::PaintResolvedReference& ref = replayedFillRefs.back();
   EXPECT_NE(ref.reference.handle.registry(), &document.registry());
 
   const auto* gradient = ref.reference.handle.try_get<components::ComputedGradientComponent>();
   ASSERT_NE(gradient, nullptr);
-  ASSERT_FALSE(gradient->stops.empty());
+  ASSERT_THAT(gradient->stops, Not(IsEmpty()));
   EXPECT_EQ(gradient->stops.front().color.resolve(css::RGBA(0, 0, 0, 255),
                                                   gradient->stops.front().opacity),
             css::RGBA(255, 0, 0, 255));
@@ -239,7 +241,7 @@ TEST(RendererSnapshotTests, PatternPaintReferencesAreSnapshotOwned) {
 
   driver.draw(snapshot);
 
-  ASSERT_FALSE(replayedPatternRefs.empty());
+  ASSERT_THAT(replayedPatternRefs, Not(IsEmpty()));
   const components::PaintResolvedReference& ref = replayedPatternRefs.back();
   EXPECT_NE(ref.reference.handle.registry(), &document.registry());
   EXPECT_NE(ref.reference.handle.try_get<components::ComputedPatternComponent>(), nullptr);
@@ -273,12 +275,12 @@ TEST(RendererSnapshotTests, FeImageFragmentReferencesAreClearedBeforeReplay) {
 
   driver.draw(snapshot);
 
-  ASSERT_FALSE(replayedFilterGraphs.empty());
-  ASSERT_FALSE(replayedFilterGraphs.front().nodes.empty());
+  ASSERT_THAT(replayedFilterGraphs, Not(IsEmpty()));
+  ASSERT_THAT(replayedFilterGraphs.front().nodes, Not(IsEmpty()));
   const auto* image = std::get_if<components::filter_primitive::Image>(
       &replayedFilterGraphs.front().nodes.front().primitive);
   ASSERT_NE(image, nullptr);
-  EXPECT_TRUE(image->fragmentId.empty());
+  EXPECT_THAT(image->fragmentId, IsEmpty());
   EXPECT_FALSE(image->svgSubDocument);
 }
 
@@ -321,7 +323,7 @@ TEST(RendererSnapshotTests, TextPaintReferencesAreSnapshotOwned) {
 
   driver.draw(snapshot);
 
-  ASSERT_FALSE(replayedSpanFillRefs.empty());
+  ASSERT_THAT(replayedSpanFillRefs, Not(IsEmpty()));
   const components::PaintResolvedReference& ref = replayedSpanFillRefs.back();
   EXPECT_NE(ref.reference.handle.registry(), &document.registry());
   EXPECT_NE(ref.reference.handle.try_get<components::ComputedGradientComponent>(), nullptr);

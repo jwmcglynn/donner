@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <filesystem>
@@ -12,6 +13,7 @@
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/tests/ImageComparisonTestFixture.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
 // clang-format off
@@ -32,6 +34,7 @@
 namespace donner::svg {
 namespace {
 
+using test::NonEmptyRendererBitmap;
 using Params = ImageComparisonParams;
 
 /// Default per-pixel threshold for the Geode backend when a test doesn't have
@@ -539,9 +542,9 @@ TEST_F(RendererTests, ChainedFeImageDeepRecursionIsBoundedAndStable) {
   const RendererBitmap shorterChain = RenderSvgString(MakeChainedFeImageSvg(40));
   const RendererBitmap longerChain = RenderSvgString(MakeChainedFeImageSvg(90));
 
-  ASSERT_FALSE(shorterChain.pixels.empty())
+  ASSERT_THAT(shorterChain, NonEmptyRendererBitmap())
       << "Renderer returned an empty bitmap for the 40-link feImage chain";
-  ASSERT_FALSE(longerChain.pixels.empty())
+  ASSERT_THAT(longerChain, NonEmptyRendererBitmap())
       << "Renderer returned an empty bitmap for the 90-link feImage chain";
 
   // Both chains exceed the depth cap, so everything past depth 32 renders empty
@@ -609,9 +612,9 @@ TEST_F(RendererTests, DashSeamClosedContourMitersStartCorner) {
   const RendererBitmap openPath =
       renderInner("<path d=\"M40,40 L160,40 L160,160 L40,160 L40,40\" " + attrs + "/>");
 
-  ASSERT_FALSE(rectEl.empty());
-  ASSERT_FALSE(closedPath.empty());
-  ASSERT_FALSE(openPath.empty());
+  ASSERT_THAT(rectEl, NonEmptyRendererBitmap());
+  ASSERT_THAT(closedPath, NonEmptyRendererBitmap());
+  ASSERT_THAT(openPath, NonEmptyRendererBitmap());
 
   // <rect> is a closed contour -> the dash seam-joins -> mitered start corner (quadrant filled).
   EXPECT_EQ(greenInOuterCorner(rectEl), 64) << "dashed <rect> should miter its start corner";
