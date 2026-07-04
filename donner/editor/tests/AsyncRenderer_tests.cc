@@ -44,6 +44,18 @@ void PrintTo(const Vector2d& vector, std::ostream* os) {
   *os << "Vector2d{x=" << vector.x << ", y=" << vector.y << "}";
 }
 
+void PrintTo(const GlTextureCache::TileView& tile, std::ostream* os) {
+  *os << "TileView{id=" << testing::PrintToString(tile.id)
+      << ", kind=" << static_cast<int>(tile.kind)
+      << ", layerEntity=" << testing::PrintToString(tile.layerEntity)
+      << ", generation=" << tile.generation
+      << ", bitmapDimsPx=" << testing::PrintToString(tile.bitmapDimsPx)
+      << ", rasterCanvasSize=" << testing::PrintToString(tile.rasterCanvasSize)
+      << ", metadataOnly=" << testing::PrintToString(tile.metadataOnly)
+      << ", isDragTarget=" << testing::PrintToString(tile.isDragTarget)
+      << ", texture=" << testing::PrintToString(tile.texture) << "}";
+}
+
 namespace {
 
 using svg::test::Rgba;
@@ -97,6 +109,10 @@ bool HasPresentationPayload(const RenderResult::CompositedTile& tile) {
   return !tile.bitmap.empty() || tile.textureSnapshot != nullptr;
 }
 
+auto TileRasterCanvasSizeIs(const Vector2i& expected) {
+  return Field("rasterCanvasSize", &GlTextureCache::TileView::rasterCanvasSize, expected);
+}
+
 MATCHER_P(DragTargetLayerTileFor, entity,
           std::string("a drag-target layer tile for entity ") + testing::PrintToString(entity)) {
   if (arg.isDragTarget && arg.layerEntity == entity) {
@@ -122,6 +138,19 @@ MATCHER(EmptyRendererBitmap, "an empty renderer bitmap") {
 
 MATCHER(NonEmptyRendererBitmap, "a non-empty renderer bitmap") {
   if (!arg.empty()) {
+    return true;
+  }
+
+  *result_listener << "dimensions=(" << arg.dimensions.x << ", " << arg.dimensions.y
+                   << "), pixels=" << arg.pixels.size() << ", rowBytes=" << arg.rowBytes;
+  return false;
+}
+
+MATCHER_P(BitmapMatchesTextureSnapshotPresentationPolicy, requiresTextureSnapshotPresentation,
+          requiresTextureSnapshotPresentation
+              ? "an empty bitmap for texture snapshot presentation"
+              : "a non-empty bitmap for CPU snapshot presentation") {
+  if (arg.empty() == requiresTextureSnapshotPresentation) {
     return true;
   }
 
@@ -1222,7 +1251,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   }
   const std::optional<RenderResult> hidden = waitForResult();
   ASSERT_TRUE(hidden.has_value());
-  ASSERT_FALSE(hidden->bitmap.empty());
+  ASSERT_THAT(hidden->bitmap, NonEmptyRendererBitmap());
   const std::array<uint8_t, 4> hiddenOldPixel = pixelAt(hidden->bitmap, 16, 16);
   const std::array<uint8_t, 4> hiddenNextPixel = pixelAt(hidden->bitmap, 48, 16);
   EXPECT_TRUE(isWhite(hiddenOldPixel))
@@ -1476,19 +1505,16 @@ TEST(AsyncRendererTest, DragPreviewRequestReturnsCompositedPreviewLayers) {
   EXPECT_TRUE(result->compositedPreview->valid());
   // Tiny-skia keeps a CPU snapshot for diagnostics; Geode direct presentation
   // must not fall back to CPU readback.
-  EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
+  EXPECT_THAT(result->bitmap, BitmapMatchesTextureSnapshotPresentationPolicy(
+                                  renderer.requiresTextureSnapshotPresentation()));
   EXPECT_EQ(result->compositedPreview->entity, target->unsafeEntityHandle().entity());
   // M2C: promoted presentation payload now lives inside the `tiles` paint-order
   // list. Assert at least one Layer-kind tile carries non-empty
   // content for the dragged entity.
-  bool sawLayerTile = false;
-  for (const auto& tile : result->compositedPreview->tiles) {
-    if (tile.kind == RenderResult::CompositedTile::Kind::Layer && HasPresentationPayload(tile)) {
-      sawLayerTile = true;
-      break;
-    }
-  }
-  EXPECT_TRUE(sawLayerTile);
+  EXPECT_THAT(result->compositedPreview->tiles,
+              Contains(AllOf(Field("kind", &RenderResult::CompositedTile::kind,
+                                   RenderResult::CompositedTile::Kind::Layer),
+                             CompositedTileWithPresentationPayload())));
 }
 
 TEST(AsyncRendererTest, PreviewRequestWithoutDomTransformReturnsCompositedPreviewLayers) {
@@ -1582,7 +1608,8 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
     // After a version change, the compositor should still produce valid composited output.
     ASSERT_TRUE(result->compositedPreview.has_value());
     EXPECT_TRUE(result->compositedPreview->valid());
-    EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
+    EXPECT_THAT(result->bitmap, BitmapMatchesTextureSnapshotPresentationPolicy(
+                                    renderer.requiresTextureSnapshotPresentation()));
   }
 }
 
@@ -1618,7 +1645,8 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   }
 
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
+  EXPECT_THAT(result->bitmap, BitmapMatchesTextureSnapshotPresentationPolicy(
+                                  renderer.requiresTextureSnapshotPresentation()));
   ASSERT_TRUE(result->compositedPreview.has_value());
   EXPECT_TRUE(result->compositedPreview->valid());
   EXPECT_THAT(result->compositedPreview->tiles, Contains(CompositedTileWithPresentationPayload()));
@@ -4653,11 +4681,9 @@ TEST(RenderCoordinatorTest, ContinuousSelectedZoomDefersViewportPrewarmUntilStab
          "prewarm.";
   EXPECT_TRUE(waitForCoordinator());
   const Vector2i paddedCanvas = viewport.selectedPrewarmRasterViewport().outputSizePx;
-  ASSERT_FALSE(textures.tiles().empty());
-  for (const GlTextureCache::TileView& tile : textures.tiles()) {
-    EXPECT_EQ(tile.rasterCanvasSize, paddedCanvas)
-        << "Settled selected prewarm should use the overdraw-padded raster viewport.";
-  }
+  ASSERT_THAT(textures.tiles(), Not(IsEmpty()));
+  EXPECT_THAT(textures.tiles(), Each(TileRasterCanvasSizeIs(paddedCanvas)))
+      << "Settled selected prewarm should use the overdraw-padded raster viewport.";
 }
 
 TEST(RenderCoordinatorTest,
@@ -4769,10 +4795,10 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
 
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   ASSERT_TRUE(waitForCoordinator());
-  EXPECT_TRUE(textures.tiles().empty())
+  EXPECT_THAT(textures.tiles(), IsEmpty())
       << "The first high-zoom selected render should not publish a bounded active tile without "
          "overview infill.";
-  ASSERT_FALSE(textures.overviewTiles().empty());
+  ASSERT_THAT(textures.overviewTiles(), Not(IsEmpty()));
   EXPECT_TRUE(textures.coverageDiagnostics().overviewInfillAvailable);
   EXPECT_EQ(coordinator.displayedDocVersion(), app.document().currentFrameVersion());
 
@@ -4780,8 +4806,8 @@ TEST(RenderCoordinatorTest, ViewportBoundedSelectionRequestsOverviewBeforeActive
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
   ASSERT_TRUE(waitForCoordinator());
-  EXPECT_FALSE(textures.tiles().empty());
-  EXPECT_FALSE(textures.overviewTiles().empty())
+  EXPECT_THAT(textures.tiles(), Not(IsEmpty()));
+  EXPECT_THAT(textures.overviewTiles(), Not(IsEmpty()))
       << "Publishing the crisp bounded selected prewarm must preserve the overview fallback.";
 }
 
@@ -4830,17 +4856,17 @@ TEST(RenderCoordinatorTest, ViewportBoundedResultWithoutOverviewIsDiscarded) {
       << "This simulates a stale selected prewarm that was already in flight before the cache "
          "noticed it lacked overview infill.";
   ASSERT_TRUE(waitForCoordinator());
-  EXPECT_TRUE(textures.tiles().empty())
+  EXPECT_THAT(textures.tiles(), IsEmpty())
       << "A bounded result without overview infill must not become the only visible content, "
          "because zooming out would reveal checkerboard for missing tile coverage.";
-  EXPECT_TRUE(textures.overviewTiles().empty());
+  EXPECT_THAT(textures.overviewTiles(), IsEmpty());
   EXPECT_EQ(coordinator.displayedDocVersion(), previousDisplayedVersion);
 
   coordinator.maybeRequestRender(app, selectTool, viewport, &textures);
   ASSERT_TRUE(coordinator.asyncRenderer().isBusy());
   ASSERT_TRUE(waitForCoordinator());
-  EXPECT_TRUE(textures.tiles().empty());
-  EXPECT_FALSE(textures.overviewTiles().empty())
+  EXPECT_THAT(textures.tiles(), IsEmpty());
+  EXPECT_THAT(textures.overviewTiles(), Not(IsEmpty()))
       << "After discarding the unsafe bounded result, the next request should build the overview "
          "fallback first.";
 }
@@ -5130,7 +5156,7 @@ TEST(RenderCoordinatorTest, ImmediateOverlayPublishesCurrentFrameWithoutVersionG
   RenderCoordinator coordinator;
   EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport, std::nullopt));
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
+  EXPECT_THAT(coordinator.immediateOverlaySnapshot()->paths, SizeIs(1u));
   EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.canvasSize, Vector2i(64, 96));
 }
 
@@ -5167,7 +5193,7 @@ TEST(RenderCoordinatorTest, IdleSelectionReusesImmediateOverlayForPresentation) 
       << "Idle selected chrome should reuse the previous immediate overlay snapshot instead of "
          "recapturing every frame.";
   ASSERT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
-  EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), firstSnapshot.paths.size());
+  EXPECT_THAT(coordinator.immediateOverlaySnapshot()->paths, SizeIs(firstSnapshot.paths.size()));
   const FrameCostBreakdown::Overlay overlayCost = coordinator.lastFrameCostBreakdown().overlay;
   EXPECT_EQ(overlayCost.payloadBytes, 0u);
   EXPECT_EQ(overlayCost.captureMs, 0.0);
@@ -5186,7 +5212,7 @@ TEST(RenderCoordinatorTest, LargeSelectionAutoDetailPromotesFromBoundsOnlyToFull
 
   std::vector<svg::SVGElement> selection =
       QueryNumberedRects(app.document().document(), kSelectedRectCount);
-  ASSERT_EQ(selection.size(), static_cast<std::size_t>(kSelectedRectCount));
+  ASSERT_THAT(selection, SizeIs(static_cast<std::size_t>(kSelectedRectCount)));
   app.setSelection(std::move(selection));
 
   ViewportState viewport;
