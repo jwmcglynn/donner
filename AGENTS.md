@@ -7,7 +7,8 @@ Modern C++20 SVG project. Source lives in `donner/`.
 - [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html) with C++20 and SVG naming modifications; 100-char line limit enforced by `.clang-format`.
 - Folders: `lower_snake_case`. Files: `UpperCamelCase` (matching main class), `.cc`/`.h`/`_tests.cc`. Headers: `#pragma once`, then `/// @file`.
 - Includes: project `#include "donner/path/file.h"` (repo-relative), system/third-party `#include <lib/header.h>`.
-- Doxygen on all public APIs: `///` single-line, `/** */` multi-line, `//!<` trailing. `@param` for all params. Use `\ref` for cross-references.
+- Doxygen on all public APIs: `///` single-line, `/** */` multi-line, `//!<` trailing. `@param` for all params. Use `\ref` for cross-references. Encouraged on internal/private APIs too, not just public ones.
+- **Inline comments are precise and rare, not decorative.** Default to no comment; add one only for a non-obvious WHY (hidden constraint, workaround, invariant), in a single line wherever possible. A multi-line block that restates the code or over-explains a mechanism is noise — shrink or delete it. **Doxygen doc comments are the exception** — apply them liberally, public or internal (per the line above); that's documentation, not the noise this rule targets.
 - All code in `donner` namespace (sub-namespaces like `donner::svg`).
 - Naming: Classes `UpperCamelCase`, methods `lowerCamelCase`, static/global functions `UpperCamelCase`, members `trailingUnderscore_`, constants `kUpperCamelCase`, enum values `UpperCamelCase`. Include units in names (`timeoutMs`) or use strong types. Properties use `thing()` / `setThing()`.
 - Strings: `std::string_view` (non-owning), `RcString` (owning), `RcStringOrRef` (flexible API param). Helpers in `"donner/base/StringUtils.h"`.
