@@ -58,6 +58,14 @@ py_test(
 )
 
 py_test(
+    name = "check_lcov_report_tests",
+    srcs = [
+        "check_lcov_report.py",
+        "check_lcov_report_tests.py",
+    ],
+)
+
+py_test(
     name = "feature_loc_tests",
     srcs = [
         "feature_loc.py",
