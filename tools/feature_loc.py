@@ -38,7 +38,7 @@ class FeatureStats:
 FEATURES: tuple[FeatureDefinition, ...] = (
     FeatureDefinition(
         label="Editor",
-        description="ImGui/GLFW editor, async rendering, repro, and sandbox tooling",
+        description="ImGui/GLFW editor, async rendering, repro, and headless tooling",
         patterns=("donner/editor/**",),
     ),
     FeatureDefinition(
@@ -228,14 +228,6 @@ EDITOR_BREAKDOWN: tuple[FeatureDefinition, ...] = (
         label="Repro files",
         description="User-visible repro recording and .donner-repro encoding/decoding",
         patterns=("donner/editor/repro/**",),
-    ),
-    FeatureDefinition(
-        label="Sandbox and replay",
-        description=(
-            "Parser/render sandbox processes, wire format, record/replay, and "
-            "structural diffs"
-        ),
-        patterns=("donner/editor/sandbox/**",),
     ),
     FeatureDefinition(
         label="Editor misc and integration tests",

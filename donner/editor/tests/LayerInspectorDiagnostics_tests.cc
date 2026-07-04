@@ -1,7 +1,9 @@
 #include "donner/editor/LayerInspectorDiagnostics.h"
 
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -105,6 +107,89 @@ TEST(LayerInspectorDiagnosticsTest, SerializesHeuristicTelemetryForOfflineRefine
   EXPECT_NE(sampleJson.find("\"tile\":{\"id\":\"seg:1\""), std::string::npos);
 }
 
+TEST(LayerInspectorDiagnosticsTest, SerializesPromotedLayersAsCachedLayerTiles) {
+  CompositeTileSnapshot immediateLayer;
+  immediateLayer.kind = CompositeTileSnapshot::Kind::Layer;
+  immediateLayer.id = "layer:99";
+  immediateLayer.label = "promoted layer";
+  immediateLayer.lastRasterizeMs = 5.0;
+  immediateLayer.immediate = true;
+  immediateLayer.dynamicHeuristicImmediate = true;
+  immediateLayer.immediateBudgetMs = 2.083;
+  immediateLayer.immediateBudgetChargeMs = 5.0;
+  immediateLayer.estimatedDrawOps = 1;
+  immediateLayer.visible = true;
+
+  CompositorHeuristicTelemetryContext context;
+  context.state.canvasSize = Vector2i(256, 256);
+  context.renderStats.immediateRasterizeMs = 5.0;
+  context.renderStats.immediateTileCount = 1;
+
+  const std::vector<CompositeTileSnapshot> tiles = {immediateLayer};
+  const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
+
+  EXPECT_NE(json.find("\"layers\":1,\"immediate\":0,\"cached\":1"), std::string::npos);
+  EXPECT_NE(json.find("\"kind\":\"layer\""), std::string::npos);
+  EXPECT_NE(json.find("\"mode\":\"cached\""), std::string::npos);
+  EXPECT_NE(json.find("\"signal\":\"normal\""), std::string::npos);
+}
+
+TEST(LayerInspectorDiagnosticsTest, SerializesTileKindsReasonsSignalsAndNonFiniteNumbers) {
+  CompositeTileSnapshot background;
+  background.kind = CompositeTileSnapshot::Kind::Background;
+  background.id = "background";
+  background.lastRasterizeMs = std::numeric_limits<double>::infinity();
+
+  CompositeTileSnapshot foreground;
+  foreground.kind = CompositeTileSnapshot::Kind::Foreground;
+  foreground.id = "foreground";
+
+  CompositeTileSnapshot staticImmediate;
+  staticImmediate.kind = CompositeTileSnapshot::Kind::Segment;
+  staticImmediate.id = "static";
+  staticImmediate.immediate = true;
+  staticImmediate.staticHeuristicImmediate = true;
+
+  CompositeTileSnapshot expensive;
+  expensive.kind = CompositeTileSnapshot::Kind::Segment;
+  expensive.id = "expensive";
+  expensive.hasExpensiveEffect = true;
+
+  CompositeTileSnapshot invisible;
+  invisible.kind = CompositeTileSnapshot::Kind::Segment;
+  invisible.id = "invisible";
+  invisible.visible = false;
+  invisible.estimatedDrawOps = 3;
+
+  CompositeTileSnapshot cachedFast;
+  cachedFast.kind = CompositeTileSnapshot::Kind::Segment;
+  cachedFast.id = "cached-fast";
+  cachedFast.visible = true;
+  cachedFast.estimatedDrawOps = 5;
+  cachedFast.immediateBudgetMs = 2.0;
+  cachedFast.lastRasterizeMs = 1.0;
+
+  CompositorHeuristicTelemetryContext context;
+  context.viewportZoom = std::numeric_limits<double>::quiet_NaN();
+  context.viewportDesiredCanvas = Vector2i(200, 100);
+  context.documentCanvas = Vector2i(100, 100);
+  context.state.canvasSize = Vector2i(100, 100);
+
+  const std::vector<CompositeTileSnapshot> tiles = {background, foreground, staticImmediate,
+                                                    expensive,  invisible,  cachedFast};
+  const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
+
+  EXPECT_NE(json.find("\"freshness\":\"commit_stalled\""), std::string::npos);
+  EXPECT_NE(json.find("\"zoom\":null"), std::string::npos);
+  EXPECT_NE(json.find("\"id\":\"background\",\"kind\":\"background\""), std::string::npos);
+  EXPECT_NE(json.find("\"id\":\"foreground\",\"kind\":\"foreground\""), std::string::npos);
+  EXPECT_NE(json.find("\"reason\":\"static_heuristic\""), std::string::npos);
+  EXPECT_NE(json.find("\"reason\":\"expensive_effect\""), std::string::npos);
+  EXPECT_NE(json.find("\"reason\":\"not_visible\""), std::string::npos);
+  EXPECT_NE(json.find("\"signal\":\"cached_fast_candidate\""), std::string::npos);
+  EXPECT_NE(json.find("\"last_ms\":null"), std::string::npos);
+}
+
 TEST(LayerInspectorDiagnosticsTest, AppendsHeuristicTelemetryJsonLine) {
   const std::string path = ::testing::TempDir() + "/donner-heuristic-telemetry.jsonl";
   std::string error;
@@ -115,6 +200,32 @@ TEST(LayerInspectorDiagnosticsTest, AppendsHeuristicTelemetryJsonLine) {
   std::string line;
   std::getline(input, line);
   EXPECT_EQ(line, "{\"ok\":true}");
+}
+
+TEST(LayerInspectorDiagnosticsTest, ReportsTelemetryWriteErrors) {
+  std::string error;
+  EXPECT_FALSE(AppendCompositorHeuristicTelemetry("", "{}", &error));
+  EXPECT_EQ(error, "telemetry path is empty");
+
+  EXPECT_FALSE(SaveCompositorHeuristicTelemetry("", "{}", &error));
+  EXPECT_EQ(error, "telemetry path is empty");
+
+  const std::filesystem::path directory =
+      std::filesystem::path(::testing::TempDir()) / "donner-telemetry-directory";
+  std::error_code ec;
+  std::filesystem::create_directories(directory, ec);
+  ASSERT_FALSE(ec);
+
+  EXPECT_FALSE(AppendCompositorHeuristicTelemetry(directory.string(), "{}", &error));
+  EXPECT_NE(error.find("failed to open telemetry path:"), std::string::npos);
+
+  EXPECT_FALSE(SaveCompositorHeuristicTelemetry(directory.string(), "{}", &error));
+  EXPECT_NE(error.find("failed to open telemetry path:"), std::string::npos);
+
+  EXPECT_FALSE(AppendCompositorHeuristicTelemetry("", "{}", nullptr));
+  EXPECT_FALSE(SaveCompositorHeuristicTelemetry("", "{}", nullptr));
+
+  std::filesystem::remove_all(directory, ec);
 }
 
 TEST(LayerInspectorDiagnosticsTest, SavesHeuristicTelemetryJsonLines) {

@@ -8,12 +8,10 @@
 ///     [rendered 512x384] uri=donner_splash.svg
 ///     donner> show       # prints an ANSI approximation to the terminal
 ///     donner> save out.png
-///     donner> inspect    # dumps the decoded wire stream
 ///     donner> quit
 ///
 /// This is deliberately the smallest possible "editor" binary: no window,
-/// no GL, no ImGui. Every piece of the sandbox infrastructure that landed
-/// in S1-S6.1 is exercised end-to-end via the REPL commands.
+/// no GL, no ImGui.
 
 #include <cstdlib>
 #include <iostream>

@@ -22,6 +22,10 @@ struct NonConstexprHasher {
   }
 };
 
+struct ConstantNonConstexprHasher {
+  std::size_t operator()(NonConstexprKey) const { return 0; }
+};
+
 constexpr std::array<std::pair<std::string_view, int>, 3> kStringEntries{{
     {"alpha", 1},
     {"beta", 2},
@@ -111,6 +115,77 @@ TEST(CompileTimeMapTest, PrimaryAPIUsage) {
   EXPECT_EQ(kMap.at("two"), 2);
   EXPECT_EQ(kMap.at("three"), 3);
   EXPECT_EQ(kMap.find("four"), nullptr);
+}
+
+TEST(CompileTimeMapTest, HashSupportTraitsCoverAllSupportedKeyKinds) {
+  EXPECT_TRUE(supportsConstexprHash<int>());
+  EXPECT_TRUE(supportsConstexprHash<EnumKey>());
+  EXPECT_TRUE(supportsConstexprHash<std::string_view>());
+  EXPECT_FALSE(supportsConstexprHash<NonConstexprKey>());
+  EXPECT_EQ(constexprHashValue(NonConstexprKey{42}), 0U);
+}
+
+TEST(CompileTimeMapTest, RuntimeConstructionBuildsPerfectHashTables) {
+  const std::array<std::pair<NonConstexprKey, int>, 3> entries{
+      {{{1}, 100}, {{2}, 200}, {{3}, 300}}};
+  auto result =
+      detail::makeCompileTimeMapWithDiagnostics<NonConstexprKey, int, 3, NonConstexprHasher>(
+          entries);
+
+  EXPECT_EQ(result.status, CompileTimeMapStatus::kOk);
+  EXPECT_TRUE(result.diagnostics.constexprHashSupported);
+  EXPECT_EQ(result.map.tables().bucketCount, result.map.size());
+  EXPECT_FALSE(result.map.empty());
+  EXPECT_EQ(result.map.keys()[0].value, 1);
+  EXPECT_TRUE(result.map.contains({2}));
+  EXPECT_EQ(result.map.at({3}), 300);
+  EXPECT_EQ(result.map.find({99}), nullptr);
+}
+
+TEST(CompileTimeMapTest, RuntimeDuplicateKeysUseFallbackLookup) {
+  const std::array<std::pair<int, int>, 3> entries{{{1, 10}, {1, 11}, {2, 20}}};
+  auto result = detail::makeCompileTimeMapWithDiagnostics(entries);
+
+  EXPECT_EQ(result.status, CompileTimeMapStatus::kDuplicateKey);
+  EXPECT_EQ(result.map.tables().bucketCount, 0U);
+  EXPECT_EQ(result.map.at(1), 10);
+  EXPECT_EQ(result.map.at(2), 20);
+  EXPECT_EQ(result.map.find(3), nullptr);
+}
+
+TEST(CompileTimeMapTest, RuntimeSeedSearchFailureFallsBackToLinearLookup) {
+  const std::array<std::pair<NonConstexprKey, int>, 3> entries{
+      {{{1}, 100}, {{2}, 200}, {{3}, 300}}};
+  auto result = detail::makeCompileTimeMapWithDiagnostics<NonConstexprKey, int, 3,
+                                                          ConstantNonConstexprHasher>(entries);
+
+  EXPECT_EQ(result.status, CompileTimeMapStatus::kSeedSearchFailed);
+  EXPECT_EQ(result.diagnostics.failedBucket, 0U);
+  EXPECT_EQ(result.diagnostics.seedAttempts, kMaxSeedSearch);
+  EXPECT_EQ(result.map.tables().bucketCount, 0U);
+  EXPECT_EQ(result.map.at({2}), 200);
+  EXPECT_EQ(result.map.find({99}), nullptr);
+}
+
+TEST(CompileTimeMapTest, ManualTablesRejectInvalidSlotsAndMismatchedKeys) {
+  const std::array<int, 1> keys{{1}};
+  const std::array<int, 1> values{{10}};
+
+  CompileTimeMapTables<1> invalidTables;
+  invalidTables.primary.fill(kEmptySlot);
+  invalidTables.secondary.fill(kEmptySlot);
+  invalidTables.bucketCount = 1;
+  invalidTables.primary[0] = 99;
+  const CompileTimeMap<int, int, 1> invalidSlotMap(keys, values, invalidTables);
+  EXPECT_EQ(invalidSlotMap.find(1), nullptr);
+
+  CompileTimeMapTables<1> mismatchTables;
+  mismatchTables.primary.fill(kEmptySlot);
+  mismatchTables.secondary.fill(kEmptySlot);
+  mismatchTables.bucketCount = 1;
+  mismatchTables.primary[0] = 0;
+  const CompileTimeMap<int, int, 1> mismatchMap(keys, values, mismatchTables);
+  EXPECT_EQ(mismatchMap.find(2), nullptr);
 }
 
 }  // namespace

@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/xml/XMLNode.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -60,6 +61,18 @@ TEST(StyleSourceAnnotations, StylesheetRuleReportsSelectorMatchedElementChipCoun
   EXPECT_TRUE(fill->showChip);
   EXPECT_EQ(fill->matchedElementCount, 2);
   EXPECT_TRUE(fill->effective);
+}
+
+TEST(StyleSourceAnnotations, EmptySourceReturnsNoAnnotations) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>.hit { fill: red; }</style>
+  <rect class="hit"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, "");
+
+  EXPECT_TRUE(annotations.contributions.empty());
 }
 
 TEST(StyleSourceAnnotations, ComputeAllowsConcurrentDom) {
@@ -219,6 +232,56 @@ TEST(StyleSourceAnnotations, ReferenceResourceElementMarksOverflowWhenTooManyRev
   EXPECT_EQ(paint->overflowTooltip, "Too many reverse refs to draw lines");
 }
 
+TEST(StyleSourceAnnotations, ReferenceResourceClassificationSkipsNonResourceDefinitionNodes) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs id="defs">
+    <style id="style">rect { fill: url('#symbol'); }</style>
+    <symbol id="symbol"><rect/></symbol>
+    <linearGradient id="paint"><stop id="stop" offset="1"/></linearGradient>
+  </defs>
+  <use href="#symbol"/>
+  <rect fill="url(#paint)"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  EXPECT_EQ(FindContribution(annotations, StyleContributionKind::ReferenceResourceElement, "defs",
+                             R"(id="defs")", kSource),
+            nullptr);
+  EXPECT_EQ(FindContribution(annotations, StyleContributionKind::ReferenceResourceElement, "style",
+                             R"(id="style")", kSource),
+            nullptr);
+  EXPECT_EQ(FindContribution(annotations, StyleContributionKind::ReferenceResourceElement, "stop",
+                             R"(id="stop")", kSource),
+            nullptr);
+
+  const StyleSourceContribution* symbol =
+      FindContribution(annotations, StyleContributionKind::ReferenceResourceElement, "symbol",
+                       R"(id="symbol")", kSource);
+  ASSERT_NE(symbol, nullptr);
+  EXPECT_TRUE(symbol->effective);
+  EXPECT_EQ(symbol->matchedElementCount, 2);
+}
+
+TEST(StyleSourceAnnotations, EmptyFragmentReferencesDoNotIncrementResourceCounts) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <defs><path id="shape"/></defs>
+  <use href="#"/>
+  <rect fill="url(#)"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  const StyleSourceContribution* shape =
+      FindContribution(annotations, StyleContributionKind::ReferenceResourceElement, "path",
+                       R"(id="shape")", kSource);
+  ASSERT_NE(shape, nullptr);
+  EXPECT_FALSE(shape->effective);
+  EXPECT_EQ(shape->matchedElementCount, 0);
+}
+
 TEST(StyleSourceAnnotations, InlineStyleDeclarationDoesNotShowSelectorChip) {
   constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <rect style="fill: red; stroke: blue"/>
@@ -293,6 +356,45 @@ TEST(StyleSourceAnnotations, PresentationAttributeStaysActiveWithoutOverride) {
   EXPECT_TRUE(presentationFill->effective);
 }
 
+TEST(StyleSourceAnnotations, PresentationAttributeWithoutSourceLocationIsSkippedInCascade) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <rect id="target" fill="red"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+  document.withWriteAccess([&document](svg::DocumentWriteAccess&) {
+    std::optional<svg::SVGElement> target = document.querySelector("#target");
+    ASSERT_TRUE(target.has_value());
+    std::optional<xml::XMLNode> xmlNode = xml::XMLNode::TryCast(target->entityHandle());
+    ASSERT_TRUE(xmlNode.has_value());
+    xmlNode->clearAttributeSourceLocation("fill");
+  });
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  EXPECT_EQ(FindContribution(annotations, StyleContributionKind::PresentationAttribute, "fill",
+                             "fill=\"red\"", kSource),
+            nullptr);
+}
+
+TEST(StyleSourceAnnotations, LaterInlineDeclarationWinsEqualSpecificityTie) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <rect style="fill: red; fill: blue"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  const StyleSourceContribution* red = FindContribution(
+      annotations, StyleContributionKind::InlineStyleDeclaration, "fill", "fill: red", kSource);
+  ASSERT_NE(red, nullptr);
+  EXPECT_FALSE(red->effective);
+
+  const StyleSourceContribution* blue = FindContribution(
+      annotations, StyleContributionKind::InlineStyleDeclaration, "fill", "fill: blue", kSource);
+  ASSERT_NE(blue, nullptr);
+  EXPECT_TRUE(blue->effective);
+}
+
 TEST(StyleSourceAnnotations, StylesheetDeclarationStaysActiveIfItWinsForAnyMatchedElement) {
   constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
   <style>.hit { fill: red; }</style>
@@ -308,6 +410,89 @@ TEST(StyleSourceAnnotations, StylesheetDeclarationStaysActiveIfItWinsForAnyMatch
   ASSERT_NE(stylesheetFill, nullptr);
   EXPECT_EQ(stylesheetFill->matchedElementCount, 2);
   EXPECT_TRUE(stylesheetFill->effective);
+}
+
+TEST(StyleSourceAnnotations, ImportantStylesheetDeclarationOverridesInlineStyle) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>rect { fill: red !important; }</style>
+  <rect style="fill: blue"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  const StyleSourceContribution* stylesheetFill =
+      FindContribution(annotations, StyleContributionKind::StylesheetDeclaration, "fill",
+                       "fill: red !important", kSource);
+  ASSERT_NE(stylesheetFill, nullptr);
+  EXPECT_TRUE(stylesheetFill->effective);
+
+  const StyleSourceContribution* inlineFill = FindContribution(
+      annotations, StyleContributionKind::InlineStyleDeclaration, "fill", "fill: blue", kSource);
+  ASSERT_NE(inlineFill, nullptr);
+  EXPECT_FALSE(inlineFill->effective);
+  EXPECT_EQ(inlineFill->tooltip, "fill is overridden by !important CSS");
+}
+
+TEST(StyleSourceAnnotations, InvalidLocalDeclarationsRemainIneffective) {
+  constexpr std::string_view kSource = R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <rect fill="not-a-color" style="fill: also-not-a-color"/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  const StyleSourceContribution* presentationFill =
+      FindContribution(annotations, StyleContributionKind::PresentationAttribute, "fill",
+                       "fill=\"not-a-color\"", kSource);
+  ASSERT_NE(presentationFill, nullptr);
+  EXPECT_FALSE(presentationFill->effective);
+
+  const StyleSourceContribution* inlineFill =
+      FindContribution(annotations, StyleContributionKind::InlineStyleDeclaration, "fill",
+                       "fill: also-not-a-color", kSource);
+  ASSERT_NE(inlineFill, nullptr);
+  EXPECT_FALSE(inlineFill->effective);
+}
+
+TEST(StyleSourceAnnotations, LooseUrlAndHrefReferencesContributeResourceCounts) {
+  constexpr std::string_view kSource =
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg">
+  <style>.quoted { fill: url( "#paint" ); stroke: url( http://example.invalid/paint ); }</style>
+  <defs>
+    <linearGradient id="base"><stop offset="0"/></linearGradient>
+    <linearGradient id="paint" href=" #base "><stop offset="1"/></linearGradient>
+    <path id="shape"/>
+  </defs>
+  <rect class="quoted"/>
+  <use href=" #shape "/>
+  <use href=" not-a-fragment "/>
+</svg>)svg";
+  svg::SVGDocument document = ParseSvg(kSource);
+
+  const StyleSourceAnnotations annotations = ComputeStyleSourceAnnotations(document, kSource);
+
+  const StyleSourceContribution* paint =
+      FindContribution(annotations, StyleContributionKind::ReferenceResourceElement,
+                       "linearGradient", R"(id="paint")", kSource);
+  ASSERT_NE(paint, nullptr);
+  EXPECT_TRUE(paint->effective);
+  EXPECT_EQ(paint->matchedElementCount, 1);
+  EXPECT_EQ(paint->chipTooltip, "Referenced 1 time");
+
+  const StyleSourceContribution* base =
+      FindContribution(annotations, StyleContributionKind::ReferenceResourceElement,
+                       "linearGradient", R"(id="base")", kSource);
+  ASSERT_NE(base, nullptr);
+  EXPECT_TRUE(base->effective);
+  EXPECT_EQ(base->matchedElementCount, 1);
+
+  const StyleSourceContribution* shape =
+      FindContribution(annotations, StyleContributionKind::ReferenceResourceElement, "path",
+                       R"(id="shape")", kSource);
+  ASSERT_NE(shape, nullptr);
+  EXPECT_TRUE(shape->effective);
+  EXPECT_EQ(shape->matchedElementCount, 1);
 }
 
 }  // namespace

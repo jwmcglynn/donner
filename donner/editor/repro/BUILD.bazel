@@ -57,6 +57,8 @@ donner_cc_test(
     deps = [
         ":repro_file",
         ":repro_recorder",
+        "//donner/editor:imgui_headers",
         "@com_google_gtest//:gtest_main",
+        "@imgui",
     ],
 )

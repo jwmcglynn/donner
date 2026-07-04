@@ -66,6 +66,9 @@ int textCharToUtf8(char* buf, char32_t c) {
 }
 
 bool matchesCommentStart(std::string_view line, size_t index, std::string_view commentStart) {
+  if (commentStart.empty()) {
+    return false;
+  }
   if (index + commentStart.size() > line.size()) {
     return false;
   }
@@ -73,6 +76,9 @@ bool matchesCommentStart(std::string_view line, size_t index, std::string_view c
 }
 
 bool matchesCommentEnd(std::string_view line, size_t index, std::string_view commentEnd) {
+  if (commentEnd.empty()) {
+    return false;
+  }
   if (index + 1 < commentEnd.size()) {
     return false;
   }
@@ -339,14 +345,15 @@ int TextEditorCore::insertTextAt(Coordinates& /* inout */ where, std::string_vie
 void TextEditorCore::removeLine(int start, int end) {
   UTILS_RELEASE_ASSERT(end >= start);
   UTILS_RELEASE_ASSERT(text_.getTotalLines() > static_cast<size_t>(end - start));
+  const int removedLineCount = end - start + 1;
 
   // Update error markers
   ErrorMarkers updatedMarkers;
   for (const auto& marker : errorMarkers_) {
-    int line = marker.first >= start ? marker.first - 1 : marker.first;
-    if (line >= start && line <= end) {
+    if (marker.first >= start && marker.first <= end) {
       continue;
     }
+    const int line = marker.first > end ? marker.first - removedLineCount : marker.first;
     updatedMarkers.insert({line, marker.second});
   }
   errorMarkers_ = std::move(updatedMarkers);
@@ -358,7 +365,7 @@ void TextEditorCore::removeLine(int start, int end) {
   if (scrollbarMarkers_) {
     for (int i = 0; i < static_cast<int>(changedLines_.size()); i++) {
       if (changedLines_[i] > end) {
-        changedLines_[i] -= (end - start);
+        changedLines_[i] -= removedLineCount;
       } else if (changedLines_[i] >= start && changedLines_[i] <= end) {
         changedLines_.erase(changedLines_.begin() + i);
         i--;
@@ -761,27 +768,14 @@ Coordinates TextEditorCore::findFirst(std::string_view searchText, const Coordin
     return Coordinates(totalLines, 0);
   }
 
-  const std::string text = getText(start, Coordinates(totalLines, 0));
-  const std::string_view textView = text;
+  const std::string text = getText();
+  const std::size_t startOffset = text_.getByteOffset(start);
+  const std::string_view textView(text.data() + startOffset, text.size() - startOffset);
 
-  size_t index = 0;
   size_t found = StringUtils::Find(textView, searchText);
-  Coordinates current = start;
 
   while (found != std::string::npos) {
-    // Advance to found position
-    while (index < found) {
-      if (textView[index] == '\n') {
-        current.column = 0;
-        current.line++;
-      } else {
-        current.column++;
-      }
-      index++;
-    }
-
-    // Convert character index to column position
-    current.column = text_.getCharacterColumn(current.line, current.column);
+    const Coordinates current = text_.getCoordinatesAtByteOffset(startOffset + found);
 
     // Check if this is a word boundary match
     if (getWordAt(current) == searchText) {
@@ -1899,6 +1893,7 @@ void TextEditorCore::colorizeInternal() {
     bool withinString = false;
     bool withinSingleLineComment = false;
     bool concatenate = false;  // '\' at end of line
+    std::string lineText;
 
     for (size_t currentLine = 0; currentLine < endLine;) {
       Line& line = text_.getLineGlyphsMutable(currentLine);
@@ -1906,6 +1901,12 @@ void TextEditorCore::colorizeInternal() {
         currentLine++;
         continue;
       }
+
+      lineText.resize(line.size());
+      for (size_t i = 0; i < line.size(); ++i) {
+        lineText[i] = line[i].character;
+      }
+      const std::string_view lineView(lineText);
 
       for (size_t currentIndex = 0; currentIndex < line.size();) {
         if (currentIndex == 0 && !concatenate) {
@@ -1944,11 +1945,10 @@ void TextEditorCore::colorizeInternal() {
             withinString = true;
             glyph.isMultiLineComment = inComment;
           } else {
-            const std::string_view lineView(reinterpret_cast<const char*>(&line[0].character),
-                                            line.size());
-
-            if (!withinSingleLineComment &&
-                matchesCommentStart(lineView, currentIndex, languageDefinition_.commentStart)) {
+            const bool startsMultiLineComment =
+                !withinSingleLineComment &&
+                matchesCommentStart(lineView, currentIndex, languageDefinition_.commentStart);
+            if (startsMultiLineComment) {
               commentStartLine = currentLine;
               commentStartIndex = currentIndex;
             } else if (!languageDefinition_.singleLineComment.empty() &&
@@ -1957,7 +1957,7 @@ void TextEditorCore::colorizeInternal() {
               withinSingleLineComment = true;
             }
 
-            glyph.isMultiLineComment = inComment;
+            glyph.isMultiLineComment = inComment || startsMultiLineComment;
             glyph.isComment = withinSingleLineComment;
 
             if (matchesCommentEnd(lineView, currentIndex, languageDefinition_.commentEnd)) {

@@ -12,6 +12,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/SVGAElement.h"
 #include "donner/svg/SVGCircleElement.h"
 #include "donner/svg/SVGClipPathElement.h"
 #include "donner/svg/SVGEllipseElement.h"
@@ -20,6 +21,7 @@
 #include "donner/svg/SVGLineElement.h"
 #include "donner/svg/SVGLinearGradientElement.h"
 #include "donner/svg/SVGMarkerElement.h"
+#include "donner/svg/SVGMaskElement.h"
 #include "donner/svg/SVGPatternElement.h"
 #include "donner/svg/SVGPolygonElement.h"
 #include "donner/svg/SVGPolylineElement.h"
@@ -27,10 +29,13 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStopElement.h"
 #include "donner/svg/SVGTSpanElement.h"
+#include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGTextPathElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterPrimitiveComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/text/TextPathComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using testing::DoubleNear;
@@ -409,6 +414,42 @@ TEST(AttributeParserTest, ClipPathUnitsObjectBoundingBox) {
 
   auto clipPath = QueryElement<SVGClipPathElement>(document, "#cp");
   EXPECT_EQ(clipPath.clipPathUnits(), ClipPathUnits::ObjectBoundingBox);
+}
+
+// --- Mask attributes ---
+
+TEST(AttributeParserTest, MaskUnitsAndInvalidValues) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <mask id="valid" x="1" y="2" width="3" height="4" maskUnits="userSpaceOnUse"
+              maskContentUnits="objectBoundingBox"/>
+        <mask id="invalid" maskUnits="bad" maskContentUnits="bad"/>
+      </defs>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  auto valid = QueryElement<SVGMaskElement>(document, "#valid");
+  EXPECT_EQ(valid.x(), Lengthd(1));
+  EXPECT_EQ(valid.y(), Lengthd(2));
+  EXPECT_EQ(valid.width(), Lengthd(3));
+  EXPECT_EQ(valid.height(), Lengthd(4));
+  EXPECT_EQ(valid.maskUnits(), MaskUnits::UserSpaceOnUse);
+  EXPECT_EQ(valid.maskContentUnits(), MaskContentUnits::ObjectBoundingBox);
+
+  auto invalid = QueryElement<SVGMaskElement>(document, "#invalid");
+  EXPECT_EQ(invalid.maskUnits(), MaskUnits::ObjectBoundingBox);
+  EXPECT_EQ(invalid.maskContentUnits(), MaskContentUnits::UserSpaceOnUse);
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("Invalid maskUnits value"))));
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(
+                  &ParseDiagnostic::reason, testing::HasSubstr("Invalid maskContentUnits value"))));
 }
 
 // --- Pattern attributes ---
@@ -1161,6 +1202,291 @@ TEST(AttributeParserTest, ExperimentalWarningAndFallbackBranches) {
   EXPECT_THAT(warningSink.warnings(),
               testing::Contains(testing::Field(
                   &ParseDiagnostic::reason, testing::HasSubstr("Invalid length or percentage"))));
+}
+
+TEST(AttributeParserTest, ExperimentalFilterNumericFallbackBranches) {
+  auto document = ParseSVGExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter>
+          <feComponentTransfer>
+            <feFuncR id="identity" type="identity" tableValues="0, bad"
+                     slope="2x" intercept="3x" amplitude="4x" exponent="5x" offset="6x"/>
+            <feFuncG id="trailing" type="table" tableValues="0, 0.5, "/>
+          </feComponentTransfer>
+          <feDropShadow id="shadow" stdDeviation="4 bad"/>
+          <feMorphology id="erode-one" operator="erode" radius="5"/>
+          <feMorphology id="erode-extra" radius="5 6 7"/>
+          <feDisplacementMap id="disp-gr" scale="8x" xChannelSelector="G" yChannelSelector="R"/>
+        </filter>
+      </defs>
+    </svg>
+  )");
+
+  const auto funcView = document.registry().view<components::FEFuncComponent>();
+  const components::FEFuncComponent* identity = nullptr;
+  const components::FEFuncComponent* trailing = nullptr;
+  for (const Entity entity : funcView) {
+    const auto& func = funcView.get<components::FEFuncComponent>(entity);
+    switch (func.channel) {
+      case components::FEFuncComponent::Channel::R: identity = &func; break;
+      case components::FEFuncComponent::Channel::G: trailing = &func; break;
+      case components::FEFuncComponent::Channel::B:
+      case components::FEFuncComponent::Channel::A: break;
+    }
+  }
+
+  ASSERT_NE(identity, nullptr);
+  EXPECT_EQ(identity->type, components::FEFuncComponent::FuncType::Identity);
+  EXPECT_THAT(identity->tableValues, testing::IsEmpty());
+  EXPECT_DOUBLE_EQ(identity->slope, 1.0);
+  EXPECT_DOUBLE_EQ(identity->intercept, 0.0);
+  EXPECT_DOUBLE_EQ(identity->amplitude, 1.0);
+  EXPECT_DOUBLE_EQ(identity->exponent, 1.0);
+  EXPECT_DOUBLE_EQ(identity->offset, 0.0);
+
+  ASSERT_NE(trailing, nullptr);
+  EXPECT_EQ(trailing->type, components::FEFuncComponent::FuncType::Table);
+  EXPECT_THAT(trailing->tableValues, testing::ElementsAre(0.0, 0.5));
+
+  const auto& shadow = QueryComponent<components::FEDropShadowComponent>(document, "#shadow");
+  EXPECT_DOUBLE_EQ(shadow.stdDeviationX, 4.0);
+  EXPECT_DOUBLE_EQ(shadow.stdDeviationY, 4.0);
+
+  const auto& erodeOne = QueryComponent<components::FEMorphologyComponent>(document, "#erode-one");
+  EXPECT_EQ(erodeOne.op, components::FEMorphologyComponent::Operator::Erode);
+  EXPECT_DOUBLE_EQ(erodeOne.radiusX, 5.0);
+  EXPECT_DOUBLE_EQ(erodeOne.radiusY, 5.0);
+
+  const auto& erodeExtra =
+      QueryComponent<components::FEMorphologyComponent>(document, "#erode-extra");
+  EXPECT_DOUBLE_EQ(erodeExtra.radiusX, 0.0);
+  EXPECT_DOUBLE_EQ(erodeExtra.radiusY, 0.0);
+
+  const auto& displacement =
+      QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-gr");
+  EXPECT_DOUBLE_EQ(displacement.scale, 0.0);
+  EXPECT_EQ(displacement.xChannelSelector, components::FEDisplacementMapComponent::Channel::G);
+  EXPECT_EQ(displacement.yChannelSelector, components::FEDisplacementMapComponent::Channel::R);
+}
+
+TEST(AttributeParserTest, ExperimentalFilterRemainingInputAndEnumBranches) {
+  auto document = ParseSVGExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <defs>
+        <filter id="f" filterUnits="userSpaceOnUse" primitiveUnits="objectBoundingBox"
+                color-interpolation-filters="sRGB" x="-10%" y="-20%" width="120%"
+                height="130%" xlink:href="#base">
+          <feOffset id="background" in="BackgroundImage" result="bg" dx="1" dy="2"/>
+          <feDisplacementMap id="disp-ab" xChannelSelector="A" yChannelSelector="B"/>
+          <feConvolveMatrix id="conv-dup" order="5" edgeMode="duplicate"
+                            preserveAlpha="false"/>
+          <feTurbulence id="turb-one" baseFrequency="0.25" numOctaves="2x" seed="3x"
+                        type="bad" stitchTiles="noStitch"/>
+          <feImage id="img-xlink" xlink:href="legacy.png" preserveAspectRatio="bad"/>
+          <feDiffuseLighting id="diff-positive" diffuseConstant="2" surfaceScale="3"/>
+          <feSpecularLighting id="spec-positive" specularConstant="4" specularExponent="5"/>
+        </filter>
+      </defs>
+    </svg>
+  )");
+
+  auto filter = QueryElement<SVGFilterElement>(document, "#f");
+  EXPECT_EQ(filter.filterUnits(), FilterUnits::UserSpaceOnUse);
+  EXPECT_EQ(filter.primitiveUnits(), PrimitiveUnits::ObjectBoundingBox);
+  EXPECT_EQ(filter.x(), Lengthd(-10, Lengthd::Unit::Percent));
+  EXPECT_EQ(filter.y(), Lengthd(-20, Lengthd::Unit::Percent));
+  EXPECT_EQ(filter.width(), Lengthd(120, Lengthd::Unit::Percent));
+  EXPECT_EQ(filter.height(), Lengthd(130, Lengthd::Unit::Percent));
+  EXPECT_THAT(filter.href(), testing::Optional(RcString("#base")));
+  EXPECT_EQ(QueryComponent<components::FilterComponent>(document, "#f").colorInterpolationFilters,
+            ColorInterpolationFilters::SRGB);
+
+  const auto& background =
+      QueryComponent<components::FilterPrimitiveComponent>(document, "#background");
+  ASSERT_TRUE(background.in.has_value());
+  ASSERT_TRUE(std::holds_alternative<components::FilterInput::Named>(background.in->value));
+  EXPECT_EQ(std::get<components::FilterInput::Named>(background.in->value).name, "BackgroundImage");
+  EXPECT_THAT(background.result, testing::Optional(RcString("bg")));
+
+  const auto& displacement =
+      QueryComponent<components::FEDisplacementMapComponent>(document, "#disp-ab");
+  EXPECT_EQ(displacement.xChannelSelector, components::FEDisplacementMapComponent::Channel::A);
+  EXPECT_EQ(displacement.yChannelSelector, components::FEDisplacementMapComponent::Channel::B);
+
+  const auto& convolve =
+      QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv-dup");
+  EXPECT_EQ(convolve.orderX, 5);
+  EXPECT_EQ(convolve.orderY, 5);
+  EXPECT_EQ(convolve.edgeMode, components::FEConvolveMatrixComponent::EdgeMode::Duplicate);
+  EXPECT_FALSE(convolve.preserveAlpha);
+
+  const auto& turbulence = QueryComponent<components::FETurbulenceComponent>(document, "#turb-one");
+  EXPECT_DOUBLE_EQ(turbulence.baseFrequencyX, 0.25);
+  EXPECT_DOUBLE_EQ(turbulence.baseFrequencyY, 0.25);
+  EXPECT_EQ(turbulence.numOctaves, 1);
+  EXPECT_DOUBLE_EQ(turbulence.seed, 0.0);
+  EXPECT_EQ(turbulence.type, components::FETurbulenceComponent::Type::Turbulence);
+  EXPECT_FALSE(turbulence.stitchTiles);
+
+  const auto& image = QueryComponent<components::FEImageComponent>(document, "#img-xlink");
+  EXPECT_EQ(image.href, "legacy.png");
+  EXPECT_EQ(QueryComponent<components::ImageComponent>(document, "#img-xlink").href, "legacy.png");
+
+  const auto& diffuse =
+      QueryComponent<components::FEDiffuseLightingComponent>(document, "#diff-positive");
+  EXPECT_DOUBLE_EQ(diffuse.diffuseConstant, 2.0);
+  EXPECT_DOUBLE_EQ(diffuse.surfaceScale, 3.0);
+
+  const auto& specular =
+      QueryComponent<components::FESpecularLightingComponent>(document, "#spec-positive");
+  EXPECT_DOUBLE_EQ(specular.specularConstant, 4.0);
+  EXPECT_DOUBLE_EQ(specular.specularExponent, 5.0);
+}
+
+TEST(AttributeParserTest, CommonInvalidAttributeBranchesWarnAndPreserveDefaults) {
+  ParseWarningSink warningSink;
+  SVGParser::Options options;
+  options.disableUserAttributes = true;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="g" gradientUnits="bad" spreadMethod="bad"/>
+        <clipPath id="clip" clipPathUnits="bad"/>
+      </defs>
+      <path id="path" d="M0,0 H10" pathLength="12px" custom-attr="removed"/>
+      <rect id="rect" fill="not-a-color"/>
+    </svg>
+  )",
+                                           warningSink, options);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  auto gradient = QueryElement<SVGLinearGradientElement>(document, "#g");
+  EXPECT_EQ(gradient.gradientUnits(), GradientUnits::ObjectBoundingBox);
+  EXPECT_EQ(gradient.spreadMethod(), GradientSpreadMethod::Pad);
+
+  auto clip = QueryElement<SVGClipPathElement>(document, "#clip");
+  EXPECT_EQ(clip.clipPathUnits(), ClipPathUnits::UserSpaceOnUse);
+
+  auto path = document.querySelector("#path");
+  ASSERT_TRUE(path.has_value());
+  EXPECT_FALSE(path->getAttribute("custom-attr").has_value());
+
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("Invalid gradientUnits"))));
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("Invalid spreadMethod"))));
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("Invalid clipPathUnits"))));
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("Invalid pathLength value"))));
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("Unknown attribute"))));
+}
+
+TEST(AttributeParserTest, TextAnchorAndPathAttributes) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = SVGParser::ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+      <defs>
+        <path id="path" d="M0,0 H100"/>
+      </defs>
+      <text id="text" x="1 2" y="3 4" dx="5 6" dy="7 8" rotate="10 20"
+            textLength="30" lengthAdjust="spacing">Text</text>
+      <text>
+        <a id="link" xlink:href="#legacy" x="11 12" y="13 14" dx="15 16" dy="17 18"
+           rotate="19 20" textLength="21" lengthAdjust="spacing">link</a>
+      </text>
+      <text>
+        <textPath id="path-text" href="#path" startOffset="50%" method="align"
+                  side="left" spacing="exact" x="22 23" y="24 25" dx="26 27" dy="28 29"
+                  rotate="30 31">path</textPath>
+      </text>
+      <text>
+        <textPath id="path-text-variant" xlink:href="#path" method="stretch"
+                  side="right" spacing="auto">variant</textPath>
+      </text>
+      <text id="invalid-text" lengthAdjust="bad" x="1,,2" y="3,,4" dx="5,,6"
+            dy="7,,8" rotate="9deg extra">bad</text>
+      <text>
+        <a id="invalid-link" x="1,,2" y="3,,4" dx="5,,6" dy="7,,8"
+           rotate="9deg extra" textLength="bad" lengthAdjust="spacingAndGlyphs">bad</a>
+      </text>
+      <text>
+        <tspan id="invalid-tspan" x="1,,2" y="3,,4" dx="5,,6" dy="7,,8"
+               rotate="9deg extra" textLength="bad" lengthAdjust="spacingAndGlyphs">bad</tspan>
+      </text>
+      <text>
+        <textPath id="invalid-path-text" x="1,,2" y="3,,4" dx="5,,6" dy="7,,8"
+                  rotate="9deg extra">bad</textPath>
+      </text>
+    </svg>
+  )",
+                                           warningSink);
+  ASSERT_TRUE(maybeDocument.hasResult());
+  auto document = std::move(maybeDocument).result();
+
+  auto text = QueryElement<SVGTextElement>(document, "#text");
+  EXPECT_THAT(text.xList(), testing::ElementsAre(Lengthd(1), Lengthd(2)));
+  EXPECT_THAT(text.yList(), testing::ElementsAre(Lengthd(3), Lengthd(4)));
+  EXPECT_THAT(text.dxList(), testing::ElementsAre(Lengthd(5), Lengthd(6)));
+  EXPECT_THAT(text.dyList(), testing::ElementsAre(Lengthd(7), Lengthd(8)));
+  EXPECT_THAT(text.rotateList(), testing::ElementsAre(10.0, 20.0));
+  EXPECT_THAT(text.textLength(), testing::Optional(Lengthd(30)));
+  EXPECT_EQ(text.lengthAdjust(), LengthAdjust::Spacing);
+
+  auto link = QueryElement<SVGAElement>(document, "#link");
+  EXPECT_THAT(link.href(), testing::Optional(RcString("#legacy")));
+  EXPECT_THAT(link.xList(), testing::ElementsAre(Lengthd(11), Lengthd(12)));
+  EXPECT_THAT(link.yList(), testing::ElementsAre(Lengthd(13), Lengthd(14)));
+  EXPECT_THAT(link.dxList(), testing::ElementsAre(Lengthd(15), Lengthd(16)));
+  EXPECT_THAT(link.dyList(), testing::ElementsAre(Lengthd(17), Lengthd(18)));
+  EXPECT_THAT(link.rotateList(), testing::ElementsAre(19.0, 20.0));
+  EXPECT_THAT(link.textLength(), testing::Optional(Lengthd(21)));
+  EXPECT_EQ(link.lengthAdjust(), LengthAdjust::Spacing);
+
+  auto pathText = QueryElement<SVGTextPathElement>(document, "#path-text");
+  EXPECT_THAT(pathText.href(), testing::Optional(RcString("#path")));
+  EXPECT_THAT(pathText.startOffset(), testing::Optional(Lengthd(50, Lengthd::Unit::Percent)));
+  EXPECT_THAT(pathText.xList(), testing::ElementsAre(Lengthd(22), Lengthd(23)));
+  EXPECT_THAT(pathText.yList(), testing::ElementsAre(Lengthd(24), Lengthd(25)));
+  EXPECT_THAT(pathText.dxList(), testing::ElementsAre(Lengthd(26), Lengthd(27)));
+  EXPECT_THAT(pathText.dyList(), testing::ElementsAre(Lengthd(28), Lengthd(29)));
+  EXPECT_THAT(pathText.rotateList(),
+              testing::ElementsAre(DoubleNear(30.0, 1e-12), DoubleNear(31.0, 1e-12)));
+  const auto& pathTextComponent =
+      QueryComponent<components::TextPathComponent>(document, "#path-text");
+  EXPECT_EQ(pathTextComponent.method, components::TextPathMethod::Align);
+  EXPECT_EQ(pathTextComponent.side, components::TextPathSide::Left);
+  EXPECT_EQ(pathTextComponent.spacing, components::TextPathSpacing::Exact);
+
+  const auto& pathTextVariant =
+      QueryComponent<components::TextPathComponent>(document, "#path-text-variant");
+  EXPECT_EQ(pathTextVariant.href, "#path");
+  EXPECT_EQ(pathTextVariant.method, components::TextPathMethod::Stretch);
+  EXPECT_EQ(pathTextVariant.side, components::TextPathSide::Right);
+  EXPECT_EQ(pathTextVariant.spacing, components::TextPathSpacing::Auto);
+
+  auto invalidText = QueryElement<SVGTextElement>(document, "#invalid-text");
+  EXPECT_EQ(invalidText.lengthAdjust(), LengthAdjust::Spacing);
+  auto invalidLink = QueryElement<SVGAElement>(document, "#invalid-link");
+  EXPECT_EQ(invalidLink.lengthAdjust(), LengthAdjust::SpacingAndGlyphs);
+  auto invalidTspan = QueryElement<SVGTSpanElement>(document, "#invalid-tspan");
+  EXPECT_EQ(invalidTspan.lengthAdjust(), LengthAdjust::SpacingAndGlyphs);
+  (void)QueryElement<SVGTextPathElement>(document, "#invalid-path-text");
+
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                               testing::HasSubstr("Invalid lengthAdjust value"))));
+  EXPECT_THAT(warningSink.warnings(),
+              testing::Contains(
+                  testing::Field(&ParseDiagnostic::reason, testing::HasSubstr("Invalid angle"))));
 }
 
 }  // namespace donner::svg::parser

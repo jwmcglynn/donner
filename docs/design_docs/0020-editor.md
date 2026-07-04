@@ -26,8 +26,7 @@ rendering ([0025](0025-composited_rendering.md)), design-tool responsiveness
 ([0044-2](0044-2-editor_fluid_canvas_rendering.md)), Geode chrome migration
 ([0045](0045-editor_geode_chrome_migration.md)), group layers
 ([0046](0046-editor_group_layers.md)), and the v0.8 showcase
-([0047](0047-v0_8_showcase.md)) — and the process-isolation sandbox in
-([0023](0023-editor_sandbox.md)).
+([0047](0047-v0_8_showcase.md)).
 
 The original full design (goals, the layered architecture, the AsyncSVGDocument
 command-queue decision note, the mutation-seam rationale, and the per-milestone

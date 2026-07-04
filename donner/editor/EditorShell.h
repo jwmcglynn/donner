@@ -210,6 +210,8 @@ struct LayerInspectorStatusReadback {
 
 /// Stateful advanced editor frontend shell. Owns all long-lived GUI/editor orchestration state.
 class EditorShell {
+  friend class EditorShellTestAccess;
+
 public:
   EditorShell(gui::EditorWindow& window, EditorShellOptions options);
   ~EditorShell();

@@ -14,6 +14,20 @@ TEST(TextBuffer, DefaultConstructor) {
   EXPECT_EQ(buffer.getText(), "");
 }
 
+TEST(TextBuffer, LineEmplaceInsertsGlyphAtIterator) {
+  Line line;
+  line.emplace_back('a', ColorIndex::Default);
+  line.emplace_back('c', ColorIndex::Default);
+
+  line.emplace(line.begin() + 1, 'b', ColorIndex::Keyword);
+
+  ASSERT_EQ(line.size(), 3u);
+  EXPECT_EQ(line[0].character, 'a');
+  EXPECT_EQ(line[1].character, 'b');
+  EXPECT_EQ(line[1].colorIndex, ColorIndex::Keyword);
+  EXPECT_EQ(line[2].character, 'c');
+}
+
 /**
  * Test loading single-line text and verify.
  */
@@ -50,6 +64,15 @@ TEST(TextBuffer, GetTextRange) {
   // end   = (3,2) => up to 'i' in "Line3"
   std::string sub = buffer.getText({1, 1}, {3, 2});
   EXPECT_EQ(sub, "ine1\nLine2\nLi");
+}
+
+TEST(TextBuffer, GetTextRangeRejectsInvalidAndEmptyRanges) {
+  TextBuffer buffer;
+  buffer.setText("abc\nxyz");
+
+  EXPECT_EQ(buffer.getText({0, 1}, {0, 1}), "");
+  EXPECT_EQ(buffer.getText({9, 0}, {9, 1}), "");
+  EXPECT_EQ(buffer.getText({0, 0}, {9, 1}), "");
 }
 
 /**
@@ -99,6 +122,54 @@ TEST(TextBuffer, InsertTextAtConsumesInvalidUtf8Byte) {
   EXPECT_EQ(buffer.getCoordinatesAtByteOffset(2), Coordinates(0, 2));
 }
 
+TEST(TextBuffer, InsertTextAtWithIndentSkipsCarriageReturnsAndUnindentsClosingBrace) {
+  TextBuffer buffer;
+  buffer.setText("    {tail");
+
+  Coordinates pos(0, 5);
+  const int insertedLines = buffer.insertTextAt(pos, "\r\n}", /*indent=*/true);
+
+  EXPECT_EQ(insertedLines, 1);
+  EXPECT_EQ(pos, Coordinates(1, 3));
+  EXPECT_EQ(buffer.getText(), "    {\n  }tail");
+}
+
+TEST(TextBuffer, InsertTextAtWithIndentAccountsForExplicitLeadingWhitespace) {
+  TextBuffer buffer;
+  buffer.setText("    start");
+
+  Coordinates pos(0, 9);
+  buffer.insertTextAt(pos, "\n  child", /*indent=*/true);
+
+  EXPECT_EQ(pos, Coordinates(1, 7));
+  EXPECT_EQ(buffer.getText(), "    start\n  child");
+}
+
+TEST(TextBuffer, InsertTextAtWithIndentExpandsTabIndent) {
+  TextBuffer buffer;
+  buffer.setText("\tparent");
+
+  Coordinates pos(0, 8);
+  const int insertedLines = buffer.insertTextAt(pos, "\nchild", /*indent=*/true);
+
+  EXPECT_EQ(insertedLines, 1);
+  EXPECT_EQ(pos, Coordinates(1, 7));
+  EXPECT_EQ(buffer.getText(), "\tparent\n  child");
+}
+
+TEST(TextBuffer, InsertTextAtTabAdvancesByTabSize) {
+  TextBuffer buffer;
+  buffer.setText("ab");
+
+  Coordinates pos(0, 1);
+  const int insertedLines = buffer.insertTextAt(pos, "\t");
+
+  EXPECT_EQ(insertedLines, 0);
+  EXPECT_EQ(pos, Coordinates(0, 3));
+  EXPECT_EQ(buffer.getText(), "a\tb");
+  EXPECT_EQ(buffer.getLineMaxColumn(0), 3);
+}
+
 /**
  * Test deleting a range within a single line.
  */
@@ -141,6 +212,15 @@ TEST(TextBuffer, DeleteRangeMultiLine) {
   EXPECT_EQ(buffer.getText(), "Linee1\nLine2\nLine3");
 }
 
+TEST(TextBuffer, DeleteRangeEmptyRangeDoesNothing) {
+  TextBuffer buffer;
+  buffer.setText("abc\nxyz");
+
+  buffer.deleteRange({1, 2}, {1, 2});
+
+  EXPECT_EQ(buffer.getText(), "abc\nxyz");
+}
+
 /**
  * Test removing one or more lines entirely.
  */
@@ -156,6 +236,50 @@ TEST(TextBuffer, RemoveLine) {
   buffer.removeLine(1, 3);
   EXPECT_EQ(buffer.getTotalLines(), 2);
   EXPECT_EQ(buffer.getText(), "Line0\nLine4");
+}
+
+TEST(TextBuffer, RemoveLineInvalidInputsAndFullRangeKeepOneLine) {
+  TextBuffer buffer;
+  buffer.setText("only");
+
+  buffer.removeLine(-1);
+  buffer.removeLine(10);
+  EXPECT_EQ(buffer.getText(), "only");
+
+  buffer.setText("a\nb");
+  buffer.removeLine(-5, 99);
+  EXPECT_EQ(buffer.getTotalLines(), 1);
+  EXPECT_EQ(buffer.getText(), "");
+
+  buffer.setText("a\nb");
+  buffer.removeLine(1, 1);
+  EXPECT_EQ(buffer.getText(), "a\nb");
+}
+
+TEST(TextBuffer, RemoveOnlyLineKeepsOneEmptyLine) {
+  TextBuffer buffer;
+  buffer.setText("only");
+
+  buffer.removeLine(0);
+
+  EXPECT_EQ(buffer.getTotalLines(), 1);
+  EXPECT_EQ(buffer.getText(), "");
+}
+
+TEST(TextBuffer, InsertLineClampsIndexAndSplitsAtBoundedColumn) {
+  TextBuffer buffer;
+  buffer.setText("abcd");
+
+  buffer.insertLine(-5);
+  EXPECT_EQ(buffer.getText(), "\nabcd");
+
+  buffer.setText("abcd");
+  buffer.insertLine(99);
+  EXPECT_EQ(buffer.getText(), "abcd\n");
+
+  buffer.setText("abcd");
+  buffer.insertLine(0, 99);
+  EXPECT_EQ(buffer.getText(), "abcd\n");
 }
 
 /**
@@ -185,6 +309,10 @@ TEST(TextBuffer, LineColumnHelpers) {
   // Third line
   EXPECT_EQ(buffer.getLineMaxColumn(2), 13);
   EXPECT_EQ(buffer.getTotalLines(), 3);
+
+  EXPECT_EQ(buffer.getLineMaxColumn(99), 0);
+  EXPECT_EQ(buffer.getLineCharacterCount(99), 0);
+  EXPECT_EQ(buffer.getCharacterColumn(99, 1), 0);
 }
 
 TEST(TextBuffer, GetByteOffsetResolvesMultilineCoordinates) {
@@ -200,6 +328,9 @@ TEST(TextBuffer, GetByteOffsetResolvesMultilineCoordinates) {
   EXPECT_EQ(buffer.getByteOffset({1, 3}), 7u);
   EXPECT_EQ(buffer.getByteOffset({2, 2}), 11u);
   EXPECT_EQ(buffer.getByteOffset({3, 0}), buffer.getText().size());
+
+  TextBuffer empty;
+  EXPECT_EQ(empty.getByteOffset({2, 0}), 0u);
 }
 
 TEST(TextBuffer, GetCoordinatesAtByteOffsetResolvesMultilineBoundaries) {
@@ -216,6 +347,7 @@ TEST(TextBuffer, GetCoordinatesAtByteOffsetResolvesMultilineBoundaries) {
   EXPECT_EQ(buffer.getCoordinatesAtByteOffset(7), Coordinates(1, 4));
   EXPECT_EQ(buffer.getCoordinatesAtByteOffset(8), Coordinates(2, 0));
   EXPECT_EQ(buffer.getCoordinatesAtByteOffset(buffer.getText().size()), Coordinates(2, 2));
+  EXPECT_EQ(buffer.getCoordinatesAtByteOffset(999), Coordinates(2, 2));
 }
 
 }  // namespace donner::editor

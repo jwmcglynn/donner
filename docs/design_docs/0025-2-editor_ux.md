@@ -41,7 +41,8 @@ The scope is everything inside the render pane window in `donner/editor/main.cc`
 - Any change to the SVG renderer backends, `OverlayRenderer`'s drawing primitives, or the `canvasFromDocumentTransform` API rename.
 - Snapping (snap-to-grid, snap-to-other-elements). Separate doc.
 - Lasso / freehand selection (only marquee rectangles in this doc).
-- Sandboxing / process isolation for the editor. Covered by the separate [editor_sandbox](0023-editor_sandbox.md) design doc.
+- Sandboxing / process isolation for the editor. The historical prototype was
+  removed; the v1.0 workstream needs a replacement sandbox design.
 - Source pane internals — text editor, syntax highlighting, autocomplete, structured-edit dispatch. Out of scope; this doc only touches the source pane to the extent that it sets `setText(text, preserveScroll=true)` on writeback.
 
 ## Next Steps

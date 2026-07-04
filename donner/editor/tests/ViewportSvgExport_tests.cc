@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <functional>
+#include <limits>
 #include <string>
 #include <string_view>
 
@@ -11,6 +12,7 @@
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseResult.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/Path.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
@@ -68,6 +70,14 @@ ViewportState MakeViewport(double zoom, const Vector2d& panDocPoint, const Vecto
 
 bool Contains(const std::string& haystack, std::string_view needle) {
   return haystack.find(needle) != std::string::npos;
+}
+
+/// A viewport whose `screenToDocument` is the identity over the render pane, so
+/// the exported viewBox is "0 0 400 300" and document coords map 1:1.
+ViewportState IdentityViewport() {
+  return MakeViewport(/*zoom=*/1.0, /*panDocPoint=*/Vector2d(0.0, 0.0),
+                      /*panScreenPoint=*/Vector2d(0.0, 0.0),
+                      /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(400.0, 300.0));
 }
 
 TEST(ViewportSvgExportTest, ViewBoxMatchesScreenToDocumentOfRenderPaneRect) {
@@ -246,6 +256,104 @@ TEST(ViewportSvgExportTest, NonTransparentBackgroundPrependsCoveringRect) {
       << result.value;
 }
 
+TEST(ViewportSvgExportTest, ProgrammaticDocumentWithoutSourceStoreIsRefused) {
+  const SVGDocument doc;
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(Contains(result.error, "source store")) << result.error;
+}
+
+TEST(ViewportSvgExportTest, ExternalReferenceScannerSkipsHrefLikeAttributes) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\" "
+      "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
+      "<defs><rect id=\"shape\" hrefish=\"https://not-a-reference.example/image.png\" "
+      "width=\"10\" height=\"10\"/></defs>"
+      "<use xlink:href=\"#shape\"/>"
+      "<image href = ' \tFILE://tmp/image.png' width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  EXPECT_FALSE(result.ok());
+  EXPECT_TRUE(Contains(result.error, "FILE://tmp/image.png")) << result.error;
+  EXPECT_FALSE(Contains(result.error, "not-a-reference.example")) << result.error;
+}
+
+TEST(ViewportSvgExportTest, InternalFragmentReferencesAreAllowed) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\" "
+      "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
+      "<defs><rect id=\"shape\" width=\"10\" height=\"10\"/></defs>"
+      "<use href=\"#shape\" x=\"5\"/>"
+      "<use xlink:href=\"#shape\" x=\"20\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "<use href=\"#shape\" x=\"5\"/>")) << result.value;
+  EXPECT_TRUE(Contains(result.value, "<use xlink:href=\"#shape\" x=\"20\"/>")) << result.value;
+}
+
+TEST(ViewportSvgExportTest, RootAttributeEscapingIsDeterministic) {
+  const SVGDocument doc = ParseOrDie(
+      "<svg id=\"root&amp;source\" data-title='\"quoted\"' data-owner=\"Bob's\" "
+      "width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\">"
+      "<rect width=\"10\" height=\"10\"/>"
+      "</svg>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "source: root&amp;amp;source")) << result.value;
+  EXPECT_TRUE(Contains(result.value, "id=\"root&amp;amp;source\"")) << result.value;
+  EXPECT_TRUE(Contains(result.value, "data-title=\"&quot;quoted&quot;\"")) << result.value;
+  EXPECT_TRUE(Contains(result.value, "data-owner=\"Bob&apos;s\"")) << result.value;
+}
+
+TEST(ViewportSvgExportTest, SelfClosingRootExportsEmptyContentGroup) {
+  const SVGDocument doc =
+      ParseOrDie("<svg width=\"100\" height=\"100\" xmlns=\"http://www.w3.org/2000/svg\"/>");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "<g clip-path=\"url(#donner-viewport-clip)\"></g>"))
+      << result.value;
+}
+
+TEST(ViewportSvgExportTest, NonFiniteViewportValuesFormatAsZero) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  ViewportState viewport = IdentityViewport();
+  const double infinity = std::numeric_limits<double>::infinity();
+  viewport.panDocPoint = Vector2d(infinity, -infinity);
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, ViewportExportOptions{});
+
+  ASSERT_TRUE(result.ok()) << result.error;
+  EXPECT_TRUE(Contains(result.value, "viewBox=\"0 0 0 0\"")) << result.value;
+}
+
 // --- Milestone 7: overlay serialization ---------------------------------
 
 /// Return the substring of @p haystack spanning the `<g id="donner-editor-
@@ -272,14 +380,6 @@ double ParseAttr(const std::string& text, std::string_view attr, std::size_t fro
   const std::size_t valueEnd = text.find('"', valueStart);
   EXPECT_NE(valueEnd, std::string::npos);
   return std::stod(text.substr(valueStart, valueEnd - valueStart));
-}
-
-/// A viewport whose `screenToDocument` is the identity over the render pane, so
-/// the exported viewBox is "0 0 400 300" and document coords map 1:1.
-ViewportState IdentityViewport() {
-  return MakeViewport(/*zoom=*/1.0, /*panDocPoint=*/Vector2d(0.0, 0.0),
-                      /*panScreenPoint=*/Vector2d(0.0, 0.0),
-                      /*paneOrigin=*/Vector2d(0.0, 0.0), /*paneSize=*/Vector2d(400.0, 300.0));
 }
 
 /// A snapshot with a single AABB at (50,60)-(150,160) and one resize handle.
@@ -371,6 +471,43 @@ TEST(ViewportSvgExportTest, OverlayPathPointChromeRendered) {
             std::string::npos)
       << overlay;
   EXPECT_NE(overlay.find("stroke=\"none\" stroke-width=\"0\""), std::string::npos) << overlay;
+}
+
+TEST(ViewportSvgExportTest, OverlaySelectedPathAndOrientedBoundsRendered) {
+  const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(400, 300));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  SelectionChromeSnapshot snapshot;
+  snapshot.paths.push_back(SelectionChromeSnapshot::PathItem{
+      .pathDoc = PathBuilder().moveTo(Vector2d(5.0, 6.0)).lineTo(Vector2d(7.0, 8.0)).build(),
+  });
+  snapshot.paths.push_back(SelectionChromeSnapshot::PathItem{});  // Empty paths are skipped.
+  snapshot.orientedBoundsDoc = SelectionChromeSnapshot::OrientedBox{
+      .cornersDoc =
+          {
+              Vector2d(10.0, 20.0),
+              Vector2d(30.0, 20.0),
+              Vector2d(35.0, 45.0),
+              Vector2d(12.0, 50.0),
+          },
+  };
+  snapshot.marqueeDoc = Box2d(Vector2d(1.0, 2.0), Vector2d(3.0, 4.0));
+
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  const std::string overlay = OverlayGroupSpan(result.value);
+  ASSERT_FALSE(overlay.empty()) << result.value;
+  EXPECT_NE(overlay.find("d=\"M 5 6 L 7 8\""), std::string::npos) << overlay;
+  EXPECT_EQ(overlay.find("d=\"\""), std::string::npos) << overlay;
+  EXPECT_NE(overlay.find("d=\"M 10 20 L 30 20 L 35 45 L 12 50 Z\""), std::string::npos) << overlay;
+  EXPECT_NE(overlay.find("<rect x=\"1\" y=\"2\" width=\"2\" height=\"2\" fill=\"none\""),
+            std::string::npos)
+      << overlay;
 }
 
 TEST(ViewportSvgExportTest, OverlayGroupCarriesClipPath) {

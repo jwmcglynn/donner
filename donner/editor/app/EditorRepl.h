@@ -2,8 +2,8 @@
 /// @file
 ///
 /// `RenderSessionRepl` is the stdin/stdout-driven command loop that sits on top
-/// of `RenderSession`. It exists so that the sandbox/render-session tooling can be driven (and
-/// tested) without an ImGui window — the shell layer is a thin parser that maps line-based text
+/// of `RenderSession`. It exists so that render-session tooling can be driven (and tested)
+/// without an ImGui window — the shell layer is a thin parser that maps line-based text
 /// commands to `RenderSession` methods and writes human-readable output.
 ///
 /// The REPL is parameterized by `std::istream&` + `std::ostream&` instead
@@ -20,8 +20,6 @@
 ///   `status`               — print the latest status line
 ///   `show`                 — render the current frame to the terminal (ANSI)
 ///   `save <out.png>`       — write the current bitmap as a PNG
-///   `inspect`              — dump the frame's decoded command stream
-///   `record <out.rnr>`     — save the current frame as a `.rnr` recording
 ///   `watch on|off`          — toggle filesystem mtime polling for auto-reload
 ///   `quit` / `exit`        — leave the loop
 
@@ -67,8 +65,6 @@ private:
   void cmdResize(int width, int height);
   void cmdShow();
   void cmdSave(const std::string& path);
-  void cmdInspect();
-  void cmdRecord(const std::string& path);
   void cmdWatch(const std::string& arg);
 
   RenderSession& app_;

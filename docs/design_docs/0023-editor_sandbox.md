@@ -1,11 +1,10 @@
 # Design: Editor Sandbox, Renderer-IPC, and Record/Replay
 
-**Status:** Implemented (Milestones S1–S4, S6). `SandboxHost`, the `Wire` framed IPC protocol,
-`SerializingRenderer`/`ReplayingRenderer`, `.rnr` record/replay (`RnrFile`), the frame inspector,
-structural diff (`sandbox_diff_main`), and seccomp-bpf/`sandbox_init` hardening all ship under
-`//donner/editor/sandbox`. Milestone S5 (C++26 reflection-based marshalling) has not been
-started; the hand-rolled marshallers from S2 remain in place. The Implementation Plan checkboxes
-below are stale (all unchecked) — see `#518`, `#527`, `#528`, `#529` for what landed.
+**Status:** Historical. This captures the removed editor parser/renderer
+process-isolation prototype. The implementation under `//donner/editor/sandbox`
+and its standalone tooling were removed; the interactive editor renders
+in-process. Editor sandboxing remains in the v1.0 scope, but the next version
+will be a redesign rather than a revival of this prototype as-is.
 **Author:** Claude Opus 4.6
 **Created:** 2026-04-11
 

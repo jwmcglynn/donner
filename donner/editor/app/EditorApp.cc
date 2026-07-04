@@ -1,24 +1,45 @@
 #include "donner/editor/app/EditorApp.h"
 
+#include <cerrno>
+#include <cstring>
+#include <fstream>
 #include <limits>
 #include <sstream>
+#include <system_error>
 #include <utility>
 
 #include "donner/base/ParseWarningSink.h"
-#include "donner/editor/sandbox/PipelinedRenderer.h"
-#include "donner/editor/sandbox/SerializingRenderer.h"
 #include "donner/svg/SVG.h"
 
 namespace donner::editor::app {
 
 namespace {
 
+enum class SvgFetchStatus {
+  kOk,
+  kSchemeNotSupported,
+  kInvalidUri,
+  kNotFound,
+  kNotRegularFile,
+  kPermissionDenied,
+  kTooLarge,
+  kReadFailed,
+};
+
+struct SvgFetchResult {
+  SvgFetchStatus status = SvgFetchStatus::kOk;
+  std::vector<uint8_t> bytes;
+  std::filesystem::path resolvedPath;
+  std::string diagnostics;
+};
+
+constexpr std::string_view kFileScheme = "file://";
+
 std::string_view StatusLabel(RenderSessionStatus status) {
   switch (status) {
     case RenderSessionStatus::kEmpty: return "empty";
     case RenderSessionStatus::kLoading: return "loading";
     case RenderSessionStatus::kRendered: return "rendered";
-    case RenderSessionStatus::kRenderedLossy: return "rendered (lossy)";
     case RenderSessionStatus::kFetchError: return "fetch error";
     case RenderSessionStatus::kParseError: return "parse error";
     case RenderSessionStatus::kRenderError: return "render error";
@@ -26,22 +47,130 @@ std::string_view StatusLabel(RenderSessionStatus status) {
   return "?";
 }
 
-RenderSessionStatus FetchStatusToRenderSessionStatus(sandbox::SvgFetchStatus status) {
-  if (status == sandbox::SvgFetchStatus::kOk) return RenderSessionStatus::kRendered;
+RenderSessionStatus FetchStatusToRenderSessionStatus(SvgFetchStatus status) {
+  if (status == SvgFetchStatus::kOk) return RenderSessionStatus::kRendered;
   return RenderSessionStatus::kFetchError;
+}
+
+bool HasExplicitScheme(std::string_view uri) {
+  const auto colon = uri.find(':');
+  if (colon == std::string_view::npos || colon == 0) return false;
+  if (uri.size() < colon + 3) return false;
+  return uri.substr(colon, 3) == "://";
+}
+
+std::string Diagnose(const std::filesystem::path& path, std::string_view verb,
+                     const std::error_code& ec) {
+  std::string out = std::string(verb);
+  out += " '";
+  out += path.string();
+  out += "': ";
+  out += ec.message();
+  return out;
+}
+
+SvgFetchResult FetchFromPath(const std::filesystem::path& path, const SourceLoadOptions& options) {
+  SvgFetchResult result;
+  result.resolvedPath = path;
+
+  std::error_code ec;
+  const auto canonical = std::filesystem::weakly_canonical(path, ec);
+  if (!ec) {
+    result.resolvedPath = canonical;
+  }
+
+  std::error_code existsEc;
+  const bool exists = std::filesystem::exists(result.resolvedPath, existsEc);
+  if (existsEc || !exists) {
+    result.status = SvgFetchStatus::kNotFound;
+    result.diagnostics =
+        Diagnose(result.resolvedPath, "stat",
+                 existsEc ? existsEc : std::make_error_code(std::errc::no_such_file_or_directory));
+    return result;
+  }
+
+  std::error_code typeEc;
+  const auto status = std::filesystem::status(result.resolvedPath, typeEc);
+  if (typeEc) {
+    result.status = SvgFetchStatus::kReadFailed;
+    result.diagnostics = Diagnose(result.resolvedPath, "status", typeEc);
+    return result;
+  }
+  if (!std::filesystem::is_regular_file(status)) {
+    result.status = SvgFetchStatus::kNotRegularFile;
+    result.diagnostics = "not a regular file: " + result.resolvedPath.string();
+    return result;
+  }
+
+  std::error_code sizeEc;
+  const auto byteCount = std::filesystem::file_size(result.resolvedPath, sizeEc);
+  if (sizeEc) {
+    result.status = SvgFetchStatus::kReadFailed;
+    result.diagnostics = Diagnose(result.resolvedPath, "file_size", sizeEc);
+    return result;
+  }
+  if (byteCount > options.maxFileBytes) {
+    result.status = SvgFetchStatus::kTooLarge;
+    result.diagnostics = "file exceeds maxFileBytes (" + std::to_string(byteCount) + " > " +
+                         std::to_string(options.maxFileBytes) +
+                         "): " + result.resolvedPath.string();
+    return result;
+  }
+
+  std::ifstream in(result.resolvedPath, std::ios::binary);
+  if (!in.is_open()) {
+    result.status =
+        errno == EACCES ? SvgFetchStatus::kPermissionDenied : SvgFetchStatus::kReadFailed;
+    result.diagnostics =
+        "failed to open: " + result.resolvedPath.string() + " (" + std::strerror(errno) + ")";
+    return result;
+  }
+
+  result.bytes.resize(static_cast<std::size_t>(byteCount));
+  if (byteCount > 0) {
+    in.read(reinterpret_cast<char*>(result.bytes.data()), static_cast<std::streamsize>(byteCount));
+    if (!in || static_cast<std::size_t>(in.gcount()) != byteCount) {
+      result.status = SvgFetchStatus::kReadFailed;
+      result.bytes.clear();
+      result.diagnostics = "short read on: " + result.resolvedPath.string();
+      return result;
+    }
+  }
+
+  result.status = SvgFetchStatus::kOk;
+  return result;
+}
+
+SvgFetchResult FetchSvg(std::string_view uri, const SourceLoadOptions& options) {
+  SvgFetchResult result;
+  if (uri.empty()) {
+    result.status = SvgFetchStatus::kInvalidUri;
+    result.diagnostics = "empty uri";
+    return result;
+  }
+
+  if (HasExplicitScheme(uri)) {
+    if (uri.size() >= kFileScheme.size() && uri.substr(0, kFileScheme.size()) == kFileScheme) {
+      return FetchFromPath(std::filesystem::path(std::string(uri.substr(kFileScheme.size()))),
+                           options);
+    }
+    result.status = SvgFetchStatus::kSchemeNotSupported;
+    result.diagnostics = "unsupported scheme in: ";
+    result.diagnostics.append(uri);
+    return result;
+  }
+
+  std::filesystem::path path{std::string(uri)};
+  if (path.is_relative()) {
+    path = options.baseDirectory / path;
+  }
+  return FetchFromPath(path, options);
 }
 
 }  // namespace
 
 RenderSession::RenderSession(RenderSessionOptions options)
-    : options_(std::move(options)),
-      source_(options_.sourceOptions),
-      width_(options_.defaultWidth),
-      height_(options_.defaultHeight) {
-  // The MVP only wires the in-process threaded pipeline today. The
-  // `kSandboxedProcess` path is reserved for a follow-up so `EditorApp`'s
-  // API stays stable across the transition.
-  pipeline_ = std::make_unique<sandbox::PipelinedRenderer>();
+    : options_(std::move(options)), width_(options_.defaultWidth), height_(options_.defaultHeight) {
   current_.message = "no document loaded";
 }
 
@@ -52,8 +181,8 @@ const RenderSessionSnapshot& RenderSession::navigate(std::string_view uri) {
   current_.uri = std::string(uri);
   current_.status = RenderSessionStatus::kLoading;
 
-  const auto fetch = source_.fetch(uri);
-  if (fetch.status != sandbox::SvgFetchStatus::kOk) {
+  const auto fetch = FetchSvg(uri, options_.sourceOptions);
+  if (fetch.status != SvgFetchStatus::kOk) {
     current_.status = FetchStatusToRenderSessionStatus(fetch.status);
     std::ostringstream msg;
     msg << StatusLabel(current_.status) << ": " << fetch.diagnostics;
@@ -101,9 +230,6 @@ const RenderSessionSnapshot& RenderSession::resize(int width, int height) {
 }
 
 const RenderSessionSnapshot& RenderSession::renderCachedBytes(std::string_view uri) {
-  // Parse on the main thread. We need to pass a real `SVGDocument` to the
-  // pipelined renderer — serialization happens inside `submit()`, which
-  // runs on the caller (main) thread too.
   ParseWarningSink warnings;
   const std::string_view svgView(reinterpret_cast<const char*>(rawBytes_.data()), rawBytes_.size());
   auto parseResult = svg::parser::SVGParser::ParseSVG(svgView, warnings);
@@ -117,48 +243,27 @@ const RenderSessionSnapshot& RenderSession::renderCachedBytes(std::string_view u
   }
 
   svg::SVGDocument document = std::move(parseResult.result());
+  document.setCanvasSize(width_, height_);
 
-  const uint64_t frameId = pipeline_->submit(document, width_, height_);
-  auto frame = pipeline_->waitForFrame(frameId);
-  if (!frame.has_value() || !frame->ok) {
+  renderer_.draw(document);
+  svg::RendererBitmap bitmap = renderer_.takeSnapshot();
+  if (bitmap.pixels.empty() || bitmap.dimensions.x <= 0 || bitmap.dimensions.y <= 0) {
     current_.uri = std::string(uri);
     current_.status = RenderSessionStatus::kRenderError;
-    current_.message = "render error: worker returned no frame";
+    current_.message = "render error: renderer returned no frame";
     return current_;
   }
 
   current_.uri = std::string(uri);
-  current_.bitmap = std::move(frame->bitmap);
-  current_.unsupportedCount = frame->unsupportedCount;
-  current_.status = frame->unsupportedCount == 0 ? RenderSessionStatus::kRendered
-                                                 : RenderSessionStatus::kRenderedLossy;
-
-  // The pipelined renderer currently doesn't surface the wire bytes it
-  // handed to the worker — the wire buffer is consumed inside the worker
-  // as soon as replay completes. The MVP re-runs the serializer on the
-  // main thread to populate `current_.wire` so that "inspect" / "record"
-  // REPL commands can operate on the same frame the user just rendered.
-  // This double-work is intentional for the MVP — a later revision can
-  // extend `PipelinedFrame` to retain the wire bytes and eliminate the
-  // second serialization pass entirely.
-  {
-    sandbox::SerializingRenderer tee;
-    auto docAgain = svg::parser::SVGParser::ParseSVG(svgView, warnings).result();
-    docAgain.setCanvasSize(width_, height_);
-    tee.draw(docAgain);
-    current_.wire = std::move(tee).takeBuffer();
-  }
+  current_.bitmap = std::move(bitmap);
+  current_.status = RenderSessionStatus::kRendered;
 
   std::ostringstream msg;
   msg << StatusLabel(current_.status) << " " << current_.bitmap.dimensions.x << "x"
       << current_.bitmap.dimensions.y;
-  if (current_.unsupportedCount > 0) {
-    msg << " (" << current_.unsupportedCount << " unsupported)";
-  }
   current_.message = std::move(msg).str();
 
   lastGoodBitmap_ = current_.bitmap;
-  lastGoodWire_ = current_.wire;
   return current_;
 }
 

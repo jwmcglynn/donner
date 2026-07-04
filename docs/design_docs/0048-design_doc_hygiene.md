@@ -100,8 +100,8 @@ This doc tracks that cleanup to completion.
         design doc to a summary + pointers + git-history reference. Two stale-comment
         traps were caught and stated accurately in the new doc: the `AsyncSVGDocument.h`
         "single-threaded, no render thread" comment is obsolete (the worker + `ConcurrentDom`
-        is live), and the process-isolation sandbox ships as separate binaries and is not
-        wired into the interactive editor. Also fixed 6 stale `docs/design_docs/editor.md`
+        is live), and the process-isolation prototype has since been removed. Also fixed 6
+        stale `docs/design_docs/editor.md`
         code-comment references (→ `0020-editor.md`).
   - [x] `0049-structured_text_editing.md`: done. Authored the developer doc
         [`docs/structured_source_editing.md`](../structured_source_editing.md)

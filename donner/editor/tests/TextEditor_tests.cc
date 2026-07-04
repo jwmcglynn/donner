@@ -3,11 +3,14 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/editor/ImGuiIncludes.h"
@@ -276,6 +279,37 @@ protected:
     return static_cast<int>(editor.autocompleteSuggestions_.size());
   }
   void SetAutocompleteSwitched(bool value) { editor.autocompleteSwitched_ = value; }
+  void BuildSuggestions(bool* keepAutocompleteOpen = nullptr) {
+    editor.buildSuggestions(keepAutocompleteOpen);
+  }
+  [[nodiscard]] bool AutocompleteReplacementActive() const {
+    return editor.autocompleteReplacementActive_;
+  }
+  [[nodiscard]] std::size_t AutocompleteReplacementStartOffset() const {
+    return editor.autocompleteReplacementStartOffset_;
+  }
+  [[nodiscard]] std::size_t AutocompleteReplacementEndOffset() const {
+    return editor.autocompleteReplacementEndOffset_;
+  }
+  [[nodiscard]] Coordinates AutocompletePosition() const { return editor.autocompletePosition_; }
+  [[nodiscard]] std::pair<RcString, RcString> AutocompleteSuggestion(int index) const {
+    return editor.autocompleteSuggestions_[index];
+  }
+  [[nodiscard]] RcString ParseAutocompleteSnippet(std::string_view snippet,
+                                                  Coordinates start = Coordinates(0, 0)) {
+    return editor.autocompleteParseSnippet(snippet, start);
+  }
+  [[nodiscard]] bool IsSnippet() const { return editor.isSnippet_; }
+  [[nodiscard]] const std::vector<Coordinates>& SnippetStarts() const {
+    return editor.snippetTagStart_;
+  }
+  [[nodiscard]] const std::vector<Coordinates>& SnippetEnds() const {
+    return editor.snippetTagEnd_;
+  }
+  [[nodiscard]] const std::vector<int>& SnippetIds() const { return editor.snippetTagId_; }
+  [[nodiscard]] const std::vector<bool>& SnippetHighlights() const {
+    return editor.snippetTagHighlight_;
+  }
 
   // Opens the autocomplete popup with the provided (display == insert)
   // suggestions, anchored at the current cursor.
@@ -356,6 +390,7 @@ protected:
   [[nodiscard]] float LastScrollX() const { return editor.lastScrollX_; }
   [[nodiscard]] float LastScrollViewportHeight() const { return editor.scrollViewportHeight_; }
   [[nodiscard]] float CharacterAdvanceY() const { return editor.charAdvance_.y; }
+  [[nodiscard]] float TextStart() const { return editor.textStart_; }
   void EnterCharacter(ImWchar character) { editor.enterCharacter(character, /*shift=*/false); }
 
   void OpenAutocompleteAtCursor(std::string_view displayText) {
@@ -442,6 +477,11 @@ protected:
   [[nodiscard]] std::optional<TextEditor::FocusReferenceConnectorLayout> FocusReferenceLayout(
       const FocusReferenceLink& link, int linkIndex) const {
     return editor.focusReferenceConnectorLayout(link, linkIndex);
+  }
+
+  [[nodiscard]] std::optional<TextEditor::FocusReferenceSourceUnderline>
+  FocusReferenceSourceUnderlineDirect(const SourcePoint& source) const {
+    return editor.focusReferenceSourceUnderline(source);
   }
 
   [[nodiscard]] std::vector<FocusReferenceLink> FocusReferenceLinks() const {
@@ -536,6 +576,12 @@ protected:
     return editor.coordinatesToScreenPos(position);
   }
 
+  [[nodiscard]] ImVec2 ScreenPointAtUnwrappedVisualLine(int visualLine, float columnPixels) const {
+    return ImVec2(
+        editor.uiCursorPos_.x + editor.textStart_ + columnPixels,
+        editor.uiCursorPos_.y + (static_cast<float>(visualLine) + 0.5f) * editor.charAdvance_.y);
+  }
+
   [[nodiscard]] float TextBaselineOffsetY() const {
     const ImFont* font = ImGui::GetFont();
     if (font == nullptr || font->FontSize <= 0.0f) {
@@ -572,6 +618,266 @@ protected:
 
   [[nodiscard]] std::string SourceStyleChipHitRectTooltip(std::size_t index) const {
     return editor.sourceStyleChipHitRects_[index].tooltip;
+  }
+
+  void SetRawHoverSourceRanges(std::vector<SourceByteRange> ranges) {
+    editor.hoverSourceRanges_ = std::move(ranges);
+  }
+
+  void SetRawSourceStyleDecorations(std::vector<TextEditor::SourceStyleDecoration> decorations) {
+    editor.sourceStyleDecorations_ = std::move(decorations);
+  }
+
+  void RemapFocusMetadataForSourceEdit(const SourceEditIntent& intent) {
+    editor.remapFocusMetadataForSourceEdit(intent);
+  }
+
+  [[nodiscard]] const FocusPartition& ActiveFocusPartition() const {
+    return editor.focusPartition_;
+  }
+
+  [[nodiscard]] const std::vector<LineRange>& ExpandedFocusHiddenRanges() const {
+    return editor.expandedFocusHiddenRanges_;
+  }
+
+  [[nodiscard]] Coordinates VisibleSelectionEndCoordinatesDirect() const {
+    return editor.visibleSelectionEndCoordinates();
+  }
+
+  [[nodiscard]] std::string TextRange(const Coordinates& start, const Coordinates& end) const {
+    return editor.getText(start, end);
+  }
+
+  [[nodiscard]] Coordinates SanitizeCoordinates(const Coordinates& value) const {
+    return editor.sanitizeCoordinates(value);
+  }
+
+  void AdvanceCoordinates(Coordinates& coordinates) const { editor.advance(coordinates); }
+
+  void DeleteRangeDirect(const Coordinates& start, const Coordinates& end) {
+    editor.deleteRange(start, end);
+  }
+
+  int InsertTextAtDirect(Coordinates& where, std::string_view text, bool indent = false) {
+    return editor.insertTextAt(where, text, indent);
+  }
+
+  void RemoveLineDirect(int start, int end) { editor.removeLine(start, end); }
+
+  void RemoveLineDirect(int index) { editor.removeLine(index); }
+
+  void InsertLineDirect(int index, int column) { editor.insertLine(index, column); }
+
+  [[nodiscard]] Coordinates FindWordStartDirect(const Coordinates& from) const {
+    return editor.findWordStart(from);
+  }
+
+  [[nodiscard]] Coordinates FindWordEndDirect(const Coordinates& from) const {
+    return editor.findWordEnd(from);
+  }
+
+  [[nodiscard]] Coordinates FindNextWordDirect(const Coordinates& from) const {
+    return editor.findNextWord(from);
+  }
+
+  [[nodiscard]] bool IsOnWordBoundaryDirect(const Coordinates& at) const {
+    return editor.isOnWordBoundary(at);
+  }
+
+  [[nodiscard]] Coordinates ScreenPosToCoordinatesDirect(const ImVec2& position) const {
+    return editor.screenPosToCoordinates(position);
+  }
+
+  [[nodiscard]] Coordinates MousePosToCoordinatesDirect(const ImVec2& position) const {
+    return editor.mousePosToCoordinates(position);
+  }
+
+  void OpenAutocompleteReplacement(std::size_t replaceStart, std::size_t replaceEnd,
+                                   std::string_view insertText) {
+    editor.autocompleteOpened_ = true;
+    editor.autocompleteSuggestions_.clear();
+    editor.autocompleteSuggestions_.emplace_back(RcString(insertText), RcString(insertText));
+    editor.autocompleteIndex_ = 0;
+    editor.autocompletePosition_ = editor.getCoordinatesAtByteOffset(replaceStart);
+    editor.autocompleteReplacementActive_ = true;
+    editor.autocompleteReplacementStartOffset_ = replaceStart;
+    editor.autocompleteReplacementEndOffset_ = replaceEnd;
+  }
+
+  void SetAutocompleteIndex(int index) { editor.autocompleteIndex_ = index; }
+
+  void AutocompleteSelectDirect() { editor.autocompleteSelect(); }
+
+  void AutocompleteNavigateDirect(bool up) { editor.autocompleteNavigate(up); }
+
+  void ExecuteActionDirect(TextEditor::ShortcutId actionId, bool& keepAutocompleteOpen,
+                           bool shift = false, bool ctrl = false) {
+    editor.executeAction(actionId, keepAutocompleteOpen, shift, ctrl);
+  }
+
+  void AddUndoRecordForInsertedText(std::string_view added, const Coordinates& start,
+                                    const Coordinates& end) {
+    EditorState before = editor.state_;
+    before.cursorPosition = start;
+    before.selectionStart = start;
+    before.selectionEnd = start;
+
+    EditorState after = editor.state_;
+    after.cursorPosition = end;
+    after.selectionStart = end;
+    after.selectionEnd = end;
+
+    UndoRecord record(added, start, end, "", start, start, before, after);
+    editor.addUndo(record);
+  }
+
+  void ConfigureFoldState(std::vector<Coordinates> foldBegin, std::vector<Coordinates> foldEnd,
+                          std::vector<bool> fold, std::vector<int> foldConnection) {
+    editor.foldEnabled_ = true;
+    editor.foldBegin_ = std::move(foldBegin);
+    editor.foldEnd_ = std::move(foldEnd);
+    editor.fold_ = std::move(fold);
+    editor.foldConnection_ = std::move(foldConnection);
+  }
+
+  void ConfigureFoldEndpointsForCalculation(std::vector<Coordinates> foldBegin,
+                                            std::vector<Coordinates> foldEnd) {
+    editor.foldEnabled_ = true;
+    editor.foldBegin_ = std::move(foldBegin);
+    editor.foldEnd_ = std::move(foldEnd);
+    editor.fold_.clear();
+    editor.foldConnection_.clear();
+    editor.foldSorted_ = false;
+    editor.foldLastIteration_ = 0;
+  }
+
+  void CalculateFoldsDirect(int currentLine, int totalLines) {
+    editor.foldLastIteration_ = 0;
+    editor.calculateFolds(currentLine, totalLines);
+  }
+
+  void UpdateFoldedLinesDirect(int currentLine, int totalLines) {
+    editor.updateFoldedLines(currentLine, totalLines);
+  }
+
+  [[nodiscard]] std::vector<int> FoldConnections() const { return editor.foldConnection_; }
+  [[nodiscard]] std::vector<bool> FoldStates() const { return editor.fold_; }
+  [[nodiscard]] int FoldedLines() const { return editor.foldedLines_; }
+
+  std::pair<bool, bool> HandleCharacterInputDirect(std::span<const ImWchar> characters,
+                                                   bool shift = false) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.InputQueueCharacters.resize(0);
+    for (ImWchar character : characters) {
+      io.InputQueueCharacters.push_back(character);
+    }
+
+    bool keepAutocompleteOpen = false;
+    bool hasWrittenLetter = false;
+    editor.handleCharacterInput(io, shift, keepAutocompleteOpen, hasWrittenLetter);
+    io.InputQueueCharacters.resize(0);
+    return {keepAutocompleteOpen, hasWrittenLetter};
+  }
+
+  void ActivateSnippetEditing(std::string_view snippetSource) {
+    const RcString snippet = ParseAutocompleteSnippet(snippetSource);
+    editor.setText(std::string(std::string_view(snippet)));
+    ASSERT_FALSE(editor.snippetTagStart_.empty());
+    editor.isSnippet_ = true;
+    editor.snippetTagSelected_ = 0;
+    editor.snippetTagLength_ = 0;
+    editor.snippetTagPreviousLength_ =
+        editor.snippetTagEnd_[0].column - editor.snippetTagStart_[0].column;
+    editor.setSelection(editor.snippetTagStart_[0], editor.snippetTagEnd_[0]);
+    editor.setCursorPosition(editor.snippetTagEnd_[0]);
+  }
+
+  template <typename Func>
+  void RunFrameWithChild(std::string_view childName, const ImVec2& childSize, Func&& func) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(childSize.x + 40.0f, childSize.y + 40.0f), ImGuiCond_Always);
+    ImGui::Begin(
+        "TextEditorDirectTestWindow", nullptr,
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::BeginChild(std::string(childName).c_str(), childSize, false);
+    func(ImGui::GetCurrentWindow(), ImGui::GetWindowDrawList());
+    ImGui::EndChild();
+    ImGui::End();
+    ImGui::Render();
+  }
+
+  [[nodiscard]] float HandleScrollingDirect(float initialScrollY,
+                                            const ImVec2& childSize = ImVec2(240.0f, 80.0f)) {
+    float scrollTargetY = 0.0f;
+    RunFrameWithChild("##scroll_host", childSize, [&](ImGuiWindow* window, ImDrawList*) {
+      window->Scroll.y = initialScrollY;
+      editor.scrollViewportHeight_ = childSize.y;
+      editor.withinRender_ = true;
+      editor.handleScrolling();
+      editor.withinRender_ = false;
+      scrollTargetY = window->ScrollTarget.y;
+    });
+    return scrollTargetY;
+  }
+
+  [[nodiscard]] bool ScrollToCursorRequested() const { return editor.scrollToCursor_; }
+  [[nodiscard]] bool ScrollSelectionIntoViewRequested() const {
+    return editor.scrollSelectionIntoView_;
+  }
+
+  void RequestCursorScroll(bool selectionIntoView = false) {
+    editor.scrollToCursor_ = true;
+    editor.scrollSelectionIntoView_ = selectionIntoView;
+  }
+
+  [[nodiscard]] ImVec2 FoldButtonCenterForLineStart(const ImVec2& lineStart) const {
+    const float spaceSize =
+        ImGui::GetFont()->CalcTextSizeA(ImGui::GetFontSize(), FLT_MAX, -1.0f, " ").x;
+    const float fontSize = ImGui::GetFontSize();
+    const float startX = lineStart.x + editor.textStart_ - spaceSize * 2.0f + 4.0f;
+    const float startY = lineStart.y + (fontSize - spaceSize) / 2.0f;
+    const ImVec2 min(startX, startY + 2.0f);
+    const ImVec2 max(min.x + spaceSize, min.y + spaceSize);
+    return ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
+  }
+
+  void RenderFoldMarkerDirect(int lineNo, const ImVec2& lineStart, const ImVec2& mousePos,
+                              bool mouseDown) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(mousePos.x, mousePos.y);
+    io.AddMouseButtonEvent(0, mouseDown);
+    RunFrameWithChild("##fold_host", ImVec2(260.0f, 120.0f),
+                      [&](ImGuiWindow* window, ImDrawList* drawList) {
+                        window->Scroll.x = 0.0f;
+                        editor.renderFoldMarkers(lineNo, lineStart, drawList);
+                      });
+  }
+
+  [[nodiscard]] bool FoldState(int index) const { return editor.fold_[index]; }
+
+  void OpenFunctionTooltipDirect(std::string_view declaration, const Coordinates& coords) {
+    editor.openFunctionDeclarationTooltip(declaration, coords);
+  }
+
+  [[nodiscard]] bool FunctionTooltipOpen() const { return editor.functionDeclarationTooltip_; }
+
+  [[nodiscard]] int WindowCountContaining(std::string_view text) const {
+    const ImGuiContext* context = ImGui::GetCurrentContext();
+    if (context == nullptr) {
+      return 0;
+    }
+
+    int count = 0;
+    for (ImGuiWindow* window : context->Windows) {
+      if (std::string_view(window->Name).find(text) != std::string_view::npos) {
+        ++count;
+      }
+    }
+    return count;
   }
 
   ImGuiContext* imguiContext_ = nullptr;
@@ -633,6 +939,35 @@ TEST_F(TextEditorTests, HoveredTextPositionTracksMouseWithoutMovingCursor) {
   EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0));
   EXPECT_FALSE(editor.isCursorPositionChanged());
   EXPECT_FALSE(editor.didMouseChangeCursorPosition());
+}
+
+TEST_F(TextEditorTests, HoveredTextPositionRejectsOutOfTextAndHiddenPlaceholderRows) {
+  editor.setText("root\nhidden-a\nhidden-b\ntarget");
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 3, .endLine = 4}},
+      .hidden = {LineRange{.startLine = 1, .endLine = 3}},
+  });
+
+  RenderEditorFrame(ImVec2(300.0f, 160.0f));
+  ASSERT_TRUE(VisualLineIsFocusHiddenPlaceholder(1));
+
+  RenderEditorFrameWithMouse(ScreenPointAtVisualTextOffset(/*visualIndex=*/1, 1),
+                             /*mouseDown=*/false, ImVec2(300.0f, 160.0f));
+  EXPECT_FALSE(editor.hoveredTextPosition().has_value());
+
+  editor.clearFocusPartition();
+  editor.setWordWrapEnabled(false);
+  RenderEditorFrame(ImVec2(300.0f, 160.0f));
+
+  const ImVec2 leftOfText =
+      ScreenPointAtUnwrappedVisualLine(/*visualLine=*/0, /*columnPixels=*/-TextStart() - 4.0f);
+  RenderEditorFrameWithMouse(leftOfText, /*mouseDown=*/false, ImVec2(300.0f, 160.0f));
+  EXPECT_FALSE(editor.hoveredTextPosition().has_value());
+
+  ImVec2 belowText = ScreenPointAtUnwrappedVisualLine(/*visualLine=*/0, /*columnPixels=*/20.0f);
+  belowText.y += 500.0f;
+  RenderEditorFrameWithMouse(belowText, /*mouseDown=*/false, ImVec2(300.0f, 160.0f));
+  EXPECT_FALSE(editor.hoveredTextPosition().has_value());
 }
 
 TEST_F(TextEditorTests, HoverSourceRangesAreClampedAndDeduplicated) {
@@ -712,6 +1047,24 @@ TEST_F(TextEditorTests, SourceStyleDecorationsStrikeRangesWithoutRenderingHidden
   EXPECT_EQ(SourceStyleChipHitRectCount(), 0u);
 }
 
+TEST_F(TextEditorTests, IneffectiveSourceStyleDecorationShowsTooltipOnSourceHover) {
+  editor.setText("fill: red;");
+  ASSERT_TRUE(editor.setSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 12,
+          .range = SourceByteRange{.start = 0, .end = 4},
+          .ineffective = true,
+          .tooltip = "fill is overridden",
+      },
+  }));
+
+  RenderEditorFrame(ImVec2(360.0f, 120.0f));
+  RenderEditorFrameWithMouse(ScreenPointAtVisualTextOffset(/*visualIndex=*/0, 2),
+                             /*mouseDown=*/false, ImVec2(360.0f, 120.0f));
+
+  EXPECT_GT(WindowCountContaining("##Tooltip"), 0);
+}
+
 TEST_F(TextEditorTests, SourceStyleDecorationChipClickIsConsumable) {
   editor.setText(".cls { fill: red; }\n");
   ASSERT_TRUE(editor.setSourceStyleDecorations({
@@ -784,6 +1137,390 @@ TEST_F(TextEditorTests, SourceStyleDecorationOverflowMarkerHasTooltipAndIsNotCli
 
   RenderEditorFrameWithMouse(SourceStyleChipHitRectCenter(1), true, ImVec2(520.0f, 120.0f));
   EXPECT_EQ(editor.takeClickedSourceStyleChipId(), std::nullopt);
+}
+
+TEST_F(TextEditorTests, RemapFocusMetadataNoOpLeavesExistingRanges) {
+  editor.setText("abcdef");
+  SetRawHoverSourceRanges({SourceByteRange{.start = 1, .end = 4}});
+  SetRawSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 3,
+          .range = SourceByteRange{.start = 2, .end = 5},
+          .chipRange = SourceByteRange{.start = 1, .end = 2},
+          .showChip = true,
+      },
+  });
+
+  RemapFocusMetadataForSourceEdit(SourceEditIntent{});
+
+  ASSERT_EQ(editor.hoverSourceRanges().size(), 1u);
+  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 1, .end = 4}));
+  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 2, .end = 5}));
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange, (SourceByteRange{.start = 1, .end = 2}));
+}
+
+TEST_F(TextEditorTests, RemapFocusMetadataMapsRangesAndFocusPartitionAfterEdit) {
+  editor.setText("aWXYZdef\nsecond\nthird");
+  SetRawHoverSourceRanges({
+      SourceByteRange{.start = 0, .end = 1},
+      SourceByteRange{.start = 3, .end = 9},
+      SourceByteRange{.start = 1, .end = 3},
+  });
+  SetRawSourceStyleDecorations({
+      TextEditor::SourceStyleDecoration{
+          .id = 9,
+          .range = SourceByteRange{.start = 3, .end = 9},
+          .chipRange = SourceByteRange{.start = 1, .end = 3},
+          .showChip = true,
+      },
+  });
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 0, .endLine = 2}},
+      .referenceColor = {LineRange{.startLine = 1, .endLine = 3}},
+      .dimmed = {LineRange{.startLine = 2, .endLine = 3}},
+      .hidden = {LineRange{.startLine = 1, .endLine = 2}},
+      .referenceLinks =
+          {
+              FocusReferenceLink{
+                  .from = SourcePoint{.line = 0, .column = 3},
+                  .to = SourcePoint{.line = 2, .column = 0},
+              },
+          },
+  });
+
+  SourceEditIntent intent;
+  intent.offset = 1;
+  intent.removedLength = 2;
+  intent.replacement = "WXYZ";
+  intent.start = SourceEditPoint{.line = 0, .column = 1};
+  intent.removedEnd = SourceEditPoint{.line = 0, .column = 3};
+  intent.replacementEnd = SourceEditPoint{.line = 0, .column = 5};
+
+  RemapFocusMetadataForSourceEdit(intent);
+
+  ASSERT_EQ(editor.hoverSourceRanges().size(), 2u);
+  EXPECT_EQ(editor.hoverSourceRanges()[0], (SourceByteRange{.start = 0, .end = 5}));
+  EXPECT_EQ(editor.hoverSourceRanges()[1], (SourceByteRange{.start = 5, .end = 11}));
+  ASSERT_EQ(editor.sourceStyleDecorations().size(), 1u);
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].range, (SourceByteRange{.start = 5, .end = 11}));
+  EXPECT_EQ(editor.sourceStyleDecorations()[0].chipRange, (SourceByteRange{.start = 5, .end = 5}));
+  EXPECT_TRUE(editor.hasFocusPartition());
+  ASSERT_EQ(ActiveFocusPartition().referenceLinks.size(), 1u);
+  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].from, (SourcePoint{.line = 0, .column = 5}));
+  EXPECT_EQ(ActiveFocusPartition().referenceLinks[0].to, (SourcePoint{.line = 2, .column = 0}));
+}
+
+TEST_F(TextEditorTests, ContentUpdateHookRunsForShellEdits) {
+  int updateCount = 0;
+  editor.onContentUpdate = [&updateCount](TextEditor*) { ++updateCount; };
+  editor.setText("alpha");
+  editor.setCursorPosition(Coordinates(0, 5));
+
+  editor.insertText("!");
+
+  EXPECT_EQ(editor.getText(), "alpha!");
+  EXPECT_GE(updateCount, 1);
+}
+
+TEST_F(TextEditorTests, PrivateShellForwardersDelegateToCore) {
+  editor.setText("alpha beta\ngamma");
+
+  EXPECT_EQ(TextRange(Coordinates(0, 0), Coordinates(0, 5)), "alpha");
+  EXPECT_EQ(SanitizeCoordinates(Coordinates(99, 99)), Coordinates(1, 5));
+
+  Coordinates advanced(0, 0);
+  AdvanceCoordinates(advanced);
+  EXPECT_EQ(advanced, Coordinates(0, 1));
+
+  EXPECT_EQ(FindWordStartDirect(Coordinates(0, 8)), Coordinates(0, 6));
+  EXPECT_EQ(FindWordEndDirect(Coordinates(0, 6)), Coordinates(0, 10));
+  EXPECT_EQ(FindNextWordDirect(Coordinates(0, 0)), Coordinates(0, 6));
+  EXPECT_FALSE(IsOnWordBoundaryDirect(Coordinates(0, 5)));
+
+  Coordinates insertAt(0, 5);
+  EXPECT_EQ(InsertTextAtDirect(insertAt, " inserted"), 0);
+  EXPECT_EQ(editor.getText(), "alpha inserted beta\ngamma");
+  EXPECT_EQ(insertAt, Coordinates(0, 14));
+
+  DeleteRangeDirect(Coordinates(0, 5), Coordinates(0, 14));
+  EXPECT_EQ(editor.getText(), "alpha beta\ngamma");
+
+  InsertLineDirect(1, 2);
+  EXPECT_EQ(editor.getText(), "alpha beta\nga\nmma");
+  RemoveLineDirect(1);
+  EXPECT_EQ(editor.getText(), "alpha beta\nmma");
+  RemoveLineDirect(0, 1);
+  EXPECT_EQ(editor.getText(), "");
+}
+
+TEST_F(TextEditorTests, DirectCoordinateConversionHandlesTabsAndMouseAdjustment) {
+  editor.setWordWrapEnabled(false);
+  editor.setText("\tabc\nz");
+
+  RenderEditorFrame(ImVec2(320.0f, 120.0f));
+
+  const ImVec2 tabLinePoint = ScreenPointAtCoordinates(Coordinates(0, 1));
+  EXPECT_EQ(ScreenPosToCoordinatesDirect(tabLinePoint).line, 0);
+  EXPECT_GE(ScreenPosToCoordinatesDirect(tabLinePoint).column, 1);
+
+  const Coordinates mouseCoords = MousePosToCoordinatesDirect(tabLinePoint);
+  EXPECT_EQ(mouseCoords.line, 0);
+  EXPECT_GE(mouseCoords.column, 0);
+
+  const ImVec2 belowText(tabLinePoint.x, tabLinePoint.y + 500.0f);
+  EXPECT_EQ(ScreenPosToCoordinatesDirect(belowText).line, 1);
+  EXPECT_EQ(MousePosToCoordinatesDirect(belowText).line, 1);
+}
+
+TEST_F(TextEditorTests, FoldedScreenPositionMapsPastCollapsedRegion) {
+  editor.setWordWrapEnabled(false);
+  editor.setText("zero\none\ntwo\nthree");
+  RenderEditorFrame(ImVec2(320.0f, 160.0f));
+
+  ConfigureFoldState({Coordinates(0, 0)}, {Coordinates(2, 0)}, {true}, {0});
+
+  const ImVec2 secondVisibleLine = ScreenPointAtUnwrappedVisualLine(1, 40.0f);
+  EXPECT_EQ(ScreenPosToCoordinatesDirect(secondVisibleLine).line, 3);
+  EXPECT_EQ(MousePosToCoordinatesDirect(secondVisibleLine).line, 3);
+}
+
+TEST_F(TextEditorTests, FoldedScreenPositionIgnoresInvalidFoldConnection) {
+  editor.setWordWrapEnabled(false);
+  editor.setText("zero\none\ntwo");
+  RenderEditorFrame(ImVec2(320.0f, 120.0f));
+
+  ConfigureFoldState({Coordinates(0, 0)}, {Coordinates(2, 0)}, {true}, {-1});
+
+  const ImVec2 secondVisibleLine = ScreenPointAtUnwrappedVisualLine(1, 40.0f);
+  EXPECT_EQ(ScreenPosToCoordinatesDirect(secondVisibleLine).line, 1);
+}
+
+TEST_F(TextEditorTests, CharacterInputSkipsControlCharactersAndTracksLetters) {
+  editor.setText("");
+
+  const std::array<ImWchar, 4> characters = {1, 'a', '.', '\n'};
+  const auto [keepAutocompleteOpen, hasWrittenLetter] = HandleCharacterInputDirect(characters);
+
+  EXPECT_FALSE(keepAutocompleteOpen);
+  EXPECT_TRUE(hasWrittenLetter);
+  EXPECT_EQ(editor.getText(), "a.\n");
+}
+
+TEST_F(TextEditorTests, SnippetTypingPropagatesRepeatedPlaceholderText) {
+  ActivateSnippetEditing(R"(<{$1:rect}>{$1}</{$1}>)");
+
+  const std::array<ImWchar, 1> characters = {'x'};
+  const auto [keepAutocompleteOpen, hasWrittenLetter] = HandleCharacterInputDirect(characters);
+
+  EXPECT_FALSE(keepAutocompleteOpen);
+  EXPECT_TRUE(hasWrittenLetter);
+  EXPECT_EQ(editor.getText(), "<x>x</x>");
+  ASSERT_EQ(SnippetStarts().size(), 3u);
+  EXPECT_EQ(SnippetEnds()[0].column - SnippetStarts()[0].column, 1);
+  EXPECT_EQ(SnippetEnds()[1].column - SnippetStarts()[1].column, 1);
+}
+
+TEST_F(TextEditorTests, AutocompleteSelectReplacesProviderRange) {
+  editor.setText("alpha beta gamma");
+  OpenAutocompleteReplacement(/*replaceStart=*/6, /*replaceEnd=*/10, "replacement");
+
+  AutocompleteSelectDirect();
+
+  EXPECT_EQ(editor.getText(), "alpha replacement gamma");
+  EXPECT_FALSE(AutocompleteOpened());
+  EXPECT_FALSE(AutocompleteReplacementActive());
+}
+
+TEST_F(TextEditorTests, AutocompleteSelectOutOfRangeLeavesPopupOpen) {
+  editor.setText("alpha");
+  OpenAutocompleteWithSuggestions({"beta"});
+  SetAutocompleteIndex(9);
+
+  AutocompleteSelectDirect();
+
+  EXPECT_EQ(editor.getText(), "alpha");
+  EXPECT_TRUE(AutocompleteOpened());
+}
+
+TEST_F(TextEditorTests, AutocompleteNavigateClampsAtBothEnds) {
+  OpenAutocompleteWithSuggestions({"alpha", "beta"});
+
+  AutocompleteNavigateDirect(/*up=*/true);
+  EXPECT_EQ(AutocompleteIndex(), 0);
+
+  AutocompleteNavigateDirect(/*up=*/false);
+  EXPECT_EQ(AutocompleteIndex(), 1);
+  AutocompleteNavigateDirect(/*up=*/false);
+  EXPECT_EQ(AutocompleteIndex(), 1);
+}
+
+TEST_F(TextEditorTests, ExecuteActionDirectCoversAutocompleteCases) {
+  editor.setText("");
+  OpenAutocompleteWithSuggestions({"alpha", "beta"});
+
+  bool keepAutocompleteOpen = false;
+  ExecuteActionDirect(TextEditor::ShortcutId::AutocompleteDown, keepAutocompleteOpen);
+  EXPECT_TRUE(keepAutocompleteOpen);
+  EXPECT_EQ(AutocompleteIndex(), 1);
+
+  keepAutocompleteOpen = false;
+  ExecuteActionDirect(TextEditor::ShortcutId::AutocompleteUp, keepAutocompleteOpen);
+  EXPECT_TRUE(keepAutocompleteOpen);
+  EXPECT_EQ(AutocompleteIndex(), 0);
+
+  keepAutocompleteOpen = true;
+  ExecuteActionDirect(TextEditor::ShortcutId::AutocompleteSelectActive, keepAutocompleteOpen);
+  EXPECT_FALSE(keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "alpha");
+  EXPECT_FALSE(AutocompleteOpened());
+}
+
+TEST_F(TextEditorTests, AddUndoWrapperFeedsCoreUndoStack) {
+  editor.setText("abc");
+  AddUndoRecordForInsertedText("b", Coordinates(0, 1), Coordinates(0, 2));
+
+  ASSERT_TRUE(editor.canUndo());
+  editor.undo();
+
+  EXPECT_EQ(editor.getText(), "ac");
+}
+
+TEST_F(TextEditorTests, ExecuteActionDirectCoversNavigationAndEditingCases) {
+  bool keepAutocompleteOpen = false;
+
+  editor.setText("a\nb\nc");
+  editor.setCursorPosition(Coordinates(1, 0));
+  ExecuteActionDirect(TextEditor::ShortcutId::MoveUp, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 0));
+  ExecuteActionDirect(TextEditor::ShortcutId::MoveDown, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 0));
+  ExecuteActionDirect(TextEditor::ShortcutId::MoveRight, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 1));
+  ExecuteActionDirect(TextEditor::ShortcutId::MoveLeft, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(1, 0));
+
+  ExecuteActionDirect(TextEditor::ShortcutId::SelectDown, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getSelectedText(), "b\n");
+  ExecuteActionDirect(TextEditor::ShortcutId::SelectUp, keepAutocompleteOpen);
+  EXPECT_FALSE(editor.hasSelection());
+
+  editor.setText("abc");
+  editor.setCursorPosition(Coordinates(0, 1));
+  ExecuteActionDirect(TextEditor::ShortcutId::ForwardDelete, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "ac");
+
+  editor.setText("abc");
+  editor.setCursorPosition(Coordinates(0, 2));
+  ExecuteActionDirect(TextEditor::ShortcutId::BackwardDelete, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "ac");
+
+  editor.setText("abc");
+  editor.setCursorPosition(Coordinates(0, 0));
+  ExecuteActionDirect(TextEditor::ShortcutId::SelectAll, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getSelectedText(), "abc");
+
+  editor.setText("ab");
+  editor.setCursorPosition(Coordinates(0, 1));
+  editor.setSelection(Coordinates(0, 1), Coordinates(0, 1));
+  ExecuteActionDirect(TextEditor::ShortcutId::NewLine, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "a\nb");
+
+  editor.setText("");
+  editor.setInsertSpaces(false);
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 0));
+  ExecuteActionDirect(TextEditor::ShortcutId::Indent, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "\t");
+
+  editor.setText("ab");
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 2));
+  ExecuteActionDirect(TextEditor::ShortcutId::Indent, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "ab");
+
+  editor.setText("abc");
+  AddUndoRecordForInsertedText("b", Coordinates(0, 1), Coordinates(0, 2));
+  ExecuteActionDirect(TextEditor::ShortcutId::Undo, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "ac");
+  ExecuteActionDirect(TextEditor::ShortcutId::Redo, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "abc");
+}
+
+TEST_F(TextEditorTests, ExecuteActionDirectCoversAliasesClipboardAndDefaultCases) {
+  bool keepAutocompleteOpen = false;
+
+  editor.setText("abc");
+  editor.setCursorPosition(Coordinates(0, 1));
+  ExecuteActionDirect(TextEditor::ShortcutId::DeleteRight, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "ac");
+
+  editor.setText("abc");
+  editor.setCursorPosition(Coordinates(0, 2));
+  ExecuteActionDirect(TextEditor::ShortcutId::DeleteLeft, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "ac");
+
+  editor.setText("copy paste");
+  editor.setSelection(Coordinates(0, 0), Coordinates(0, 4));
+  ExecuteActionDirect(TextEditor::ShortcutId::Copy, keepAutocompleteOpen);
+  EXPECT_STREQ(ImGui::GetClipboardText(), "copy");
+
+  editor.setSelection(Coordinates(0, 5), Coordinates(0, 10));
+  ExecuteActionDirect(TextEditor::ShortcutId::Cut, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "copy ");
+  EXPECT_STREQ(ImGui::GetClipboardText(), "paste");
+
+  editor.setCursorPosition(Coordinates(0, 5));
+  ExecuteActionDirect(TextEditor::ShortcutId::Paste, keepAutocompleteOpen);
+  EXPECT_EQ(editor.getText(), "copy paste");
+
+  const TextEditor::ShortcutId defaultOnlyActions[] = {
+      TextEditor::ShortcutId::MoveWordLeft,      TextEditor::ShortcutId::SelectWordLeft,
+      TextEditor::ShortcutId::MoveWordRight,     TextEditor::ShortcutId::SelectWordRight,
+      TextEditor::ShortcutId::MoveUpBlock,       TextEditor::ShortcutId::SelectUpBlock,
+      TextEditor::ShortcutId::MoveDownBlock,     TextEditor::ShortcutId::SelectDownBlock,
+      TextEditor::ShortcutId::MoveTop,           TextEditor::ShortcutId::SelectTop,
+      TextEditor::ShortcutId::MoveBottom,        TextEditor::ShortcutId::SelectBottom,
+      TextEditor::ShortcutId::MoveStartLine,     TextEditor::ShortcutId::SelectStartLine,
+      TextEditor::ShortcutId::MoveEndLine,       TextEditor::ShortcutId::SelectEndLine,
+      TextEditor::ShortcutId::ForwardDeleteWord, TextEditor::ShortcutId::BackwardDeleteWord,
+      TextEditor::ShortcutId::Unindent,          TextEditor::ShortcutId::Find,
+      TextEditor::ShortcutId::Replace,           TextEditor::ShortcutId::FindNext,
+      TextEditor::ShortcutId::DuplicateLine,     TextEditor::ShortcutId::CommentLines,
+      TextEditor::ShortcutId::UncommentLines,    TextEditor::ShortcutId::Count,
+  };
+
+  for (TextEditor::ShortcutId action : defaultOnlyActions) {
+    SCOPED_TRACE(static_cast<int>(action));
+    ExecuteActionDirect(action, keepAutocompleteOpen);
+  }
+  EXPECT_EQ(editor.getText(), "copy paste");
+}
+
+TEST_F(TextEditorTests, UpdateFoldedLinesAccountsForConnectedAndInvalidFolds) {
+  editor.setText("zero\none\ntwo\nthree\nfour\nfive");
+
+  ConfigureFoldState({Coordinates(0, 0), Coordinates(2, 0), Coordinates(3, 0)},
+                     {Coordinates(2, 0), Coordinates(5, 0), Coordinates(4, 0)}, {true, true, true},
+                     {-1, 99, 2});
+  UpdateFoldedLinesDirect(/*currentLine=*/5, /*totalLines=*/6);
+  EXPECT_EQ(FoldedLines(), 1);
+
+  ConfigureFoldState({Coordinates(0, 0)}, {Coordinates(3, 0)}, {true}, {0});
+  UpdateFoldedLinesDirect(/*currentLine=*/1, /*totalLines=*/6);
+  EXPECT_EQ(FoldedLines(), 3);
+
+  UpdateFoldedLinesDirect(/*currentLine=*/0, /*totalLines=*/6);
+  EXPECT_EQ(FoldedLines(), 0);
+}
+
+TEST_F(TextEditorTests, CalculateFoldsSortsAndPairsNestedFoldEndpoints) {
+  editor.setText("{\n  {\n  }\n}\n");
+  ConfigureFoldEndpointsForCalculation({Coordinates(1, 2), Coordinates(0, 0)},
+                                       {Coordinates(3, 0), Coordinates(2, 2)});
+
+  CalculateFoldsDirect(/*currentLine=*/3, /*totalLines=*/4);
+
+  EXPECT_EQ(FoldConnections(), (std::vector<int>{1, 0}));
+  EXPECT_EQ(FoldStates(), (std::vector<bool>{false, false}));
 }
 
 TEST_F(TextEditorTests, MoveLeftRetractsCursor) {
@@ -937,6 +1674,19 @@ TEST_F(TextEditorTests, SelectionStartAndEnd) {
   editor.setText("Hello world");
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 5));
   EXPECT_EQ(editor.getSelectedText(), "Hello") << "setSelection should select specified range";
+}
+
+TEST_F(TextEditorTests, VisibleSelectionEndBacksUpFromExclusiveMultilineEnd) {
+  editor.setText("abc\ndef");
+
+  editor.setCursorPosition(Coordinates(0, 1));
+  EXPECT_EQ(VisibleSelectionEndCoordinatesDirect(), Coordinates(0, 0));
+
+  editor.setSelection(Coordinates(0, 1), Coordinates(0, 3));
+  EXPECT_EQ(VisibleSelectionEndCoordinatesDirect(), Coordinates(0, 2));
+
+  editor.setSelection(Coordinates(0, 1), Coordinates(1, 0));
+  EXPECT_EQ(VisibleSelectionEndCoordinatesDirect(), Coordinates(0, 3));
 }
 
 TEST_F(TextEditorTests, HasSelectionReturnsFalseWhenNoSelection) {
@@ -1720,6 +2470,21 @@ TEST_F(TextEditorTests, FocusReferenceConnectorTargetsSelectorChipByRangeStart) 
   ExpectFocusReferenceArrowMatchesTangent(link);
 }
 
+TEST_F(TextEditorTests, FocusReferenceSourceUnderlineHandlesDelimitersAndInvalidPositions) {
+  editor.setText("fill=\"url(#grad)\";\n\n");
+  RenderEditorFrame(ImVec2(420.0f, 120.0f));
+
+  EXPECT_EQ(FocusReferenceSourceUnderlineDirect(SourcePoint{.line = 9, .column = 0}), std::nullopt);
+  EXPECT_EQ(FocusReferenceSourceUnderlineDirect(SourcePoint{.line = 1, .column = 0}), std::nullopt);
+
+  const auto underline = FocusReferenceSourceUnderlineDirect(SourcePoint{.line = 0, .column = 15});
+
+  ASSERT_TRUE(underline.has_value());
+  EXPECT_FLOAT_EQ(underline->start.x, ScreenPointAtCoordinates(Coordinates(0, 10)).x);
+  EXPECT_FLOAT_EQ(underline->end.x, ScreenPointAtCoordinates(Coordinates(0, 15)).x);
+  EXPECT_GT(underline->end.x, underline->start.x);
+}
+
 TEST_F(TextEditorTests, TypingRemapsFocusReferenceRopeEndpointsImmediately) {
   const std::string source =
       "<linearGradient id=\"grad\"/>\n"
@@ -1942,6 +2707,70 @@ TEST_F(TextEditorTests, SelectAndFocusScrollsEntireSelectionIntoView) {
                              << " viewportY=" << LastScrollViewportHeight();
 }
 
+TEST_F(TextEditorTests, HandleScrollingDirectScrollsWrappedSelectionRange) {
+  editor.setText(
+      "  <rect id=\"target\" x=\"10\" y=\"20\" width=\"30\" height=\"40\" "
+      "fill=\"red\" stroke=\"blue\" opacity=\"0.5\" transform=\"translate(1 2)\"/>\n");
+  RenderEditorFrame(ImVec2(220.0f, 80.0f));
+
+  editor.selectAndFocus(Coordinates(0, 88), Coordinates(0, 116));
+
+  const float scrollTargetY = HandleScrollingDirect(/*initialScrollY=*/0.0f);
+
+  EXPECT_GT(scrollTargetY, 0.0f);
+  EXPECT_FALSE(ScrollToCursorRequested());
+  EXPECT_FALSE(ScrollSelectionIntoViewRequested());
+}
+
+TEST_F(TextEditorTests, HandleScrollingDirectScrollsWrappedCursorAboveAndBelowViewport) {
+  editor.setText(
+      "  <rect id=\"target\" x=\"10\" y=\"20\" width=\"30\" height=\"40\" "
+      "fill=\"red\" stroke=\"blue\" opacity=\"0.5\" transform=\"translate(1 2)\"/>\n");
+  RenderEditorFrame(ImVec2(220.0f, 80.0f));
+
+  const Coordinates wrappedTail(0, 112);
+  ASSERT_GT(VisualLineIndexForCoordinates(wrappedTail), 0);
+  editor.setCursorPosition(wrappedTail);
+  RequestCursorScroll();
+  const float scrollTargetBelow = HandleScrollingDirect(/*initialScrollY=*/0.0f);
+
+  EXPECT_GT(scrollTargetBelow, 0.0f);
+  EXPECT_FALSE(ScrollToCursorRequested());
+
+  editor.setCursorPosition(Coordinates(0, 0));
+  RequestCursorScroll();
+  const float scrolledDownY = 3.0f * CharacterAdvanceY();
+  const float scrollTargetAbove = HandleScrollingDirect(scrolledDownY);
+
+  EXPECT_LT(scrollTargetAbove, scrolledDownY);
+  EXPECT_FALSE(ScrollToCursorRequested());
+}
+
+TEST_F(TextEditorTests, HandleScrollingDirectScrollsUnwrappedCursorAboveAndBelowViewport) {
+  editor.setWordWrapEnabled(false);
+  std::ostringstream source;
+  for (int i = 0; i < 80; ++i) {
+    source << "line" << i << "\n";
+  }
+  editor.setText(source.str());
+  RenderEditorFrame(ImVec2(240.0f, 80.0f));
+
+  editor.setCursorPosition(Coordinates(40, 0));
+  RequestCursorScroll();
+  const float scrollTargetBelow = HandleScrollingDirect(/*initialScrollY=*/0.0f);
+
+  EXPECT_GT(scrollTargetBelow, 0.0f);
+  EXPECT_FALSE(ScrollToCursorRequested());
+
+  const float scrolledDownY = 30.0f * CharacterAdvanceY();
+  editor.setCursorPosition(Coordinates(2, 0));
+  RequestCursorScroll();
+  const float scrollTargetAbove = HandleScrollingDirect(scrolledDownY);
+
+  EXPECT_LT(scrollTargetAbove, scrolledDownY);
+  EXPECT_FALSE(ScrollToCursorRequested());
+}
+
 TEST_F(TextEditorTests, TypingOnTopVisibleLineDoesNotNudgeScrollUp) {
   std::ostringstream source;
   for (int i = 0; i < 80; ++i) {
@@ -1994,6 +2823,131 @@ TEST_F(TextEditorTests, AutocompletePopupDoesNotPerturbEditorScroll) {
   EXPECT_NEAR(afterSuggestionChangeScrollY, beforePopupScrollY, 0.5f);
   EXPECT_EQ(AutocompleteChildWindowCount(), 0);
   EXPECT_EQ(AutocompleteTopLevelWindowCount(), 1);
+}
+
+TEST_F(TextEditorTests, AutocompleteParseSnippetReplacesRepeatedPlaceholders) {
+  const RcString parsed =
+      ParseAutocompleteSnippet(R"(<{$1:rect} id="{$2:name}">{$1}</{$1}>)", Coordinates(3, 4));
+
+  EXPECT_EQ(std::string(std::string_view(parsed)), R"(<rect id="name">rect</rect>)");
+  EXPECT_TRUE(IsSnippet());
+  EXPECT_EQ(SnippetIds(), (std::vector<int>{1, 2, 1, 1}));
+  EXPECT_EQ(SnippetHighlights(), (std::vector<bool>{true, true, false, false}));
+  ASSERT_EQ(SnippetStarts().size(), 4u);
+  ASSERT_EQ(SnippetEnds().size(), 4u);
+  EXPECT_EQ(SnippetStarts()[0], Coordinates(3, 5));
+  EXPECT_EQ(SnippetEnds()[0], Coordinates(3, 9));
+}
+
+TEST_F(TextEditorTests, AutocompleteParseSnippetWithoutTagsClearsSnippetState) {
+  ASSERT_FALSE(ParseAutocompleteSnippet("{$1:value}").empty());
+  ASSERT_TRUE(IsSnippet());
+
+  const RcString parsed = ParseAutocompleteSnippet("plain text");
+
+  EXPECT_EQ(std::string(std::string_view(parsed)), "plain text");
+  EXPECT_FALSE(IsSnippet());
+  EXPECT_TRUE(SnippetStarts().empty());
+  EXPECT_TRUE(SnippetEnds().empty());
+  EXPECT_TRUE(SnippetIds().empty());
+  EXPECT_TRUE(SnippetHighlights().empty());
+}
+
+TEST_F(TextEditorTests, BuildSuggestionsUsesStructuredProviderReplacementRange) {
+  editor.setText("alpha beta gamma");
+  editor.setCursorPosition(Coordinates(0, 8));
+  editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest& request)
+                                     -> std::optional<TextEditor::AutocompleteResponse> {
+    EXPECT_EQ(request.source, "alpha beta gamma");
+    EXPECT_EQ(request.cursorOffset, 8u);
+    TextEditor::AutocompleteResponse response;
+    response.replaceStartOffset = 6;
+    response.replaceEndOffset = 10;
+    response.suggestions.push_back(
+        TextEditor::AutocompleteSuggestion{RcString("beta item"), RcString("replacement")});
+    response.suggestions.push_back(
+        TextEditor::AutocompleteSuggestion{RcString("beta item 2"), RcString("replacement2")});
+    return response;
+  });
+
+  bool keepAutocompleteOpen = false;
+  BuildSuggestions(&keepAutocompleteOpen);
+
+  EXPECT_TRUE(keepAutocompleteOpen);
+  EXPECT_TRUE(AutocompleteOpened());
+  EXPECT_TRUE(AutocompleteReplacementActive());
+  EXPECT_EQ(AutocompleteReplacementStartOffset(), 6u);
+  EXPECT_EQ(AutocompleteReplacementEndOffset(), 10u);
+  EXPECT_EQ(AutocompletePosition(), Coordinates(0, 6));
+  ASSERT_EQ(AutocompleteSuggestionCount(), 2);
+  EXPECT_EQ(AutocompleteSuggestion(0).first, RcString("beta item"));
+  EXPECT_EQ(AutocompleteSuggestion(0).second, RcString("replacement"));
+}
+
+TEST_F(TextEditorTests, BuildSuggestionsProviderEmptyResponseSuppressesFallback) {
+  editor.setText("alpha beta gamma");
+  editor.setCursorPosition(Coordinates(0, 8));
+  editor.addAutocompleteEntry("beta", "fallback beta", "fallback");
+  editor.setAutocompleteProvider([](const TextEditor::AutocompleteRequest&)
+                                     -> std::optional<TextEditor::AutocompleteResponse> {
+    return TextEditor::AutocompleteResponse{};
+  });
+
+  bool keepAutocompleteOpen = false;
+  BuildSuggestions(&keepAutocompleteOpen);
+
+  EXPECT_FALSE(keepAutocompleteOpen);
+  EXPECT_FALSE(AutocompleteOpened());
+  EXPECT_FALSE(AutocompleteReplacementActive());
+  EXPECT_EQ(AutocompleteSuggestionCount(), 0);
+}
+
+TEST_F(TextEditorTests, BuildSuggestionsFallsBackToStoredEntriesInMatchOrder) {
+  editor.setText("ap");
+  editor.setCursorPosition(Coordinates(0, 2));
+  editor.setLanguageDefinition(TextEditor::LanguageDefinition{});
+  editor.addAutocompleteEntry("snapple", "snapple entry", "snapple()");
+  editor.addAutocompleteEntry("apple", "apple entry", "apple()");
+  editor.addAutocompleteEntry("apricot", "apricot entry", "apricot()");
+
+  bool keepAutocompleteOpen = false;
+  BuildSuggestions(&keepAutocompleteOpen);
+
+  EXPECT_TRUE(keepAutocompleteOpen);
+  EXPECT_TRUE(AutocompleteOpened());
+  ASSERT_EQ(AutocompleteSuggestionCount(), 3);
+  EXPECT_EQ(AutocompleteSuggestion(0).first, RcString("apple entry"));
+  EXPECT_EQ(AutocompleteSuggestion(1).first, RcString("apricot entry"));
+  EXPECT_EQ(AutocompleteSuggestion(2).first, RcString("snapple entry"));
+  EXPECT_EQ(AutocompletePosition(), Coordinates(0, 0));
+}
+
+TEST_F(TextEditorTests, BuildSuggestionsIgnoresWordsWithoutLetters) {
+  editor.setText("123");
+  editor.setCursorPosition(Coordinates(0, 3));
+  editor.addAutocompleteEntry("123", "numeric", "numeric");
+
+  bool keepAutocompleteOpen = false;
+  BuildSuggestions(&keepAutocompleteOpen);
+
+  EXPECT_FALSE(keepAutocompleteOpen);
+  EXPECT_FALSE(AutocompleteOpened());
+  EXPECT_EQ(AutocompleteSuggestionCount(), 0);
+}
+
+TEST_F(TextEditorTests, BuildSuggestionsAcceptsUppercaseWords) {
+  editor.setText("AP");
+  editor.setCursorPosition(Coordinates(0, 2));
+  editor.setLanguageDefinition(TextEditor::LanguageDefinition{});
+  editor.addAutocompleteEntry("APEX", "upper", "APEX()");
+
+  bool keepAutocompleteOpen = false;
+  BuildSuggestions(&keepAutocompleteOpen);
+
+  EXPECT_TRUE(keepAutocompleteOpen);
+  EXPECT_TRUE(AutocompleteOpened());
+  ASSERT_EQ(AutocompleteSuggestionCount(), 1);
+  EXPECT_EQ(AutocompleteSuggestion(0).first, RcString("upper"));
 }
 
 // ============================================================================
@@ -2501,6 +3455,20 @@ TEST_F(TextEditorTests, ErrorMarkersRenderLineBackground) {
   EXPECT_GT(VisualLineCount(), 0);
 }
 
+TEST_F(TextEditorTests, HoveringErrorMarkerRendersTooltip) {
+  editor.setText("first\nsecond\nthird");
+  editor.setErrorMarkers(ErrorMarkers{{2, "syntax error"}});
+  editor.setCursorPosition(Coordinates(0, 0));
+
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  const ImVec2 errorLinePoint =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/1, /*visualColumnOffset=*/1);
+
+  RenderEditorFrameWithMouse(errorLinePoint, /*mouseDown=*/false, ImVec2(300.0f, 180.0f));
+
+  EXPECT_GT(WindowCountContaining("##Tooltip"), 0);
+}
+
 TEST_F(TextEditorTests, HighlightedLinesRender) {
   editor.setWordWrapEnabled(false);
   editor.setText("one\ntwo\nthree");
@@ -2523,6 +3491,33 @@ TEST_F(TextEditorTests, FoldMarkersRenderForBracedBlock) {
   RenderEditorFrame(ImVec2(300.0f, 180.0f));
 
   EXPECT_GT(VisualLineCount(), 0) << "Folded-document rendering should not disturb layout";
+}
+
+TEST_F(TextEditorTests, DirectFoldMarkerRenderingTogglesFoldAndDrawsConnections) {
+  editor.setWordWrapEnabled(false);
+  editor.setFoldEnabled(true);
+  editor.setText("{\n  {\n  }\n}\n");
+  RenderEditorFrame(ImVec2(300.0f, 180.0f));
+  ConfigureFoldState({Coordinates(0, 0), Coordinates(1, 2)}, {Coordinates(3, 0), Coordinates(2, 2)},
+                     {false, false}, {0, 1});
+
+  const ImVec2 lineStart(24.0f, 28.0f);
+  const ImVec2 foldCenter = FoldButtonCenterForLineStart(lineStart);
+  RenderFoldMarkerDirect(/*lineNo=*/0, lineStart, foldCenter, /*mouseDown=*/false);
+  RenderFoldMarkerDirect(/*lineNo=*/0, lineStart, foldCenter, /*mouseDown=*/true);
+
+  EXPECT_TRUE(FoldState(0));
+
+  RenderFoldMarkerDirect(/*lineNo=*/0, lineStart, foldCenter, /*mouseDown=*/false);
+  const ImVec2 offscreenMouse(700.0f, 500.0f);
+  RenderFoldMarkerDirect(/*lineNo=*/1, ImVec2(lineStart.x, lineStart.y + CharacterAdvanceY()),
+                         offscreenMouse, /*mouseDown=*/false);
+  RenderFoldMarkerDirect(/*lineNo=*/2,
+                         ImVec2(lineStart.x, lineStart.y + 2.0f * CharacterAdvanceY()),
+                         offscreenMouse, /*mouseDown=*/false);
+  RenderFoldMarkerDirect(/*lineNo=*/3,
+                         ImVec2(lineStart.x, lineStart.y + 3.0f * CharacterAdvanceY()),
+                         offscreenMouse, /*mouseDown=*/false);
 }
 
 TEST_F(TextEditorTests, CustomPaletteIsAppliedThroughRender) {
@@ -2650,6 +3645,24 @@ TEST_F(TextEditorTests, ReplaceDialogRendersExpandedRow) {
   EXPECT_TRUE(ReplaceOpened()) << "Replace row should render when expanded";
 }
 
+TEST_F(TextEditorTests, FunctionTooltipRendersAndClosesOnEscape) {
+  editor.setText("drawShape()");
+  RenderEditorFrameWithFont(ImVec2(360.0f, 180.0f));
+  OpenFunctionTooltipDirect("void drawShape()", Coordinates(0, 0));
+
+  RenderEditorFrameWithFont(ImVec2(360.0f, 180.0f));
+
+  EXPECT_TRUE(FunctionTooltipOpen());
+  EXPECT_GT(WindowCountContaining("FunctionTooltip"), 0);
+
+  ResetKeyboardState({ImGuiKey_Escape}, /*ctrl=*/false, /*shift=*/false, /*alt=*/false,
+                     ImVec2(360.0f, 180.0f));
+  RenderEditorFrameWithKeyboard({ImGuiKey_Escape}, /*characters=*/"", /*ctrl=*/false,
+                                /*shift=*/false, /*alt=*/false, ImVec2(360.0f, 180.0f));
+
+  EXPECT_FALSE(FunctionTooltipOpen());
+}
+
 // ============================================================================
 // AUTOCOMPLETE NAVIGATION & SELECTION THROUGH THE RENDER PATH
 // ============================================================================
@@ -2680,6 +3693,22 @@ TEST_F(TextEditorTests, AutocompleteEnterInsertsSelectionThroughRenderPath) {
   EXPECT_FALSE(AutocompleteOpened()) << "Selecting a suggestion should close the popup";
 }
 
+TEST_F(TextEditorTests, AutocompletePopupClosesOnEscapeThroughRenderPath) {
+  editor.setText("al");
+  editor.setCursorPosition(Coordinates(0, 2));
+  OpenAutocompleteWithSuggestions({"alpha"});
+
+  RenderEditorFrameWithFont(ImVec2(320.0f, 180.0f));
+  EXPECT_TRUE(AutocompleteOpened());
+
+  ResetKeyboardState({ImGuiKey_Escape}, /*ctrl=*/false, /*shift=*/false, /*alt=*/false,
+                     ImVec2(320.0f, 180.0f));
+  RenderEditorFrameWithKeyboard({ImGuiKey_Escape}, /*characters=*/"", /*ctrl=*/false,
+                                /*shift=*/false, /*alt=*/false, ImVec2(320.0f, 180.0f));
+
+  EXPECT_FALSE(AutocompleteOpened());
+}
+
 // ============================================================================
 // MOUSE INTERACTION VARIANTS
 // ============================================================================
@@ -2699,6 +3728,37 @@ TEST_F(TextEditorTests, DoubleClickSelectsWordThroughRenderPath) {
 
   EXPECT_EQ(editor.getSelectedText(), "Hello")
       << "A double click in the text area should select the word under the cursor";
+}
+
+TEST_F(TextEditorTests, TripleClickSelectsLineThroughRenderPath) {
+  editor.setText("Hello world\nsecond line");
+  editor.setCursorPosition(Coordinates(0, 0));
+  RenderEditorFrame();
+
+  const ImVec2 clickPos =
+      ScreenPointAtVisualTextOffset(/*visualIndex=*/0, /*visualColumnOffset=*/2);
+  RenderEditorFrameWithMouse(clickPos, false);
+  RenderEditorFrameWithMouse(clickPos, true);
+  RenderEditorFrameWithMouse(clickPos, false);
+  RenderEditorFrameWithMouse(clickPos, true);
+  RenderEditorFrameWithMouse(clickPos, false);
+  RenderEditorFrameWithMouse(clickPos, true);
+
+  EXPECT_NE(editor.getSelectedText().find("Hello world"), std::string::npos)
+      << "A triple click should promote the mouse selection to line mode";
+}
+
+TEST_F(TextEditorTests, ClickingLineNumberMarginDoesNotMoveCursorThroughRenderPath) {
+  editor.setText("Hello world");
+  editor.setCursorPosition(Coordinates(0, 5));
+  RenderEditorFrame();
+
+  const ImVec2 marginPoint =
+      ScreenPointAtUnwrappedVisualLine(/*visualLine=*/0, /*columnPixels=*/-TextStart() + 1.0f);
+  RenderEditorFrameWithMouse(marginPoint, false);
+  RenderEditorFrameWithMouse(marginPoint, true);
+
+  EXPECT_EQ(editor.getCursorPosition(), Coordinates(0, 5));
 }
 
 TEST_F(TextEditorTests, MouseDragExtendsSelectionThroughRenderPath) {

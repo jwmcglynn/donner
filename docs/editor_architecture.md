@@ -27,9 +27,9 @@ Guarantees callers can rely on:
 - **Edits never race the renderer.** Queued commands are flushed only while the
   async renderer reports `!isBusy()`; a render in flight defers the flush to the
   next idle frame.
-- **The interactive editor renders in-process.** The process-isolation sandbox is
-  a *separate* set of binaries (see [Security and Safety](#EditorArchSecurity)),
-  not a layer the GUI editor routes through.
+- **The interactive editor renders in-process.** The removed process-isolation
+  prototype is no longer a layer the GUI editor can route through; v1.0 sandboxing
+  is expected to be a replacement design.
 
 ## Architecture Snapshot
 
@@ -157,12 +157,9 @@ entry points are:
 ## Security and Safety {#EditorArchSecurity}
 
 - **In-process rendering.** The interactive editor parses and renders untrusted SVG
-  in-process on the worker thread. The process-isolation sandbox under
-  `donner/editor/sandbox/` — `SandboxHost` spawning a `donner_parser_child`
-  subprocess that streams a `RendererInterface` wire protocol back, hardened with
-  `setrlimit`, `close_range`, and Linux seccomp-bpf — ships as *standalone* binaries
-  (`sandbox_render`, `sandbox_replay`, `sandbox_inspect`, `sandbox_diff`) and is
-  **not** linked into the GUI editor binary.
+  in-process on the worker thread. The former process-isolation prototype has
+  been removed, so there are no standalone sandbox parser/renderer binaries. A
+  production replacement sandbox remains in the v1.0 scope.
 - **Save-path invariants** (`donner/editor/DocumentSave.h`): existing destinations
   are opened `O_NOFOLLOW` (no symlink following), missing ones created
   `O_CREAT | O_EXCL`, with no pre-`stat` (avoiding a TOCTOU window). Save writes the
@@ -174,7 +171,7 @@ entry points are:
   format strings; this is an enforced-by-convention practice in the editor code, not
   a separate lint rule.
 - **`stb_image`** is not used anywhere under `donner/editor/`; image decoding runs
-  behind `svg::Renderer` (on the worker) or in the standalone sandbox child.
+  behind `svg::Renderer` on the worker.
 - **Profiling.** Tracy instrumentation compiles to no-ops unless `ENABLE_TRACY` is
   defined (native builds enable it; RE/WASM builds do not).
 
@@ -204,8 +201,8 @@ surfaced for both the live layers panel and the replay/readback harnesses.
 
 ## Limitations and Future Extensions
 
-- The process-isolation sandbox is fully built and tested but is not yet wired into
-  the interactive editor; the GUI editor renders untrusted input in-process.
+- The GUI editor renders untrusted input in-process until the v1.0 sandbox redesign
+  lands.
 - `PenTool` is a prototype path-authoring tool; richer path editing and boolean
   operations are tracked in their own design docs.
 - The editor is an application binary, not a stable embedding API; the entry points

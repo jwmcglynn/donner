@@ -79,6 +79,17 @@ svg::SVGElement QuerySelector(EditorApp& app, std::string_view selector) {
   return *element;
 }
 
+SelectTool::ActiveDragPreview DragPreview(Entity entity, std::uint64_t generation,
+                                          Vector2d translation = Vector2d::Zero(),
+                                          Transform2d documentFromCachedDocument = Transform2d()) {
+  return SelectTool::ActiveDragPreview{
+      .entity = entity,
+      .translation = translation,
+      .documentFromCachedDocument = documentFromCachedDocument,
+      .dragGeneration = generation,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Free-function presentation policies (pure, no editor state).
 // ---------------------------------------------------------------------------
@@ -178,6 +189,94 @@ TEST(RenderCoordinatorPolicyTest, OnlyForcedSelectedResultClearsPendingLayerRast
   forcedSelectionPreview.entity = static_cast<Entity>(8);
   EXPECT_FALSE(ShouldClearPendingSelectedLayerRasterization(
       forcedSelectionPreview, selectedEntity, /*resultVersion=*/8, /*pendingVersion=*/8));
+}
+
+TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewFollowsActiveTargetWhenPresentable) {
+  const SelectTool::ActiveDragPreview active =
+      DragPreview(static_cast<Entity>(42), 7, Vector2d(5.0, 2.0));
+  const SelectTool::ActiveDragPreview displayed =
+      DragPreview(static_cast<Entity>(42), 7, Vector2d(1.0, 1.0));
+
+  EXPECT_EQ(OverlayRepresentedDragPreviewForPresentation(std::nullopt, displayed,
+                                                         /*hasPresentableActiveDragTarget=*/true),
+            std::nullopt);
+
+  const std::optional<SelectTool::ActiveDragPreview> represented =
+      OverlayRepresentedDragPreviewForPresentation(active, displayed,
+                                                   /*hasPresentableActiveDragTarget=*/true);
+  ASSERT_TRUE(represented.has_value());
+  EXPECT_EQ(represented->translation, active.translation);
+}
+
+TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewReusesDisplayedMatchingGeneration) {
+  const SelectTool::ActiveDragPreview active =
+      DragPreview(static_cast<Entity>(42), 7, Vector2d(5.0, 2.0));
+  const SelectTool::ActiveDragPreview displayed =
+      DragPreview(static_cast<Entity>(42), 7, Vector2d(1.0, 1.0));
+
+  const std::optional<SelectTool::ActiveDragPreview> represented =
+      OverlayRepresentedDragPreviewForPresentation(active, displayed,
+                                                   /*hasPresentableActiveDragTarget=*/false);
+  ASSERT_TRUE(represented.has_value());
+  EXPECT_EQ(represented->translation, displayed.translation);
+}
+
+TEST(RenderCoordinatorPolicyTest, RepresentedDragPreviewFallsBackForMismatchedDisplayedState) {
+  const SelectTool::ActiveDragPreview active =
+      DragPreview(static_cast<Entity>(42), 7, Vector2d(5.0, 2.0));
+  const SelectTool::ActiveDragPreview displayed =
+      DragPreview(static_cast<Entity>(43), 9, Vector2d(1.0, 1.0));
+
+  const std::optional<SelectTool::ActiveDragPreview> represented =
+      OverlayRepresentedDragPreviewForPresentation(active, displayed,
+                                                   /*hasPresentableActiveDragTarget=*/false);
+  ASSERT_TRUE(represented.has_value());
+  EXPECT_EQ(represented->entity, active.entity);
+  EXPECT_EQ(represented->translation, Vector2d::Zero());
+  EXPECT_TRUE(represented->documentFromCachedDocument.isIdentity());
+  EXPECT_EQ(represented->dragGeneration, active.dragGeneration);
+}
+
+TEST(RenderCoordinatorPolicyTest, RepresentedDocumentTransformRequiresMatchingInvertibleDrag) {
+  const SelectTool::ActiveDragPreview live = DragPreview(
+      static_cast<Entity>(42), 7, Vector2d(10.0, 0.0), Transform2d::Translate(Vector2d(10.0, 0.0)));
+  const SelectTool::ActiveDragPreview represented = DragPreview(
+      static_cast<Entity>(42), 7, Vector2d(3.0, 0.0), Transform2d::Translate(Vector2d(3.0, 0.0)));
+
+  EXPECT_TRUE(OverlayRepresentedDocumentFromLiveDocument(std::nullopt, represented).isIdentity());
+  EXPECT_TRUE(OverlayRepresentedDocumentFromLiveDocument(
+                  live, DragPreview(static_cast<Entity>(42), 8, Vector2d(3.0, 0.0)))
+                  .isIdentity());
+  EXPECT_TRUE(
+      OverlayRepresentedDocumentFromLiveDocument(
+          DragPreview(static_cast<Entity>(42), 7, Vector2d::Zero(), Transform2d::Scale(0.0)),
+          represented)
+          .isIdentity());
+
+  const Transform2d projected = OverlayRepresentedDocumentFromLiveDocument(live, represented);
+  EXPECT_FALSE(projected.isIdentity());
+  EXPECT_NE(projected.data[4], 0.0);
+}
+
+TEST(RenderCoordinatorPolicyTest, GesturePreviewProjectsOntoRepresentedDragState) {
+  SelectTool::ActiveGesturePreview gesture;
+  gesture.kind = SelectTool::ActiveGestureKind::Move;
+  gesture.startBoundsDoc = Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0);
+  gesture.documentFromStartDocument = Transform2d::Translate(Vector2d(10.0, 0.0));
+  gesture.currentDocumentDelta = Vector2d(10.0, 0.0);
+
+  EXPECT_EQ(OverlayGesturePreviewForPresentation(std::nullopt, std::nullopt, std::nullopt),
+            std::nullopt);
+
+  const SelectTool::ActiveDragPreview live = DragPreview(
+      static_cast<Entity>(42), 7, Vector2d(10.0, 0.0), Transform2d::Translate(Vector2d(10.0, 0.0)));
+  const SelectTool::ActiveDragPreview represented = DragPreview(
+      static_cast<Entity>(42), 7, Vector2d(3.0, 0.0), Transform2d::Translate(Vector2d(3.0, 0.0)));
+  const std::optional<SelectTool::ActiveGesturePreview> projected =
+      OverlayGesturePreviewForPresentation(gesture, live, represented);
+  ASSERT_TRUE(projected.has_value());
+  EXPECT_EQ(projected->currentDocumentDelta, represented.translation);
+  EXPECT_FALSE(projected->documentFromStartDocument.isIdentity());
 }
 
 // ---------------------------------------------------------------------------
@@ -440,6 +539,46 @@ TEST(RenderCoordinatorTest, RasterizeOverlayPublishesImmediateSnapshot) {
   EXPECT_EQ(coordinator.immediateOverlaySnapshot()->paths.size(), 1u);
 }
 
+TEST(RenderCoordinatorTest, RasterizeOverlaySkipsUnchangedImmediateSnapshot) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  ViewportState viewport = MakeViewport(app);
+
+  app.setSelection(QuerySelector(app, "#r1"));
+
+  ASSERT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
+                                                              /*marqueeRectDoc=*/std::nullopt));
+  EXPECT_FALSE(coordinator.rasterizeOverlayForCurrentSelection(app, viewport,
+                                                               /*marqueeRectDoc=*/std::nullopt));
+  EXPECT_EQ(coordinator.lastFrameCostBreakdown().overlay.selectedElementCount, 1);
+  EXPECT_FALSE(coordinator.lastFrameCostBreakdown().overlay.selectionBoundsOnly);
+}
+
+TEST(RenderCoordinatorTest, RasterizeOverlayTracksActiveBoundsPreviewChanges) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  ViewportState viewport = MakeViewport(app);
+
+  app.setSelection(QuerySelector(app, "#r1"));
+
+  SelectTool::ActiveTransformBoundsPreview boundsPreview;
+  boundsPreview.startBoundsDoc = Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0);
+  boundsPreview.documentFromStartDocument = Transform2d::Translate(Vector2d(2.0, 0.0));
+
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, /*marqueeRectDoc=*/std::nullopt,
+      /*representedDragPreview=*/std::nullopt, boundsPreview));
+  EXPECT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+
+  boundsPreview.documentFromStartDocument = Transform2d::Translate(Vector2d(4.0, 0.0));
+  EXPECT_TRUE(coordinator.rasterizeOverlayForCurrentSelection(
+      app, viewport, /*marqueeRectDoc=*/std::nullopt,
+      /*representedDragPreview=*/std::nullopt, boundsPreview));
+  EXPECT_TRUE(coordinator.immediateOverlaySnapshot().has_value());
+}
+
 TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
@@ -507,6 +646,25 @@ TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesAsyncRenderForSelection)
 
   // Committing the canvas size is part of maybeRequestRender's contract; it set
   // the live document canvas to the viewport's desired size.
+  EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
+}
+
+TEST(RenderCoordinatorTest, MaybeRequestRenderDispatchesWithoutTextureCache) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kTwoRectSvg));
+  RenderCoordinator coordinator;
+  SelectTool selectTool;
+  ViewportState viewport = MakeViewport(app);
+
+  app.setSelection(QuerySelector(app, "#r1"));
+
+  coordinator.maybeRequestRender(app, selectTool, viewport, /*textures=*/nullptr);
+  coordinator.asyncRenderer().cancelInFlight();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (coordinator.asyncRenderer().isBusy() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  EXPECT_FALSE(coordinator.asyncRenderer().isBusy());
   EXPECT_EQ(app.document().document().canvasSize(), viewport.desiredCanvasSize());
 }
 

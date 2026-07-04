@@ -4,6 +4,7 @@
 
 #include <cmath>
 #include <sstream>
+#include <vector>
 
 #include "donner/base/MathUtils.h"
 
@@ -63,6 +64,12 @@ TEST(PathBuilder, ClosePath) {
 
   EXPECT_EQ(path.verbCount(), 4u);
   EXPECT_EQ(path.commands()[3].verb, Path::Verb::ClosePath);
+}
+
+TEST(PathBuilder, ClosePathWithoutOpenSubpathIsNoOp) {
+  Path path = PathBuilder().closePath().build();
+
+  EXPECT_TRUE(path.empty());
 }
 
 TEST(PathBuilder, BuildResetsState) {
@@ -129,6 +136,23 @@ TEST(PathBuilder, AddPath) {
 
   // moveTo(-5,-5) + moveTo(0,0) + lineTo(10,10) = 3
   EXPECT_EQ(combined.verbCount(), 3u);
+}
+
+TEST(PathBuilder, AddPathCopiesCurvesAndClosePath) {
+  Path sub = PathBuilder()
+                 .moveTo({0, 0})
+                 .quadTo({5, 10}, {10, 0})
+                 .curveTo({15, -10}, {20, 10}, {25, 0})
+                 .closePath()
+                 .build();
+
+  Path combined = PathBuilder().addPath(sub).build();
+
+  ASSERT_EQ(combined.verbCount(), 4u);
+  EXPECT_EQ(combined.commands()[0].verb, Path::Verb::MoveTo);
+  EXPECT_EQ(combined.commands()[1].verb, Path::Verb::QuadTo);
+  EXPECT_EQ(combined.commands()[2].verb, Path::Verb::CurveTo);
+  EXPECT_EQ(combined.commands()[3].verb, Path::Verb::ClosePath);
 }
 
 // =============================================================================
@@ -321,6 +345,42 @@ TEST(Path, ToMonotonicXSplitsCubicAtXExtrema) {
   EXPECT_GT(cubicCount, 1u) << "X-monotonic split must subdivide an X-non-monotonic cubic";
 }
 
+TEST(Path, ToMonotonicXSplitsQuadraticAtXExtremum) {
+  Path path = PathBuilder().moveTo({0, 0}).quadTo({10, 5}, {0, 10}).build();
+
+  Path result = path.toMonotonic(Path::MonotonicAxis::X);
+
+  size_t quadCount = 0;
+  result.forEach([&](Path::Verb verb, std::span<const Vector2d>) {
+    if (verb == Path::Verb::QuadTo) {
+      ++quadCount;
+    }
+  });
+  EXPECT_EQ(quadCount, 2u);
+}
+
+TEST(Path, ToMonotonicLeavesAlreadyMonotonicCurvesUnsplit) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .quadTo({5, 3}, {10, 6})
+                  .curveTo({12, 7}, {14, 8}, {16, 9})
+                  .build();
+
+  Path result = path.toMonotonic();
+
+  size_t quadCount = 0;
+  size_t cubicCount = 0;
+  result.forEach([&](Path::Verb verb, std::span<const Vector2d>) {
+    if (verb == Path::Verb::QuadTo) {
+      ++quadCount;
+    } else if (verb == Path::Verb::CurveTo) {
+      ++cubicCount;
+    }
+  });
+  EXPECT_EQ(quadCount, 1u);
+  EXPECT_EQ(cubicCount, 1u);
+}
+
 // =============================================================================
 // Path::flatten
 // =============================================================================
@@ -367,6 +427,24 @@ TEST(Path, FlattenToleranceAffectsSegmentCount) {
   Path coarse = path.flatten(10.0);
 
   EXPECT_GE(fine.verbCount(), coarse.verbCount());
+}
+
+TEST(Path, FlattenFlatCurvesUseSingleLineSegments) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .quadTo({5, 0}, {10, 0})
+                  .curveTo({10.0 + 10.0 / 3.0, 0}, {10.0 + 20.0 / 3.0, 0}, {20, 0})
+                  .build();
+
+  Path result = path.flatten(0.25);
+
+  size_t lineCount = 0;
+  result.forEach([&](Path::Verb verb, std::span<const Vector2d>) {
+    if (verb == Path::Verb::LineTo) {
+      ++lineCount;
+    }
+  });
+  EXPECT_EQ(lineCount, 2u);
 }
 
 // =============================================================================
@@ -436,6 +514,18 @@ TEST(Path, TransformedBoundsScale) {
   Box2d transformed = path.transformedBounds(Transform2d::Scale({2, 3}));
   ExpectNear(transformed.topLeft, Vector2d(0, 0));
   ExpectNear(transformed.bottomRight, Vector2d(20, 60));
+}
+
+TEST(Path, TransformedBoundsCurves) {
+  Path quad = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
+  Box2d transformedQuad = quad.transformedBounds(Transform2d::Translate({7, -3}));
+  ExpectNear(transformedQuad.topLeft, Vector2d(7, -3));
+  ExpectNear(transformedQuad.bottomRight, Vector2d(107, 47));
+
+  Path cubic = PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).build();
+  Box2d transformedCubic = cubic.transformedBounds(Transform2d::Translate({7, -3}));
+  ExpectNear(transformedCubic.topLeft, Vector2d(7, -3));
+  ExpectNear(transformedCubic.bottomRight, Vector2d(107, 72));
 }
 
 TEST(Path, TransformedBoundsUsesTightTransformedPathNotTransformedLocalAabb) {
@@ -570,6 +660,40 @@ TEST(Path, PointAtArcLengthOnClosePath) {
   ExpectNear(result.point, Vector2d(0, 5), 1e-6);
 }
 
+TEST(Path, PointAtArcLengthZeroLengthSegments) {
+  Path zeroLine = PathBuilder().moveTo({2, 3}).lineTo({2, 3}).build();
+  Path::PointOnPath lineResult = zeroLine.pointAtArcLength(0.0);
+  ASSERT_TRUE(lineResult.valid);
+  ExpectNear(lineResult.point, Vector2d(2, 3));
+  ExpectNear(lineResult.tangent, Vector2d(0, 0));
+
+  Path zeroClose = PathBuilder().moveTo({4, 5}).closePath().build();
+  Path::PointOnPath closeResult = zeroClose.pointAtArcLength(0.0);
+  ASSERT_TRUE(closeResult.valid);
+  ExpectNear(closeResult.point, Vector2d(4, 5));
+  ExpectNear(closeResult.tangent, Vector2d(0, 0));
+}
+
+TEST(Path, PointAtArcLengthCurveStartAndEnd) {
+  Path quad = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).build();
+  Path::PointOnPath quadStart = quad.pointAtArcLength(0.0);
+  Path::PointOnPath quadEnd = quad.pointAtArcLength(quad.pathLength());
+
+  EXPECT_TRUE(quadStart.valid);
+  ExpectNear(quadStart.point, Vector2d(0, 0), 1e-6);
+  EXPECT_TRUE(quadEnd.valid);
+  ExpectNear(quadEnd.point, Vector2d(100, 0), 1e-6);
+
+  Path cubic = PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).build();
+  Path::PointOnPath cubicStart = cubic.pointAtArcLength(0.0);
+  Path::PointOnPath cubicEnd = cubic.pointAtArcLength(cubic.pathLength());
+
+  EXPECT_TRUE(cubicStart.valid);
+  ExpectNear(cubicStart.point, Vector2d(0, 0), 1e-6);
+  EXPECT_TRUE(cubicEnd.valid);
+  ExpectNear(cubicEnd.point, Vector2d(100, 0), 1e-6);
+}
+
 // =============================================================================
 // Path::pointAt / tangentAt / normalAt
 // =============================================================================
@@ -657,6 +781,29 @@ TEST(Path, NormalAtLineTo) {
   ExpectNear(normal, Vector2d(0, 10));
 }
 
+TEST(Path, TangentAtDegenerateQuadraticFallsBackToChord) {
+  Path degenerateAtStart = PathBuilder().moveTo({0, 0}).quadTo({0, 0}, {10, 0}).build();
+  ExpectNear(degenerateAtStart.tangentAt(1, 0.0), Vector2d(10, 0));
+
+  Path degenerateAtEnd = PathBuilder().moveTo({0, 0}).quadTo({10, 0}, {10, 0}).build();
+  ExpectNear(degenerateAtEnd.tangentAt(1, 1.0), Vector2d(10, 0));
+}
+
+TEST(Path, TangentAtDegenerateCubicAdjustsEndpointSamples) {
+  Path degenerateAtStart = PathBuilder().moveTo({0, 0}).curveTo({0, 0}, {10, 0}, {20, 0}).build();
+  Vector2d startTangent = degenerateAtStart.tangentAt(1, 0.0);
+  EXPECT_GT(startTangent.x, 0.0);
+  EXPECT_NEAR(startTangent.y, 0.0, 1e-9);
+
+  Path degenerateAtEnd = PathBuilder().moveTo({0, 0}).curveTo({10, 0}, {20, 0}, {20, 0}).build();
+  Vector2d endTangent = degenerateAtEnd.tangentAt(1, 1.0);
+  EXPECT_GT(endTangent.x, 0.0);
+  EXPECT_NEAR(endTangent.y, 0.0, 1e-9);
+
+  Path fullyDegenerate = PathBuilder().moveTo({4, 4}).curveTo({4, 4}, {4, 4}, {4, 4}).build();
+  ExpectNear(fullyDegenerate.tangentAt(1, 0.5), Vector2d(0, 0));
+}
+
 // =============================================================================
 // Path::isInside
 // =============================================================================
@@ -707,6 +854,15 @@ TEST(Path, IsInsideEvenOddRule) {
   EXPECT_FALSE(path.isInside({15, 15}, FillRule::EvenOdd));
 }
 
+TEST(Path, IsInsideTreatsPointsOnCurvesAsInside) {
+  Path quad = PathBuilder().moveTo({0, 0}).quadTo({50, 100}, {100, 0}).closePath().build();
+  EXPECT_TRUE(quad.isInside({50, 50}));
+
+  Path cubic =
+      PathBuilder().moveTo({0, 0}).curveTo({0, 100}, {100, 100}, {100, 0}).closePath().build();
+  EXPECT_TRUE(cubic.isInside({50, 75}));
+}
+
 // =============================================================================
 // Path::isOnPath
 // =============================================================================
@@ -744,6 +900,25 @@ TEST(Path, IsOnPathClosePath) {
   EXPECT_TRUE(path.isOnPath({5, 5}, 1.0));
 }
 
+TEST(Path, IsOnPathMoveOnlyAndDistantCurves) {
+  EXPECT_FALSE(PathBuilder().moveTo({0, 0}).build().isOnPath({0, 0}, 1.0));
+
+  Path quad = PathBuilder().moveTo({0, 0}).quadTo({5, 0}, {10, 0}).build();
+  EXPECT_FALSE(quad.isOnPath({5, 5}, 1.0));
+
+  Path cubic = PathBuilder().moveTo({0, 0}).curveTo({3, 0}, {7, 0}, {10, 0}).build();
+  EXPECT_FALSE(cubic.isOnPath({5, 5}, 1.0));
+}
+
+TEST(Path, ZeroLengthLineHitTestingUsesPointDistance) {
+  Path zeroLine = PathBuilder().moveTo({2, 3}).lineTo({2, 3}).build();
+
+  EXPECT_TRUE(zeroLine.isOnPath({2.25, 3.0}, 0.5));
+  EXPECT_FALSE(zeroLine.isOnPath({3.0, 3.0}, 0.5));
+  EXPECT_TRUE(zeroLine.isInside({2.0, 3.0}));
+  EXPECT_FALSE(zeroLine.isInside({3.0, 3.0}));
+}
+
 // =============================================================================
 // Path::strokeMiterBounds
 // =============================================================================
@@ -779,6 +954,39 @@ TEST(Path, StrokeMiterBoundsAcuteAngle) {
   // Just verify it doesn't crash and returns a sensible (non-empty) box.
   EXPECT_GE(bounds.bottomRight.x, bounds.topLeft.x);
   EXPECT_GE(bounds.bottomRight.y, bounds.topLeft.y);
+}
+
+TEST(Path, StrokeMiterBoundsCurveAndCloseJoins) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .lineTo({10, 0})
+                  .quadTo({15, 5}, {20, 0})
+                  .curveTo({25, -5}, {30, 5}, {35, 0})
+                  .closePath()
+                  .build();
+
+  Box2d bounds = path.strokeMiterBounds(2.0, 4.0);
+
+  EXPECT_LE(bounds.topLeft.x, 0.0);
+  EXPECT_GE(bounds.bottomRight.x, 35.0);
+  EXPECT_LE(bounds.topLeft.y, 0.0);
+  EXPECT_GE(bounds.bottomRight.y, 0.0);
+}
+
+TEST(Path, StrokeMiterBoundsHandlesFirstCurveAndMoveCloseOnlySubpath) {
+  Path startsWithCurve = PathBuilder()
+                             .moveTo({0, 0})
+                             .quadTo({5, 10}, {10, 0})
+                             .curveTo({15, -5}, {20, 5}, {25, 0})
+                             .build();
+  Box2d curveBounds = startsWithCurve.strokeMiterBounds(2.0, 4.0);
+  EXPECT_LE(curveBounds.topLeft.x, 0.0);
+  EXPECT_GE(curveBounds.bottomRight.x, 25.0);
+
+  Path moveCloseOnly = PathBuilder().moveTo({3, 4}).closePath().build();
+  Box2d degenerateBounds = moveCloseOnly.strokeMiterBounds(2.0, 4.0);
+  ExpectNear(degenerateBounds.topLeft, Vector2d(3, 4));
+  ExpectNear(degenerateBounds.bottomRight, Vector2d(3, 4));
 }
 
 // =============================================================================
@@ -993,6 +1201,24 @@ TEST(Path, StrokeToFillButtCapShape) {
   EXPECT_EQ(rayCastWinding(filled, {10.1, 0.0}), 0) << "butt: no right extension";
 }
 
+TEST(Path, StrokeToFillColinearJoinDoesNotCreateCornerBulge) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({20, 0}).build();
+  StrokeStyle style;
+  style.width = 2.0;
+  style.join = LineJoin::Round;
+
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  const Box2d bounds = filled.bounds();
+  EXPECT_NEAR(bounds.topLeft.x, 0.0, 1e-9);
+  EXPECT_NEAR(bounds.bottomRight.x, 20.0, 1e-9);
+  EXPECT_NEAR(bounds.topLeft.y, -1.0, 1e-9);
+  EXPECT_NEAR(bounds.bottomRight.y, 1.0, 1e-9);
+  EXPECT_NE(rayCastWinding(filled, {10.0, 0.0}), 0);
+  EXPECT_EQ(rayCastWinding(filled, {10.0, 1.5}), 0);
+}
+
 TEST(Path, StrokeToFillRoundCapVertical) {
   // Same line but vertical, to verify the cap math is direction-agnostic.
   // Line from (0,0) to (0,10) with width 2; round caps at top and bottom.
@@ -1132,6 +1358,19 @@ TEST(Path, StrokeToFillBevelJoin) {
   // the inner offset lines meet at (9,1). Points well inside the concave
   // pocket — deep in the L's interior — should be outside the stroke.
   EXPECT_FALSE(evenOdd({5, 5})) << "deep inside L (concave region)";
+}
+
+TEST(Path, StrokeToFillMiterLimitFallbackMatchesBevelJoin) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({10, 10}).build();
+  StrokeStyle limitedMiter;
+  limitedMiter.width = 2.0;
+  limitedMiter.join = LineJoin::Miter;
+  limitedMiter.miterLimit = 0.25;
+
+  StrokeStyle bevel = limitedMiter;
+  bevel.join = LineJoin::Bevel;
+
+  EXPECT_EQ(path.strokeToFill(limitedMiter), path.strokeToFill(bevel));
 }
 
 TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
@@ -1554,6 +1793,115 @@ TEST(Path, StrokeToFillDashNegativeIsSolid) {
   EXPECT_EQ(countSubpaths(filled), 1u);
 }
 
+TEST(Path, StrokeToFillDashOffsetOnPatternBoundaryStartsWithOffEntry) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {10.0, 10.0};
+  style.dashOffset = 10.0;
+
+  Path filled = path.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  EXPECT_NEAR(filled.bounds().topLeft.x, 10.0, 1e-9);
+  EXPECT_EQ(countSubpaths(filled), 5u);
+}
+
+TEST(Path, StrokeToFillDashedZeroLengthSubpathFallsBackToCapShape) {
+  Path pointStroke = PathBuilder().moveTo({5, 5}).lineTo({5, 5}).build();
+  StrokeStyle style;
+  style.width = 4.0;
+  style.cap = LineCap::Square;
+  style.dashArray = {1.0, 1.0};
+
+  Path filled = pointStroke.strokeToFill(style);
+
+  ASSERT_FALSE(filled.empty());
+  ExpectNear(filled.bounds().topLeft, Vector2d(3, 3));
+  ExpectNear(filled.bounds().bottomRight, Vector2d(7, 7));
+}
+
+TEST(Path, StrokeToFillEmptyOrNonPositiveWidthReturnsEmpty) {
+  StrokeStyle style;
+  style.width = 2.0;
+  EXPECT_TRUE(Path().strokeToFill(style).empty());
+
+  Path line = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
+  style.width = 0.0;
+  EXPECT_TRUE(line.strokeToFill(style).empty());
+
+  style.width = -1.0;
+  EXPECT_TRUE(line.strokeToFill(style).empty());
+}
+
+TEST(Path, StrokeToFillZeroLengthSubpathCaps) {
+  Path pointStroke = PathBuilder().moveTo({5, 5}).lineTo({5, 5}).build();
+
+  StrokeStyle butt;
+  butt.width = 4.0;
+  butt.cap = LineCap::Butt;
+  EXPECT_TRUE(pointStroke.strokeToFill(butt).empty());
+
+  StrokeStyle square;
+  square.width = 4.0;
+  square.cap = LineCap::Square;
+  Path squareFill = pointStroke.strokeToFill(square);
+  ASSERT_FALSE(squareFill.empty());
+  ExpectNear(squareFill.bounds().topLeft, Vector2d(3, 3));
+  ExpectNear(squareFill.bounds().bottomRight, Vector2d(7, 7));
+
+  StrokeStyle round;
+  round.width = 4.0;
+  round.cap = LineCap::Round;
+  Path roundFill = pointStroke.strokeToFill(round);
+  ASSERT_FALSE(roundFill.empty());
+  EXPECT_GT(roundFill.points().size(), squareFill.points().size());
+  ExpectNear(roundFill.bounds().topLeft, Vector2d(3, 3), 1e-9);
+  ExpectNear(roundFill.bounds().bottomRight, Vector2d(7, 7), 1e-9);
+}
+
+TEST(Path, StrokeToFillDashOversizedPatternFallsBackToSolid) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({100, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray.assign(257, 1.0);
+
+  Path filled = path.strokeToFill(style);
+
+  EXPECT_FALSE(filled.empty());
+  EXPECT_EQ(countSubpaths(filled), 1u);
+}
+
+TEST(Path, StrokeToFillDashSkipsZeroLengthSegments) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({0, 0}).lineTo({10, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {5.0, 5.0};
+
+  Path filled = path.strokeToFill(style);
+
+  EXPECT_FALSE(filled.empty());
+}
+
+TEST(Path, StrokeToFillUsesCurveBoundaryTangentsAtMixedJoins) {
+  Path path = PathBuilder()
+                  .moveTo({0, 0})
+                  .curveTo({5, 0}, {10, 0}, {10, 0})
+                  .lineTo({10, 10})
+                  .quadTo({10, 15}, {15, 15})
+                  .build();
+  StrokeStyle style;
+  style.width = 2.0;
+  style.join = LineJoin::Miter;
+  style.miterLimit = 4.0;
+
+  Path filled = path.strokeToFill(style);
+
+  EXPECT_FALSE(filled.empty());
+  EXPECT_NE(rayCastWinding(filled, {5, 0}), 0);
+  EXPECT_NE(rayCastWinding(filled, {10, 5}), 0);
+}
+
 // =============================================================================
 // Path::vertices
 // =============================================================================
@@ -1570,6 +1918,22 @@ TEST(Path, VerticesSingleLine) {
   EXPECT_GE(verts.size(), 2u);
   ExpectNear(verts.front().point, Vector2d(0, 0));
   ExpectNear(verts.back().point, Vector2d(10, 0));
+}
+
+TEST(Path, VerticesMoveOnlyReturnsEmpty) {
+  Path path = PathBuilder().moveTo({1, 2}).build();
+
+  EXPECT_TRUE(path.vertices().empty());
+}
+
+TEST(Path, VerticesRepeatedMoveOnlyKeepsFinalMovePoint) {
+  Path path = PathBuilder().moveTo({1, 2}).moveTo({3, 4}).build();
+
+  std::vector<Path::Vertex> verts = path.vertices();
+
+  ASSERT_EQ(verts.size(), 1u);
+  ExpectNear(verts[0].point, Vector2d(3, 4));
+  ExpectNear(verts[0].orientation, Vector2d(0, 0));
 }
 
 TEST(Path, VerticesPolyline) {
@@ -1674,6 +2038,60 @@ TEST(Path, VerticesSharpRectStartStacksTwice) {
   EXPECT_EQ(atStart, 2);  // start + end only; the close-line mid is the distinct BL corner.
 }
 
+TEST(Path, VerticesOpenSubpathFinalizesBeforeNextMove) {
+  Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).moveTo({20, 0}).lineTo({20, 10}).build();
+
+  std::vector<Path::Vertex> verts = path.vertices();
+
+  ASSERT_EQ(verts.size(), 4u);
+  ExpectNear(verts[0].point, Vector2d(0, 0));
+  ExpectNear(verts[1].point, Vector2d(10, 0));
+  ExpectNear(verts[2].point, Vector2d(20, 0));
+  ExpectNear(verts[3].point, Vector2d(20, 10));
+}
+
+TEST(Path, VerticesSkipEmptyOpenSubpathBeforeRepeatedMove) {
+  Path path = PathBuilder().moveTo({0, 0}).moveTo({5, 5}).lineTo({10, 5}).build();
+
+  std::vector<Path::Vertex> verts = path.vertices();
+
+  ASSERT_EQ(verts.size(), 2u);
+  ExpectNear(verts[0].point, Vector2d(5, 5));
+  ExpectNear(verts[1].point, Vector2d(10, 5));
+}
+
+TEST(Path, VerticesArcSkipsInternalDecompositionSegments) {
+  Path path = PathBuilder().moveTo({10, 0}).arcTo({10, 10}, 0.0, true, true, {0, 10}).build();
+  ASSERT_GT(path.verbCount(), 3u);
+
+  std::vector<Path::Vertex> verts = path.vertices();
+
+  ASSERT_EQ(verts.size(), 2u);
+  ExpectNear(verts.front().point, Vector2d(10, 0));
+  ExpectNear(verts.back().point, Vector2d(0, 10), 1e-6);
+}
+
+TEST(Path, VerticesInteriorCuspsResolveBothPerpendicularBranches) {
+  Path positiveHalfPlane = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).lineTo({0, 0}).build();
+  std::vector<Path::Vertex> positiveVerts = positiveHalfPlane.vertices();
+  ASSERT_GE(positiveVerts.size(), 3u);
+  ExpectNear(positiveVerts[1].orientation, Vector2d(0, 1));
+
+  Path negativeHalfPlane = PathBuilder().moveTo({0, 0}).lineTo({0, -10}).lineTo({0, 0}).build();
+  std::vector<Path::Vertex> negativeVerts = negativeHalfPlane.vertices();
+  ASSERT_GE(negativeVerts.size(), 3u);
+  ExpectNear(negativeVerts[1].orientation, Vector2d(-1, 0));
+}
+
+TEST(Path, VerticesClosedDegenerateSubpathKeepsZeroOrientation) {
+  Path path = PathBuilder().moveTo({5, 5}).lineTo({5, 5}).closePath().build();
+
+  std::vector<Path::Vertex> verts = path.vertices();
+
+  ASSERT_FALSE(verts.empty());
+  ExpectNear(verts.front().orientation, Vector2d(0, 0));
+}
+
 // =============================================================================
 // PathBuilder::arcTo
 // =============================================================================
@@ -1706,6 +2124,13 @@ TEST(PathBuilder, ArcToZeroRadius) {
   EXPECT_GT(path.verbCount(), 1u);
 }
 
+TEST(PathBuilder, ArcToZeroYRadiusFallsBackToLine) {
+  Path path = PathBuilder().moveTo({0, 0}).arcTo({10, 0}, 0.0, false, false, {10, 10}).build();
+
+  ASSERT_EQ(path.verbCount(), 2u);
+  EXPECT_EQ(path.commands()[1].verb, Path::Verb::LineTo);
+}
+
 TEST(PathBuilder, ArcToCoincidentEndpoints) {
   // SVG spec: if endpoints are the same, the arc is omitted entirely.
   Path path = PathBuilder().moveTo({5, 5}).arcTo({10, 10}, 0.0, false, false, {5, 5}).build();
@@ -1719,6 +2144,36 @@ TEST(PathBuilder, ArcToWithRotation) {
                   .arcTo({10, 5}, MathConstants<double>::kPi / 4, false, true, {0, 10})
                   .build();
   EXPECT_GT(path.verbCount(), 1u);
+}
+
+TEST(PathBuilder, ArcToOppositeLargeArcSweepUsesPositiveCenterFactor) {
+  Path path = PathBuilder().moveTo({10, 0}).arcTo({10, 10}, 0.0, true, false, {0, 10}).build();
+
+  EXPECT_GT(path.verbCount(), 1u);
+  ExpectNear(path.points().back(), Vector2d(0, 10), 1e-6);
+}
+
+TEST(PathBuilder, ArcToNegativeSmallRadiiAreAbsScaled) {
+  Path path = PathBuilder().moveTo({0, 0}).arcTo({-2, -3}, 0.0, false, true, {20, 0}).build();
+
+  EXPECT_GT(path.verbCount(), 1u);
+  ExpectNear(path.points().front(), Vector2d(0, 0));
+  ExpectNear(path.points().back(), Vector2d(20, 0), 1e-6);
+}
+
+// =============================================================================
+// Path equality
+// =============================================================================
+
+TEST(Path, EqualityComparesCommandsAndPoints) {
+  Path baseline = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
+  Path same = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
+  Path differentPoint = PathBuilder().moveTo({0, 0}).lineTo({10, 1}).build();
+  Path differentCommand = PathBuilder().moveTo({0, 0}).quadTo({5, 5}, {10, 0}).build();
+
+  EXPECT_EQ(baseline, same);
+  EXPECT_NE(baseline, differentPoint);
+  EXPECT_NE(baseline, differentCommand);
 }
 
 // =============================================================================
@@ -1740,6 +2195,22 @@ TEST(PathBuilder, AddRoundedRectZeroCornerRadius) {
   EXPECT_GT(path.verbCount(), 0u);
 }
 
+TEST(PathBuilder, AddRoundedRectZeroYRadiusFallsBackToRect) {
+  Path path = PathBuilder().addRoundedRect(Box2d({0, 0}, {100, 50}), 10.0, 0.0).build();
+
+  EXPECT_EQ(path.verbCount(), 5u);
+  EXPECT_EQ(path.toSVGPathData(), "M 0 0 L 100 0 L 100 50 L 0 50 Z");
+}
+
+TEST(PathBuilder, AddRoundedRectClampsOversizedRadii) {
+  Path path = PathBuilder().addRoundedRect(Box2d({0, 0}, {100, 50}), 500.0, 500.0).build();
+
+  Box2d bounds = path.bounds();
+  ExpectNear(bounds.topLeft, Vector2d(0, 0), 1e-6);
+  ExpectNear(bounds.bottomRight, Vector2d(100, 50), 1e-6);
+  EXPECT_GT(path.verbCount(), 5u);
+}
+
 // =============================================================================
 // Ostream operators
 // =============================================================================
@@ -1749,6 +2220,12 @@ TEST(Path, OstreamVerb) {
   oss << Path::Verb::MoveTo << "," << Path::Verb::LineTo << "," << Path::Verb::QuadTo << ","
       << Path::Verb::CurveTo << "," << Path::Verb::ClosePath;
   EXPECT_EQ(oss.str(), "MoveTo,LineTo,QuadTo,CurveTo,ClosePath");
+}
+
+TEST(Path, OstreamUnknownVerb) {
+  std::ostringstream oss;
+  oss << static_cast<Path::Verb>(0xff);
+  EXPECT_EQ(oss.str(), "Unknown");
 }
 
 TEST(Path, OstreamCommand) {
@@ -1772,10 +2249,22 @@ TEST(LineCap, OstreamOperator) {
   EXPECT_EQ(oss.str(), "Butt,Round,Square");
 }
 
+TEST(LineCap, OstreamUnknown) {
+  std::ostringstream oss;
+  oss << static_cast<LineCap>(0xff);
+  EXPECT_EQ(oss.str(), "Unknown");
+}
+
 TEST(LineJoin, OstreamOperator) {
   std::ostringstream oss;
   oss << LineJoin::Miter << "," << LineJoin::Round << "," << LineJoin::Bevel;
   EXPECT_EQ(oss.str(), "Miter,Round,Bevel");
+}
+
+TEST(LineJoin, OstreamUnknown) {
+  std::ostringstream oss;
+  oss << static_cast<LineJoin>(0xff);
+  EXPECT_EQ(oss.str(), "Unknown");
 }
 
 TEST(Path, OstreamVertex) {

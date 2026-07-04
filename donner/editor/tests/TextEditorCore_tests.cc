@@ -3,6 +3,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cstring>
+#include <string>
+#include <string_view>
+
 namespace donner::editor {
 
 using ::testing::ElementsAre;
@@ -232,6 +236,37 @@ TEST_F(TextEditorCoreTests, WordSelectionModeSnapsToWordBoundaries) {
   EXPECT_THAT(editor_.getSelectedText(), Eq("bar"));
 }
 
+TEST_F(TextEditorCoreTests, WordSelectionModeLeavesBoundaryEndpointInPlace) {
+  editor_.setText("alpha beta");
+  editor_.setColorizerEnabled(false);
+
+  editor_.setSelection(Coordinates(0, 1), Coordinates(0, 5), SelectionMode::Word);
+
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(0, 5));
+  EXPECT_THAT(editor_.getSelectedText(), Eq("alpha"));
+}
+
+TEST_F(TextEditorCoreTests, IsOnWordBoundaryHandlesDisabledAndColorizedModes) {
+  editor_.setText("aa bb");
+  editor_.setColorizerEnabled(false);
+
+  EXPECT_TRUE(editor_.isOnWordBoundary(Coordinates(0, 0)));
+  EXPECT_FALSE(editor_.isOnWordBoundary(Coordinates(0, 1)));
+  EXPECT_TRUE(editor_.isOnWordBoundary(Coordinates(0, 3)));
+  EXPECT_TRUE(editor_.isOnWordBoundary(Coordinates(99, 0)));
+
+  LanguageDefinition language;
+  language.tokenRegexStrings.push_back({R"(a+)", ColorIndex::Keyword});
+  language.tokenRegexStrings.push_back({R"(b+)", ColorIndex::Identifier});
+  editor_.setColorizerEnabled(true);
+  editor_.setLanguageDefinition(language);
+  editor_.colorizeInternal();
+  editor_.colorizeInternal();
+
+  EXPECT_TRUE(editor_.isOnWordBoundary(Coordinates(0, 3)));
+}
+
 // ---------------------------------------------------------------------------
 // Word utilities
 // ---------------------------------------------------------------------------
@@ -264,6 +299,15 @@ TEST_F(TextEditorCoreTests, FindNextWordSkipsToNextAlphanumericRun) {
   EXPECT_EQ(editor_.findNextWord(Coordinates(0, 0)), Coordinates(0, 5));
 }
 
+TEST_F(TextEditorCoreTests, WordUtilitiesClassifyPunctuationWhitespaceAndEndSentinel) {
+  editor_.setText("foo !!!\n   ");
+  editor_.setColorizerEnabled(false);
+
+  EXPECT_THAT(editor_.getWordAt(Coordinates(0, 5)), Eq("!!!"));
+  EXPECT_THAT(editor_.getWordAt(Coordinates(0, 3)), Eq(" "));
+  EXPECT_EQ(editor_.findNextWord(Coordinates(0, 3)), Coordinates(1, 3));
+}
+
 TEST_F(TextEditorCoreTests, SelectWordUnderCursorSelectsWholeWord) {
   editor_.setText("foo bar baz");
   editor_.setColorizerEnabled(false);
@@ -280,6 +324,14 @@ TEST_F(TextEditorCoreTests, FindFirstReturnsSentinelWhenAbsent) {
 
 TEST_F(TextEditorCoreTests, FindFirstOutOfRangeStartReturnsEndSentinel) {
   EXPECT_EQ(editor_.findFirst("0", Coordinates(99, 0)), Coordinates(5, 0));
+}
+
+TEST_F(TextEditorCoreTests, FindFirstSkipsSubstringAndReportsWordBoundaryMatch) {
+  editor_.setText("foo\nbar alpha\nbaz");
+  editor_.setColorizerEnabled(false);
+
+  EXPECT_EQ(editor_.findFirst("alpha", Coordinates(0, 1)), Coordinates(1, 4));
+  EXPECT_EQ(editor_.findFirst("baz", Coordinates(1, 5)), Coordinates(2, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +400,19 @@ TEST_F(TextEditorCoreTests, ShiftMoveRightExtendsSelection) {
   EXPECT_THAT(editor_.getSelectedText(), Eq("234"));
 }
 
+TEST_F(TextEditorCoreTests, ShiftMoveRightUpdatesInteractiveStartWhenAnchorIsAtEnd) {
+  editor_.setCursorPosition(Coordinates(1, 2));
+  editor_.interactiveStart() = Coordinates(1, 0);
+  editor_.interactiveEnd() = Coordinates(1, 2);
+
+  editor_.moveRight(2, /*select=*/true);
+
+  EXPECT_EQ(editor_.interactiveStart(), Coordinates(1, 0));
+  EXPECT_EQ(editor_.interactiveEnd(), Coordinates(1, 4));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(1, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(1, 4));
+}
+
 TEST_F(TextEditorCoreTests, ShiftMoveDownThenUpContractsSelection) {
   editor_.setCursorPosition(Coordinates(1, 0));
   editor_.interactiveStart() = Coordinates(1, 0);
@@ -356,6 +421,36 @@ TEST_F(TextEditorCoreTests, ShiftMoveDownThenUpContractsSelection) {
   EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(3, 0));
   editor_.moveUp(1, /*select=*/true);
   EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(2, 0));
+}
+
+TEST_F(TextEditorCoreTests, ShiftMoveTopAndBottomCreateFullRangeSelection) {
+  editor_.setCursorPosition(Coordinates(2, 4));
+
+  editor_.moveTop(/*select=*/true);
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(2, 4));
+
+  editor_.setCursorPosition(Coordinates(1, 3));
+  editor_.moveBottom(/*select=*/true);
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(1, 3));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(4, 0));
+}
+
+TEST_F(TextEditorCoreTests, ShiftHomeAndEndExtendFromInteractiveSide) {
+  editor_.setCursorPosition(Coordinates(2, 5));
+  editor_.interactiveStart() = Coordinates(2, 2);
+  editor_.interactiveEnd() = Coordinates(2, 5);
+
+  editor_.moveHome(/*select=*/true);
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(2, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(2, 2));
+
+  editor_.setCursorPosition(Coordinates(2, 5));
+  editor_.interactiveStart() = Coordinates(2, 5);
+  editor_.interactiveEnd() = Coordinates(2, 7);
+  editor_.moveEnd(/*select=*/true);
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(2, 7));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(2, 10));
 }
 
 // ---------------------------------------------------------------------------
@@ -393,6 +488,19 @@ TEST_F(TextEditorCoreTests, EnterCharacterInsertsAndAdvancesCursor) {
   editor_.enterCharacter('b', false);
   EXPECT_THAT(editor_.getText(), Eq("abc"));
   EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 2));
+}
+
+TEST_F(TextEditorCoreTests, EnterUnicodeCharactersWritesUtf8AndInvalidCodepointFallback) {
+  editor_.setText("");
+  editor_.setCompleteBraces(false);
+  editor_.setCursorPosition(Coordinates(0, 0));
+
+  editor_.enterCharacter(static_cast<char32_t>(0x00E9), false);
+  editor_.enterCharacter(static_cast<char32_t>(0x20AC), false);
+  editor_.enterCharacter(static_cast<char32_t>(0x1F600), false);
+  editor_.enterCharacter(static_cast<char32_t>(0x110000), false);
+
+  EXPECT_THAT(editor_.getText(), Eq(std::string("\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80?")));
 }
 
 TEST_F(TextEditorCoreTests, EnterNewlineAutoIndentsFollowingLine) {
@@ -436,6 +544,17 @@ TEST_F(TextEditorCoreTests, EnterBraceCompletesClosingBrace) {
   EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 1));
 }
 
+TEST_F(TextEditorCoreTests, EnterBracketCompletesClosingBracket) {
+  editor_.setText("");
+  editor_.setCompleteBraces(true);
+  editor_.setCursorPosition(Coordinates(0, 0));
+
+  editor_.enterCharacter('[', false);
+
+  EXPECT_THAT(editor_.getText(), Eq("[]"));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 1));
+}
+
 TEST_F(TextEditorCoreTests, EnterTabInsertsSpacesWhenInsertSpacesEnabled) {
   editor_.setText("");
   editor_.setCompleteBraces(false);
@@ -444,6 +563,45 @@ TEST_F(TextEditorCoreTests, EnterTabInsertsSpacesWhenInsertSpacesEnabled) {
   editor_.setCursorPosition(Coordinates(0, 0));
   editor_.enterCharacter('\t', false);
   EXPECT_THAT(editor_.getText(), Eq("    "));
+}
+
+TEST_F(TextEditorCoreTests, EnterTabCanInsertLiteralTab) {
+  editor_.setText("");
+  editor_.setCompleteBraces(false);
+  editor_.setInsertSpaces(false);
+  editor_.setCursorPosition(Coordinates(0, 0));
+
+  editor_.enterCharacter('\t', false);
+
+  EXPECT_THAT(editor_.getText(), Eq("\t"));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 1));
+}
+
+TEST_F(TextEditorCoreTests, InsertTextWithIndentUnindentsClosingBrace) {
+  editor_.setText("    {tail");
+  editor_.resetTextChanged();
+  editor_.setCursorPosition(Coordinates(0, 5));
+
+  editor_.insertText("\n}", /*indent=*/true);
+
+  EXPECT_THAT(editor_.getText(), Eq("    {\n  }tail"));
+  ASSERT_TRUE(editor_.hasPendingSourceEditIntents());
+  const std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Insert);
+  EXPECT_EQ(intents[0].replacement, "\n}");
+}
+
+TEST_F(TextEditorCoreTests, OpeningBraceCompletionCreatesIndentedClosingBrace) {
+  editor_.setText("  ");
+  editor_.setCompleteBraces(true);
+  editor_.setSmartIndent(true);
+  editor_.setCursorPosition(Coordinates(0, 2));
+
+  editor_.enterCharacter('{', false);
+
+  EXPECT_THAT(editor_.getText(), Eq("  {\n  }"));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(1, 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -477,6 +635,17 @@ TEST_F(TextEditorCoreTests, BackspaceRemovesFullIndentUnit) {
   EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 0));
 }
 
+TEST_F(TextEditorCoreTests, BackspaceRemovesLiteralTabWhenInsertSpacesDisabled) {
+  editor_.setText("\tx");
+  editor_.setInsertSpaces(false);
+  editor_.setCursorPosition(Coordinates(0, 2));
+
+  editor_.backspace();
+
+  EXPECT_THAT(editor_.getText(), Eq("x"));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 1));
+}
+
 TEST_F(TextEditorCoreTests, DeleteMidLineRemovesCharacterUnderCursor) {
   editor_.setText("abc");
   editor_.setCursorPosition(Coordinates(0, 1));
@@ -504,6 +673,15 @@ TEST_F(TextEditorCoreTests, DeleteRangeRemovesAcrossLines) {
   EXPECT_THAT(editor_.getText(), Eq("0123456789\n01456789\n0123456789"));
 }
 
+TEST_F(TextEditorCoreTests, DeleteRangeUpdatesScrollbarMarkers) {
+  editor_.setScrollbarMarkers(true);
+  editor_.changedLines() = {0, 1, 2, 4};
+
+  editor_.deleteRange(Coordinates(1, 0), Coordinates(3, 0));
+
+  EXPECT_THAT(editor_.changedLines(), ElementsAre(0, 1, 2));
+}
+
 TEST_F(TextEditorCoreTests, DeleteSelectionRemovesAndCollapsesCursor) {
   editor_.setSelection(Coordinates(1, 2), Coordinates(2, 4));
   editor_.deleteSelection();
@@ -516,6 +694,132 @@ TEST_F(TextEditorCoreTests, BackspaceWithSelectionDeletesSelection) {
   editor_.setSelection(Coordinates(0, 2), Coordinates(0, 5));
   editor_.backspace();
   EXPECT_THAT(editor_.getText(), Eq("0156789\n0123456789\n0123456789\n0123456789\n0123456789"));
+}
+
+TEST_F(TextEditorCoreTests, DeleteWithSelectionCapturesDeleteIntent) {
+  editor_.resetTextChanged();
+  editor_.setSelection(Coordinates(0, 2), Coordinates(0, 5));
+
+  editor_.delete_();
+
+  EXPECT_THAT(editor_.getText(), Eq("0156789\n0123456789\n0123456789\n0123456789\n0123456789"));
+  const std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Delete);
+  EXPECT_EQ(intents[0].removedLength, 3u);
+  EXPECT_EQ(intents[0].replacement, "");
+}
+
+TEST_F(TextEditorCoreTests, BackspaceAndDeleteRemoveWholeUtf8Clusters) {
+  editor_.setText(std::string("a\xC3\xA9z"));
+  editor_.setCompleteBraces(false);
+
+  editor_.setCursorPosition(Coordinates(0, 2));
+  editor_.backspace();
+  EXPECT_THAT(editor_.getText(), Eq("az"));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 1));
+
+  editor_.setText(std::string("a\xF0\x9F\x98\x80z"));
+  editor_.setCursorPosition(Coordinates(0, 1));
+  editor_.delete_();
+  EXPECT_THAT(editor_.getText(), Eq("az"));
+}
+
+TEST_F(TextEditorCoreTests, BackspaceAtLineStartMergesErrorMarkers) {
+  editor_.setText("a\nb\nc");
+  editor_.setErrorMarkers(ErrorMarkers{{0, "first"}, {2, "last"}});
+  editor_.setCursorPosition(Coordinates(1, 0));
+
+  editor_.backspace();
+
+  EXPECT_THAT(editor_.getText(), Eq("ab\nc"));
+  EXPECT_THAT(editor_.getErrorMarkers(),
+              ElementsAre(testing::Pair(0, "first"), testing::Pair(1, "last")));
+}
+
+TEST_F(TextEditorCoreTests, AdvanceStepsUtf8AndWrapsPastLineEnd) {
+  editor_.setText(std::string("\xC3\xA9x\nz"));
+
+  Coordinates coords(0, 0);
+  editor_.advance(coords);
+  EXPECT_EQ(coords, Coordinates(0, 1));
+
+  coords = Coordinates(0, 2);
+  editor_.advance(coords);
+  EXPECT_EQ(coords, Coordinates(1, 0));
+}
+
+TEST_F(TextEditorCoreTests, InsertAndRemoveLineMaintainFoldAndMarkerBookkeeping) {
+  editor_.setText("a{\nb\n}\nd");
+  editor_.foldBegin() = {Coordinates(0, 1), Coordinates(1, 0)};
+  editor_.foldEnd() = {Coordinates(2, 0)};
+  editor_.foldSorted() = true;
+  editor_.setErrorMarkers(ErrorMarkers{{0, "first"}, {2, "third"}});
+
+  editor_.insertLine(1, 0);
+
+  EXPECT_EQ(editor_.foldBegin()[0], Coordinates(1, 1));
+  EXPECT_EQ(editor_.foldBegin()[1], Coordinates(2, 0));
+  EXPECT_EQ(editor_.foldEnd()[0], Coordinates(3, 0));
+  ASSERT_TRUE(editor_.getErrorMarkers().contains(3));
+
+  editor_.removeLine(1);
+
+  ASSERT_EQ(editor_.foldBegin().size(), 1u);
+  EXPECT_EQ(editor_.foldBegin()[0], Coordinates(1, 0));
+  EXPECT_EQ(editor_.foldEnd()[0], Coordinates(2, 0));
+  ASSERT_TRUE(editor_.getErrorMarkers().contains(0));
+}
+
+TEST_F(TextEditorCoreTests, RemoveLineRangeDropsInteriorMarkersAndShiftsFollowingLines) {
+  editor_.setText("a\nb\nc\nd\ne");
+  editor_.setScrollbarMarkers(true);
+  editor_.changedLines() = {0, 1, 3, 4};
+  editor_.setErrorMarkers(ErrorMarkers{{0, "zero"}, {1, "one"}, {3, "three"}, {4, "four"}});
+
+  editor_.removeLine(1, 3);
+
+  EXPECT_THAT(editor_.getText(), Eq("a\ne"));
+  EXPECT_THAT(editor_.changedLines(), ElementsAre(0, 1));
+  EXPECT_THAT(editor_.getErrorMarkers(),
+              ElementsAre(testing::Pair(0, "zero"), testing::Pair(1, "four")));
+}
+
+TEST_F(TextEditorCoreTests, RemoveFoldsShiftsFoldsAfterDeletedFullLines) {
+  editor_.setText("a\nb\nc\nd");
+  editor_.foldBegin() = {Coordinates(0, 0), Coordinates(3, 0)};
+  editor_.foldEnd() = {Coordinates(0, 0), Coordinates(3, 0)};
+  editor_.foldSorted() = true;
+
+  editor_.removeFolds(Coordinates(1, 0), Coordinates(2, 100000));
+
+  EXPECT_THAT(editor_.foldBegin(), ElementsAre(Coordinates(0, 0), Coordinates(1, 0)));
+  EXPECT_THAT(editor_.foldEnd(), ElementsAre(Coordinates(0, 0), Coordinates(1, 0)));
+  EXPECT_TRUE(editor_.foldSorted());
+}
+
+TEST_F(TextEditorCoreTests, RemoveFoldsSameLineShiftsFoldAfterDeletedColumns) {
+  editor_.setText("abcdef");
+  editor_.foldBegin() = {Coordinates(0, 5)};
+  editor_.foldEnd() = {Coordinates(0, 5)};
+  editor_.foldSorted() = true;
+
+  editor_.removeFolds(Coordinates(0, 1), Coordinates(0, 3));
+
+  EXPECT_THAT(editor_.foldBegin(), ElementsAre(Coordinates(0, 3)));
+  EXPECT_THAT(editor_.foldEnd(), ElementsAre(Coordinates(0, 3)));
+}
+
+TEST_F(TextEditorCoreTests, RemoveFoldsKeepsFoldBeforeSameLineDeletedRange) {
+  editor_.setText("abcdef");
+  editor_.foldBegin() = {Coordinates(0, 0), Coordinates(0, 5)};
+  editor_.foldEnd() = {Coordinates(0, 0), Coordinates(0, 5)};
+  editor_.foldSorted() = true;
+
+  editor_.removeFolds(Coordinates(0, 2), Coordinates(0, 4));
+
+  EXPECT_THAT(editor_.foldBegin(), ElementsAre(Coordinates(0, 0), Coordinates(0, 3)));
+  EXPECT_THAT(editor_.foldEnd(), ElementsAre(Coordinates(0, 0), Coordinates(0, 3)));
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +848,22 @@ TEST_F(TextEditorCoreTests, RedoReappliesUndoneInsert) {
   editor_.undo();
   editor_.redo();
   EXPECT_THAT(editor_.getText(), Eq("abc"));
+}
+
+TEST_F(TextEditorCoreTests, RedoEmitsRedoKindSourceEditIntent) {
+  editor_.setText("ac");
+  editor_.setCompleteBraces(false);
+  editor_.setCursorPosition(Coordinates(0, 1));
+  editor_.enterCharacter('b', false);
+  editor_.takePendingSourceEditIntents();
+
+  editor_.undo();
+  editor_.takePendingSourceEditIntents();
+  editor_.redo();
+
+  const std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].kind, SourceEditIntentKind::Redo);
 }
 
 TEST_F(TextEditorCoreTests, UndoReplaceRestoresOriginalSelectionText) {
@@ -627,6 +947,41 @@ TEST_F(TextEditorCoreTests, ShiftTabWithMultiLineSelectionOutdents) {
   EXPECT_THAT(editor_.getText(), Eq("a\nb\nc"));
 }
 
+TEST_F(TextEditorCoreTests, ShiftTabOutdentsMixedTabsAndSpaces) {
+  editor_.setText("\ta\n  b\nc");
+  editor_.setInsertSpaces(true);
+  editor_.setTabSize(2);
+  editor_.setSelection(Coordinates(0, 0), Coordinates(1, 3));
+
+  editor_.enterCharacter('\t', /*shift=*/true);
+
+  EXPECT_THAT(editor_.getText(), Eq("a\nb\nc"));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(1, 1));
+}
+
+TEST_F(TextEditorCoreTests, MultiLineTabCanInsertLiteralTabs) {
+  editor_.setText("a\nb\nc");
+  editor_.setInsertSpaces(false);
+  editor_.setSelection(Coordinates(0, 0), Coordinates(1, 1));
+
+  editor_.enterCharacter('\t', /*shift=*/false);
+
+  EXPECT_THAT(editor_.getText(), Eq("\ta\n\tb\nc"));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 0));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(1, 3));
+}
+
+TEST_F(TextEditorCoreTests, ShiftTabNoOpDoesNotCreateUndoRecord) {
+  editor_.setText("a\nb");
+  editor_.setSelection(Coordinates(0, 0), Coordinates(1, 1));
+
+  editor_.enterCharacter('\t', /*shift=*/true);
+
+  EXPECT_THAT(editor_.getText(), Eq("a\nb"));
+  EXPECT_FALSE(editor_.canUndo());
+}
+
 // ---------------------------------------------------------------------------
 // External source edits (applyExternalSourceEdit)
 // ---------------------------------------------------------------------------
@@ -648,6 +1003,83 @@ TEST_F(TextEditorCoreTests, ApplyExternalSourceEditShiftsCursorAfterEditPoint) {
   editor_.applyExternalSourceEdit(/*offset=*/0, /*removedLength=*/0, "XX");
   EXPECT_THAT(editor_.getText(), Eq("XXhello world"));
   EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 13));
+}
+
+TEST_F(TextEditorCoreTests, ApplyExternalSourceEditHonorsSelectionBoundaryBias) {
+  editor_.setText("abcd");
+  editor_.setSelection(Coordinates(0, 1), Coordinates(0, 3));
+  editor_.setCursorPosition(Coordinates(0, 3));
+
+  editor_.applyExternalSourceEdit(/*offset=*/3, /*removedLength=*/0, "X");
+
+  EXPECT_THAT(editor_.getText(), Eq("abcXd"));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 1));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(0, 4));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 3));
+}
+
+TEST_F(TextEditorCoreTests, ApplyExternalSourceEditMapsCursorInsideReplacedRangeToReplacementEnd) {
+  editor_.setText("abcdef");
+  editor_.setCursorPosition(Coordinates(0, 4));
+
+  editor_.applyExternalSourceEdit(/*offset=*/2, /*removedLength=*/3, "XY");
+
+  EXPECT_THAT(editor_.getText(), Eq("abXYf"));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 4));
+  EXPECT_TRUE(editor_.cursorPositionChanged());
+}
+
+TEST_F(TextEditorCoreTests, ApplyExternalSourceEditShrinksSelectionAfterShorterReplacement) {
+  editor_.setText("abcdef");
+  editor_.setSelection(Coordinates(0, 1), Coordinates(0, 6));
+  editor_.setCursorPosition(Coordinates(0, 6));
+
+  editor_.applyExternalSourceEdit(/*offset=*/2, /*removedLength=*/3, "Q");
+
+  EXPECT_THAT(editor_.getText(), Eq("abQf"));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 1));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(0, 4));
+  EXPECT_EQ(editor_.interactiveStart(), Coordinates(0, 1));
+  EXPECT_EQ(editor_.interactiveEnd(), Coordinates(0, 4));
+}
+
+TEST_F(TextEditorCoreTests, ApplyExternalSourceEditKeepsSelectionBeforeEditPoint) {
+  editor_.setText("abcdef");
+  editor_.setSelection(Coordinates(0, 1), Coordinates(0, 2));
+  editor_.setCursorPosition(Coordinates(0, 2));
+
+  editor_.applyExternalSourceEdit(/*offset=*/4, /*removedLength=*/1, "XYZ");
+
+  EXPECT_THAT(editor_.getText(), Eq("abcdXYZf"));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 1));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(0, 2));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 2));
+}
+
+TEST_F(TextEditorCoreTests, ApplyExternalSourceEditCollapsedSelectionUsesBeforeBiasAtInsertion) {
+  editor_.setText("abcd");
+  editor_.setSelection(Coordinates(0, 2), Coordinates(0, 2));
+  editor_.setCursorPosition(Coordinates(0, 2));
+
+  editor_.applyExternalSourceEdit(/*offset=*/2, /*removedLength=*/0, "XX");
+
+  EXPECT_THAT(editor_.getText(), Eq("abXXcd"));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 2));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(0, 2));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 2));
+}
+
+TEST_F(TextEditorCoreTests, ApplyExternalSourceEditExpandsSelectionAfterLongerReplacement) {
+  editor_.setText("abcdef");
+  editor_.setSelection(Coordinates(0, 1), Coordinates(0, 6));
+  editor_.setCursorPosition(Coordinates(0, 6));
+
+  editor_.applyExternalSourceEdit(/*offset=*/2, /*removedLength=*/1, "WXYZ");
+
+  EXPECT_THAT(editor_.getText(), Eq("abWXYZdef"));
+  EXPECT_EQ(editor_.getSelectionStart(), Coordinates(0, 1));
+  EXPECT_EQ(editor_.getSelectionEnd(), Coordinates(0, 9));
+  EXPECT_EQ(editor_.getCursorPosition(), Coordinates(0, 9));
 }
 
 // ---------------------------------------------------------------------------
@@ -673,6 +1105,55 @@ TEST_F(TextEditorCoreTests, ErrorMarkersAccessibleViaMutableRef) {
   EXPECT_THAT(editor_.getErrorMarkers(), ElementsAre(testing::Pair(4, "err")));
 }
 
+TEST_F(TextEditorCoreTests, AppendSourceEditIntentDeduplicatesAndInvokesHook) {
+  int hookCalls = 0;
+  editor_.sourceEditIntentHook = [&](const SourceEditIntent& intent) {
+    ++hookCalls;
+    EXPECT_EQ(intent.kind, SourceEditIntentKind::Insert);
+  };
+
+  SourceEditIntent intent;
+  intent.offset = 1;
+  intent.removedLength = 0;
+  intent.replacement = "x";
+  intent.kind = SourceEditIntentKind::Insert;
+
+  editor_.appendSourceEditIntent(intent);
+  editor_.appendSourceEditIntent(intent);
+  editor_.appendSourceEditIntent(SourceEditIntent{});
+
+  std::vector<SourceEditIntent> intents = editor_.takePendingSourceEditIntents();
+  ASSERT_EQ(intents.size(), 1u);
+  EXPECT_EQ(intents[0].bufferVersion, 1u);
+  EXPECT_EQ(hookCalls, 1);
+}
+
+TEST_F(TextEditorCoreTests, EditingHooksFireForAutocompleteAndContentUpdates) {
+  int autocompleteRequests = 0;
+  int contentUpdates = 0;
+  int sourceIntentHooks = 0;
+  int tooltipHooks = 0;
+  editor_.requestAutocompleteHook = [&] { ++autocompleteRequests; };
+  editor_.onContentUpdateInternal = [&] { ++contentUpdates; };
+  editor_.sourceEditIntentHook = [&](const SourceEditIntent&) { ++sourceIntentHooks; };
+  editor_.functionTooltipHook = [&](char32_t character, const Coordinates& position) {
+    ++tooltipHooks;
+    EXPECT_EQ(character, 'a');
+    EXPECT_EQ(position, Coordinates(0, 0));
+  };
+
+  editor_.setText("");
+  editor_.setCompleteBraces(false);
+  editor_.setActiveAutocomplete(true);
+  editor_.setCursorPosition(Coordinates(0, 0));
+  editor_.enterCharacter('a', false);
+
+  EXPECT_EQ(autocompleteRequests, 1);
+  EXPECT_GE(contentUpdates, 1);
+  EXPECT_EQ(sourceIntentHooks, 1);
+  EXPECT_EQ(tooltipHooks, 1);
+}
+
 // ---------------------------------------------------------------------------
 // Tab size / indentation detection
 // ---------------------------------------------------------------------------
@@ -692,6 +1173,21 @@ TEST_F(TextEditorCoreTests, DetectIndentationStylePicksTabsOverSpaces) {
 
 TEST_F(TextEditorCoreTests, DetectIndentationStyleInfersSpaceTabSize) {
   editor_.setText("    a\n        b\n    c");
+  EXPECT_TRUE(editor_.getInsertSpaces());
+  EXPECT_EQ(editor_.getTabSize(), 4);
+}
+
+TEST_F(TextEditorCoreTests, DetectIndentationStyleFallsBackToFourSpacesWithoutIndent) {
+  editor_.setTabSize(2);
+  editor_.setText("a\nb\nc");
+
+  EXPECT_TRUE(editor_.getInsertSpaces());
+  EXPECT_EQ(editor_.getTabSize(), 4);
+}
+
+TEST_F(TextEditorCoreTests, DetectIndentationStyleUsesFourWhenSpaceGcdIsTiny) {
+  editor_.setText("  a\n   b\n  c");
+
   EXPECT_TRUE(editor_.getInsertSpaces());
   EXPECT_EQ(editor_.getTabSize(), 4);
 }
@@ -741,6 +1237,178 @@ TEST_F(TextEditorCoreTests, GetGlyphColorHonorsCommentFlag) {
   Glyph commentGlyph('x', ColorIndex::Default);
   commentGlyph.isComment = true;
   EXPECT_EQ(editor_.getGlyphColor(commentGlyph), 0xCAFEF00Du);
+}
+
+TEST_F(TextEditorCoreTests, GetGlyphColorHonorsMultiLineCommentFlag) {
+  Palette palette{};
+  palette[static_cast<size_t>(ColorIndex::MultiLineComment)] = 0xBEEFCACE;
+  editor_.mutablePalette() = palette;
+  editor_.setColorizerEnabled(true);
+
+  Glyph commentGlyph('x', ColorIndex::Default);
+  commentGlyph.isMultiLineComment = true;
+  EXPECT_EQ(editor_.getGlyphColor(commentGlyph), 0xBEEFCACEu);
+}
+
+TEST_F(TextEditorCoreTests, CustomLanguageColorizesCaseInsensitiveIdentifiers) {
+  LanguageDefinition language;
+  language.keywords.insert("FOO");
+  language.identifiers.emplace("BAR", Identifier("BAR"));
+  language.caseSensitive = false;
+  language.tokenRegexStrings.push_back({R"([A-Za-z_]+)", ColorIndex::Identifier});
+
+  editor_.setText("foo bar baz");
+  editor_.setLanguageDefinition(language);
+  editor_.colorizeInternal();
+  editor_.colorizeInternal();
+
+  const Line& line = editor_.buffer().getLineGlyphs(0);
+  EXPECT_EQ(line[0].colorIndex, ColorIndex::Keyword);
+  EXPECT_EQ(line[4].colorIndex, ColorIndex::KnownIdentifier);
+  EXPECT_EQ(line[8].colorIndex, ColorIndex::Identifier);
+}
+
+TEST_F(TextEditorCoreTests, CustomTokenizerTakesPrecedenceOverRegexRules) {
+  LanguageDefinition language;
+  language.tokenize = [](const char* inBegin, const char* inEnd, const char*& outBegin,
+                         const char*& outEnd, ColorIndex& paletteIndex) {
+    if (inBegin != inEnd && *inBegin == '@') {
+      outBegin = inBegin;
+      outEnd = inBegin + 1;
+      paletteIndex = ColorIndex::UserFunction;
+      return true;
+    }
+    return false;
+  };
+  language.tokenRegexStrings.push_back({R"(@)", ColorIndex::Punctuation});
+
+  editor_.setText("@");
+  editor_.setLanguageDefinition(language);
+  editor_.colorizeInternal();
+
+  const Line& line = editor_.buffer().getLineGlyphs(0);
+  EXPECT_EQ(line[0].colorIndex, ColorIndex::UserFunction);
+}
+
+namespace {
+
+struct TokenExpectation {
+  std::string_view input;
+  std::string_view token;
+  ColorIndex color;
+};
+
+void ExpectSvgToken(const TokenExpectation& expectation) {
+  const LanguageDefinition& language = LanguageDefinition::SVG();
+  const char* outBegin = nullptr;
+  const char* outEnd = nullptr;
+  ColorIndex color = ColorIndex::Default;
+
+  ASSERT_TRUE(language.tokenize(expectation.input.data(),
+                                expectation.input.data() + expectation.input.size(), outBegin,
+                                outEnd, color))
+      << expectation.input;
+  EXPECT_EQ(std::string_view(outBegin, static_cast<std::size_t>(outEnd - outBegin)),
+            expectation.token);
+  EXPECT_EQ(color, expectation.color);
+}
+
+}  // namespace
+
+TEST_F(TextEditorCoreTests, SvgTokenizerClassifiesXmlSyntaxTokens) {
+  const TokenExpectation cases[] = {
+      {"<rect", "<", ColorIndex::Punctuation},      {"</rect>", "</", ColorIndex::Punctuation},
+      {">", ">", ColorIndex::Punctuation},          {"/>", "/>", ColorIndex::Punctuation},
+      {"\"value\"", "\"", ColorIndex::Punctuation}, {"'value'", "'", ColorIndex::Punctuation},
+      {"=", "=", ColorIndex::Punctuation},          {"@unknown", "", ColorIndex::Default},
+  };
+
+  for (const TokenExpectation& expectation : cases) {
+    SCOPED_TRACE(expectation.input);
+    if (expectation.token.empty()) {
+      const LanguageDefinition& language = LanguageDefinition::SVG();
+      const char* outBegin = nullptr;
+      const char* outEnd = nullptr;
+      ColorIndex color = ColorIndex::Default;
+      EXPECT_FALSE(language.tokenize(expectation.input.data(),
+                                     expectation.input.data() + expectation.input.size(), outBegin,
+                                     outEnd, color));
+    } else {
+      ExpectSvgToken(expectation);
+    }
+  }
+}
+
+TEST_F(TextEditorCoreTests, SvgTokenizerClassifiesEntitiesNumbersAndIdentifiers) {
+  const TokenExpectation cases[] = {
+      {"&amp; tail", "&amp;", ColorIndex::Number},
+      {"&name<tag", "&name", ColorIndex::Number},
+      {"&#65; tail", "&#65;", ColorIndex::Number},
+      {"&#x41; tail", "&#x41;", ColorIndex::Number},
+      {"&unterminated tail", "&unterminated", ColorIndex::Number},
+      {"1e next", "1e", ColorIndex::Number},
+      {"-1.5e+2px", "-1.5e+2px", ColorIndex::Number},
+      {".5%", ".5%", ColorIndex::Number},
+      {"9E-2em", "9E-2em", ColorIndex::Number},
+      {"_private:name", "_private:name", ColorIndex::Identifier},
+      {"xml:name-1.2", "xml:name-1.2", ColorIndex::Identifier},
+      {std::string_view("\xC3\xA9"
+                        "lement attr"),
+       std::string_view("\xC3\xA9"
+                        "lement"),
+       ColorIndex::Identifier},
+  };
+
+  for (const TokenExpectation& expectation : cases) {
+    SCOPED_TRACE(expectation.input);
+    ExpectSvgToken(expectation);
+  }
+}
+
+TEST_F(TextEditorCoreTests, SvgTokenizerRejectsNumberLookalikes) {
+  const char* inputs[] = {"-", "-x", ".", ".x"};
+  const LanguageDefinition& language = LanguageDefinition::SVG();
+
+  for (const char* input : inputs) {
+    SCOPED_TRACE(input);
+    const char* outBegin = nullptr;
+    const char* outEnd = nullptr;
+    ColorIndex color = ColorIndex::Default;
+    EXPECT_FALSE(language.tokenize(input, input + std::strlen(input), outBegin, outEnd, color));
+  }
+}
+
+TEST_F(TextEditorCoreTests, SvgTokenizerReturnsFalseForEmptyInput) {
+  const LanguageDefinition& language = LanguageDefinition::SVG();
+  const char* begin = "";
+  const char* outBegin = nullptr;
+  const char* outEnd = nullptr;
+  ColorIndex color = ColorIndex::Default;
+
+  EXPECT_FALSE(language.tokenize(begin, begin, outBegin, outEnd, color));
+}
+
+TEST_F(TextEditorCoreTests, ColorizeInternalMarksSingleAndMultilineComments) {
+  LanguageDefinition language;
+  language.commentStart = "/*";
+  language.commentEnd = "*/";
+  language.singleLineComment = "//";
+
+  editor_.setText("a // one\n/* multi\nstill */ \"not /* comment\"");
+  editor_.setLanguageDefinition(language);
+  editor_.colorizeInternal();
+
+  const Line& line0 = editor_.buffer().getLineGlyphs(0);
+  EXPECT_FALSE(line0[0].isComment);
+  EXPECT_TRUE(line0[2].isComment);
+
+  const Line& line1 = editor_.buffer().getLineGlyphs(1);
+  EXPECT_TRUE(line1[0].isMultiLineComment);
+  EXPECT_TRUE(line1[3].isMultiLineComment);
+
+  const Line& line2 = editor_.buffer().getLineGlyphs(2);
+  EXPECT_TRUE(line2[0].isMultiLineComment);
+  EXPECT_FALSE(line2[9].isMultiLineComment);
 }
 
 }  // namespace donner::editor
