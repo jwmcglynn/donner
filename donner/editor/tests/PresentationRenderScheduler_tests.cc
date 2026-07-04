@@ -1,12 +1,15 @@
 #include "donner/editor/PresentationRenderScheduler.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <utility>
 #include <vector>
 
-#include "gtest/gtest.h"
-
 namespace donner::editor {
 namespace {
+
+using ::testing::ElementsAre;
 
 const Vector2i kCanvasSize(100, 100);
 
@@ -62,7 +65,7 @@ TEST(PresentationRenderSchedulerTest, SelectionPrewarmCarriesGroupedSelectionEnt
 
   ASSERT_TRUE(decision.dragPreview.has_value());
   EXPECT_EQ(decision.dragPreview->entity, Entity(7));
-  EXPECT_EQ(decision.dragPreview->extraEntities, std::vector<Entity>{Entity(8)});
+  EXPECT_THAT(decision.dragPreview->extraEntities, ElementsAre(Entity(8)));
   EXPECT_EQ(decision.dragPreview->interactionKind, svg::compositor::InteractionHint::Selection);
 }
 
@@ -88,7 +91,7 @@ TEST(PresentationRenderSchedulerTest, ChangedGroupedSelectionRewarmsSamePrimaryE
 
   EXPECT_TRUE(changed.needsCompositedPrewarm);
   ASSERT_TRUE(changed.dragPreview.has_value());
-  EXPECT_EQ(changed.dragPreview->extraEntities, std::vector<Entity>{Entity(9)});
+  EXPECT_THAT(changed.dragPreview->extraEntities, ElementsAre(Entity(9)));
 }
 
 TEST(PresentationRenderSchedulerTest, RepeatedUpToDateSelectionDoesNotRequestRender) {

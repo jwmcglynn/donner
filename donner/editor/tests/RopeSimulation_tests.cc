@@ -161,7 +161,7 @@ TEST(RopeSimulationTest, ResetCatenaryStartsSettledWithZeroVelocity) {
   rope.update(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0), 1.0 / 60.0, 0.0, 1.0 / 60.0, 123u, false,
               options);
 
-  EXPECT_EQ(std::vector<Vector2d>(rope.points().begin(), rope.points().end()), before);
+  EXPECT_THAT(rope.points(), testing::ElementsAreArray(before));
   EXPECT_FALSE(rope.needsAnimation());
 }
 
@@ -386,7 +386,7 @@ TEST(RopeSimulationTest, SleepsAfterStillnessAndWakesOnImpulse) {
   const std::vector<Vector2d> asleep(rope.points().begin(), rope.points().end());
   rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 3.0 / 60.0, 123u, false,
               options);
-  EXPECT_EQ(std::vector<Vector2d>(rope.points().begin(), rope.points().end()), asleep);
+  EXPECT_THAT(rope.points(), testing::ElementsAreArray(asleep));
 
   rope.applyImpulse(Vector2d(1.0, 0.0));
   EXPECT_TRUE(rope.needsAnimation());
@@ -507,7 +507,7 @@ TEST(RopeSimulationTest, HoverFreezePreservesBodyWhenAnchorsDoNotMove) {
 
   rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 30.0, 1.0, 12u, true, options);
 
-  EXPECT_EQ(std::vector<Vector2d>(rope.points().begin(), rope.points().end()), before);
+  EXPECT_THAT(rope.points(), testing::ElementsAreArray(before));
 }
 
 TEST(RopeSimulationTest, ConvertsToBezierPathEndingAtTarget) {
@@ -659,7 +659,7 @@ TEST(RopeSimulationTest, TwoParticleRopeProducesSingleLineSegmentPath) {
   RopeSimulation rope;
   rope.reset(route, options);
 
-  ASSERT_EQ(rope.points().size(), 2u);
+  ASSERT_THAT(rope.points(), testing::SizeIs(2u));
   const Path path = rope.toPath(options);
   ASSERT_GE(path.commands().size(), 2u);
   EXPECT_THAT(path.commands(), PathCommandEndpointVerbsAre(Path::Verb::MoveTo, Path::Verb::LineTo));
