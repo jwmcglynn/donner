@@ -1,11 +1,13 @@
 #include "donner/editor/EditorShell.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -14,7 +16,37 @@
 #include "donner/editor/gui/EditorWindow.h"
 
 namespace donner::editor {
+
+void PrintTo(const SourceByteRange& range, std::ostream* os) {
+  *os << "SourceByteRange{start=" << range.start << ", end=" << range.end << "}";
+}
+
 namespace {
+
+using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::UnorderedElementsAre;
+
+MATCHER_P(ElementIdIs, expected,
+          std::string("an SVG element with id ") + testing::PrintToString(expected)) {
+  const std::string actual(std::string_view(arg.id()));
+  if (actual == expected) {
+    return true;
+  }
+
+  *result_listener << "id is " << testing::PrintToString(actual);
+  return false;
+}
+
+MATCHER(NonEmptySourceByteRange, "a source byte range with start before end") {
+  if (arg.start < arg.end) {
+    return true;
+  }
+
+  *result_listener << "start=" << arg.start << ", end=" << arg.end;
+  return false;
+}
 
 constexpr std::string_view kInitialSvg = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
@@ -375,11 +407,11 @@ TEST(EditorShellTest, SelectionReadbackAndIdleWakeReflectSourceState) {
 
   EXPECT_EQ(shell.selectedElementLabelForReadback(), "<rect> #target");
   EXPECT_TRUE(EditorShellTestAccess::HighlightSelectionSourceIfNeeded(shell));
-  ASSERT_FALSE(EditorShellTestAccess::Source(shell).getSelectedText().empty());
+  ASSERT_THAT(EditorShellTestAccess::Source(shell).getSelectedText(), Not(IsEmpty()));
 
   const std::vector<SourceByteRange> ranges =
       EditorShellTestAccess::SourceHoverRangesForElements(shell, {*target});
-  ASSERT_FALSE(ranges.empty());
+  ASSERT_THAT(ranges, ElementsAre(NonEmptySourceByteRange()));
   EditorShellTestAccess::RevealSourceRange(shell, ranges.front());
 
   const std::optional<float> idleWake = shell.nextIdleWakeSeconds();
@@ -546,7 +578,7 @@ TEST(EditorShellTest, SourceFocusAndStyleDecorationsTrackSelectionAndDirtySource
   EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
   EXPECT_TRUE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
   EXPECT_GT(EditorShellTestAccess::StyleSourceContributionCount(shell), 0u);
-  EXPECT_GT(EditorShellTestAccess::Source(shell).sourceStyleDecorations().size(), 0u);
+  EXPECT_THAT(EditorShellTestAccess::Source(shell).sourceStyleDecorations(), Not(IsEmpty()));
 
   const std::size_t contributionCount = EditorShellTestAccess::StyleSourceContributionCount(shell);
   EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
@@ -557,7 +589,7 @@ TEST(EditorShellTest, SourceFocusAndStyleDecorationsTrackSelectionAndDirtySource
   source.insertText(" ");
   EditorShellTestAccess::UpdateSourceStyleDecorations(shell);
   EXPECT_FALSE(EditorShellTestAccess::StyleSourceDecorationsValid(shell));
-  EXPECT_TRUE(source.sourceStyleDecorations().empty());
+  EXPECT_THAT(source.sourceStyleDecorations(), IsEmpty());
 }
 
 TEST(EditorShellTest, StyleFocusCursorAndPartitionGuards) {
@@ -577,7 +609,7 @@ TEST(EditorShellTest, StyleFocusCursorAndPartitionGuards) {
 
   std::optional<StyleFocus> cursorFocus = EditorShellTestAccess::StyleFocusAtSourceCursor(shell);
   ASSERT_TRUE(cursorFocus.has_value());
-  EXPECT_FALSE(cursorFocus->impactedElements.empty());
+  EXPECT_THAT(cursorFocus->impactedElements, ElementsAre(ElementIdIs("target")));
 
   EXPECT_FALSE(EditorShellTestAccess::StyleFocusAtSourceOffset(shell, 1).has_value());
 
@@ -631,20 +663,19 @@ TEST(EditorShellTest, SourcePaneVisibilityRevealAndHoverRangesUseCurrentDocument
 
   const std::vector<SourceByteRange> ranges =
       EditorShellTestAccess::SourceHoverRangesForElements(shell, {*target});
-  ASSERT_FALSE(ranges.empty());
-  EXPECT_LT(ranges.front().start, ranges.front().end);
+  ASSERT_THAT(ranges, ElementsAre(NonEmptySourceByteRange()));
 
   ASSERT_TRUE(EditorShellTestAccess::Source(shell).setHoverSourceRanges(ranges));
   EditorShellTestAccess::SetSourcePaneVisible(shell, false);
   EXPECT_FALSE(EditorShellTestAccess::SourcePaneVisible(shell));
-  EXPECT_TRUE(EditorShellTestAccess::Source(shell).hoverSourceRanges().empty());
+  EXPECT_THAT(EditorShellTestAccess::Source(shell).hoverSourceRanges(), IsEmpty());
 
   EditorShellTestAccess::RevealSourceRange(shell, ranges.front());
   EXPECT_TRUE(EditorShellTestAccess::SourcePaneVisible(shell));
   EXPECT_TRUE(EditorShellTestAccess::Source(shell).nextFlashWakeSeconds().has_value());
 
   EditorShellTestAccess::Source(shell).setText("out of sync");
-  EXPECT_TRUE(EditorShellTestAccess::SourceHoverRangesForElements(shell, {*target}).empty());
+  EXPECT_THAT(EditorShellTestAccess::SourceHoverRangesForElements(shell, {*target}), IsEmpty());
 }
 
 TEST(EditorShellTest, StyleFocusSelectionPathUsesSourceCursorContext) {
@@ -663,7 +694,7 @@ TEST(EditorShellTest, StyleFocusSelectionPathUsesSourceCursorContext) {
   std::optional<StyleFocus> styleFocus =
       EditorShellTestAccess::StyleFocusAtSourceOffset(shell, styleOffset);
   ASSERT_TRUE(styleFocus.has_value());
-  EXPECT_FALSE(styleFocus->impactedElements.empty());
+  EXPECT_THAT(styleFocus->impactedElements, ElementsAre(ElementIdIs("target")));
 
   TextEditor& source = EditorShellTestAccess::Source(shell);
   source.setSelection(source.getCoordinatesAtByteOffset(styleOffset),
@@ -671,7 +702,8 @@ TEST(EditorShellTest, StyleFocusSelectionPathUsesSourceCursorContext) {
   EditorShellTestAccess::ApplyStyleFocus(shell, *styleFocus);
 
   EXPECT_TRUE(EditorShellTestAccess::SourceFocusOriginatedInStyle(shell));
-  EXPECT_FALSE(EditorShellTestAccess::App(shell).selectedElements().empty());
+  EXPECT_THAT(EditorShellTestAccess::App(shell).selectedElements(),
+              ElementsAre(ElementIdIs("target")));
 
   EditorShellTestAccess::SetSourceFocusMode(shell, true);
   EXPECT_TRUE(EditorShellTestAccess::SourceFocusMode(shell));
@@ -692,20 +724,24 @@ TEST(EditorShellTest, ReferenceHighlightPreviewCombinesElementsAndSourceRanges) 
 
   EditorShellTestAccess::RefreshReferenceHighlightSummaryIfNeeded(shell);
   const ReferenceHighlightSummary& summary = EditorShellTestAccess::ReferenceSummary(shell);
-  EXPECT_EQ(summary.referencedElements.size(), 2u);
-  EXPECT_TRUE(summary.referencingElements.empty());
-  EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightElements(shell).empty());
+  EXPECT_THAT(summary.referencedElements,
+              UnorderedElementsAre(ElementIdIs("paint"), ElementIdIs("clip")));
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
+  EXPECT_THAT(EditorShellTestAccess::ReferenceHighlightElements(shell), IsEmpty());
 
   EditorShellTestAccess::SetReferenceHighlightChipHovered(shell, true);
   EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightChipHovered(shell));
   EXPECT_FALSE(EditorShellTestAccess::ReferenceHighlightActive(shell));
-  EXPECT_EQ(EditorShellTestAccess::ReferenceHighlightElements(shell).size(), 2u);
-  EXPECT_EQ(EditorShellTestAccess::CombinedSourcePreviewElements(shell).size(), 2u);
-  EXPECT_EQ(EditorShellTestAccess::Source(shell).hoverSourceRanges().size(), 2u);
+  EXPECT_THAT(EditorShellTestAccess::ReferenceHighlightElements(shell),
+              UnorderedElementsAre(ElementIdIs("paint"), ElementIdIs("clip")));
+  EXPECT_THAT(EditorShellTestAccess::CombinedSourcePreviewElements(shell),
+              UnorderedElementsAre(ElementIdIs("paint"), ElementIdIs("clip")));
+  EXPECT_THAT(EditorShellTestAccess::Source(shell).hoverSourceRanges(),
+              ElementsAre(NonEmptySourceByteRange(), NonEmptySourceByteRange()));
 
   EditorShellTestAccess::SetReferenceHighlightChipHovered(shell, false);
   EXPECT_FALSE(EditorShellTestAccess::ReferenceHighlightChipHovered(shell));
-  EXPECT_TRUE(EditorShellTestAccess::Source(shell).hoverSourceRanges().empty());
+  EXPECT_THAT(EditorShellTestAccess::Source(shell).hoverSourceRanges(), IsEmpty());
 
   EditorShellTestAccess::SetReferenceHighlightChipHovered(shell, false);
   EXPECT_FALSE(EditorShellTestAccess::ReferenceHighlightChipHovered(shell));
@@ -724,8 +760,8 @@ TEST(EditorShellTest, ReferenceHighlightSummaryClearsForEmptySelection) {
 
   EXPECT_EQ(EditorShellTestAccess::ReferenceSummary(shell).totalCount(), 0u);
   EXPECT_EQ(EditorShellTestAccess::LastReferenceHighlightSelectionSize(shell), 0u);
-  EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightElements(shell).empty());
-  EXPECT_TRUE(EditorShellTestAccess::CombinedSourcePreviewElements(shell).empty());
+  EXPECT_THAT(EditorShellTestAccess::ReferenceHighlightElements(shell), IsEmpty());
+  EXPECT_THAT(EditorShellTestAccess::CombinedSourcePreviewElements(shell), IsEmpty());
 }
 
 TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
@@ -822,10 +858,12 @@ TEST(EditorShellTest, ReferenceHighlightActiveAndChipRectUseSelectionBoundsCache
   ASSERT_GT(EditorShellTestAccess::DisplayedSelectionBoundsCount(shell), 0u);
   EditorShellTestAccess::RefreshReferenceHighlightSummaryIfNeeded(shell);
 
-  EXPECT_TRUE(EditorShellTestAccess::ReferenceHighlightElements(shell).empty());
+  EXPECT_THAT(EditorShellTestAccess::ReferenceHighlightElements(shell), IsEmpty());
   EditorShellTestAccess::SetReferenceHighlightActive(shell, true);
-  EXPECT_EQ(EditorShellTestAccess::ReferenceHighlightElements(shell).size(), 2u);
-  EXPECT_EQ(EditorShellTestAccess::CombinedSourcePreviewElements(shell).size(), 2u);
+  EXPECT_THAT(EditorShellTestAccess::ReferenceHighlightElements(shell),
+              UnorderedElementsAre(ElementIdIs("paint"), ElementIdIs("clip")));
+  EXPECT_THAT(EditorShellTestAccess::CombinedSourcePreviewElements(shell),
+              UnorderedElementsAre(ElementIdIs("paint"), ElementIdIs("clip")));
 
   const std::optional<Box2d> chipRect =
       EditorShellTestAccess::ReferenceHighlightChipScreenRect(shell, "refs 2");
@@ -889,14 +927,15 @@ TEST(EditorShellTest, SourceHoverRangeGuardsRejectEmptyNoDocumentAndDirtySource)
   auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
   ASSERT_TRUE(target.has_value());
 
-  EXPECT_TRUE(EditorShellTestAccess::SourceHoverRangesForElements(shell, {}).empty());
+  EXPECT_THAT(EditorShellTestAccess::SourceHoverRangesForElements(shell, {}), IsEmpty());
 
   EditorShell invalidShell(window, OptionsWithSource("<svg><rect></svg>", "broken.svg"));
   ASSERT_TRUE(invalidShell.valid());
-  EXPECT_TRUE(EditorShellTestAccess::SourceHoverRangesForElements(invalidShell, {*target}).empty());
+  EXPECT_THAT(EditorShellTestAccess::SourceHoverRangesForElements(invalidShell, {*target}),
+              IsEmpty());
 
   EditorShellTestAccess::Source(shell).insertText(" ");
-  EXPECT_TRUE(EditorShellTestAccess::SourceHoverRangesForElements(shell, {*target}).empty());
+  EXPECT_THAT(EditorShellTestAccess::SourceHoverRangesForElements(shell, {*target}), IsEmpty());
 }
 
 TEST(EditorShellTest, SourcePaneVisibilityNoOpsWhenAlreadyMatching) {
