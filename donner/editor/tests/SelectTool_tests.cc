@@ -1,7 +1,13 @@
 #include "donner/editor/SelectTool.h"
 
-#include <cstdint>
+#include <gmock/gmock.h>
 
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectionAabb.h"
 #include "donner/svg/SVGGeometryElement.h"
@@ -62,6 +68,18 @@ constexpr std::string_view kRotateRingNeighborSvg =
          <rect id="nearby" x="40" y="16" width="12" height="12" fill="blue"/>
        </svg>)";
 
+Vector2d TranslationOf(const Transform2d& transform) {
+  return Vector2d(transform.data[4], transform.data[5]);
+}
+
+Vector2d TranslationDelta(const Transform2d& start, const Transform2d& end) {
+  return Vector2d(end.data[4] - start.data[4], end.data[5] - start.data[5]);
+}
+
+auto Vector2NearExact(double x, double y) {
+  return Vector2Eq(testing::DoubleNear(x, 1e-6), testing::DoubleNear(y, 1e-6));
+}
+
 class SelectToolTest : public ::testing::Test {
 protected:
   void SetUp() override { ASSERT_TRUE(app.loadFromString(kTwoRectsSvg)); }
@@ -78,6 +96,14 @@ protected:
     auto element = app.document().document().querySelector(id);
     EXPECT_TRUE(element.has_value());
     return element->cast<svg::SVGGraphicsElement>().transform();
+  }
+
+  std::vector<std::string> selectedElementIds() {
+    std::vector<std::string> ids;
+    for (const svg::SVGElement& element : app.selectedElements()) {
+      ids.emplace_back(element.id());
+    }
+    return ids;
   }
 
   Box2d worldBoundsOf(std::string_view id) {
@@ -237,7 +263,7 @@ TEST_F(SelectToolTest, ClickInsideFilterGroupSelectsTheGroupNotSiblings) {
   quickClick(Vector2d(12.0, 20.0));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "anchor")
+  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("anchor"))
       << "elevation lands on the filter-g, single-element selection";
 
   drag(Vector2d(12.0, 20.0), Vector2d(42.0, 50.0));
@@ -258,7 +284,7 @@ TEST_F(SelectToolTest, NonCompositingGroupSelectsLeafNotGroup) {
   quickClick(Vector2d(12.0, 20.0));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "plain_leaf")
+  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("plain_leaf"))
       << "plain `<g>` is not a compositing object - select the leaf path";
 
   drag(Vector2d(12.0, 20.0), Vector2d(32.0, 40.0));
@@ -510,7 +536,7 @@ TEST_F(SelectToolTest, ShiftClickAddsElementsToSelection) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "r1");
+  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("r1"));
 
   // Shift+click on r2 → selection = {r1, r2}.
   MouseModifiers shift;
@@ -650,7 +676,7 @@ TEST_F(SelectToolTest, QuickClickOnUnselectedBackgroundStillSelectsIt) {
   tool.onMouseUp(app, Vector2d(5.0, 5.0));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "background");
+  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("background"));
 }
 
 TEST_F(SelectToolTest, MarqueeUsesShapeIntersectionNotShapeBounds) {
@@ -678,7 +704,7 @@ TEST_F(SelectToolTest, MarqueeReleaseSkipsLockedElements) {
   tool.onMouseUp(app, Vector2d(120.0, 120.0));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "target");
+  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("target"));
 }
 
 TEST_F(SelectToolTest, MarqueeDoesNotSelectShapeThatContainsDragBox) {
@@ -692,7 +718,7 @@ TEST_F(SelectToolTest, MarqueeDoesNotSelectShapeThatContainsDragBox) {
   tool.onMouseUp(app, Vector2d(95.0, 95.0));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "target");
+  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("target"));
 }
 
 TEST_F(SelectToolTest, MarqueeGrowsToCoverDraggedRect) {
@@ -737,7 +763,7 @@ TEST_F(SelectToolTest, MarqueeReleaseSelectsOneWhenOnlyOneIntersects) {
   tool.onMouseUp(app, Vector2d(50.0, 50.0));
 
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "r1");
+  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("r1"));
 }
 
 TEST_F(SelectToolTest, MarqueeReleaseSelectsZeroWhenEmpty) {
@@ -764,7 +790,7 @@ TEST_F(SelectToolTest, PlainDragFromEmptySpaceWithExistingSelectionStartsMarquee
   EXPECT_FALSE(tool.isMarqueeing());
   EXPECT_FALSE(tool.marqueeRect().has_value());
   ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "r2");
+  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("r2"));
 }
 
 TEST_F(SelectToolTest, PlainDragStartingOnSelectedShapeDoesNotStartMarquee) {
@@ -865,10 +891,10 @@ TEST_F(SelectToolTest, MultiSelectDragMovesAllSelectedElements) {
 
   const Transform2d r1End = transformOf("#r1");
   const Transform2d r2End = transformOf("#r2");
-  EXPECT_NEAR(r1End.data[4] - r1Start.data[4], 50.0, 1e-6) << "r1 moved by dx";
-  EXPECT_NEAR(r1End.data[5] - r1Start.data[5], 30.0, 1e-6) << "r1 moved by dy";
-  EXPECT_NEAR(r2End.data[4] - r2Start.data[4], 50.0, 1e-6) << "r2 moved by same dx";
-  EXPECT_NEAR(r2End.data[5] - r2Start.data[5], 30.0, 1e-6) << "r2 moved by same dy";
+  EXPECT_THAT(TranslationDelta(r1Start, r1End), Vector2NearExact(50.0, 30.0))
+      << "r1 should move by the drag delta";
+  EXPECT_THAT(TranslationDelta(r2Start, r2End), Vector2NearExact(50.0, 30.0))
+      << "r2 should move by the same drag delta";
 }
 
 TEST_F(SelectToolTest, ClickOnUnselectedElementCollapsesMultiSelection) {
@@ -909,9 +935,9 @@ TEST_F(SelectToolTest, SingleSelectionStaysSingleWhenDragged) {
 
   const Transform2d r1End = transformOf("#r1");
   const Transform2d r2End = transformOf("#r2");
-  EXPECT_NEAR(r1End.data[4] - r1Start.data[4], 50.0, 1e-6) << "r1 moved";
-  EXPECT_NEAR(r2End.data[4] - r2Start.data[4], 0.0, 1e-6) << "r2 did NOT move (not in selection)";
-  EXPECT_NEAR(r2End.data[5] - r2Start.data[5], 0.0, 1e-6);
+  EXPECT_THAT(TranslationDelta(r1Start, r1End), Vector2NearExact(50.0, 30.0)) << "r1 moved";
+  EXPECT_THAT(TranslationDelta(r2Start, r2End), Vector2NearExact(0.0, 0.0))
+      << "r2 did NOT move (not in selection)";
 }
 
 TEST_F(SelectToolTest, DragAfterScaleTranslatesInDocumentSpace) {
@@ -927,10 +953,8 @@ TEST_F(SelectToolTest, DragAfterScaleTranslatesInDocumentSpace) {
   ASSERT_TRUE(app.flushFrame());
 
   const Transform2d r1End = transformOf("#r1");
-  EXPECT_NEAR(r1End.data[0], 2.0, 1e-6);
-  EXPECT_NEAR(r1End.data[3], 2.0, 1e-6);
-  EXPECT_NEAR(r1End.data[4] - r1Start.data[4], 30.0, 1e-6);
-  EXPECT_NEAR(r1End.data[5] - r1Start.data[5], 15.0, 1e-6);
+  EXPECT_THAT(r1End,
+              TransformIs(2.0, 0.0, 0.0, 2.0, r1Start.data[4] + 30.0, r1Start.data[5] + 15.0));
 }
 
 TEST_F(SelectToolTest, MultiSelectDragPreservesExtraElementTransforms) {
@@ -955,9 +979,9 @@ TEST_F(SelectToolTest, MultiSelectDragPreservesExtraElementTransforms) {
 
   const Transform2d r1End = transformOf("#r1");
   const Transform2d r2End = transformOf("#r2");
-  EXPECT_NEAR(r1End.data[4], r1Start.data[4] + 10.0, 1e-6);
-  EXPECT_NEAR(r2End.data[4], 15.0, 1e-6) << "r2: 5 + 10 = 15 (delta applied to prior transform)";
-  EXPECT_NEAR(r2End.data[5], 27.0, 1e-6) << "r2: 7 + 20 = 27";
+  EXPECT_THAT(TranslationDelta(r1Start, r1End), Vector2NearExact(10.0, 20.0));
+  EXPECT_THAT(TranslationOf(r2End), Vector2NearExact(15.0, 27.0))
+      << "r2 delta should be applied to its prior transform";
 }
 
 TEST_F(SelectToolTest, MultiSelectDragWithoutMovementLeavesElementsAlone) {
@@ -971,8 +995,10 @@ TEST_F(SelectToolTest, MultiSelectDragWithoutMovementLeavesElementsAlone) {
   tool.onMouseUp(app, Vector2d(15.1, 15.1));
   app.flushFrame();
 
-  EXPECT_EQ(transformOf("#r1").data[4], r1Start.data[4]) << "r1 unchanged by click-without-drag";
-  EXPECT_EQ(transformOf("#r2").data[4], r2Start.data[4]) << "r2 unchanged";
+  EXPECT_THAT(TranslationDelta(r1Start, transformOf("#r1")), Vector2NearExact(0.0, 0.0))
+      << "r1 unchanged by click-without-drag";
+  EXPECT_THAT(TranslationDelta(r2Start, transformOf("#r2")), Vector2NearExact(0.0, 0.0))
+      << "r2 unchanged";
 }
 
 TEST_F(SelectToolTest, MultiSelectDragProducesWritebackForAllElements) {
@@ -1497,12 +1523,7 @@ TEST_F(SelectToolTest, RotateZoneRotatesAroundSelectionCenter) {
   ASSERT_TRUE(app.flushFrame());
 
   const Transform2d transform = transformOf("#r1");
-  EXPECT_NEAR(transform.data[0], 0.0, 1e-6);
-  EXPECT_NEAR(transform.data[1], 1.0, 1e-6);
-  EXPECT_NEAR(transform.data[2], -1.0, 1e-6);
-  EXPECT_NEAR(transform.data[3], 0.0, 1e-6);
-  EXPECT_NEAR(transform.data[4], 40.0, 1e-6);
-  EXPECT_NEAR(transform.data[5], 0.0, 1e-6);
+  EXPECT_THAT(transform, TransformIs(0.0, 1.0, -1.0, 0.0, 40.0, 0.0));
   ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
   EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Rotate element");
 }

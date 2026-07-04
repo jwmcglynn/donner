@@ -5,7 +5,10 @@
 
 namespace donner {
 
+using testing::AllOf;
 using testing::ElementsAre;
+using testing::Field;
+using testing::IsEmpty;
 
 namespace {
 
@@ -75,6 +78,11 @@ struct StreamableType {
   }
 };
 
+auto EmplaceableTypeIs(int value, std::string text) {
+  return AllOf(Field("value", &EmplaceableType::value, value),
+               Field("text", &EmplaceableType::text, std::move(text)));
+}
+
 }  // namespace
 
 /**
@@ -85,8 +93,7 @@ struct StreamableType {
  */
 TEST(SmallVector, DefaultConstruction) {
   SmallVector<int, 4> vec;
-  EXPECT_TRUE(vec.empty());
-  EXPECT_EQ(0, vec.size());
+  EXPECT_THAT(vec, IsEmpty());
   EXPECT_EQ(4, vec.capacity());
 }
 
@@ -97,12 +104,8 @@ TEST(SmallVector, DefaultConstruction) {
 TEST(SmallVector, InitializerListConstruction) {
   SmallVector<int, 4> vec = {1, 2, 3, 4};
   EXPECT_FALSE(vec.empty());
-  EXPECT_EQ(4, vec.size());
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4));
   EXPECT_EQ(4, vec.capacity());
-  EXPECT_EQ(1, vec[0]);
-  EXPECT_EQ(2, vec[1]);
-  EXPECT_EQ(3, vec[2]);
-  EXPECT_EQ(4, vec[3]);
 }
 
 /**
@@ -112,10 +115,8 @@ TEST(SmallVector, InitializerListConstruction) {
 TEST(SmallVector, ExceedsDefaultSize) {
   SmallVector<int, 4> vec = {1, 2, 3, 4, 5};
   EXPECT_FALSE(vec.empty());
-  EXPECT_EQ(5, vec.size());
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4, 5));
   EXPECT_LE(4, vec.capacity());  // Capacity must be at least 4
-  EXPECT_EQ(1, vec[0]);
-  EXPECT_EQ(5, vec[4]);
 }
 
 /**
@@ -125,10 +126,7 @@ TEST(SmallVector, ExceedsDefaultSize) {
 TEST(SmallVector, CopyConstruction) {
   SmallVector<int, 4> original = {1, 2, 3, 4};
   SmallVector<int, 4> copy = original;
-  EXPECT_EQ(original.size(), copy.size());
-  for (size_t i = 0; i < original.size(); ++i) {
-    EXPECT_EQ(original[i], copy[i]);
-  }
+  EXPECT_THAT(copy, ElementsAre(1, 2, 3, 4));
 }
 
 /**
@@ -138,10 +136,8 @@ TEST(SmallVector, CopyConstruction) {
 TEST(SmallVector, MoveConstruction) {
   SmallVector<int, 4> original = {1, 2, 3, 4};
   SmallVector<int, 4> moved = std::move(original);
-  EXPECT_TRUE(original.empty());
-  EXPECT_EQ(4, moved.size());
-  EXPECT_EQ(1, moved[0]);
-  EXPECT_EQ(4, moved[3]);
+  EXPECT_THAT(original, IsEmpty());
+  EXPECT_THAT(moved, ElementsAre(1, 2, 3, 4));
 }
 
 /**
@@ -152,16 +148,13 @@ TEST(SmallVector, PushBackAndPopBack) {
   SmallVector<int, 4> vec;
   vec.push_back(1);
   vec.push_back(2);
-  EXPECT_EQ(2, vec.size());
-  EXPECT_EQ(1, vec[0]);
-  EXPECT_EQ(2, vec[1]);
+  EXPECT_THAT(vec, ElementsAre(1, 2));
 
   vec.pop_back();
-  EXPECT_EQ(1, vec.size());
-  EXPECT_EQ(1, vec[0]);
+  EXPECT_THAT(vec, ElementsAre(1));
 
   vec.clear();
-  EXPECT_TRUE(vec.empty());
+  EXPECT_THAT(vec, IsEmpty());
 }
 
 /**
@@ -172,8 +165,7 @@ TEST(SmallVector, EmplaceBack) {
   {
     SmallVector<int, 4> vec;
     vec.emplace_back(42);
-    EXPECT_EQ(1, vec.size());
-    EXPECT_EQ(42, vec[0]);
+    EXPECT_THAT(vec, ElementsAre(42));
   }
 
   // Test with std::string
@@ -181,9 +173,7 @@ TEST(SmallVector, EmplaceBack) {
     SmallVector<std::string, 4> vec;
     vec.emplace_back("hello");
     vec.emplace_back(5, 'a');  // Creates "aaaaa"
-    EXPECT_EQ(2, vec.size());
-    EXPECT_EQ("hello", vec[0]);
-    EXPECT_EQ("aaaaa", vec[1]);
+    EXPECT_THAT(vec, ElementsAre("hello", "aaaaa"));
   }
 
   // Test with custom type
@@ -193,11 +183,7 @@ TEST(SmallVector, EmplaceBack) {
     vec.emplace_back(10, "test");
     vec.emplace_back(20, "example");
 
-    EXPECT_EQ(2, vec.size());
-    EXPECT_EQ(10, vec[0].value);
-    EXPECT_EQ("test", vec[0].text);
-    EXPECT_EQ(20, vec[1].value);
-    EXPECT_EQ("example", vec[1].text);
+    EXPECT_THAT(vec, ElementsAre(EmplaceableTypeIs(10, "test"), EmplaceableTypeIs(20, "example")));
     EXPECT_EQ(2, EmplaceableType::constructCount);
   }
 
@@ -208,11 +194,8 @@ TEST(SmallVector, EmplaceBack) {
     vec.emplace_back("second");
     vec.emplace_back("third");  // Should trigger reallocation
 
-    EXPECT_EQ(3, vec.size());
+    EXPECT_THAT(vec, ElementsAre("first", "second", "third"));
     EXPECT_GT(vec.capacity(), 2);
-    EXPECT_EQ("first", vec[0]);
-    EXPECT_EQ("second", vec[1]);
-    EXPECT_EQ("third", vec[2]);
   }
 
   // Test return value of emplace_back
@@ -221,7 +204,7 @@ TEST(SmallVector, EmplaceBack) {
     auto& ref = vec.emplace_back("test");
     EXPECT_EQ("test", ref);
     ref = "modified";
-    EXPECT_EQ("modified", vec[0]);
+    EXPECT_THAT(vec, ElementsAre("modified"));
   }
 }
 
@@ -232,13 +215,10 @@ TEST(SmallVector, NonTrivialType) {
   SmallVector<std::string, 4> vec;
   vec.push_back("hello");
   vec.push_back("world");
-  EXPECT_EQ(2, vec.size());
-  EXPECT_EQ("hello", vec[0]);
-  EXPECT_EQ("world", vec[1]);
+  EXPECT_THAT(vec, ElementsAre("hello", "world"));
 
   vec.pop_back();
-  EXPECT_EQ(1, vec.size());
-  EXPECT_EQ("hello", vec[0]);
+  EXPECT_THAT(vec, ElementsAre("hello"));
 
   vec.clear();
   EXPECT_TRUE(vec.empty());
@@ -251,10 +231,7 @@ TEST(SmallVector, CopyAssignment) {
   SmallVector<int, 4> original = {1, 2, 3, 4};
   SmallVector<int, 4> copy;
   copy = original;
-  EXPECT_EQ(original.size(), copy.size());
-  for (size_t i = 0; i < original.size(); ++i) {
-    EXPECT_EQ(original[i], copy[i]);
-  }
+  EXPECT_THAT(copy, ElementsAre(1, 2, 3, 4));
 }
 
 /**
@@ -264,10 +241,8 @@ TEST(SmallVector, MoveAssignment) {
   SmallVector<int, 4> original = {1, 2, 3, 4};
   SmallVector<int, 4> moved;
   moved = std::move(original);
-  EXPECT_TRUE(original.empty());
-  EXPECT_EQ(4, moved.size());
-  EXPECT_EQ(1, moved[0]);
-  EXPECT_EQ(4, moved[3]);
+  EXPECT_THAT(original, IsEmpty());
+  EXPECT_THAT(moved, ElementsAre(1, 2, 3, 4));
 }
 
 /**
@@ -279,12 +254,7 @@ TEST(SmallVector, EnsureCapacity) {
   vec.push_back(4);
   vec.push_back(5);  // Should trigger reallocation
 
-  EXPECT_EQ(5, vec.size());
-  EXPECT_EQ(1, vec[0]);
-  EXPECT_EQ(2, vec[1]);
-  EXPECT_EQ(3, vec[2]);
-  EXPECT_EQ(4, vec[3]);
-  EXPECT_EQ(5, vec[4]);
+  EXPECT_THAT(vec, ElementsAre(1, 2, 3, 4, 5));
 }
 
 /**
@@ -311,13 +281,10 @@ TEST(SmallVector, NonTrivialTypeUsage) {
   SmallVector<std::string, 4> vec;
   vec.push_back("hello");
   vec.push_back("world");
-  EXPECT_EQ(2, vec.size());
-  EXPECT_EQ("hello", vec[0]);
-  EXPECT_EQ("world", vec[1]);
+  EXPECT_THAT(vec, ElementsAre("hello", "world"));
 
   vec.pop_back();
-  EXPECT_EQ(1, vec.size());
-  EXPECT_EQ("hello", vec[0]);
+  EXPECT_THAT(vec, ElementsAre("hello"));
 
   vec.clear();
   EXPECT_TRUE(vec.empty());
@@ -332,8 +299,7 @@ TEST(SmallVector, PushBackMove) {
   SmallVector<std::string, 4> vec;
   std::string hello = "hello";
   vec.push_back(std::move(hello));  // NOLINT
-  EXPECT_EQ(1, vec.size());
-  EXPECT_EQ("hello", vec[0]);
+  EXPECT_THAT(vec, ElementsAre("hello"));
   EXPECT_FALSE(hello.empty());
 }
 
@@ -356,8 +322,7 @@ TEST(SmallVector, PopBackEmpty) {
 TEST(SmallVector, ClearWithElements) {
   SmallVector<int, 4> vec = {1, 2, 3, 4};
   vec.clear();
-  EXPECT_TRUE(vec.empty());
-  EXPECT_EQ(0, vec.size());
+  EXPECT_THAT(vec, IsEmpty());
 }
 
 /**
@@ -430,10 +395,7 @@ TEST(SmallVector, Insert) {
 
     auto it = vec.insert(vec.begin(), 1);
     EXPECT_EQ(*it, 1);
-    EXPECT_EQ(vec.size(), 3);
-    EXPECT_EQ(vec[0], 1);
-    EXPECT_EQ(vec[1], 2);
-    EXPECT_EQ(vec[2], 3);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3));
   }
 
   // Test inserting in the middle
@@ -444,10 +406,7 @@ TEST(SmallVector, Insert) {
 
     auto it = vec.insert(vec.begin() + 1, 2);
     EXPECT_EQ(*it, 2);
-    EXPECT_EQ(vec.size(), 3);
-    EXPECT_EQ(vec[0], 1);
-    EXPECT_EQ(vec[1], 2);
-    EXPECT_EQ(vec[2], 3);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3));
   }
 
   // Test inserting at the end
@@ -458,10 +417,7 @@ TEST(SmallVector, Insert) {
 
     auto it = vec.insert(vec.end(), 3);
     EXPECT_EQ(*it, 3);
-    EXPECT_EQ(vec.size(), 3);
-    EXPECT_EQ(vec[0], 1);
-    EXPECT_EQ(vec[1], 2);
-    EXPECT_EQ(vec[2], 3);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3));
   }
 
   // Test inserting in an empty vector
@@ -470,8 +426,7 @@ TEST(SmallVector, Insert) {
 
     auto it = vec.insert(vec.begin(), 1);
     EXPECT_EQ(*it, 1);
-    EXPECT_EQ(vec.size(), 1);
-    EXPECT_EQ(vec[0], 1);
+    EXPECT_THAT(vec, ElementsAre(1));
   }
 
   // Test inserting with invalid position (beyond end)
@@ -482,9 +437,7 @@ TEST(SmallVector, Insert) {
     // Should insert at the end
     auto it = vec.insert(vec.begin() + 5, 2);
     EXPECT_EQ(*it, 2);
-    EXPECT_EQ(vec.size(), 2);
-    EXPECT_EQ(vec[0], 1);
-    EXPECT_EQ(vec[1], 2);
+    EXPECT_THAT(vec, ElementsAre(1, 2));
   }
 
   // Test inserting with data growth beyond small size
@@ -497,11 +450,7 @@ TEST(SmallVector, Insert) {
     // This will trigger reallocation
     auto it = vec.insert(vec.begin(), 0);
     EXPECT_EQ(*it, 0);
-    EXPECT_EQ(vec.size(), 5);
-
-    for (int i = 0; i < 5; ++i) {
-      EXPECT_EQ(vec[i], i);
-    }
+    EXPECT_THAT(vec, ElementsAre(0, 1, 2, 3, 4));
   }
 
   // Test with non-trivial type (std::string)
@@ -512,10 +461,7 @@ TEST(SmallVector, Insert) {
 
     auto it = vec.insert(vec.begin() + 1, "banana");
     EXPECT_EQ(*it, "banana");
-    EXPECT_EQ(vec.size(), 3);
-    EXPECT_EQ(vec[0], "apple");
-    EXPECT_EQ(vec[1], "banana");
-    EXPECT_EQ(vec[2], "cherry");
+    EXPECT_THAT(vec, ElementsAre("apple", "banana", "cherry"));
   }
 }
 
@@ -636,7 +582,7 @@ TEST(SmallVector, Front) {
     EXPECT_EQ(vec.front(), 1);
     vec.front() = 10;
     EXPECT_EQ(vec.front(), 10);
-    EXPECT_EQ(vec[0], 10);
+    EXPECT_THAT(vec, ElementsAre(10, 2, 3, 4));
   }
 
   // Test with single element
@@ -651,7 +597,7 @@ TEST(SmallVector, Front) {
     EXPECT_EQ(vec.front(), "hello");
     vec.front() = "modified";
     EXPECT_EQ(vec.front(), "modified");
-    EXPECT_EQ(vec[0], "modified");
+    EXPECT_THAT(vec, ElementsAre("modified", "world", "test"));
   }
 
   // Test with vector that exceeds small size
@@ -682,7 +628,7 @@ TEST(SmallVector, Back) {
     EXPECT_EQ(vec.back(), 4);
     vec.back() = 40;
     EXPECT_EQ(vec.back(), 40);
-    EXPECT_EQ(vec[3], 40);
+    EXPECT_THAT(vec, ElementsAre(1, 2, 3, 40));
   }
 
   // Test with single element
@@ -698,7 +644,7 @@ TEST(SmallVector, Back) {
     EXPECT_EQ(vec.back(), "test");
     vec.back() = "modified";
     EXPECT_EQ(vec.back(), "modified");
-    EXPECT_EQ(vec[2], "modified");
+    EXPECT_THAT(vec, ElementsAre("hello", "world", "modified"));
   }
 
   // Test with vector that exceeds small size
@@ -739,8 +685,6 @@ TEST(SmallVector, FrontAndBack) {
 
   vec.front() = 10;
   vec.back() = 50;
-  EXPECT_EQ(vec[0], 10);
-  EXPECT_EQ(vec[4], 50);
   EXPECT_THAT(vec, ElementsAre(10, 2, 3, 4, 50));
 }
 
@@ -750,12 +694,7 @@ TEST(SmallVector, FrontAndBack) {
 TEST(SmallVector, ResizeGrowTrivial) {
   SmallVector<int, 4> vec = {1, 2};
   vec.resize(5);
-  EXPECT_EQ(vec.size(), 5);
-  EXPECT_EQ(vec[0], 1);
-  EXPECT_EQ(vec[1], 2);
-  EXPECT_EQ(vec[2], 0);
-  EXPECT_EQ(vec[3], 0);
-  EXPECT_EQ(vec[4], 0);
+  EXPECT_THAT(vec, ElementsAre(1, 2, 0, 0, 0));
 }
 
 /**
@@ -764,9 +703,7 @@ TEST(SmallVector, ResizeGrowTrivial) {
 TEST(SmallVector, ResizeShrinkTrivial) {
   SmallVector<int, 4> vec = {1, 2, 3, 4, 5};
   vec.resize(2);
-  EXPECT_EQ(vec.size(), 2);
-  EXPECT_EQ(vec[0], 1);
-  EXPECT_EQ(vec[1], 2);
+  EXPECT_THAT(vec, ElementsAre(1, 2));
 }
 
 /**
@@ -776,10 +713,7 @@ TEST(SmallVector, ResizeGrowNonTrivial) {
   SmallVector<std::string, 2> vec;
   vec.push_back("hello");
   vec.resize(3);
-  EXPECT_EQ(vec.size(), 3);
-  EXPECT_EQ(vec[0], "hello");
-  EXPECT_EQ(vec[1], "");
-  EXPECT_EQ(vec[2], "");
+  EXPECT_THAT(vec, ElementsAre("hello", "", ""));
 }
 
 /**
@@ -791,8 +725,7 @@ TEST(SmallVector, ResizeShrinkNonTrivial) {
   vec.push_back("world");
   vec.push_back("test");
   vec.resize(1);
-  EXPECT_EQ(vec.size(), 1);
-  EXPECT_EQ(vec[0], "hello");
+  EXPECT_THAT(vec, ElementsAre("hello"));
 }
 
 /**
@@ -801,7 +734,6 @@ TEST(SmallVector, ResizeShrinkNonTrivial) {
 TEST(SmallVector, ResizeSameSize) {
   SmallVector<int, 4> vec = {1, 2, 3};
   vec.resize(3);
-  EXPECT_EQ(vec.size(), 3);
   EXPECT_THAT(vec, ElementsAre(1, 2, 3));
 }
 
@@ -823,7 +755,6 @@ TEST(SmallVector, AssignRange) {
   SmallVector<int, 4> vec = {1, 2, 3};
   std::vector<int> source = {10, 20, 30, 40, 50};
   vec.assign(source.begin(), source.end());
-  EXPECT_EQ(vec.size(), 5);
   EXPECT_THAT(vec, ElementsAre(10, 20, 30, 40, 50));
 }
 
@@ -838,7 +769,6 @@ TEST(SmallVector, AssignReplacesContents) {
 
   std::vector<std::string> source = {"new1", "new2"};
   vec.assign(source.begin(), source.end());
-  EXPECT_EQ(vec.size(), 2);
   EXPECT_THAT(vec, ElementsAre("new1", "new2"));
 }
 

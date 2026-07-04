@@ -1,6 +1,7 @@
 /// @file
 /// Tests for the Geode embedded-device code path (Phase 6).
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -12,11 +13,14 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"  // IWYU pragma: keep - provides wgpuLabel
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
 namespace {
 
 constexpr double kViewportSize = 32.0;
+
+using test::IsTransparent;
 
 /// RGBA pixel at (x, y) in a tightly packed snapshot bitmap.
 std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
@@ -110,7 +114,7 @@ TEST_F(GeodeEmbedTest, EmptyFrameIsTransparent) {
   EXPECT_EQ(snap.dimensions.y, static_cast<int>(kViewportSize));
 
   auto pixel = pixelAt(snap, 16, 16);
-  EXPECT_EQ(pixel[3], 0u) << "Empty frame should be transparent";
+  EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 }
 
 // ---------------------------------------------------------------------------
@@ -154,7 +158,7 @@ TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   EXPECT_EQ(snap.dimensions.y, static_cast<int>(kSize));
 
   auto pixel = pixelAt(snap, 16, 16);
-  EXPECT_EQ(pixel[3], 0u) << "Empty frame should be transparent";
+  EXPECT_THAT(pixel, IsTransparent()) << "Empty frame should be transparent";
 
   renderer.clearTargetTexture();
 }

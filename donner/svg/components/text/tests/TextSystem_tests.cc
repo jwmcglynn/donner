@@ -26,6 +26,33 @@ using testing::IsEmpty;
 using testing::SizeIs;
 
 namespace donner::svg::components {
+namespace {
+
+MATCHER_P(TextSpanTextIs, expected, "") {
+  return testing::ExplainMatchResult(Eq(std::string(expected)), std::string(arg.text.str()),
+                                     result_listener);
+}
+
+MATCHER_P(OptionalLengthValueIs, expected, "") {
+  return testing::ExplainMatchResult(
+      testing::Optional(LengthIs(testing::DoubleEq(expected), Eq(Lengthd::Unit::None))), arg,
+      result_listener);
+}
+
+MATCHER(NoLengthValue, "") {
+  if (arg.has_value()) {
+    *result_listener << "value is " << testing::PrintToString(*arg);
+    return false;
+  }
+
+  return true;
+}
+
+MATCHER_P(PathCommandVerbIs, expectedVerb, "") {
+  return testing::ExplainMatchResult(Eq(expectedVerb), arg.verb, result_listener);
+}
+
+}  // namespace
 
 class TextSystemTest : public ::testing::Test {
 protected:
@@ -60,8 +87,7 @@ TEST_F(TextSystemTest, BasicTextElement) {
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  EXPECT_THAT(computed->spans, SizeIs(1));
-  EXPECT_EQ(computed->spans[0].text, "Hello");
+  EXPECT_THAT(computed->spans, testing::ElementsAre(TextSpanTextIs("Hello")));
 }
 
 // --- Text with tspan children ---
@@ -80,9 +106,8 @@ TEST_F(TextSystemTest, TextWithTspan) {
   ASSERT_NE(computed, nullptr);
   // The root <text> element produces a span (with its own text content, possibly empty),
   // followed by one span per <tspan> child.
-  ASSERT_THAT(computed->spans, SizeIs(3));
-  EXPECT_EQ(computed->spans[1].text, "First");
-  EXPECT_EQ(computed->spans[2].text, "Second");
+  EXPECT_THAT(computed->spans, testing::ElementsAre(TextSpanTextIs(""), TextSpanTextIs("First"),
+                                                    TextSpanTextIs("Second")));
 }
 
 // --- Text positioning: x, y inherited from root ---
@@ -103,12 +128,10 @@ TEST_F(TextSystemTest, PositioningInheritedFromRoot) {
   ASSERT_THAT(computed->spans, SizeIs(2));
 
   // The tspan should inherit x/y from the root <text> element via xList/yList.
-  ASSERT_FALSE(computed->spans[1].xList.empty());
-  ASSERT_TRUE(computed->spans[1].xList[0].has_value());
-  EXPECT_DOUBLE_EQ(computed->spans[1].xList[0]->value, 15.0);
-  ASSERT_FALSE(computed->spans[1].yList.empty());
-  ASSERT_TRUE(computed->spans[1].yList[0].has_value());
-  EXPECT_DOUBLE_EQ(computed->spans[1].yList[0]->value, 25.0);
+  EXPECT_THAT(computed->spans[1].xList,
+              testing::ElementsAre(OptionalLengthValueIs(15.0), NoLengthValue(), NoLengthValue()));
+  EXPECT_THAT(computed->spans[1].yList,
+              testing::ElementsAre(OptionalLengthValueIs(25.0), NoLengthValue(), NoLengthValue()));
 }
 
 // --- Per-character positioning ---
@@ -128,14 +151,10 @@ TEST_F(TextSystemTest, PerCharacterPositioning) {
   ASSERT_THAT(computed->spans, SizeIs(1));
 
   auto& span = computed->spans[0];
-  ASSERT_EQ(span.xList.size(), 3u);
   // xList[0] now holds the span-start value (was previously cleared).
-  EXPECT_TRUE(span.xList[0].has_value());
-  EXPECT_DOUBLE_EQ(span.xList[0]->value, 10.0);
-  EXPECT_TRUE(span.xList[1].has_value());
-  EXPECT_DOUBLE_EQ(span.xList[1]->value, 20.0);
-  EXPECT_TRUE(span.xList[2].has_value());
-  EXPECT_DOUBLE_EQ(span.xList[2]->value, 30.0);
+  EXPECT_THAT(span.xList,
+              testing::ElementsAre(OptionalLengthValueIs(10.0), OptionalLengthValueIs(20.0),
+                                   OptionalLengthValueIs(30.0)));
 }
 
 // --- dx/dy positioning ---
@@ -156,16 +175,11 @@ TEST_F(TextSystemTest, DxDyPositioning) {
   ASSERT_THAT(computed->spans, SizeIs(2));
 
   auto& span = computed->spans[1];
-  ASSERT_EQ(span.dxList.size(), 2u);
-  ASSERT_EQ(span.dyList.size(), 2u);
   // dxList[0] now holds the span-start value (was previously cleared).
-  EXPECT_TRUE(span.dxList[0].has_value());
-  EXPECT_DOUBLE_EQ(span.dxList[0]->value, 5.0);
-  EXPECT_TRUE(span.dxList[1].has_value());
-  EXPECT_DOUBLE_EQ(span.dxList[1]->value, 10.0);
-  EXPECT_TRUE(span.dyList[0].has_value());
-  EXPECT_DOUBLE_EQ(span.dyList[0]->value, 2.0);
-  EXPECT_DOUBLE_EQ(span.dyList[1]->value, 4.0);
+  EXPECT_THAT(span.dxList,
+              testing::ElementsAre(OptionalLengthValueIs(5.0), OptionalLengthValueIs(10.0)));
+  EXPECT_THAT(span.dyList,
+              testing::ElementsAre(OptionalLengthValueIs(2.0), OptionalLengthValueIs(4.0)));
 }
 
 TEST_F(TextSystemTest, RootDxDyBecomesScalarStartPosition) {
@@ -183,13 +197,11 @@ TEST_F(TextSystemTest, RootDxDyBecomesScalarStartPosition) {
   ASSERT_THAT(computed->spans, SizeIs(1));
 
   const auto& span = computed->spans[0];
-  ASSERT_EQ(span.dxList.size(), 4u);
-  ASSERT_EQ(span.dyList.size(), 4u);
   // dxList[0]/dyList[0] now hold the span-start values (no longer cleared).
-  EXPECT_TRUE(span.dxList[0].has_value());
-  EXPECT_DOUBLE_EQ(span.dxList[0]->value, 33.0);
-  EXPECT_TRUE(span.dyList[0].has_value());
-  EXPECT_DOUBLE_EQ(span.dyList[0]->value, 100.0);
+  EXPECT_THAT(span.dxList, testing::ElementsAre(OptionalLengthValueIs(33.0), testing::_, testing::_,
+                                                testing::_));
+  EXPECT_THAT(span.dyList, testing::ElementsAre(OptionalLengthValueIs(100.0), testing::_,
+                                                testing::_, testing::_));
 }
 
 // --- Rotation ---
@@ -210,9 +222,8 @@ TEST_F(TextSystemTest, RotateAttribute) {
   ASSERT_THAT(computed->spans, SizeIs(2));
 
   auto& span = computed->spans[1];
-  ASSERT_THAT(span.rotateList, SizeIs(2));
-  EXPECT_DOUBLE_EQ(span.rotateList[0], 45.0);
-  EXPECT_DOUBLE_EQ(span.rotateList[1], 90.0);
+  EXPECT_THAT(span.rotateList,
+              testing::ElementsAre(testing::DoubleEq(45.0), testing::DoubleEq(90.0)));
 }
 
 // --- Empty text element ---
@@ -230,8 +241,7 @@ TEST_F(TextSystemTest, EmptyTextElement) {
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   // The root <text> element itself produces a single span even when empty.
-  ASSERT_THAT(computed->spans, SizeIs(1));
-  EXPECT_EQ(computed->spans[0].text, "");
+  EXPECT_THAT(computed->spans, testing::ElementsAre(TextSpanTextIs("")));
 }
 
 // --- Multiple tspan with individual positioning ---
@@ -251,18 +261,12 @@ TEST_F(TextSystemTest, MultipleTspanWithPositioning) {
   // Root span + 3 tspan children.
   ASSERT_THAT(computed->spans, SizeIs(4));
 
-  ASSERT_TRUE(computed->spans[1].hasExplicitX());
-  EXPECT_DOUBLE_EQ(computed->spans[1].xList[0]->value, 10.0);
-  ASSERT_TRUE(computed->spans[1].hasExplicitY());
-  EXPECT_DOUBLE_EQ(computed->spans[1].yList[0]->value, 20.0);
-  ASSERT_TRUE(computed->spans[2].hasExplicitX());
-  EXPECT_DOUBLE_EQ(computed->spans[2].xList[0]->value, 30.0);
-  ASSERT_TRUE(computed->spans[2].hasExplicitY());
-  EXPECT_DOUBLE_EQ(computed->spans[2].yList[0]->value, 40.0);
-  ASSERT_TRUE(computed->spans[3].hasExplicitX());
-  EXPECT_DOUBLE_EQ(computed->spans[3].xList[0]->value, 50.0);
-  ASSERT_TRUE(computed->spans[3].hasExplicitY());
-  EXPECT_DOUBLE_EQ(computed->spans[3].yList[0]->value, 60.0);
+  EXPECT_THAT(computed->spans[1].xList, testing::ElementsAre(OptionalLengthValueIs(10.0)));
+  EXPECT_THAT(computed->spans[1].yList, testing::ElementsAre(OptionalLengthValueIs(20.0)));
+  EXPECT_THAT(computed->spans[2].xList, testing::ElementsAre(OptionalLengthValueIs(30.0)));
+  EXPECT_THAT(computed->spans[2].yList, testing::ElementsAre(OptionalLengthValueIs(40.0)));
+  EXPECT_THAT(computed->spans[3].xList, testing::ElementsAre(OptionalLengthValueIs(50.0)));
+  EXPECT_THAT(computed->spans[3].yList, testing::ElementsAre(OptionalLengthValueIs(60.0)));
 }
 
 // --- textPath reference ---
@@ -344,8 +348,8 @@ TEST_F(TextSystemTest, TextPathWithAbsoluteStartOffsetAndTransform) {
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(2));
   ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
-  EXPECT_EQ(computed->spans[1].pathSpline->points()[0], Vector2d(5, 7));
-  EXPECT_EQ(computed->spans[1].pathSpline->points()[1], Vector2d(105, 7));
+  EXPECT_THAT(computed->spans[1].pathSpline->points(),
+              testing::ElementsAre(Vector2d(5, 7), Vector2d(105, 7)));
   EXPECT_DOUBLE_EQ(computed->spans[1].pathStartOffset, 10.0);
 }
 
@@ -387,8 +391,8 @@ TEST_F(TextSystemTest, TextPathTransformIncludesTransformOriginPivot) {
   ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
 
   // Pivoted result: T(-origin) * rotate90 * T(origin).
-  EXPECT_THAT(computed->spans[1].pathSpline->points()[0], Vector2Near(50.0, -50.0));
-  EXPECT_THAT(computed->spans[1].pathSpline->points()[1], Vector2Near(50.0, 50.0));
+  EXPECT_THAT(computed->spans[1].pathSpline->points(),
+              testing::ElementsAre(Vector2Near(50.0, -50.0), Vector2Near(50.0, 50.0)));
 }
 
 TEST_F(TextSystemTest, TextPathUsesSplineOverrideWhenComputedPathMissing) {
@@ -421,8 +425,8 @@ TEST_F(TextSystemTest, TextPathUsesSplineOverrideWhenComputedPathMissing) {
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(2));
   ASSERT_TRUE(computed->spans[1].pathSpline.has_value());
-  EXPECT_EQ(computed->spans[1].pathSpline->points()[0], Vector2d(1, 2));
-  EXPECT_EQ(computed->spans[1].pathSpline->points()[1], Vector2d(3, 4));
+  EXPECT_THAT(computed->spans[1].pathSpline->points(),
+              testing::ElementsAre(Vector2d(1, 2), Vector2d(3, 4)));
 }
 
 TEST_F(TextSystemTest, TextPathWithInvalidReferenceMarksFailure) {
@@ -687,7 +691,7 @@ TEST_F(TextSystemTest, Utf8MultibyteCounting) {
   ASSERT_THAT(computed->spans, SizeIs(1));
 
   // Should have 3 characters (2 CJK + 1 ASCII), so 3 xList entries.
-  EXPECT_EQ(computed->spans[0].xList.size(), 3u);
+  EXPECT_THAT(computed->spans[0].xList, SizeIs(3));
 }
 
 TEST_F(TextSystemTest, Utf16CountingTreatsEmojiAsTwoCodeUnits) {
@@ -702,7 +706,7 @@ TEST_F(TextSystemTest, Utf16CountingTreatsEmojiAsTwoCodeUnits) {
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(1));
-  EXPECT_EQ(computed->spans[0].xList.size(), 3u);
+  EXPECT_THAT(computed->spans[0].xList, SizeIs(3));
 }
 
 TEST_F(TextSystemTest, RotateListStopsWhenGlobalIndicesRunOut) {
@@ -717,8 +721,7 @@ TEST_F(TextSystemTest, RotateListStopsWhenGlobalIndicesRunOut) {
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(1));
-  ASSERT_THAT(computed->spans[0].rotateList, SizeIs(1));
-  EXPECT_THAT(computed->spans[0].rotateList[0], testing::DoubleNear(15.0, 1e-9));
+  EXPECT_THAT(computed->spans[0].rotateList, testing::ElementsAre(testing::DoubleNear(15.0, 1e-9)));
 }
 
 TEST_F(TextSystemTest, InheritedRotateListStopsAcrossChildSpans) {
@@ -733,8 +736,7 @@ TEST_F(TextSystemTest, InheritedRotateListStopsAcrossChildSpans) {
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
   ASSERT_THAT(computed->spans, SizeIs(3));
-  EXPECT_THAT(computed->spans[1].rotateList, SizeIs(1));
-  EXPECT_THAT(computed->spans[1].rotateList[0], testing::DoubleNear(15.0, 1e-9));
+  EXPECT_THAT(computed->spans[1].rotateList, testing::ElementsAre(testing::DoubleNear(15.0, 1e-9)));
   EXPECT_THAT(computed->spans[2].rotateList, IsEmpty());
 }
 
@@ -751,10 +753,9 @@ TEST_F(TextSystemTest, XmlSpacePreserveKeepsWhitespaceAndInheritance) {
   auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);
-  ASSERT_THAT(computed->spans, SizeIs(3));
-  EXPECT_EQ(computed->spans[0].text, " A         ");
-  EXPECT_EQ(computed->spans[1].text, " B ");
-  EXPECT_EQ(computed->spans[2].text, "       ");
+  EXPECT_THAT(computed->spans,
+              testing::ElementsAre(TextSpanTextIs(" A         "), TextSpanTextIs(" B "),
+                                   TextSpanTextIs("       ")));
 }
 
 TEST_F(TextSystemTest, TextPathWithoutHrefIsHidden) {
@@ -839,21 +840,21 @@ TEST_F(TextSystemTest, TextPathTransformAppliesQuadAndCurveCommands) {
       pathSpans.push_back(&span);
     }
   }
-  ASSERT_THAT(pathSpans, SizeIs(2));
+  ASSERT_THAT(pathSpans, testing::ElementsAre(testing::Pointee(TextSpanTextIs("Q")),
+                                              testing::Pointee(TextSpanTextIs("C"))));
 
-  EXPECT_EQ(pathSpans[0]->text, "Q");
-  EXPECT_EQ(pathSpans[1]->text, "C");
+  EXPECT_THAT(pathSpans[0]->pathSpline->commands(),
+              testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                   PathCommandVerbIs(Path::Verb::QuadTo)));
+  EXPECT_THAT(pathSpans[0]->pathSpline->points(),
+              testing::ElementsAre(Vector2d(1, 2), Vector2d(11, 7), Vector2d(21, 2)));
 
-  EXPECT_EQ(pathSpans[0]->pathSpline->commands()[1].verb, Path::Verb::QuadTo);
-  EXPECT_EQ(pathSpans[0]->pathSpline->points()[0], Vector2d(1, 2));
-  EXPECT_EQ(pathSpans[0]->pathSpline->points()[1], Vector2d(11, 7));
-  EXPECT_EQ(pathSpans[0]->pathSpline->points()[2], Vector2d(21, 2));
-
-  EXPECT_EQ(pathSpans[1]->pathSpline->commands()[1].verb, Path::Verb::CurveTo);
-  EXPECT_EQ(pathSpans[1]->pathSpline->points()[0], Vector2d(3, 4));
-  EXPECT_EQ(pathSpans[1]->pathSpline->points()[1], Vector2d(13, 9));
-  EXPECT_EQ(pathSpans[1]->pathSpline->points()[2], Vector2d(18, 14));
-  EXPECT_EQ(pathSpans[1]->pathSpline->points()[3], Vector2d(23, 4));
+  EXPECT_THAT(pathSpans[1]->pathSpline->commands(),
+              testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                   PathCommandVerbIs(Path::Verb::CurveTo)));
+  EXPECT_THAT(
+      pathSpans[1]->pathSpline->points(),
+      testing::ElementsAre(Vector2d(3, 4), Vector2d(13, 9), Vector2d(18, 14), Vector2d(23, 4)));
 }
 
 TEST_F(TextSystemTest, TextPathTransformAppliesClosePath) {
@@ -890,9 +891,12 @@ TEST_F(TextSystemTest, TextPathTransformAppliesClosePath) {
                                      [](const auto& span) { return span.pathSpline.has_value(); });
   ASSERT_NE(pathSpan, computed->spans.end());
   ASSERT_TRUE(pathSpan->pathSpline.has_value());
-  EXPECT_EQ(pathSpan->pathSpline->points()[0], Vector2d(2, 3));
-  EXPECT_EQ(pathSpan->pathSpline->points()[1], Vector2d(12, 3));
-  EXPECT_EQ(pathSpan->pathSpline->commands().back().verb, Path::Verb::ClosePath);
+  EXPECT_THAT(pathSpan->pathSpline->points(),
+              testing::ElementsAre(Vector2d(2, 3), Vector2d(12, 3)));
+  EXPECT_THAT(pathSpan->pathSpline->commands(),
+              testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                   PathCommandVerbIs(Path::Verb::LineTo),
+                                   PathCommandVerbIs(Path::Verb::ClosePath)));
 }
 
 // --- No warnings for valid text ---
@@ -936,10 +940,10 @@ TEST_F(TextSystemTest, ListOnlyPositioning) {
 
   const auto& span = computed->spans[0];
   // xList[0] and yList[0] hold the span-start position.
-  ASSERT_TRUE(span.hasExplicitX());
-  EXPECT_DOUBLE_EQ(span.xList[0]->value, 10.0);
-  ASSERT_TRUE(span.hasExplicitY());
-  EXPECT_DOUBLE_EQ(span.yList[0]->value, 20.0);
+  EXPECT_THAT(span.xList, testing::ElementsAre(OptionalLengthValueIs(10.0), NoLengthValue(),
+                                               NoLengthValue(), NoLengthValue(), NoLengthValue()));
+  EXPECT_THAT(span.yList, testing::ElementsAre(OptionalLengthValueIs(20.0), NoLengthValue(),
+                                               NoLengthValue(), NoLengthValue(), NoLengthValue()));
   EXPECT_TRUE(span.startsNewChunk);
 }
 
@@ -961,9 +965,7 @@ TEST_F(TextSystemTest, NoDoubleApplication) {
 
   const auto& span = computed->spans[0];
   // dx should appear exactly once in dxList[0], not in a separate scalar field.
-  ASSERT_GE(span.dxList.size(), 1u);
-  ASSERT_TRUE(span.dxList[0].has_value());
-  EXPECT_DOUBLE_EQ(span.dxList[0]->value, 5.0);
+  EXPECT_THAT(span.dxList, testing::ElementsAre(OptionalLengthValueIs(5.0)));
 }
 
 // --- Child tspan preserves dyList[0] ---
@@ -985,9 +987,7 @@ TEST_F(TextSystemTest, ChildTspanPreservesListZero) {
 
   // The tspan's dyList[0] should retain dy=7 (not be cleared).
   const auto& span = computed->spans[1];
-  ASSERT_GE(span.dyList.size(), 1u);
-  ASSERT_TRUE(span.dyList[0].has_value());
-  EXPECT_DOUBLE_EQ(span.dyList[0]->value, 7.0);
+  EXPECT_THAT(span.dyList, testing::ElementsAre(OptionalLengthValueIs(7.0)));
 }
 
 // --- startsNewChunk flag ---
@@ -1007,12 +1007,11 @@ TEST_F(TextSystemTest, StartsNewChunk) {
   // Root span + 2 tspan children.
   ASSERT_THAT(computed->spans, SizeIs(3));
 
-  // Root span starts a new chunk (has x and y).
-  EXPECT_TRUE(computed->spans[0].startsNewChunk);
-  // First tspan has no explicit position - continuation.
-  EXPECT_FALSE(computed->spans[1].startsNewChunk);
-  // Second tspan has explicit x - new chunk.
-  EXPECT_TRUE(computed->spans[2].startsNewChunk);
+  std::vector<bool> startsNewChunk;
+  for (const auto& span : computed->spans) {
+    startsNewChunk.push_back(span.startsNewChunk);
+  }
+  EXPECT_THAT(startsNewChunk, testing::ElementsAre(true, false, true));
 }
 
 // --- display:none + rotate ---
@@ -1048,17 +1047,15 @@ TEST_F(TextSystemTest, DisplayNoneConsumesRotateIndices) {
   EXPECT_THAT(texts, testing::ElementsAre("T", "ex", "t"));
   EXPECT_THAT(hiddenFlags, testing::ElementsAre(false, true, false));
 
-  // "T" is the root's first chunk → gets the full rotate list [10,30,50,70].
-  ASSERT_GE(rotateLists[0].size(), 1u);
-  EXPECT_DOUBLE_EQ(rotateLists[0][0], 10.0);
-
+  // "T" is the root's first chunk -> gets the full rotate list [10,30,50,70].
   // "ex" is hidden (display:none) - does NOT consume attribute indices.
   // The hidden span has no rotate values (skips character counting entirely).
-  EXPECT_TRUE(rotateLists[1].empty());
-
-  // "t" is root continuation at globalCharIndex=1 (hidden chars skipped) → rotate[1]=30.
-  ASSERT_EQ(rotateLists[2].size(), 1u);
-  EXPECT_DOUBLE_EQ(rotateLists[2][0], 30.0);
+  // "t" is root continuation at globalCharIndex=1 (hidden chars skipped) -> rotate[1]=30.
+  EXPECT_THAT(
+      rotateLists,
+      testing::ElementsAre(testing::ElementsAre(testing::DoubleEq(10.0), testing::DoubleEq(30.0),
+                                                testing::DoubleEq(50.0), testing::DoubleEq(70.0)),
+                           IsEmpty(), testing::ElementsAre(testing::DoubleEq(30.0))));
 }
 
 // --- Whitespace normalization tests ---
@@ -1074,11 +1071,12 @@ TEST_F(TextSystemTest, WhitespaceTspanBoundarySpace) {
   auto textEntity = document.querySelector("#t")->unsafeEntityHandle().entity();
 
   auto& textComp = registry.get<TextComponent>(textEntity);
-  EXPECT_EQ(textComp.textChunks.size(), 2u);
-  if (textComp.textChunks.size() >= 2) {
-    EXPECT_EQ(textComp.textChunks[0].str(), "Some ");
-    EXPECT_EQ(textComp.textChunks[1].str(), " text");
+  std::vector<std::string> textChunks;
+  textChunks.reserve(textComp.textChunks.size());
+  for (const auto& textChunk : textComp.textChunks) {
+    textChunks.push_back(textChunk.str());
   }
+  EXPECT_THAT(textChunks, testing::ElementsAre("Some ", " text"));
 
   auto* computed = registry.try_get<ComputedTextComponent>(textEntity);
   ASSERT_NE(computed, nullptr);

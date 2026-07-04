@@ -1,5 +1,8 @@
 #include "donner/editor/SidebarPresenter.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
 #include <optional>
 #include <span>
 #include <string_view>
@@ -7,11 +10,13 @@
 
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/svg/DocumentState.h"
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
 
 namespace donner::editor {
 namespace {
+
+using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::Pair;
 
 constexpr std::string_view kInspectorSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">
@@ -46,31 +51,17 @@ TEST(SidebarPresenterTest, RefreshSnapshotCapturesXmlAttributesAndComputedStyle)
   EXPECT_TRUE(presenter.inspectorHasSelectionForTesting());
 
   const auto xmlAttributes = presenter.inspectorXmlAttributesForTesting();
-  ASSERT_EQ(xmlAttributes.size(), 6u);
-  EXPECT_EQ(xmlAttributes[0].first, "x");
-  EXPECT_EQ(xmlAttributes[0].second, "10");
-  EXPECT_EQ(xmlAttributes[1].first, "y");
-  EXPECT_EQ(xmlAttributes[1].second, "20");
-  EXPECT_EQ(xmlAttributes[2].first, "width");
-  EXPECT_EQ(xmlAttributes[2].second, "100");
-  EXPECT_EQ(xmlAttributes[3].first, "height");
-  EXPECT_EQ(xmlAttributes[3].second, "50");
-  EXPECT_EQ(xmlAttributes[4].first, "fill");
-  EXPECT_EQ(xmlAttributes[4].second, "red");
-  EXPECT_EQ(xmlAttributes[5].first, "id");
-  EXPECT_EQ(xmlAttributes[5].second, "target");
+  EXPECT_THAT(xmlAttributes,
+              ElementsAre(Pair("x", "10"), Pair("y", "20"), Pair("width", "100"),
+                          Pair("height", "50"), Pair("fill", "red"), Pair("id", "target")));
 
   const auto computedStyle = presenter.inspectorComputedStyleForTesting();
-  ASSERT_EQ(computedStyle.size(), 9u);
-  EXPECT_EQ(computedStyle[0].first, "display");
-  EXPECT_EQ(computedStyle[1].first, "visibility");
-  EXPECT_EQ(computedStyle[2].first, "opacity");
-  EXPECT_EQ(computedStyle[3].first, "fill");
-  EXPECT_EQ(computedStyle[4].first, "fill-opacity");
-  EXPECT_EQ(computedStyle[5].first, "stroke");
-  EXPECT_EQ(computedStyle[6].first, "stroke-width");
-  EXPECT_EQ(computedStyle[7].first, "stroke-opacity");
-  EXPECT_EQ(computedStyle[8].first, "color");
+  EXPECT_THAT(computedStyle,
+              ElementsAre(Pair("display", ::testing::_), Pair("visibility", ::testing::_),
+                          Pair("opacity", ::testing::_), Pair("fill", ::testing::_),
+                          Pair("fill-opacity", ::testing::_), Pair("stroke", ::testing::_),
+                          Pair("stroke-width", ::testing::_), Pair("stroke-opacity", ::testing::_),
+                          Pair("color", ::testing::_)));
 
   const std::string* displayValue = FindInspectorValue(computedStyle, "display");
   ASSERT_NE(displayValue, nullptr);
@@ -166,8 +157,8 @@ TEST(SidebarPresenterTest, RefreshSnapshotOmitsInspectorDetailsForMultiSelection
   presenter.refreshSnapshot(app);
 
   EXPECT_FALSE(presenter.inspectorHasSelectionForTesting());
-  EXPECT_TRUE(presenter.inspectorXmlAttributesForTesting().empty());
-  EXPECT_TRUE(presenter.inspectorComputedStyleForTesting().empty());
+  EXPECT_THAT(presenter.inspectorXmlAttributesForTesting(), IsEmpty());
+  EXPECT_THAT(presenter.inspectorComputedStyleForTesting(), IsEmpty());
 }
 
 class SidebarPresenterImGuiTest : public ::testing::Test {

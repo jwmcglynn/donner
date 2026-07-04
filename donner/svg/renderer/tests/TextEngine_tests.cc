@@ -1,5 +1,6 @@
 #include "donner/svg/text/TextEngine.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -14,6 +15,17 @@
 namespace donner::svg {
 
 namespace {
+
+using ::testing::AllOf;
+using ::testing::DoubleEq;
+using ::testing::DoubleNear;
+using ::testing::Each;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::Gt;
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 components::ComputedTextComponent::TextSpan MakeSpan(const std::string& str) {
   components::ComputedTextComponent::TextSpan span;
@@ -61,6 +73,30 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
   return fontManager.findFont(RcString(familyName));
 }
 
+auto GlyphIndexIs(auto matcher) {
+  return Field("glyphIndex", &TextGlyph::glyphIndex, matcher);
+}
+
+auto GlyphXPositionIs(auto matcher) {
+  return Field("xPosition", &TextGlyph::xPosition, matcher);
+}
+
+auto GlyphYPositionIs(auto matcher) {
+  return Field("yPosition", &TextGlyph::yPosition, matcher);
+}
+
+auto GlyphRotateDegreesIs(auto matcher) {
+  return Field("rotateDegrees", &TextGlyph::rotateDegrees, matcher);
+}
+
+auto RunFontIs(auto matcher) {
+  return Field("font", &TextRun::font, matcher);
+}
+
+auto RunGlyphsAre(auto matcher) {
+  return Field("glyphs", &TextRun::glyphs, matcher);
+}
+
 }  // namespace
 
 TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
@@ -83,12 +119,9 @@ TEST(TextEngineTest, UsesCoverageFallbackForArabicText) {
   params.fontFamilies = {RcString("Noto Sans")};
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_FALSE(runs[0].glyphs.empty());
-  EXPECT_EQ(runs[0].font, amiri);
-  for (const auto& glyph : runs[0].glyphs) {
-    EXPECT_GT(glyph.glyphIndex, 0);
-  }
+  EXPECT_THAT(runs,
+              ElementsAre(AllOf(RunFontIs(amiri),
+                                RunGlyphsAre(AllOf(Not(IsEmpty()), Each(GlyphIndexIs(Gt(0))))))));
 }
 
 TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
@@ -115,11 +148,7 @@ TEST(TextEngineTest, UsesCoverageFallbackForVerticalJapaneseText) {
   params.writingMode = WritingMode::VerticalRl;
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 2u);
-  for (const auto& glyph : runs[0].glyphs) {
-    EXPECT_GT(glyph.glyphIndex, 0);
-  }
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(AllOf(SizeIs(2), Each(GlyphIndexIs(Gt(0)))))));
 
   const float scale = engine.scaleForEmToPixels(runs[0].font, 64.0f);
   const Path firstGlyphPath =
@@ -159,11 +188,10 @@ TEST(TextEngineTest, SupplementaryCharactersConsumeLowSurrogateCoordinates) {
   params.fontFamilies = {RcString("Noto Color Emoji")};
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 1u);
-  ASSERT_EQ(runs[0].glyphs.size(), 3u);
-  EXPECT_NEAR(runs[0].glyphs[0].yPosition, 90.0, 1.0);
-  EXPECT_NEAR(runs[0].glyphs[1].yPosition, 130.0, 1.0);
-  EXPECT_NEAR(runs[0].glyphs[2].yPosition, 150.0, 1.0);
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleNear(90.0, 1.0)),
+                                                   GlyphYPositionIs(DoubleNear(130.0, 1.0)),
+                                                   GlyphYPositionIs(DoubleNear(150.0, 1.0))))));
 }
 
 TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
@@ -183,13 +211,11 @@ TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   params.fontFamilies = {RcString("Noto Sans")};
 
   const auto unrotatedRuns = engine.layout(text, params);
-  ASSERT_EQ(unrotatedRuns.size(), 1u);
-  ASSERT_EQ(unrotatedRuns[0].glyphs.size(), 2u);
+  ASSERT_THAT(unrotatedRuns, ElementsAre(RunGlyphsAre(SizeIs(2))));
 
   text.spans[0].rotateList = {30.0};
   const auto rotatedRuns = engine.layout(text, params);
-  ASSERT_EQ(rotatedRuns.size(), 1u);
-  ASSERT_EQ(rotatedRuns[0].glyphs.size(), 2u);
+  ASSERT_THAT(rotatedRuns, ElementsAre(RunGlyphsAre(SizeIs(2))));
 
   const auto& unrotatedBase = unrotatedRuns[0].glyphs[0];
   const auto& unrotatedMark = unrotatedRuns[0].glyphs[1];
@@ -202,8 +228,8 @@ TEST(TextEngineTest, RotatesCombiningMarkOffsetsWithBaseGlyph) {
   const double expectedDx = dx * std::cos(angle) - dy * std::sin(angle);
   const double expectedDy = dx * std::sin(angle) + dy * std::cos(angle);
 
-  EXPECT_DOUBLE_EQ(rotatedBase.rotateDegrees, 30.0);
-  EXPECT_DOUBLE_EQ(rotatedMark.rotateDegrees, 30.0);
+  EXPECT_THAT(rotatedRuns[0].glyphs, ElementsAre(GlyphRotateDegreesIs(DoubleEq(30.0)),
+                                                 GlyphRotateDegreesIs(DoubleEq(30.0))));
   EXPECT_NEAR(rotatedMark.xPosition - rotatedBase.xPosition, expectedDx, 1.0);
   EXPECT_NEAR(rotatedMark.yPosition - rotatedBase.yPosition, expectedDy, 1.0);
 }
@@ -244,10 +270,8 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   params.fontFamilies = {RcString("Noto Sans")};
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 3u);
-  ASSERT_FALSE(runs[0].glyphs.empty());
-  ASSERT_FALSE(runs[1].glyphs.empty());
-  ASSERT_FALSE(runs[2].glyphs.empty());
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(Not(IsEmpty())), RunGlyphsAre(Not(IsEmpty())),
+                                RunGlyphsAre(Not(IsEmpty()))));
 
   EXPECT_GT(runs[1].glyphs.front().xPosition, 5.0);
   EXPECT_NEAR(runs[1].glyphs.front().yPosition, 0.0, 1.0);
@@ -278,9 +302,7 @@ TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
   params.fontFamilies = {RcString("Noto Sans")};
   const auto runs = engine.layout(text, params);
 
-  ASSERT_EQ(runs.size(), 2u);
-  ASSERT_FALSE(runs[0].glyphs.empty());
-  ASSERT_FALSE(runs[1].glyphs.empty());
+  ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(Not(IsEmpty())), RunGlyphsAre(Not(IsEmpty()))));
   EXPECT_GT(runs[1].glyphs.front().xPosition, runs[0].glyphs.back().xPosition);
   EXPECT_LT(runs[1].glyphs.front().xPosition, 180.0);
 }

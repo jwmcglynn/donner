@@ -26,6 +26,16 @@ namespace {
 using components::DirtyFlagsComponent;
 using components::RenderTreeState;
 
+auto MutationKindIs(xml::XMLMutation::Kind kind) {
+  return testing::Field("kind", &xml::XMLMutation::kind, kind);
+}
+
+auto AttributeMutationIs(xml::XMLMutation::Kind kind, xml::XMLQualifiedName attributeName) {
+  return testing::AllOf(
+      MutationKindIs(kind),
+      testing::Field("attributeName", &xml::XMLMutation::attributeName, std::move(attributeName)));
+}
+
 class SVGInvalidationTests : public testing::Test {
 protected:
   SVGInvalidationTests() { document_.setCanvasSize(800, 600); }
@@ -247,8 +257,8 @@ TEST_F(SVGInvalidationTests, SourceEditAttributeValueUpdatesPresentationAttribut
   expectNoDiagnostic(result);
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::AttributeValue);
-  ASSERT_THAT(result.mutations, testing::SizeIs(1));
-  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::AttributeSet);
+  EXPECT_THAT(result.mutations,
+              testing::ElementsAre(MutationKindIs(xml::XMLMutation::Kind::AttributeSet)));
 
   std::optional<RcString> fill = target->getAttribute("fill");
   ASSERT_TRUE(fill.has_value());
@@ -284,8 +294,8 @@ TEST_F(SVGInvalidationTests, SourceEditOpeningTagRemovalClearsPresentationAttrib
   expectNoDiagnostic(result);
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::OpeningTag);
-  ASSERT_THAT(result.mutations, testing::SizeIs(1));
-  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::AttributeRemoved);
+  EXPECT_THAT(result.mutations,
+              testing::ElementsAre(MutationKindIs(xml::XMLMutation::Kind::AttributeRemoved)));
 
   EXPECT_FALSE(target->getAttribute("fill").has_value());
   EXPECT_EQ(doc.source().find(R"(fill="red")"), std::string_view::npos);
@@ -407,8 +417,8 @@ TEST_F(SVGInvalidationTests, RemoveElementConsumesNodeRemovedMutation) {
   expectNoDiagnostic(result);
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
-  ASSERT_THAT(result.mutations, testing::SizeIs(1));
-  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::NodeRemoved);
+  EXPECT_THAT(result.mutations,
+              testing::ElementsAre(MutationKindIs(xml::XMLMutation::Kind::NodeRemoved)));
 
   EXPECT_EQ(doc.source().find(R"(<rect id="target")"), std::string_view::npos);
   EXPECT_FALSE(doc.querySelector("#target").has_value());
@@ -544,14 +554,11 @@ TEST_F(SVGInvalidationTests, SourceEditElementSubtreeAttributeRemovalClearsPathP
   expectNoDiagnostic(result);
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
-  ASSERT_GE(result.mutations.size(), 2u);
-  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::SubtreeReplaced);
-  bool sawPathDataRemoved = false;
-  for (const xml::XMLMutation& mutation : result.mutations) {
-    sawPathDataRemoved |= mutation.kind == xml::XMLMutation::Kind::AttributeRemoved &&
-                          mutation.attributeName == xml::XMLQualifiedName("d");
-  }
-  EXPECT_TRUE(sawPathDataRemoved);
+  ASSERT_THAT(result.mutations, testing::SizeIs(testing::Ge(2u)));
+  EXPECT_THAT(result.mutations.front(), MutationKindIs(xml::XMLMutation::Kind::SubtreeReplaced));
+  EXPECT_THAT(result.mutations,
+              testing::Contains(AttributeMutationIs(xml::XMLMutation::Kind::AttributeRemoved,
+                                                    xml::XMLQualifiedName("d"))));
 
   EXPECT_FALSE(target->getAttribute("d").has_value());
   EXPECT_TRUE(path->d.get().value().empty());
@@ -626,8 +633,8 @@ TEST_F(SVGInvalidationTests, SourceEditTextNodeUpdatesTextContent) {
   expectNoDiagnostic(result);
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
-  ASSERT_THAT(result.mutations, testing::SizeIs(1));
-  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::NodeValueChanged);
+  EXPECT_THAT(result.mutations,
+              testing::ElementsAre(MutationKindIs(xml::XMLMutation::Kind::NodeValueChanged)));
 
   EXPECT_EQ(target->cast<SVGTextElement>().textContent(), RcString("world"));
   EXPECT_NE(doc.source().find(">world<"), std::string_view::npos);
@@ -658,9 +665,11 @@ TEST_F(SVGInvalidationTests, SourceEditTextDirtyDiagnosticClearsThroughMutation)
   EXPECT_TRUE(dirtyResult.applied);
   EXPECT_EQ(dirtyResult.scope, xml::ReparseScope::TextNode);
   ASSERT_TRUE(dirtyResult.diagnostic.has_value());
-  ASSERT_THAT(dirtyResult.mutations, testing::SizeIs(1));
-  EXPECT_EQ(dirtyResult.mutations[0].kind, xml::XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_TRUE(dirtyResult.mutations[0].diagnostic.has_value());
+  EXPECT_THAT(dirtyResult.mutations,
+              testing::ElementsAre(
+                  testing::AllOf(MutationKindIs(xml::XMLMutation::Kind::SourceDiagnosticChanged),
+                                 testing::Field("diagnostic", &xml::XMLMutation::diagnostic,
+                                                testing::Optional(testing::_)))));
   EXPECT_EQ(target->cast<SVGTextElement>().textContent(), RcString("aAb"));
 
   xml::ApplySourceEditResult recoveryResult = doc.applySourceEdit(xml::XMLEditIntent{
@@ -672,10 +681,12 @@ TEST_F(SVGInvalidationTests, SourceEditTextDirtyDiagnosticClearsThroughMutation)
   expectNoDiagnostic(recoveryResult);
   EXPECT_TRUE(recoveryResult.applied);
   EXPECT_EQ(recoveryResult.scope, xml::ReparseScope::TextNode);
-  ASSERT_THAT(recoveryResult.mutations, testing::SizeIs(2));
-  EXPECT_EQ(recoveryResult.mutations[0].kind, xml::XMLMutation::Kind::NodeValueChanged);
-  EXPECT_EQ(recoveryResult.mutations[1].kind, xml::XMLMutation::Kind::SourceDiagnosticChanged);
-  EXPECT_EQ(recoveryResult.mutations[1].diagnostic, std::nullopt);
+  EXPECT_THAT(recoveryResult.mutations,
+              testing::ElementsAre(
+                  MutationKindIs(xml::XMLMutation::Kind::NodeValueChanged),
+                  testing::AllOf(MutationKindIs(xml::XMLMutation::Kind::SourceDiagnosticChanged),
+                                 testing::Field("diagnostic", &xml::XMLMutation::diagnostic,
+                                                testing::Eq(std::nullopt)))));
   EXPECT_EQ(target->cast<SVGTextElement>().textContent(), RcString("aAb"));
 }
 
@@ -704,9 +715,9 @@ TEST_F(SVGInvalidationTests, SourceEditElementSubtreeInsertedChildProjectsToSVG)
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
   ASSERT_FALSE(result.diagnostic.has_value()) << *result.diagnostic;
-  ASSERT_THAT(result.mutations, testing::SizeIs(2));
-  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::SubtreeReplaced);
-  EXPECT_EQ(result.mutations[1].kind, xml::XMLMutation::Kind::NodeInserted);
+  EXPECT_THAT(result.mutations,
+              testing::ElementsAre(MutationKindIs(xml::XMLMutation::Kind::SubtreeReplaced),
+                                   MutationKindIs(xml::XMLMutation::Kind::NodeInserted)));
 
   auto insertedElement = doc.querySelector("#inserted");
   ASSERT_TRUE(insertedElement.has_value());
@@ -809,8 +820,8 @@ TEST_F(SVGInvalidationTests, SourceEditStyleTextNodeUpdatesStylesheet) {
   expectNoDiagnostic(result);
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::TextNode);
-  ASSERT_THAT(result.mutations, testing::SizeIs(1));
-  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::NodeValueChanged);
+  EXPECT_THAT(result.mutations,
+              testing::ElementsAre(MutationKindIs(xml::XMLMutation::Kind::NodeValueChanged)));
 
   EXPECT_THAT(
       target->getComputedStyle().fill.get(),
@@ -879,8 +890,8 @@ TEST_F(SVGInvalidationTests, InsertElementAppendsSourceBackedProgrammaticChild) 
   expectNoDiagnostic(result);
   EXPECT_TRUE(result.applied);
   EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
-  ASSERT_THAT(result.mutations, testing::SizeIs(1));
-  EXPECT_EQ(result.mutations[0].kind, xml::XMLMutation::Kind::NodeInserted);
+  EXPECT_THAT(result.mutations,
+              testing::ElementsAre(MutationKindIs(xml::XMLMutation::Kind::NodeInserted)));
 
   EXPECT_NE(doc.source().find(R"(<rect id="inserted" width="10"/>)"), std::string_view::npos);
   auto inserted = doc.querySelector("#inserted");

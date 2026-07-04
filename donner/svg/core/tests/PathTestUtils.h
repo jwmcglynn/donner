@@ -2,10 +2,32 @@
 
 #include <gmock/gmock.h>
 
+#include <vector>
+
 #include "donner/base/Path.h"
 #include "gtest/gtest.h"
 
 namespace donner::svg {
+
+/**
+ * Matches a Path command by verb.
+ *
+ * @param expectedVerb Expected Path::Verb value.
+ */
+MATCHER_P(CommandVerbIs, expectedVerb, "has command verb " + testing::PrintToString(expectedVerb)) {
+  *result_listener << "actual command=" << arg;
+  return testing::ExplainMatchResult(testing::Eq(expectedVerb), arg.verb, result_listener);
+}
+
+/**
+ * Matches the verb sequence of a Path commands list.
+ *
+ * @param verbs Expected Path::Verb values in command order.
+ */
+template <typename... Verbs>
+auto CommandVerbsAre(Verbs... verbs) {
+  return testing::ElementsAre(CommandVerbIs(verbs)...);
+}
 
 /**
  * Matches the points and commands of a Path.

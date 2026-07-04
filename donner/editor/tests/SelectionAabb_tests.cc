@@ -1,8 +1,10 @@
 #include "donner/editor/SelectionAabb.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/MathUtils.h"
+#include "donner/base/tests/BaseTestUtils.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/svg/DocumentState.h"
@@ -16,6 +18,17 @@ constexpr std::string_view kTwoRectSvg =
             <rect id="r1" x="20"  y="20"  width="40" height="40" fill="red"/>
             <rect id="r2" x="140" y="140" width="20" height="30" fill="blue"/>
           </svg>)svg";
+
+auto BoxFromXYWHIs(double x, double y, double width, double height) {
+  return BoxEq(Vector2d(x, y), Vector2d(x + width, y + height));
+}
+
+auto BoxNear(const Box2d& expected, double tolerance) {
+  return BoxEq(Vector2Eq(testing::DoubleNear(expected.topLeft.x, tolerance),
+                         testing::DoubleNear(expected.topLeft.y, tolerance)),
+               Vector2Eq(testing::DoubleNear(expected.bottomRight.x, tolerance),
+                         testing::DoubleNear(expected.bottomRight.y, tolerance)));
+}
 
 TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsSkipsNonGeometryWithoutBounds) {
   constexpr std::string_view kMixedSvg =
@@ -35,8 +48,7 @@ TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsSkipsNonGeometryWithoutBound
   const std::vector<Box2d> bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
 
-  ASSERT_EQ(bounds.size(), 1u);
-  EXPECT_EQ(bounds[0], Box2d::FromXYWH(10.0, 15.0, 20.0, 25.0));
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(10.0, 15.0, 20.0, 25.0)));
 }
 
 TEST(SelectionAabbTest, SnapshotBoundsAllowConcurrentDom) {
@@ -51,8 +63,7 @@ TEST(SelectionAabbTest, SnapshotBoundsAllowConcurrentDom) {
   const std::vector<Box2d> bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
 
-  ASSERT_EQ(bounds.size(), 1u);
-  EXPECT_EQ(bounds[0], Box2d::FromXYWH(20.0, 20.0, 40.0, 40.0));
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(20.0, 20.0, 40.0, 40.0)));
 }
 
 TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsMovesWithDrag) {
@@ -66,8 +77,7 @@ TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsMovesWithDrag) {
 
   std::vector<Box2d> bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
-  ASSERT_EQ(bounds.size(), 1u);
-  EXPECT_EQ(bounds[0], Box2d::FromXYWH(20.0, 20.0, 40.0, 40.0));
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(20.0, 20.0, 40.0, 40.0)));
 
   // Drag preview leaves DOM world-bounds unchanged (preview is applied
   // on top, not as a DOM mutation in composited mode).
@@ -75,8 +85,7 @@ TEST(SelectionAabbTest, SnapshotSelectionWorldBoundsMovesWithDrag) {
   ASSERT_TRUE(tool.activeDragPreview().has_value());
 
   bounds = SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));
-  ASSERT_EQ(bounds.size(), 1u);
-  EXPECT_EQ(bounds[0], Box2d::FromXYWH(20.0, 20.0, 40.0, 40.0));
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(20.0, 20.0, 40.0, 40.0)));
 }
 
 TEST(SelectionAabbTest, SnapshotUnionsGeometryDescendantsForGroupSelection) {
@@ -100,9 +109,8 @@ TEST(SelectionAabbTest, SnapshotUnionsGeometryDescendantsForGroupSelection) {
   const std::vector<Box2d> bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
 
-  ASSERT_EQ(bounds.size(), 1u);
   // Union of (20,30,40,40) ∪ (140,150,20,30) → (20,30)-(160,180).
-  EXPECT_EQ(bounds[0], Box2d::FromXYWH(20.0, 30.0, 140.0, 150.0));
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(20.0, 30.0, 140.0, 150.0)));
 }
 
 TEST(SelectionAabbTest, SnapshotSkipsNonRenderedContainerDescendants) {
@@ -127,10 +135,9 @@ TEST(SelectionAabbTest, SnapshotSkipsNonRenderedContainerDescendants) {
   const std::vector<Box2d> bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
 
-  ASSERT_EQ(bounds.size(), 1u);
   // Hidden rect inside <defs><clipPath> must not contribute; the
   // bounds are just the visible child.
-  EXPECT_EQ(bounds[0], Box2d::FromXYWH(80.0, 80.0, 40.0, 40.0));
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(80.0, 80.0, 40.0, 40.0)));
 }
 
 TEST(SelectionAabbTest, SnapshotUsesTightTransformedPathBounds) {
@@ -150,17 +157,13 @@ TEST(SelectionAabbTest, SnapshotUsesTightTransformedPathBounds) {
   const std::vector<Box2d> bounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(selection));
 
-  ASSERT_EQ(bounds.size(), 1u);
   const Transform2d documentFromElement =
       triangle->cast<svg::SVGGraphicsElement>().elementFromWorld();
   Box2d expected = Box2d::CreateEmpty(documentFromElement.transformPosition(Vector2d(0.0, 0.0)));
   expected.addPoint(documentFromElement.transformPosition(Vector2d(100.0, 0.0)));
   expected.addPoint(documentFromElement.transformPosition(Vector2d(0.0, 10.0)));
 
-  EXPECT_NEAR(bounds[0].topLeft.x, expected.topLeft.x, 1e-6);
-  EXPECT_NEAR(bounds[0].topLeft.y, expected.topLeft.y, 1e-6);
-  EXPECT_NEAR(bounds[0].bottomRight.x, expected.bottomRight.x, 1e-6);
-  EXPECT_NEAR(bounds[0].bottomRight.y, expected.bottomRight.y, 1e-6);
+  ASSERT_THAT(bounds, testing::ElementsAre(BoxNear(expected, 1e-6)));
 
   const Box2d looseBounds =
       documentFromElement.transformBox(Box2d::FromXYWH(0.0, 0.0, 100.0, 10.0));
@@ -191,9 +194,8 @@ TEST(SelectionAabbTest, SnapshotOccludingWorldBoundsIncludesOnlyLaterPaintedGeom
   const std::vector<Box2d> bounds =
       SnapshotSelectionOccludingWorldBounds(std::span<const svg::SVGElement>(selection));
 
-  ASSERT_EQ(bounds.size(), 2u);
-  EXPECT_EQ(bounds[0], Box2d::FromXYWH(70.0, 80.0, 10.0, 20.0));
-  EXPECT_EQ(bounds[1], Box2d::FromXYWH(100.0, 110.0, 30.0, 40.0));
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(70.0, 80.0, 10.0, 20.0),
+                                           BoxFromXYWHIs(100.0, 110.0, 30.0, 40.0)));
 }
 
 TEST(SelectionAabbTest, SnapshotOccludingBoundsAllowConcurrentDom) {
@@ -213,8 +215,7 @@ TEST(SelectionAabbTest, SnapshotOccludingBoundsAllowConcurrentDom) {
   const std::vector<Box2d> bounds =
       SnapshotSelectionOccludingWorldBounds(std::span<const svg::SVGElement>(selection));
 
-  ASSERT_EQ(bounds.size(), 1u);
-  EXPECT_EQ(bounds[0], Box2d::FromXYWH(70.0, 80.0, 10.0, 20.0));
+  EXPECT_THAT(bounds, testing::ElementsAre(BoxFromXYWHIs(70.0, 80.0, 10.0, 20.0)));
 }
 
 }  // namespace

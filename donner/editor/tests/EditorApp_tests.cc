@@ -1,11 +1,14 @@
 #include "donner/editor/EditorApp.h"
 
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/Path.h"
+#include "donner/base/RcString.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/ViewportGeometry.h"
 #include "donner/svg/SVGElement.h"
@@ -80,6 +83,53 @@ std::vector<svg::SVGPathElement> RootPathChildren(EditorApp& app) {
     }
   }
   return paths;
+}
+
+std::vector<std::string> PathData(const std::vector<svg::SVGPathElement>& paths) {
+  std::vector<std::string> data;
+  data.reserve(paths.size());
+  for (const svg::SVGPathElement& path : paths) {
+    data.emplace_back(path.d());
+  }
+  return data;
+}
+
+template <typename Elements>
+std::vector<std::string> ElementIds(const Elements& elements) {
+  std::vector<std::string> ids;
+  ids.reserve(elements.size());
+  for (const auto& element : elements) {
+    ids.emplace_back(element.id().str());
+  }
+  return ids;
+}
+
+template <typename Elements>
+std::vector<std::optional<std::string>> AttributeValues(const Elements& elements,
+                                                        std::string_view name) {
+  std::vector<std::optional<std::string>> values;
+  values.reserve(elements.size());
+  for (const auto& element : elements) {
+    if (const std::optional<RcString> value = element.getAttribute(name)) {
+      values.emplace_back(value->str());
+    } else {
+      values.emplace_back(std::nullopt);
+    }
+  }
+  return values;
+}
+
+std::vector<std::string> SelectedPathData(EditorApp& app) {
+  std::vector<std::string> data;
+  data.reserve(app.selectedElements().size());
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    if (element.isa<svg::SVGPathElement>()) {
+      data.emplace_back(element.cast<svg::SVGPathElement>().d());
+    } else {
+      data.emplace_back("<non-path:" + std::string(element.id().str()) + ">");
+    }
+  }
+  return data;
 }
 
 std::optional<Vector2d> FindMembershipSample(const svg::SVGElement& first,
@@ -249,9 +299,7 @@ TEST(EditorAppTest, MultiSelectionStoresEveryElement) {
 
   app.setSelection(std::vector<svg::SVGElement>{*r1, *r2});
   EXPECT_TRUE(app.hasSelection());
-  ASSERT_EQ(app.selectedElements().size(), 2u);
-  EXPECT_TRUE(app.selectedElements()[0] == *r1);
-  EXPECT_TRUE(app.selectedElements()[1] == *r2);
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("r1", "r2"));
   // Single-element compat: returns the *first* element.
   ASSERT_TRUE(app.selectedElement().has_value());
   EXPECT_TRUE(*app.selectedElement() == *r1);
@@ -312,21 +360,19 @@ TEST(EditorAppTest, ToggleInSelectionAddsThenRemoves) {
   ASSERT_TRUE(r2.has_value());
 
   app.toggleInSelection(*r1);
-  EXPECT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_TRUE(app.selectedElements()[0] == *r1);
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("r1"));
 
   app.toggleInSelection(*r2);
-  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("r1", "r2"));
 
   // Toggling an already-selected element removes it without
   // disturbing the other entries.
   app.toggleInSelection(*r1);
-  EXPECT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_TRUE(app.selectedElements()[0] == *r2);
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("r2"));
 
   // Re-toggling brings it back.
   app.toggleInSelection(*r1);
-  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("r2", "r1"));
 }
 
 TEST(EditorAppTest, AddToSelectionIsIdempotent) {
@@ -665,9 +711,8 @@ TEST(EditorAppTest, UnbundleCompoundPathReplacesExplicitTargetAndRestoresUndoSel
   EXPECT_FALSE(app.document().document().querySelector("#compound").has_value());
 
   const std::vector<svg::SVGPathElement> paths = RootPathChildren(app);
-  ASSERT_EQ(paths.size(), 2u);
-  EXPECT_EQ(std::string_view(paths[0].d()), "M 10 10 L 30 10 L 30 30 L 10 30 Z");
-  EXPECT_EQ(std::string_view(paths[1].d()), "M 50 50 L 70 50 L 70 70 L 50 70 Z");
+  EXPECT_THAT(PathData(paths), ::testing::ElementsAre("M 10 10 L 30 10 L 30 30 L 10 30 Z",
+                                                      "M 50 50 L 70 50 L 70 70 L 50 70 Z"));
   EXPECT_NE(app.document().document().source().find("M 10 10 L 30 10"), std::string_view::npos);
   EXPECT_EQ(app.document().document().source().find(R"(id="compound")"), std::string_view::npos);
 
@@ -675,8 +720,7 @@ TEST(EditorAppTest, UnbundleCompoundPathReplacesExplicitTargetAndRestoresUndoSel
   ASSERT_TRUE(app.flushFrame());
   EXPECT_TRUE(app.document().document().querySelector("#compound").has_value());
   EXPECT_EQ(RootPathChildren(app).size(), 1u);
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "compound");
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("compound"));
 }
 
 TEST(EditorAppTest, UnbundleCompoundPathReleasesNestedHoleContours) {
@@ -700,14 +744,13 @@ TEST(EditorAppTest, UnbundleCompoundPathReleasesNestedHoleContours) {
   ASSERT_TRUE(app.flushFrame());
 
   const std::vector<svg::SVGPathElement> paths = RootPathChildren(app);
-  ASSERT_EQ(paths.size(), 4u);
   for (const svg::SVGPathElement& path : paths) {
     EXPECT_EQ(path.getAttribute("fill-rule"), "evenodd");
   }
-  EXPECT_EQ(std::string_view(paths[0].d()), "M 0 0 L 40 0 L 40 40 L 0 40 Z");
-  EXPECT_EQ(std::string_view(paths[1].d()), "M 10 10 L 30 10 L 30 30 L 10 30 Z");
-  EXPECT_EQ(std::string_view(paths[2].d()), "M 60 0 L 100 0 L 100 40 L 60 40 Z");
-  EXPECT_EQ(std::string_view(paths[3].d()), "M 70 10 L 90 10 L 90 30 L 70 30 Z");
+  EXPECT_THAT(PathData(paths), ::testing::ElementsAre("M 0 0 L 40 0 L 40 40 L 0 40 Z",
+                                                      "M 10 10 L 30 10 L 30 30 L 10 30 Z",
+                                                      "M 60 0 L 100 0 L 100 40 L 60 40 Z",
+                                                      "M 70 10 L 90 10 L 90 30 L 70 30 Z"));
 }
 
 TEST(EditorAppTest, UnbundleCompoundPathSupportsDonnerDWithCounter) {
@@ -723,23 +766,16 @@ TEST(EditorAppTest, UnbundleCompoundPathSupportsDonnerDWithCounter) {
   EXPECT_TRUE(app.compoundPathUnbundleAvailability(*donnerD).canApply);
 
   ASSERT_TRUE(app.unbundleCompoundPath(*donnerD));
-  ASSERT_EQ(app.selectedElements().size(), 2u);
-  EXPECT_EQ(app.selectedElements()[0].getAttribute("class"), "cls-5");
-  EXPECT_EQ(app.selectedElements()[1].getAttribute("class"), "cls-5");
-  EXPECT_EQ(app.selectedElements()[0].getAttribute("id"), std::nullopt);
-  EXPECT_EQ(app.selectedElements()[1].getAttribute("id"), std::nullopt);
+  EXPECT_THAT(AttributeValues(app.selectedElements(), "class"),
+              ::testing::ElementsAre(std::optional<std::string>("cls-5"),
+                                     std::optional<std::string>("cls-5")));
+  EXPECT_THAT(AttributeValues(app.selectedElements(), "id"),
+              ::testing::ElementsAre(std::nullopt, std::nullopt));
 
   ASSERT_TRUE(app.flushFrame());
   EXPECT_FALSE(app.document().document().querySelector("#Donner_D").has_value());
-  ASSERT_EQ(app.selectedElements().size(), 2u);
-  ASSERT_TRUE(app.selectedElements()[0].isa<svg::SVGPathElement>());
-  ASSERT_TRUE(app.selectedElements()[1].isa<svg::SVGPathElement>());
-  EXPECT_NE(
-      std::string_view(app.selectedElements()[0].cast<svg::SVGPathElement>().d()).find("M 302.82"),
-      std::string_view::npos);
-  EXPECT_NE(
-      std::string_view(app.selectedElements()[1].cast<svg::SVGPathElement>().d()).find("M 312.81"),
-      std::string_view::npos);
+  EXPECT_THAT(SelectedPathData(app), ::testing::ElementsAre(::testing::HasSubstr("M 302.82"),
+                                                            ::testing::HasSubstr("M 312.81")));
 }
 
 TEST(EditorAppTest, PathUnionReplacesSelectionWithBooleanPath) {
@@ -793,9 +829,7 @@ TEST(EditorAppTest, PathOperationRecordsStructuralUndo) {
   EXPECT_TRUE(app.document().document().querySelector("#r1").has_value());
   EXPECT_TRUE(app.document().document().querySelector("#r2").has_value());
   EXPECT_FALSE(app.document().document().querySelector("path").has_value());
-  ASSERT_EQ(app.selectedElements().size(), 2u);
-  EXPECT_EQ(app.selectedElements()[0].id(), "r1");
-  EXPECT_EQ(app.selectedElements()[1].id(), "r2");
+  EXPECT_THAT(ElementIds(app.selectedElements()), ::testing::ElementsAre("r1", "r2"));
   EXPECT_TRUE(app.canRedo());
 
   app.redo();
@@ -803,8 +837,8 @@ TEST(EditorAppTest, PathOperationRecordsStructuralUndo) {
   EXPECT_FALSE(app.document().document().querySelector("#r1").has_value());
   EXPECT_FALSE(app.document().document().querySelector("#r2").has_value());
   EXPECT_TRUE(app.document().document().querySelector("path").has_value());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_TRUE(app.selectedElements()[0].isa<svg::SVGPathElement>());
+  EXPECT_THAT(SelectedPathData(app),
+              ::testing::ElementsAre(::testing::HasSubstr("M 10 10 L 30 10")));
 }
 
 TEST(EditorAppTest, PathIntersectReplacesSelectionWithOverlapPath) {
@@ -1267,8 +1301,7 @@ TEST(EditorAppTest, HitTestRectFindsAllIntersectingElements) {
 
   // A marquee that only overlaps r1 returns just r1.
   auto r1Only = app.hitTestRect(Box2d::FromXYWH(5.0, 5.0, 20.0, 20.0));
-  ASSERT_EQ(r1Only.size(), 1u);
-  EXPECT_EQ(r1Only[0].id(), "r1");
+  EXPECT_THAT(ElementIds(r1Only), ::testing::ElementsAre("r1"));
 
   // A marquee that misses both returns empty.
   auto noHits = app.hitTestRect(Box2d::FromXYWH(80.0, 80.0, 5.0, 5.0));
@@ -1276,8 +1309,7 @@ TEST(EditorAppTest, HitTestRectFindsAllIntersectingElements) {
 
   // Edge contact (marquee touches r1's edge) counts as intersection.
   auto edgeHits = app.hitTestRect(Box2d::FromXYWH(30.0, 30.0, 5.0, 5.0));
-  ASSERT_EQ(edgeHits.size(), 1u);
-  EXPECT_EQ(edgeHits[0].id(), "r1");
+  EXPECT_THAT(ElementIds(edgeHits), ::testing::ElementsAre("r1"));
 }
 
 TEST(EditorAppTest, HitTestRectUsesFilledShapeIntersectionNotAabb) {
@@ -1291,8 +1323,7 @@ TEST(EditorAppTest, HitTestRectUsesFilledShapeIntersectionNotAabb) {
       << "The marquee intersects the triangle AABB, but not the filled triangle.";
 
   auto hits = app.hitTestRect(Box2d::FromXYWH(5.0, 5.0, 20.0, 20.0));
-  ASSERT_EQ(hits.size(), 1u);
-  EXPECT_EQ(hits[0].id(), "triangle");
+  EXPECT_THAT(ElementIds(hits), ::testing::ElementsAre("triangle"));
 }
 
 TEST(EditorAppTest, HitTestRectDoesNotSelectShapeThatContainsMarquee) {
@@ -1304,8 +1335,7 @@ TEST(EditorAppTest, HitTestRectDoesNotSelectShapeThatContainsMarquee) {
          </svg>)svg"));
 
   auto hits = app.hitTestRect(Box2d::FromXYWH(65.0, 65.0, 30.0, 30.0));
-  ASSERT_EQ(hits.size(), 1u);
-  EXPECT_EQ(hits[0].id(), "target");
+  EXPECT_THAT(ElementIds(hits), ::testing::ElementsAre("target"));
 }
 
 TEST(EditorAppTest, HitTestRectAppliesElementTransformToShapeIntersection) {
@@ -1320,8 +1350,7 @@ TEST(EditorAppTest, HitTestRectAppliesElementTransformToShapeIntersection) {
       << "The marquee intersects the transformed AABB, but not the transformed fill.";
 
   auto hits = app.hitTestRect(Box2d::FromXYWH(15.0, 25.0, 30.0, 30.0));
-  ASSERT_EQ(hits.size(), 1u);
-  EXPECT_EQ(hits[0].id(), "triangle");
+  EXPECT_THAT(ElementIds(hits), ::testing::ElementsAre("triangle"));
 }
 
 TEST(EditorAppTest, HitTestRectUsesStrokeShapeIntersection) {
@@ -1332,8 +1361,7 @@ TEST(EditorAppTest, HitTestRectUsesStrokeShapeIntersection) {
          </svg>)"));
 
   auto hits = app.hitTestRect(Box2d::FromXYWH(40.0, 53.0, 10.0, 4.0));
-  ASSERT_EQ(hits.size(), 1u);
-  EXPECT_EQ(hits[0].id(), "stroke");
+  EXPECT_THAT(ElementIds(hits), ::testing::ElementsAre("stroke"));
 }
 
 TEST(EditorAppTest, HitTestRectCoversStrokeCapAndJoinVariants) {
@@ -1373,8 +1401,7 @@ TEST(EditorAppTest, HitTestRectSkipsXmlTextNodeChildren) {
          </svg>)"));
 
   auto hits = app.hitTestRect(Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
-  ASSERT_EQ(hits.size(), 1u);
-  EXPECT_EQ(hits[0].id(), "r1");
+  EXPECT_THAT(ElementIds(hits), ::testing::ElementsAre("r1"));
 }
 
 TEST(EditorAppTest, HitTestRectReturnsEmptyWithoutDocument) {
