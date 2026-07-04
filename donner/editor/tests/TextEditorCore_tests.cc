@@ -105,6 +105,36 @@ std::vector<std::optional<ColorIndex>> ColorIndexesAt(const Line& line,
   return colors;
 }
 
+std::vector<std::optional<bool>> SingleLineCommentStatesAt(
+    const Line& line, std::initializer_list<std::size_t> indexes) {
+  std::vector<std::optional<bool>> states;
+  states.reserve(indexes.size());
+  for (std::size_t index : indexes) {
+    if (index < line.size()) {
+      states.emplace_back(line[index].isComment);
+    } else {
+      states.emplace_back(std::nullopt);
+    }
+  }
+
+  return states;
+}
+
+std::vector<std::optional<bool>> MultiLineCommentStatesAt(
+    const Line& line, std::initializer_list<std::size_t> indexes) {
+  std::vector<std::optional<bool>> states;
+  states.reserve(indexes.size());
+  for (std::size_t index : indexes) {
+    if (index < line.size()) {
+      states.emplace_back(line[index].isMultiLineComment);
+    } else {
+      states.emplace_back(std::nullopt);
+    }
+  }
+
+  return states;
+}
+
 class TextEditorCoreTests : public ::testing::Test {
 protected:
   void SetUp() override {
@@ -1482,16 +1512,16 @@ TEST_F(TextEditorCoreTests, ColorizeInternalMarksSingleAndMultilineComments) {
   editor_.colorizeInternal();
 
   const Line& line0 = editor_.buffer().getLineGlyphs(0);
-  EXPECT_FALSE(line0[0].isComment);
-  EXPECT_TRUE(line0[2].isComment);
+  EXPECT_THAT(SingleLineCommentStatesAt(line0, {0u, 2u}),
+              ElementsAre(Optional(false), Optional(true)));
 
   const Line& line1 = editor_.buffer().getLineGlyphs(1);
-  EXPECT_TRUE(line1[0].isMultiLineComment);
-  EXPECT_TRUE(line1[3].isMultiLineComment);
+  EXPECT_THAT(MultiLineCommentStatesAt(line1, {0u, 3u}),
+              ElementsAre(Optional(true), Optional(true)));
 
   const Line& line2 = editor_.buffer().getLineGlyphs(2);
-  EXPECT_TRUE(line2[0].isMultiLineComment);
-  EXPECT_FALSE(line2[9].isMultiLineComment);
+  EXPECT_THAT(MultiLineCommentStatesAt(line2, {0u, 9u}),
+              ElementsAre(Optional(true), Optional(false)));
 }
 
 }  // namespace donner::editor

@@ -33,6 +33,9 @@ using ::testing::AllOf;
 using ::testing::DoubleNear;
 using ::testing::ElementsAre;
 using ::testing::Field;
+using ::testing::IsEmpty;
+using ::testing::ResultOf;
+using ::testing::SizeIs;
 
 constexpr double kPi = 3.14159265358979323846;
 
@@ -50,11 +53,24 @@ auto Vector2dNear(Vector2d expected, double tolerance) {
                Field("y", &Vector2d::y, DoubleNear(expected.y, tolerance)));
 }
 
+auto Box2dNear(Box2d expected, double tolerance) {
+  return AllOf(
+      Field("topLeft", &Box2d::topLeft, Vector2dNear(expected.topLeft, tolerance)),
+      Field("bottomRight", &Box2d::bottomRight, Vector2dNear(expected.bottomRight, tolerance)));
+}
+
 auto PathControlLineIs(Vector2d anchorDoc, Vector2d controlDoc) {
   return AllOf(Field("anchorDoc", &SelectionChromeSnapshot::PathControlLine::anchorDoc,
                      Vector2dNear(anchorDoc, 1e-9)),
                Field("controlDoc", &SelectionChromeSnapshot::PathControlLine::controlDoc,
                      Vector2dNear(controlDoc, 1e-9)));
+}
+
+auto PathBoundsAre(Box2d expected) {
+  return ResultOf(
+      "pathDoc.bounds()",
+      [](const SelectionChromeSnapshot::PathItem& item) { return item.pathDoc.bounds(); },
+      Box2dNear(expected, 1e-9));
 }
 
 MATCHER(DimmedGrayBlueStrokePixel,
@@ -293,12 +309,12 @@ TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenSelectionAndHoverChrome) 
       std::nullopt, std::span<const svg::SVGElement>(hoverElements),
       Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0));
 
-  ASSERT_EQ(snapshot.paths.size(), 1u);
-  ASSERT_EQ(snapshot.aabbsDoc.size(), 1u);
-  EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0));
-  EXPECT_TRUE(snapshot.hoverPaths.empty());
-  EXPECT_TRUE(snapshot.hoverAabbsDoc.empty());
-  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+  EXPECT_THAT(snapshot.paths, SizeIs(1));
+  EXPECT_THAT(snapshot.aabbsDoc,
+              ElementsAre(Box2dNear(Box2d::FromXYWH(10.0, 10.0, 20.0, 20.0), 1e-9)));
+  EXPECT_THAT(snapshot.hoverPaths, IsEmpty());
+  EXPECT_THAT(snapshot.hoverAabbsDoc, IsEmpty());
+  EXPECT_THAT(snapshot.handleBoxesDoc, SizeIs(4));
 }
 
 TEST(OverlayRendererTest, CaptureSnapshotCullsOffscreenHandles) {
@@ -346,10 +362,10 @@ TEST(OverlayRendererTest, CaptureSnapshotCombinedBoundsOnlySkipsSelectionPaths) 
       std::nullopt, std::span<const svg::SVGElement>(), std::nullopt,
       SelectionChromeDetail::CombinedBoundsOnly);
 
-  EXPECT_TRUE(snapshot.paths.empty());
-  ASSERT_EQ(snapshot.aabbsDoc.size(), 1u);
-  EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(10.0, 10.0, 50.0, 60.0));
-  EXPECT_EQ(snapshot.handleBoxesDoc.size(), 4u);
+  EXPECT_THAT(snapshot.paths, IsEmpty());
+  EXPECT_THAT(snapshot.aabbsDoc,
+              ElementsAre(Box2dNear(Box2d::FromXYWH(10.0, 10.0, 50.0, 60.0), 1e-9)));
+  EXPECT_THAT(snapshot.handleBoxesDoc, SizeIs(4));
 }
 
 // The editor draws selection chrome into a *second* renderer's frame
@@ -494,8 +510,7 @@ TEST(OverlayRendererTest, ActiveRotationUsesOrientedBoundsUntilGestureEnds) {
   const SelectionChromeSnapshot settledSnapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(app.selectedElements()), std::nullopt, canvasFromDoc);
   EXPECT_FALSE(settledSnapshot.orientedBoundsDoc.has_value());
-  ASSERT_EQ(settledSnapshot.aabbsDoc.size(), 1u);
-  EXPECT_EQ(settledSnapshot.aabbsDoc.front(), startBounds);
+  EXPECT_THAT(settledSnapshot.aabbsDoc, ElementsAre(Box2dNear(startBounds, 1e-9)));
 }
 
 TEST(OverlayRendererTest, CaptureSnapshotCanProjectLiveDragBackToRepresentedDocument) {
@@ -516,10 +531,9 @@ TEST(OverlayRendererTest, CaptureSnapshotCanProjectLiveDragBackToRepresentedDocu
       /*cullRectDoc=*/std::nullopt, SelectionChromeDetail::Full,
       Transform2d::Translate(-50.0, 0.0));
 
-  ASSERT_EQ(snapshot.aabbsDoc.size(), 1u);
-  EXPECT_EQ(snapshot.aabbsDoc.front(), Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0));
-  ASSERT_EQ(snapshot.paths.size(), 1u);
-  EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(), Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0));
+  EXPECT_THAT(snapshot.aabbsDoc,
+              ElementsAre(Box2dNear(Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0), 1e-9)));
+  EXPECT_THAT(snapshot.paths, ElementsAre(PathBoundsAre(Box2d::FromXYWH(20.0, 30.0, 40.0, 50.0))));
 }
 
 // Calling the overlay-only render path repeatedly (the click→reselect

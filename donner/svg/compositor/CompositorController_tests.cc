@@ -50,6 +50,7 @@ void PrintTo(const CompositorController::StaticSpanPlan& plan, std::ostream* os)
 namespace {
 
 using MockRendererInterface = tests::MockRendererInterface;
+using LayerInspectorRow = CompositorController::LayerInspectorRow;
 using StaticSpanPlan = CompositorController::StaticSpanPlan;
 
 MATCHER(EstimatedRedrawCostNoMoreThanCacheOverhead, "") {
@@ -74,6 +75,34 @@ template <typename... Matchers>
 auto StaticSpanPlanAtSlot(size_t slotIndex, Matchers... matchers) {
   return ::testing::AllOf(::testing::Field("slotIndex", &StaticSpanPlan::slotIndex, slotIndex),
                           matchers...);
+}
+
+auto LayerRasterizeCountIs(auto matcher) {
+  return ::testing::Field("rasterizeCount", &LayerInspectorRow::rasterizeCount, matcher);
+}
+
+auto LayerGenerationIs(auto matcher) {
+  return ::testing::Field("generation", &LayerInspectorRow::generation, matcher);
+}
+
+auto LayerHasValidBitmapIs(auto matcher) {
+  return ::testing::Field("hasValidBitmap", &LayerInspectorRow::hasValidBitmap, matcher);
+}
+
+auto LayerDirtyIs(auto matcher) {
+  return ::testing::Field("dirty", &LayerInspectorRow::dirty, matcher);
+}
+
+auto LayerBitmapSizeIs(auto matcher) {
+  return ::testing::Field("bitmapSize", &LayerInspectorRow::bitmapSize, matcher);
+}
+
+auto LayerThumbnailDimsIs(auto matcher) {
+  return ::testing::Field("thumbnailDims", &LayerInspectorRow::thumbnailDims, matcher);
+}
+
+auto LayerThumbnailPixelsAre(auto matcher) {
+  return ::testing::Field("thumbnailPixels", &LayerInspectorRow::thumbnailPixels, matcher);
 }
 
 class FakeTextureSnapshot : public RendererTextureSnapshot {
@@ -1004,16 +1033,14 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsTracksRasterizeCountA
   // First frame: layer must rasterize exactly once.
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
   const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
-  ASSERT_EQ(rowsAfterFirst.size(), 1u);
-  EXPECT_EQ(rowsAfterFirst.front().rasterizeCount, 1u);
+  EXPECT_THAT(rowsAfterFirst, ::testing::ElementsAre(LayerRasterizeCountIs(1u)));
 
   // A pure-translation drag goes through the fast path — bitmap is reused,
   // rasterize count does NOT advance.
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
   const auto rowsAfterTranslate = compositor.snapshotLayerInspectorRows();
-  ASSERT_EQ(rowsAfterTranslate.size(), 1u);
-  EXPECT_EQ(rowsAfterTranslate.front().rasterizeCount, 1u)
+  EXPECT_THAT(rowsAfterTranslate, ::testing::ElementsAre(LayerRasterizeCountIs(1u)))
       << "Pure-translation drag must reuse the cached bitmap rather than re-rasterize.";
 }
 
@@ -1034,8 +1061,7 @@ TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
   ASSERT_TRUE(compositor.hasSplitStaticLayers())
       << "Texture-backed drag layers must count as cached split layers.";
   const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
-  ASSERT_EQ(rowsAfterFirst.size(), 1u);
-  ASSERT_TRUE(rowsAfterFirst.front().hasValidBitmap);
+  ASSERT_THAT(rowsAfterFirst, ::testing::ElementsAre(LayerHasValidBitmapIs(true)));
   const uint64_t generationAfterFirst = rowsAfterFirst.front().generation;
   const uint32_t rasterizeCountAfterFirst = rowsAfterFirst.front().rasterizeCount;
 
@@ -1057,11 +1083,10 @@ TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto rowsAfterDrag = compositor.snapshotLayerInspectorRows();
-  ASSERT_EQ(rowsAfterDrag.size(), 1u);
-  EXPECT_EQ(rowsAfterDrag.front().generation, generationAfterFirst)
+  EXPECT_THAT(rowsAfterDrag, ::testing::ElementsAre(
+                                 ::testing::AllOf(LayerGenerationIs(generationAfterFirst),
+                                                  LayerRasterizeCountIs(rasterizeCountAfterFirst))))
       << "Pure-translation drag must not mint a new texture generation.";
-  EXPECT_EQ(rowsAfterDrag.front().rasterizeCount, rasterizeCountAfterFirst)
-      << "Pure-translation drag must reuse the cached texture rather than re-rasterize.";
 
   const auto countersAfterDrag = compositor.fastPathCountersForTesting();
   EXPECT_EQ(countersAfterDrag.fastPathFrames, countersBeforeDrag.fastPathFrames + 1u);
@@ -1656,11 +1681,11 @@ TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsCanOmitThumbnails) {
 
   const auto rows =
       compositor.snapshotLayerInspectorRows(CompositorController::SnapshotThumbnails::Omit);
-  ASSERT_EQ(rows.size(), 1u);
-  EXPECT_TRUE(rows.front().hasValidBitmap);
-  EXPECT_NE(rows.front().bitmapSize, Vector2i::Zero());
-  EXPECT_EQ(rows.front().thumbnailDims, Vector2i::Zero());
-  EXPECT_TRUE(rows.front().thumbnailPixels.empty());
+  EXPECT_THAT(
+      rows,
+      ::testing::ElementsAre(::testing::AllOf(
+          LayerHasValidBitmapIs(true), LayerBitmapSizeIs(::testing::Ne(Vector2i::Zero())),
+          LayerThumbnailDimsIs(Vector2i::Zero()), LayerThumbnailPixelsAre(::testing::IsEmpty()))));
 }
 
 TEST_F(CompositorControllerTest, SetTightBoundedSegmentsEnabledMarksExistingSegmentsDirty) {
@@ -1722,18 +1747,16 @@ TEST_F(CompositorControllerTest, CancelledRenderLeavesDirtyLayerForNextFrame) {
 
   {
     const auto rows = compositor.snapshotLayerInspectorRows();
-    ASSERT_EQ(rows.size(), 1u);
-    EXPECT_TRUE(rows.front().dirty);
-    EXPECT_FALSE(rows.front().hasValidBitmap);
+    EXPECT_THAT(rows, ::testing::ElementsAre(
+                          ::testing::AllOf(LayerDirtyIs(true), LayerHasValidBitmapIs(false))));
   }
 
   token.reset();
   EXPECT_TRUE(compositor.renderFrame(RenderViewport{kTestSvgDefaultSize}, token));
 
   const auto rows = compositor.snapshotLayerInspectorRows();
-  ASSERT_EQ(rows.size(), 1u);
-  EXPECT_FALSE(rows.front().dirty);
-  EXPECT_TRUE(rows.front().hasValidBitmap);
+  EXPECT_THAT(rows, ::testing::ElementsAre(
+                        ::testing::AllOf(LayerDirtyIs(false), LayerHasValidBitmapIs(true))));
 }
 
 TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanvasOffset) {
