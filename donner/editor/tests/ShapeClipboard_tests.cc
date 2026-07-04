@@ -111,6 +111,23 @@ TEST(ShapeClipboardCommands, CopyEmptySelectionReturnsNullopt) {
   EXPECT_FALSE(copySelectionToPayload(document, {}).has_value());
 }
 
+TEST(ShapeClipboardCommands, CopyGroupSelectionMarksPayloadAsGroupSelection) {
+  constexpr std::string_view kGrouped =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<g id="group"><rect id="inside" x="0" y="0" width="10" height="10"/></g>
+</svg>)";
+  svg::SVGDocument document = Parse(kGrouped);
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(document, Select(document, {"group"}));
+
+  ASSERT_TRUE(payload.has_value());
+  EXPECT_TRUE(payload->wasGroupSelection);
+  EXPECT_THAT(payload->svgFragment, HasSubstr("<g id=\"group\">"));
+  EXPECT_THAT(payload->sourceElementIds, ::testing::ElementsAre("group"));
+  EXPECT_FALSE(payload->documentBounds.has_value())
+      << "group-only selections do not have geometry bounds of their own";
+}
+
 TEST(ShapeClipboardCommands, PasteInsertsInsideRootAndOffsets) {
   svg::SVGDocument document = Parse(kTwoRects);
   std::optional<ShapeClipboardPayload> payload =
@@ -138,6 +155,19 @@ TEST(ShapeClipboardCommands, PasteInsertsInsideRootAndOffsets) {
   EXPECT_TRUE(pasted.querySelector("#a_pasted").has_value());
 }
 
+TEST(ShapeClipboardCommands, PasteWithoutIdSelectsGeneratedWrapper) {
+  svg::SVGDocument document = Parse(kTwoRects);
+  ShapeClipboardPayload payload;
+  payload.svgFragment = R"(<circle cx="5" cy="6" r="4"/>)";
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  ASSERT_EQ(result.pastedElementIds.size(), 1u);
+  EXPECT_EQ(result.pastedElementIds[0], "donner-paste_pasted");
+  EXPECT_THAT(result.mergedSource, HasSubstr("id=\"donner-paste_pasted\""));
+}
+
 TEST(ShapeClipboardCommands, PasteRegeneratesIdsDeterministically) {
   svg::SVGDocument document = Parse(kTwoRects);
   std::optional<ShapeClipboardPayload> payload =
@@ -152,6 +182,63 @@ TEST(ShapeClipboardCommands, PasteRegeneratesIdsDeterministically) {
   EXPECT_EQ(first.pastedElementIds, second.pastedElementIds);
   EXPECT_EQ(first.mergedSource, second.mergedSource);
   EXPECT_THAT(first.pastedElementIds, ::testing::ElementsAre("a_pasted", "b_pasted"));
+}
+
+TEST(ShapeClipboardCommands, PasteUniqueIdsKeepsFragmentIdsAndIgnoresIdSubstrings) {
+  svg::SVGDocument document = Parse(kTwoRects);
+  ShapeClipboardPayload payload;
+  payload.svgFragment =
+      R"(<rect gradientid="ignored" id='fresh' x="1" y="2" width="3" height="4"/>)";
+  payload.sourceElementIds = {"fresh"};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  EXPECT_THAT(result.pastedElementIds, ::testing::ElementsAre("fresh"));
+  EXPECT_THAT(result.mergedSource, HasSubstr("gradientid=\"ignored\""));
+  EXPECT_THAT(result.mergedSource, HasSubstr("id='fresh'"));
+  EXPECT_THAT(result.mergedSource, Not(HasSubstr("fresh_pasted")));
+}
+
+TEST(ShapeClipboardCommands, PasteRepairsUrlAndHrefReferencesToRenamedIds) {
+  constexpr std::string_view kDestination =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<defs><linearGradient id="grad"/></defs>
+<rect id="shape" x="0" y="0" width="10" height="10"/>
+</svg>)";
+  svg::SVGDocument document = Parse(kDestination);
+  ShapeClipboardPayload payload;
+  payload.svgFragment =
+      R"SVG(<defs><linearGradient id='grad'><stop offset="0" stop-color="red"/></linearGradient></defs>
+<rect id="shape" x="1" y="1" width="10" height="10" fill="url(#grad)"/>
+<use xlink:href='#shape'/>)SVG";
+  payload.sourceElementIds = {"shape"};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  EXPECT_THAT(result.pastedElementIds, ::testing::ElementsAre("shape_pasted"));
+  EXPECT_THAT(result.mergedSource, HasSubstr("id='grad_pasted'"));
+  EXPECT_THAT(result.mergedSource, HasSubstr("fill=\"url(#grad_pasted)\""));
+  EXPECT_THAT(result.mergedSource, HasSubstr("xlink:href='#shape_pasted'"));
+}
+
+TEST(ShapeClipboardCommands, PasteIdRepairSkipsAlreadyTakenGeneratedIds) {
+  constexpr std::string_view kDestination =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<rect id="shape" x="0" y="0" width="10" height="10"/>
+<rect id="shape_pasted" x="20" y="0" width="10" height="10"/>
+</svg>)";
+  svg::SVGDocument document = Parse(kDestination);
+  ShapeClipboardPayload payload;
+  payload.svgFragment = R"(<rect id="shape" x="1" y="1" width="10" height="10"/>)";
+  payload.sourceElementIds = {"shape"};
+
+  PreparePasteResult result = preparePaste(document, payload, PastePlacement::EndOfRootOffset);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  EXPECT_THAT(result.pastedElementIds, ::testing::ElementsAre("shape_pasted2"));
+  EXPECT_THAT(result.mergedSource, HasSubstr("id=\"shape_pasted2\""));
 }
 
 TEST(ShapeClipboardCommands, PasteInFrontHasNoOffsetAndPaintsAfterSource) {
@@ -196,6 +283,29 @@ TEST(ShapeClipboardCommands, PasteIntoSelectedGroupLandsInsideGroup) {
   ASSERT_NE(wrapperPos, std::string::npos);
   ASSERT_NE(groupClose, std::string::npos);
   EXPECT_LT(wrapperPos, groupClose);
+}
+
+TEST(ShapeClipboardCommands, PasteWithNonGroupSelectedElementFallsBackToRoot) {
+  svg::SVGDocument document = Parse(kTwoRects);
+  std::optional<ShapeClipboardPayload> payload =
+      copySelectionToPayload(document, Select(document, {"b"}));
+  ASSERT_TRUE(payload.has_value());
+
+  std::optional<svg::SVGElement> rect = document.querySelector("#a");
+  ASSERT_TRUE(rect.has_value());
+  PreparePasteResult result =
+      preparePaste(document, *payload, PastePlacement::EndOfRootOffset, rect);
+  ASSERT_TRUE(result.ok) << result.error;
+
+  const std::size_t rectClose =
+      result.mergedSource.find("/>", result.mergedSource.find("id=\"a\""));
+  const std::size_t wrapperPos = result.mergedSource.find("b_pasted");
+  const std::size_t rootClose = result.mergedSource.rfind("</svg>");
+  ASSERT_NE(rectClose, std::string::npos);
+  ASSERT_NE(wrapperPos, std::string::npos);
+  ASSERT_NE(rootClose, std::string::npos);
+  EXPECT_GT(wrapperPos, rectClose);
+  EXPECT_LT(wrapperPos, rootClose);
 }
 
 TEST(ShapeClipboardCommands, FailedPasteLeavesDocumentUnchanged) {

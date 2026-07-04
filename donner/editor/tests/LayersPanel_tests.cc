@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "donner/base/tests/Runfiles.h"
@@ -1117,6 +1118,52 @@ protected:
     ImGui::Render();
   }
 
+  int RenderCompositorDebugPanelFrame(
+      CompositorDebugPanel& panel,
+      const std::vector<svg::compositor::CompositorController::CompositeTileSnapshot>& tiles,
+      const svg::compositor::CompositorController::StateSnapshot& state,
+      Entity workerCompositorEntity, const Vector2i& viewportDesiredCanvas,
+      const Vector2i& documentCanvas) {
+    const PresentationCoverageDiagnostics coverageDiagnostics{
+        .activeTilesViewportBounded = true,
+        .overviewInfillAvailable = true,
+        .activeRasterDocumentRect = Box2d::FromXYWH(0.0, 0.0, 50.0, 40.0),
+        .overviewRasterDocumentRect = Box2d::FromXYWH(-10.0, -20.0, 100.0, 80.0),
+        .activeOutputSizePx = Vector2i(160, 120),
+        .overviewOutputSizePx = Vector2i(320, 240),
+    };
+    const svg::compositor::CompositorController::FastPathCounters fastPath{
+        .fastPathFrames = 4,
+        .slowPathFramesWithDirty = 2,
+        .noDirtyFrames = 1,
+    };
+    const svg::compositor::CompositorController::RenderFrameStats renderStats{
+        .immediateRasterizeMs = 1.25,
+        .cachedRasterizeMs = 4.5,
+        .immediateTileCount = 2,
+        .cachedTileCount = 3,
+    };
+
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(720, 540);
+    io.AddMousePosEvent(-1.0f, -1.0f);
+    io.AddMouseButtonEvent(0, false);
+    ImGui::NewFrame();
+    ImGui::SetNextWindowPos(ImVec2(0, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(700, 500), ImGuiCond_Always);
+    ImGui::Begin("##compositor_debug_panel_test", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_NoSavedSettings);
+    panel.render(tiles, state, workerCompositorEntity, /*viewportZoom=*/2.0,
+                 /*viewportDpr=*/1.5, viewportDesiredCanvas, documentCanvas, coverageDiagnostics,
+                 fastPath, renderStats);
+    ImGui::End();
+    ImGui::Render();
+
+    const ImDrawData* drawData = ImGui::GetDrawData();
+    return drawData != nullptr ? drawData->TotalVtxCount : 0;
+  }
+
   int CountRightAffordanceTextRuns(LayersPanel& panel, EditorApp& app) {
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(400, 300);
@@ -1454,6 +1501,86 @@ protected:
 
   ImGuiContext* ctx_ = nullptr;
 };
+
+TEST_F(LayersPanelImGuiTest, CompositorDebugPanelRendersStateAndTileBranchesWithoutTextures) {
+  using Controller = svg::compositor::CompositorController;
+  using Tile = Controller::CompositeTileSnapshot;
+  using Kind = Tile::Kind;
+  using RefusalReason = Controller::PromoteRefusalReason;
+
+  CompositorDebugPanel panel;
+  Controller::StateSnapshot state{
+      .activeHintsCount = 2,
+      .layerCount = 3,
+      .splitPathActive = true,
+      .splitStaticLayersEntity = static_cast<Entity>(7u),
+      .canvasSize = Vector2i(128, 128),
+      .lastPromoteRefusalReason = RefusalReason::MemoryLimit,
+      .lastPromoteRefusalEntity = static_cast<Entity>(9u),
+  };
+
+  EXPECT_GT(RenderCompositorDebugPanelFrame(panel, {}, state, entt::null, Vector2i(256, 256),
+                                            Vector2i(256, 256)),
+            0);
+
+  std::vector<Tile> tiles;
+  auto addTile = [&tiles](Kind kind, std::string id, std::string label) -> Tile& {
+    Tile& tile = tiles.emplace_back();
+    tile.kind = kind;
+    tile.id = std::move(id);
+    tile.label = std::move(label);
+    tile.bitmapDims = Vector2i(64, 32);
+    tile.thumbnailDims = Vector2i::Zero();
+    tile.boundsCanvas = Box2d::FromXYWH(2.0, 3.0, 40.0, 20.0);
+    tile.visible = true;
+    return tile;
+  };
+
+  Tile& background = addTile(Kind::Background, "bg", "background");
+  background.generation = 10;
+
+  Tile& staticSegment = addTile(Kind::Segment, "seg:0", "segment 0");
+  staticSegment.generation = 11;
+  staticSegment.lastRasterizeMs = 0.75;
+  staticSegment.immediate = true;
+  staticSegment.staticHeuristicImmediate = true;
+  staticSegment.immediateBudgetChargeMs = 0.5;
+  staticSegment.immediateBudgetMs = 2.0;
+  staticSegment.estimatedDrawOps = 3;
+  staticSegment.estimatedPathVerbs = 15;
+  staticSegment.spanRangeLabel = "rect..circle";
+
+  Tile& dynamicSegment = addTile(Kind::Segment, "seg:1", "segment 1");
+  dynamicSegment.generation = 12;
+  dynamicSegment.lastRasterizeMs = 6.5;
+  dynamicSegment.immediate = true;
+  dynamicSegment.dynamicHeuristicImmediate = true;
+  dynamicSegment.immediateBudgetMs = 2.0;
+  dynamicSegment.estimatedDrawOps = 7;
+  dynamicSegment.estimatedPathVerbs = 21;
+
+  Tile& layer = addTile(Kind::Layer, "layer:5", "layer #5");
+  layer.generation = 13;
+  layer.lastRasterizeMs = 4.25;
+  layer.demotedDynamicImmediate = true;
+  layer.estimatedRetainedBytes = 8192;
+  layer.hasValidBitmap = true;
+  layer.isDragTarget = true;
+  layer.spanRangeLabel = "drag target";
+
+  Tile& foreground = addTile(Kind::Foreground, "fg", "foreground");
+  foreground.generation = 14;
+
+  EXPECT_GT(RenderCompositorDebugPanelFrame(panel, tiles, state, static_cast<Entity>(7u),
+                                            Vector2i(512, 512), Vector2i(256, 256)),
+            0);
+
+  state.lastPromoteRefusalReason = RefusalReason::None;
+  state.lastPromoteRefusalEntity = entt::null;
+  EXPECT_GT(RenderCompositorDebugPanelFrame(panel, tiles, state, entt::null, Vector2i(512, 512),
+                                            Vector2i(512, 512)),
+            0);
+}
 
 TEST_F(LayersPanelImGuiTest, CheckerboardUsesFourPixelCells) {
   EditorApp app;

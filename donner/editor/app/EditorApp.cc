@@ -10,7 +10,6 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVG.h"
-#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor::app {
 
@@ -246,9 +245,8 @@ const RenderSessionSnapshot& RenderSession::renderCachedBytes(std::string_view u
   svg::SVGDocument document = std::move(parseResult.result());
   document.setCanvasSize(width_, height_);
 
-  svg::Renderer renderer;
-  renderer.draw(document);
-  svg::RendererBitmap bitmap = renderer.takeSnapshot();
+  renderer_.draw(document);
+  svg::RendererBitmap bitmap = renderer_.takeSnapshot();
   if (bitmap.pixels.empty() || bitmap.dimensions.x <= 0 || bitmap.dimensions.y <= 0) {
     current_.uri = std::string(uri);
     current_.status = RenderSessionStatus::kRenderError;

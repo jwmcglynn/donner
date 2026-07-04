@@ -19,7 +19,7 @@
 #include <string_view>
 #include <vector>
 
-#include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/Renderer.h"
 
 namespace donner::editor::app {
 
@@ -124,6 +124,7 @@ private:
   int width_;
   int height_;
 
+  svg::Renderer renderer_;
   RenderSessionSnapshot current_;
   std::vector<uint8_t> rawBytes_;  ///< Last successfully-fetched bytes, for reload/resize.
   svg::RendererBitmap lastGoodBitmap_;

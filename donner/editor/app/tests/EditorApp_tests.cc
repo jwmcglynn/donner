@@ -122,6 +122,33 @@ TEST_F(RenderSessionTest, ResizeReRendersAtNewViewport) {
   EXPECT_EQ(resized.bitmap.dimensions.y, 96);
 }
 
+TEST_F(RenderSessionTest, SequentialRendersReplaceFrameOnSameSession) {
+  WriteSvg("red.svg", kSimpleSvg);
+  WriteSvg("blue.svg",
+           R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48">
+       <rect width="64" height="48" fill="blue"/>
+     </svg>)");
+  RenderSession app(Options());
+
+  const auto& red = app.navigate("red.svg");
+  ASSERT_EQ(red.status, RenderSessionStatus::kRendered) << red.message;
+  const auto redPixels = red.bitmap.pixels;
+
+  const auto& blue = app.navigate("blue.svg");
+  ASSERT_EQ(blue.status, RenderSessionStatus::kRendered) << blue.message;
+  EXPECT_EQ(blue.bitmap.dimensions.x, 64);
+  EXPECT_EQ(blue.bitmap.dimensions.y, 48);
+  EXPECT_NE(blue.bitmap.pixels, redPixels);
+  const auto bluePixels = blue.bitmap.pixels;
+
+  const auto& resized = app.resize(32, 24);
+  ASSERT_EQ(resized.status, RenderSessionStatus::kRendered) << resized.message;
+  EXPECT_EQ(resized.bitmap.dimensions.x, 32);
+  EXPECT_EQ(resized.bitmap.dimensions.y, 24);
+  EXPECT_NE(resized.bitmap.pixels, bluePixels);
+  EXPECT_EQ(app.lastGoodBitmap().pixels, resized.bitmap.pixels);
+}
+
 TEST_F(RenderSessionTest, ReloadPicksUpFileChanges) {
   const auto path = WriteSvg("live.svg",
                              R"(<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
