@@ -11,28 +11,32 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestMatchers.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::geode {
 
 using svg::test::RgbaEq;
+using test::TruthyWgpuHandle;
+using ::testing::IsTrue;
+using ::testing::NotNull;
 
 /// Smoke test: can we instantiate a headless Dawn device at all?
 /// If this fails, the entire Geode backend is non-functional.
 TEST(GeodeDevice, CreateHeadlessSucceeds) {
   auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr) << "Failed to create headless Dawn device. Check driver availability "
-                                "(Metal on macOS, Vulkan/SwiftShader on Linux).";
+  ASSERT_THAT(device, NotNull()) << "Failed to create headless Dawn device. Check driver "
+                                    "availability (Metal on macOS, Vulkan/SwiftShader on Linux).";
 
-  EXPECT_TRUE(static_cast<bool>(device->device()));
-  EXPECT_TRUE(static_cast<bool>(device->queue()));
-  EXPECT_TRUE(static_cast<bool>(device->adapter()));
+  EXPECT_THAT(device->device(), TruthyWgpuHandle());
+  EXPECT_THAT(device->queue(), TruthyWgpuHandle());
+  EXPECT_THAT(device->adapter(), TruthyWgpuHandle());
 }
 
 /// Can we allocate an offscreen render-target texture?
 TEST(GeodeDevice, CanCreateRenderTargetTexture) {
   auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr);
+  ASSERT_THAT(device, NotNull());
 
   wgpu::TextureDescriptor desc = {};
   desc.label = wgpuLabel("TestRenderTarget");
@@ -44,7 +48,7 @@ TEST(GeodeDevice, CanCreateRenderTargetTexture) {
   desc.dimension = wgpu::TextureDimension::_2D;
 
   wgpu::Texture texture = device->device().createTexture(desc);
-  ASSERT_TRUE(static_cast<bool>(texture));
+  ASSERT_THAT(texture, TruthyWgpuHandle());
   EXPECT_EQ(texture.getWidth(), 64u);
   EXPECT_EQ(texture.getHeight(), 64u);
 }
@@ -52,7 +56,7 @@ TEST(GeodeDevice, CanCreateRenderTargetTexture) {
 /// Can we allocate a buffer for readback?
 TEST(GeodeDevice, CanCreateReadbackBuffer) {
   auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr);
+  ASSERT_THAT(device, NotNull());
 
   wgpu::BufferDescriptor desc = {};
   desc.label = wgpuLabel("TestReadbackBuffer");
@@ -60,7 +64,7 @@ TEST(GeodeDevice, CanCreateReadbackBuffer) {
   desc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
 
   wgpu::Buffer buffer = device->device().createBuffer(desc);
-  ASSERT_TRUE(static_cast<bool>(buffer));
+  ASSERT_THAT(buffer, TruthyWgpuHandle());
   EXPECT_EQ(buffer.getSize(), 1024u);
 }
 
@@ -68,7 +72,7 @@ TEST(GeodeDevice, CanCreateReadbackBuffer) {
 /// This proves that command submission and texture readback actually work.
 TEST(GeodeDevice, CanExecuteClearAndReadback) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
-  ASSERT_NE(geodeDevice, nullptr);
+  ASSERT_THAT(geodeDevice, NotNull());
 
   const wgpu::Device& device = geodeDevice->device();
   const wgpu::Queue& queue = geodeDevice->queue();
@@ -84,7 +88,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   texDesc.sampleCount = 1;
   texDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture target = device.createTexture(texDesc);
-  ASSERT_TRUE(static_cast<bool>(target));
+  ASSERT_THAT(target, TruthyWgpuHandle());
 
   // Create readback buffer. Bytes per row must be a multiple of 256 per WebGPU spec.
   constexpr uint32_t kBytesPerRow = 256;  // Padded from kSize*4=16.
@@ -152,10 +156,10 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   while (!mapState.done) {
     device.poll(true, nullptr);
   }
-  EXPECT_TRUE(mapState.ok) << "buffer map failed";
+  EXPECT_THAT(mapState.ok, IsTrue()) << "buffer map failed";
 
   const uint8_t* pixels = static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
-  ASSERT_NE(pixels, nullptr);
+  ASSERT_THAT(pixels, NotNull());
 
   // First pixel should be red (255, 0, 0, 255).
   const std::array<uint8_t, 4> firstPixel = {pixels[0], pixels[1], pixels[2], pixels[3]};
@@ -169,7 +173,7 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
 /// references them doesn't trigger a use-after-free.
 TEST(GeodeDevice, DeferredDestroyBufferSurvivesUntilDrain) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
-  ASSERT_NE(geodeDevice, nullptr);
+  ASSERT_THAT(geodeDevice, NotNull());
 
   const wgpu::Device& device = geodeDevice->device();
   const wgpu::Queue& queue = geodeDevice->queue();
@@ -181,7 +185,7 @@ TEST(GeodeDevice, DeferredDestroyBufferSurvivesUntilDrain) {
   desc.size = kBufSize;
   desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
   wgpu::Buffer buffer = device.createBuffer(desc);
-  ASSERT_TRUE(static_cast<bool>(buffer));
+  ASSERT_THAT(buffer, TruthyWgpuHandle());
 
   // Write some data so the buffer is "in use".
   const uint32_t data[4] = {1, 2, 3, 4};
@@ -211,7 +215,7 @@ TEST(GeodeDevice, DeferredDestroyBufferSurvivesUntilDrain) {
 /// Deferred-destroy queue: textures survive until drain.
 TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
-  ASSERT_NE(geodeDevice, nullptr);
+  ASSERT_THAT(geodeDevice, NotNull());
 
   const wgpu::Device& device = geodeDevice->device();
   const wgpu::Queue& queue = geodeDevice->queue();
@@ -225,7 +229,7 @@ TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
   desc.sampleCount = 1;
   desc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture texture = device.createTexture(desc);
-  ASSERT_TRUE(static_cast<bool>(texture));
+  ASSERT_THAT(texture, TruthyWgpuHandle());
 
   // Use the texture as a render target, then defer destruction.
   wgpu::TextureView view = texture.createView();
@@ -264,7 +268,7 @@ TEST(GeodeDevice, DeferredDestroyTextureSurvivesUntilDrain) {
 /// reference identity is a cheap way to pin the sharing contract.
 TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
   auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr);
+  ASSERT_THAT(device, NotNull());
 
   // Every accessor must return the same reference each time.
   EXPECT_EQ(&device->pipeline(), &device->pipeline());
@@ -285,7 +289,7 @@ TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
 /// test written against it can't lie to itself.
 TEST(GeodeDevice, LifetimeCountersReflectCountHelpers) {
   auto device = GeodeDevice::CreateHeadless();
-  ASSERT_NE(device, nullptr);
+  ASSERT_THAT(device, NotNull());
 
   const uint64_t beforeTex = device->lifetimeTextureCreates();
   const uint64_t beforeBuf = device->lifetimeBufferCreates();

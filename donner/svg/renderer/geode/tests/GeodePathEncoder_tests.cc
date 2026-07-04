@@ -1,19 +1,27 @@
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include "donner/base/FillRule.h"
 #include "donner/base/Path.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestMatchers.h"
 
 namespace donner::geode {
+
+using test::EmptyEncodedPath;
+using test::HasBandGridsSizedToCounts;
+using test::HasBandVertexQuads;
+using test::NonEmptyEncodedPath;
+using ::testing::Eq;
+using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::SizeIs;
 
 TEST(GeodePathEncoder, EmptyPath) {
   Path path;
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_TRUE(encoded.empty());
-  EXPECT_TRUE(encoded.curves.empty());
-  EXPECT_TRUE(encoded.bands.empty());
-  EXPECT_TRUE(encoded.vertices.empty());
+  EXPECT_THAT(encoded, EmptyEncodedPath());
 }
 
 TEST(GeodePathEncoder, SimpleTriangle) {
@@ -25,7 +33,7 @@ TEST(GeodePathEncoder, SimpleTriangle) {
                   .build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, NonEmptyEncodedPath());
 
   // Should have curves for each edge (3 edges: bottom, right diagonal, left diagonal + close).
   EXPECT_GT(encoded.curves.size(), 0u);
@@ -34,7 +42,7 @@ TEST(GeodePathEncoder, SimpleTriangle) {
   EXPECT_GE(encoded.bands.size(), 1u);
 
   // Each band produces 6 vertices (2 triangles).
-  EXPECT_EQ(encoded.vertices.size(), encoded.bands.size() * 6);
+  EXPECT_THAT(encoded, HasBandVertexQuads());
 
   // Bounds should encompass the triangle.
   EXPECT_LE(encoded.pathBounds.topLeft.x, 0.0f);
@@ -48,10 +56,10 @@ TEST(GeodePathEncoder, SmallPathSingleBand) {
   Path path = PathBuilder().addRect(Box2d({0, 0}, {10, 10})).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, NonEmptyEncodedPath());
 
   // 10px height → single band.
-  EXPECT_EQ(encoded.bands.size(), 1u);
+  EXPECT_THAT(encoded.bands, SizeIs(1u));
 }
 
 TEST(GeodePathEncoder, LargePathMultipleBands) {
@@ -59,7 +67,7 @@ TEST(GeodePathEncoder, LargePathMultipleBands) {
   Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 500})).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, NonEmptyEncodedPath());
 
   // 500px / 32px per band ≈ 16 bands.
   EXPECT_GT(encoded.bands.size(), 1u);
@@ -70,7 +78,7 @@ TEST(GeodePathEncoder, BandsCoverFullHeight) {
   Path path = PathBuilder().addRect(Box2d({10, 20}, {90, 120})).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, NonEmptyEncodedPath());
 
   // First band should start at or before the path's top.
   EXPECT_LE(encoded.bands.front().yMin, encoded.pathBounds.topLeft.y + 0.01f);
@@ -105,7 +113,7 @@ TEST(GeodePathEncoder, QuadraticCurveEncoded) {
                   .build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, NonEmptyEncodedPath());
   EXPECT_GT(encoded.curves.size(), 0u);
 }
 
@@ -113,7 +121,7 @@ TEST(GeodePathEncoder, CircleEncoded) {
   Path path = PathBuilder().addCircle(Vector2d(50, 50), 40).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, NonEmptyEncodedPath());
 
   // Circle is ~80px tall → should have a few bands.
   EXPECT_GE(encoded.bands.size(), 2u);
@@ -130,14 +138,14 @@ TEST(GeodePathEncoder, DegeneratePath) {
   Path path = PathBuilder().moveTo(Vector2d(50, 50)).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_TRUE(encoded.empty());
+  EXPECT_THAT(encoded, EmptyEncodedPath());
 }
 
 TEST(GeodePathEncoder, VertexNormalsPointOutward) {
   Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 100})).build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, NonEmptyEncodedPath());
 
   // Each band has 6 vertices. Verify normals are non-zero and point in expected directions.
   for (const auto& v : encoded.vertices) {
@@ -227,9 +235,10 @@ TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {
                   .build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  ASSERT_FALSE(encoded.empty());
-  EXPECT_FALSE(encoded.vBands.empty()) << "Vertical bands must be populated for the vertical ray";
-  EXPECT_FALSE(encoded.vCurves.empty());
+  ASSERT_THAT(encoded, NonEmptyEncodedPath());
+  EXPECT_THAT(encoded.vBands, Not(IsEmpty()))
+      << "Vertical bands must be populated for the vertical ray";
+  EXPECT_THAT(encoded.vCurves, Not(IsEmpty()));
 
   // Vertical bands partition the bounds width.
   EXPECT_LE(encoded.vBands.front().xMin, encoded.pathBounds.topLeft.x + 0.01);
@@ -263,10 +272,9 @@ TEST(GeodePathEncoder, BandGridResolvesToCoveringBand) {
                   .build();
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
-  ASSERT_FALSE(encoded.empty());
+  ASSERT_THAT(encoded, NonEmptyEncodedPath());
 
-  ASSERT_EQ(encoded.hBandGrid.size(), encoded.hBandCount);
-  ASSERT_EQ(encoded.vBandGrid.size(), encoded.vBandCount);
+  ASSERT_THAT(encoded, HasBandGridsSizedToCounts());
   EXPECT_GT(encoded.hBandCount, 0u);
   EXPECT_GT(encoded.hStride, 0.0f);
 
@@ -325,10 +333,10 @@ TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
                             .build();
   EncodedPath openEncoded = GeodePathEncoder::encode(openTriangle, FillRule::NonZero);
   EncodedPath closedEncoded = GeodePathEncoder::encode(closedTriangle, FillRule::NonZero);
-  EXPECT_FALSE(openEncoded.empty());
-  EXPECT_FALSE(closedEncoded.empty());
-  EXPECT_EQ(openEncoded.curves.size(), closedEncoded.curves.size());
-  EXPECT_EQ(openEncoded.bands.size(), closedEncoded.bands.size());
+  EXPECT_THAT(openEncoded, NonEmptyEncodedPath());
+  EXPECT_THAT(closedEncoded, NonEmptyEncodedPath());
+  EXPECT_THAT(openEncoded.curves, SizeIs(closedEncoded.curves.size()));
+  EXPECT_THAT(openEncoded.bands, SizeIs(closedEncoded.bands.size()));
 
   // A straight line (the geometry resvg's `a-stroke-linecap-001` feeds to
   // the fill path before the stroke ribbon is generated) must produce
@@ -336,11 +344,11 @@ TEST(GeodePathEncoder, OpenSubpathGetsImplicitClose) {
   // a single forward curve with no return edge, producing spill fill.
   Path openLine = PathBuilder().moveTo(Vector2d(40, 40)).lineTo(Vector2d(160, 160)).build();
   EncodedPath encoded = GeodePathEncoder::encode(openLine, FillRule::NonZero);
-  EXPECT_FALSE(encoded.empty());
+  EXPECT_THAT(encoded, NonEmptyEncodedPath());
   // There must be an even number of forward+return segments per band
   // (one LineTo forward, one implicit close back). `curves.size()` is
   // band-flattened, so for an N-band span we expect 2*N band curves.
-  EXPECT_EQ(encoded.curves.size() % 2u, 0u);
+  EXPECT_THAT(encoded.curves.size() % 2u, Eq(0u));
 }
 
 // Multi-subpath regression: a MoveTo in the middle of a path starts a new
@@ -372,7 +380,7 @@ TEST(GeodePathEncoder, MultipleOpenSubpathsEachGetClosed) {
                             .build();
   EncodedPath openEncoded = GeodePathEncoder::encode(twoLinesOpen, FillRule::NonZero);
   EncodedPath closedEncoded = GeodePathEncoder::encode(twoLinesClosed, FillRule::NonZero);
-  EXPECT_EQ(openEncoded.curves.size(), closedEncoded.curves.size());
+  EXPECT_THAT(openEncoded.curves, SizeIs(closedEncoded.curves.size()));
 }
 
 }  // namespace donner::geode

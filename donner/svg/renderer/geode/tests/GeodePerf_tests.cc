@@ -14,6 +14,7 @@
 /// ceiling(s) it targets; the `// M{N}:` comment beside each assertion
 /// names the milestone that will change it.
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cinttypes>
@@ -27,6 +28,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -35,6 +37,9 @@
 
 namespace donner::svg {
 namespace {
+
+using ::donner::NoParseError;
+using ::testing::NotNull;
 
 /// Inline fixture: three disjoint primitives, no gradients/filters/layers.
 /// Exercises the pure `submitFillDraw` path — the Tier-1 hot path from
@@ -159,7 +164,7 @@ protected:
 
 TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   geode::GeodeCounters c = renderAndGetCounters(kSimpleShapesSvg, device);
 
@@ -204,7 +209,7 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
 
 TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   geode::GeodeCounters c = renderAndGetCounters(kModerateSvg, device);
 
@@ -248,7 +253,7 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
 
 TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
   if (svg.empty()) {
@@ -305,7 +310,7 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
 
 TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   geode::GeodeCounters c = renderAndGetCounters(kUseHeavySvg, device);
 
@@ -348,11 +353,11 @@ TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
 
 TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   ParseWarningSink sink = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(kSimpleShapesSvg, sink);
-  ASSERT_FALSE(parsed.hasError());
+  ASSERT_THAT(parsed, NoParseError());
   SVGDocument document = std::move(parsed.result());
 
   RendererGeode renderer(device);
@@ -426,7 +431,7 @@ geode::GeodeCounters countersForSecondRender(std::string_view svgSource,
 
 TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const geode::GeodeCounters c = countersForSecondRender(kSimpleShapesSvg, device);
   printCounters("SimpleShapes_NoDirtyPath_ZeroEncodes (frame2)", c);
@@ -439,7 +444,7 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
 
 TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const geode::GeodeCounters c = countersForSecondRender(kModerateSvg, device);
   printCounters("Moderate_NoDirtyPath_ZeroEncodes (frame2)", c);
@@ -453,7 +458,7 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
   if (svg.empty()) {
@@ -475,7 +480,7 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
 
 TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
   if (svg.empty()) {
@@ -507,7 +512,7 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
 
 TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const geode::GeodeCounters c = countersForSecondRender(kSimpleShapesSvg, device);
   printCounters("SimpleShapes_NoDirtyPath_ZeroTextures (frame2)", c);
@@ -522,7 +527,7 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroTextures) {
 
 TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const geode::GeodeCounters c = countersForSecondRender(kModerateSvg, device);
   printCounters("Moderate_NoDirtyPath_ZeroTextures (frame2)", c);
@@ -537,7 +542,7 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroTextures) {
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
   if (svg.empty()) {
@@ -553,7 +558,7 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
 
 TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
   if (svg.empty()) {
@@ -583,7 +588,7 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroTextures) {
 // ---------------------------------------------------------------------------
 TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
 
   // Warm the lazy caches on the shared device (mask pipeline, any
   // first-render device-side buffers) so we measure steady-state
@@ -627,14 +632,14 @@ TEST_F(GeodePerfTest, SharedDevice_RendererConstructionDoesNotLeakPipelines) {
 
 TEST_F(GeodePerfTest, TextureSnapshotStressReleasesMsaaTargets) {
   auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+  ASSERT_THAT(device, NotNull()) << "GeodeDevice::CreateHeadless failed";
   if (device->sampleCount() <= 1u) {
     GTEST_SKIP() << "MSAA target leak regression only applies when Geode allocates MSAA targets.";
   }
 
   ParseWarningSink sink = ParseWarningSink::Disabled();
   auto parsed = parser::SVGParser::ParseSVG(kSimpleShapesSvg, sink);
-  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  ASSERT_THAT(parsed, NoParseError());
   SVGDocument document = std::move(parsed.result());
 
   RendererGeode renderer(device);

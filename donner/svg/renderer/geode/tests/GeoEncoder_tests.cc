@@ -15,6 +15,7 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/tests/GeodeTestMatchers.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
 
@@ -30,6 +31,9 @@ using svg::test::FormatRgba;
 using svg::test::Near;
 using svg::test::Rgba;
 using svg::test::RgbaEq;
+using test::TruthyWgpuHandle;
+using ::testing::IsTrue;
+using ::testing::NotNull;
 
 /// Test fixture: shares a process-wide device and creates per-test render
 /// targets + readback buffer.
@@ -48,7 +52,7 @@ protected:
 
   void SetUp() override {
     device_ = sharedDevice();
-    ASSERT_NE(device_, nullptr);
+    ASSERT_THAT(device_, NotNull());
 
     // Build the fixture pipelines with the device's *actual* sample
     // count, not the default. On Intel + Vulkan the device falls back
@@ -72,7 +76,7 @@ protected:
     td.sampleCount = 1;
     td.dimension = wgpu::TextureDimension::_2D;
     target_ = device_->device().createTexture(td);
-    ASSERT_TRUE(static_cast<bool>(target_));
+    ASSERT_THAT(target_, TruthyWgpuHandle());
 
     // MSAA companion required by the GeoEncoder constructor whenever
     // the device uses multisampled rendering. `sampleCount == 1` means
@@ -89,7 +93,7 @@ protected:
       msaaDesc.sampleCount = sampleCount;
       msaaDesc.dimension = wgpu::TextureDimension::_2D;
       msaaTarget_ = device_->device().createTexture(msaaDesc);
-      ASSERT_TRUE(static_cast<bool>(msaaTarget_));
+      ASSERT_THAT(msaaTarget_, TruthyWgpuHandle());
     }
 
     wgpu::BufferDescriptor bd = {};
@@ -97,7 +101,7 @@ protected:
     bd.size = kBytesPerRow * kSize;
     bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
     readback_ = device_->device().createBuffer(bd);
-    ASSERT_TRUE(static_cast<bool>(readback_));
+    ASSERT_THAT(readback_, TruthyWgpuHandle());
   }
 
   /// Read back the rendered texture into a flat RGBA byte array (row-major,
@@ -142,7 +146,7 @@ protected:
     while (!mapState.done) {
       device_->device().poll(true, nullptr);
     }
-    EXPECT_TRUE(mapState.ok) << "buffer map failed";
+    EXPECT_THAT(mapState.ok, IsTrue()) << "buffer map failed";
 
     const uint8_t* mapped =
         static_cast<const uint8_t*>(readback_.getConstMappedRange(0, kBytesPerRow * kSize));
@@ -563,7 +567,7 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture tile = device_->device().createTexture(td);
-  ASSERT_TRUE(static_cast<bool>(tile));
+  ASSERT_THAT(tile, TruthyWgpuHandle());
 
   wgpu::TexelCopyTextureInfo dst = {};
   dst.texture = tile;

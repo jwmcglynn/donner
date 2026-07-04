@@ -13,6 +13,8 @@
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"  // IWYU pragma: keep — provides wgpuLabel
+#include "donner/svg/renderer/geode/tests/GeodeTestMatchers.h"
+#include "donner/svg/renderer/tests/RendererTestMatchers.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::svg {
@@ -20,7 +22,10 @@ namespace {
 
 constexpr double kViewportSize = 32.0;
 
+using ::donner::geode::test::TruthyWgpuHandle;
 using test::IsTransparent;
+using test::NonEmptyRendererBitmap;
+using ::testing::NotNull;
 
 /// RGBA pixel at (x, y) in a tightly packed snapshot bitmap.
 std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
@@ -38,7 +43,7 @@ std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
 /// application.
 TEST(GeodeEmbed, CreateFromExternalSucceeds) {
   auto headless = geode::GeodeDevice::CreateHeadless();
-  ASSERT_NE(headless, nullptr);
+  ASSERT_THAT(headless, NotNull());
 
   geode::GeodeEmbedConfig config;
   config.device = headless->device();
@@ -47,9 +52,9 @@ TEST(GeodeEmbed, CreateFromExternalSucceeds) {
   config.textureFormat = wgpu::TextureFormat::RGBA8Unorm;
 
   auto embedded = geode::GeodeDevice::CreateFromExternal(config);
-  ASSERT_NE(embedded, nullptr);
-  EXPECT_TRUE(static_cast<bool>(embedded->device()));
-  EXPECT_TRUE(static_cast<bool>(embedded->queue()));
+  ASSERT_THAT(embedded, NotNull());
+  EXPECT_THAT(embedded->device(), TruthyWgpuHandle());
+  EXPECT_THAT(embedded->queue(), TruthyWgpuHandle());
   EXPECT_EQ(embedded->textureFormat(), wgpu::TextureFormat::RGBA8Unorm);
 }
 
@@ -109,7 +114,7 @@ TEST_F(GeodeEmbedTest, EmptyFrameIsTransparent) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
   EXPECT_EQ(snap.dimensions.x, static_cast<int>(kViewportSize));
   EXPECT_EQ(snap.dimensions.y, static_cast<int>(kViewportSize));
 
@@ -125,7 +130,7 @@ TEST_F(GeodeEmbedTest, EmptyFrameIsTransparent) {
 /// Because the "host" target has CopySrc usage, takeSnapshot() should work.
 TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   auto device = sharedEmbedDevice();
-  ASSERT_NE(device, nullptr);
+  ASSERT_THAT(device, NotNull());
 
   // Create a host-owned target texture.
   constexpr uint32_t kSize = 32;
@@ -139,7 +144,7 @@ TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   texDesc.sampleCount = 1;
   texDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture hostTexture = device->device().createTexture(texDesc);
-  ASSERT_TRUE(static_cast<bool>(hostTexture));
+  ASSERT_THAT(hostTexture, TruthyWgpuHandle());
 
   auto renderer = createRenderer();
   renderer.setTargetTexture(hostTexture);
@@ -153,7 +158,7 @@ TEST_F(GeodeEmbedTest, SetTargetTextureRendersIntoHostTexture) {
   renderer.endFrame();
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
   EXPECT_EQ(snap.dimensions.x, static_cast<int>(kSize));
   EXPECT_EQ(snap.dimensions.y, static_cast<int>(kSize));
 
@@ -198,7 +203,7 @@ TEST_F(GeodeEmbedTest, ClearTargetTextureRevertsToInternal) {
   EXPECT_EQ(renderer.height(), 32);
 
   RendererBitmap snap = renderer.takeSnapshot();
-  ASSERT_FALSE(snap.empty());
+  ASSERT_THAT(snap, NonEmptyRendererBitmap());
   EXPECT_EQ(snap.dimensions.x, 32);
 }
 
