@@ -51,6 +51,17 @@ void PrintTo(const CompositorController::StaticSpanPlan& plan, std::ostream* os)
       << ", label=" << testing::PrintToString(plan.spanRangeLabel) << "}";
 }
 
+void PrintTo(const CompositorController::LayerInspectorRow& row, std::ostream* os) {
+  *os << "LayerInspectorRow{layerId=" << row.layerId
+      << ", entity=" << testing::PrintToString(row.entity)
+      << ", bitmapSize=" << testing::PrintToString(row.bitmapSize)
+      << ", generation=" << row.generation << ", rasterizeCount=" << row.rasterizeCount
+      << ", dirty=" << row.dirty << ", hasValidBitmap=" << row.hasValidBitmap
+      << ", thumbnailDims=" << testing::PrintToString(row.thumbnailDims)
+      << ", thumbnailPixels=" << row.thumbnailPixels.size()
+      << ", fallbackReasons=" << testing::PrintToString(row.fallbackReasonsText) << "}";
+}
+
 namespace {
 
 using MockRendererInterface = tests::MockRendererInterface;
@@ -85,6 +96,15 @@ auto StaticSpanPlanAtSlot(size_t slotIndex, Matchers... matchers) {
 
 auto LayerRasterizeCountIs(auto matcher) {
   return ::testing::Field("rasterizeCount", &LayerInspectorRow::rasterizeCount, matcher);
+}
+
+auto LayerEntityIs(auto matcher) {
+  return Field("entity", &LayerInspectorRow::entity, matcher);
+}
+
+template <typename... Matchers>
+auto LayerRowForEntity(Entity entity, Matchers... matchers) {
+  return ::testing::AllOf(LayerEntityIs(entity), matchers...);
 }
 
 auto LayerGenerationIs(auto matcher) {
@@ -1266,7 +1286,9 @@ TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextur
 
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
   const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
-  ASSERT_GT(rowsAfterFirst.size(), 1u)
+  ASSERT_THAT(rowsAfterFirst, Contains(LayerRowForEntity(entity, LayerHasValidBitmapIs(true))))
+      << "The promoted group should have a cached layer after the first render.";
+  ASSERT_THAT(rowsAfterFirst, Contains(LayerRowForEntity(childEntity, LayerHasValidBitmapIs(true))))
       << "The opacity child should remain a mandatory promoted descendant layer.";
   const auto rowAfterFirst =
       std::find_if(rowsAfterFirst.begin(), rowsAfterFirst.end(),
@@ -1274,10 +1296,6 @@ TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextur
   const auto childRowAfterFirst =
       std::find_if(rowsAfterFirst.begin(), rowsAfterFirst.end(),
                    [childEntity](const auto& row) { return row.entity == childEntity; });
-  ASSERT_NE(rowAfterFirst, rowsAfterFirst.end());
-  ASSERT_NE(childRowAfterFirst, rowsAfterFirst.end());
-  ASSERT_TRUE(rowAfterFirst->hasValidBitmap);
-  ASSERT_TRUE(childRowAfterFirst->hasValidBitmap);
   const uint64_t generationAfterFirst = rowAfterFirst->generation;
   const uint32_t rasterizeCountAfterFirst = rowAfterFirst->rasterizeCount;
   const uint64_t childGenerationAfterFirst = childRowAfterFirst->generation;
@@ -1288,21 +1306,15 @@ TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextur
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto rowsAfterDrag = compositor.snapshotLayerInspectorRows();
-  const auto rowAfterDrag =
-      std::find_if(rowsAfterDrag.begin(), rowsAfterDrag.end(),
-                   [entity](const auto& row) { return row.entity == entity; });
-  const auto childRowAfterDrag =
-      std::find_if(rowsAfterDrag.begin(), rowsAfterDrag.end(),
-                   [childEntity](const auto& row) { return row.entity == childEntity; });
-  ASSERT_NE(rowAfterDrag, rowsAfterDrag.end());
-  ASSERT_NE(childRowAfterDrag, rowsAfterDrag.end());
-  EXPECT_EQ(rowAfterDrag->generation, generationAfterFirst)
+  EXPECT_THAT(rowsAfterDrag,
+              Contains(LayerRowForEntity(entity, LayerGenerationIs(generationAfterFirst),
+                                         LayerRasterizeCountIs(rasterizeCountAfterFirst))))
       << "A translation-only drag of a promoted group with a mandatory child layer must reuse the "
          "cached texture.";
-  EXPECT_EQ(rowAfterDrag->rasterizeCount, rasterizeCountAfterFirst)
-      << "Re-rasterizing this subtree on every drag frame is the #Blue_center_burst lag.";
-  EXPECT_EQ(childRowAfterDrag->generation, childGenerationAfterFirst);
-  EXPECT_EQ(childRowAfterDrag->rasterizeCount, childRasterizeCountAfterFirst);
+  EXPECT_THAT(rowsAfterDrag,
+              Contains(LayerRowForEntity(childEntity, LayerGenerationIs(childGenerationAfterFirst),
+                                         LayerRasterizeCountIs(childRasterizeCountAfterFirst))))
+      << "The mandatory child layer should also stay cached during translation-only drag.";
 
   const auto countersAfterDrag = compositor.fastPathCountersForTesting();
   EXPECT_EQ(countersAfterDrag.fastPathFrames, countersBeforeDrag.fastPathFrames + 1u);
