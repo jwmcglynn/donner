@@ -309,8 +309,8 @@ SVGElement& SVGElement::operator=(const SVGElement& other) = default;
 SVGElement& SVGElement::operator=(SVGElement&& other) noexcept = default;
 
 ElementType SVGElement::type() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  return handle_.get<components::ElementTypeComponent>().type();
+  DocumentReadAccess access = handle_.readAccess();
+  return access.registry().get<components::ElementTypeComponent>(handle_.entity()).type();
 }
 
 std::optional<ElementType> SVGElement::tryType() const {
@@ -318,17 +318,17 @@ std::optional<ElementType> SVGElement::tryType() const {
     return std::nullopt;
   }
 
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  if (!handle_.all_of<components::ElementTypeComponent>()) {
+  DocumentReadAccess access = handle_.readAccess();
+  if (!access.registry().all_of<components::ElementTypeComponent>(handle_.entity())) {
     return std::nullopt;
   }
 
-  return handle_.get<components::ElementTypeComponent>().type();
+  return access.registry().get<components::ElementTypeComponent>(handle_.entity()).type();
 }
 
 xml::XMLQualifiedName SVGElement::tagName() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  return handle_.get<donner::components::TreeComponent>().tagName();
+  DocumentReadAccess access = handle_.readAccess();
+  return access.registry().get<donner::components::TreeComponent>(handle_.entity()).tagName();
 }
 
 std::optional<xml::XMLQualifiedName> SVGElement::tryTagName() const {
@@ -336,12 +336,12 @@ std::optional<xml::XMLQualifiedName> SVGElement::tryTagName() const {
     return std::nullopt;
   }
 
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  if (!handle_.all_of<donner::components::TreeComponent>()) {
+  DocumentReadAccess access = handle_.readAccess();
+  if (!access.registry().all_of<donner::components::TreeComponent>(handle_.entity())) {
     return std::nullopt;
   }
 
-  return handle_.get<donner::components::TreeComponent>().tagName();
+  return access.registry().get<donner::components::TreeComponent>(handle_.entity()).tagName();
 }
 
 bool SVGElement::isKnownType() const {
@@ -353,8 +353,9 @@ RcString SVGElement::id() const {
     return "";
   }
 
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  if (const auto* component = handle_.try_get<components::IdComponent>()) {
+  DocumentReadAccess access = handle_.readAccess();
+  if (const auto* component =
+          access.registry().try_get<components::IdComponent>(handle_.entity())) {
     return component->id();
   } else {
     return "";
@@ -503,8 +504,9 @@ bool SVGElement::hasAttribute(const xml::XMLQualifiedNameRef& name) const {
     return false;
   }
 
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
+  DocumentReadAccess access = handle_.readAccess();
+  const auto* attributes =
+      access.registry().try_get<donner::components::AttributesComponent>(handle_.entity());
   return attributes != nullptr && attributes->hasAttribute(name);
 }
 
@@ -513,8 +515,9 @@ std::optional<RcString> SVGElement::getAttribute(const xml::XMLQualifiedNameRef&
     return std::nullopt;
   }
 
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
+  DocumentReadAccess access = handle_.readAccess();
+  const auto* attributes =
+      access.registry().try_get<donner::components::AttributesComponent>(handle_.entity());
   return attributes != nullptr ? attributes->getAttribute(name) : std::nullopt;
 }
 
@@ -524,8 +527,9 @@ SmallVector<xml::XMLQualifiedNameRef, 1> SVGElement::findMatchingAttributes(
     return SmallVector<xml::XMLQualifiedNameRef, 1>();
   }
 
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
+  DocumentReadAccess access = handle_.readAccess();
+  const auto* attributes =
+      access.registry().try_get<donner::components::AttributesComponent>(handle_.entity());
   return attributes != nullptr ? attributes->findMatchingAttributes(matcher)
                                : SmallVector<xml::XMLQualifiedNameRef, 1>();
 }
@@ -535,8 +539,9 @@ SmallVector<xml::XMLQualifiedNameRef, 10> SVGElement::attributes() const {
     return SmallVector<xml::XMLQualifiedNameRef, 10>();
   }
 
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  const auto* attributes = handle_.try_get<donner::components::AttributesComponent>();
+  DocumentReadAccess access = handle_.readAccess();
+  const auto* attributes =
+      access.registry().try_get<donner::components::AttributesComponent>(handle_.entity());
   return attributes != nullptr ? attributes->attributes()
                                : SmallVector<xml::XMLQualifiedNameRef, 10>();
 }
@@ -795,22 +800,24 @@ const PropertyRegistry& SVGElement::getComputedStyle() const {
 }
 
 const PropertyRegistry* SVGElement::specifiedStyle() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  const auto* style = handle_.try_get<components::StyleComponent>();
+  DocumentReadAccess access = handle_.readAccess();
+  const auto* style = access.registry().try_get<components::StyleComponent>(handle_.entity());
   return style != nullptr ? &style->properties : nullptr;
 }
 
 const PropertyRegistry* SVGElement::computedStyleIfPresent() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  const auto* computedStyle = handle_.try_get<components::ComputedStyleComponent>();
+  DocumentReadAccess access = handle_.readAccess();
+  const auto* computedStyle =
+      access.registry().try_get<components::ComputedStyleComponent>(handle_.entity());
   return computedStyle != nullptr && computedStyle->properties.has_value()
              ? &*computedStyle->properties
              : nullptr;
 }
 
 std::optional<PaintServer> SVGElement::resolvedFillPaint() const {
-  [[maybe_unused]] DocumentReadAccess access = handle_.readAccess();
-  const auto* instance = handle_.try_get<components::RenderingInstanceComponent>();
+  DocumentReadAccess access = handle_.readAccess();
+  const auto* instance =
+      access.registry().try_get<components::RenderingInstanceComponent>(handle_.entity());
   if (instance == nullptr) {
     return std::nullopt;
   }
