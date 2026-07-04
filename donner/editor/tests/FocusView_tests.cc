@@ -36,9 +36,12 @@ void PrintTo(const FocusReferenceLink& link, std::ostream* os) {
 namespace {
 
 using ::testing::AllOf;
+using ::testing::Contains;
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::IsEmpty;
+using ::testing::Not;
+using ::testing::UnorderedElementsAre;
 
 auto LineRangeIs(int startLine, int endLine) {
   return AllOf(Field("startLine", &LineRange::startLine, startLine),
@@ -53,6 +56,30 @@ auto SourcePointIs(const SourcePoint& expected) {
 auto ReferenceLinkIs(const SourcePoint& from, const SourcePoint& to) {
   return AllOf(Field("from", &FocusReferenceLink::from, SourcePointIs(from)),
                Field("to", &FocusReferenceLink::to, SourcePointIs(to)));
+}
+
+MATCHER(EmptyFocusPartition, "an empty FocusPartition") {
+  if (arg.empty()) {
+    return true;
+  }
+
+  *result_listener << "fullColor=" << testing::PrintToString(arg.fullColor)
+                   << ", referenceColor=" << testing::PrintToString(arg.referenceColor)
+                   << ", dimmed=" << testing::PrintToString(arg.dimmed)
+                   << ", hidden=" << testing::PrintToString(arg.hidden)
+                   << ", referenceLinks=" << testing::PrintToString(arg.referenceLinks);
+  return false;
+}
+
+MATCHER_P(ElementIdIs, expected,
+          std::string("an SVG element with id ") + testing::PrintToString(expected)) {
+  const std::string actual(std::string_view(arg.id()));
+  if (actual == expected) {
+    return true;
+  }
+
+  *result_listener << "id is " << testing::PrintToString(actual);
+  return false;
 }
 
 constexpr std::string_view kNestedSvg =
@@ -335,11 +362,6 @@ bool ContainsLink(const std::vector<FocusReferenceLink>& links, const FocusRefer
   return std::ranges::find(links, needle) != links.end();
 }
 
-bool ContainsElement(const std::vector<svg::SVGElement>& elements,
-                     const std::optional<svg::SVGElement>& needle) {
-  return needle.has_value() && std::ranges::find(elements, *needle) != elements.end();
-}
-
 std::vector<FocusReferenceLink> SortLinks(std::vector<FocusReferenceLink> links) {
   std::sort(links.begin(), links.end(),
             [](const FocusReferenceLink& a, const FocusReferenceLink& b) {
@@ -369,7 +391,8 @@ TEST(FocusViewTest, EmptySelectionsAndNoSourceDocumentsReturnEmptyResults) {
   ASSERT_TRUE(app.loadFromString(kNestedSvg));
 
   const std::vector<svg::SVGElement> emptySelection;
-  EXPECT_TRUE(ComputeFocusPartition(app.document().document(), emptySelection).empty());
+  EXPECT_THAT(ComputeFocusPartition(app.document().document(), emptySelection),
+              EmptyFocusPartition());
   EXPECT_EQ(
       ComputeReferenceHighlightSummary(app.document().document(), emptySelection).totalCount(), 0u);
 
@@ -378,8 +401,9 @@ TEST(FocusViewTest, EmptySelectionsAndNoSourceDocumentsReturnEmptyResults) {
   svg::SVGElement child = svg::SVGUnknownElement::Create(document, "g");
   root.appendChild(child);
 
-  EXPECT_TRUE(ComputeFocusPartition(document, child).empty());
-  EXPECT_TRUE(ComputeFocusPartition(document, std::span<const svg::SVGElement>(&child, 1)).empty());
+  EXPECT_THAT(ComputeFocusPartition(document, child), EmptyFocusPartition());
+  EXPECT_THAT(ComputeFocusPartition(document, std::span<const svg::SVGElement>(&child, 1)),
+              EmptyFocusPartition());
   EXPECT_FALSE(ComputeStyleFocusAtSourceOffset(document, 0).has_value());
   EXPECT_FALSE(ComputeStyleFocusPartitionAtSourceOffset(document, 0).has_value());
   EXPECT_EQ(ComputeReferenceHighlightSummary(document, std::span<const svg::SVGElement>(&child, 1))
@@ -483,11 +507,9 @@ TEST(FocusViewTest, ReferenceSummaryHandlesLooseReferenceSyntax) {
 
   const ReferenceHighlightSummary targetSummary = ComputeReferenceHighlightSummary(
       app.document().document(), std::span<const svg::SVGElement>(&*target, 1));
-  EXPECT_TRUE(ContainsElement(targetSummary.referencedElements,
-                              app.document().document().querySelector("#paint")));
-  EXPECT_TRUE(ContainsElement(targetSummary.referencedElements,
-                              app.document().document().querySelector("#shape")));
-  EXPECT_TRUE(targetSummary.referencingElements.empty());
+  EXPECT_THAT(targetSummary.referencedElements,
+              UnorderedElementsAre(ElementIdIs("paint"), ElementIdIs("shape")));
+  EXPECT_THAT(targetSummary.referencingElements, IsEmpty());
 
   const ReferenceHighlightSummary ignoredSummary = ComputeReferenceHighlightSummary(
       app.document().document(), std::span<const svg::SVGElement>(&*ignored, 1));
@@ -503,14 +525,10 @@ TEST(FocusViewTest, ReferenceHighlightSummaryCountsForwardReferences) {
   const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
       app.document().document(), std::span<const svg::SVGElement>(&*target, 1));
 
-  EXPECT_EQ(summary.referencedElements.size(), 3u);
-  EXPECT_TRUE(ContainsElement(summary.referencedElements,
-                              app.document().document().querySelector("#paint")));
-  EXPECT_TRUE(ContainsElement(summary.referencedElements,
-                              app.document().document().querySelector("#clip")));
-  EXPECT_TRUE(ContainsElement(summary.referencedElements,
-                              app.document().document().querySelector("#shadow")));
-  EXPECT_TRUE(summary.referencingElements.empty());
+  EXPECT_THAT(
+      summary.referencedElements,
+      UnorderedElementsAre(ElementIdIs("paint"), ElementIdIs("clip"), ElementIdIs("shadow")));
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
   EXPECT_EQ(summary.totalCount(), 3u);
 }
 
@@ -524,8 +542,10 @@ TEST(FocusViewTest, ReferenceHighlightSummaryAllowsConcurrentDom) {
   const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
       app.document().document(), std::span<const svg::SVGElement>(&*target, 1));
 
-  EXPECT_EQ(summary.referencedElements.size(), 3u);
-  EXPECT_TRUE(summary.referencingElements.empty());
+  EXPECT_THAT(
+      summary.referencedElements,
+      UnorderedElementsAre(ElementIdIs("paint"), ElementIdIs("clip"), ElementIdIs("shadow")));
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
 }
 
 TEST(FocusViewTest, GroupSelectionDrawsOnlyOwnReferenceArrows) {
@@ -670,15 +690,12 @@ TEST(FocusViewTest, StyleFocusReportsImpactedElementsForCanvasSelection) {
   const std::optional<StyleFocus> hitFocus = ComputeStyleFocusAtSourceOffset(
       app.document().document(), OffsetForNeedle(kSelectorListSvg, ".hit"));
   ASSERT_TRUE(hitFocus.has_value());
-  ASSERT_EQ(hitFocus->impactedElements.size(), 1u);
-  EXPECT_EQ(hitFocus->impactedElements[0].id(), "hit");
+  EXPECT_THAT(hitFocus->impactedElements, ElementsAre(ElementIdIs("hit")));
 
   const std::optional<StyleFocus> blockFocus = ComputeStyleFocusAtSourceOffset(
       app.document().document(), OffsetForNeedle(kSelectorListSvg, "opacity"));
   ASSERT_TRUE(blockFocus.has_value());
-  ASSERT_EQ(blockFocus->impactedElements.size(), 2u);
-  EXPECT_EQ(blockFocus->impactedElements[0].id(), "hit");
-  EXPECT_EQ(blockFocus->impactedElements[1].id(), "miss");
+  EXPECT_THAT(blockFocus->impactedElements, ElementsAre(ElementIdIs("hit"), ElementIdIs("miss")));
 }
 
 TEST(FocusViewTest, StyleOffsetFocusSurvivesStructuredSourceTypingMutations) {
@@ -744,7 +761,7 @@ TEST(FocusViewTest, StyleOffsetFocusSurvivesStructuredSourceTypingMutations) {
         app.document().document(), OffsetForNeedle(editedSource, ".hit"));
     if (!mutationCase.expectParseError) {
       ASSERT_TRUE(focus.has_value());
-      EXPECT_FALSE(focus->impactedElements.empty());
+      EXPECT_THAT(focus->impactedElements, Not(IsEmpty()));
     } else {
       EXPECT_TRUE(app.document().lastParseError().has_value());
     }
@@ -891,14 +908,10 @@ TEST(FocusViewTest, ReferenceHighlightSummaryCountsReverseReferences) {
   const ReferenceHighlightSummary summary = ComputeReferenceHighlightSummary(
       app.document().document(), std::span<const svg::SVGElement>(&*paint, 1));
 
-  EXPECT_TRUE(summary.referencedElements.empty());
-  EXPECT_EQ(summary.referencingElements.size(), 3u);
-  EXPECT_TRUE(ContainsElement(summary.referencingElements,
-                              app.document().document().querySelector("#cssTarget")));
-  EXPECT_TRUE(ContainsElement(summary.referencingElements,
-                              app.document().document().querySelector("#attrTarget")));
-  EXPECT_TRUE(ContainsElement(summary.referencingElements,
-                              app.document().document().querySelector("#chained")));
+  EXPECT_THAT(summary.referencedElements, IsEmpty());
+  EXPECT_THAT(summary.referencingElements,
+              UnorderedElementsAre(ElementIdIs("cssTarget"), ElementIdIs("attrTarget"),
+                                   ElementIdIs("chained")));
   EXPECT_EQ(summary.totalCount(), 3u);
 }
 
@@ -914,10 +927,8 @@ TEST(FocusViewTest, ReferenceHighlightSummaryHandlesNestedMultiSelectionOnce) {
   const ReferenceHighlightSummary summary =
       ComputeReferenceHighlightSummary(app.document().document(), selection);
 
-  EXPECT_EQ(summary.referencedElements.size(), 1u);
-  EXPECT_TRUE(ContainsElement(summary.referencedElements,
-                              app.document().document().querySelector("#paint")));
-  EXPECT_TRUE(summary.referencingElements.empty());
+  EXPECT_THAT(summary.referencedElements, ElementsAre(ElementIdIs("paint")));
+  EXPECT_THAT(summary.referencingElements, IsEmpty());
   EXPECT_EQ(summary.totalCount(), 1u);
 }
 
@@ -933,14 +944,10 @@ TEST(FocusViewTest, ReferenceHighlightSummaryExcludesSelectedReverseReferences) 
   const ReferenceHighlightSummary summary =
       ComputeReferenceHighlightSummary(app.document().document(), selection);
 
-  EXPECT_EQ(summary.referencingElements.size(), 3u);
-  EXPECT_TRUE(ContainsElement(summary.referencingElements,
-                              app.document().document().querySelector("#cssTarget")));
-  EXPECT_TRUE(ContainsElement(summary.referencingElements,
-                              app.document().document().querySelector("#attrTarget")));
-  EXPECT_TRUE(ContainsElement(summary.referencingElements,
-                              app.document().document().querySelector("#chainTarget")));
-  EXPECT_FALSE(ContainsElement(summary.referencingElements, chained));
+  EXPECT_THAT(summary.referencingElements,
+              UnorderedElementsAre(ElementIdIs("cssTarget"), ElementIdIs("attrTarget"),
+                                   ElementIdIs("chainTarget")));
+  EXPECT_THAT(summary.referencingElements, Not(Contains(ElementIdIs("chained"))));
 }
 
 TEST(FocusViewTest, SuppressesReverseReferenceExpansionAfterFiveRefs) {
@@ -972,7 +979,7 @@ TEST(FocusViewTest, StyleFocusSuppressesUniversalSelectorExpansionAfterFiveRefs)
   ASSERT_TRUE(focus.has_value());
 
   EXPECT_TRUE(focus->reverseReferenceExpansionSuppressed);
-  EXPECT_TRUE(focus->impactedElements.empty());
+  EXPECT_THAT(focus->impactedElements, IsEmpty());
   EXPECT_TRUE(ContainsLine(focus->partition.fullColor,
                            PointForNeedle(kDenseUniversalStyleSvg, "* {").line));
   EXPECT_FALSE(ContainsLine(focus->partition.referenceColor,
@@ -1087,7 +1094,7 @@ TEST(FocusViewTest, ReturnsEmptyPartitionWithoutSourceLocations) {
   svg::SVGElement child = svg::SVGUnknownElement::Create(document, "g");
   root.appendChild(child);
 
-  EXPECT_TRUE(ComputeFocusPartition(document, child).empty());
+  EXPECT_THAT(ComputeFocusPartition(document, child), EmptyFocusPartition());
 }
 
 }  // namespace
