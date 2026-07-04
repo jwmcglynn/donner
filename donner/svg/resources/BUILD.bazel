@@ -37,6 +37,7 @@ donner_cc_library(
     hdrs = [
         "UrlLoader.h",
     ],
+    visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":resource_loader_interface",
         "//donner/base",

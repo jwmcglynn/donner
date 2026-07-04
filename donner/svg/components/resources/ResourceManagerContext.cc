@@ -1,7 +1,6 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
-#include <cstdint>
-#include <span>
+#include <memory>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -11,37 +10,12 @@
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
-#include "donner/svg/resources/FontLoader.h"
 #include "donner/svg/resources/ImageLoader.h"
 #include "donner/svg/resources/NullResourceLoader.h"
+#include "donner/svg/resources/UrlLoader.h"
 
 namespace donner::svg::components {
 namespace {
-
-constexpr uint32_t kWoffMagic = 0x774F4646;          // "wOFF"
-constexpr uint32_t kSfntTrueTypeMagic = 0x00010000;  // TrueType sfnt
-constexpr uint32_t kSfntCffMagic = 0x4F54544F;       // "OTTO"
-constexpr uint32_t kSfntAppleMagic = 0x74727565;     // "true"
-constexpr uint32_t kSfntType1Magic = 0x74797031;     // "typ1"
-
-uint32_t ReadBigEndianU32(std::span<const uint8_t> data) {
-  return (static_cast<uint32_t>(data[0]) << 24u) | (static_cast<uint32_t>(data[1]) << 16u) |
-         (static_cast<uint32_t>(data[2]) << 8u) | static_cast<uint32_t>(data[3]);
-}
-
-bool IsRawSfntFont(std::span<const uint8_t> data) {
-  if (data.size() < 4u) {
-    return false;
-  }
-
-  const uint32_t magic = ReadBigEndianU32(data);
-  return magic == kSfntTrueTypeMagic || magic == kSfntCffMagic || magic == kSfntAppleMagic ||
-         magic == kSfntType1Magic;
-}
-
-bool IsWoffFont(std::span<const uint8_t> data) {
-  return data.size() >= 4u && ReadBigEndianU32(data) == kWoffMagic;
-}
 
 void AssertNoDocumentWriteAccessForUserCallback(Registry& registry, const char* callbackName) {
   const auto* context = registry.ctx().find<SVGDocumentContext>();
@@ -119,7 +93,8 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
     return false;
   }();
   const bool hasExternalFontFace = [&] {
-    for (const auto& fontFace : fontFacesToLoad_) {
+    for (const size_t fontFaceIndex : fontFaceIndexesToLoad_) {
+      const css::FontFace& fontFace = fontFaces_[fontFaceIndex];
       for (const css::FontFaceSource& source : fontFace.sources) {
         if (source.kind == css::FontFaceSource::Kind::Url &&
             needsExternalLoader(std::get<RcString>(source.payload))) {
@@ -192,51 +167,39 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
     }
   }
 
-  // Iterate over all font faces and load them.
-  FontLoader fontLoader(loader);
-  for (const auto& fontFace : fontFacesToLoad_) {
-    for (const css::FontFaceSource& source : fontFace.sources) {
+  // Hydrate URL font sources into data sources. FontManager owns parsing and caches decoded font
+  // handles on demand; ResourceManager only resolves bytes while the document resource loader is
+  // available.
+  UrlLoader urlLoader(loader);
+  for (const size_t fontFaceIndex : fontFaceIndexesToLoad_) {
+    css::FontFace& fontFace = fontFaces_[fontFaceIndex];
+    for (css::FontFaceSource& source : fontFace.sources) {
       if (source.kind == css::FontFaceSource::Kind::Url) {
-        auto maybeFontData = fontLoader.fromUri(std::get<RcString>(source.payload));
-
-        if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
-          ParseDiagnostic err;
-          err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
-          warningSink.add(std::move(err));
-        } else {
-          loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
-        }
-      } else if (source.kind == css::FontFaceSource::Kind::Data) {
-        const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
-        if (!dataPtr || IsRawSfntFont(*dataPtr)) {
-          continue;
-        }
-        if (!IsWoffFont(*dataPtr)) {
-          ParseDiagnostic err;
-          err.reason = std::string(ToString(UrlLoaderError::DataCorrupt));
-          warningSink.add(std::move(err));
+        const RcString& url = std::get<RcString>(source.payload);
+        if (!loader_ && needsExternalLoader(url)) {
           continue;
         }
 
-        auto maybeFontData = fontLoader.fromData(*dataPtr);
-
+        auto maybeFontData = urlLoader.fromUri(url);
         if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
           ParseDiagnostic err;
-          err.reason = std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
+          err.reason = std::string("Could not load font ") + url + ": " +
+                       std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
           warningSink.add(std::move(err));
         } else {
-          loadedFonts_.emplace_back(std::get<FontResource>(maybeFontData));
+          UrlLoader::Result fontData = std::get<UrlLoader::Result>(std::move(maybeFontData));
+          source.kind = css::FontFaceSource::Kind::Data;
+          source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData.data));
         }
-      } else {
+      } else if (source.kind != css::FontFaceSource::Kind::Data) {
         ParseDiagnostic err;
         err.reason = "Unsupported font face source kind";
         warningSink.add(std::move(err));
-        continue;
       }
     }
   }
 
-  fontFacesToLoad_.clear();
+  fontFaceIndexesToLoad_.clear();
 }
 
 std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
@@ -291,8 +254,11 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
-  fontFacesToLoad_.insert(fontFacesToLoad_.end(), fontFaces.begin(), fontFaces.end());
+  const size_t firstInsertedIndex = fontFaces_.size();
   fontFaces_.insert(fontFaces_.end(), fontFaces.begin(), fontFaces.end());
+  for (size_t index = 0; index < fontFaces.size(); ++index) {
+    fontFaceIndexesToLoad_.push_back(firstInsertedIndex + index);
+  }
 }
 
 std::optional<Vector2i> ResourceManagerContext::getImageSize(Entity entity) const {

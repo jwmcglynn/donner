@@ -60,6 +60,14 @@ TEST_F(SandboxedFileResourceLoaderTests, AccessNonExistentFile) {
   EXPECT_THAT(data, testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::NotFound));
 }
 
+TEST_F(SandboxedFileResourceLoaderTests, AccessDirectoryReturnsNotFound) {
+  std::filesystem::create_directories(root_ / "subdir");
+  SandboxedFileResourceLoader loader(root_, root_ / "doc.svg");
+
+  auto data = loader.fetchExternalResource("subdir");
+  EXPECT_THAT(data, testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::NotFound));
+}
+
 TEST_F(SandboxedFileResourceLoaderTests, AccessOutsideSandbox) {
   createTestFileUnder(secondaryDir_, "test.txt");
   SandboxedFileResourceLoader loader(root_, root_ / "doc.svg");
