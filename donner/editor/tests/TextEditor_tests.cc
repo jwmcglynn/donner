@@ -52,6 +52,7 @@ using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::Gt;
+using ::testing::IsEmpty;
 
 auto SourceByteRangeIs(std::size_t start, std::size_t end) {
   return AllOf(Field("start", &SourceByteRange::start, start),
@@ -1606,8 +1607,8 @@ TEST_F(TextEditorTests, CalculateFoldsSortsAndPairsNestedFoldEndpoints) {
 
   CalculateFoldsDirect(/*currentLine=*/3, /*totalLines=*/4);
 
-  EXPECT_EQ(FoldConnections(), (std::vector<int>{1, 0}));
-  EXPECT_EQ(FoldStates(), (std::vector<bool>{false, false}));
+  EXPECT_THAT(FoldConnections(), ElementsAre(1, 0));
+  EXPECT_THAT(FoldStates(), ElementsAre(false, false));
 }
 
 TEST_F(TextEditorTests, MoveLeftRetractsCursor) {
@@ -2906,8 +2907,8 @@ TEST_F(TextEditorTests, AutocompleteParseSnippetReplacesRepeatedPlaceholders) {
 
   EXPECT_EQ(std::string(std::string_view(parsed)), R"(<rect id="name">rect</rect>)");
   EXPECT_TRUE(IsSnippet());
-  EXPECT_EQ(SnippetIds(), (std::vector<int>{1, 2, 1, 1}));
-  EXPECT_EQ(SnippetHighlights(), (std::vector<bool>{true, true, false, false}));
+  EXPECT_THAT(SnippetIds(), ElementsAre(1, 2, 1, 1));
+  EXPECT_THAT(SnippetHighlights(), ElementsAre(true, true, false, false));
   EXPECT_THAT(SnippetStarts(), ElementsAre(Coordinates(3, 5), Coordinates(3, 14),
                                            Coordinates(3, 20), Coordinates(3, 26)));
   EXPECT_THAT(SnippetEnds(), ElementsAre(Coordinates(3, 9), Coordinates(3, 18), Coordinates(3, 24),
@@ -2922,10 +2923,10 @@ TEST_F(TextEditorTests, AutocompleteParseSnippetWithoutTagsClearsSnippetState) {
 
   EXPECT_EQ(std::string(std::string_view(parsed)), "plain text");
   EXPECT_FALSE(IsSnippet());
-  EXPECT_TRUE(SnippetStarts().empty());
-  EXPECT_TRUE(SnippetEnds().empty());
-  EXPECT_TRUE(SnippetIds().empty());
-  EXPECT_TRUE(SnippetHighlights().empty());
+  EXPECT_THAT(SnippetStarts(), IsEmpty());
+  EXPECT_THAT(SnippetEnds(), IsEmpty());
+  EXPECT_THAT(SnippetIds(), IsEmpty());
+  EXPECT_THAT(SnippetHighlights(), IsEmpty());
 }
 
 TEST_F(TextEditorTests, BuildSuggestionsUsesStructuredProviderReplacementRange) {
