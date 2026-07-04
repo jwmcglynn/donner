@@ -286,9 +286,6 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(getTestsInCategory(
             "filters/feImage",
             {
-                {"empty.svg",
-                 Params::Skip("Bug: std::bad_alloc crash on Linux CI runners (passes on macOS); "
-                              "likely shares the resource-loading root cause of issue #576")},
                 {"svg.svg",
                  Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-svg.png")
                      .withReason("We render higher quality")
@@ -451,14 +448,15 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-// TODO: The entire filters/filter-functions category produces "Data corrupted"
-// parse errors on CI x86_64 runners but passes locally on aarch64. The root
-// cause is unknown — possibly a resvg test suite data integrity issue on CI,
-// or an x86_64-specific parser bug. Disabled until investigated.
+// TODO: The filters/filter-functions category has CSS filter-function pixel-parity gaps when
+// enabled wholesale. Keep the category disabled until those rendering mismatches are triaged; the
+// previous resource-loading "Data corrupted" warnings are covered by ResourceManagerContext tests,
+// and filters/feImage/empty.svg now runs in the active FiltersFeImage suite.
 //
 // INSTANTIATE_TEST_SUITE_P(
 //     FiltersFilterFunctions, ImageComparisonTestFixture,
-//     ValuesIn(getTestsInCategory("filters/filter-functions")),
+//     Combine(ValuesIn(getTestsInCategory("filters/filter-functions")),
+//             ValuesIn(ActiveComparisonModes())),
 //     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(

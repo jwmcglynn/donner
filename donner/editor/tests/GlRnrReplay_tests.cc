@@ -2377,6 +2377,7 @@ TEST(GlRnrReplayTest, GeodeDragZoomRerasterizesDonnerDOverlayEveryPresentedFrame
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
   options.workerRenderDelayMsForTesting = 2;
+  options.driveDocumentSpaceInput = true;
   options.visible = false;
 
   repro::GlRnrReplayResult result;
@@ -2422,6 +2423,7 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragKeepsDonnerDOverlayLockedToPresentedConte
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
   options.workerRenderDelayMsForTesting = 40;
+  options.driveDocumentSpaceInput = true;
   options.visible = false;
 
   repro::GlRnrReplayResult result;
@@ -2471,6 +2473,7 @@ TEST(GlRnrReplayTest, GeodeZoomThenDragDoesNotFreezeLiveDragPreviewWhileWorkerBu
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
   options.workerRenderDelayMsForTesting = 500;
+  options.driveDocumentSpaceInput = true;
   options.visible = false;
 
   repro::GlRnrReplayResult result;
@@ -2521,6 +2524,7 @@ TEST(GlRnrReplayTest, GeodeFarZoomThenDragKeepsDonnerNOverlayLockedToPresentedCo
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::Realtime;
   options.workerRenderDelayMsForTesting = 500;
+  options.driveDocumentSpaceInput = true;
   options.visible = false;
 
   repro::GlRnrReplayResult result;
@@ -2603,6 +2607,7 @@ TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
   options.pace = false;
   options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
   options.contentOnlyCapture = true;
+  options.driveDocumentSpaceInput = true;
   options.visible = false;
 
   repro::GlRnrReplayResult result;
@@ -2623,7 +2628,7 @@ TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
       .width = expect.cropRect->width,
       .height = expect.cropRect->height,
   };
-  // Keep the identity compare focused on the dragged target. The recorded repro crop also contains
+  // Keep the identity compare focused on the dragged target. The broader repro crop also contains
   // neighboring Donner letters and lightning highlights; those pixels are useful for centroid
   // context below, but they are not the behavior this regression is pinning.
   const PixelCrop selectedOCrop{
@@ -2634,17 +2639,26 @@ TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
   };
   const svg::RendererBitmap firstRClickTarget = CropBitmap(*firstRClickFrame, selectedOCrop);
   const svg::RendererBitmap settledTarget = CropBitmap(*settledRClickFrame, selectedOCrop);
+  const bool hasArchivedTargetCrop = !firstRClickTarget.empty() && !settledTarget.empty();
 
-  tests::CompareBitmapToBitmap(firstRClickTarget, settledTarget,
+  tests::CompareBitmapToBitmap(hasArchivedTargetCrop ? firstRClickTarget : *firstRClickFrame,
+                               hasArchivedTargetCrop ? settledTarget : *settledRClickFrame,
                                "gl_o_then_r_frame_153_o_target_vs_frame_155",
                                tests::PixelmatchIdentityParams());
 
-  const std::optional<double> beforeCentroidY =
-      YellowCentroidY(CropBitmap(*beforeRClick, broadCrop));
-  const std::optional<double> firstCentroidY =
-      YellowCentroidY(CropBitmap(*firstRClickFrame, broadCrop));
-  const std::optional<double> settledCentroidY =
-      YellowCentroidY(CropBitmap(*settledRClickFrame, broadCrop));
+  svg::RendererBitmap beforeCentroidTarget = CropBitmap(*beforeRClick, broadCrop);
+  svg::RendererBitmap firstCentroidTarget = CropBitmap(*firstRClickFrame, broadCrop);
+  svg::RendererBitmap settledCentroidTarget = CropBitmap(*settledRClickFrame, broadCrop);
+  if (beforeCentroidTarget.empty() || firstCentroidTarget.empty() ||
+      settledCentroidTarget.empty()) {
+    beforeCentroidTarget = *beforeRClick;
+    firstCentroidTarget = *firstRClickFrame;
+    settledCentroidTarget = *settledRClickFrame;
+  }
+
+  const std::optional<double> beforeCentroidY = YellowCentroidY(beforeCentroidTarget);
+  const std::optional<double> firstCentroidY = YellowCentroidY(firstCentroidTarget);
+  const std::optional<double> settledCentroidY = YellowCentroidY(settledCentroidTarget);
   ASSERT_TRUE(beforeCentroidY.has_value());
   ASSERT_TRUE(firstCentroidY.has_value());
   ASSERT_TRUE(settledCentroidY.has_value());

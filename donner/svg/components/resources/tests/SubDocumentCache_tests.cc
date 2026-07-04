@@ -446,6 +446,16 @@ TEST_F(ResourceManagerContextTest, LoadResourcesWithoutLoaderWarnsForExternalIma
   EXPECT_TRUE(warnings.hasWarnings());
 }
 
+TEST_F(ResourceManagerContextTest, LoadResourcesSkipsEmptyImageHref) {
+  const Entity imageEntity = addImage("");
+
+  ParseWarningSink warnings;
+  resourceManager_->loadResources(warnings);
+
+  EXPECT_FALSE(registry_.all_of<LoadedImageComponent>(imageEntity));
+  EXPECT_FALSE(warnings.hasWarnings());
+}
+
 TEST_F(ResourceManagerContextTest, LoadResourcesSkipsAlreadyLoadedImages) {
   const Entity imageEntity = addImage("missing.png");
   registry_.emplace<LoadedImageComponent>(imageEntity);
@@ -567,6 +577,24 @@ TEST_F(ResourceManagerContextTest, AddFontFacesLoadsUrlAndDataFonts) {
   EXPECT_EQ(resourceManager_->fontFaces().size(), 2u);
   EXPECT_EQ(resourceManager_->loadedFonts().size(), 2u);
   EXPECT_FALSE(warnings.hasWarnings());
+}
+
+TEST_F(ResourceManagerContextTest, LoadResourcesLeavesRawSfntDataFontsForFontManager) {
+  css::FontFace dataFace;
+  dataFace.familyName = "RawSfnt";
+  css::FontFaceSource dataSource;
+  dataSource.kind = css::FontFaceSource::Kind::Data;
+  dataSource.payload =
+      std::make_shared<const std::vector<uint8_t>>(std::vector<uint8_t>{0x00, 0x01, 0x00, 0x00});
+  dataFace.sources.push_back(dataSource);
+
+  resourceManager_->addFontFaces(std::array<css::FontFace, 1>{dataFace});
+
+  ParseWarningSink warnings;
+  resourceManager_->loadResources(warnings);
+
+  EXPECT_FALSE(warnings.hasWarnings());
+  EXPECT_TRUE(resourceManager_->loadedFonts().empty());
 }
 
 TEST_F(ResourceManagerContextTest, LoadResourcesWarnsForInvalidAndUnsupportedFonts) {

@@ -216,14 +216,29 @@ void QueueRecordedScrollEvents(EditorShell& shell, const ReproFrame& frame) {
   return modifiers;
 }
 
+[[nodiscard]] std::optional<Vector2d> DocumentPointFromFrame(const ReproFrame& frame) {
+  if (frame.mouseDocX.has_value() && frame.mouseDocY.has_value()) {
+    return Vector2d(*frame.mouseDocX, *frame.mouseDocY);
+  }
+
+  if (!frame.viewport.has_value() || frame.viewport->zoom <= 0.0) {
+    return std::nullopt;
+  }
+
+  const ReproViewport& viewport = *frame.viewport;
+  return Vector2d(viewport.panDocX + (frame.mouseX - viewport.panScreenX) / viewport.zoom,
+                  viewport.panDocY + (frame.mouseY - viewport.panScreenY) / viewport.zoom);
+}
+
 [[nodiscard]] std::optional<EditorShellDocumentReplayInput> DocumentReplayInputFromFrame(
     const ReproFrame& frame) {
-  if (!frame.mouseDocX.has_value() || !frame.mouseDocY.has_value()) {
+  const std::optional<Vector2d> documentPoint = DocumentPointFromFrame(frame);
+  if (!documentPoint.has_value()) {
     return std::nullopt;
   }
 
   return EditorShellDocumentReplayInput{
-      .documentPoint = Vector2d(*frame.mouseDocX, *frame.mouseDocY),
+      .documentPoint = *documentPoint,
       .leftMouseDown = (frame.mouseButtonMask & 1) != 0,
       .leftMousePressed = HasLeftMouseEvent(frame, ReproEvent::Kind::MouseDown),
       .leftMouseReleased = HasLeftMouseEvent(frame, ReproEvent::Kind::MouseUp),
@@ -594,7 +609,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     window.pollEvents();
     window.beginFrameWithInput(options.driveDocumentSpaceInput ? NonCanvasInputFromFrame(frame)
                                                                : InputFromFrame(frame));
-    if (frame.viewport.has_value() && !options.driveDocumentSpaceInput) {
+    if (frame.viewport.has_value()) {
       shell.overrideViewportForReplay(ViewportFromReproViewport(*frame.viewport));
     }
     if (options.driveDocumentSpaceInput) {
