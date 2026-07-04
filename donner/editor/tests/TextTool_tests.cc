@@ -1,5 +1,7 @@
 #include "donner/editor/TextTool.h"
 
+#include <gmock/gmock.h>
+
 #include <string>
 #include <string_view>
 
@@ -12,6 +14,8 @@
 
 namespace donner::editor {
 namespace {
+
+using ::testing::ElementsAre;
 
 constexpr std::string_view kEmptySvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"></svg>)";
@@ -72,8 +76,7 @@ TEST_F(TextToolTest, InsertSelectsNewText) {
   tool.onMouseDown(app, Vector2d(20.0, 30.0), MouseModifiers{});
   ASSERT_TRUE(app.flushFrame());
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front(), text());
+  EXPECT_THAT(app.selectedElements(), ElementsAre(svg::SVGElement(text())));
   ASSERT_TRUE(tool.insertedTextElement().has_value());
   EXPECT_EQ(*tool.insertedTextElement(), svg::SVGElement(text()));
 }
@@ -93,8 +96,7 @@ TEST_F(TextToolTest, UndoRemovesAndRestoresSelection) {
   ASSERT_TRUE(app.flushFrame());
 
   EXPECT_FALSE(hasTextElement());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front(), *rect);
+  EXPECT_THAT(app.selectedElements(), ElementsAre(*rect));
 }
 
 TEST_F(TextToolTest, RedoReinsertsAndSelects) {
@@ -109,8 +111,7 @@ TEST_F(TextToolTest, RedoReinsertsAndSelects) {
   ASSERT_TRUE(app.flushFrame());
 
   ASSERT_TRUE(hasTextElement());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front(), text());
+  EXPECT_THAT(app.selectedElements(), ElementsAre(svg::SVGElement(text())));
 }
 
 TEST_F(TextToolTest, SetTextContentUpdatesNode) {

@@ -31,6 +31,11 @@
 namespace donner::editor {
 namespace {
 
+using ::testing::ElementsAre;
+using ::testing::Gt;
+using ::testing::ResultOf;
+using ::testing::SizeIs;
+
 constexpr std::string_view kSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
   <g id="groupA">
@@ -51,6 +56,10 @@ int RowIndex(const LayersPanel& panel, std::string_view name) {
   return -1;
 }
 
+auto ElementIdIs(auto matcher) {
+  return ResultOf("id()", [](const svg::SVGElement& element) { return element.id(); }, matcher);
+}
+
 // The Layers panel is a distinct type from the compositor diagnostics panel.
 static_assert(!std::is_same_v<LayersPanel, CompositorDebugPanel>,
               "LayersPanel must be a distinct type from CompositorDebugPanel");
@@ -67,8 +76,7 @@ TEST(LayersPanelTest, PlainClickSelectsRowElement) {
   const svg::SVGElement leafElement = panel.rows()[leafIdx].element;
   panel.handleRowClick(app, static_cast<std::size_t>(leafIdx), LayersPanel::ClickModifiers{});
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front(), leafElement);
+  EXPECT_THAT(app.selectedElements(), ElementsAre(leafElement));
   EXPECT_TRUE(panel.consumeSelectionChanged());
 }
 
@@ -89,7 +97,7 @@ TEST(LayersPanelTest, ShiftClickSelectsContiguousRange) {
   shift.shift = true;
   panel.handleRowClick(app, panel.visibleRowCount() - 1, shift);
 
-  EXPECT_GT(app.selectedElements().size(), 1u)
+  EXPECT_THAT(app.selectedElements(), SizeIs(Gt(1u)))
       << "shift-click should select a contiguous range of rows";
 }
 
@@ -106,15 +114,15 @@ TEST(LayersPanelTest, CtrlClickTogglesMembership) {
   ASSERT_GE(groupAIdx, 0);
 
   panel.handleRowClick(app, static_cast<std::size_t>(leafIdx), LayersPanel::ClickModifiers{});
-  EXPECT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_THAT(app.selectedElements(), SizeIs(1u));
 
   LayersPanel::ClickModifiers ctrl;
   ctrl.ctrl = true;
   panel.handleRowClick(app, static_cast<std::size_t>(groupAIdx), ctrl);
-  EXPECT_EQ(app.selectedElements().size(), 2u) << "ctrl-click adds to selection";
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u)) << "ctrl-click adds to selection";
 
   panel.handleRowClick(app, static_cast<std::size_t>(groupAIdx), ctrl);
-  EXPECT_EQ(app.selectedElements().size(), 1u) << "ctrl-click again toggles it back off";
+  EXPECT_THAT(app.selectedElements(), SizeIs(1u)) << "ctrl-click again toggles it back off";
 }
 
 TEST(LayersPanelTest, EveryVisibleRowHasThumbnailOrSwatch) {
@@ -189,8 +197,7 @@ TEST(LayersPanelTest, RowRenameChangesIdAndSelectsRow) {
 
   // The element kept its identity but took the new id, and the rename selected it.
   EXPECT_EQ(element.id(), RcString("renamed"));
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front(), element);
+  EXPECT_THAT(app.selectedElements(), ElementsAre(element));
   EXPECT_TRUE(panel.consumeSelectionChanged());
 
   panel.refreshSnapshot(app);
@@ -333,8 +340,7 @@ TEST(LayersPanelTest, RowZOrderBringsElementForward) {
   panel.refreshSnapshot(app);
   EXPECT_LT(RowIndex(panel, "b"), RowIndex(panel, "a"));
   // The reorder selected the acted-on row.
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front().id(), RcString("a"));
+  EXPECT_THAT(app.selectedElements(), ElementsAre(ElementIdIs(RcString("a"))));
 }
 
 TEST(LayersPanelTest, RowZOrderOutOfRangeIsNoOp) {

@@ -17,6 +17,11 @@
 namespace donner::editor {
 namespace {
 
+using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::SizeIs;
+using ::testing::UnorderedElementsAre;
+
 constexpr std::string_view kTwoRectsSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
          <rect id="r1" x="10" y="10" width="20" height="20" fill="red"/>
@@ -120,15 +125,6 @@ protected:
       return false;
     }
     return *selection == elementById(id);
-  }
-
-  bool selectionContainsId(std::string_view id) const {
-    for (const svg::SVGElement& selected : app.selectedElements()) {
-      if (selected.id() == id) {
-        return true;
-      }
-    }
-    return false;
   }
 
   void quickClick(const Vector2d& point) {
@@ -262,8 +258,7 @@ TEST_F(SelectToolTest, ClickInsideFilterGroupSelectsTheGroupNotSiblings) {
 
   quickClick(Vector2d(12.0, 20.0));
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("anchor"))
+  EXPECT_THAT(selectedElementIds(), ElementsAre("anchor"))
       << "elevation lands on the filter-g, single-element selection";
 
   drag(Vector2d(12.0, 20.0), Vector2d(42.0, 50.0));
@@ -283,8 +278,7 @@ TEST_F(SelectToolTest, NonCompositingGroupSelectsLeafNotGroup) {
 
   quickClick(Vector2d(12.0, 20.0));
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("plain_leaf"))
+  EXPECT_THAT(selectedElementIds(), ElementsAre("plain_leaf"))
       << "plain `<g>` is not a compositing object — select the leaf path";
 
   drag(Vector2d(12.0, 20.0), Vector2d(32.0, 40.0));
@@ -535,27 +529,26 @@ TEST_F(SelectToolTest, ShiftClickAddsElementsToSelection) {
   // Plain click on r1 → selection = {r1}.
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("r1"));
+  EXPECT_THAT(selectedElementIds(), ElementsAre("r1"));
 
   // Shift+click on r2 → selection = {r1, r2}.
   MouseModifiers shift;
   shift.shift = true;
   tool.onMouseDown(app, Vector2d(120.0, 120.0), shift);
   tool.onMouseUp(app, Vector2d(120.0, 120.0));
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u));
 }
 
 TEST_F(SelectToolTest, ShiftClickOnSelectedElementTogglesItOff) {
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(1u));
 
   MouseModifiers shift;
   shift.shift = true;
   tool.onMouseDown(app, Vector2d(15.0, 15.0), shift);
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
-  EXPECT_TRUE(app.selectedElements().empty());
+  EXPECT_THAT(app.selectedElements(), IsEmpty());
 }
 
 TEST_F(SelectToolTest, ShiftClickDoesNotStartDrag) {
@@ -588,9 +581,7 @@ TEST_F(SelectToolTest, ShiftClickInRotateRingAddsNearbyElementInsteadOfRotating)
   tool.onMouseUp(app, Vector2d(20.0, 44.0));
 
   EXPECT_FALSE(tool.activeGesturePreview().has_value());
-  ASSERT_EQ(app.selectedElements().size(), 2u);
-  EXPECT_TRUE(selectionContainsId("target"));
-  EXPECT_TRUE(selectionContainsId("nearby"));
+  EXPECT_THAT(selectedElementIds(), UnorderedElementsAre("target", "nearby"));
   EXPECT_DOUBLE_EQ(transformOf("#target").data[0], 1.0);
   EXPECT_DOUBLE_EQ(transformOf("#target").data[1], 0.0);
   EXPECT_DOUBLE_EQ(transformOf("#nearby").data[0], 1.0);
@@ -675,8 +666,7 @@ TEST_F(SelectToolTest, QuickClickOnUnselectedBackgroundStillSelectsIt) {
   tool.onMouseDown(app, Vector2d(5.0, 5.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(5.0, 5.0));
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("background"));
+  EXPECT_THAT(selectedElementIds(), ElementsAre("background"));
 }
 
 TEST_F(SelectToolTest, MarqueeUsesShapeIntersectionNotShapeBounds) {
@@ -688,7 +678,7 @@ TEST_F(SelectToolTest, MarqueeUsesShapeIntersectionNotShapeBounds) {
   tool.onMouseMove(app, Vector2d(90.0, 90.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(90.0, 90.0));
 
-  EXPECT_TRUE(app.selectedElements().empty())
+  EXPECT_THAT(app.selectedElements(), IsEmpty())
       << "The marquee overlaps the triangle AABB but not the filled triangle.";
 }
 
@@ -703,8 +693,7 @@ TEST_F(SelectToolTest, MarqueeReleaseSkipsLockedElements) {
   tool.onMouseMove(app, Vector2d(120.0, 120.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(120.0, 120.0));
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("target"));
+  EXPECT_THAT(selectedElementIds(), ElementsAre("target"));
 }
 
 TEST_F(SelectToolTest, MarqueeDoesNotSelectShapeThatContainsDragBox) {
@@ -717,8 +706,7 @@ TEST_F(SelectToolTest, MarqueeDoesNotSelectShapeThatContainsDragBox) {
   tool.onMouseMove(app, Vector2d(95.0, 95.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(95.0, 95.0));
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("target"));
+  EXPECT_THAT(selectedElementIds(), ElementsAre("target"));
 }
 
 TEST_F(SelectToolTest, MarqueeGrowsToCoverDraggedRect) {
@@ -754,7 +742,7 @@ TEST_F(SelectToolTest, MarqueeReleaseSelectsIntersectingElements) {
 
   EXPECT_FALSE(tool.isMarqueeing());
   EXPECT_FALSE(tool.marqueeRect().has_value());
-  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u));
 }
 
 TEST_F(SelectToolTest, MarqueeReleaseSelectsOneWhenOnlyOneIntersects) {
@@ -762,8 +750,7 @@ TEST_F(SelectToolTest, MarqueeReleaseSelectsOneWhenOnlyOneIntersects) {
   tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(50.0, 50.0));
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("r1"));
+  EXPECT_THAT(selectedElementIds(), ElementsAre("r1"));
 }
 
 TEST_F(SelectToolTest, MarqueeReleaseSelectsZeroWhenEmpty) {
@@ -772,7 +759,7 @@ TEST_F(SelectToolTest, MarqueeReleaseSelectsZeroWhenEmpty) {
   tool.onMouseDown(app, Vector2d(60.0, 60.0), MouseModifiers{});
   tool.onMouseMove(app, Vector2d(80.0, 80.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(80.0, 80.0));
-  EXPECT_TRUE(app.selectedElements().empty());
+  EXPECT_THAT(app.selectedElements(), IsEmpty());
 }
 
 TEST_F(SelectToolTest, PlainDragFromEmptySpaceWithExistingSelectionStartsMarquee) {
@@ -789,8 +776,7 @@ TEST_F(SelectToolTest, PlainDragFromEmptySpaceWithExistingSelectionStartsMarquee
 
   EXPECT_FALSE(tool.isMarqueeing());
   EXPECT_FALSE(tool.marqueeRect().has_value());
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_THAT(selectedElementIds(), testing::ElementsAre("r2"));
+  EXPECT_THAT(selectedElementIds(), ElementsAre("r2"));
 }
 
 TEST_F(SelectToolTest, PlainDragStartingOnSelectedShapeDoesNotStartMarquee) {
@@ -824,7 +810,7 @@ TEST_F(SelectToolTest, ShiftMarqueeAppendsToSelection) {
   // Pre-select r1.
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(1u));
 
   // Shift+marquee over r2.
   MouseModifiers shift;
@@ -834,7 +820,7 @@ TEST_F(SelectToolTest, ShiftMarqueeAppendsToSelection) {
   tool.onMouseUp(app, Vector2d(145.0, 145.0));
 
   // Both should now be selected.
-  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u));
 }
 
 TEST_F(SelectToolTest, ShiftMarqueeOverAlreadySelectedDoesNotDuplicate) {
@@ -845,14 +831,14 @@ TEST_F(SelectToolTest, ShiftMarqueeOverAlreadySelectedDoesNotDuplicate) {
   shift.shift = true;
   tool.onMouseDown(app, Vector2d(120.0, 120.0), shift);
   tool.onMouseUp(app, Vector2d(120.0, 120.0));
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(2u));
 
   // Shift+marquee over r1 (already selected). `addToSelection` is
   // idempotent, so the size shouldn't grow.
   tool.onMouseDown(app, Vector2d(0.0, 0.0), shift);
   tool.onMouseMove(app, Vector2d(50.0, 50.0), /*buttonHeld=*/true);
   tool.onMouseUp(app, Vector2d(50.0, 50.0));
-  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u));
 }
 
 // ── Multi-select drag ───────────────────────────────────────────────────────
@@ -865,7 +851,7 @@ TEST_F(SelectToolTest, ShiftMarqueeOverAlreadySelectedDoesNotDuplicate) {
 TEST_F(SelectToolTest, MultiSelectDragMovesAllSelectedElements) {
   // Marquee-select both rects.
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(2u));
 
   const Transform2d r1Start = transformOf("#r1");
   const Transform2d r2Start = transformOf("#r2");
@@ -873,7 +859,7 @@ TEST_F(SelectToolTest, MultiSelectDragMovesAllSelectedElements) {
   // Click-drag on r1 (an already-selected element). Both should move.
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
   ASSERT_TRUE(tool.isDragging()) << "click on selected element starts a drag";
-  EXPECT_EQ(app.selectedElements().size(), 2u)
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u))
       << "selection preserved — clicking an already-selected element does not collapse";
   const auto moveGestureBeforeMove = tool.activeGesturePreview();
   ASSERT_TRUE(moveGestureBeforeMove.has_value());
@@ -900,22 +886,22 @@ TEST_F(SelectToolTest, MultiSelectDragMovesAllSelectedElements) {
 TEST_F(SelectToolTest, ClickOnUnselectedElementCollapsesMultiSelection) {
   // Marquee-select both.
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(2u));
 
   // Click on r1 — already in selection — the "grab any, move all" case:
   // selection preserved.
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
-  EXPECT_EQ(app.selectedElements().size(), 2u);
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u));
   tool.onMouseUp(app, Vector2d(15.0, 15.0));
 
   // Reset to multi-selection. Now click on empty space BETWEEN the rects so
   // the marquee path clears selection. Re-select and then click r1.
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(2u));
 
   // Now simulate "click on a different selected element" (r2): still preserves.
   tool.onMouseDown(app, Vector2d(120.0, 120.0), MouseModifiers{});
-  EXPECT_EQ(app.selectedElements().size(), 2u)
+  EXPECT_THAT(app.selectedElements(), SizeIs(2u))
       << "clicking on r2 (also in selection) preserves the whole selection";
   tool.onMouseUp(app, Vector2d(120.0, 120.0));
 }
@@ -923,7 +909,7 @@ TEST_F(SelectToolTest, ClickOnUnselectedElementCollapsesMultiSelection) {
 TEST_F(SelectToolTest, SingleSelectionStaysSingleWhenDragged) {
   // Only r1 selected. Click-drag on r1 → single-element drag, no extras.
   app.setSelection(elementById("#r1"));
-  ASSERT_EQ(app.selectedElements().size(), 1u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(1u));
 
   const Transform2d r1Start = transformOf("#r1");
   const Transform2d r2Start = transformOf("#r2");
@@ -964,7 +950,7 @@ TEST_F(SelectToolTest, MultiSelectDragPreservesExtraElementTransforms) {
   r2Handle.setTransform(Transform2d::Translate(Vector2d(5.0, 7.0)));
 
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(2u));
 
   const Transform2d r1Start = transformOf("#r1");
   const Transform2d r2Start = transformOf("#r2");
@@ -1471,7 +1457,7 @@ TEST_F(SelectToolTest, OptionCanToggleCenterResizeDuringResize) {
 
 TEST_F(SelectToolTest, MultiSelectionCornerResizeUsesCombinedBounds) {
   app.setSelection(std::vector<svg::SVGElement>{elementById("#r1"), elementById("#r2")});
-  ASSERT_EQ(app.selectedElements().size(), 2u);
+  ASSERT_THAT(app.selectedElements(), SizeIs(2u));
 
   const Box2d r1StartBounds = worldBoundsOf("#r1");
   const Box2d r2StartBounds = worldBoundsOf("#r2");

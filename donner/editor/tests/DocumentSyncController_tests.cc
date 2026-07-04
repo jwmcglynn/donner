@@ -1,12 +1,15 @@
 #include "donner/editor/DocumentSyncController.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <algorithm>
 #include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "donner/base/RcString.h"
+#include "donner/base/xml/XMLSourceStore.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
@@ -23,6 +26,14 @@
 namespace donner::editor {
 namespace {
 
+using ::testing::AllOf;
+using ::testing::Contains;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::Gt;
+using ::testing::ResultOf;
+using ::testing::SizeIs;
+
 constexpr std::string_view kTrivialSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
          <rect id="r1" x="10" y="10" width="20" height="20" fill="red"/>
@@ -38,6 +49,29 @@ constexpr std::string_view kTwoRectSvg =
          <rect id="r1" x="0" y="0" width="10" height="10"/>
          <rect id="r2" x="20" y="0" width="10" height="10"/>
        </svg>)";
+
+std::vector<RcString> SelectedElementIds(const EditorApp& app) {
+  std::vector<RcString> ids;
+  ids.reserve(app.selectedElements().size());
+  for (const svg::SVGElement& element : app.selectedElements()) {
+    ids.push_back(element.id());
+  }
+
+  return ids;
+}
+
+auto IsLockedElement() {
+  return ResultOf(
+      "IsLocked", [](const svg::SVGElement& element) { return IsLocked(element); }, true);
+}
+
+auto SourceDeltaRemovedLengthIs(auto matcher) {
+  return Field("removedLength", &xml::XMLSourceDelta::removedLength, matcher);
+}
+
+auto SourceDeltaInsertedLengthIs(auto matcher) {
+  return Field("insertedLength", &xml::XMLSourceDelta::insertedLength, matcher);
+}
 
 class DocumentSyncControllerTest : public ::testing::Test {
 protected:
@@ -150,15 +184,14 @@ TEST_F(DocumentSyncControllerTest, PartialOpeningTagEditPreservesSelectionWhileI
     controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.0f);
 
     ASSERT_TRUE(app_.hasSelection()) << "lost selection after typing '" << ch << "'";
-    ASSERT_EQ(app_.selectedElements().size(), 1u);
-    EXPECT_TRUE(app_.selectedElements().front() == *rect);
+    EXPECT_THAT(app_.selectedElements(), ElementsAre(*rect));
 
     controller_.handleTextEdits(app_, textEditor_, /*deltaSeconds=*/0.2f);
   }
 
   EXPECT_FALSE(app_.document().lastParseError().has_value());
   ASSERT_TRUE(app_.hasSelection());
-  EXPECT_TRUE(app_.selectedElements().front() == *rect);
+  EXPECT_THAT(app_.selectedElements(), ElementsAre(*rect));
   EXPECT_NE(app_.document().document().source().find(R"(style="display:none")"),
             std::string_view::npos);
 }
@@ -194,7 +227,7 @@ TEST_F(DocumentSyncControllerTest, TypingDisplayNoneBeforePathClassKeepsSelectio
     (void)app_.flushFrame();
 
     ASSERT_TRUE(app_.hasSelection()) << "lost selection after typing '" << ch << "'";
-    ASSERT_EQ(app_.selectedElements().size(), 1u);
+    ASSERT_THAT(app_.selectedElements(), SizeIs(1u));
     EXPECT_TRUE(app_.selectedElement()->isa<svg::SVGGeometryElement>());
   }
 
@@ -446,7 +479,7 @@ TEST_F(DocumentSyncControllerTest, SourceBackedDeleteWritebackMirrorsFlushDeltaW
   ASSERT_TRUE(app_.flushFrame());
   EXPECT_FALSE(app_.document().lastFlushResult().replacedDocument);
   EXPECT_EQ(app_.document().documentGeneration(), documentGeneration);
-  ASSERT_EQ(app_.document().lastFlushResult().sourceDeltas.size(), 1u);
+  ASSERT_THAT(app_.document().lastFlushResult().sourceDeltas, SizeIs(1u));
 
   controller_.applyPendingWritebacks(app_, tool, textEditor_);
 
@@ -581,8 +614,7 @@ TEST_F(DocumentSyncControllerTest, DeleteSelectionSkipsLockedElementsInSourceToo
   EXPECT_EQ(textEditor.getText().find("id=\"free\""), std::string::npos);
   EXPECT_TRUE(app.document().document().querySelector("#locked").has_value());
   EXPECT_NE(textEditor.getText().find("id=\"locked\""), std::string::npos);
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_TRUE(IsLocked(app.selectedElements().front()));
+  EXPECT_THAT(app.selectedElements(), ElementsAre(IsLockedElement()));
 }
 
 TEST_F(DocumentSyncControllerTest, SetTextContentMirrorsIntoSourceText) {
@@ -841,8 +873,7 @@ TEST(DocumentSyncControllerStructuredTest, SelectedElementSourceAttributeEditsKe
   textEditor.insertText(kNewWidth);
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front().id(), "r1");
+  EXPECT_THAT(SelectedElementIds(app), ElementsAre(RcString("r1")));
   SelectionBoundsCache cache;
   RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(app.selectedElements()),
                               app.document().currentFrameVersion(),
@@ -875,8 +906,7 @@ TEST(DocumentSyncControllerStructuredTest, SourceInsertNearSelectionKeepsBoundsS
 
   controller.handleTextEdits(app, textEditor, /*deltaSeconds=*/0.0f);
 
-  ASSERT_EQ(app.selectedElements().size(), 1u);
-  EXPECT_EQ(app.selectedElements().front().id(), "a");
+  EXPECT_THAT(SelectedElementIds(app), ElementsAre(RcString("a")));
   SelectionBoundsCache cache;
   RefreshSelectionBoundsCache(cache, std::span<const svg::SVGElement>(app.selectedElements()),
                               app.document().currentFrameVersion(),
@@ -1206,10 +1236,8 @@ TEST(DocumentSyncControllerStructuredTest, MultiDeltaMoveMirrorsIntoTextPane) {
 
   xml::ApplySourceEditResult result = app.document().document().insertElement(*target, *moved);
   ASSERT_TRUE(result.applied);
-  ASSERT_EQ(result.sourceDeltas.size(), 2u);
-  EXPECT_TRUE(std::ranges::any_of(result.sourceDeltas, [](const xml::XMLSourceDelta& delta) {
-    return delta.insertedLength > 0;
-  }));
+  ASSERT_THAT(result.sourceDeltas, SizeIs(2u));
+  EXPECT_THAT(result.sourceDeltas, Contains(SourceDeltaInsertedLengthIs(Gt(0u))));
 
   EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
 
@@ -1343,8 +1371,7 @@ TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasFallsBackWhenDelete
   ASSERT_TRUE(rect.has_value());
   xml::ApplySourceEditResult result = app.document().document().removeElement(*rect);
   ASSERT_TRUE(result.applied);
-  ASSERT_EQ(result.sourceDeltas.size(), 1u);
-  ASSERT_GT(result.sourceDeltas.front().removedLength, 0u);
+  ASSERT_THAT(result.sourceDeltas, ElementsAre(SourceDeltaRemovedLengthIs(Gt(0u))));
 
   EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
 
@@ -1378,8 +1405,7 @@ TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasFallsBackWhenInsert
   xml::ApplySourceEditResult result =
       app.document().document().insertElement(app.document().document().svgElement(), inserted);
   ASSERT_TRUE(result.applied);
-  ASSERT_EQ(result.sourceDeltas.size(), 1u);
-  ASSERT_EQ(result.sourceDeltas.front().removedLength, 0u);
+  ASSERT_THAT(result.sourceDeltas, ElementsAre(SourceDeltaRemovedLengthIs(0u)));
 
   EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
 
@@ -1412,9 +1438,8 @@ TEST(DocumentSyncControllerStructuredTest, MirrorSourceDeltasInsertsNewRootChild
   xml::ApplySourceEditResult result =
       app.document().document().insertElement(app.document().document().svgElement(), inserted);
   ASSERT_TRUE(result.applied);
-  ASSERT_EQ(result.sourceDeltas.size(), 1u);
-  ASSERT_EQ(result.sourceDeltas.front().removedLength, 0u);
-  ASSERT_GT(result.sourceDeltas.front().insertedLength, 0u);
+  ASSERT_THAT(result.sourceDeltas, ElementsAre(AllOf(SourceDeltaRemovedLengthIs(0u),
+                                                     SourceDeltaInsertedLengthIs(Gt(0u)))));
 
   EXPECT_TRUE(controller.mirrorSourceDeltas(app, textEditor, result.sourceDeltas));
 

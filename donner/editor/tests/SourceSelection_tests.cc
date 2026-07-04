@@ -1,5 +1,6 @@
 #include "donner/editor/SourceSelection.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <fstream>
@@ -17,6 +18,10 @@
 
 namespace donner::editor {
 namespace {
+
+using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::ResultOf;
 
 RcString ElementId(const svg::SVGElement& element) {
   return element.withReadAccess(
@@ -169,8 +174,7 @@ TEST(SourceSelectionTest, ExcludesSelectedElementsFromSourceHoverCandidates) {
   const std::vector<svg::SVGElement> filtered = ExcludeSelectedSourceHoverElements(
       {*group, *rect}, std::span<const svg::SVGElement>(&*rect, 1));
 
-  ASSERT_EQ(filtered.size(), 1u);
-  EXPECT_EQ(filtered.front().id(), "layer");
+  EXPECT_THAT(filtered, ElementsAre(ResultOf("ElementId", ElementId, RcString("layer"))));
 }
 
 TEST(SourceSelectionTest, ExcludesDocumentRootFromSourceHoverCandidates) {
@@ -183,11 +187,10 @@ TEST(SourceSelectionTest, ExcludesDocumentRootFromSourceHoverCandidates) {
 
   std::vector<svg::SVGElement> filtered =
       ExcludeDocumentRootSourceHoverElement({root, *rect}, document);
-  ASSERT_EQ(filtered.size(), 1u);
-  EXPECT_EQ(filtered.front().id(), "target");
+  EXPECT_THAT(filtered, ElementsAre(ResultOf("ElementId", ElementId, RcString("target"))));
 
   filtered = ExcludeDocumentRootSourceHoverElement({root}, document);
-  EXPECT_TRUE(filtered.empty());
+  EXPECT_THAT(filtered, IsEmpty());
 }
 
 TEST(SourceSelectionTest, RootSvgStillResolvesAtSourceOffsetForExplicitSelection) {
