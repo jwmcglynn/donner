@@ -26,12 +26,12 @@ tiny_skia_cc_library(
         "Blend.h",
         "ColorMatrix.h",
         "ColorSpace.h",
-        "FloatPixmap.h",
         "ComponentTransfer.h",
         "Composite.h",
         "ConvolveMatrix.h",
         "DisplacementMap.h",
         "FilterGraph.h",
+        "FloatPixmap.h",
         "Flood.h",
         "GaussianBlur.h",
         "Lighting.h",
@@ -48,4 +48,5 @@ tiny_skia_cc_library(
     deps = [
         "//src/tiny_skia:tiny_skia_core",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )

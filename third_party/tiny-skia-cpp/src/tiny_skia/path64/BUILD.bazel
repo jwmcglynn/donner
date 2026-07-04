@@ -26,4 +26,5 @@ tiny_skia_cc_library(
     deps = [
         "//src/tiny_skia:tiny_skia_point",
     ],
+    alwayslink = True,  # link-order independence (#665)
 )

@@ -756,6 +756,7 @@ def _donner_perf_sensitive_cc_library_impl(ctx):
             # so force the wrapper to emit a static archive instead.
             # The top-level editor binary links it statically anyway.
             disallow_dynamic_library = True,
+            alwayslink = ctx.attr.alwayslink,
         )
 
         if linking_outputs.library_to_link != None:
@@ -782,6 +783,7 @@ _donner_perf_sensitive_cc_library = rule(
         "local_defines": attr.string_list(default = []),  # Optional defines
         "copts": attr.string_list(default = []),  # Optional compile options
         "linkopts": attr.string_list(default = []),  # Optional link options
+        "alwayslink": attr.bool(default = False),  # Whole-archive inclusion
     },
     fragments = ["cpp"],
 )
