@@ -21,6 +21,23 @@ MATCHER_P(VertexPointIs, expectedPoint, "") {
   return testing::ExplainMatchResult(testing::Eq(expectedPoint), arg.point, result_listener);
 }
 
+MATCHER_P2(Vector2dNear, expectedPoint, tolerance, "") {
+  return testing::ExplainMatchResult(
+      testing::AllOf(
+          testing::Field("x", &Vector2d::x, testing::DoubleNear(expectedPoint.x, tolerance)),
+          testing::Field("y", &Vector2d::y, testing::DoubleNear(expectedPoint.y, tolerance))),
+      arg, result_listener);
+}
+
+MATCHER_P(VertexPointMatches, pointMatcher, "") {
+  return testing::ExplainMatchResult(pointMatcher, arg.point, result_listener);
+}
+
+MATCHER_P(VertexOrientationIs, expectedOrientation, "") {
+  return testing::ExplainMatchResult(Vector2dNear(expectedOrientation, 1e-9), arg.orientation,
+                                     result_listener);
+}
+
 void ExpectNear(const Vector2d& actual, const Vector2d& expected, double tolerance = 1e-9) {
   EXPECT_NEAR(actual.x, expected.x, tolerance) << "actual=" << actual << " expected=" << expected;
   EXPECT_NEAR(actual.y, expected.y, tolerance) << "actual=" << actual << " expected=" << expected;
@@ -159,11 +176,10 @@ TEST(PathBuilder, AddPathCopiesCurvesAndClosePath) {
 
   Path combined = PathBuilder().addPath(sub).build();
 
-  ASSERT_EQ(combined.verbCount(), 4u);
-  EXPECT_EQ(combined.commands()[0].verb, Path::Verb::MoveTo);
-  EXPECT_EQ(combined.commands()[1].verb, Path::Verb::QuadTo);
-  EXPECT_EQ(combined.commands()[2].verb, Path::Verb::CurveTo);
-  EXPECT_EQ(combined.commands()[3].verb, Path::Verb::ClosePath);
+  EXPECT_THAT(combined.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                        PathCommandVerbIs(Path::Verb::QuadTo),
+                                                        PathCommandVerbIs(Path::Verb::CurveTo),
+                                                        PathCommandVerbIs(Path::Verb::ClosePath)));
 }
 
 // =============================================================================
@@ -1968,10 +1984,8 @@ TEST(Path, VerticesClosedPathDegenerateFirstSegment) {
   Path path = PathBuilder().moveTo({5, 5}).lineTo({5, 5}).lineTo({15, 5}).closePath().build();
   std::vector<Path::Vertex> verts = path.vertices();
   ASSERT_FALSE(verts.empty());
-  EXPECT_EQ(verts.front().point, Vector2d(5, 5));
-  // Orientation should be a unit vector pointing along +X.
-  EXPECT_NEAR(verts.front().orientation.x, 1.0, 1e-9);
-  EXPECT_NEAR(verts.front().orientation.y, 0.0, 1e-9);
+  EXPECT_THAT(verts.front(),
+              testing::AllOf(VertexPointIs(Vector2d(5, 5)), VertexOrientationIs(Vector2d(1, 0))));
 }
 
 // When a closed subpath's final drawing segment already arrives at the subpath start
@@ -2044,11 +2058,9 @@ TEST(Path, VerticesOpenSubpathFinalizesBeforeNextMove) {
 
   std::vector<Path::Vertex> verts = path.vertices();
 
-  ASSERT_EQ(verts.size(), 4u);
-  ExpectNear(verts[0].point, Vector2d(0, 0));
-  ExpectNear(verts[1].point, Vector2d(10, 0));
-  ExpectNear(verts[2].point, Vector2d(20, 0));
-  ExpectNear(verts[3].point, Vector2d(20, 10));
+  EXPECT_THAT(
+      verts, testing::ElementsAre(VertexPointIs(Vector2d(0, 0)), VertexPointIs(Vector2d(10, 0)),
+                                  VertexPointIs(Vector2d(20, 0)), VertexPointIs(Vector2d(20, 10))));
 }
 
 TEST(Path, VerticesSkipEmptyOpenSubpathBeforeRepeatedMove) {
@@ -2056,9 +2068,8 @@ TEST(Path, VerticesSkipEmptyOpenSubpathBeforeRepeatedMove) {
 
   std::vector<Path::Vertex> verts = path.vertices();
 
-  ASSERT_EQ(verts.size(), 2u);
-  ExpectNear(verts[0].point, Vector2d(5, 5));
-  ExpectNear(verts[1].point, Vector2d(10, 5));
+  EXPECT_THAT(verts,
+              testing::ElementsAre(VertexPointIs(Vector2d(5, 5)), VertexPointIs(Vector2d(10, 5))));
 }
 
 TEST(Path, VerticesArcSkipsInternalDecompositionSegments) {
@@ -2067,9 +2078,8 @@ TEST(Path, VerticesArcSkipsInternalDecompositionSegments) {
 
   std::vector<Path::Vertex> verts = path.vertices();
 
-  ASSERT_EQ(verts.size(), 2u);
-  ExpectNear(verts.front().point, Vector2d(10, 0));
-  ExpectNear(verts.back().point, Vector2d(0, 10), 1e-6);
+  EXPECT_THAT(verts, testing::ElementsAre(VertexPointIs(Vector2d(10, 0)),
+                                          VertexPointMatches(Vector2dNear(Vector2d(0, 10), 1e-6))));
 }
 
 TEST(Path, VerticesInteriorCuspsResolveBothPerpendicularBranches) {
@@ -2129,7 +2139,8 @@ TEST(PathBuilder, ArcToZeroYRadiusFallsBackToLine) {
   Path path = PathBuilder().moveTo({0, 0}).arcTo({10, 0}, 0.0, false, false, {10, 10}).build();
 
   ASSERT_EQ(path.verbCount(), 2u);
-  EXPECT_EQ(path.commands()[1].verb, Path::Verb::LineTo);
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo)));
 }
 
 TEST(PathBuilder, ArcToCoincidentEndpoints) {

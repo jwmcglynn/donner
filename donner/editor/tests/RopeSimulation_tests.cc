@@ -1,5 +1,6 @@
 #include "donner/editor/RopeSimulation.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -38,6 +39,74 @@ double MaxDeviationFrom(std::span<const Vector2d> points, std::span<const Vector
   return result;
 }
 
+MATCHER_P2(Vector2dNear, expected, tolerance, "") {
+  return testing::ExplainMatchResult(
+      testing::AllOf(testing::Field("x", &Vector2d::x, testing::DoubleNear(expected.x, tolerance)),
+                     testing::Field("y", &Vector2d::y, testing::DoubleNear(expected.y, tolerance))),
+      arg, result_listener);
+}
+
+MATCHER_P2(EndpointsAre, expectedStart, expectedEnd, "") {
+  if (arg.size() < 2u) {
+    *result_listener << "point count is " << arg.size();
+    return false;
+  }
+
+  *result_listener << "front=" << arg.front() << ", back=" << arg.back();
+  bool ok = true;
+  ok &= testing::ExplainMatchResult(testing::Eq(expectedStart), arg.front(), result_listener);
+  ok &= testing::ExplainMatchResult(testing::Eq(expectedEnd), arg.back(), result_listener);
+  return ok;
+}
+
+MATCHER_P3(EndpointsNear, expectedStart, expectedEnd, tolerance, "") {
+  if (arg.size() < 2u) {
+    *result_listener << "point count is " << arg.size();
+    return false;
+  }
+
+  *result_listener << "front=" << arg.front() << ", back=" << arg.back();
+  bool ok = true;
+  ok &= testing::ExplainMatchResult(Vector2dNear(expectedStart, tolerance), arg.front(),
+                                    result_listener);
+  ok &= testing::ExplainMatchResult(Vector2dNear(expectedEnd, tolerance), arg.back(),
+                                    result_listener);
+  return ok;
+}
+
+MATCHER_P(PathCommandVerbIs, expectedVerb, "") {
+  return testing::ExplainMatchResult(testing::Eq(expectedVerb), arg.verb, result_listener);
+}
+
+MATCHER_P2(PathCommandEndpointVerbsAre, expectedFirstVerb, expectedLastVerb, "") {
+  if (arg.size() < 2u) {
+    *result_listener << "command count is " << arg.size();
+    return false;
+  }
+
+  *result_listener << "first verb=" << testing::PrintToString(arg.front().verb)
+                   << ", last verb=" << testing::PrintToString(arg.back().verb);
+  bool ok = true;
+  ok &= testing::ExplainMatchResult(PathCommandVerbIs(expectedFirstVerb), arg.front(),
+                                    result_listener);
+  ok &=
+      testing::ExplainMatchResult(PathCommandVerbIs(expectedLastVerb), arg.back(), result_listener);
+  return ok;
+}
+
+MATCHER_P(LastPointIs, expectedPoint, "") {
+  if (arg.empty()) {
+    *result_listener << "point list is empty";
+    return false;
+  }
+
+  return testing::ExplainMatchResult(testing::Eq(expectedPoint), arg.back(), result_listener);
+}
+
+const Vector2d& MiddlePoint(std::span<const Vector2d> points) {
+  return points[points.size() / 2u];
+}
+
 }  // namespace
 
 TEST(RopeSimulationTest, KeepsEndpointsPinnedAfterUpdates) {
@@ -50,23 +119,21 @@ TEST(RopeSimulationTest, KeepsEndpointsPinnedAfterUpdates) {
   }
 
   ASSERT_GE(rope.points().size(), 2u);
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0)));
 }
 
 TEST(RopeSimulationTest, GravityMovesInteriorParticlesDown) {
   const RopeSimulationOptions options = TestOptions();
   RopeSimulation rope = MakeStraightRope(options);
-  const double beforeY = rope.points()[rope.points().size() / 2u].y;
+  const double beforeY = MiddlePoint(rope.points()).y;
 
   for (int i = 0; i < 8; ++i) {
     rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0,
                 static_cast<double>(i) / 60.0, 456u, false, options);
   }
 
-  EXPECT_GT(rope.points()[rope.points().size() / 2u].y, beforeY);
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_GT(MiddlePoint(rope.points()).y, beforeY);
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0)));
 }
 
 TEST(RopeSimulationTest, ResetCatenaryHangsBetweenEndpoints) {
@@ -78,11 +145,8 @@ TEST(RopeSimulationTest, ResetCatenaryHangsBetweenEndpoints) {
   rope.resetCatenary(Vector2d(0.0, 20.0), Vector2d(120.0, 20.0), options);
 
   ASSERT_GE(rope.points().size(), 3u);
-  EXPECT_NEAR(rope.points().front().x, 0.0, 1e-9);
-  EXPECT_NEAR(rope.points().front().y, 20.0, 1e-9);
-  EXPECT_NEAR(rope.points().back().x, 120.0, 1e-9);
-  EXPECT_NEAR(rope.points().back().y, 20.0, 1e-9);
-  const Vector2d middle = rope.points()[rope.points().size() / 2u];
+  EXPECT_THAT(rope.points(), EndpointsNear(Vector2d(0.0, 20.0), Vector2d(120.0, 20.0), 1e-9));
+  const Vector2d middle = MiddlePoint(rope.points());
   EXPECT_NEAR(middle.x, 60.0, 1.0);
   EXPECT_GT(middle.y, 20.0);
 }
@@ -113,10 +177,8 @@ TEST(RopeSimulationTest, ScrollImpulseAffectsInteriorOnly) {
                     options);
 
   ASSERT_EQ(withoutScroll.points().size(), withScroll.points().size());
-  EXPECT_EQ(withScroll.points().front(), Vector2d(0.0, 0.0));
-  EXPECT_EQ(withScroll.points().back(), Vector2d(100.0, 0.0));
-  EXPECT_NE(withScroll.points()[withScroll.points().size() / 2u].y,
-            withoutScroll.points()[withoutScroll.points().size() / 2u].y);
+  EXPECT_THAT(withScroll.points(), EndpointsAre(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0)));
+  EXPECT_NE(MiddlePoint(withScroll.points()).y, MiddlePoint(withoutScroll.points()).y);
 }
 
 TEST(RopeSimulationTest, ScrollImpulseIsCappedForFastScrolls) {
@@ -131,9 +193,8 @@ TEST(RopeSimulationTest, ScrollImpulseIsCappedForFastScrolls) {
               options);
 
   ASSERT_GE(rope.points().size(), 3u);
-  EXPECT_LE(std::abs(rope.points()[rope.points().size() / 2u].y), 0.5 + 1e-9);
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_LE(std::abs(MiddlePoint(rope.points()).y), 0.5 + 1e-9);
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0)));
 }
 
 TEST(RopeSimulationTest, ApplyImpulseCreatesMotionOnNextUpdate) {
@@ -146,9 +207,8 @@ TEST(RopeSimulationTest, ApplyImpulseCreatesMotionOnNextUpdate) {
   rope.applyImpulse(Vector2d(4.0, 0.0));
   rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 0.0, 123u, false, options);
 
-  EXPECT_GT(rope.points()[rope.points().size() / 2u].x, before.x);
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_GT(MiddlePoint(rope.points()).x, before.x);
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0)));
 }
 
 TEST(RopeSimulationTest, BottomImpulseIsLocalizedNearCatenaryBottom) {
@@ -174,8 +234,7 @@ TEST(RopeSimulationTest, BottomImpulseIsLocalizedNearCatenaryBottom) {
   const Vector2d shoulderDelta = rope.points()[shoulderIndex] - before[shoulderIndex];
   EXPECT_GT(std::abs(bottomDelta.x), std::abs(shoulderDelta.x) * 4.0);
   EXPECT_GT(std::abs(bottomDelta.x), std::abs(bottomDelta.y) * 20.0);
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(120.0, 0.0));
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 0.0), Vector2d(120.0, 0.0)));
 }
 
 TEST(RopeSimulationTest, CatenaryBottomImpulseDecaysWithoutEnergyGain) {
@@ -249,8 +308,8 @@ TEST(RopeSimulationTest, CatenaryBottomImpulseIsStableAcrossFrameCadences) {
   ASSERT_EQ(sixtyHz.points().size(), fastInputCadence.points().size());
   ASSERT_EQ(sixtyHz.points().size(), coarseCadence.points().size());
   for (std::size_t i = 0; i < sixtyHz.points().size(); ++i) {
-    EXPECT_LT(sixtyHz.points()[i].distance(fastInputCadence.points()[i]), 0.02);
-    EXPECT_LT(sixtyHz.points()[i].distance(coarseCadence.points()[i]), 0.02);
+    EXPECT_THAT(sixtyHz.points()[i], Vector2dNear(fastInputCadence.points()[i], 0.02));
+    EXPECT_THAT(sixtyHz.points()[i], Vector2dNear(coarseCadence.points()[i], 0.02));
   }
 }
 
@@ -276,8 +335,7 @@ TEST(RopeSimulationTest, LargeFrameDeltaAdvancesThroughFixedRealtimeSubsteps) {
 
   ASSERT_EQ(singleFrame.points().size(), fourFrames.points().size());
   const std::size_t middle = singleFrame.points().size() / 2u;
-  EXPECT_NEAR(singleFrame.points()[middle].x, fourFrames.points()[middle].x, 1e-9);
-  EXPECT_NEAR(singleFrame.points()[middle].y, fourFrames.points()[middle].y, 1e-9);
+  EXPECT_THAT(singleFrame.points()[middle], Vector2dNear(fourFrames.points()[middle], 1e-9));
 }
 
 TEST(RopeSimulationTest, ShortFrameDeltasPreserveRealtimeVelocityScale) {
@@ -302,8 +360,7 @@ TEST(RopeSimulationTest, ShortFrameDeltasPreserveRealtimeVelocityScale) {
 
   ASSERT_EQ(singleFrame.points().size(), twoFrames.points().size());
   const std::size_t middle = singleFrame.points().size() / 2u;
-  EXPECT_NEAR(singleFrame.points()[middle].x, twoFrames.points()[middle].x, 1e-9);
-  EXPECT_NEAR(singleFrame.points()[middle].y, twoFrames.points()[middle].y, 1e-9);
+  EXPECT_THAT(singleFrame.points()[middle], Vector2dNear(twoFrames.points()[middle], 1e-9));
 }
 
 TEST(RopeSimulationTest, SleepsAfterStillnessAndWakesOnImpulse) {
@@ -359,13 +416,13 @@ TEST(RopeSimulationTest, OverdueDampingSleepsOnlyAfterStillnessAndResetsOnWake) 
               options);
   ASSERT_FALSE(rope.needsAnimation());
 
-  const Vector2d beforeWake = rope.points()[rope.points().size() / 2u];
+  const Vector2d beforeWake = MiddlePoint(rope.points());
   rope.applyImpulse(Vector2d(0.75, 0.0));
   rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 1.0 / 60.0, 0.0, 4.0 / 60.0, 123u, false,
               options);
 
   EXPECT_TRUE(rope.needsAnimation());
-  EXPECT_NE(rope.points()[rope.points().size() / 2u].x, beforeWake.x);
+  EXPECT_NE(MiddlePoint(rope.points()).x, beforeWake.x);
 }
 
 TEST(RopeSimulationTest, EndpointMotionCarriesBodyAndAddsVelocity) {
@@ -380,9 +437,8 @@ TEST(RopeSimulationTest, EndpointMotionCarriesBodyAndAddsVelocity) {
   rope.update(Vector2d(0.0, 12.0), Vector2d(100.0, 12.0), 1.0 / 60.0, 0.0, 0.0, 123u, false,
               options);
 
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 12.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 12.0));
-  EXPECT_GT(rope.points()[rope.points().size() / 2u].y, before.y + 8.0);
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 12.0), Vector2d(100.0, 12.0)));
+  EXPECT_GT(MiddlePoint(rope.points()).y, before.y + 8.0);
 }
 
 TEST(RopeSimulationTest, EndpointMotionRetargetsAndDampsBackToCatenary) {
@@ -438,9 +494,9 @@ TEST(RopeSimulationTest, IdleSwayIsDeterministicAndSubtle) {
                 options);
 
   ASSERT_EQ(first.points().size(), second.points().size());
-  const std::size_t middle = first.points().size() / 2u;
-  EXPECT_EQ(first.points()[middle], second.points()[middle]);
-  EXPECT_LT(std::abs(first.points()[middle].x - 50.0), 0.1);
+  const Vector2d firstMiddle = MiddlePoint(first.points());
+  EXPECT_THAT(firstMiddle, testing::Eq(MiddlePoint(second.points())));
+  EXPECT_THAT(firstMiddle.x, testing::AllOf(testing::Gt(49.9), testing::Lt(50.1)));
 }
 
 TEST(RopeSimulationTest, HoverFreezePreservesBodyWhenAnchorsDoNotMove) {
@@ -461,11 +517,8 @@ TEST(RopeSimulationTest, ConvertsToBezierPathEndingAtTarget) {
 
   const Path path = rope.toPath(options);
   ASSERT_FALSE(path.empty());
-  ASSERT_GE(path.commands().size(), 2u);
-  EXPECT_EQ(path.commands().front().verb, Path::Verb::MoveTo);
-  EXPECT_EQ(path.commands().back().verb, Path::Verb::QuadTo);
-  ASSERT_FALSE(path.points().empty());
-  EXPECT_EQ(path.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_THAT(path.commands(), PathCommandEndpointVerbsAre(Path::Verb::MoveTo, Path::Verb::QuadTo));
+  EXPECT_THAT(path.points(), LastPointIs(Vector2d(100.0, 0.0)));
 }
 
 // --- Degenerate reset / empty rope -----------------------------------------
@@ -501,9 +554,7 @@ TEST(RopeSimulationTest, ResetWithCoincidentEndpointsCollapsesToPoint) {
   rope.reset(route, options);
 
   ASSERT_GE(rope.points().size(), 2u);
-  for (const Vector2d& point : rope.points()) {
-    EXPECT_EQ(point, Vector2d(7.0, 9.0));
-  }
+  EXPECT_THAT(rope.points(), testing::Each(Vector2d(7.0, 9.0)));
 }
 
 // --- Self-healing update on an empty/uninitialized rope --------------------
@@ -517,8 +568,7 @@ TEST(RopeSimulationTest, UpdateOnEmptyRopeSelfInitializesCatenary) {
               options);
 
   ASSERT_GE(rope.points().size(), 2u);
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0)));
 }
 
 TEST(RopeSimulationTest, ZeroDeltaUpdateSolvesConstraintsWithoutAdvancing) {
@@ -531,8 +581,7 @@ TEST(RopeSimulationTest, ZeroDeltaUpdateSolvesConstraintsWithoutAdvancing) {
   // integrating any motion.
   rope.update(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0), 0.0, 0.0, 0.0, 1u, false, options);
 
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 0.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 0.0));
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 0.0), Vector2d(100.0, 0.0)));
 }
 
 // --- Impulse guards --------------------------------------------------------
@@ -613,9 +662,8 @@ TEST(RopeSimulationTest, TwoParticleRopeProducesSingleLineSegmentPath) {
   ASSERT_EQ(rope.points().size(), 2u);
   const Path path = rope.toPath(options);
   ASSERT_GE(path.commands().size(), 2u);
-  EXPECT_EQ(path.commands().front().verb, Path::Verb::MoveTo);
-  EXPECT_EQ(path.commands().back().verb, Path::Verb::LineTo);
-  EXPECT_EQ(path.points().back(), Vector2d(40.0, 0.0));
+  EXPECT_THAT(path.commands(), PathCommandEndpointVerbsAre(Path::Verb::MoveTo, Path::Verb::LineTo));
+  EXPECT_THAT(path.points(), LastPointIs(Vector2d(40.0, 0.0)));
 }
 
 // --- Catenary fallback geometry --------------------------------------------
@@ -629,12 +677,9 @@ TEST(RopeSimulationTest, VerticalEndpointsUseFallbackCatenaryRoute) {
   rope.resetCatenary(Vector2d(50.0, 0.0), Vector2d(50.0, 120.0), options);
 
   ASSERT_GE(rope.points().size(), 3u);
-  EXPECT_NEAR(rope.points().front().x, 50.0, 1e-9);
-  EXPECT_NEAR(rope.points().front().y, 0.0, 1e-9);
-  EXPECT_NEAR(rope.points().back().x, 50.0, 1e-9);
-  EXPECT_NEAR(rope.points().back().y, 120.0, 1e-9);
+  EXPECT_THAT(rope.points(), EndpointsNear(Vector2d(50.0, 0.0), Vector2d(50.0, 120.0), 1e-9));
   // The fallback sags the interior downward in y while x tracks the chord.
-  const Vector2d middle = rope.points()[rope.points().size() / 2u];
+  const Vector2d middle = MiddlePoint(rope.points());
   EXPECT_NEAR(middle.x, 50.0, 1e-9);
   EXPECT_GT(middle.y, 0.0);
 }
@@ -646,8 +691,7 @@ TEST(RopeSimulationTest, CoincidentEndpointCatenaryStaysAtSharedPoint) {
   rope.resetCatenary(Vector2d(10.0, 10.0), Vector2d(10.0, 10.0), options);
 
   ASSERT_GE(rope.points().size(), 2u);
-  EXPECT_EQ(rope.points().front(), Vector2d(10.0, 10.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(10.0, 10.0));
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(10.0, 10.0), Vector2d(10.0, 10.0)));
 }
 
 TEST(RopeSimulationTest, FrozenUpdateRigidlyCarriesBodyWithMovedEndpoints) {
@@ -665,11 +709,10 @@ TEST(RopeSimulationTest, FrozenUpdateRigidlyCarriesBodyWithMovedEndpoints) {
   rope.update(Vector2d(0.0, 5.0), Vector2d(100.0, 5.0), 1.0 / 60.0, 0.0, 2.0 / 60.0, 9u, true,
               options);
 
-  EXPECT_EQ(rope.points().front(), Vector2d(0.0, 5.0));
-  EXPECT_EQ(rope.points().back(), Vector2d(100.0, 5.0));
+  EXPECT_THAT(rope.points(), EndpointsAre(Vector2d(0.0, 5.0), Vector2d(100.0, 5.0)));
   const std::size_t middle = rope.points().size() / 2u;
-  EXPECT_NEAR(rope.points()[middle].x, before[middle].x, 1e-9);
-  EXPECT_NEAR(rope.points()[middle].y, before[middle].y + 5.0, 1e-9);
+  EXPECT_THAT(rope.points()[middle],
+              Vector2dNear(Vector2d(before[middle].x, before[middle].y + 5.0), 1e-9));
 }
 
 }  // namespace donner::editor

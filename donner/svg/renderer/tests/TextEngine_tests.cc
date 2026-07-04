@@ -24,6 +24,7 @@ using ::testing::ElementsAre;
 using ::testing::Field;
 using ::testing::Gt;
 using ::testing::IsEmpty;
+using ::testing::Lt;
 using ::testing::Not;
 using ::testing::SizeIs;
 
@@ -95,6 +96,15 @@ auto RunFontIs(auto matcher) {
 
 auto RunGlyphsAre(auto matcher) {
   return Field("glyphs", &TextRun::glyphs, matcher);
+}
+
+MATCHER_P(FirstGlyphMatches, glyphMatcher, "first glyph matches") {
+  if (arg.empty()) {
+    *result_listener << "glyph list is empty";
+    return false;
+  }
+
+  return testing::ExplainMatchResult(glyphMatcher, arg.front(), result_listener);
 }
 
 }  // namespace
@@ -273,10 +283,11 @@ TEST(TextEngineTest, TextPathTspanCoordinatesAffectPathLocalPlacement) {
   ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(Not(IsEmpty())), RunGlyphsAre(Not(IsEmpty())),
                                 RunGlyphsAre(Not(IsEmpty()))));
 
-  EXPECT_GT(runs[1].glyphs.front().xPosition, 5.0);
-  EXPECT_NEAR(runs[1].glyphs.front().yPosition, 0.0, 1.0);
-  EXPECT_GT(runs[2].glyphs.front().xPosition, runs[1].glyphs.front().xPosition);
-  EXPECT_NEAR(runs[2].glyphs.front().yPosition, 0.0, 1.0);
+  EXPECT_THAT(runs[1].glyphs, FirstGlyphMatches(AllOf(GlyphXPositionIs(Gt(5.0)),
+                                                      GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
+  const double secondSpanFirstGlyphX = runs[1].glyphs.front().xPosition;
+  EXPECT_THAT(runs[2].glyphs, FirstGlyphMatches(AllOf(GlyphXPositionIs(Gt(secondSpanFirstGlyphX)),
+                                                      GlyphYPositionIs(DoubleNear(0.0, 1.0)))));
 }
 
 TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
@@ -303,8 +314,9 @@ TEST(TextEngineTest, TextAfterTextPathStartsAfterLastVisiblePathGlyph) {
   const auto runs = engine.layout(text, params);
 
   ASSERT_THAT(runs, ElementsAre(RunGlyphsAre(Not(IsEmpty())), RunGlyphsAre(Not(IsEmpty()))));
-  EXPECT_GT(runs[1].glyphs.front().xPosition, runs[0].glyphs.back().xPosition);
-  EXPECT_LT(runs[1].glyphs.front().xPosition, 180.0);
+  const double lastPathGlyphX = runs[0].glyphs.back().xPosition;
+  EXPECT_THAT(runs[1].glyphs,
+              FirstGlyphMatches(GlyphXPositionIs(AllOf(Gt(lastPathGlyphX), Lt(180.0)))));
 }
 
 }  // namespace donner::svg

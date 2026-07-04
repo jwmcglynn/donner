@@ -1,8 +1,20 @@
 #include "donner/editor/TextBuffer.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 namespace donner::editor {
+namespace {
+
+MATCHER_P2(GlyphIs, expectedCharacter, expectedColorIndex, "") {
+  return testing::ExplainMatchResult(
+      testing::AllOf(
+          testing::Field("character", &Glyph::character, testing::Eq(expectedCharacter)),
+          testing::Field("colorIndex", &Glyph::colorIndex, testing::Eq(expectedColorIndex))),
+      arg, result_listener);
+}
+
+}  // namespace
 
 /**
  * Test that a newly created TextBuffer has a single empty line.
@@ -21,11 +33,9 @@ TEST(TextBuffer, LineEmplaceInsertsGlyphAtIterator) {
 
   line.emplace(line.begin() + 1, 'b', ColorIndex::Keyword);
 
-  ASSERT_EQ(line.size(), 3u);
-  EXPECT_EQ(line[0].character, 'a');
-  EXPECT_EQ(line[1].character, 'b');
-  EXPECT_EQ(line[1].colorIndex, ColorIndex::Keyword);
-  EXPECT_EQ(line[2].character, 'c');
+  EXPECT_THAT(line, testing::ElementsAre(GlyphIs('a', ColorIndex::Default),
+                                         GlyphIs('b', ColorIndex::Keyword),
+                                         GlyphIs('c', ColorIndex::Default)));
 }
 
 /**
