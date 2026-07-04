@@ -1,5 +1,6 @@
 #include "donner/editor/TextInspectorPanel.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <optional>
@@ -66,7 +67,7 @@ TEST_F(TextInspectorPanelTest, RendersSelectedTextUnderConcurrentDomWithoutCrash
   ImGui::Render();
 
   // Reaching here means the access-assert did not abort the process.
-  EXPECT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_THAT(app.selectedElements(), ::testing::ElementsAre(*text));
 }
 
 }  // namespace
