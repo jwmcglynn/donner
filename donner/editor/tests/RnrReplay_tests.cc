@@ -279,7 +279,7 @@ std::optional<RenderResult> RequestRenderAndWait(AsyncRenderer& asyncRenderer,
 // in place, and dispatch a `ReplaceDocumentCommand(preserveUndoOnReparse=true)`.
 // Mirrors `DocumentSyncController::applyPendingWritebacks` minus the
 // TextEditor widget: the in-memory source is the equivalent of
-// `textEditor.getText()`. Returns true if a writeback was applied —
+// `textEditor.getText()`. Returns true if a writeback was applied -
 // caller should request a render to pick up the new docGeneration.
 bool DrainWritebackAndReparse(EditorApp& app, SelectTool& selectTool, std::string* source) {
   auto completed = selectTool.consumeCompletedDragWriteback();
@@ -616,7 +616,7 @@ protected:
 
     // Mirrors `RenderCoordinator::maybeRequestRender`'s posting
     // policy without the GL/overlay sub-steps. Skipped when the
-    // worker is busy — exactly the production gate that lets a
+    // worker is busy - exactly the production gate that lets a
     // long prewarm tie up the click slow-path.
     const auto maybePostRender = [&]() {
       if (asyncRenderer.isBusy()) {
@@ -630,7 +630,7 @@ protected:
       const Entity prewarmEntity = SelectedGraphicsEntity(app);
 
       // Drop stale settling state on selection change. (Lighter than
-      // production's full handling — sufficient for the bug.)
+      // production's full handling - sufficient for the bug.)
       compositedPresentation.clearSettlingIfSelectionChanged(prewarmEntity,
                                                              dragPreview.has_value());
 
@@ -678,7 +678,7 @@ protected:
 
     // Track each per-mouse-down measurement separately (production
     // buffers ONE click at a time; if a second arrives before the
-    // first dispatches the buffer gets overwritten — exactly what we
+    // first dispatches the buffer gets overwritten - exactly what we
     // want to reproduce here too).
     std::vector<AsyncMouseDownLatency> capturedLatencies;
     const auto captureCurrentLatency = [&]() {
@@ -709,7 +709,7 @@ protected:
       // pollResult is always race-safe; drain at start of every frame.
       pollAndRecord();
 
-      // Viewport state (zoom/pan/pane) is harness-local — safe to
+      // Viewport state (zoom/pan/pane) is harness-local - safe to
       // update even mid-render. The canvas-size COMMIT (which writes
       // into the registry via `SVGDocument::setCanvasSize`) is the
       // one that races with the worker, and is gated below.
@@ -718,7 +718,7 @@ protected:
       }
 
       // Click buffering is harness-local. Buffer the click on the
-      // frame it arrives regardless of worker state — production's
+      // frame it arrives regardless of worker state - production's
       // `ViewportInteractionController::bufferPendingClick` is also
       // not gated on `isBusy()`.
       const Vector2d mouseDoc =
@@ -737,7 +737,7 @@ protected:
         }
       }
 
-      // Everything below this point touches the registry — race-
+      // Everything below this point touches the registry - race-
       // unsafe while the worker is busy reading. Production gates
       // identically via `!asyncRenderer_.isBusy()` checks scattered
       // throughout `EditorShell::runFrame`. The user-visible bug
@@ -748,7 +748,7 @@ protected:
         // Mirror production: a deferred click pre-empts the in-
         // flight render. Whether `cancelInFlight()` actually saves
         // wall-clock depends on the §M4 cancel-poll granularity in
-        // the compositor — if the worker is mid-segment with no
+        // the compositor - if the worker is mid-segment with no
         // poll until segment-end, this is a no-op for the user.
         if (cancelInFlightOnDeferredClick_ && pendingClick.has_value() &&
             !pendingClick->dispatched) {
@@ -896,7 +896,7 @@ TEST_F(RnrReplayTest, FilterSnapbackReproPreservesCompositorAcrossWriteback) {
   ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
   EXPECT_EQ(snapshot.compositorReconstructCount, 1u)
       << "Compositor was reconstructed " << snapshot.compositorReconstructCount
-      << " times — the post-drag-release source reparse must route through "
+      << " times - the post-drag-release source reparse must route through "
          "remapAfterStructuralReplace, not a destructive `compositor_ = "
          "make_unique<...>` rebuild that flushes the in-flight drag bitmap and "
          "leaves the editor blitting cached textures at zero offset.";
@@ -912,22 +912,22 @@ TEST_F(RnrReplayTest, FilterSnapbackReproPreservesCompositorAcrossWriteback) {
 //
 // This test drives the same pipeline programmatically without ImGui /
 // SelectTool: writebacks are simulated by running source-text patches
-// through `ReplaceDocumentCommand(preserveUndoOnReparse=true)` — the
+// through `ReplaceDocumentCommand(preserveUndoOnReparse=true)` - the
 // production path the source-pane uses for any change the classifier
 // can't reduce to a single `SetAttribute`. The delete writeback's
 // element-remove patch is multi-byte and always falls through to
 // `ReplaceDocumentCommand`, matching what `DocumentSyncController`
 // dispatches in the editor.
 //
-// The test captures bitmaps at three checkpoints — after the moves,
-// immediately after the delete, and after the delete's reparse — and
+// The test captures bitmaps at three checkpoints - after the moves,
+// immediately after the delete, and after the delete's reparse - and
 // compares the per-pixel difference between "after moves" and "after
 // delete" against an independently-rendered ground truth: the same
 // source with `Lightning_glow_dark` removed up-front via the SVG
 // parser. If the post-delete bitmap differs from the ground truth, the
 // previously-moved shapes are NOT where they should be.
 TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
-  // Load the splash directly — no .rnr, just programmatic mutations.
+  // Load the splash directly - no .rnr, just programmatic mutations.
   const std::filesystem::path splashPath("donner_splash.svg");
   const std::string svgSource = LoadFileOrEmpty(splashPath);
   ASSERT_FALSE(svgSource.empty()) << "SVG source missing: " << splashPath;
@@ -960,14 +960,14 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
   // For each "dragged" shape, simulate the drag-end writeback by
   // patching the source text to insert a `transform="translate(...)"`
   // attribute on the element's opening tag, then dispatch a
-  // `ReplaceDocumentCommand(preserveUndoOnReparse=true)` — the exact
+  // `ReplaceDocumentCommand(preserveUndoOnReparse=true)` - the exact
   // command shape the classifier emits when it falls through to the
   // structural path (and what `DocumentSyncController` re-dispatches
   // for any unclassifiable diff).
   //
   // Per-shape translation chosen large enough to be visible in any
   // pixel-diff but small enough to keep the shape on-canvas. The
-  // values are arbitrary — they just need to be distinct so a
+  // values are arbitrary - they just need to be distinct so a
   // "flash to pre-move" would show a clear delta against the
   // ground-truth bitmap.
   struct ShapeDrag {
@@ -1040,7 +1040,7 @@ TEST_F(RnrReplayTest, DeleteElementDoesNotResetPreviouslyMovedShapes) {
   }
 
   // Drain the element-remove writeback to patch source text and
-  // dispatch `ReplaceDocumentCommand(preserveUndoOnReparse=true)` —
+  // dispatch `ReplaceDocumentCommand(preserveUndoOnReparse=true)` -
   // exactly what `DocumentSyncController::applyPendingWritebacks`
   // does for the post-delete source-pane sync.
   auto removals = app.consumeElementRemoveWritebacks();

@@ -55,7 +55,7 @@ namespace {
 
 /// Device-pixel threshold below which a draw call is skipped as "too small to
 /// meaningfully influence the render". At 0.25 px per axis, the entire shape
-/// fits inside a quarter of a pixel — even with rasterizer AA, fill contribution
+/// fits inside a quarter of a pixel - even with rasterizer AA, fill contribution
 /// rounds to < 1 subpixel. Strokes and markers are accounted for by inflating
 /// the bounds before this check.
 inline constexpr double kMinCullableExtentDevicePx = 0.25;
@@ -63,7 +63,7 @@ inline constexpr double kMinCullableExtentDevicePx = 0.25;
 /// Maximum nesting depth for chained `<feImage>` fragment references
 /// (filter1→rect3→filter2→rect4→…). The visited-set guard already stops a true
 /// *cycle*, but an arbitrarily long *acyclic* chain would otherwise recurse once
-/// per link — each level standing up a GPU offscreen instance — and can exhaust
+/// per link - each level standing up a GPU offscreen instance - and can exhaust
 /// the native stack (issue #552, segfault on macOS/Metal). Past this depth the
 /// over-deep fragment is rendered as empty/transparent instead of recursing
 /// further. Real documents nest at most a couple of levels (resvg's
@@ -73,7 +73,7 @@ inline constexpr int kMaxFeImageFragmentDepth = 32;
 
 /// Slack margin (in device pixels) applied when intersecting the viewport for
 /// culling. Keeps fractional-pixel strokes at the viewport edge safely on-screen
-/// — we'd rather do a little extra work than cull content the user should see.
+/// - we'd rather do a little extra work than cull content the user should see.
 inline constexpr double kViewportCullSlackDevicePx = 1.0;
 
 /// Compute the draw call's local-space AABB (inclusive of stroke width) for
@@ -81,7 +81,7 @@ inline constexpr double kViewportCullSlackDevicePx = 1.0;
 /// that this pass can cheaply bound (i.e., it's a group, or it's text/<image>
 /// whose bounds live in a different component than `ComputedPathComponent`).
 ///
-/// Stroke-width expansion uses a uniform half-stroke inflate — it over-counts
+/// Stroke-width expansion uses a uniform half-stroke inflate - it over-counts
 /// at miter joins but never under-counts, which is the only direction that
 /// matters for a culling decision.
 std::optional<Box2d> LocalDrawableBoundsWithStroke(
@@ -157,7 +157,7 @@ bool ShouldCullDeviceBox(const Box2d& deviceBox, const Vector2i& renderingSize) 
   }
 
   // Too-small culling: both axes below the quarter-pixel threshold. One-axis
-  // line segments (extent == 0 along one axis) aren't culled here — strokes
+  // line segments (extent == 0 along one axis) aren't culled here - strokes
   // of thin lines must still render.
   const double extentX = maxX - minX;
   const double extentY = maxY - minY;
@@ -196,7 +196,7 @@ components::ResolvedPaintServer resolvePaintServer(Registry& registry, const Pai
 /// Layout-facing span state is delegated to TextEngine.
 ///
 /// `contextFill` / `contextStroke` are the text instance's already-resolved paints, substituted
-/// when a span's fill or stroke computes to `context-fill` / `context-stroke` — the render-tree
+/// when a span's fill or stroke computes to `context-fill` / `context-stroke` - the render-tree
 /// instantiation resolved the context paints (including any \ref components::PaintContextRemap)
 /// on the instance, and spans share the text element's coordinate space.
 void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent& text,
@@ -282,7 +282,7 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
         if (walkStyle && walkStyle->properties) {
           const TextDecoration ancestorDeco = walkStyle->properties->textDecoration.get().value();
           if (ancestorDeco != TextDecoration::None) {
-            // This ancestor declares decoration — accumulate it for descendant glyphs.
+            // This ancestor declares decoration - accumulate it for descendant glyphs.
             span.textDecoration |= ancestorDeco;
             ++span.decorationDeclarationCount;
 
@@ -444,7 +444,7 @@ double lengthToPixels(const Lengthd& length, const Box2d& viewBox, const FontMet
 /// `createFeImageShadowTree` instantiates the referenced fragment's subtree as an
 /// offscreen shadow tree and emplaces a `RenderingInstanceComponent` per shadow
 /// entity into the global pool (so the feImage pre-pass can rasterize it). Those
-/// instances are offscreen-only — they are consumed by the feImage pre-render and
+/// instances are offscreen-only - they are consumed by the feImage pre-render and
 /// must never be drawn by the main pass. They are NOT torn down between renders
 /// (the render-tree fast path skips a rebuild when nothing is dirty), so on any
 /// re-draw they linger in the `RenderingInstanceComponent` storage. Unlike
@@ -959,7 +959,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
 
   // Snapshot the entities we intend to traverse BEFORE the filter-graph pre-pass, so that shadow
   // entities created by feImage pre-rendering don't get picked up by the main traversal view.
-  // `beginFrame` must come first — some callers (notably the RendererDriver unit tests) populate
+  // `beginFrame` must come first - some callers (notably the RendererDriver unit tests) populate
   // the render tree inside a `beginFrame` hook.
   //
   // Filter out OffscreenFeImage shadow instances: a prior render's feImage pre-pass leaves them in
@@ -1086,7 +1086,7 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
     // tight-bounded segments). Had this swapped; worked when
     // surfaceFromCanvasTransform_ was identity (non-tight) and for
     // pure-translation element transforms (translations commute) but
-    // silently pushed rotated paths off the tight bitmap entirely —
+    // silently pushed rotated paths off the tight bitmap entirely -
     // regression guarded by TightBoundsRotatedEllipseWithRotatingGradient.
     renderer_.setTransform(instance.worldFromEntityTransform * surfaceFromCanvasTransform_);
 
@@ -1115,7 +1115,7 @@ void RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
 
     ResolvedClip entityClip = toResolvedClip(instance, style, registry);
     entityClip.clipRect = std::nullopt;
-    // Mask is handled separately from clip — access it directly from instance.
+    // Mask is handled separately from clip - access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
       renderer_.pushClip(entityClip);
@@ -1279,7 +1279,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
   };
 
   // Advance the view past an entity's subtree (used when a filter
-  // consumes its children — their individual bounds are absorbed into
+  // consumes its children - their individual bounds are absorbed into
   // the filter region).
   const auto skipSubtree = [&view](Entity lastRenderedEntity, Entity rangeLastEntity) {
     bool skippedRangeLast = false;
@@ -1377,7 +1377,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
 
       // Stroke padding. `strokeWidth / 2` is the geometric stroke
       // extent from the path; miter joins on sharp corners can spike
-      // further — use `miterLimit * strokeWidth / 2` as the worst-case
+      // further - use `miterLimit * strokeWidth / 2` as the worst-case
       // bound per spec.
       const PaintParams paint = toPaintParams(registry, instance, style);
       const bool hasStroke = !std::holds_alternative<PaintServer::None>(paint.stroke);
@@ -1396,7 +1396,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
       continue;
     }
 
-    // Text and image — not yet modeled. Bail.
+    // Text and image - not yet modeled. Bail.
     if (instance.dataHandle(registry).try_get<components::ComputedTextComponent>()) {
       return std::nullopt;
     }
@@ -1405,7 +1405,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
     }
 
     // An entity with none of the above data components is either a
-    // container group (no direct draw — its children contribute
+    // container group (no direct draw - its children contribute
     // bounds as they're iterated) or a sub-document boundary (not
     // modeled yet; bail).
     if (IsNonDrawingContainer(instance.dataHandle(registry))) {
@@ -1413,7 +1413,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
     }
 
     if (instance.subtreeInfo.has_value()) {
-      // Plain container — children will be iterated next. Continue.
+      // Plain container - children will be iterated next. Continue.
       continue;
     }
 
@@ -1425,7 +1425,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
     return std::nullopt;
   }
 
-  // Clamp to canvas — content partially off-canvas shouldn't
+  // Clamp to canvas - content partially off-canvas shouldn't
   // over-allocate the offscreen.
   const Box2d canvasRect(Vector2d::Zero(), canvasSize);
   const Vector2d clampedTL(std::max(accumulated->topLeft.x, canvasRect.topLeft.x),
@@ -1503,7 +1503,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
       if (!filterGraph->empty()) {
         // These calls may mutate `RenderingInstanceComponent` storage (shadow-tree creation +
         // global sort inside `createFeImageShadowTree`). We do NOT hold the `instance` reference
-        // across them — the next iteration of this loop re-fetches via `storage.get(entity)`.
+        // across them - the next iteration of this loop re-fetches via `storage.get(entity)`.
         preRenderSvgFeImages(*filterGraph);
         preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
       }
@@ -2356,8 +2356,8 @@ void RendererDriver::drawMarkers(RenderingInstanceView& view, Registry& registry
 
   // The shape referencing the markers is the context element for `context-fill` /
   // `context-stroke` paints inside the marker content (SVG2). Record where each of the shape's
-  // paints originated — chaining through the shape's own context remap if its paint was itself
-  // inherited — so paint remaps can be resolved per marker placement.
+  // paints originated - chaining through the shape's own context remap if its paint was itself
+  // inherited - so paint remaps can be resolved per marker placement.
   const Transform2d surfaceFromShape =
       instance.worldFromEntityTransform * surfaceFromCanvasTransform_;
   const auto surfaceFromPaintContext =
@@ -2457,7 +2457,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   components::LayoutSystem layoutSystem;
   // markerWidth/markerHeight percentages resolve against the viewport of the *element referencing
   // the marker* (the painted shape's nearest ancestor viewport), **not** the marker's own
-  // viewBox. Use `instance.dataHandle` (the painted entity) — `getViewBox(markerHandle)` was wrong
+  // viewBox. Use `instance.dataHandle` (the painted entity) - `getViewBox(markerHandle)` was wrong
   // for the common case of markers defined in a root `<defs>` and referenced from a nested `<svg>`
   // viewport (PR #611 Codex P1). markerWidth resolves against the width (Extent::X) and
   // markerHeight against the height (Extent::Y).
@@ -2482,7 +2482,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
   // Per SVG2 §11.6.2, when the marker has a viewBox, refX/refY percentages (and the
   // left/center/right / top/center/bottom keywords the parser maps to percentages) resolve
   // against that viewBox's width/height. Without a viewBox there is no such basis, so they fall
-  // back to the referencing element's viewport — the same basis markerWidth/markerHeight use, and
+  // back to the referencing element's viewport - the same basis markerWidth/markerHeight use, and
   // the behavior the resvg reference expects (e.g. painting/marker/percent-values).
   const Box2d refPercentViewport = markerViewBox.value_or(markerPercentViewport);
   const double refXPx =
@@ -2539,7 +2539,7 @@ void RendererDriver::drawMarker(RenderingInstanceView& view, Registry& registry,
     // The marker subtree may lie *behind* the caller's cursor when it is shared with an earlier
     // instantiation (e.g. the same shape stamped through several marker branches reuses one
     // cached offscreen subtree). Rewind to the start of the snapshot so traverseRange can locate
-    // it, then restore the caller's position — drawMarkers consumes inline subtrees separately.
+    // it, then restore the caller's position - drawMarkers consumes inline subtrees separately.
     const RenderingInstanceView::SavedState savedPosition = view.save();
     view.restore(RenderingInstanceView::SavedState{0});
     traverseRange(view, registry, marker.subtreeInfo->firstRenderedEntity,
@@ -2866,7 +2866,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     // (no surfaceFromCanvasTransform_ offset). The filter pipeline applies a device-space
     // post-translation via SkImageFilters::Offset to position the content at the filter region
     // origin. This is correct for all transforms (skew, rotation, etc.) because the offset doesn't
-    // interact with the element's transform — it's applied after the element is fully rendered.
+    // interact with the element's transform - it's applied after the element is fully rendered.
     if (filterRegion.has_value()) {
       imageNode->fragmentRegionTopLeft = Vector2d(filterRegion->topLeft.x, filterRegion->topLeft.y);
     }
@@ -2874,7 +2874,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     // Snapshot the entity slice [firstEntity, lastEntity] that the sub-driver is about to render,
     // then pre-resolve + pre-render any nested filter graphs on those entities before handing the
     // slice to traverseRange. This prevents the sub-driver from mutating storage mid-iteration
-    // (which could happen for chained feImage references — a shadow entity whose own filter also
+    // (which could happen for chained feImage references - a shadow entity whose own filter also
     // references another fragment).
     std::vector<Entity> subEntities;
     {

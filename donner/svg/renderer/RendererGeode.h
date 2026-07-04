@@ -30,7 +30,7 @@ struct GeodeEmbedConfig;
 }  // namespace donner::geode
 
 // Forward-declare std::shared_ptr specialization to avoid pulling <memory>
-// into every includer — <memory> is already included above.
+// into every includer - <memory> is already included above.
 
 namespace donner::svg {
 
@@ -95,19 +95,19 @@ struct FrameTimings {
   geode::GeodeCounters counters;
 
   /// GPU render-pass duration in nanoseconds. Zero if timestamps are
-  /// disabled or unsupported by the driver. Reserved for future work —
+  /// disabled or unsupported by the driver. Reserved for future work -
   /// currently always zero.
   uint64_t renderPassNs = 0;
 
   /// Total GPU work duration in nanoseconds (end of beginFrame's first
   /// submit to completion of endFrame's final submit). Zero if timestamps
-  /// are disabled or unsupported. Reserved for future work — currently
+  /// are disabled or unsupported. Reserved for future work - currently
   /// always zero.
   uint64_t totalGpuNs = 0;
 };
 
 /**
- * Geode rendering backend — GPU-native via WebGPU + the Slug algorithm.
+ * Geode rendering backend - GPU-native via WebGPU + the Slug algorithm.
  *
  * `RendererGeode` implements `RendererInterface` by translating draw calls
  * into the lower-level `donner::geode::GeoEncoder` API.
@@ -152,7 +152,7 @@ public:
    * The caller retains shared ownership of the device; it must outlive every
    * frame rendered through this renderer. This overload avoids creating a new
    * WebGPU instance/adapter/device per renderer, which is important in test
-   * fixtures that construct thousands of short-lived renderers — Mesa llvmpipe
+   * fixtures that construct thousands of short-lived renderers - Mesa llvmpipe
    * (and some Intel ANV configurations) accumulate driver state across device
    * creations and eventually deadlock.
    *

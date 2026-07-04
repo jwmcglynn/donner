@@ -59,7 +59,7 @@ int textCharToUtf8(char* buf, char32_t c) {
     buf[4] = '\0';
     return 4;
   }
-  // Invalid — write replacement character.
+  // Invalid - write replacement character.
   buf[0] = '?';
   buf[1] = '\0';
   return 1;
@@ -523,7 +523,7 @@ void TextEditorCore::removeFolds(std::vector<Coordinates>& folds, const Coordina
           folds[i].column = std::max(0, folds[i].column - (end.column - start.column));
         } else {
           // The original used `foldEnd_[&fold - &foldBegin_[0]]` to pick
-          // the matching end marker — preserve that semantic when the
+          // the matching end marker - preserve that semantic when the
           // folds vector is `foldBegin_` and fall back to the current
           // fold itself otherwise.
           const Coordinates& matchingEnd =
@@ -588,7 +588,7 @@ void TextEditorCore::redo(int steps) {
 namespace {
 
 /// Word-boundary classification used by `findWordStart` / `findWordEnd`.
-/// Characters in the same class belong to the same "word run" — so a
+/// Characters in the same class belong to the same "word run" - so a
 /// click on a letter selects the contiguous letters/digits, a click
 /// on a punctuation character selects the contiguous punctuation
 /// run, and a click on a space selects the contiguous whitespace
@@ -831,7 +831,7 @@ void TextEditorCore::applySelection(const Coordinates& start, const Coordinates&
     // replace, "select word" double-click, etc.) and then expect a
     // shifted arrow to grow or shrink it from the cursor side would
     // see the move logic treat the old selection as if it didn't
-    // exist — see the `ShiftLeftContractsSelection` regression test.
+    // exist - see the `ShiftLeftContractsSelection` regression test.
     interactiveStart_ = state_.selectionStart;
     interactiveEnd_ = state_.selectionEnd;
   }
@@ -943,7 +943,7 @@ void TextEditorCore::insertText(std::string_view text, bool indent) {
   }
 
   if (record.added.empty() && record.removed.empty()) {
-    // Nothing actually happened — don't pollute the undo stack.
+    // Nothing actually happened - don't pollute the undo stack.
     return;
   }
 
@@ -971,7 +971,7 @@ void TextEditorCore::deleteSelection() {
 void TextEditorCore::handleNewLine(UndoState& state, const Coordinates& coord, bool smartIndent) {
   Line& newLine = insertLine(coord.line, coord.column);
   // `insertLine()` calls `lines_.insert()`, which can reallocate the line storage
-  // (`lines_` is a `std::vector<Line>`). Fetch the source line *after* it — holding a `Line&`
+  // (`lines_` is a `std::vector<Line>`). Fetch the source line *after* it - holding a `Line&`
   // across `insertLine()` was a use-after-realloc that crashed on Enter with smartIndent. The
   // line at `coord.line` is the (now-truncated) head of the split, which is what the auto-indent
   // copy reads.
@@ -2067,7 +2067,7 @@ const LanguageDefinition& LanguageDefinition::SVG() {
   static const LanguageDefinition langDef = [] {
     LanguageDefinition def;
 
-    // SVG element names — used as keywords so tag names like <rect>, <circle>
+    // SVG element names - used as keywords so tag names like <rect>, <circle>
     // highlight distinctly from unknown elements. This list is hardcoded
     // rather than pulled from kSVGElementNames because the text_editor
     // target must not depend on //donner/svg. Callers that want the full
@@ -2135,7 +2135,7 @@ const LanguageDefinition& LanguageDefinition::SVG() {
     };
     def.keywords.insert(keywords.begin(), keywords.end());
 
-    // Known SVG/CSS attribute names — highlighted as KnownIdentifier.
+    // Known SVG/CSS attribute names - highlighted as KnownIdentifier.
     static constexpr std::array knownAttrs{
         "id",
         "class",

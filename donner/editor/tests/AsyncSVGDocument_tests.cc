@@ -212,7 +212,7 @@ TEST(AsyncSVGDocumentTest, FailedLoadStashesParseErrorAndKeepsOldDocument) {
   ASSERT_TRUE(doc.loadFromString(kTrivialSvg));
   EXPECT_FALSE(doc.lastParseError().has_value());
 
-  // Truly malformed XML — unclosed tag, no '>'.
+  // Truly malformed XML - unclosed tag, no '>'.
   EXPECT_FALSE(doc.loadFromString("<svg xmlns=\"http://www.w3.org/2000/svg\""));
   ASSERT_TRUE(doc.lastParseError().has_value());
 

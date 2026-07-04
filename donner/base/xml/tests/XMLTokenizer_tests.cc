@@ -210,7 +210,7 @@ TEST(XMLTokenizer, UnterminatedAttributeValue) {
 }
 
 TEST(XMLTokenizer, MalformedTagName) {
-  // `<1bad>` — '1' is not a valid name start character.
+  // `<1bad>` - '1' is not a valid name start character.
   const auto tokens = TokenizeWithText("<1bad>");
   bool hasError = false;
   for (const auto& t : tokens) {
@@ -258,7 +258,7 @@ TEST(XMLTokenizer, JustText) {
 }
 
 TEST(XMLTokenizer, EntityInTextEmitsEntityRefWithoutExpanding) {
-  // Entities are NOT expanded — the token text remains the exact source bytes.
+  // Entities are NOT expanded - the token text remains the exact source bytes.
   EXPECT_THAT(
       TokenizeWithText("a&amp;b&#x20;c&#32;d&notClosed"),
       ElementsAre(Tok(T::TextContent, "a"), Tok(T::EntityRef, "&amp;"), Tok(T::TextContent, "b"),

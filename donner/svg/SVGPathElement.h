@@ -15,7 +15,7 @@ namespace donner::svg {
  *
  * The `<path>` element is the most flexible drawing primitive in SVG: it can describe any
  * 2D shape, from simple lines to complex curves and compound regions. The geometry is encoded
- * in a single `d` attribute written in a compact mini-language of commands — `M` to move the
+ * in a single `d` attribute written in a compact mini-language of commands - `M` to move the
  * pen, `L` to draw a line, `C` for cubic Bezier curves, `A` for elliptical arcs, `Z` to close
  * a sub-path, and more. See \ref path_data for the full command reference.
  *

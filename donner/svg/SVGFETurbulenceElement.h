@@ -20,7 +20,7 @@ namespace donner::svg {
  * - DOM object: SVGFETurbulenceElement
  * - SVG2 spec: https://www.w3.org/TR/filter-effects/#feTurbulenceElement
  *
- * ## `baseFrequency` — the scale of noise features
+ * ## `baseFrequency` - the scale of noise features
  *
  * Controls how "zoomed in" the noise is. Lower values produce larger blobs; higher values
  * produce finer grain. You can specify one number (same for X and Y) or two (separate X and Y
@@ -48,7 +48,7 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * ## `numOctaves` — how many layers of detail
+ * ## `numOctaves` - how many layers of detail
  *
  * Each octave adds a finer layer of noise on top of the previous one. More octaves produces
  * richer, more natural-looking texture at the cost of more computation per pixel.
@@ -75,14 +75,14 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * ## `type` — turbulence vs fractalNoise
+ * ## `type` - turbulence vs fractalNoise
  *
  * The two supported noise types have a visibly different character:
  *
  * - **`turbulence`** takes the absolute value of Perlin noise, producing sharper, cloudier,
- *   more contrasted patterns — good for marble, fire, smoke.
+ *   more contrasted patterns - good for marble, fire, smoke.
  * - **`fractalNoise`** leaves the signed noise alone and remaps it to [0, 1], producing
- *   softer, more balanced patterns — good for clouds, paper, organic textures.
+ *   softer, more balanced patterns - good for clouds, paper, organic textures.
  *
  * \htmlonly
  * <svg width="290" height="150" viewBox="0 0 290 150" style="background-color: white" font-family="sans-serif" font-size="12">
@@ -101,10 +101,10 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * ## `seed` — choosing a different random pattern
+ * ## `seed` - choosing a different random pattern
  *
  * Same frequency and octaves, different `seed`. The structure is identical but the specific
- * pattern of light and dark changes — use this when two identical noises would look too
+ * pattern of light and dark changes - use this when two identical noises would look too
  * repetitive, or to pick a pattern you like:
  *
  * \htmlonly
@@ -124,7 +124,7 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * ## `stitchTiles` — tileable noise
+ * ## `stitchTiles` - tileable noise
  *
  * Normally the noise doesn't line up at the edges of the primitive subregion, so if you tile
  * it you can see seams. Setting `stitchTiles="stitch"` adjusts the frequency slightly so the

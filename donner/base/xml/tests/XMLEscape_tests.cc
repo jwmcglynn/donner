@@ -33,7 +33,7 @@ TEST(XMLEscape, LessThanAndGreaterThan) {
 TEST(XMLEscape, Ampersand) {
   EXPECT_THAT(EscapeAttributeValue("&"), Optional(RcString("&amp;")));
   EXPECT_THAT(EscapeAttributeValue("a & b"), Optional(RcString("a &amp; b")));
-  // Escape must not be idempotent-lossy — a pre-escaped `&amp;` becomes `&amp;amp;`.
+  // Escape must not be idempotent-lossy - a pre-escaped `&amp;` becomes `&amp;amp;`.
   EXPECT_THAT(EscapeAttributeValue("&amp;"), Optional(RcString("&amp;amp;")));
 }
 

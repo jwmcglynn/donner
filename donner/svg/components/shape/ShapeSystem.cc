@@ -114,7 +114,7 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
 /// Emplace or replace ComputedPathComponent only if the newly computed
 /// path differs from any existing one. Suppressing the write when the
 /// geometry is unchanged keeps entt's on_update<ComputedPathComponent>
-/// signal a precise "geometry actually changed" edge — downstream
+/// signal a precise "geometry actually changed" edge - downstream
 /// caches (e.g. the Geode encode cache from design doc 0030
 /// Milestone 2) listen on that signal and rely on it not firing for
 /// no-op regenerations.
@@ -464,7 +464,7 @@ ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::strin
     } else {
       // Property found and parsed successfully. Drop any previously instantiated
       // computed path so on-demand readers (computedSpline, worldBounds, editor
-      // overlay chrome) see the new geometry instead of a stale cache — matching
+      // overlay chrome) see the new geometry instead of a stale cache - matching
       // SVGPathElement::setD().
       handle.remove<ComputedPathComponent>();
       return true;

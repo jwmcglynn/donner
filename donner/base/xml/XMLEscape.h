@@ -29,13 +29,13 @@ namespace donner::xml {
  * Returns `std::nullopt` for input that cannot be represented in a well-formed XML
  * attribute value at all:
  * - The NUL byte (`\0`).
- * - C0 control characters other than `\t`, `\n`, `\r` (i.e. `U+0001`–`U+0008`, `U+000B`,
- *   `U+000C`, `U+000E`–`U+001F`) — these are forbidden in XML 1.0.
- * - Lone surrogates (`U+D800`–`U+DFFF`) encoded in UTF-8.
+ * - C0 control characters other than `\t`, `\n`, `\r` (i.e. `U+0001`-`U+0008`, `U+000B`,
+ *   `U+000C`, `U+000E`-`U+001F`) - these are forbidden in XML 1.0.
+ * - Lone surrogates (`U+D800`-`U+DFFF`) encoded in UTF-8.
  * - The non-characters `U+FFFE` and `U+FFFF`.
  * - Overlong UTF-8 sequences or truncated multi-byte starts.
  *
- * This function is total on the *input space it accepts* — any input that makes it
+ * This function is total on the *input space it accepts* - any input that makes it
  * through the reject-list above produces a valid escaped string.
  *
  * @param value The raw attribute value bytes.
@@ -53,7 +53,7 @@ std::optional<RcString> EscapeAttributeValue(std::string_view value, char quoteC
  * bytes.
  *
  * Escape rules: `&` → `&amp;`, `<` → `&lt;`, `>` → `&gt;`. Whitespace (including tabs and
- * newlines) passes through unchanged — character data preserves it. Valid multi-byte
+ * newlines) passes through unchanged - character data preserves it. Valid multi-byte
  * UTF-8 passes through unchanged.
  *
  * Returns `std::nullopt` for input that cannot be represented in well-formed XML

@@ -6,7 +6,7 @@
 /// viewport math, then hit-test the result against the document to
 /// identify which SVG element was clicked.
 ///
-/// Doesn't play back the recording — just decodes click-landings so a
+/// Doesn't play back the recording - just decodes click-landings so a
 /// human (or a follow-up test) knows which elements the user actually
 /// interacted with. The recorded `(mx, my)` are in logical window
 /// pixels, below every layer of editor / ImGui coordinate math; this
@@ -43,7 +43,7 @@ namespace donner::editor::repro {
 namespace {
 
 // Pane layout constants (mirror `EditorShell.cc:27-28`). A repro-replay
-// harness ultimately needs to run the real layout code — these
+// harness ultimately needs to run the real layout code - these
 // constants drift with the editor UI. For the diagnostic use case
 // where we just want to know roughly what was clicked, matching the
 // two constants is enough.
@@ -158,7 +158,7 @@ TEST(ReproDecodeClicks, MapClicksToDocumentElements) {
         if (auto id = hit->id(); !id.empty()) {
           hitId = " id=\"" + std::string(id) + "\"";
         }
-        // class attribute — helpful when elements carry only a class
+        // class attribute - helpful when elements carry only a class
         // rather than an id (splash is full of these, e.g. cls-70 /
         // cls-8 / cls-90).
         if (auto classAttr = hit->getAttribute(xml::XMLQualifiedNameRef("class"));

@@ -25,7 +25,7 @@ std::string_view getLineContent(std::string_view source, const parser::LineOffse
                                 size_t line) {
   const size_t lineStart = lineOffsets.lineOffset(line);
 
-  // Find the end of the line — look for any newline character.
+  // Find the end of the line - look for any newline character.
   size_t lineEnd = lineStart;
   while (lineEnd < source.size() && source[lineEnd] != '\n' && source[lineEnd] != '\r') {
     ++lineEnd;

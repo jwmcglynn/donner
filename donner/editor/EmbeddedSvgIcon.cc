@@ -36,8 +36,8 @@ void NormalizeIconBitmapToTintableAlphaMask(svg::RendererBitmap* bitmap) {
 
 /// One shared renderer for all embedded-icon rasterization, created on first
 /// use. Icons render lazily from UI-thread panel code only. Constructing a
-/// fresh renderer per icon is disproportionately expensive on GPU backends —
-/// each construction stands up a full WebGPU instance/adapter/device — and
+/// fresh renderer per icon is disproportionately expensive on GPU backends -
+/// each construction stands up a full WebGPU instance/adapter/device - and
 /// showed up as a stream of duplicate "[Geode/wgpu-native] Adapter:" logs at
 /// editor startup.
 svg::Renderer& SharedIconRenderer() {

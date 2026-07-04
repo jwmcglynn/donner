@@ -15,8 +15,8 @@
 // GL-free portions of its orchestration. These tests deliberately avoid any
 // path that calls into a live GL/WGPU context: `GlTextureCache::uploadComposited`
 // emits raw `glGenTextures`/`glBindTexture` in the default
-// (tiny-skia) build, so the editor unit-test process — which has no GL context
-// — would crash. The harness therefore:
+// (tiny-skia) build, so the editor unit-test process - which has no GL context
+// - would crash. The harness therefore:
 //   * uses the default CPU (`tiny-skia`) `svg::Renderer` (no Geode device), and
 //   * keeps `displayedDocVersion_ == 0` while the live document is at
 //     `currentFrameVersion() >= 1`, so `rasterizeOverlayForCurrentSelection`
@@ -280,7 +280,7 @@ TEST(RenderCoordinatorPolicyTest, GesturePreviewProjectsOntoRepresentedDragState
 }
 
 // ---------------------------------------------------------------------------
-// setSourceHoverElements — change detection.
+// setSourceHoverElements - change detection.
 // ---------------------------------------------------------------------------
 
 TEST(RenderCoordinatorTest, SetSourceHoverElementsReportsChange) {
@@ -304,7 +304,7 @@ TEST(RenderCoordinatorTest, SetSourceHoverElementsReportsChange) {
 }
 
 // ---------------------------------------------------------------------------
-// selectedElementIsDisplayNone — predicate over the live selection.
+// selectedElementIsDisplayNone - predicate over the live selection.
 // ---------------------------------------------------------------------------
 
 TEST(RenderCoordinatorTest, SelectedElementIsDisplayNoneFalseWithoutSelection) {
@@ -344,7 +344,7 @@ TEST(RenderCoordinatorTest, SelectedElementIsDisplayNoneFalseForNonGraphicsSelec
 }
 
 // ---------------------------------------------------------------------------
-// suppressedCompositedLayerEntity — display:none stale-layer suppression.
+// suppressedCompositedLayerEntity - display:none stale-layer suppression.
 // ---------------------------------------------------------------------------
 
 TEST(RenderCoordinatorTest, SuppressedLayerEntityNullWithoutSelection) {
@@ -373,7 +373,7 @@ TEST(RenderCoordinatorTest, SuppressedLayerEntityFallsBackToSelfWhenNoCachedText
   app.setSelection(hidden);
 
   // With no composited cache, the live selected display:none entity is its own
-  // suppression target — there is no separately-cached promoted layer to hide.
+  // suppression target - there is no separately-cached promoted layer to hide.
   EXPECT_EQ(coordinator.suppressedCompositedLayerEntity(app), hiddenEntity);
 
   // The selection is sticky: a second query returns the same suppression
@@ -480,7 +480,7 @@ TEST(RenderCoordinatorTest, PromoteSelectionBoundsNoOpUntilDisplayedVersionCatch
 }
 
 // ---------------------------------------------------------------------------
-// resetForLoadedDocument — clears all coordinator-owned state.
+// resetForLoadedDocument - clears all coordinator-owned state.
 // ---------------------------------------------------------------------------
 
 TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
@@ -506,12 +506,12 @@ TEST(RenderCoordinatorTest, ResetForLoadedDocumentClearsCachesAndOverlayState) {
   EXPECT_FALSE(coordinator.immediateOverlaySnapshot().has_value());
 
   // A hover set re-issued after reset reports a change (the cleared set differs
-  // from the new one) — confirming the hover state was actually cleared.
+  // from the new one) - confirming the hover state was actually cleared.
   EXPECT_TRUE(coordinator.setSourceHoverElements({QuerySelector(app, "#r2")}));
 }
 
 // ---------------------------------------------------------------------------
-// rasterizeOverlayForCurrentSelection — GL-free immediate overlay snapshotting.
+// rasterizeOverlayForCurrentSelection - GL-free immediate overlay snapshotting.
 // ---------------------------------------------------------------------------
 
 TEST(RenderCoordinatorTest, RasterizeOverlayReturnsFalseWithoutDocument) {
@@ -592,7 +592,7 @@ TEST(RenderCoordinatorTest, RasterizeOverlayWithEmptySelectionIsAccepted) {
 }
 
 // ---------------------------------------------------------------------------
-// maybeRequestRender — GL-free orchestration that posts an async render request.
+// maybeRequestRender - GL-free orchestration that posts an async render request.
 // ---------------------------------------------------------------------------
 
 TEST(RenderCoordinatorTest, MaybeRequestRenderNoOpWithoutDocument) {

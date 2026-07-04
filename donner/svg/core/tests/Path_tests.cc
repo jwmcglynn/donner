@@ -86,7 +86,7 @@ TEST(Path, MoveToUnused) {
                           Command{CommandType::MoveTo, 2}));
 }
 
-/// @test that after closing a path, a subsequent lineTo auto‑reopens the subpath.
+/// @test that after closing a path, a subsequent lineTo auto-reopens the subpath.
 TEST(Path, AutoReopenOnLineTo) {
   Path spline = PathBuilder()
                     .moveTo(Vector2d(0, 0))
@@ -306,12 +306,12 @@ TEST(Path, ManyConsecutiveClosePathsDoNotCorrupt) {
   builder.lineTo(kVec2);
   builder.closePath();
 
-  // Hammer closePath 100 times — all are no-ops (no open subpath).
+  // Hammer closePath 100 times - all are no-ops (no open subpath).
   for (int i = 0; i < 100; ++i) {
     builder.closePath();
   }
 
-  // Open a new subpath — should work normally.
+  // Open a new subpath - should work normally.
   builder.moveTo(kVec3);
   builder.lineTo(kVec4);
   builder.closePath();
@@ -479,7 +479,7 @@ TEST(Path, PathLengthClosedPath) {
 TEST(Path, PathLengthSubdivideExceedsMaxRecursion) {
   Path spline = PathBuilder()
                     .moveTo(Vector2d(0.0, 0.0))
-                    // Create an extremely “curvy” cubic Bezier curve:
+                    // Create an extremely "curvy" cubic Bezier curve:
                     //   p0 = (0,0)
                     //   p1 = (0,10000)  -- a huge jump upward
                     //   p2 = (0,-10000) -- a huge jump downward
@@ -1174,7 +1174,7 @@ TEST(Path, IsOnPathCurve) {
   // Test a point exactly on the curve (at t=0.5).
   EXPECT_TRUE(spline.isOnPath(Vector2d(3.75, 5.0), 0.1));
 
-  // Test a point that is near—but not on—the curve.
+  // Test a point that is near-but not on-the curve.
   EXPECT_FALSE(spline.isOnPath(Vector2d(3.9, 5.0), 0.1));
 }
 
@@ -1192,12 +1192,12 @@ TEST(Path, IsOnPathMultiSegment) {
   // Test a point on the base edge.
   EXPECT_TRUE(spline.isOnPath(Vector2d(2.5, 0), 0.001));
 
-  // Test a point on the edge from (5,0) to (2.5,5) – linear interpolation yields (3.75,2.5) at
+  // Test a point on the edge from (5,0) to (2.5,5) - linear interpolation yields (3.75,2.5) at
   // t=0.5.
   EXPECT_TRUE(spline.isOnPath(Vector2d(3.75, 2.5), 0.001));
 
   // Test a point on the closePath edge.
-  // Test a point on the edge from (2.5,5) back to (0,0) – linear interpolation yields (1.25,2.5) at
+  // Test a point on the edge from (2.5,5) back to (0,0) - linear interpolation yields (1.25,2.5) at
   // t=0.5.
   EXPECT_TRUE(spline.isOnPath(Vector2d(1.25, 2.5), 0.001));
 

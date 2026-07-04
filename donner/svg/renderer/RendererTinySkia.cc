@@ -773,7 +773,7 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
     width = viewportWidth + frame.filterBufferOffsetX;
     height = viewportHeight + frame.filterBufferOffsetY;
   } else {
-    // No expansion needed — use viewport dimensions.
+    // No expansion needed - use viewport dimensions.
     width = viewportWidth;
     height = viewportHeight;
   }
@@ -1474,7 +1474,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
 
-  // Text bounding box for objectBoundingBox gradient/pattern mapping — the same
+  // Text bounding box for objectBoundingBox gradient/pattern mapping - the same
   // shared computation RendererGeode::drawText uses, so the two backends can't
   // drift on the bbox (see docs/design_docs/0038). Per the SVG spec it uses
   // em-box cells from font v-metrics (ascent above baseline, |descent| below),
@@ -1573,7 +1573,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
           // Keep the inherited paint for non-gradient refs such as patterns.
         }
       } else if (span.opacity < 1.0 && spanFillPaint.has_value()) {
-        // No explicit fill but has per-span opacity — re-apply with opacity.
+        // No explicit fill but has per-span opacity - re-apply with opacity.
         spanFillPaint = makeSolidPaint(params.fillColor, span.opacity);
       }
 
@@ -1992,7 +1992,7 @@ RendererBitmap RendererTinySkia::takeSnapshot() const {
   snapshot.dimensions = Vector2i(width(), height());
   snapshot.rowBytes = static_cast<std::size_t>(width()) * 4u;
   // Tiny-skia's compose paths to the top-level frame buffer use
-  // `unpremulStore = surfaceStack_.empty()` — every semi-transparent pixel that
+  // `unpremulStore = surfaceStack_.empty()` - every semi-transparent pixel that
   // lands in `frame_` is stored unpremultiplied in float space, preserving
   // precision at low alpha values. The frame buffer is therefore consistently
   // unpremultiplied (alpha=255 pixels are identical under either convention).

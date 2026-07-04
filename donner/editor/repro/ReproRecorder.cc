@@ -65,7 +65,7 @@ int CurrentMouseButtonMask() {
 
 // Keys we watch for press/release events. The full ImGuiKey enum is
 // huge; we care about the keys a typical editing session uses.
-// Adding more here is cheap — one line per key.
+// Adding more here is cheap - one line per key.
 constexpr ImGuiKey kWatchedKeys[] = {
     // Modifiers (for kdown/kup events beyond the mask).
     ImGuiKey_LeftCtrl,
@@ -239,7 +239,7 @@ void ReproRecorder::snapshotFrame(const FrameContext& context) {
     frame.events.push_back(ev);
   }
 
-  // Keyboard edges — iterate the watched key set.
+  // Keyboard edges - iterate the watched key set.
   for (ImGuiKey key : kWatchedKeys) {
     if (ImGui::IsKeyPressed(key, /*repeat=*/false)) {
       ReproEvent ev;
@@ -256,7 +256,7 @@ void ReproRecorder::snapshotFrame(const FrameContext& context) {
     }
   }
 
-  // Character input — ImGui accumulates these per-frame before widgets
+  // Character input - ImGui accumulates these per-frame before widgets
   // consume them via `InputText`. Snapshot from the queue.
   for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
     ReproEvent ev;
@@ -265,7 +265,7 @@ void ReproRecorder::snapshotFrame(const FrameContext& context) {
     frame.events.push_back(ev);
   }
 
-  // Window resize — compare against last frame's displayed size. The
+  // Window resize - compare against last frame's displayed size. The
   // replayer uses this to resize its mock window so layout-dependent
   // widgets land in the same pixel positions.
   const int currW = static_cast<int>(io.DisplaySize.x);

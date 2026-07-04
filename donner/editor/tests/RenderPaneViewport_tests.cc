@@ -10,7 +10,7 @@ namespace {
 
 // `EXPECT_NEAR` for `Vector2d`. We don't have an existing
 // gmock matcher for this in the editor test suite, so define one
-// locally — the tests below use it everywhere a coordinate-mapping
+// locally - the tests below use it everywhere a coordinate-mapping
 // round-trip is expected to land within rounding tolerance.
 ::testing::AssertionResult NearVec(const Vector2d& actual, const Vector2d& expected,
                                    double tolerance) {
@@ -77,7 +77,7 @@ TEST(ViewportStateTest, ResetTo100PercentMakesOneDocUnitOneScreenPixel) {
 }
 
 // ---------------------------------------------------------------------------
-// Round-trip invariants — the core property the design doc commits to.
+// Round-trip invariants - the core property the design doc commits to.
 // ---------------------------------------------------------------------------
 
 TEST(ViewportStateTest, ScreenToDocumentRoundTripsAt100Percent) {
@@ -121,7 +121,7 @@ TEST(ViewportStateTest, DocumentToScreenRoundTripsTheOtherWay) {
 }
 
 // ---------------------------------------------------------------------------
-// Zoom focal-point preservation — the bug from the user report.
+// Zoom focal-point preservation - the bug from the user report.
 // ---------------------------------------------------------------------------
 
 TEST(ViewportStateTest, ZoomAroundCursorPreservesFocalPoint) {
@@ -158,7 +158,7 @@ TEST(ViewportStateTest, ZoomAroundCursorPreservesFocalAcrossSweep) {
 
 TEST(ViewportStateTest, ZoomInThenOutReturnsToStart) {
   // 5 steps in, 5 steps out around the same focal point, all using
-  // the same factor — should land exactly on the start zoom and the
+  // the same factor - should land exactly on the start zoom and the
   // start anchor screen position.
   ViewportState v = MakeFreshState(Vector2d::Zero(), Vector2d(800.0, 800.0),
                                    Box2d::FromXYWH(0.0, 0.0, 200.0, 200.0));
@@ -193,7 +193,7 @@ TEST(ViewportStateTest, PanByMovesEveryPointByDelta) {
   v.zoomAround(3.0, Vector2d(640.0, 360.0));
 
   const Vector2d delta(50.0, -25.0);
-  // A few representative document points — pan must shift their
+  // A few representative document points - pan must shift their
   // on-screen positions by exactly `delta`, regardless of where they
   // are in the document.
   for (auto docPoint : {Vector2d(0.0, 0.0), Vector2d(446.0, 256.0), Vector2d(892.0, 512.0)}) {

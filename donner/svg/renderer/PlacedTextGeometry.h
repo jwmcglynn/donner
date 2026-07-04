@@ -10,7 +10,7 @@
 /// reference); geode converges to it.
 ///
 /// Pure geometry only: inputs/outputs are `donner::Path` / `Transform2d` /
-/// `TextEngine` — no backend paint types. No allocation beyond what `Path`
+/// `TextEngine` - no backend paint types. No allocation beyond what `Path`
 /// itself does; no exceptions.
 
 #include <span>
@@ -48,7 +48,7 @@ Path TransformPath(const Path& path, const Transform2d& transform);
  *   3. position via `Rotate(rotateDegrees) * Translate(xPosition, yPosition)`.
  *
  * Returns an empty path for `.notdef` (glyphIndex 0) or when the font has no
- * vector outline for the glyph (e.g. bitmap-only fonts) — callers handle those
+ * vector outline for the glyph (e.g. bitmap-only fonts) - callers handle those
  * cases (skip / bitmap path) exactly as before.
  *
  * @param textEngine Engine providing glyph outlines.
@@ -64,7 +64,7 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
  * @brief Compute the text element's bounding box for `objectBoundingBox` paint.
  *
  * Encodes tiny-skia's computation: the union over rendered glyphs of em-box
- * cells — horizontally `[xPosition, xPosition + xAdvance]`, vertically
+ * cells - horizontally `[xPosition, xPosition + xAdvance]`, vertically
  * `[yPosition - ascent*scale, yPosition - descent*scale]` (font v-metrics, not
  * the raw font size), per the SVG spec for text `objectBoundingBox`. A `tspan`
  * has no bbox of its own, so gradient/pattern paint on a span maps through this

@@ -177,7 +177,7 @@ public:
     }
 
     // ShadowOnlyChildren elements (e.g., <mask>, <pattern>) don't render content in the light
-    // tree — only when instantiated as shadow trees. Track this so we can skip mask/clippath
+    // tree - only when instantiated as shadow trees. Track this so we can skip mask/clippath
     // resolution on them (which would wastefully consume shadow tree entities needed by the
     // actual users of those masks).
     bool isShadowOnlyInLightTree = false;
@@ -667,7 +667,7 @@ public:
 
     if (contextPaintServers_.resolveAtDrawTime) {
       // Marker context: the consuming entity lives in the marker's offscreen space, which is
-      // placed per path vertex at draw time — the driver computes the concrete transform then.
+      // placed per path vertex at draw time - the driver computes the concrete transform then.
       // Preserve the original context bounds if the stored paint was itself inherited.
       const Box2d contextBounds = augmented.contextRemap ? augmented.contextRemap->contextBounds
                                                          : contextPaintServers_.contextBounds;

@@ -61,7 +61,7 @@ enum class PastePlacement : std::uint8_t {
 /// Result of preparing a paste.
 struct PreparePasteResult {
   /// Whether the paste can be applied. When false, `error` describes why and
-  /// `mergedSource` is empty — the caller must not mutate the document.
+  /// `mergedSource` is empty - the caller must not mutate the document.
   bool ok = false;
 
   /// Human-readable failure reason for the user when `ok` is false.

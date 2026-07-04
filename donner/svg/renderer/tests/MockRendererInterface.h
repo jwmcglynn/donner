@@ -4,7 +4,7 @@
 /// Shared GMock fixture for `RendererInterface`. Every mock method is a
 /// straight `MOCK_METHOD(...)` with the same signature as the interface;
 /// nothing test-specific lives here. Compositor-oriented tests used to keep
-/// five identical copies of this class in five files — see PR #531 review.
+/// five identical copies of this class in five files - see PR #531 review.
 
 #include <gmock/gmock.h>
 

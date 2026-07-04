@@ -14,7 +14,7 @@ namespace donner::editor {
 
 /// Collect every renderable \ref svg::SVGGeometryElement in @p root's
 /// subtree (including @p root itself if it is geometry). Skips container
-/// subtrees that are not part of the visual tree — \c defs, \c clipPath,
+/// subtrees that are not part of the visual tree - \c defs, \c clipPath,
 /// \c mask, \c filter, \c pattern, gradients, \c symbol, \c marker, \c
 /// style.
 ///

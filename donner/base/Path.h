@@ -269,14 +269,14 @@ public:
 
   /// Axis along which \ref toMonotonic splits curves.
   enum class MonotonicAxis : uint8_t {
-    Y,  ///< Split at Y-extrema (each segment monotonic in Y) — horizontal-ray banding.
-    X,  ///< Split at X-extrema (each segment monotonic in X) — vertical-ray banding.
+    Y,  ///< Split at Y-extrema (each segment monotonic in Y) - horizontal-ray banding.
+    X,  ///< Split at X-extrema (each segment monotonic in X) - vertical-ray banding.
   };
 
   /**
    * Split all curves at the chosen axis's extrema so each segment is monotonic along it.
    *
-   * Required for Slug band decomposition — a Y-monotonic curve intersects any horizontal
+   * Required for Slug band decomposition - a Y-monotonic curve intersects any horizontal
    * band boundary at most once (horizontal ray); an X-monotonic curve intersects any
    * vertical band boundary at most once (vertical ray, used by Slug dual-ray coverage).
    *

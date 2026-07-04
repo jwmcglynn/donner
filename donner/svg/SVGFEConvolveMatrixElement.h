@@ -15,7 +15,7 @@ namespace donner::svg {
  * numbers.
  *
  * If you've used an image editor's "custom filter" or "convolution" dialog, this is the same
- * math. Changing the kernel changes the effect — the same primitive produces wildly different
+ * math. Changing the kernel changes the effect - the same primitive produces wildly different
  * results depending on the numbers you feed it.
  *
  * - DOM object: SVGFEConvolveMatrixElement

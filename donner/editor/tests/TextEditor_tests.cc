@@ -1661,7 +1661,7 @@ TEST_F(TextEditorTests, ShiftLeftContractsSelection) {
   editor.setText("Hello");
   editor.setSelection(Coordinates(0, 0), Coordinates(0, 3));
   // `setSelection` doesn't move the cursor, so put it explicitly at
-  // the selection's end before contracting — `moveLeft(_, select)`
+  // the selection's end before contracting - `moveLeft(_, select)`
   // grows/shrinks relative to the cursor position, not the
   // selection bounds.
   editor.setCursorPosition(Coordinates(0, 3));
@@ -1756,7 +1756,7 @@ TEST_F(TextEditorTests, InsertTextWithSelection) {
 // UNDO/REDO TESTS
 //
 // IMPORTANT: `editor.insertText()` is a raw-primitive that does NOT record
-// undo entries — only the user-facing path (`enterCharacter`, `backspace`,
+// undo entries - only the user-facing path (`enterCharacter`, `backspace`,
 // `delete_`, `cut`, `paste`) records undo. These tests exercise the real
 // user-facing path. If a future refactor makes `insertText` participate in
 // the undo system, additional tests for that direct-API case should be
@@ -2973,7 +2973,7 @@ TEST_F(TextEditorTests, GetTextReturnsExactBuffer) {
 
 TEST_F(TextEditorTests, SelectionNormalizedIfStartAfterEnd) {
   editor.setText("Hello world");
-  // Pass the bounds in reverse order — `setSelection` should
+  // Pass the bounds in reverse order - `setSelection` should
   // normalize them so `start <= end` and the resulting selection
   // covers the same character range as if they'd been in order.
   editor.setSelection(Coordinates(0, 8), Coordinates(0, 2));
@@ -3078,7 +3078,7 @@ TEST_F(TextEditorTests, ShiftCtrlHomeSelectsToDocumentStart) {
 TEST_F(TextEditorTests, MultiLineDeleteAcrossLines) {
   editor.setText("Line1\nLine2\nLine3");
   // Select cols 2..4 across lines 0..2 (half-open). That covers
-  // "ne1\nLine2\nLine" — the trailing 4 chars on line 0, all of
+  // "ne1\nLine2\nLine" - the trailing 4 chars on line 0, all of
   // line 1, and the leading 4 chars on line 2. Replacing it with
   // empty text should leave "Li" + "3" = "Li3".
   editor.setSelection(Coordinates(0, 2), Coordinates(2, 4));
@@ -3266,7 +3266,7 @@ TEST_F(TextEditorTests, ShiftDownArrowSelectsThroughRenderPath) {
 TEST_F(TextEditorTests, EnterKeyInsertsNewlineThroughRenderPath) {
   // Drives the keyboard NewLine path through the full render loop with the default
   // smartIndent enabled. This previously crashed via a use-after-realloc in
-  // TextEditorCore::handleNewLine (a Line& held across insertLine) — now fixed.
+  // TextEditorCore::handleNewLine (a Line& held across insertLine) - now fixed.
   editor.setText("  AB");                       // leading indent so smart indent runs
   editor.setCursorPosition(Coordinates(0, 4));  // end of "  AB"
 

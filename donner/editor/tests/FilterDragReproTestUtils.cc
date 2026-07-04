@@ -8,11 +8,11 @@
 /// drive `SelectTool` + `EditorApp` with the document-space coordinates
 /// derived from the recording's window geometry. Every repro frame
 /// maps to one `runFrame()` tick that drains the command queue, fires
-/// an async render request, and waits for the bitmap to land — exactly
+/// an async render request, and waits for the bitmap to land - exactly
 /// the flow `main.cc` runs per-frame.
 ///
 /// Design-doc context: this is the first vertical slice of Stage 2 of
-/// `docs/design_docs/0029-ui_input_repro.md` (headless replay) —
+/// `docs/design_docs/0029-ui_input_repro.md` (headless replay) -
 /// scoped tightly to the repro we have in hand rather than a general
 /// replay player. When Stage 2 lands in full this harness collapses
 /// into `donner::editor::repro::ReplayPlayer`.
@@ -78,11 +78,11 @@ using ::donner::editor::SelectTool;
 using ::donner::editor::ViewportState;
 
 // ---------------------------------------------------------------------------
-// Editor pane layout constants — mirrors `EditorShell.cc`.
+// Editor pane layout constants - mirrors `EditorShell.cc`.
 //
 // The recording was captured with these exact offsets, so any drift here
 // would dislocate the replayed clicks from the elements the user hit in
-// the live editor. Keep in sync with `EditorShell.cc` — if the shell
+// the live editor. Keep in sync with `EditorShell.cc` - if the shell
 // layout changes, replay-repro tests need to be re-recorded.
 // ---------------------------------------------------------------------------
 
@@ -105,7 +105,7 @@ struct FrameTiming {
 
 // Mirrors `EditorShell::runFrame`'s render-pane layout derivation (see
 // `EditorShell.cc`'s pane-origin math just before
-// `renderRenderPane()` — same subtraction with the same constants).
+// `renderRenderPane()` - same subtraction with the same constants).
 Vector2d RenderPaneOriginForWindow() {
   return Vector2d(kSourcePaneWidth, kMenuBarHeight);
 }
@@ -162,7 +162,7 @@ std::optional<double> DrainOneRender(AsyncRenderer& asyncRenderer, svg::Renderer
 }
 
 // Track the held-button state across frames so we can synthesize
-// `onMouseMove` events between the recorded down/up frames — the repro
+// `onMouseMove` events between the recorded down/up frames - the repro
 // captures mouse POSITION every frame but only emits discrete events at
 // button edges. The live editor fires `onMouseMove` every frame the
 // button is held at whatever position ImGui reports, so faithful replay
@@ -268,7 +268,7 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
     if (nowHeld && wasHeld) {
       selectTool.onMouseMove(app, mouseDoc, /*buttonHeld=*/true);
     } else if (!nowHeld && wasHeld) {
-      // Button just released — already dispatched above via the
+      // Button just released - already dispatched above via the
       // discrete MouseUp event.
     }
     state.leftButtonHeld = nowHeld;

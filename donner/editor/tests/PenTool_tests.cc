@@ -49,7 +49,7 @@ MATCHER_P(BoxContainingPoint, point,
   if (arg.contains(point)) {
     return true;
   }
-  *result_listener << "box [" << arg.topLeft.x << ", " << arg.topLeft.y << " — "
+  *result_listener << "box [" << arg.topLeft.x << ", " << arg.topLeft.y << " - "
                    << arg.bottomRight.x << ", " << arg.bottomRight.y << "] does not contain ("
                    << point.x << ", " << point.y << ")";
   return false;
@@ -178,8 +178,8 @@ TEST_F(PenToolTest, OverlayChromeIncludesNewAnchorOnSameFlush) {
   (void)CapturePenChromeSnapshot(app);
   tool.onMouseUp(app, Vector2d(10.0, 20.0));
 
-  // Second click appends a segment. Chrome captured after the same flush — with
-  // no async render in between — must already include the new segment's anchor.
+  // Second click appends a segment. Chrome captured after the same flush - with
+  // no async render in between - must already include the new segment's anchor.
   // A stale capture here is the user-visible "overlay only updates on the next
   // mousemove" bug.
   tool.onMouseDown(app, Vector2d(30.0, 40.0), MouseModifiers{});
@@ -331,7 +331,7 @@ TEST_F(PenToolTest, RepeatedAnchorDragAtSamePointDoesNotQueueDuplicatePathMutati
 // Hardening guard for the user-reported "pen path placed after </svg> so it
 // never renders" symptom. The existing tests only assert source-substring order
 // right after onMouseDown+flushFrame; this drives the FULL pen session through
-// finalize (commitOpenPath — the Enter / tool-switch commit path), flushes, and
+// finalize (commitOpenPath - the Enter / tool-switch commit path), flushes, and
 // then *re-parses* the serialized source to prove the new <path> is a direct
 // child of the root <svg> (i.e. it actually renders), not merely that its bytes
 // precede </svg>. The splice was already correct at the time this test was
@@ -363,7 +363,7 @@ TEST_F(PenToolTest, FinalizedPenPathStaysInsideSvgRootSource) {
       << source;
 
   // Re-parse the serialized source and confirm the path is a direct child of
-  // the root <svg> — proof it renders, not just that the bytes precede </svg>.
+  // the root <svg> - proof it renders, not just that the bytes precede </svg>.
   EditorApp reparsed;
   ASSERT_TRUE(reparsed.loadFromString(source)) << source;
   auto reparsedPath = reparsed.document().document().querySelector("path");
@@ -560,7 +560,7 @@ TEST_F(PenToolTest, ClickDragOnCloseShapesClosingAnchorHandles) {
   ASSERT_TRUE(app.flushFrame());
 
   // Mouse-down on the first anchor closes the contour, and KEEPING the button
-  // down while dragging shapes the closing anchor's mirrored handles — the
+  // down while dragging shapes the closing anchor's mirrored handles - the
   // closing segment becomes a cubic (serialized explicitly before the Z) and
   // the first segment curves with the mirrored outgoing handle. The session
   // finalizes on mouse-up.
@@ -623,7 +623,7 @@ TEST_F(PenToolTest, EditingCommittedSelectedPathDragsAnchor) {
   ASSERT_TRUE(selected.has_value());
   app.setSelection(*selected);
 
-  // Drag the interior anchor (0,0)? — drag the first anchor (0,0) of the
+  // Drag the interior anchor (0,0)? - drag the first anchor (0,0) of the
   // committed path to (4,4). Editing a committed path is a self-contained
   // session: not drafting afterwards.
   tool.onMouseDown(app, Vector2d(0.0, 0.0), MouseModifiers{});
@@ -757,8 +757,8 @@ TEST_F(PenToolTest, SelectedOpenPathCanBeContinued) {
 // is always true. The live editor flips the document to
 // `ThreadingMode::ConcurrentDom` on its first async render (see
 // AsyncRenderer.cc), which is the state the user was in. This test reproduces
-// the user's exact sequence — select a path, enter ConcurrentDom, Pen
-// onMouseDown — so the guarded read is actually exercised.
+// the user's exact sequence - select a path, enter ConcurrentDom, Pen
+// onMouseDown - so the guarded read is actually exercised.
 TEST_F(PenToolTest, SelectedOpenPathContinuesUnderConcurrentDom) {
   ASSERT_TRUE(app.loadFromString(kOpenPathSvg));
   auto selected = app.document().document().querySelector("#p");
@@ -778,7 +778,7 @@ TEST_F(PenToolTest, SelectedOpenPathContinuesUnderConcurrentDom) {
   ASSERT_TRUE(app.flushFrame());
 
   // The test verifies the result the same way the live editor reads the selected
-  // element under ConcurrentDom — through a scoped read-access guard (the
+  // element under ConcurrentDom - through a scoped read-access guard (the
   // SelectTool / OverlayRenderer idiom). Reading `d()` raw here would itself trip
   // the ConcurrentDom release assert; the production crash is in the tool's
   // onMouseDown path above, which now runs to completion.
@@ -793,7 +793,7 @@ TEST_F(PenToolTest, SelectedOpenPathContinuesUnderConcurrentDom) {
 // Sibling of the regression above for the first-click-on-empty-canvas path.
 // With nothing selected, `onMouseDown` falls through to `startNewPath`, which
 // synchronously creates the `<path>`, writes its `d`/`fill`/`stroke`
-// attributes, resolves the root `<svg>`, and inserts — all raw ECS
+// attributes, resolves the root `<svg>`, and inserts - all raw ECS
 // reads/writes through SVGElement. Under ThreadingMode::ConcurrentDom (the
 // live editor's steady state) those accesses abort via SVGElement's
 // scoped-access release assert unless the tool holds a document write scope.

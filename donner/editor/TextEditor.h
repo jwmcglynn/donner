@@ -1016,7 +1016,7 @@ private:
   bool functionDeclarationTooltip_ = false;
   std::string functionDeclaration_;
 
-  // Core text content — aliased to fields owned by `core_`. Binding as
+  // Core text content - aliased to fields owned by `core_`. Binding as
   // references avoids churn in every shell method that referenced these
   // short names. The references are initialized in the constructor's
   // member-initializer list.
@@ -1037,7 +1037,7 @@ private:
   bool replaceOpened_ = false;   //!< Replace dialog is open
   std::string replaceWord_;      //!< Current replace term
 
-  // Code folding — begin/end positions and sorted flag live in `core_`
+  // Code folding - begin/end positions and sorted flag live in `core_`
   // (mutated by insertion/deletion bookkeeping); the render-side state
   // (fold_, foldConnection_, foldedLines_, foldLastIteration_) stays here.
   bool foldEnabled_ = true;              //!< Enable code folding
@@ -1228,7 +1228,7 @@ private:
   bool& autoIndentOnPaste_;
   SelectionMode& selectionMode_;
 
-  // Colors and syntax highlighting — canonical storage in `core_`.
+  // Colors and syntax highlighting - canonical storage in `core_`.
   Palette& paletteBase_;                          //!< Base color palette (core_)
   Palette& palette_;                              //!< Current (alpha-blended) palette (core_)
   const LanguageDefinition& languageDefinition_;  //!< Language syntax (core_)

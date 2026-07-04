@@ -14,7 +14,7 @@ namespace donner::svg {
 ///
 /// The view snapshots the entity IDs it will visit at construction time. This lets the caller
 /// safely mutate the underlying \ref components::RenderingInstanceComponent storage during
-/// iteration — for example, a filter-graph pre-pass that calls
+/// iteration - for example, a filter-graph pre-pass that calls
 /// `RenderingContext::createFeImageShadowTree`, which emplaces new rendering instances and sorts
 /// the whole pool. Iterating over live entt iterators across such mutation would be undefined
 /// behaviour; iterating a snapshot of entity IDs is stable, and each component access re-reads
@@ -42,7 +42,7 @@ public:
   /**
    * Constructor taking an explicit ordered list of entities to iterate. The view copies the list;
    * subsequent storage mutations do not affect iteration. Entities must all currently have a \ref
-   * components::RenderingInstanceComponent — `get()` will dereference via storage lookup.
+   * components::RenderingInstanceComponent - `get()` will dereference via storage lookup.
    *
    * @param registry The registry to use.
    * @param entities Ordered entity list to iterate.

@@ -225,7 +225,7 @@ void RenderFrameGraph(const FrameHistory& history) {
   static float displayedBackendMs = 0.0f;
 
   msEma = msEma == 0.0f ? latestMs : 0.9f * msEma + 0.1f * latestMs;
-  // Feed the worker EMA only from non-zero samples — between drag bursts we go
+  // Feed the worker EMA only from non-zero samples - between drag bursts we go
   // idle and stop emitting worker results; smoothing zero into the EMA would
   // collapse the readout to near-zero even though the last actual render was
   // 5-10 ms. Keep the EMA "sticky" at the most recent real measurement
@@ -287,7 +287,7 @@ void RenderFrameGraph(const FrameHistory& history) {
   DrawFrameBudgetLine(dl, origin, bottomRight, kFrameBudget120Ms, kFrameGraphBudget120Color);
   DrawFrameBudgetLine(dl, origin, bottomRight, kFrameBudget60Ms, kFrameGraphBudget60Color);
 
-  // Async worker/presentation time overlay. Only non-zero samples are plotted —
+  // Async worker/presentation time overlay. Only non-zero samples are plotted -
   // zero means "no render result landed this frame" and we don't want a visible
   // drop-to-zero between drag bursts. A thin cyan line segment connects
   // consecutive non-zero samples; isolated points render as a single-pixel dot
@@ -314,7 +314,7 @@ void RenderFrameGraph(const FrameHistory& history) {
     if (havePrev) {
       dl->AddLine(prev, point, kBackendColor, 1.5f);
     } else {
-      // Isolated sample — draw a small dot so it's visible.
+      // Isolated sample - draw a small dot so it's visible.
       dl->AddRectFilled(ImVec2(point.x - 0.5f, point.y - 0.5f),
                         ImVec2(point.x + 1.0f, point.y + 1.0f), kBackendColor);
     }

@@ -37,7 +37,7 @@ constexpr std::string_view kSelfContainedSvg =
     "  <circle cx=\"300\" cy=\"300\" r=\"40\" fill=\"blue\"/>\n"
     "</svg>\n";
 
-/// A document referencing an external resource over http:// — must be refused.
+/// A document referencing an external resource over http:// - must be refused.
 constexpr std::string_view kExternalResourceSvg =
     "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
     "<svg width=\"600\" height=\"600\" viewBox=\"0 0 600 600\" "
@@ -131,7 +131,7 @@ TEST(ViewportSvgExportTest, ContentIsClippedToViewportRect) {
   // Content is wrapped in a group referencing that clip path.
   EXPECT_TRUE(Contains(result.value, "<g clip-path=\"url(#donner-viewport-clip)\">"))
       << result.value;
-  // Source children are present (verbatim, vector-first — no <image> snapshot).
+  // Source children are present (verbatim, vector-first - no <image> snapshot).
   EXPECT_TRUE(Contains(result.value, "<rect x=\"10\" y=\"20\" width=\"100\" height=\"50\""))
       << result.value;
   EXPECT_TRUE(Contains(result.value, "<circle cx=\"300\" cy=\"300\" r=\"40\"")) << result.value;
@@ -175,7 +175,7 @@ TEST(ViewportSvgExportTest, OverlayGroupPlaceholderEmittedWhenRequested) {
   const std::size_t openTagEnd = result.value.find('>', overlayPos);
   ASSERT_NE(openTagEnd, std::string::npos);
   // Between the overlay group's open tag and its close tag there is no nested
-  // element — only whitespace/comment placeholder.
+  // element - only whitespace/comment placeholder.
   const std::string between = result.value.substr(openTagEnd + 1, closePos - (openTagEnd + 1));
   EXPECT_EQ(between.find('<'), std::string::npos)
       << "overlay group must be empty in M6: " << between;
@@ -595,7 +595,7 @@ int CountPixels(const svg::RendererBitmap& bmp,
 }
 
 // The exported SVG, when rendered, must be pixel-identical to the same document
-// content shown under the export's viewBox at the export's output size — i.e.
+// content shown under the export's viewBox at the export's output size - i.e.
 // the export is a faithful screenshot of the viewport crop. The export's
 // clip-group wrapper and injected clipPath must not distort the visible region.
 TEST(ViewportSvgExportTest, ExportRenderMatchesViewportCrop) {

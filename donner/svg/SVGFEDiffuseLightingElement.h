@@ -8,8 +8,8 @@ namespace donner::svg {
 /**
  * @page xml_feDiffuseLighting "<feDiffuseLighting>"
  *
- * `<feDiffuseLighting>` uses the input image's alpha channel as a **height map** — the more
- * opaque a pixel, the taller the imaginary "surface" at that spot — and then computes how a
+ * `<feDiffuseLighting>` uses the input image's alpha channel as a **height map** - the more
+ * opaque a pixel, the taller the imaginary "surface" at that spot - and then computes how a
  * light bouncing off that surface would look using the Lambertian (diffuse) reflection model.
  * The output is a grayscale-tinted image that looks like a matte lit surface: bright where the
  * surface tilts toward the light, dark where it tilts away. (A "height map" is just a
@@ -17,8 +17,8 @@ namespace donner::svg {
  * straight out of that terrain at each point, and shading is computed by comparing each
  * normal's direction to the direction of the light.)
  *
- * It must contain exactly one child light source — \ref xml_feDistantLight, \ref
- * xml_fePointLight, or \ref xml_feSpotLight — which tells the primitive where the light is
+ * It must contain exactly one child light source - \ref xml_feDistantLight, \ref
+ * xml_fePointLight, or \ref xml_feSpotLight - which tells the primitive where the light is
  * coming from. `<feDiffuseLighting>` on its own just produces a lit grayscale image; to apply
  * the lighting to your actual shape's colors, chain it with \ref xml_feComposite (usually
  * `operator="in"` to mask it against the source, or `operator="arithmetic"` to multiply it
@@ -32,7 +32,7 @@ namespace donner::svg {
  *
  * Because `<feDiffuseLighting>` reads the *alpha channel* as its height map, feeding it a
  * solid-filled shape (which has alpha = 1.0 across the whole interior) produces a bump with
- * zero height variation — i.e. a perfectly flat plateau — and the result looks uniformly lit,
+ * zero height variation - i.e. a perfectly flat plateau - and the result looks uniformly lit,
  * often indistinguishable from an outlined shape. The classic fix is to blur `SourceAlpha`
  * first so the alpha fades smoothly near the edges, producing a rounded bump. Every example on
  * this page uses that `feGaussianBlur` → `feDiffuseLighting` pattern.
@@ -66,7 +66,7 @@ namespace donner::svg {
  * <circle cx="70" cy="70" r="50" fill="black" filter="url(#f)" />
  * ```
  *
- * The black circle is invisible on its own — what you see is the lighting output. The blurred
+ * The black circle is invisible on its own - what you see is the lighting output. The blurred
  * alpha gives `feDiffuseLighting` a smooth dome to shade, so the result looks like a ball lit
  * from the upper-left.
  *
@@ -100,7 +100,7 @@ namespace donner::svg {
  *
  * \par Example 3: same bump, spot light
  *
- * A tight \ref xml_feSpotLight aimed at the centre of the bump — only the middle is lit.
+ * A tight \ref xml_feSpotLight aimed at the centre of the bump - only the middle is lit.
  *
  * \htmlonly
  * <svg viewBox="0 0 140 140" width="140" height="140"
@@ -132,7 +132,7 @@ namespace donner::svg {
  *
  * \par Example 4: surfaceScale
  *
- * `surfaceScale` is the multiplier applied to the alpha height map — it controls how tall the
+ * `surfaceScale` is the multiplier applied to the alpha height map - it controls how tall the
  * bump actually is when the surface normals are computed. Larger values exaggerate the bump
  * and produce more dramatic shading; smaller values give a subtle, nearly-flat look.
  *
@@ -220,7 +220,7 @@ namespace donner::svg {
  * \par Example 6: lighting-color
  *
  * `lighting-color` tints the output by the color of the light itself. The surface's own
- * colors are not involved here — `<feDiffuseLighting>` always produces the pure lit look;
+ * colors are not involved here - `<feDiffuseLighting>` always produces the pure lit look;
  * you'd composite it onto your shape separately.
  *
  * \htmlonly
@@ -264,7 +264,7 @@ namespace donner::svg {
  * \par What you'd actually use this for
  *
  * `<feDiffuseLighting>` on its own just produces a lit grayscale image. In practice it's
- * chained with \ref xml_feComposite — `<feComposite in2="SourceGraphic" operator="in">` to
+ * chained with \ref xml_feComposite - `<feComposite in2="SourceGraphic" operator="in">` to
  * clip the lighting to the silhouette of your shape, or `<feComposite operator="arithmetic"
  * k1="1" k2="0" k3="0" k4="0">` to multiply the lighting onto your source colors. For glossy
  * highlights added on top, use the companion \ref xml_feSpecularLighting primitive.

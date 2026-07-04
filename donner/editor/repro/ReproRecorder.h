@@ -4,7 +4,7 @@
 /// Live UI-input recorder. Install one instance in `EditorShell` when
 /// the user passes `--save-repro <path>`; call `snapshotFrame()` once
 /// per editor frame (before any UI widgets have consumed input events
-/// — right after `window_.beginFrame()` / `ImGui::NewFrame()`). On
+/// - right after `window_.beginFrame()` / `ImGui::NewFrame()`). On
 /// process exit, call `flush()` to serialize the recording to the
 /// destination path.
 ///

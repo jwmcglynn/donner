@@ -7,16 +7,16 @@
 ///
 /// Two filters compose:
 ///
-/// 1. **Backend cadence gate** — if a previous `kMove` future is still
+/// 1. **Backend cadence gate** - if a previous `kMove` future is still
 ///    in flight, suppress new posts. Otherwise the host overwrites
 ///    `pendingFrame` every ImGui frame and discards every promise's
 ///    future except the latest, so the user sees no preview updates
 ///    until the backend's FIFO drains. Symptom: drag freezes mid-
 ///    stroke and snaps to the release position. Reproduces under the
 ///    session-backed client when a single round-trip is slower than
-///    one ImGui frame (e.g. Geode + IPC, ~30–60 ms on macOS).
+///    one ImGui frame (e.g. Geode + IPC, ~30-60 ms on macOS).
 ///
-/// 2. **Sub-pixel jitter gate** — if the cursor hasn't moved by more
+/// 2. **Sub-pixel jitter gate** - if the cursor hasn't moved by more
 ///    than `kDragMoveScreenEpsilonPx`, skip the post. Saves a backend
 ///    round-trip on no-op moves the OS reports while the user holds
 ///    the mouse still.
@@ -41,7 +41,7 @@ inline constexpr double kDragMoveScreenEpsilonPx = 0.25;
 
 /// Coalesce decision. Templated on the cursor type so the same helper
 /// works against `donner::Vector2d`, `ImVec2`, or any other 2D vector
-/// that exposes `x` / `y` and supports `(a - b).lengthSquared()` —
+/// that exposes `x` / `y` and supports `(a - b).lengthSquared()` -
 /// either as a member or via a free function.
 template <typename Vec>
 [[nodiscard]] bool ShouldPostDragMove(const Vec& screenPoint,

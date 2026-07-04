@@ -573,7 +573,7 @@ TEST(LayersPanelTest, LockSurvivesLoadFromSource) {
   const std::optional<LayerTreeRow> row = FindRow(panel, "rect1");
   ASSERT_TRUE(row.has_value());
   // A `data-donner-locked` attribute present in the loaded source must be
-  // detected — otherwise locks do not survive save/reload (or any full reparse).
+  // detected - otherwise locks do not survive save/reload (or any full reparse).
   EXPECT_TRUE(IsLocked(row->element))
       << "data-donner-locked loaded from source was not detected by IsLocked";
   EXPECT_TRUE(row->isLocked);
@@ -1054,7 +1054,7 @@ TEST(LayersPanelTest, DonnerSplashRowThumbnailsMatchApprovedRendererGoldens) {
 
 // ---------------------------------------------------------------------------
 // Render-path: the right-aligned eye/lock buttons must actually receive clicks.
-// Regression for a QA-found "lock/hide buttons don't respond" — the full-width
+// Regression for a QA-found "lock/hide buttons don't respond" - the full-width
 // SpanAllColumns row Selectable needs AllowOverlap or it eats the buttons' clicks.
 // ---------------------------------------------------------------------------
 

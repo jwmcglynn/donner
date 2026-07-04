@@ -14,7 +14,7 @@ namespace donner::svg {
  *
  * `<feFlood>` fills a rectangular region with a solid color. Think of it as a filter-graph paint
  * bucket that stamps a flat rectangle of color onto the filter canvas. Unlike most filter
- * primitives, it doesn't take an input image at all — it just produces pixels of a single color
+ * primitives, it doesn't take an input image at all - it just produces pixels of a single color
  * and opacity.
  *
  * `<feFlood>` is rarely used alone because painting a solid rectangle on top of your shape simply
@@ -26,7 +26,7 @@ namespace donner::svg {
  *
  * ## What region does it fill?
  *
- * The flood fills the **filter primitive subregion** — a rectangle defined by the `x`, `y`,
+ * The flood fills the **filter primitive subregion** - a rectangle defined by the `x`, `y`,
  * `width`, and `height` attributes on the `<feFlood>` element itself (these are inherited from
  * the standard filter primitive attributes). If those attributes are omitted, the flood fills
  * the **entire filter region** of the parent `<filter>` element, which by default extends 10%
@@ -54,7 +54,7 @@ namespace donner::svg {
  *
  * The simplest possible filter. The `<feFlood>` produces orange, and because no other primitive
  * runs, the output *is* that orange. The original blue rectangle's geometry is completely
- * replaced by the flood rectangle — notice the shape outline is lost:
+ * replaced by the flood rectangle - notice the shape outline is lost:
  *
  * \htmlonly
  * <svg width="260" height="120" viewBox="0 0 260 120" style="background-color: white" font-family="sans-serif" font-size="12">

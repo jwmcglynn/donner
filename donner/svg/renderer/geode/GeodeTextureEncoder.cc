@@ -27,22 +27,22 @@ constexpr uint32_t alignUp(uint32_t value, uint32_t alignment) {
 /// `maskBounds` lands at offset 128 (not 120). The explicit 8-byte pad
 /// before `maskBounds` mirrors that alignment so `blendMode` /
 /// `hasClipMask` end up at the offsets the fragment shader reads from
-/// (verified via `spirv-dis` on the naga-emitted SPIR-V — see
+/// (verified via `spirv-dis` on the naga-emitted SPIR-V - see
 /// OpMemberDecorate offsets 128/144/148).
 struct alignas(16) Uniforms {
   float mvp[16];                   //   0 ..  64
   float destRect[4];               //  64 ..  80
   float srcRect[4];                //  80 ..  96
-  float targetSize[2];             //  96 .. 104 — target size for clip-mask UVs
+  float targetSize[2];             //  96 .. 104 - target size for clip-mask UVs
   float opacity;                   // 104 .. 108
   uint32_t sourceIsPremult;        // 108 .. 112
-  uint32_t maskMode;               // 112 .. 116 — Phase 3c <mask> luminance blit
-  uint32_t applyMaskBounds;        // 116 .. 120 — clip output to `maskBounds`
-  uint32_t _padBeforeMaskBounds0;  // 120 .. 124 — align maskBounds to vec4f (16B) boundary
+  uint32_t maskMode;               // 112 .. 116 - Phase 3c <mask> luminance blit
+  uint32_t applyMaskBounds;        // 116 .. 120 - clip output to `maskBounds`
+  uint32_t _padBeforeMaskBounds0;  // 120 .. 124 - align maskBounds to vec4f (16B) boundary
   uint32_t _padBeforeMaskBounds1;  // 124 .. 128
-  float maskBounds[4];             // 128 .. 144 — (x0, y0, x1, y1) in target-pixel space
-  uint32_t blendMode;              // 144 .. 148 — Phase 3d mix-blend-mode selector
-  uint32_t hasClipMask;            // 148 .. 152 — Phase 3b path-clip mask blit
+  float maskBounds[4];             // 128 .. 144 - (x0, y0, x1, y1) in target-pixel space
+  uint32_t blendMode;              // 144 .. 148 - Phase 3d mix-blend-mode selector
+  uint32_t hasClipMask;            // 148 .. 152 - Phase 3b path-clip mask blit
   uint32_t _pad0;                  // 152 .. 156
   uint32_t _pad1;                  // 156 .. 160
 };
@@ -91,11 +91,11 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
   wgpu::Extent3D writeSize = {width, height, 1};
 
   if (unpaddedBytesPerRow == paddedBytesPerRow) {
-    // Fast path — source rows already 256-aligned. Upload directly.
+    // Fast path - source rows already 256-aligned. Upload directly.
     const size_t byteCount = static_cast<size_t>(unpaddedBytesPerRow) * height;
     queue.writeTexture(dst, rgbaPixels, byteCount, layout, writeSize);
   } else {
-    // Slow path — copy into a padded staging buffer. `std::vector` is the
+    // Slow path - copy into a padded staging buffer. `std::vector` is the
     // allowed allocation path (stdlib, not raw malloc/free). We size-cap on
     // the same uint32_t × uint32_t × 4 that the GPU already accepted for
     // the texture, so overflow is not a concern here.
@@ -159,7 +159,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   const wgpu::Sampler& sampler =
       (params.filter == Filter::Nearest) ? pipeline.nearestSampler() : pipeline.linearSampler();
 
-  // Bind group — optional texture bindings must always carry a valid
+  // Bind group - optional texture bindings must always carry a valid
   // view. When their owning feature flags are off, we bind the source
   // content texture view as a cheap dummy (the shader never samples it
   // because the corresponding mode guard is 0).

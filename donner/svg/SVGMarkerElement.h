@@ -20,7 +20,7 @@ namespace donner::svg {
  * - SVG2 spec: https://www.w3.org/TR/SVG2/painting.html#MarkerElement
  *
  * A `<marker>` is a reusable mini-graphic that SVG automatically stamps at the vertices of a
- * path or other shape — the classic example is an arrowhead at the end of a line. You define
+ * path or other shape - the classic example is an arrowhead at the end of a line. You define
  * the marker's geometry once (typically inside \ref xml_defs), give it an `id`, and then
  * attach it to a shape through the `marker-start`, `marker-mid`, or `marker-end` CSS
  * properties (or the shorthand `marker`). SVG draws one copy of the marker at each relevant

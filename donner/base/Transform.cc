@@ -36,7 +36,7 @@ RcString toSVGTransformString(const Transform2d& transform) {
   //
   // This check precedes the scale detection below because `rotate(180°)` =
   // `[-1, 0, 0, -1, 0, 0]` also satisfies the "pure scale" constraints (b=c=0,
-  // e=f=0, a=d) — but it's semantically a rotation and the canonical SVG output
+  // e=f=0, a=d) - but it's semantically a rotation and the canonical SVG output
   // for that matrix is `rotate(180)`, not `scale(-1)`. Conversely, `scale(2)`
   // has `a² + b² = 4` and fails the `NearEquals(..., 1.0)` check here, so it
   // correctly falls through to the scale branch.

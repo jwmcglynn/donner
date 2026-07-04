@@ -121,7 +121,7 @@ public:
    *     rectangle is taken as the entity subtree's contribution).
    *   - Stroke widths on stroked paths (expanded by `strokeWidth / 2`
    *     plus a miter margin).
-   *   - Isolated layers — child bounds accumulate into the parent.
+   *   - Isolated layers - child bounds accumulate into the parent.
    *   - Clip-rects (intersect, shrink only).
    *
    * Returns `std::nullopt` when:
@@ -133,7 +133,7 @@ public:
    *     segments.md` tracks which cases are pending.
    *
    * Safe to call on a `RendererDriver` whose renderer holds persistent
-   * state — the traversal never invokes renderer methods.
+   * state - the traversal never invokes renderer methods.
    */
   [[nodiscard]] std::optional<Box2d> computeEntityRangeBounds(Registry& registry,
                                                               Entity firstEntity, Entity lastEntity,
@@ -275,7 +275,7 @@ private:
   /// (canvas → tight-bitmap). For sub-document rendering it's a compound
   /// `subDocFromLocal * parentAbsoluteTransform * canvasFromDoc` that, when
   /// post-composed with the sub-doc entity's own `worldFromEntity` (named
-  /// `worldFromEntityTransform` for historical reasons — see
+  /// `worldFromEntityTransform` for historical reasons - see
   /// `RenderingInstanceComponent.h`), yields the correct device CTM.
   ///
   /// Composition order matters. `Transform2d::operator*` is left-first
@@ -283,7 +283,7 @@ private:
   /// `worldFromEntityTransform * surfaceFromCanvasTransform_`: first map
   /// entity-local to canvas via `worldFromEntityTransform`, then canvas to
   /// surface via this. Swapping the two silently mis-renders rotated
-  /// paths (translations commute, rotations don't) — see
+  /// paths (translations commute, rotations don't) - see
   /// `TightBoundsRotatedEllipseWithRotatingGradient`.
   Transform2d surfaceFromCanvasTransform_;
   Vector2i renderingSize_ = Vector2i::Zero();
@@ -296,7 +296,7 @@ private:
   /// Nesting depth of the current feImage fragment pre-render. The visited-set above stops a
   /// *cyclic* reference (A→A, A→B→A) because it keys on the light-tree entity, but a sufficiently
   /// long *acyclic* chain (filter1→rect3→filter2→rect4→…) still recurses once per link and could
-  /// exhaust the native stack — observed as a segfault on macOS/Metal CI (issue #552), where every
+  /// exhaust the native stack - observed as a segfault on macOS/Metal CI (issue #552), where every
   /// nested fragment pre-render also stands up a GPU offscreen instance and amplifies per-frame
   /// stack usage. This counter caps the chain length so an over-deep fragment renders as empty
   /// (transparent) rather than crashing, matching Donner's never-crash-on-untrusted-input

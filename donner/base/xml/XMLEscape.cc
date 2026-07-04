@@ -56,7 +56,7 @@ constexpr std::int32_t DecodeUtf8(const std::uint8_t* bytes, int length) {
     default: return -1;
   }
 
-  // Reject overlong encodings — the shortest valid form must be used.
+  // Reject overlong encodings - the shortest valid form must be used.
   if ((length == 2 && codepoint < 0x80) || (length == 3 && codepoint < 0x800) ||
       (length == 4 && codepoint < 0x10000)) {
     return -1;

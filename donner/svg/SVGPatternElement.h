@@ -24,7 +24,7 @@ namespace donner::svg {
  * A `<pattern>` is a **tileable paint server**: you draw a small graphic once inside the
  * `<pattern>` element, then fill any shape with `fill="url(#id)"` and SVG repeats (tiles) that
  * graphic across the filled region. Unlike gradients, which vary color smoothly, a pattern
- * repeats an arbitrary sub-drawing — stripes, dots, crosshatches, custom textures — as many
+ * repeats an arbitrary sub-drawing - stripes, dots, crosshatches, custom textures - as many
  * times as needed to cover the shape.
  *
  * Patterns are typically declared inside a \ref xml_defs block. The `width` and `height`
@@ -93,7 +93,7 @@ namespace donner::svg {
  *
  * # patternTransform
  *
- * `patternTransform` applies an extra transformation to the tile grid — you can rotate, skew,
+ * `patternTransform` applies an extra transformation to the tile grid - you can rotate, skew,
  * or scale the tiling without affecting the filled shape itself. Common uses include diagonal
  * stripes (rotate 45°) and textures drawn "on an angle".
  *

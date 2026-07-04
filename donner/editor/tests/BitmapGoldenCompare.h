@@ -21,7 +21,7 @@
 namespace donner::editor::tests {
 
 struct BitmapGoldenCompareParams {
-  /// Per-pixel L∞ threshold (0.0 – 1.0). 0.02 matches the renderer
+  /// Per-pixel L∞ threshold (0.0 - 1.0). 0.02 matches the renderer
   /// suite's default; replay drift vs. a golden captured on the same
   /// machine is typically well below this on AA edges.
   float threshold = 0.02f;

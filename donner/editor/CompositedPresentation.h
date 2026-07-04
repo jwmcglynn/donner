@@ -165,7 +165,7 @@ public:
         representedPreviewForActiveCache(*cache, *activePreview);
     if (activePreview->documentFromCachedDocument.isTranslation()) {
       // A pure translation tracks via the cached bitmap's translation offset with
-      // no re-capture — UNLESS the cached bitmap is still an affine (we just
+      // no re-capture - UNLESS the cached bitmap is still an affine (we just
       // returned from a resize/rotate to a translation), in which case re-capture
       // a clean, crisply-translated layer instead of carrying the stale affine.
       return !representedPreview.documentFromCachedDocument.isTranslation();
@@ -176,7 +176,7 @@ public:
     // blurry). The re-capture is intentional (anti-blur); the presentation
     // compensates for the swapped-in image via `represented` (the transform the
     // re-captured bitmap was baked at) so the shape stays continuous across the
-    // swap — `effective = represented^-1 * active` re-bases tracking onto the
+    // swap - `effective = represented^-1 * active` re-bases tracking onto the
     // fresh bitmap with no pop. Pure rotation is area-preserving so it never
     // trips this (a rotated bitmap keeps resolution); scaling down downsamples
     // and stays sharp; only upscaling past the threshold re-captures, and a

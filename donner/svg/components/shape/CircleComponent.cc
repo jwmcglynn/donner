@@ -80,7 +80,7 @@ ParseResult<bool> ParseCirclePresentationAttribute(EntityHandle handle, std::str
     } else {
       // Property found and parsed successfully. Drop stale computed geometry so
       // on-demand readers (computedSpline, worldBounds, editor overlay chrome)
-      // see the new values — matching SVGCircleElement::invalidate().
+      // see the new values - matching SVGCircleElement::invalidate().
       handle.remove<ComputedCircleComponent>();
       handle.remove<ComputedPathComponent>();
       return true;

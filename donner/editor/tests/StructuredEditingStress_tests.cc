@@ -500,7 +500,7 @@ protected:
     }
 
     const std::string source(app_.document().document().source());
-    // §concurrent-dom: hold a scoped read access for the XML/source inspection below — the call
+    // §concurrent-dom: hold a scoped read access for the XML/source inspection below - the call
     // chain (XMLNode::TryCast → entity resolution → getNodeLocation) hits guarded EntityHandle
     // accessors that assert under ConcurrentDom without a scoped access guard.
     [[maybe_unused]] svg::DocumentReadAccess access = app_.document().document().readAccess();

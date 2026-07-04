@@ -362,24 +362,24 @@ TEST(TransformParser, RangeEndOfString) {
 
 TEST(TransformParser, ToSVGTransformStringRoundTrip) {
   const Transform2d cases[] = {
-      // Identity — serializes to the empty string, which the parser treats as
+      // Identity - serializes to the empty string, which the parser treats as
       // an empty input and returns identity.
       Transform2d(),
-      // Translate — both forms.
+      // Translate - both forms.
       Transform2d::Translate(Vector2d(10.0, 20.0)),
       Transform2d::Translate(Vector2d(5.0, 0.0)),  // collapses to translate(5)
       Transform2d::Translate(Vector2d(1.5, -2.5)),
       Transform2d::Translate(Vector2d(-7.0, 13.0)),
-      // Scale — uniform + non-uniform.
+      // Scale - uniform + non-uniform.
       Transform2d::Scale(2.0),
       Transform2d::Scale(Vector2d(0.5, 0.5)),
       Transform2d::Scale(Vector2d(2.0, 3.0)),
       Transform2d::Scale(Vector2d(-1.0, 1.0)),  // reflection, stays as scale
-      // Rotate — 90/180/-90.
+      // Rotate - 90/180/-90.
       Transform2d::Rotate(MathConstants<double>::kHalfPi),
       Transform2d::Rotate(-MathConstants<double>::kHalfPi),
       Transform2d::Rotate(MathConstants<double>::kPi),  // special case: also matches pure scale
-      // Skew — falls through to matrix(...) form.
+      // Skew - falls through to matrix(...) form.
       Transform2d::SkewX(MathConstants<double>::kPi / 4.0),
       Transform2d::SkewY(MathConstants<double>::kPi / 6.0),
   };
@@ -398,7 +398,7 @@ TEST(TransformParser, ToSVGTransformStringRoundTrip) {
 }
 
 TEST(TransformParser, ToSVGTransformStringGeneralMatrixRoundTrip) {
-  // A transform that doesn't decompose into any named form — must use matrix().
+  // A transform that doesn't decompose into any named form - must use matrix().
   Transform2d t(Transform2d::uninitialized);
   t.data[0] = 1.5;
   t.data[1] = 0.25;

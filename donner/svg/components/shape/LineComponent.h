@@ -13,7 +13,7 @@ namespace donner::svg::components {
  * don't need a `ComputedLineComponent` counterpart of this struct.
  *
  * From https://www.w3.org/TR/SVG2/shapes.html#LineElement
- * > A future specification may convert the ‘x1’, ‘y1’, ‘x2’, and ‘y2’ attributes to geometric
+ * > A future specification may convert the , u2019:x1', , u2019:y1', , u2019:x2', and , u2019:y2' attributes to geometric
  * > properties. Currently, they can only be specified via element attributes, and not CSS.
  */
 struct LineComponent {

@@ -20,9 +20,9 @@ namespace donner::geode {
  * - `@group(0) @binding(4) var patternSampler: sampler;`
  *
  * and vertex attributes:
- * - `@location(0) pos: vec2f`      — path-space position
- * - `@location(1) normal: vec2f`   — outward normal for dilation
- * - `@location(2) bandIndex: u32`  — which band this vertex belongs to
+ * - `@location(0) pos: vec2f`      - path-space position
+ * - `@location(1) normal: vec2f`   - outward normal for dilation
+ * - `@location(2) bandIndex: u32`  - which band this vertex belongs to
  *
  * @return A valid shader module on success, or an empty module if compilation
  *   failed (errors go to the device's uncaptured error callback).
@@ -48,7 +48,7 @@ wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device);
  * Same band/curve encoding as @ref createSlugFillShader but the fragment
  * stage writes clip coverage into an RGBA8Unorm target.
  * The uniform layout is reduced to just the mvp matrix, viewport size,
- * and fill rule — no paint mode, no pattern, no clip polygon. Used by
+ * and fill rule - no paint mode, no pattern, no clip polygon. Used by
  * the Phase 3b path-clipping pipeline to materialise a per-pixel clip
  * mask texture that subsequent fill / gradient draws sample as a
  * coverage multiplier.
@@ -66,7 +66,7 @@ wgpu::ShaderModule createSlugMaskShader(const wgpu::Device& device);
  * - `@group(0) @binding(1) var imageSampler: sampler;`
  * - `@group(0) @binding(2) var imageTexture: texture_2d<f32>;`
  *
- * and no vertex buffer — corners are generated from `@builtin(vertex_index)`.
+ * and no vertex buffer - corners are generated from `@builtin(vertex_index)`.
  *
  * @return A valid shader module on success, or an empty module if compilation
  *   failed (errors go to the device's uncaptured error callback).

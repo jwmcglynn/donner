@@ -15,7 +15,7 @@ namespace donner::components {
  * the `Default*` callbacks below (which operate on \ref TreeComponent directly), and higher-level
  * models such as SVGDocument overwrite the individual callbacks after construction to layer
  * invalidation and lifetime tracking on top. \ref XMLNode mutation methods always go through the
- * context, so the lookup never needs to fall back to a direct \ref TreeComponent path —
+ * context, so the lookup never needs to fall back to a direct \ref TreeComponent path -
  * `Registry::ctx().contains<TreeMutationContext>()` is an invariant of any registry exposed
  * through one of the document facades.
  */
@@ -46,7 +46,7 @@ struct TreeMutationContext {
   /// Callback for `remove(entity)`.
   std::function<void(EntityHandle entity)> remove;
 
-  /// Basic XML defaults — operate on \ref TreeComponent directly.
+  /// Basic XML defaults - operate on \ref TreeComponent directly.
   static void DefaultInsertBefore(EntityHandle parent, EntityHandle newNode,
                                   EntityHandle referenceNode) {
     parent.get<TreeComponent>().insertBefore(*parent.registry(), newNode.entity(),

@@ -77,7 +77,7 @@ protected:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Shared contract tests — both backends must satisfy these.
+// Shared contract tests - both backends must satisfy these.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Font metrics ────────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ TEST_P(TextBackendTest, ShapeRunHandlesSubstring) {
       backend().shapeRun(font, 16.0f, "Hello", 2, 2, false, FontVariant::Normal, false);
   ASSERT_EQ(shaped.glyphs.size(), 2u);
 
-  // Both glyphs are 'l' — same glyph index.
+  // Both glyphs are 'l' - same glyph index.
   EXPECT_EQ(shaped.glyphs[0].glyphIndex, shaped.glyphs[1].glyphIndex);
   // HarfBuzz GPOS may adjust advances slightly per context, so check near-equality.
   EXPECT_NEAR(shaped.glyphs[0].xAdvance, shaped.glyphs[1].xAdvance, 1.0);
@@ -267,7 +267,7 @@ TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
 }
 
 TEST_P(TextBackendTest, SmallCapsSynthesizesScaleForFontWithoutSmcp) {
-  // MPLUS 1p doesn't have native smcp — both backends synthesize.
+  // MPLUS 1p doesn't have native smcp - both backends synthesize.
   const FontHandle font = loadFont("MPLUS1p-Regular.ttf", "MPLUS 1p");
   ASSERT_TRUE(static_cast<bool>(font));
   ASSERT_FALSE(backend().hasSmallCapsFeature(font));
@@ -302,7 +302,7 @@ TEST_P(TextBackendTest, GlyphOutlineForNotdefDoesNotCrash) {
   ASSERT_TRUE(static_cast<bool>(font));
 
   const float scale = backend().scaleForEmToPixels(font, 16.0f);
-  // Glyph index 0 is .notdef — may or may not have an outline. Just verify no crash.
+  // Glyph index 0 is .notdef - may or may not have an outline. Just verify no crash.
   const Path path = backend().glyphOutline(font, 0, scale);
   EXPECT_GE(path.commands().size(), 0u);
 }
@@ -311,7 +311,7 @@ INSTANTIATE_TEST_SUITE_P(Backends, TextBackendTest,
                          testing::Values(BackendType::Simple, BackendType::Full), BackendName);
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Capability tests — behaviour that differs between backends.
+// Capability tests - behaviour that differs between backends.
 // ═══════════════════════════════════════════════════════════════════════════
 
 // ── Simple backend: no advanced capabilities ────────────────────────────────

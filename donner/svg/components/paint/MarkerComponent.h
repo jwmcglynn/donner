@@ -10,8 +10,8 @@ namespace donner::svg::components {
 /**
  * Stores the marker data for an SVG element.
  *
- * Lengths are stored unresolved (\ref Lengthd) so that percentage units — which resolve against the
- * viewport of the element referencing the marker — are computed at render time.
+ * Lengths are stored unresolved (\ref Lengthd) so that percentage units - which resolve against the
+ * viewport of the element referencing the marker - are computed at render time.
  * `markerWidth`/`refX` resolve against the viewport width (\ref Lengthd::Extent::X) and
  * `markerHeight`/`refY` against the viewport height (\ref Lengthd::Extent::Y).
  */

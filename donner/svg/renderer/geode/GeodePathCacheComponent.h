@@ -6,7 +6,7 @@
 ///
 /// `GeodePathEncoder::encode` (cubicToQuadratic → toMonotonic → band
 /// decomposition) is the Tier-3 hot path identified in 0030. Without a
-/// cache it runs every frame for every draw — 132 times per frame for
+/// cache it runs every frame for every draw - 132 times per frame for
 /// `lion.svg`. This component holds the encode result across frames so
 /// re-rendering an unchanged document skips the CPU work entirely.
 ///
@@ -42,7 +42,7 @@ struct GeodePathCacheComponent {
   /// path and its encoded form, keyed by the source `StrokeStyle`.
   /// Invalidated whenever the fill slot is (geometry change, via the
   /// entt signal), or on stroke-key mismatch (stroke width/dash/cap/
-  /// join change via CSS — the old key no longer matches the new one,
+  /// join change via CSS - the old key no longer matches the new one,
   /// so the next access regenerates).
   struct StrokeSlot {
     /// Equality key. Compared against the caller's `StrokeStyle` to

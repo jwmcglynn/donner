@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// RAII wrapper around a WebGPU device — headless or host-provided.
+/// RAII wrapper around a WebGPU device - headless or host-provided.
 
 #include <memory>
 #include <vector>
@@ -11,7 +11,7 @@
 
 namespace donner::geode {
 
-// Forward declarations — GeodeDevice exposes accessors for the pipeline
+// Forward declarations - GeodeDevice exposes accessors for the pipeline
 // objects it owns (see "Shared render / compute pipelines" section below).
 // The full class definitions live in their own headers; including them
 // here would pull the entire Slug / filter compilation graph into every
@@ -27,7 +27,7 @@ class GeodeFilterEngine;
  * Configuration for embedding Geode into a host application that already owns a
  * WebGPU device.
  *
- * The host is responsible for the lifetime of the device and queue — they must
+ * The host is responsible for the lifetime of the device and queue - they must
  * remain valid for the entire lifetime of any `GeodeDevice` or `RendererGeode`
  * constructed from this config.
  *
@@ -55,7 +55,7 @@ struct GeodeEmbedConfig {
 
   /// Optional adapter handle. When provided, Geode uses it for hardware
   /// workaround detection (e.g., Intel Arc + Vulkan alpha-coverage fallback).
-  /// When null, workaround detection is skipped — the host is assumed to
+  /// When null, workaround detection is skipped - the host is assumed to
   /// know its own hardware characteristics.
   wgpu::Adapter adapter;
 
@@ -70,7 +70,7 @@ struct GeodeEmbedConfig {
  *
  * GeodeDevice is the entry point to the Geode rendering backend. In **headless
  * mode** (`CreateHeadless`), it creates a WebGPU instance, selects a default
- * adapter, and creates a device — all without any window system integration.
+ * adapter, and creates a device - all without any window system integration.
  *
  * In **embedded mode** (`CreateFromExternal`), it wraps a device and queue
  * already created by the host application. The host retains ownership of the
@@ -105,7 +105,7 @@ public:
    * Create a GeodeDevice wrapping a host-provided device and queue.
    *
    * The returned device does NOT own the underlying WebGPU instance, adapter,
-   * device, or queue — the host is responsible for keeping them alive.
+   * device, or queue - the host is responsible for keeping them alive.
    *
    * @param config Embedding configuration with valid device/queue handles.
    * @return A valid GeodeDevice on success, or null if \p config.device or
@@ -212,7 +212,7 @@ public:
   // Counter increment helpers. Cheap no-op when counters are disabled.
   // Also bump process-lifetime totals (`lifetimeBufferCreates_` /
   // `lifetimeTextureCreates_`) that are visible regardless of which
-  // per-frame `GeodeCounters` instance is wired up — these exist so
+  // per-frame `GeodeCounters` instance is wired up - these exist so
   // issue #575's leak hunt can measure unbounded growth across whole
   // test-suite runs where each `RendererGeode` has its own scoped
   // per-frame counters.
@@ -230,7 +230,7 @@ public:
 
   /// Cumulative number of `countTexture()` calls since this `GeodeDevice`
   /// was created. Does not account for textures released back into a
-  /// pool — it is an allocation-site counter, not a live-count.
+  /// pool - it is an allocation-site counter, not a live-count.
   uint64_t lifetimeTextureCreates() const { return lifetimeTextureCreates_; }
   /// Cumulative number of `countBuffer()` calls since this `GeodeDevice`
   /// was created. Same caveat as `lifetimeTextureCreates()`.
@@ -250,7 +250,7 @@ public:
 
   /**
    * Whether the driver supports GPU timestamp queries. Always false
-   * today — reserved for future work (design doc 0030, "Future Work").
+   * today - reserved for future work (design doc 0030, "Future Work").
    */
   bool supportsTimestamps() const { return false; }
 
@@ -263,8 +263,8 @@ public:
   /// texture when the feature is inactive. Prior to M4.2 every
   /// GeoEncoder instance created its own dummies (two textures per
   /// encoder), which showed up as 2+ `textureCreates` per frame per
-  /// push/pop. Caching the dummies on the device — one instance per
-  /// GeodeDevice — drops that to zero steady-state.
+  /// push/pop. Caching the dummies on the device - one instance per
+  /// GeodeDevice - drops that to zero steady-state.
 
   /// 1×1 opaque-black RGBA8 dummy. Bound into the pattern slot when
   /// the current draw is solid / gradient (not a pattern). The shader
@@ -277,7 +277,7 @@ public:
   const wgpu::Sampler& dummyPatternSampler() const;
 
   /// 1×1 R8Unorm with value `0xFF` (= 1.0 coverage). Bound into the
-  /// clip-mask slot when no clip mask is active — the shader
+  /// clip-mask slot when no clip mask is active - the shader
   /// multiplies coverage by this value, so `1.0` is a no-op.
   const wgpu::Texture& dummyClipMaskTexture() const;
   /// View of `dummyClipMaskTexture()`.
@@ -303,13 +303,13 @@ public:
   ///
   /// Every wgpu pipeline created by `createRenderPipeline` /
   /// `createComputePipeline` is retained internally by wgpu-native even
-  /// after the public handle's refcount drops to zero — `wgpuDevicePoll`
+  /// after the public handle's refcount drops to zero - `wgpuDevicePoll`
   /// does not drain it. Prior to this, `RendererGeode` constructed the
   /// four pipeline objects below (~18 wgpu pipelines in total, most
   /// inside `GeodeFilterEngine`) per-instance, so the image-comparison
   /// suite leaked ~1.6 MB per test and ultimately exhausted the driver
-  /// memory budget (see issue #575). Moving ownership here — one copy
-  /// per `GeodeDevice` — caps the pipeline footprint at a fixed cost.
+  /// memory budget (see issue #575). Moving ownership here - one copy
+  /// per `GeodeDevice` - caps the pipeline footprint at a fixed cost.
   ///
   /// Every renderer that talks to this device shares the same pipeline
   /// objects; their state is intentionally immutable after construction
@@ -326,14 +326,14 @@ public:
   GeodeImagePipeline& imagePipeline() const;
   /// Clip-path mask render pipeline. Built lazily on first access rather
   /// than eagerly at device creation, matching the prior per-encoder
-  /// lazy path — most documents don't use `<clipPath>` and the
+  /// lazy path - most documents don't use `<clipPath>` and the
   /// production WASM path avoids the cost.
   GeodeMaskPipeline& maskPipeline() const;
   /// GPU filter-graph executor. Owns ~15 compute pipelines for SVG
   /// filter primitives.
   GeodeFilterEngine& filterEngine() const;
   /// Framebuffer checkerboard underlay pipeline used by the editor's direct
-  /// presentation path. Built lazily on first access — only the editor draws
+  /// presentation path. Built lazily on first access - only the editor draws
   /// it, so headless/WASM consumers never pay the compile cost.
   GeodeCheckerboardPipeline& checkerboardPipeline() const;
   /// @}
@@ -366,7 +366,7 @@ private:
 
   GeodeCounters* counters_ = nullptr;
 
-  // Process-lifetime cumulative totals — see `lifetimeTextureCreates()`
+  // Process-lifetime cumulative totals - see `lifetimeTextureCreates()`
   // for why these are separate from the scoped `counters_`. Mutable
   // because `countTexture()` / `countBuffer()` are logically const
   // (the caller is reporting, not mutating visible state).

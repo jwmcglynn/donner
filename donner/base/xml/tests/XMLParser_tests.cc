@@ -2449,7 +2449,7 @@ TEST_F(XMLParserTests, MaxAttributesPerElementLimitExceeded) {
 }
 
 TEST_F(XMLParserTests, MaxAttributesCapIsPerElement) {
-  // The attribute cap is **per element**, not cumulative — two elements
+  // The attribute cap is **per element**, not cumulative - two elements
   // each with the maximum attributes must both parse.
   XMLParser::Options options;
   options.maxAttributesPerElement = 3;
@@ -2478,7 +2478,7 @@ TEST_F(XMLParserTests, MaxNestingDepthLimitExceeded) {
 
 TEST_F(XMLParserTests, MaxNestingDepthAllowsSiblingSpread) {
   // A wide-but-shallow document should parse fine under a tight nesting
-  // cap — the cap is about call-stack depth, not total element count.
+  // cap - the cap is about call-stack depth, not total element count.
   XMLParser::Options options;
   options.maxNestingDepth = 2;
 
@@ -2836,7 +2836,7 @@ TEST_F(XMLParserTests, GetAttributeLocationOutOfBoundsOffset) {
 
 TEST_F(XMLParserTests, GetAttributeLocationMalformedInputAtOffset) {
   // Offset points inside a well-formed region of the outer parse, but
-  // the element at that offset is no longer well-formed — the user just
+  // the element at that offset is no longer well-formed - the user just
   // typed a stray character. Historically this release-asserted; now
   // it must return std::nullopt cleanly.
 

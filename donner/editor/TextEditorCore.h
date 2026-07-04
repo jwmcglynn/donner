@@ -20,7 +20,7 @@
 /// ## Palette type note
 ///
 /// The canonical `Palette` type was `std::array<ImU32, N>`. To keep this
-/// header ImGui-free we use `std::array<uint32_t, N>` instead — `ImU32` is
+/// header ImGui-free we use `std::array<uint32_t, N>` instead - `ImU32` is
 /// a `typedef unsigned int` in ImGui, so the representation matches and the
 /// shell can freely interchange the two at call sites via implicit
 /// conversion in ImGui's drawlist APIs.
@@ -156,7 +156,7 @@ struct LanguageDefinition {
 };
 
 /**
- * Headless editing substrate — the text buffer, cursor, undo history and
+ * Headless editing substrate - the text buffer, cursor, undo history and
  * syntax colorizer with no ImGui dependency.
  *
  * `TextEditor` wraps this class and adds the ImGui rendering and input
@@ -180,7 +180,7 @@ public:
   // ---------------------------------------------------------------------
 
   /// Replace the buffer contents with `text`. By default this scrolls
-  /// the view back to the top — appropriate for File→Open and similar
+  /// the view back to the top - appropriate for File→Open and similar
   /// "load a different document" flows. Pass `preserveScroll=true` when
   /// the replacement is a small in-place edit (e.g. canvas→text
   /// writeback after a transform drag) so the user's scroll position
@@ -438,7 +438,7 @@ public:
   // ---------------------------------------------------------------------
   //
   // A handful of moved methods (`backspace`, `enterCharacter`, etc.)
-  // historically invoked helpers that live in the ImGui shell —
+  // historically invoked helpers that live in the ImGui shell -
   // `ensureCursorVisible` pokes the ImGui scroll state, function tooltips
   // and brace completion read shell-only configuration. The core invokes
   // these via `std::function` hooks set by `TextEditor`. When unset (e.g.

@@ -2,7 +2,7 @@
 /// @file
 ///
 /// Header-only in-memory implementation of ClipboardInterface. Stores
-/// a single std::string in the object — no OS / ImGui interaction.
+/// a single std::string in the object - no OS / ImGui interaction.
 ///
 /// Useful in two places:
 ///   * Headless unit tests for TextEditorCore (the usual consumer).
@@ -23,7 +23,7 @@ namespace donner::editor {
 /**
  * In-memory ClipboardInterface backed by a single std::string member.
  * Copying from one InMemoryClipboard and pasting into another does
- * not share state — each instance owns its own buffer.
+ * not share state - each instance owns its own buffer.
  */
 class InMemoryClipboard final : public ClipboardInterface {
 public:

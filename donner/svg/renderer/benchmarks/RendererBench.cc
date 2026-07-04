@@ -1,5 +1,5 @@
 /// @file
-/// Geode renderer benchmark — wall-clock and GPU-timestamp timing for
+/// Geode renderer benchmark - wall-clock and GPU-timestamp timing for
 /// RendererGeode across SVGs of varying complexity.
 ///
 /// Reports per-SVG per-phase median/min/max frame times and a geometric-mean
@@ -230,7 +230,7 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     auto bitmap = renderer.takeSnapshot();
     t1 = Clock::now();
     s.snapshotMs = toMs(t1 - t0);
-    (void)bitmap;  // Discard — we only care about timing.
+    (void)bitmap;  // Discard - we only care about timing.
 
     samples.push_back(s);
   }

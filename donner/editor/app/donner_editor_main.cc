@@ -1,6 +1,6 @@
 /// @file
 ///
-/// `render_repl` — a non-GUI render/debug REPL. Spins up a `RenderSession` and a
+/// `render_repl` - a non-GUI render/debug REPL. Spins up a `RenderSession` and a
 /// `RenderSessionRepl` driven by stdin/stdout.
 ///
 ///     $ bazel run //donner/editor/app:render_repl

@@ -90,7 +90,7 @@ bool SystemLanguageMatches(std::string_view systemLanguage, std::string_view use
 
 bool EvaluateConditionalProcessing(const ConditionalProcessingComponent& conditional) {
   // `requiredFeatures` is deprecated in SVG2 and always evaluates to true (matching resvg, which
-  // ignores it) — intentionally not checked here.
+  // ignores it) - intentionally not checked here.
 
   if (conditional.requiredExtensions.has_value()) {
     // Donner supports no extensions: any non-empty list evaluates to false. An empty string

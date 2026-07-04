@@ -16,7 +16,7 @@ TEST(AsyncRendererPerfCorrectnessTest, FilterGroupSubtreeDragHitsTranslationFast
 
   EXPECT_GE(result.fastPathFrames, static_cast<uint64_t>(result.dragFrames))
       << "filter-group subtree drag is not hitting the translation-only fast "
-         "path — compositor is falling through to prepareDocumentForRendering "
+         "path - compositor is falling through to prepareDocumentForRendering "
          "every frame";
   EXPECT_LE(result.slowPathFramesWithDirty, 1u)
       << "more than the pre-warm frame slipped into the slow path";

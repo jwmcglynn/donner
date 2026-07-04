@@ -141,7 +141,7 @@ void resolveTextPath(Registry& registry, const TextPathComponent& textPath,
   // The transform must include the `transform-origin` pivot so the path the text follows lands
   // in the same place as the path element renders.
   // `ComputedLocalTransformComponent::parentFromEntity` is the *raw* transform (pivot not applied);
-  // compose the pivot here exactly as LayoutSystem::getEntityFromParentTransform does — `T(-origin)
+  // compose the pivot here exactly as LayoutSystem::getEntityFromParentTransform does - `T(-origin)
   // * M * T(origin)` in Donner's left-first multiplication order. Without this,
   // `transform="rotate(90)" transform-origin="center"` rotated the baseline path about the origin
   // instead of its center, sampling glyphs off-screen (issue #624:
@@ -205,7 +205,7 @@ Entity findApplicableTextPathEntity(Registry& registry, Entity entity, bool& out
           registry.any_of<TextRootComponent>(tree->parent())) {
         return current;
       }
-      // Found a textPath but it's not a direct child of <text> — invalid nesting.
+      // Found a textPath but it's not a direct child of <text> - invalid nesting.
       // Content inside should be hidden per SVG spec.
       outInvalidNesting = true;
       return entt::null;
@@ -341,13 +341,13 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
       const auto& textPath = registry.get<TextPathComponent>(textPathEntity);
       resolveTextPath(registry, textPath, span, warningSink);
       if (!span.pathSpline) {
-        // textPath href could not be resolved — mark as failed so glyphs are hidden.
+        // textPath href could not be resolved - mark as failed so glyphs are hidden.
         span.textPathFailed = true;
       } else {
         span.textPathSourceEntity = textPathEntity;
       }
     } else if (invalidTextPathNesting) {
-      // Content inside a nested (invalid) textPath — hide glyphs.
+      // Content inside a nested (invalid) textPath - hide glyphs.
       span.textPathFailed = true;
     }
 
@@ -394,7 +394,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     }
 
     // Invalid textPath elements (empty href or nested) should hide their content
-    // so whitespace collapsing treats it as absent — preserving the surrounding
+    // so whitespace collapsing treats it as absent - preserving the surrounding
     // inter-element whitespace from the parent's text chunks.
     if (!isHidden) {
       const auto* textPathComp = handle.try_get<TextPathComponent>();
@@ -459,7 +459,7 @@ void TextSystem::instantiateComputedComponent(EntityHandle rootHandle,
     std::optional<size_t> lastNonEmpty;
     for (size_t i = 0; i + 1 < pendingSpans.size(); ++i) {
       // Hidden spans (display:none, invalid textPath) block inter-span whitespace
-      // collapsing — surrounding visible spans preserve their whitespace.
+      // collapsing - surrounding visible spans preserve their whitespace.
       if (pendingSpans[i].hidden) {
         lastNonEmpty = std::nullopt;
       } else if (!pendingSpans[i].text.empty()) {

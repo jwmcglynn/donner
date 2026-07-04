@@ -38,7 +38,7 @@ struct ComputedLocalTransformComponent {
 };
 
 /**
- * Stores the computed absolute transform for an entity — the full cascade of
+ * Stores the computed absolute transform for an entity - the full cascade of
  * ancestor transforms composed together.
  */
 struct ComputedAbsoluteTransformComponent {

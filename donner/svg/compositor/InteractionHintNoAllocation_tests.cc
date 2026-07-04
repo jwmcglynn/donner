@@ -81,7 +81,7 @@ TEST_F(InteractionHintNoAllocationTest, SteadyStateDragDoesNotChurnECSState) {
 
 // The MandatoryHintDetector is gated on the document-dirty signal. During a
 // steady-state drag (no DirtyFlagsComponent entries, no `needsFullRebuild`),
-// it must NOT scan the registry — a 10k-node document's O(N) scan would
+// it must NOT scan the registry - a 10k-node document's O(N) scan would
 // dominate every drag frame otherwise.
 TEST_F(InteractionHintNoAllocationTest, MandatoryDetectorIsIdleDuringSteadyStateDrag) {
   SVGDocument document = parseDocument(R"svg(

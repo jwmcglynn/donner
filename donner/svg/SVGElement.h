@@ -237,7 +237,7 @@ private:
  * `firstChild()`, `nextSibling()`), querying and setting attributes (`getAttribute()`,
  * `setAttribute()`), and modifying the tree structure (`appendChild()`, `removeChild()`).
  *
- * Elements are lightweight value types — copying an SVGElement creates another handle to the same
+ * Elements are lightweight value types - copying an SVGElement creates another handle to the same
  * underlying element, not a deep copy. Use `isa<Derived>()` and `cast<Derived>()` to work with
  * element-specific APIs (e.g., `SVGCircleElement`, `SVGPathElement`).
  *
@@ -680,8 +680,8 @@ public:
   const PropertyRegistry& getComputedStyle() const;
 
   /**
-   * The element's own specified style properties — the parsed `style` attribute plus presentation
-   * attributes, before the CSS cascade and inheritance — or `nullptr` when the element carries no
+   * The element's own specified style properties - the parsed `style` attribute plus presentation
+   * attributes, before the CSS cascade and inheritance - or `nullptr` when the element carries no
    * style data.
    *
    * Unlike \ref getComputedStyle this never computes anything, making it suitable for diagnostics
@@ -694,7 +694,7 @@ public:
    * \ref getComputedStyle call), otherwise `nullptr`.
    *
    * Unlike \ref getComputedStyle this never triggers style computation, making it suitable for
-   * diagnostics that must observe whether — and with which values — the style cascade has run.
+   * diagnostics that must observe whether - and with which values - the style cascade has run.
    */
   const PropertyRegistry* computedStyleIfPresent() const;
 

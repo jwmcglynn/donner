@@ -235,13 +235,13 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     if (stretchDelta == 0) {
       // Exact match, no penalty.
     } else if (stretch < 5 && stretchDelta < 0) {
-      // Request is narrow, face is even narrower — preferred direction.
+      // Request is narrow, face is even narrower - preferred direction.
       score += (-stretchDelta) * 100;
     } else if (stretch > 5 && stretchDelta > 0) {
-      // Request is wide, face is even wider — preferred direction.
+      // Request is wide, face is even wider - preferred direction.
       score += stretchDelta * 100;
     } else {
-      // Face is on the wrong side — heavy penalty.
+      // Face is on the wrong side - heavy penalty.
       score += std::abs(stretchDelta) * 100 + 1000;
     }
 

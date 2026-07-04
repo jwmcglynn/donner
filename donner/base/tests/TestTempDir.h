@@ -12,7 +12,7 @@ namespace donner {
  *
  * Use this instead of `std::filesystem::temp_directory_path()` in tests: the
  * latter resolves to the shared `/tmp` on remote-execution workers (which do not
- * set `TMPDIR`), so fixed filenames written there collide across users — a file
+ * set `TMPDIR`), so fixed filenames written there collide across users - a file
  * left by one worker user makes a later run under a different user fail to open
  * the same path for write.
  */

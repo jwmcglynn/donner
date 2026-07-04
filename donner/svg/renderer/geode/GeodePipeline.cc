@@ -16,7 +16,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   // the clip-mask texture/sampler only when `hasClipMask != 0`. A 1x1
   // dummy texture is bound for both when the feature is inactive so
   // the bind group layout is stable across draw calls. The
-  // instance-transforms buffer is always bound too — a 1-element
+  // instance-transforms buffer is always bound too - a 1-element
   // identity buffer (`GeodeDevice::identityInstanceTransformBuffer`)
   // for single-draw fills, a full per-instance array for
   // `fillPathInstanced`.
@@ -164,7 +164,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
 
   rpDesc.fragment = &fragmentState;
   // MSAA sample count. On the alpha-coverage path (Intel Arc + Vulkan) this
-  // is 1 — no MSAA rasterization, no hardware resolve. Other adapters get
+  // is 1 - no MSAA rasterization, no hardware resolve. Other adapters get
   // 4× with fragment-shader sample_mask AA.
   rpDesc.multisample.count = sampleCount;
   rpDesc.multisample.mask = 0xFFFFFFFF;
@@ -180,7 +180,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
                                              wgpu::TextureFormat colorFormat,
                                              bool useAlphaCoverageShader, uint32_t sampleCount)
     : colorFormat_(colorFormat) {
-  // Nine bindings — uniforms, H bands SSBO, H curves SSBO, clip-mask texture,
+  // Nine bindings - uniforms, H bands SSBO, H curves SSBO, clip-mask texture,
   // clip-mask sampler, and (analytic dual-ray, 0041 §8) V bands SSBO, V curves
   // SSBO, H band grid, V band grid. The clip-mask bindings always carry
   // something valid; when `hasClipMask == 0` a 1x1 dummy texture is bound and
@@ -303,7 +303,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
 
 GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device, bool useAlphaCoverageShader,
                                      uint32_t sampleCount) {
-  // Nine bindings — uniforms, H bands SSBO, H curves SSBO, nested clip mask
+  // Nine bindings - uniforms, H bands SSBO, H curves SSBO, nested clip mask
   // texture, nested clip mask sampler, and (analytic dual-ray, 0041 §8) V bands
   // SSBO, V curves SSBO, H band grid, V band grid. The clip-mask slot is always
   // bound; a 1x1 dummy is used when `uniforms.hasClipMask == 0`.

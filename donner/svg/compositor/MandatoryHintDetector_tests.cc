@@ -38,7 +38,7 @@ const HintEntry* getSingleMandatoryEntry(const Registry& registry, Entity entity
 namespace {
 
 /// Create an entity with `TreeComponent` parent @p parent. Uses the public
-/// TreeComponent constructor with a dummy tag name — tests don't care about
+/// TreeComponent constructor with a dummy tag name - tests don't care about
 /// names, just the tree structure.
 Entity makeTreeEntity(Registry& registry, Entity parent) {
   const Entity e = registry.create();
@@ -90,7 +90,7 @@ TEST(MandatoryHintDetectorTest, EntityWithClipPathAncestorSkippedForSafety) {
 }
 
 TEST(MandatoryHintDetectorTest, QualifyingEntityWithoutAncestorCompositingStillPromotes) {
-  // Same shape as above but the parent has no clip-path — the child should
+  // Same shape as above but the parent has no clip-path - the child should
   // still auto-promote. Verifies the ancestor check doesn't over-suppress.
   Registry registry;
   MandatoryHintDetector detector;
@@ -113,7 +113,7 @@ TEST(MandatoryHintDetectorTest, NonQualifyingEntityGetsNoHint) {
   MandatoryHintDetector detector;
 
   const Entity entity = registry.create();
-  registry.emplace<RenderingInstanceComponent>(entity);  // all defaults — nothing qualifies.
+  registry.emplace<RenderingInstanceComponent>(entity);  // all defaults - nothing qualifies.
 
   detector.reconcile(registry);
 
@@ -261,7 +261,7 @@ TEST(MandatoryHintDetectorTest, MoveConstructPreservesHint) {
       << "exactly one hint entry still present after move";
 
   // A reconcile on the moved-from detector should see an empty internal map,
-  // re-publish the hint from scratch — but because the moved-to detector still
+  // re-publish the hint from scratch - but because the moved-to detector still
   // holds the active ScopedCompositorHint, publishing from the moved-from
   // detector would add a second entry. The real invariant we care about is
   // that the moved-from detector has an empty hints_ map. We can verify that
@@ -270,7 +270,7 @@ TEST(MandatoryHintDetectorTest, MoveConstructPreservesHint) {
   Registry emptyRegistry;
   source.reconcile(emptyRegistry);            // NOLINT(bugprone-use-after-move)
   EXPECT_EQ(source.stats().hintsDropped, 0u)  // NOLINT(bugprone-use-after-move)
-      << "moved-from detector's hints_ map must be empty — no hints to drop";
+      << "moved-from detector's hints_ map must be empty - no hints to drop";
   EXPECT_EQ(source.stats().hintsActive, 0u);  // NOLINT(bugprone-use-after-move)
 }
 

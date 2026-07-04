@@ -31,7 +31,7 @@ TEST(WoffParser, Simple) {
   ASSERT_THAT(maybeWoffFont, NoParseError());
 }
 
-/// Ensures WoffParser::Parse extracts the UTF‑8 family name.
+/// Ensures WoffParser::Parse extracts the UTF-8 family name.
 TEST(WoffParser, ExtractsFamilyName) {
   const std::string location =
       Runfiles::instance().Rlocation("donner/base/fonts/testdata/valid-001.woff");

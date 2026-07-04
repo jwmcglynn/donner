@@ -129,7 +129,7 @@ TEST(SVGMarkerElementTests, MarkerStartProperty) {
   )-");
 
   // Per SVG 2 §11.6.2, the start marker on a closed polygon uses the
-  // outgoing tangent (toward vertex 2) only — not a bisector with the
+  // outgoing tangent (toward vertex 2) only - not a bisector with the
   // closing segment. Rotates the triangle to point up-right from (2,8).
   const AsciiImage generatedAscii = RendererTestUtils::renderToAsciiImage(document);
   EXPECT_TRUE(generatedAscii.matches(R"(
@@ -154,7 +154,7 @@ TEST(SVGMarkerElementTests, MarkerStartProperty) {
 
 /// Test that a marker defined in `<defs>` is applied at the midpoints of a path.
 /// This test uses a polyline (with the same diamond points) so that the two
-/// mid–points (namely at 8,2 and 14,8) receive markers.
+/// mid-points (namely at 8,2 and 14,8) receive markers.
 TEST(SVGMarkerElementTests, MarkerMidPropertyPolyline) {
   // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
   // bug is fixed (tracked in jwmcglynn/donner#566).
@@ -232,7 +232,7 @@ TEST(SVGMarkerElementTests, MarkerMidPropertyPolygon) {
 }
 
 /// Test that a marker defined in `<defs>` is applied at the end of a path.
-/// Here the same diamond–shaped polygon is used, so that the last point for the path close (2,8)
+/// Here the same diamond-shaped polygon is used, so that the last point for the path close (2,8)
 /// receives the marker.
 TEST(SVGMarkerElementTests, MarkerEndProperty) {
   // Variant lane (doc 0031 M2.3): re-enable on Geode once the backend
@@ -252,7 +252,7 @@ TEST(SVGMarkerElementTests, MarkerEndProperty) {
   )-");
 
   // Per SVG 2 §11.6.2, the end marker on a closed polygon uses the
-  // incoming tangent (from vertex 3 toward 0) only — not a bisector
+  // incoming tangent (from vertex 3 toward 0) only - not a bisector
   // with the opening segment. Rotates the triangle to point down-right
   // from (2,8).
   EXPECT_TRUE(generatedAscii.matches(R"(
@@ -278,7 +278,7 @@ TEST(SVGMarkerElementTests, MarkerEndProperty) {
 /// @test SVG2 §11.6.2: a marker's refX/refY percentage/keyword resolves against the marker's own
 /// viewBox, not the referencing element's viewport. A `viewBox="0 0 4 4"` marker referenced from a
 /// 16x16 root must place refX/refY="center" (50% of 4 = 2) identically to the explicit refX/refY=2
-/// — even though the referencing viewport is 16 wide. Before the fix, "center" resolved to 50% of
+/// - even though the referencing viewport is 16 wide. Before the fix, "center" resolved to 50% of
 /// 16 = 8, displacing the marker. Asserted differentially so the expected placement needs no
 /// hand-derived golden.
 TEST(SVGMarkerElementRenderingTests, RefKeywordResolvesAgainstMarkerViewBox) {

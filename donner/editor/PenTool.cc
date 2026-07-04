@@ -27,13 +27,13 @@ namespace {
 // pixels of the first anchor. Matches the v0.8 Pen tool quality bar.
 constexpr double kClosePointScreenTolerance = 6.0;
 
-// Anchor/control-point hit tolerance in logical (screen) pixels — slightly
+// Anchor/control-point hit tolerance in logical (screen) pixels - slightly
 // larger than the drawn anchor (5 px) and control point (4 px) chrome so the
 // targets stay grabbable at every zoom.
 constexpr double kPointHitScreenTolerance = 6.0;
 
 // Constrain `documentPoint` to the nearest 45-degree direction around
-// `origin` by projecting it onto that direction — the cursor's travel along
+// `origin` by projecting it onto that direction - the cursor's travel along
 // the constrained axis is preserved, matching standard design-tool Shift
 // behavior.
 Vector2d ConstrainTo45Degrees(const Vector2d& origin, const Vector2d& documentPoint) {
@@ -98,7 +98,7 @@ void PenTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
       kPointHitScreenTolerance / std::max(modifiers.pixelsPerDocUnit, 0.000001);
 
   if (activePath_.has_value()) {
-    // Close-path wins over point editing for the first anchor — unless
+    // Close-path wins over point editing for the first anchor - unless
     // Cmd/Ctrl explicitly restricts the gesture to point editing.
     if (!modifiers.command && shouldCloseAt(documentPoint, modifiers)) {
       closePath(editor, documentPoint, toleranceDoc);
@@ -383,12 +383,12 @@ std::optional<PenTool::SelectedPathState> PenTool::stateForSelectedPath(
   bool sawSubpath = false;
   for (const Path::Command& command : path.commands()) {
     if (closed && command.verb != Path::Verb::ClosePath) {
-      return std::nullopt;  // Content after Z — multiple subpaths.
+      return std::nullopt;  // Content after Z - multiple subpaths.
     }
     switch (command.verb) {
       case Path::Verb::MoveTo:
         if (sawSubpath) {
-          return std::nullopt;  // Second MoveTo — multiple subpaths.
+          return std::nullopt;  // Second MoveTo - multiple subpaths.
         }
         sawSubpath = true;
         anchors.push_back(Anchor{.point = path.points()[command.pointIndex]});
@@ -599,7 +599,7 @@ bool PenTool::updateDraggedAnchor(const Vector2d& documentPoint, bool breakSymme
   // The outgoing handle always follows the mouse. With symmetry (default) the
   // incoming handle mirrors it through the anchor for a smooth node; Alt/Option
   // breaks that link so the incoming handle keeps whatever value it already had
-  // (its previous segment's tangent) — the anchor becomes a corner with
+  // (its previous segment's tangent) - the anchor becomes a corner with
   // mismatched handles. The first anchor only has an incoming segment to
   // mirror into once the contour is closed.
   std::optional<Vector2d> nextInHandle = anchor.inHandle;
@@ -711,7 +711,7 @@ bool PenTool::updatePointDrag(const Vector2d& documentPoint, const MouseModifier
       next.inHandle = target;
     }
 
-    // Aligned coupling: a smooth anchor keeps its handles collinear — the
+    // Aligned coupling: a smooth anchor keeps its handles collinear - the
     // opposite handle rotates with the drag while preserving its own length.
     // Alt/Option breaks the coupling so only the grabbed handle moves.
     if (dragStartAnchorSmooth_ && !modifiers.option && handleLength > 1e-9) {
@@ -1030,7 +1030,7 @@ bool PenTool::removeLastAnchor(EditorApp& editor) {
   }
 
   if (anchors_.size() <= 1u) {
-    // Removing the only anchor leaves nothing to draft — discard the draft,
+    // Removing the only anchor leaves nothing to draft - discard the draft,
     // restoring the pre-pen document and undo stack.
     cancel(editor);
     return true;
@@ -1050,8 +1050,8 @@ bool PenTool::commitOpenPath(EditorApp& editor) {
     return false;
   }
 
-  // A drag may still be shaping the final anchor's handles — or an existing
-  // point — when commit fires.
+  // A drag may still be shaping the final anchor's handles - or an existing
+  // point - when commit fires.
   if (dragMode_ != DragMode::None) {
     dragMode_ = DragMode::None;
     if (draggedAnchorChanged_) {
@@ -1061,7 +1061,7 @@ bool PenTool::commitOpenPath(EditorApp& editor) {
   }
 
   // A point-edit session on a committed path must not rewrite the path's
-  // closed/open state — only the edited points — and a commit that lands
+  // closed/open state - only the edited points - and a commit that lands
   // mid-close-drag keeps the just-closed contour closed. Finalize as-is.
   if (!editingExistingPath_ && !pendingFinalizeOnRelease_) {
     closed_ = false;
@@ -1075,7 +1075,7 @@ bool PenTool::commitOpenPath(EditorApp& editor) {
 
 void PenTool::beginPenSession(EditorApp& editor) {
   if (sessionBeforeSource_.has_value()) {
-    return;  // Session already open — keep the original baseline.
+    return;  // Session already open - keep the original baseline.
   }
   if (editor.document().hasDocument() && editor.document().document().hasSourceStore()) {
     sessionBeforeSource_ = std::string(editor.document().document().source());
@@ -1094,7 +1094,7 @@ void PenTool::finalize(EditorApp& editor) {
                                                *sessionBeforeSource_);
   }
 
-  // Clear local draft state without rolling back the document — the queued
+  // Clear local draft state without rolling back the document - the queued
   // geometry is the committed path. (cancel() with no editor only resets the
   // tool's own fields.)
   cancel();

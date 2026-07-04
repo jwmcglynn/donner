@@ -4233,7 +4233,7 @@ const TextEditor::LanguageDefinition& TextEditor::LanguageDefinition::SVG() {
   static const LanguageDefinition langDef = [] {
     LanguageDefinition def;
 
-    // SVG element names — used as keywords so tag names like <rect>, <circle>
+    // SVG element names - used as keywords so tag names like <rect>, <circle>
     // highlight distinctly from unknown elements. This list is hardcoded
     // rather than pulled from kSVGElementNames because the text_editor
     // target must not depend on //donner/svg. Callers that want the full
@@ -4301,7 +4301,7 @@ const TextEditor::LanguageDefinition& TextEditor::LanguageDefinition::SVG() {
     };
     def.keywords.insert(keywords.begin(), keywords.end());
 
-    // Known SVG/CSS attribute names — highlighted as KnownIdentifier.
+    // Known SVG/CSS attribute names - highlighted as KnownIdentifier.
     static constexpr std::array knownAttrs{
         "id",    "class",   "style",  "viewBox", "xmlns",
         "href",  "transform", "fill",   "stroke",  "opacity",
@@ -4447,7 +4447,7 @@ const TextEditor::LanguageDefinition& TextEditor::LanguageDefinition::SVG() {
         return true;
       }
 
-      // Fall through for whitespace and anything else — the caller advances
+      // Fall through for whitespace and anything else - the caller advances
       // past it character-by-character.
       return false;
     };

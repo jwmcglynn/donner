@@ -12,7 +12,7 @@ namespace donner::geode {
 
 namespace {
 
-/// Maximum number of bands — prevents runaway memory for huge paths.
+/// Maximum number of bands - prevents runaway memory for huge paths.
 constexpr uint16_t kMaxBands = 256;
 
 /// Axis-aligned extent of a quadratic Bézier (control-point hull bounds).
@@ -124,7 +124,7 @@ std::vector<CurveWithRange> extractCurves(const Path& monoPath) {
           pushCurve(currentPoint.x, currentPoint.y, mid.x, mid.y, end.x, end.y);
         }
         currentPoint = end;
-        // Explicitly closed — don't let the final implicit close re-close it.
+        // Explicitly closed - don't let the final implicit close re-close it.
         subpathHasSegments = false;
         break;
       }

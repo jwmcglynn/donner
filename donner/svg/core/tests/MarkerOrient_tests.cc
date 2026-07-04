@@ -9,7 +9,7 @@
 
 namespace donner::svg {
 
-/// @test Default–constructed MarkerOrient produces an Angle–type with a zero angle.
+/// @test Default-constructed MarkerOrient produces an Angle-type with a zero angle.
 TEST(MarkerOrientTests, DefaultConstructor) {
   const MarkerOrient orient;
   EXPECT_EQ(orient.type(), MarkerOrient::Type::Angle);
@@ -61,7 +61,7 @@ TEST(MarkerOrientTests, AutoOrientation) {
   const double expectedAngle = std::atan2(vertical.y, vertical.x);  // π/2
   EXPECT_NEAR(orient.computeAngleRadians(vertical), expectedAngle, 1e-6);
 
-  // With a near–zero direction vector, the computed angle should fall back to 0.
+  // With a near-zero direction vector, the computed angle should fall back to 0.
   const Vector2d nearZero(0.0, 0.0);
   EXPECT_DOUBLE_EQ(orient.computeAngleRadians(nearZero), 0.0);
   EXPECT_DOUBLE_EQ(orient.computeAngleRadians(nearZero, MarkerOrient::MarkerType::Start), 0.0);

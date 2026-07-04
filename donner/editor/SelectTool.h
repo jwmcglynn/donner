@@ -14,7 +14,7 @@
 ///     replaces (or appends-to, if Shift was held) the selection.
 ///
 /// All DOM mutations flow through `EditorApp::applyMutation()` as
-/// `EditorCommand::SetTransform` — never directly.
+/// `EditorCommand::SetTransform` - never directly.
 
 #include <cstdint>
 #include <optional>
@@ -105,13 +105,13 @@ public:
   /// Snapshot-safe re-drag start (design doc 0033 §M8). When the user
   /// clicks inside the bounds of the single currently-selected element,
   /// start a drag of that element WITHOUT calling `EditorApp::hitTest`
-  /// — so the call is safe to run even while the async-renderer worker
+  /// - so the call is safe to run even while the async-renderer worker
   /// is mid-render (hitTest would race the worker's
   /// `prepareDocumentForRendering`).
   ///
   /// `selectionBoundsDoc` and `occludingBoundsDoc` are **caller-supplied**
   /// AABB lists in document space. EditorShell passes the pre-snapshotted
-  /// bounds from `SelectionBoundsCache` — that cache is refreshed on idle
+  /// bounds from `SelectionBoundsCache` - that cache is refreshed on idle
   /// frames, so reading it during a busy render is race-free (no live
   /// `SnapshotSelectionWorldBounds` call inside this function). `onMouseDown`
   /// passes freshly-computed live selection bounds and no occlusion hints since
@@ -123,7 +123,7 @@ public:
   /// later-painted cached bounds, empty bounds span, etc.).
   ///
   /// `onMouseDown` itself calls this first to avoid duplicating logic
-  /// — so plain clicks on the selection always take the no-hit-test
+  /// - so plain clicks on the selection always take the no-hit-test
   /// path regardless of busy state. The split exists so EditorShell
   /// can run it BEFORE checking `isBusy()` for the click handler.
   [[nodiscard]] bool tryStartRedragOnSelected(EditorApp& editor, const Vector2d& documentPoint,
@@ -222,7 +222,7 @@ private:
     /// for `UndoSnapshot::sourceTransformAttributeValue` on release.
     /// Captured eagerly in `onMouseDown` (which runs only when the async
     /// renderer is idle) so `onMouseUp` never needs to touch the entt
-    /// registry itself — reads here racing with a concurrent background
+    /// registry itself - reads here racing with a concurrent background
     /// render would hit `entt::fast_mod` assertions when the worker is
     /// resizing a dense-map bucket array.
     std::optional<RcString> sourceTransformAttributeValue;
@@ -235,7 +235,7 @@ private:
       Rotate,
     };
 
-    /// Primary drag participant — the element that was under the cursor on
+    /// Primary drag participant - the element that was under the cursor on
     /// mouse-down. Always populated. The compositor-preview fast path
     /// (when a single-element drag is composited) runs against this one.
     PerElementDrag primary;
@@ -243,7 +243,7 @@ private:
     /// Additional elements that move in lockstep with the primary. Empty
     /// for a single-element drag. Populated when mouse-down hits an
     /// already-selected element and the current selection has more than
-    /// one entry — classic "grab an item in the current selection, move
+    /// one entry - classic "grab an item in the current selection, move
     /// them all" design-tool behavior.
     std::vector<PerElementDrag> extras;
 
@@ -268,7 +268,7 @@ private:
   /// Active marquee drag. Records the start point (the document
   /// position of the `onMouseDown` that hit empty space), the
   /// current point (updated on every `onMouseMove`), and whether
-  /// Shift was held — additive marquee appends to the existing
+  /// Shift was held - additive marquee appends to the existing
   /// selection instead of replacing it.
   struct MarqueeState {
     Vector2d startDocumentPoint;

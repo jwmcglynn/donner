@@ -22,7 +22,7 @@
 ///     Equal to `screen * devicePixelRatio`. Only the SVG renderer's
 ///     bitmap output and the GL texture upload care about this.
 ///
-/// Zoom semantics: `zoom == 1.0` means **100%** — one SVG `viewBox`
+/// Zoom semantics: `zoom == 1.0` means **100%** - one SVG `viewBox`
 /// unit takes exactly one screen pixel. This is the initial state
 /// when the editor opens and the target of `Cmd+0` / View → Reset
 /// Zoom. The user can pan freely if the document doesn't fit the

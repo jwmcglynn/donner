@@ -98,7 +98,7 @@ TEST(Transform, IsTranslation) {
   EXPECT_TRUE(Transform2d().isTranslation());
   EXPECT_TRUE(Transform2d::Translate(0, 0).isTranslation());
 
-  // Pure translations — non-zero tx/ty shouldn't disqualify.
+  // Pure translations - non-zero tx/ty shouldn't disqualify.
   EXPECT_TRUE(Transform2d::Translate(5, 0).isTranslation());
   EXPECT_TRUE(Transform2d::Translate(0, 7).isTranslation());
   EXPECT_TRUE(Transform2d::Translate(-3.5, 12.25).isTranslation());
@@ -115,7 +115,7 @@ TEST(Transform, IsTranslation) {
                    .isTranslation());
 
   // A tiny jitter within the comparison tolerance should still be recognized
-  // as a pure translation — floating-point composition produces these when
+  // as a pure translation - floating-point composition produces these when
   // `Translate * Translate` rounds the identity 2×2 block.
   {
     Transform2d composed = Transform2d::Translate(1, 2) * Transform2d::Translate(3, 4);
@@ -313,7 +313,7 @@ TEST(Transform, Output) {
 }
 
 // -----------------------------------------------------------------------------
-// toSVGTransformString — decomposition to the simplest canonical form
+// toSVGTransformString - decomposition to the simplest canonical form
 // -----------------------------------------------------------------------------
 
 TEST(Transform, ToSVGTransformStringIdentity) {

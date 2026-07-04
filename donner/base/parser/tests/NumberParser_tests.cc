@@ -263,7 +263,7 @@ TEST(NumberParser, DigitAddOverflow) {
   const auto maybeResult = NumberParser::Parse(toParse);
   EXPECT_THAT(maybeResult, NoParseError());
 
-  // We don’t particularly care about the final double, just that we didn’t crash
+  // We don't particularly care about the final double, just that we didn't crash
   // and consumed all digits (which demonstrates we parsed them, saturating the integer).
   // Because it saturates the internal 64-bit, it should remain a very large double ~1.8446744e19
   // but not infinite. You can do a more precise check if you like.

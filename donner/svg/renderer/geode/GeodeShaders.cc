@@ -31,7 +31,7 @@ namespace {
 
 /// Build a `wgpu::ShaderModule` from a raw byte buffer of WGSL source.
 /// The embedded WGSL blobs in `//donner/svg/renderer/geode:*_wgsl` land
-/// here as `std::span<const unsigned char>` — wgpu-native's shader-
+/// here as `std::span<const unsigned char>` - wgpu-native's shader-
 /// module descriptor wants a pointer + length as a `WGPUStringView`
 /// (since the newer WebGPU headers use string views everywhere instead
 /// of NUL-terminated C strings).

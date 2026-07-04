@@ -18,7 +18,7 @@ namespace donner::svg {
  * - SVG2 spec: https://www.w3.org/TR/SVG2/text.html#TextPathElement
  *
  * A `<textPath>` lets text flow along the curve of any \ref xml_path instead of in a straight
- * horizontal line — think of a label hugging the edge of a circle, a headline bent along a
+ * horizontal line - think of a label hugging the edge of a circle, a headline bent along a
  * wave, or caption text tracking the outline of a shape. You reference the target path by its
  * `id` via the `href` attribute, and SVG lays out each glyph along the path's geometry,
  * automatically rotating it to follow the local tangent. The `startOffset` attribute controls

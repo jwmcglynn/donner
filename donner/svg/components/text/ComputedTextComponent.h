@@ -23,12 +23,12 @@
 namespace donner::svg::components {
 
 /**
- * Pre‑computed layout information for a text subtree.
+ * Pre-computed layout information for a text subtree.
  *
  * A **ComputedTextComponent** is attached by the layout system to the root \ref xml_text element
  * after all \ref xml_text, \ref xml_tspan, and \ref xml_textPath descendants have been resolved.
  * It stores the final, absolute positions for each contiguous slice of text, allowing the renderer
- * to iterate quickly without re‑evaluating attribute vectors on every frame.
+ * to iterate quickly without re-evaluating attribute vectors on every frame.
  *
  * The component contains a single public field, `spans`, which is the computed list of text
  * spans.
@@ -46,7 +46,7 @@ struct ComputedTextComponent {
    * from ancestor \ref xml_text elements.
    */
   struct TextSpan {
-    /// Back‑reference to the original text for this span.
+    /// Back-reference to the original text for this span.
     RcString text;
 
     /// Byte index (inclusive) of the first code unit of the span within \c text.
@@ -200,7 +200,7 @@ struct ComputedTextComponent {
     LengthAdjust lengthAdjust = LengthAdjust::Default;
 
     /// Per-character absolute X positions from \c x attribute lists. Indexed by character
-    /// (codepoint) index within the span. \c nullopt means no explicit position — the glyph
+    /// (codepoint) index within the span. \c nullopt means no explicit position - the glyph
     /// advances naturally from the previous character. Index 0 holds the span-start position.
     SmallVector<std::optional<Lengthd>, 1> xList;
     /// Per-character absolute Y positions from \c y attribute lists.

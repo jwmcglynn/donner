@@ -4,7 +4,7 @@
  * A small ImGui demo: load an SVG, display it, click to select a shape,
  * and edit the source in a text pane that re-parses on every keystroke.
  * Selection chrome is drawn by injecting an `editor-only` `<rect>` and
- * `<path>` into the document tree — no separate overlay renderer and no
+ * `<path>` into the document tree - no separate overlay renderer and no
  * editor-side command queue. The **only** dependency on the editor tree
  * is `donner::editor::TextEditor`, the syntax-aware text widget.
  *
@@ -173,7 +173,7 @@ struct ViewerState {
   /// geometry element that carries XML source offsets, so the caller can
   /// highlight it in the text pane.
   ///
-  /// Selection is **sticky** — clicking empty space is a no-op rather than
+  /// Selection is **sticky** - clicking empty space is a no-op rather than
   /// a deselect. Only a click that lands on an element changes the
   /// selection. This matches the behavior of most vector editors and
   /// avoids accidental deselection while pan/zoom lands later.
@@ -317,7 +317,7 @@ int main(int argc, char** argv) {
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
 
-    // Re-render every frame — this is a minimal demo and the document is
+    // Re-render every frame - this is a minimal demo and the document is
     // small. A real application would track a dirty flag.
     if (state.valid) {
       renderer.draw(state.document);
@@ -356,7 +356,7 @@ int main(int argc, char** argv) {
     textEditor.render("##source");
     if (textEditor.isTextChanged()) {
       state.loadFromString(textEditor.getText());
-      // `isTextChanged` is a sticky flag — the caller is responsible for
+      // `isTextChanged` is a sticky flag - the caller is responsible for
       // clearing it. Without this reset, every frame would re-parse the
       // document and wipe any selection state we just built up via the
       // click handler below.

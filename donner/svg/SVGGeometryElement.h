@@ -51,7 +51,7 @@ public:
   void setPathLength(std::optional<double> value);
 
   /**
-   * Get the computed path geometry as a \ref Path — a sequence of line segments, quadratic
+   * Get the computed path geometry as a \ref Path - a sequence of line segments, quadratic
    * and cubic Bezier curves that define the shape's outline. For `<path>` elements, this is parsed
    * from the `d` attribute; for shapes like `<circle>` and `<rect>`, the shape is converted to
    * equivalent path commands.

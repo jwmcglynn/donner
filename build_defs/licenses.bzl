@@ -18,9 +18,9 @@ from a provided catalog.
 
 Two outputs are produced per rule instance:
 
-  * `<name>.txt` — concatenated human-readable NOTICE suitable for embedding
+  * `<name>.txt` - concatenated human-readable NOTICE suitable for embedding
     into an application (e.g. via `cc_embed_data` or a resource loader).
-  * `<name>.json` — machine-readable manifest listing each dependency's
+  * `<name>.json` - machine-readable manifest listing each dependency's
     package metadata, SPDX kinds and workspace-relative license text path.
     Consumed by `tools/generate_build_report.py` to annotate dependencies.
 """

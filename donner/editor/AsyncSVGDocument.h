@@ -53,14 +53,14 @@ public:
   AsyncSVGDocument(AsyncSVGDocument&&) = delete;
   AsyncSVGDocument& operator=(AsyncSVGDocument&&) = delete;
 
-  /// Replace the inner document. Clears any pending commands — they would
+  /// Replace the inner document. Clears any pending commands - they would
   /// reference now-invalid entities. Bumps the frame version.
   void setDocument(svg::SVGDocument document);
 
   /// Outcome of `setDocumentMaybeStructural`. `FullReplace` means the new
   /// doc differs structurally from the current one (or there was no
   /// current one) and every consumer of the old entity space must treat
-  /// their state as invalid — identical to `setDocument`'s contract.
+  /// their state as invalid - identical to `setDocument`'s contract.
   /// `Structural` means the new doc has the same XML shape and element
   /// ids, and the entity remap carried via the next `RenderRequest`
   /// lets downstream consumers (the compositor) preserve their caches.
@@ -69,7 +69,7 @@ public:
   /// Like `setDocument`, but builds a structural entity remap against
   /// the current document first. If the remap is non-empty (trees match
   /// by tag name + id at every step), the replacement is tagged as
-  /// `Structural` — the next `RenderRequest` carries the remap so the
+  /// `Structural` - the next `RenderRequest` carries the remap so the
   /// compositor can call `remapAfterStructuralReplace` instead of
   /// `resetAllLayers(documentReplaced=true)`, preserving cached layer
   /// bitmaps and segments across the swap. The current editor canvas
@@ -133,7 +133,7 @@ public:
   /// SVGDocument (e.g. `ReplaceDocumentCommand` on source-pane edits). The
   /// inner document's storage address is stable across a replacement (the
   /// optional lives inside this object), so pointer-identity is NOT a
-  /// reliable "is this the same document" check — consumers that cache
+  /// reliable "is this the same document" check - consumers that cache
   /// per-document state (like the compositor's `activeHints_` backing an
   /// entity space) need this counter to know when to tear that state down.
   ///
@@ -158,7 +158,7 @@ public:
   [[nodiscard]] bool loadFromString(std::string_view svgBytes);
 
   /// The diagnostic from the most recent failed `loadFromString` /
-  /// `ReplaceDocumentCommand`. Cleared on every successful parse — so
+  /// `ReplaceDocumentCommand`. Cleared on every successful parse - so
   /// `has_value()` is the live "is the source pane currently invalid?"
   /// signal.
   [[nodiscard]] const std::optional<ParseDiagnostic>& lastParseError() const {

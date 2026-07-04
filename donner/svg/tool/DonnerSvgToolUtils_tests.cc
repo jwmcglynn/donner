@@ -110,7 +110,7 @@ TEST(CompositeAABBRect, RectIsExactlyOneSubPixelWide) {
   constexpr int kCells = 10;
   SampledImageInfo info{kCells, kCells, 5.0, 5.0};
 
-  // AABB from (20, 20) to (70, 70) — should land on sub-pixel boundaries exactly.
+  // AABB from (20, 20) to (70, 70) - should land on sub-pixel boundaries exactly.
   // Sub-pixel 4 covers pixels [20, 25), sub-pixel 13 covers [65, 70).
   RendererBitmap bmp = MakeBlackBitmap(kImgSize, kImgSize);
   CompositeAABBRect(bmp, Box2d(Vector2d(20.0, 20.0), Vector2d(70.0, 70.0)), info);

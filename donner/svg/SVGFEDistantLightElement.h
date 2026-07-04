@@ -8,16 +8,16 @@ namespace donner::svg {
 /**
  * @page xml_feDistantLight "<feDistantLight>"
  *
- * `<feDistantLight>` is a parallel light source — think of the sun. All its light rays are
+ * `<feDistantLight>` is a parallel light source - think of the sun. All its light rays are
  * parallel, so every pixel on the surface gets hit at the same angle, and the light has no
  * "position" at all, only a direction. Because of this, moving the lit object around the canvas
- * doesn't change the shading at all — only rotating the light does.
+ * doesn't change the shading at all - only rotating the light does.
  *
  * The direction is defined by two angles: `azimuth` (horizontal rotation around the surface, where
  * 0° points along the +X axis / "east", 90° points along the +Y axis / "south") and `elevation`
  * (vertical angle above the XY plane, where 0° is a grazing ray parallel to the surface and 90° is
  * a ray coming straight down). `<feDistantLight>` must appear as a child of \ref
- * xml_feDiffuseLighting or \ref xml_feSpecularLighting — on its own it does nothing. It takes no
+ * xml_feDiffuseLighting or \ref xml_feSpecularLighting - on its own it does nothing. It takes no
  * standard filter primitive attributes (`in`, `result`, `x`, `y`, `width`, `height`); only
  * `azimuth` and `elevation`.
  *
@@ -156,7 +156,7 @@ namespace donner::svg {
  * | `elevation` | `0`     | Angle in degrees above the XY plane (0 = grazing the surface, 90 = straight down). |
  *
  * `<feDistantLight>` does not take the standard filter primitive attributes (`in`, `result`, `x`,
- * `y`, `width`, `height`) — it is purely a child element of a lighting primitive.
+ * `y`, `width`, `height`) - it is purely a child element of a lighting primitive.
  */
 
 /**

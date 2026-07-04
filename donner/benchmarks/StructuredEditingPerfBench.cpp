@@ -6,8 +6,8 @@
 /// ground every "needs measurement" row in the Performance table of
 /// `docs/design_docs/0049-structured_text_editing.md`.
 ///
-/// All benchmarks use **representative SVG inputs** — not contrived worst-cases
-/// — so the baseline reflects what editors actually encounter. Worst-case
+/// All benchmarks use **representative SVG inputs** - not contrived worst-cases
+/// - so the baseline reflects what editors actually encounter. Worst-case
 /// benchmarks (10k-element SVG, 500-command path) are included as separate
 /// entries so the gap is visible.
 ///
@@ -63,7 +63,7 @@ constexpr std::string_view kTrivialSvg =
   <text id="t1" x="10" y="180">Hello</text>
 </svg>)";
 
-/// A medium SVG with ~50 elements — typical of a simple diagram.
+/// A medium SVG with ~50 elements - typical of a simple diagram.
 std::string MakeMediumSvg() {
   std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600">)";
   svg += "\n";
@@ -76,7 +76,7 @@ std::string MakeMediumSvg() {
   return svg;
 }
 
-/// A large SVG with ~500 elements — stress test for the full-reparse baseline.
+/// A large SVG with ~500 elements - stress test for the full-reparse baseline.
 std::string MakeLargeSvg() {
   std::string svg = R"(<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="2000">)";
   svg += "\n";
@@ -88,7 +88,7 @@ std::string MakeLargeSvg() {
   return svg;
 }
 
-/// A path with ~100 commands — typical icon/logo path.
+/// A path with ~100 commands - typical icon/logo path.
 constexpr std::string_view kMediumPath =
     "M 10 80 C 40 10 65 10 95 80 S 150 150 180 80 "
     "C 210 10 235 10 265 80 S 320 150 350 80 "

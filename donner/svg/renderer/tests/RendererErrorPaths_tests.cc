@@ -173,7 +173,7 @@ TEST(RendererErrorPathsTest, GradientWithNoStops) {
 }
 
 TEST(RendererErrorPathsTest, SelfReferencingClipPath) {
-  // Clip path that references itself — should be handled gracefully.
+  // Clip path that references itself - should be handled gracefully.
   SVGDocument document = ParseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
       <defs>

@@ -129,7 +129,7 @@ struct ImageComparisonParams {
   /// is implementation-defined or UB, but we still want to verify rendering stability.
   bool renderOnly = false;
   /// Human-readable reason attached to Skip / RenderOnly / WithThreshold overrides.
-  /// Surfaced in test skip messages and failure output — prefer this over trailing
+  /// Surfaced in test skip messages and failure output - prefer this over trailing
   /// `// comments` so the reason is discoverable from test logs.
   std::string_view reason;
 
@@ -451,7 +451,7 @@ std::string TestNameFromFilename(const testing::TestParamInfo<ImageComparisonTes
 /**
  * @brief Asserts two live renderer bitmaps are pixel-for-pixel identical.
  *
- * Strict identity pixelmatch (threshold 0, AA included, 0 mismatches allowed) —
+ * Strict identity pixelmatch (threshold 0, AA included, 0 mismatches allowed) -
  * the renderer suite's shared bitmap-to-bitmap comparator (so tests don't roll a
  * private one; mirrors the editor's `CompareBitmapToBitmap`). On mismatch, adds a
  * gtest failure and writes `actual_/expected_/diff_<label>.png` to

@@ -793,7 +793,7 @@ TEST(SVGDocumentConcurrencyTests, ConcurrentDomStressHasDeterministicFinalState)
 // (a perfectly-normal API pattern: a detached element local going out of scope while the calling
 // thread holds a read guard), the destructor's release() path used to unconditionally acquire
 // `documentHandle_->write()`. In ConcurrentDom the writer drains all readers without supporting a
-// read→write upgrade, so it would wait on the calling thread's own held read — hanging forever.
+// read→write upgrade, so it would wait on the calling thread's own held read - hanging forever.
 // The fix bails when the thread holds read-but-not-write (the opportunistic detached-node Collect
 // happens on the next periodic Collect pass instead). If the deadlock regresses, this test hangs
 // the entire `donner_svg_concurrency_tests` target until its bazel timeout fires.

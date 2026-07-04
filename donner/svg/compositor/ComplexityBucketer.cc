@@ -36,7 +36,7 @@ void ComplexityBucketer::reconcile(Registry& registry) {
   std::reverse(drawOrder.begin(), drawOrder.end());
 
   if (drawOrder.empty()) {
-    // Empty document — drop any lingering hints and exit.
+    // Empty document - drop any lingering hints and exit.
     const uint32_t droppedCount = static_cast<uint32_t>(bucketHints_.size());
     bucketHints_.clear();
     stats_.bucketsDropped = droppedCount;

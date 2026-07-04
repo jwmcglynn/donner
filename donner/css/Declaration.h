@@ -81,7 +81,7 @@ struct Declaration {
    * splice into a `style=""` value can compute the trailing bound from the source text by
    * scanning forward from `sourceRange.end` to the `;`, closing brace, or end-of-input.
    *
-   * `sourceRange.start == sourceRange.end` means "no consumed value tokens" — either the
+   * `sourceRange.start == sourceRange.end` means "no consumed value tokens" - either the
    * parser failed partway, or the caller constructed the `Declaration` directly without
    * going through `DeclarationListParser`.
    */

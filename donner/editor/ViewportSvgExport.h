@@ -6,7 +6,7 @@
 /// Exports the document region currently visible in the editor render pane as a
 /// standalone, cropped SVG. The export is **vector-first**: the source SVG
 /// children are copied verbatim into a clipped `<g>`, never snapshotted as a
-/// raster `<image>`. The crop is derived entirely from \ref ViewportState — it
+/// raster `<image>`. The crop is derived entirely from \ref ViewportState - it
 /// is the single source of truth for the screen↔document mapping.
 ///
 /// Content export is vector-first as described above. When
@@ -68,7 +68,7 @@ struct ViewportExportOptions {
  *
  * Emits overlay primitives (selected path outlines, selection AABBs, the
  * oriented rotation box, resize handles, and the marquee rect) as SVG element
- * strings in **document space**, with NO wrapping `<g>` — the caller is
+ * strings in **document space**, with NO wrapping `<g>` - the caller is
  * responsible for the enclosing `<g id="donner-editor-overlay">`.
  *
  * Backend-neutral: this reads only the snapshot struct and `Path` geometry. It

@@ -11,7 +11,7 @@ namespace donner::svg {
  * @page xml_use "&lt;use&gt;"
  *
  * `<use>` instantiates another element at a specified position, cloning its rendered output.
- * It's the SVG equivalent of "put another copy of that shape over here" — commonly used for
+ * It's the SVG equivalent of "put another copy of that shape over here" - commonly used for
  * reusable icon libraries, tilesets, symbol sheets, and anywhere you'd otherwise copy-paste
  * the same shape multiple times. Define your artwork once (typically inside `<defs>` or a
  * `<symbol>`), then stamp it out wherever you need it with `<use href="#id" x="..." y="..." />`.
@@ -44,7 +44,7 @@ namespace donner::svg {
  *
  * ## Example 2: icon library via `<symbol>`
  *
- * A `<symbol>` is a template that isn't rendered on its own — it's only visible through a
+ * A `<symbol>` is a template that isn't rendered on its own - it's only visible through a
  * `<use>` reference. Symbols can declare their own `viewBox`, which makes them resolution
  * independent: the `<use>` element's `width` and `height` decide how big the instance is, and
  * the symbol's `viewBox` is mapped into that box:
@@ -91,9 +91,9 @@ namespace donner::svg {
  *   `Mid` = center, `Max` = right); the `Y*` part controls vertical alignment (`Min` = top,
  *   `Mid` = middle, `Max` = bottom).
  * - **`<meetOrSlice>`** picks the fitting mode:
- *   - **`meet`** (the default) — scale the content uniformly so it fits *entirely* inside the
+ *   - **`meet`** (the default) - scale the content uniformly so it fits *entirely* inside the
  *     destination. If aspect ratios differ, there's empty space on one axis. Think "fit".
- *   - **`slice`** — scale the content uniformly so it *entirely covers* the destination.
+ *   - **`slice`** - scale the content uniformly so it *entirely covers* the destination.
  *     If aspect ratios differ, the content is cropped on one axis. Think "fill".
  * - **`none`** as the alignment value disables aspect-ratio preservation entirely: the content
  *   is stretched non-uniformly to exactly fill the destination rectangle. `<meetOrSlice>` is

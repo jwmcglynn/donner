@@ -64,14 +64,14 @@ struct EncodedPath {
 
   std::vector<Curve> curves;     ///< Horizontal (Y-monotonic) curves, sorted by band.
   std::vector<Band> bands;       ///< Horizontal band metadata (Y-strips), for the horizontal ray.
-  std::vector<Vertex> vertices;  ///< Per-band bounding quad vertices (6 per band) — legacy
+  std::vector<Vertex> vertices;  ///< Per-band bounding quad vertices (6 per band) - legacy
                                  ///< 4-sample path (gradient/mask alpha-coverage shaders).
   Box2d pathBounds;              ///< Axis-aligned bounding box of the path.
 
   /// Single bounding quad (6 verts) over the whole path, for the analytic dual-ray fill
   /// shader (0041 §8.1). One quad per path means each pixel is rasterized by exactly one
   /// fragment, so folded sampleCount=1 coverage composes correctly (no band-seam
-  /// double-count — Blocker B). `bandIndex` is unused (the fragment looks up both its
+  /// double-count - Blocker B). `bandIndex` is unused (the fragment looks up both its
   /// H- and V-band from `sample_pos` via the band grids).
   std::vector<Vertex> quadVertices;
 
@@ -124,7 +124,7 @@ public:
    * Encode a path for GPU rendering.
    *
    * @param path The path to encode. Will be preprocessed (cubic→quadratic, monotonic split).
-   * @param fillRule The fill rule (non-zero or even-odd) — stored for the fragment shader.
+   * @param fillRule The fill rule (non-zero or even-odd) - stored for the fragment shader.
    * @param tolerance Quadratic approximation tolerance (default 0.1, suitable for text-size).
    * @return Encoded path data ready for GPU upload, or empty if the path is degenerate.
    */

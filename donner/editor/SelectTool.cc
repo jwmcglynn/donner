@@ -101,7 +101,7 @@ std::optional<Transform2d> RotateTransform(const Vector2d& center, double startA
 
 /// Elements that don't contribute geometry to the rendered tree.
 /// `<defs>` / `<title>` / `<desc>` / `<metadata>` / `<style>` / `<script>`
-/// live under an SVG document but paint nothing — they must be excluded
+/// live under an SVG document but paint nothing - they must be excluded
 /// when detecting "wrapping single-g containers" so the presence of a
 /// `<defs>` block doesn't prevent a top-level `<g>` from being recognised
 /// as the sole render child.
@@ -111,9 +111,9 @@ bool IsNonRenderChild(const svg::SVGElement& element) {
          tag == RcString("metadata") || tag == RcString("style") || tag == RcString("script");
 }
 
-/// Walk down from the document root through "wrapping" layers — each
+/// Walk down from the document root through "wrapping" layers - each
 /// level where the element has exactly one render-contributing child
-/// that's a `<g>` — and return the deepest such container. The children
+/// that's a `<g>` - and return the deepest such container. The children
 /// of this container are the document's **top-level objects**: the
 /// logical units the editor treats as grouped for click/drag selection.
 ///
@@ -124,7 +124,7 @@ bool IsNonRenderChild(const svg::SVGElement& element) {
 /// would select the entire document. Descending through them to reach
 /// the *real* top-level grouping (e.g. `<g id="Donner">`,
 /// `<g id="Lightning_glow_dark">`, `<g id="Big_lightning_glow">` on the
-/// splash) matches what Figma / Illustrator / Inkscape do — and what a
+/// splash) matches what Figma / Illustrator / Inkscape do - and what a
 /// user expects when they click on a composed object.
 ///
 /// Stop conditions, each "top-level object(s) live here" signal:
@@ -133,7 +133,7 @@ bool IsNonRenderChild(const svg::SVGElement& element) {
 ///   * the lone render child isn't a `<g>` (a terminal geometry element
 ///     like `<path>` is itself a top-level object);
 ///   * the lone child carries `filter` / `mask` / `clip-path` / `id`, or
-///     any attribute the editor treats as semantic — those are the
+///     any attribute the editor treats as semantic - those are the
 ///     "this wrapper IS a logical object" markers.
 svg::SVGElement DeepestWrappingContainer(svg::SVGElement root) {
   svg::SVGElement current = root;
@@ -155,7 +155,7 @@ svg::SVGElement DeepestWrappingContainer(svg::SVGElement root) {
     }
 
     // Stop at non-`<g>` children (terminal geometry) and at `<g>`s that
-    // carry semantic attributes — a `<g id="Foo">` or `<g filter="…">`
+    // carry semantic attributes - a `<g id="Foo">` or `<g filter="…">`
     // is itself a top-level object, not a wrapper.
     const RcString tag = soleRenderChild->tagName().name;
     if (tag != RcString("g")) {
@@ -175,7 +175,7 @@ svg::SVGElement DeepestWrappingContainer(svg::SVGElement root) {
 }
 
 /// True when @p element carries an inline `filter` / `mask` / `clip-path`
-/// attribute — the markers the editor treats as "this group is a
+/// attribute - the markers the editor treats as "this group is a
 /// compositing-aware object, not a plain transparent wrapper".
 bool HasCompositingAttribute(const svg::SVGElement& element) {
   return element.hasAttribute(xml::XMLQualifiedNameRef("filter")) ||
@@ -252,7 +252,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
       });
 
   // Reset any in-progress drag/marquee state before starting the new one
-  // — mirrors `onMouseDown`'s prologue. A previous mouse-down without
+  // - mirrors `onMouseDown`'s prologue. A previous mouse-down without
   // a matching mouse-up means the user dragged off the window or a
   // tool switch happened mid-drag.
   dragState_.reset();
@@ -313,7 +313,7 @@ bool SelectTool::clickHitsImmediatelySelectableElement(EditorApp& editor,
 
 void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
                              MouseModifiers modifiers) {
-  // Reset any in-progress drag/marquee — a previous mouse-down without
+  // Reset any in-progress drag/marquee - a previous mouse-down without
   // a matching mouse-up means the user dragged off the window or a
   // tool switch happened mid-drag. Either way, abandon the old gesture
   // silently.
@@ -385,13 +385,13 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // Snapshot-safe fallback for clicks inside the selected element's
   // bbox that miss its geometric path: clicking on the transparent
   // interior of a `<g filter>`, between strokes, etc. Only fires when
-  // hitTest returned null AND not shift — when hitTest DOES return a
+  // hitTest returned null AND not shift - when hitTest DOES return a
   // hit, the click might be on a different element (deselect /
   // re-select); we never want to hijack that.
   //
   // The race-safe variant (`tryStartRedragOnSelected`) is exposed
   // publicly so EditorShell can run it before `!isBusy()` for the
-  // mid-render re-drag case — but on this code path the caller has
+  // mid-render re-drag case - but on this code path the caller has
   // already gated on `!isBusy()`, so a live `SnapshotSelectionWorldBounds`
   // call is race-free.
   if (!hit.has_value()) {
@@ -423,7 +423,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // Shift+click on an element → toggle membership in the current
   // selection without starting a drag. The user is curating a
   // multi-element set, not moving anything. Leaf-accuracy matters here
-  // so the user can add/remove individual paths from a set — no
+  // so the user can add/remove individual paths from a set - no
   // compositing-group elevation.
   if (modifiers.shift) {
     // Locked elements (or elements inside a locked group) can't be added to the
@@ -438,7 +438,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
 
   // Plain click on an element. Two-step elevation:
   //
-  //   1. Find the "top-level object" — the ancestor that sits directly
+  //   1. Find the "top-level object" - the ancestor that sits directly
   //      under the deepest `<g>`-only wrapping container (see
   //      `DeepestWrappingContainer`). This skips past transparent
   //      `<g class="cls-94">`-style outer wrappers that exist only to
@@ -452,7 +452,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   //      breaking the composition (the filter output depends on the
   //      whole subtree being rendered as one). Plain `<g>`s (no
   //      compositing attribute) leave the selection on the clicked
-  //      leaf — a single Donner letter, a single cloud path, etc. —
+  //      leaf - a single Donner letter, a single cloud path, etc. -
   //      matching what a vector editor's direct-select tool does.
   //
   // Auto-expansion to sibling composite layers was explicitly vetoed
@@ -461,7 +461,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   // guess.
   //
   // TODO: double-click "focus into" to descend one level deeper in a
-  // filter-group — select the clicked path instead of the whole group.
+  // filter-group - select the clicked path instead of the whole group.
   // Requires double-click detection in the pointer-event protocol.
   svg::SVGDocument& doc = editor.document().document();
   const svg::SVGElement element = doc.withReadAccess([&](svg::DocumentReadAccess&) {
@@ -480,7 +480,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
   }
 
   // If the element is already in the current multi-selection, preserve
-  // the selection and drag ALL selected elements in lockstep — classic
+  // the selection and drag ALL selected elements in lockstep - classic
   // design-tool behavior (grab any item in the group, the group moves).
   // Otherwise replace the selection with just this element and drag it
   // alone.
@@ -520,7 +520,7 @@ void SelectTool::requestLockedRejectionFlash(const svg::SVGElement& element) {
   // Flash the entire locked layer, not just the clicked leaf: clicking a
   // `<rect>` inside a locked `<g>` should outline (and highlight in the Layers
   // panel) the whole `<g>` that actually carries the lock. Resolve to the
-  // locked ancestor; fall back to the clicked element if — somehow — it isn't
+  // locked ancestor; fall back to the clicked element if - somehow - it isn't
   // locked (both call sites gate on `IsLocked` first, so this is belt-and-
   // suspenders).
   lockedFlashElement_ = LockedAncestor(element).value_or(element);
@@ -614,7 +614,7 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   // whether the compositor preview path is active. The composited path
   // optimizes the *visual* cost (the compositor detects a pure-translation
   // delta on a promoted layer and reuses the cached bitmap via its
-  // internal composition transform instead of re-rasterizing — see
+  // internal composition transform instead of re-rasterizing - see
   // `CompositorController` fast-path), but the DOM writes happen either
   // way so the canvas view and the backing document never disagree. That
   // disagreement was the source of the drag-release "pop back" class of
@@ -664,7 +664,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
 
     if (additive) {
       // Shift+marquee appends to the existing selection. Use
-      // `addToSelection` so duplicates collapse silently — a marquee
+      // `addToSelection` so duplicates collapse silently - a marquee
       // that re-grabs an already-selected element shouldn't toggle
       // it off.
       for (const auto& element : hitsAsElements) {
@@ -681,7 +681,7 @@ void SelectTool::onMouseUp(EditorApp& editor, const Vector2d& /*documentPoint*/)
   }
 
   // Record a single undo entry for the whole drag, but only if the
-  // element actually moved — a click that never saw a mouse-move event
+  // element actually moved - a click that never saw a mouse-move event
   // is a no-op for undo purposes. `onMouseMove` has already been
   // applying `SetTransformCommand` every frame, so the DOM is already
   // at the final position; we only need to record the undo snapshot

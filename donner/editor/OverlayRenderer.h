@@ -4,7 +4,7 @@
 /// `OverlayRenderer` draws editor chrome (currently selection path outlines)
 /// directly into the renderer's existing framebuffer using
 /// the canvas primitives `RendererInterface` already exposes. It is **not**
-/// a separate compositing layer and **not** a fabricated SVG subtree —
+/// a separate compositing layer and **not** a fabricated SVG subtree -
 /// chrome and document share one render target so there is no subpixel
 /// drift between them.
 ///
@@ -82,7 +82,7 @@ enum class SelectionChromeDetail {
 ///
 /// Captured once via `OverlayRenderer::captureChromeSnapshot` while the
 /// registry is safe to read (worker is idle), then handed to
-/// `OverlayRenderer::drawChromeFromSnapshot` which is race-free —
+/// `OverlayRenderer::drawChromeFromSnapshot` which is race-free -
 /// it touches only the snapshot, never the registry.
 ///
 /// Design doc 0033 §M7. Lets the chrome rasterize run while the worker
@@ -129,7 +129,7 @@ struct SelectionChromeSnapshot {
   /// (locked) element's outline is stroked in red with alpha scaled by `intensity` (1 → 0 as the
   /// flash fades). Captured from `SelectTool::lockedRejectionFlash()`.
   struct LockedFlash {
-    /// Document-space path of the rejected (locked) element, sampled at capture time — same
+    /// Document-space path of the rejected (locked) element, sampled at capture time - same
     /// document-space convention as `PathItem::pathDoc`.
     Path pathDoc;
     /// Fade intensity in (0, 1]; scales the red stroke's alpha.
@@ -141,7 +141,7 @@ struct SelectionChromeSnapshot {
   /// Live document-geometry preview of the path the Pen tool is actively
   /// authoring or point-editing. Drawn beneath the selection chrome with the
   /// path's own resolved solid paint, so the presented pixels for the edited
-  /// path come from the same post-flush DOM capture as the chrome — they never
+  /// path come from the same post-flush DOM capture as the chrome - they never
   /// wait for the async raster of the new geometry. While this is present the
   /// presenter suppresses the path's stale composited layer tile
   /// (`ShouldPresentCompositedTile`), otherwise the old geometry would show
@@ -154,7 +154,7 @@ struct SelectionChromeSnapshot {
   /// cached tiles, which matches pen authoring (new paths are appended last in
   /// paint order).
   struct LivePathPreview {
-    /// Entity of the previewed path — the presenter suppresses this entity's
+    /// Entity of the previewed path - the presenter suppresses this entity's
     /// composited layer tile while the preview is drawn.
     Entity entity = entt::null;
     /// Document-space path geometry sampled at capture time.
@@ -227,7 +227,7 @@ public:
   static void drawChrome(svg::RendererInterface& renderer, const EditorApp& editor);
 
   /// Overload that takes a selection snapshot directly. Single-element
-  /// back-compat shim — kept so worker-thread callers and existing
+  /// back-compat shim - kept so worker-thread callers and existing
   /// tests don't have to switch to spans. Identity `canvasFromDoc`.
   static void drawChrome(svg::RendererInterface& renderer,
                          const std::optional<svg::SVGElement>& selection);
@@ -249,7 +249,7 @@ public:
   ///
   /// AABBs are computed inline from `selection` (via
   /// `SnapshotSelectionWorldBounds`) at overlay-draw time so they
-  /// always match the current DOM snapshot — same source of truth as
+  /// always match the current DOM snapshot - same source of truth as
   /// the per-element path outlines. This avoids the frame-lag-shear
   /// that happened when AABBs came from a separately-promoted cache
   /// while the path outlines came from the live DOM.
@@ -282,7 +282,7 @@ public:
   /// Build a `SelectionChromeSnapshot` for the given selection +
   /// marquee + canvas transform. Reads `computedSpline`,
   /// `elementFromWorld`, and `SnapshotSelectionWorldBounds` for every
-  /// selected element — MUST be called when the worker is idle or
+  /// selected element - MUST be called when the worker is idle or
   /// otherwise not mutating these components on the same registry.
   /// When `cullRectDoc` is present, path outlines, AABBs, and handles
   /// fully outside that document-space rect are skipped before draw.
@@ -318,7 +318,7 @@ public:
   ///
   /// Produces byte-identical pixels to
   /// `drawChromeWithTransform(selection, marqueeRectDoc, canvasFromDoc)`
-  /// given the same input snapshot — pinned by
+  /// given the same input snapshot - pinned by
   /// `OverlayRendererTest.SnapshotProducesByteIdenticalPixels`.
   static void drawChromeFromSnapshot(svg::RendererInterface& renderer,
                                      const SelectionChromeSnapshot& snapshot);

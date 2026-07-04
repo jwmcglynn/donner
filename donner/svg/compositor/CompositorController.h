@@ -49,7 +49,7 @@ enum class StaticSpanMode : uint8_t {
   Immediate,
 };
 
-/// A single bitmap cache unit the compositor exposes for GPU upload —
+/// A single bitmap cache unit the compositor exposes for GPU upload -
 /// either a static segment (non-promoted content between promoted
 /// layers) or a promoted layer's own rasterization.
 ///
@@ -61,7 +61,7 @@ struct CompositorTile {
   /// Stable id for this tile's slot in the compositor's cache
   /// topology. Segments are (0..N), layers are (1'<<31) | entityId so
   /// the two namespaces don't collide. Editor uses the tileId as the
-  /// key in its GL texture cache — so as long as the compositor reuses
+  /// key in its GL texture cache - so as long as the compositor reuses
   /// the same tileId for a preserved bitmap, the editor keeps its
   /// texture.
   uint64_t tileId = 0;
@@ -70,8 +70,8 @@ struct CompositorTile {
   /// content is re-rasterized. Editor uploads to GL only when the
   /// generation differs from the one it last uploaded for this tileId.
   /// On the first click-to-drag after page load, at most 3 tile
-  /// generations advance — the split segment's two halves and the new
-  /// drag-target layer — because every other segment / filter layer
+  /// generations advance - the split segment's two halves and the new
+  /// drag-target layer - because every other segment / filter layer
   /// keeps its identity across the layer-set change.
   uint64_t generation = 0;
 
@@ -118,7 +118,7 @@ struct CompositorTile {
   bool immediate = false;
 };
 
-/// Design doc 0033 §M4 — cancellation handle for `CompositorController::
+/// Design doc 0033 §M4 - cancellation handle for `CompositorController::
 /// renderFrame`. The token wraps a single `std::atomic<bool>`; the
 /// compositor's per-layer / per-segment rasterize loops poll
 /// `isCancelled()` at coarse safe points (between `rasterizeLayer` /
@@ -150,10 +150,10 @@ private:
  * Walk the XML trees of @p oldDoc and @p newDoc in lockstep and build a
  * remap from old-registry entity ids → new-registry entity ids, suitable
  * for `CompositorController::remapAfterStructuralReplace`. Returns an
- * empty map if the two trees are not structurally equivalent — defined
+ * empty map if the two trees are not structurally equivalent - defined
  * as: same preorder walk, same element tag name at every step, and same
  * `id` attribute at every step (or neither has one). Attribute values
- * other than `id` are allowed to differ — the drag-end writeback case
+ * other than `id` are allowed to differ - the drag-end writeback case
  * changes `transform` values, not tree shape.
  *
  * The returned map covers every element visited in the walk. The caller
@@ -175,13 +175,13 @@ inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
  * Runtime feature gates for `CompositorController`.
  *
  * Each field toggles an independent auto-promotion source. The primary
- * kill-switch — "don't use the compositor at all" — is a linkage / construction
+ * kill-switch - "don't use the compositor at all" - is a linkage / construction
  * decision: a consumer that doesn't want compositing simply doesn't instantiate
  * a `CompositorController`. These gates only affect what *hint sources* run
  * inside a live compositor.
  *
  * Default-constructed config has all features enabled. Mandatory hints
- * (opacity < 1, filter, mask, blend-mode, isolation) are always active — they
+ * (opacity < 1, filter, mask, blend-mode, isolation) are always active - they
  * implement SVG semantics, not an optional optimization, and cannot be
  * disabled through config.
  *
@@ -205,7 +205,7 @@ struct CompositorConfig {
 
   /// When true, `renderFrame` additionally runs a full-document reference
   /// render after the composited path completes and asserts pixel identity
-  /// via `UTILS_RELEASE_ASSERT`. Doubles per-frame cost — intended for CI
+  /// via `UTILS_RELEASE_ASSERT`. Doubles per-frame cost - intended for CI
   /// compositor test targets and `--config=compositor-debug` local runs, not
   /// for interactive editor use. See 0025 § Dual-path debug assertion.
   ///
@@ -217,7 +217,7 @@ struct CompositorConfig {
   /// `RendererDriver::computeEntityRangeBounds` and sizes each segment's
   /// offscreen bitmap to the tight canvas-space rectangle its contents
   /// paint into (with a 1-px AA padding + 75% coverage cutoff). When
-  /// false, every segment rasterizes full-canvas — slower and more
+  /// false, every segment rasterizes full-canvas - slower and more
   /// memory, but bypasses every code path added in design doc 0027,
   /// which is the bisection fast-path for any visual regression
   /// suspected to originate in tight-bounded rasterization.
@@ -249,7 +249,7 @@ struct CompositorConfig {
  * truth for entity position: during a drag, callers mutate the entity's transform directly
  * (`element.setTransform(...)`) and the compositor's fast path diffs the new absolute transform
  * against the cached bitmap's rasterize-time transform. When the delta is a pure translation, the
- * bitmap is reused and only the internal compose offset updates — no re-rasterization.
+ * bitmap is reused and only the internal compose offset updates - no re-rasterization.
  *
  * Usage:
  * ```cpp
@@ -258,7 +258,7 @@ struct CompositorConfig {
  * // Promote drag target
  * compositor.promoteEntity(dragTarget);
  *
- * // During drag — mutate the DOM; the compositor tracks the delta internally.
+ * // During drag - mutate the DOM; the compositor tracks the delta internally.
  * dragElement.setTransform(Transform2d::Translate(dx, dy));
  * compositor.renderFrame(viewport);
  *
@@ -415,7 +415,7 @@ public:
    */
   void renderFrame(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
-  /// Design doc 0033 §M4 — cancellable variant. The @p token is polled
+  /// Design doc 0033 §M4 - cancellable variant. The @p token is polled
   /// at coarse safe points (between `rasterizeLayer` / segment
   /// rasterize calls) and `renderFrame` returns early when set. The
   /// compositor's internal dirty flags are left intact for the work
@@ -545,7 +545,7 @@ public:
   /// inspector panel. Safe to call from the renderer worker thread when
   /// the compositor isn't mid-render (the editor calls it at the same
   /// Done-transition point as `fastPathCountersForTesting`). Allocates a
-  /// `vector` and one short string per layer — fine for diagnostics, not
+  /// `vector` and one short string per layer - fine for diagnostics, not
   /// hot-path-grade.
   [[nodiscard]] std::vector<LayerInspectorRow> snapshotLayerInspectorRows(
       SnapshotThumbnails thumbnails = SnapshotThumbnails::Include) const;
@@ -610,7 +610,7 @@ public:
     double estimatedRedrawCost = 0.0;
     /// Relative fixed/cache memory cost avoided by immediate presentation.
     double estimatedCacheOverheadCost = 0.0;
-    /// Raster time from the most recent span render. Telemetry only — recorded
+    /// Raster time from the most recent span render. Telemetry only - recorded
     /// so the geometry cost model behind `estimatedRasterizeMs` can be
     /// recalibrated against real timings. NOT used in the immediate decision.
     double measuredRasterizeMs = 0.0;
@@ -646,7 +646,7 @@ public:
   }
 
   /// One row of the unified "everything composited together" view that
-  /// the layer-inspector panel renders in paint order — design doc 0033
+  /// the layer-inspector panel renders in paint order - design doc 0033
   /// §M1++. Mirrors what `composeLayers` actually draws so the operator
   /// sees the same sequence of blits the renderer performs.
   ///
@@ -771,7 +771,7 @@ public:
   ///     Drops here explain "the view got pixelated after drag" type
   ///     symptoms.
   /// Reason `promoteEntity` returned false on its most recent call.
-  /// Sticky — clears only on a subsequent successful `promoteEntity`.
+  /// Sticky - clears only on a subsequent successful `promoteEntity`.
   /// Surfaced through `StateSnapshot::lastPromoteRefusalReason` so the
   /// editor's diagnostic panel can show "the compositor refused this
   /// promote because <reason>" without the operator having to read
@@ -793,11 +793,11 @@ public:
   struct StateSnapshot {
     /// Editor-driven explicit promotions (drag target + selection
     /// prewarm). Mandatory-detector hints don't count toward this
-    /// number — they live in a separate map.
+    /// number - they live in a separate map.
     uint32_t activeHintsCount = 0;
     /// Total layers currently in `layers_` (mandatory + explicit).
     uint32_t layerCount = 0;
-    /// `hasSplitStaticLayers()` — the editor's drag-overlay fast
+    /// `hasSplitStaticLayers()` - the editor's drag-overlay fast
     /// path is active when this is true.
     bool splitPathActive = false;
     /// Entity the compositor cached the bg/fg split for. `entt::null`
@@ -836,7 +836,7 @@ public:
    *    cached `Registry*` now aims at a live object that knows nothing
    *    about the old entity IDs, so calling `registry.valid(old_entity)`
    *    from the dtor SIGSEGVs inside entt's sparse-set lookup. In this
-   *    mode the hints are `release()`-defused before clearing — the old
+   *    mode the hints are `release()`-defused before clearing - the old
    *    `CompositorHintComponent`s went down with the old registry anyway.
    *
    * After this call, `layerCount()` is 0 and all cached bitmaps are
@@ -864,7 +864,7 @@ public:
    *   detectors rebuild against the new registry so their hint set
    *   doesn't need remap entries.
    * @return true on success. On false, the compositor is in an
-   *   indeterminate state — the caller MUST follow up with
+   *   indeterminate state - the caller MUST follow up with
    *   `resetAllLayers(documentReplaced=true)` to recover.
    */
   [[nodiscard]] bool remapAfterStructuralReplace(const std::unordered_map<Entity, Entity>& remap);
@@ -878,7 +878,7 @@ public:
   ///
   /// Intended as a bisection knob for the editor: if a visual
   /// regression seems to originate in 0027-tight_bounded_segments, flip
-  /// the toggle and watch whether it disappears. Not a hot path —
+  /// the toggle and watch whether it disappears. Not a hot path -
   /// re-rasterizing every segment on the next frame costs one full
   /// render's worth of work.
   void setTightBoundedSegmentsEnabled(bool enabled);
@@ -891,7 +891,7 @@ public:
   /// the split-static-layers cache (`bg`/`drag`/`fg` triple) is populated.
   /// The editor's drag overlay reads those bitmaps directly via GL, so the
   /// per-frame `drawImage` calls into the main renderer are wasted work
-  /// — on a 892×512 Skia backend with a few filter layers the skip saves
+  /// - on a 892×512 Skia backend with a few filter layers the skip saves
   /// ~100 ms per drag frame. The flat snapshot the editor uploads stays
   /// stale during drag but is only drawn after drag ends, by which point
   /// the caller must disable the skip for a settle render that refreshes it.
@@ -900,7 +900,7 @@ public:
   /// Enumerate every cacheable unit (static segments + promoted layer
   /// bitmaps) interleaved in paint order. Each tile carries a
   /// `generation` counter that advances only when the tile's pixel
-  /// content was actually re-rasterized — so the editor can gate its
+  /// content was actually re-rasterized - so the editor can gate its
   /// GL texture uploads to the minimum set that actually changed this
   /// frame. On a click-to-drag, the user should observe at most 3
   /// tiles advance: the two halves of the split segment and the new
@@ -909,7 +909,7 @@ public:
   [[nodiscard]] std::vector<CompositorTile> snapshotTilesForUpload(
       CompositorTileBitmapPayload payload = CompositorTileBitmapPayload::All) const;
 
-  /// Read-only accessor for the layer bound to @p entity. Test-only —
+  /// Read-only accessor for the layer bound to @p entity. Test-only -
   /// lets regression tests inspect `canvasFromBitmap` /
   /// `bitmapEntityFromWorldTransform` after a drag frame to verify the
   /// translation-only fast path engaged (bitmap stamp unchanged,
@@ -935,7 +935,7 @@ private:
   /// set. Each segment lives between two consecutive promoted layers in
   /// paint-order (plus the pre-first and post-last slots) and is rendered
   /// with all promoted layers hidden + out-of-slot entities hidden. A
-  /// mutation inside a segment only re-rasterizes that one segment —
+  /// mutation inside a segment only re-rasterizes that one segment -
   /// every other segment (and every promoted layer bitmap) stays cached.
   void rasterizeDirtyStaticSegments(const RenderViewport& viewport,
                                     const Transform2d& surfaceFromCanvas);
@@ -1020,13 +1020,13 @@ private:
   /// all defer to it after running the resolver.
   void reconcileLayers(Registry& registry);
 
-  /// Design doc 0033 §M9 — age `pendingDemotions_` by one frame and
+  /// Design doc 0033 §M9 - age `pendingDemotions_` by one frame and
   /// flush any entries that hit zero. Called once per `renderFrame`
   /// before the dirty-flag snapshot so an expired demotion's
   /// `resyncSegmentsToLayerSet` runs inside the normal render's
   /// resolve+reconcile pass (one batched cost for any number of
   /// expirations in the same frame). The pending entity stays in
-  /// `activeHints_` and `layers_` for the whole window — a
+  /// `activeHints_` and `layers_` for the whole window - a
   /// re-`promoteEntity` for the same entity erases it from
   /// `pendingDemotions_` and reuses the cached bitmap.
   void processPendingDemotions(Registry& registry);
@@ -1057,8 +1057,8 @@ private:
   /// world-space translation. Descendants' local transforms are unchanged, so
   /// their world transforms shift by the same delta. Pre-multiply every
   /// descendant RIC's `worldFromEntityTransform` by @p worldFromPreviousWorld
-  /// — the per-frame world-from-world delta that maps a point at its previous
-  /// frame's world position to its current world position — so subsequent
+  /// - the per-frame world-from-world delta that maps a point at its previous
+  /// frame's world position to its current world position - so subsequent
   /// reads (e.g. a forced re-rasterize later in the session, or the next
   /// frame's fast-path delta computation against a descendant-rooted layer)
   /// see up-to-date world positions.
@@ -1078,7 +1078,7 @@ private:
   std::unordered_map<Entity, ScopedCompositorHint> activeHints_;
   std::vector<CompositorLayer> layers_;
 
-  /// Design doc 0033 §M9 — layer-set hysteresis. Entity → frames
+  /// Design doc 0033 §M9 - layer-set hysteresis. Entity → frames
   /// remaining before the demote actually fires. `demoteEntity` adds
   /// an entry here instead of running the resolver / reconcileLayers
   /// immediately; the layer + hint stay in `layers_` /
@@ -1092,7 +1092,7 @@ private:
 
 public:
   /// Frames the demotion waits before actually firing. ~0.5s at 60Hz
-  /// — long enough to absorb the typical "click-deselect-click"
+  /// - long enough to absorb the typical "click-deselect-click"
   /// rhythm (a few hundred ms), short enough that an actual
   /// commit-to-demote stays inside one human reaction time. Public
   /// so tests can drive `renderFrame` exactly the right number of
@@ -1108,7 +1108,7 @@ public:
   void flushPendingDemotionsForTesting();
 
 private:
-  /// Cached static segments — N+1 bitmaps, one per paint-order gap between
+  /// Cached static segments - N+1 bitmaps, one per paint-order gap between
   /// promoted layers, plus the pre-first and post-last slots. Together
   /// with `layers_` (interleaved) this reproduces the full document in
   /// correct paint order without ever baking promoted content into the
@@ -1130,7 +1130,7 @@ private:
   /// untouched.
   std::vector<uint64_t> staticSegmentGeneration_;
   /// Per-segment wall-clock duration (ms) of the most recent rasterize,
-  /// parallel to `staticSegments_`. Diagnostic-only — surfaced via
+  /// parallel to `staticSegments_`. Diagnostic-only - surfaced via
   /// `snapshotSegmentInspectorRows` to the layer-inspector panel (design
   /// doc 0033 M1+). Zero for slots that have never rasterized in the
   /// current session.
@@ -1143,7 +1143,7 @@ private:
   /// `staticSegments_` after the first segment raster pass.
   std::vector<StaticSpanPlan> staticSpanPlans_;
   /// Process-monotonic counter that seeds the `generation` of any freshly
-  /// rasterized tile — both static segments (`staticSegmentGeneration_[i]`)
+  /// rasterized tile - both static segments (`staticSegmentGeneration_[i]`)
   /// and promoted layers (`CompositorLayer::setGeneration`). Survives
   /// layer-set shuffles AND `resetAllLayers` document replaces, so a tile id
   /// reused across a document swap never reuses a previously-published
@@ -1154,7 +1154,7 @@ private:
   /// Raster work charged to the current/most recent render frame.
   RenderFrameStats lastRenderFrameStats_;
   /// Boundary identity for each segment in `staticSegments_`. Segment
-  /// `i`'s identity is `(left, right)` — the entity ids of the promoted
+  /// `i`'s identity is `(left, right)` - the entity ids of the promoted
   /// layers immediately to its left and right in paint order.
   /// `entt::null` in a slot means "document start" (left of `segment[0]`)
   /// or "document end" (right of `segment[N]`). When the layer set
@@ -1188,12 +1188,12 @@ private:
   /// the promoted set changes segment boundaries, so segments invalidate.
   size_t staticSegmentsLayerCount_ = 0;
 
-  /// Entity tracking the active editor-promoted drag target — used by
+  /// Entity tracking the active editor-promoted drag target - used by
   /// `snapshotTilesForUpload` to mark the corresponding `CompositorTile`
   /// with `isDragTarget = true`. `entt::null` when no editor-promoted
   /// drag target is active (selection-only state, no editor selection,
   /// or multiple active hints). Post-§M2C there are no pre-flattened
-  /// bg/fg bitmaps gated on this — the field only drives the tile-list
+  /// bg/fg bitmaps gated on this - the field only drives the tile-list
   /// drag-target flag.
   Entity splitStaticLayersEntity_ = entt::null;
   /// Canvas size bg/fg were composited at. Mirrors `staticSegmentsCanvas_`
@@ -1209,12 +1209,12 @@ private:
   bool offscreenSupportKnown_ = false;
   bool offscreenSupported_ = false;
   /// When true, `composeLayers` skips the main-renderer draw calls while
-  /// the split bg/drag/fg cache is populated — the editor reads those
+  /// the split bg/drag/fg cache is populated - the editor reads those
   /// bitmaps directly, so the main-renderer output would go unconsumed.
   /// See `setSkipMainComposeDuringSplit`.
   bool skipMainComposeDuringSplit_ = false;
 
-  /// Design doc 0033 §M4 — active cancellation token for the current
+  /// Design doc 0033 §M4 - active cancellation token for the current
   /// cancellable `renderFrame` call. Empty outside the cancellable
   /// render window; `isCancelled()` returns false in that state.
   std::optional<std::reference_wrapper<const CancellationToken>> cancelToken_;
@@ -1240,7 +1240,7 @@ private:
 
   FastPathCounters fastPathCounters_;
 
-  /// Most-recent promote refusal — sticky on failure, cleared on next
+  /// Most-recent promote refusal - sticky on failure, cleared on next
   /// successful `promoteEntity`. Diagnostic only.
   PromoteRefusalReason lastPromoteRefusalReason_ = PromoteRefusalReason::None;
   Entity lastPromoteRefusalEntity_ = entt::null;

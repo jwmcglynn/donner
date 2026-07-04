@@ -50,7 +50,7 @@ struct ApplyPatchesResult {
  * `result.rejectedBounds`). The remaining patches are applied in place.
  *
  * @param source The mutable source text. Modified in place.
- * @param patches The patches to apply. Order does not matter — the function
+ * @param patches The patches to apply. Order does not matter - the function
  *   sorts internally.
  * @return Summary of how many patches were applied vs. rejected.
  */

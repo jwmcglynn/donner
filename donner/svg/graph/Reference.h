@@ -104,7 +104,7 @@ struct Reference {
 
   /**
    * Resolves a fragment identifier against the given registry. Unlike \ref resolve(), this
-   * does not require the href to start with `#` — it uses the \ref fragment() component directly.
+   * does not require the href to start with `#` - it uses the \ref fragment() component directly.
    * This is used for resolving external references after loading the external document.
    *
    * @param registry The Registry to resolve the fragment against.

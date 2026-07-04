@@ -275,7 +275,7 @@ TEST(SVGClipPathElementTests, RenderingTransform) {
 }
 
 /**
- * Verify that a clipPath with multiple child elements—each potentially having their own transforms—
+ * Verify that a clipPath with multiple child elements-each potentially having their own transforms-
  * is correctly applied when rendering.
  */
 TEST(SVGClipPathElementTests, RenderingMultipleChildrenWithTransforms) {

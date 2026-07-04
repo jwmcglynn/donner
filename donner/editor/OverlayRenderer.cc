@@ -130,7 +130,7 @@ svg::PaintParams MakeSourceHoverBoundsPaint(double worldStrokeWidth) {
 constexpr double kLockedFlashStrokeLogicalPixels = 2.0;
 
 /// Red stroke, no fill, for the "this element is locked, you can't select it" flash. The stroke's
-/// alpha is the flash `intensity` (1 → 0 as it fades) scaled into the 0–255 channel range.
+/// alpha is the flash `intensity` (1 → 0 as it fades) scaled into the 0-255 channel range.
 svg::PaintParams MakeLockedFlashStrokePaint(double worldStrokeWidth, float intensity) {
   svg::PaintParams paint;
   const float clampedIntensity = std::clamp(intensity, 0.0f, 1.0f);
@@ -145,7 +145,7 @@ svg::PaintParams MakeLockedFlashStrokePaint(double worldStrokeWidth, float inten
   return paint;
 }
 
-/// Translucent cyan fill, no stroke — used for the marquee fill pass.
+/// Translucent cyan fill, no stroke - used for the marquee fill pass.
 /// Alpha 0x33 matches the prior `IM_COL32(0x00, 0xc8, 0xff, 0x33)` in
 /// `RenderPanePresenter`.
 svg::PaintParams MakeMarqueeFillPaint() {
@@ -156,7 +156,7 @@ svg::PaintParams MakeMarqueeFillPaint() {
   return paint;
 }
 
-/// Solid white stroke, no fill — the marquee's outer outline. Matches
+/// Solid white stroke, no fill - the marquee's outer outline. Matches
 /// the prior `IM_COL32(0xff, 0xff, 0xff, 0xff)` in `RenderPanePresenter`.
 svg::PaintParams MakeMarqueeStrokePaint(double worldStrokeWidth) {
   svg::PaintParams paint;
@@ -467,7 +467,7 @@ std::optional<std::optional<css::RGBA>> SolidPreviewColor(const svg::PaintServer
 /// document-space path plus resolved solid paint. Returns nullopt when the
 /// element is not plain solid-painted geometry (gradient/pattern paint,
 /// currentColor, non-absolute stroke-width, or a filter/clip-path/mask/marker
-/// that the preview could not reproduce) — the presenter then falls back to
+/// that the preview could not reproduce) - the presenter then falls back to
 /// the composited raster.
 std::optional<SelectionChromeSnapshot::LivePathPreview> CaptureLivePathPreview(
     const svg::SVGElement& element, const Transform2d& representedDocumentFromLiveDocument) {
@@ -601,7 +601,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
 
   // Locked-rejection flash: capture the rejected element's document-space outline (merged across
   // its renderable geometry leaves, same path-build path as selection chrome) so the draw phase can
-  // stroke it red without touching the registry. Captured unconditionally of selection state — a
+  // stroke it red without touching the registry. Captured unconditionally of selection state - a
   // locked click never selects, so the flashed element is typically NOT in `selection`.
   if (lockedFlash.has_value() && lockedFlash->intensity > 0.0f) {
     std::vector<SelectionChromeSnapshot::PathItem> flashPaths;
@@ -646,7 +646,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   }
 
   // Per-element path data + transforms. `computedSpline` and
-  // `elementFromWorld` both read registry state — done here, before
+  // `elementFromWorld` both read registry state - done here, before
   // returning, so the post-return snapshot is fully self-contained.
   const bool combinedBoundsOnly = selectionDetail == SelectionChromeDetail::CombinedBoundsOnly;
   const bool pathOutlinesOnly = selectionDetail == SelectionChromeDetail::PathOutlinesOnly;
@@ -669,7 +669,7 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   // AABBs are computed inline from the selection's current DOM transforms
   // so they track the same frame as the per-element path outlines above.
   // Historically these came from a `SelectionBoundsCache` promoted by the
-  // main loop — but that cache lagged the live DOM by 1–2 frames during a
+  // main loop - but that cache lagged the live DOM by 1-2 frames during a
   // drag, producing a visible shear between the path outline (live) and
   // the AABB (cached). Path outline + AABB are now sampled from the same
   // DOM snapshot. The cache is still useful for main-loop selection-
@@ -771,7 +771,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   const svg::PaintParams displayNoneSelectionStrokePaint =
       MakeDisplayNoneSelectionStrokePaint(snapshot.selectionStrokeWidthWorld);
 
-  // Per-element path outlines first — the user sees the exact shape of
+  // Per-element path outlines first - the user sees the exact shape of
   // every selected element regardless of how many are picked.
   if (!snapshot.paths.empty()) {
     renderer.setTransform(snapshot.canvasFromDoc);
@@ -877,7 +877,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   }
 
   // Marquee: translucent cyan fill + solid white outline. Two passes
-  // (fill then stroke) — different fill/stroke paints per the legacy
+  // (fill then stroke) - different fill/stroke paints per the legacy
   // ImGui styling.
   if (snapshot.marqueeDoc.has_value()) {
     renderer.setTransform(snapshot.canvasFromDoc);

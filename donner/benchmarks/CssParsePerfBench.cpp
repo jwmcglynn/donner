@@ -7,7 +7,7 @@
 /// inline `style="..."` attributes to a medium stylesheet typical of an SVG
 /// `<style>` block.
 ///
-/// Allocation counts are intentionally not collected here — run this binary
+/// Allocation counts are intentionally not collected here - run this binary
 /// under `heaptrack` (Linux) or Instruments (macOS) to attribute allocations
 /// per call site if the wall-time numbers suggest the parser is a hotspot.
 ///
@@ -68,7 +68,7 @@ use[href="#icon-warn"] { fill: orange; }
 .hidden { display: none !important; }
 )CSS";
 
-/// Moderately complex single selector — class, attribute, pseudo-class, combinator.
+/// Moderately complex single selector - class, attribute, pseudo-class, combinator.
 constexpr std::string_view kSelectorComplex =
     "div.container > .row[data-role=\"primary\"]:nth-child(2n+1):hover";
 

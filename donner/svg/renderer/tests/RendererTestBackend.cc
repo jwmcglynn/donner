@@ -15,7 +15,7 @@ namespace donner::svg {
 // that calls `RegisterBackendOps()` to populate this table with its function
 // pointers. The geode build links both TUs (so both register); the CPU build
 // links tiny-skia only. Registration is driven explicitly from
-// `EnsureBackendsRegistered()` below — no static-init ordering dependency, and
+// `EnsureBackendsRegistered()` below - no static-init ordering dependency, and
 // the table entry for an unlinked backend stays empty.
 // ---------------------------------------------------------------------------
 

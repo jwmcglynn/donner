@@ -8,7 +8,7 @@
 /// - **Error-recovers** on malformed input by emitting `ErrorRecovery` tokens
 ///   and synchronizing to the next `<` or `>`, rather than aborting with a
 ///   `ParseDiagnostic`.
-/// - Does **not** expand entities — `&amp;` stays as `&amp;` in the token
+/// - Does **not** expand entities - `&amp;` stays as `&amp;` in the token
 ///   stream, so byte offsets match the raw source text.
 ///
 /// The token stream is gap-free: concatenating every token's source range
@@ -370,7 +370,7 @@ private:
 /**
  * Tokenize an XML source string, emitting \ref XMLToken values to \p sink.
  *
- * The sink must be callable as `sink(XMLToken)` — typically a lambda, a
+ * The sink must be callable as `sink(XMLToken)` - typically a lambda, a
  * functor, or a `std::vector<XMLToken>::push_back` wrapper.
  *
  * @tparam TokenSink Callable with signature `void(XMLToken)`.

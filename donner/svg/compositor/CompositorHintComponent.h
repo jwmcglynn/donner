@@ -51,10 +51,10 @@ struct HintEntry {
  * Multiple sources may hint the same entity at the same time. The resolver
  * sums weights to rank candidates for layer assignment, except that any
  * `Mandatory` hint short-circuits the calculation to infinite weight
- * (`UINT32_MAX`) — mandatory hints are non-contestable.
+ * (`UINT32_MAX`) - mandatory hints are non-contestable.
  *
- * Storage is a plain `std::vector<HintEntry>` — see Non-Goal 3 (sequential,
- * single-threaded) in the design doc. Hints are typically 1–3 per entity.
+ * Storage is a plain `std::vector<HintEntry>` - see Non-Goal 3 (sequential,
+ * single-threaded) in the design doc. Hints are typically 1-3 per entity.
  *
  * This component mirrors `StyleComponent` in the CSS engine: it is the
  * author-layer input to a resolver that produces a `ComputedLayerAssignmentComponent`.
@@ -65,14 +65,14 @@ struct CompositorHintComponent {
   /// All hint entries currently attached to this entity.
   std::vector<HintEntry> entries;
 
-  /// Append a hint. Does not deduplicate — the same `(source, weight)` pair may appear more than
+  /// Append a hint. Does not deduplicate - the same `(source, weight)` pair may appear more than
   /// once.
   void addHint(HintSource source, uint16_t weight) { entries.push_back(HintEntry{source, weight}); }
 
   /**
    * Remove exactly one entry whose `source` and `weight` both match. Used
    * by `ScopedCompositorHint` on destruction. If duplicate entries exist,
-   * only the first matching one is removed — callers that stacked duplicates
+   * only the first matching one is removed - callers that stacked duplicates
    * should drop their handles in LIFO order.
    *
    * @returns true if an entry was removed, false if no match was found.
@@ -91,7 +91,7 @@ struct CompositorHintComponent {
   /**
    * Saturating sum of all entry weights.
    *
-   * Any `Mandatory` hint short-circuits the result to `UINT32_MAX` — the
+   * Any `Mandatory` hint short-circuits the result to `UINT32_MAX` - the
    * infinite-weight sentinel. Otherwise returns the clamped sum of
    * `weight` fields (clamped at `UINT32_MAX - 1` so `Mandatory` remains
    * distinguishable). With a `std::vector` of `uint16_t` weights the sum

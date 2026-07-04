@@ -9,10 +9,10 @@
 ///
 /// The scenario is split across two paired test targets produced by
 /// `donner_perf_cc_test`:
-///   - `filter_drag_repro_tests_correctness` — CPU-invariant
+///   - `filter_drag_repro_tests_correctness` - CPU-invariant
 ///     assertions (fast-path counters, selection invariants). Runs on
 ///     the default PR gate via `bazel test //...`.
-///   - `filter_drag_repro_tests_wallclock` — wall-clock budget
+///   - `filter_drag_repro_tests_wallclock` - wall-clock budget
 ///     assertions. Tagged `manual` + `perf` so it runs in the nightly
 ///     `perf` lane, not on the PR gate where shared GitHub CI runners
 ///     make per-frame wall-clock measurements flaky.
@@ -36,7 +36,7 @@ struct DragCounterStats {
 
 /// Aggregated result of replaying `filter_drag_repro.rnr` through the
 /// real editor stack. `skipped == true` means required data files were
-/// missing in runfiles and the caller should `GTEST_SKIP()` — the other
+/// missing in runfiles and the caller should `GTEST_SKIP()` - the other
 /// fields are meaningless in that case.
 struct FilterDragReproResult {
   bool skipped = false;
@@ -49,7 +49,7 @@ struct FilterDragReproResult {
   DragCounterStats firstDragCounters;
   DragCounterStats secondDragCounters;
 
-  // Selection invariants — did each mouse-up produce a selection, and
+  // Selection invariants - did each mouse-up produce a selection, and
   // did the second mouse-up end up on a different entity than the first?
   // (The entity values themselves aren't useful to assert on by name;
   // the invariant the user cares about is "new drag, new selection".)
@@ -67,7 +67,7 @@ struct FilterDragReproResult {
   std::string secondSelectionId;
   std::string secondSelectionFilterAncestorId;
 
-  // CPU-speed-invariant compositor counters — cumulative across the
+  // CPU-speed-invariant compositor counters - cumulative across the
   // whole replay plus per-drag deltas in `firstDragCounters` /
   // `secondDragCounters`.
   uint64_t fastPathFrames = 0;
@@ -83,7 +83,7 @@ struct FilterDragReproResult {
 /// Uses `ASSERT_*` internally; if an assertion trips, `out->skipped`
 /// stays false and the caller's test is halted by the assertion flow.
 /// On genuine "files missing in runfiles", sets `out->skipped = true`
-/// and returns without asserting — the caller issues `GTEST_SKIP()`.
+/// and returns without asserting - the caller issues `GTEST_SKIP()`.
 void RunFilterDragReproScenario(FilterDragReproResult* out);
 
 }  // namespace donner::editor::filter_drag_repro

@@ -118,8 +118,8 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGTextElement>(SVGParserContex
  *
  * `<a>` is a transparent text-content group when nested in text, so its direct text children must
  * be captured into the text layout (with chunk boundaries around nested elements) exactly like
- * \ref xml_tspan. Outside of text the captured chunks are inert — the text layout only descends
- * from a text root — so the same handling is safe for the general-container case.
+ * \ref xml_tspan. Outside of text the captured chunks are inert - the text layout only descends
+ * from a text root - so the same handling is safe for the general-container case.
  *
  * @param context The parser context.
  * @param element The `<a>` element to parse contents for.
@@ -258,7 +258,7 @@ ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, co
 
 /// Returns true if an element type is experimental. Element types opt in by declaring
 /// `static constexpr bool IsExperimental = true;`. When a feature ships, remove the
-/// `IsExperimental` declaration entirely rather than setting it to false — the absence of the
+/// `IsExperimental` declaration entirely rather than setting it to false - the absence of the
 /// member is the default (non-experimental) state.
 template <typename T>
 constexpr bool IsExperimental() {
@@ -433,7 +433,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarni
                                    ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
       SVGDocument::Settings subSettings;
       subSettings.processingMode = ProcessingMode::SecureStatic;
-      // No resource loader — secure mode sub-documents cannot load external resources.
+      // No resource loader - secure mode sub-documents cannot load external resources.
 
       const std::string_view subSource(reinterpret_cast<const char*>(svgContent.data()),
                                        svgContent.size());

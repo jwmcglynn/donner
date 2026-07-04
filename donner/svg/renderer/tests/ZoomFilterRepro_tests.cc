@@ -20,12 +20,12 @@
 ///
 /// These tests pin the regression at the renderer layer:
 ///
-///   - Tiny pixmap (sanity)         — must always succeed.
-///   - 4096×4096 main pixmap        — at the prior 64 MiB cap boundary.
-///   - 8192×4708 main pixmap        — what the editor produces at
+///   - Tiny pixmap (sanity)         - must always succeed.
+///   - 4096×4096 main pixmap        - at the prior 64 MiB cap boundary.
+///   - 8192×4708 main pixmap        - what the editor produces at
 ///                                    `kMaxCanvasDim` on the splash; the
 ///                                    snapshot must be non-empty.
-///   - Halo luma low vs high zoom   — the gaussian blur must apply at both
+///   - Halo luma low vs high zoom   - the gaussian blur must apply at both
 ///                                    canvas sizes. Without the fix, the
 ///                                    high-zoom probe falls back to the
 ///                                    raw deep-blue background and the
@@ -140,13 +140,13 @@ TEST(ZoomFilterRepro, SquareCanvasAtPriorCapBoundaryRenders) {
   // is on the boundary and was historically allowed.
   const RendererBitmap snapshot = RenderAt(kTinySvg, 4096, 4096, /*outName=*/nullptr);
   EXPECT_FALSE(snapshot.empty())
-      << "4096×4096 canvas (64 MiB exactly) failed to render — the cap may have moved.";
+      << "4096×4096 canvas (64 MiB exactly) failed to render - the cap may have moved.";
 }
 
 TEST(ZoomFilterRepro, SplashAtEditorClampBoundaryRenders) {
   // The editor clamps `desiredCanvasSize` at `kMaxCanvasDim=8192` per axis,
   // so at ~9.18× zoom on the 892×512 splash the canvas becomes 8192×4708
-  // (~154 MiB) — above the prior 64 MiB tiny-skia cap. Before the fix,
+  // (~154 MiB) - above the prior 64 MiB tiny-skia cap. Before the fix,
   // `Pixmap::fromSize` returned `nullopt`, `frame_` was empty,
   // `takeSnapshot` returned an empty bitmap, and the editor (which doesn't
   // propagate the failure) ended up showing a stale or empty rendered
@@ -158,7 +158,7 @@ TEST(ZoomFilterRepro, SplashAtEditorClampBoundaryRenders) {
   const RendererBitmap snapshot =
       RenderAt(std::string_view{source}, 8192, 4708, "splash_at_editor_clamp_8192x4708.png");
   EXPECT_FALSE(snapshot.empty())
-      << "Splash @ 8192×4708 produced an empty snapshot — main pixmap allocation failed. "
+      << "Splash @ 8192×4708 produced an empty snapshot - main pixmap allocation failed. "
          "Check `Pixmap::fromSize` cap in third_party/tiny-skia-cpp.";
   // Renderer preserves the 892:512 viewBox aspect inside the requested canvas,
   // so width matches exactly and height ends up at floor/round of
@@ -172,7 +172,7 @@ TEST(ZoomFilterRepro, SplashHaloSurvivesHighZoom) {
   // The gaussian blur halos around the splash's lightning bolts must
   // survive a high-canvas render. Without the filter-primitive cap raises,
   // `gaussianBlur(FloatPixmap&, …)` silently returns early on viewport-
-  // sized SourceGraphic float buffers above ~2048×2048 floats — the blur
+  // sized SourceGraphic float buffers above ~2048×2048 floats - the blur
   // disappears while every other element renders normally. This produces a
   // luma swing of ~37+ at the Lightning_glow_dark halo probe; with the
   // blur intact, the delta is ≤25.
@@ -186,12 +186,12 @@ TEST(ZoomFilterRepro, SplashHaloSurvivesHighZoom) {
   ASSERT_FALSE(hi.empty());
 
   // Probe inside the Lightning_glow_dark halo on the small bottom bolt
-  // (low-zoom doc coords near (478, 440)) — the bright cyan glow that's
+  // (low-zoom doc coords near (478, 440)) - the bright cyan glow that's
   // visible in the low-zoom reference. When the gaussian blur no-ops at
   // high zoom this region falls back to the deep-blue background.
   const double delta = MeanLumaDelta(lo, hi, /*lowX=*/478, /*lowY=*/440, /*patchRadius=*/4);
   EXPECT_LT(delta, 25.0) << "Halo luma at low vs high zoom differs by " << delta
-                         << " — a gaussian blur on the splash is no-op'ing at the high canvas. "
+                         << " - a gaussian blur on the splash is no-op'ing at the high canvas. "
                             "The blur primitive's defensive size cap is the likely cause: check "
                             "third_party/tiny-skia-cpp/src/tiny_skia/filter/"
                             "{GaussianBlur,Morphology,FloatPixmap}.{cpp,h}.";

@@ -264,7 +264,7 @@ TEST(Path, CubicToQuadraticPreservesNonCubics) {
 
   Path result = path.cubicToQuadratic();
 
-  // No cubics to convert — should be identical.
+  // No cubics to convert - should be identical.
   EXPECT_EQ(result.verbCount(), path.verbCount());
 }
 
@@ -330,7 +330,7 @@ TEST(Path, ToMonotonicSplitsCubic) {
 TEST(Path, ToMonotonicXSplitsCubicAtXExtrema) {
   // A cubic that is monotonic in Y (0->3->7->10) but NOT in X (0->10->-10->0).
   // Under MonotonicAxis::X it must split at the X-extrema; the Y solver would
-  // see no extrema and leave it as a single (X-non-monotonic) segment — the bug
+  // see no extrema and leave it as a single (X-non-monotonic) segment - the bug
   // this guards (cubic branch must use the axis-selected extrema solver).
   Path path = PathBuilder().moveTo({0, 0}).curveTo({10, 3}, {-10, 7}, {0, 10}).build();
 
@@ -570,13 +570,13 @@ TEST(Path, PathLengthClosePath) {
 }
 
 TEST(Path, PathLengthQuadratic) {
-  // Degenerate quadratic (control on the line) — length equals chord.
+  // Degenerate quadratic (control on the line) - length equals chord.
   Path path = PathBuilder().moveTo({0, 0}).quadTo({5, 0}, {10, 0}).build();
   EXPECT_NEAR(path.pathLength(), 10.0, 1e-3);
 }
 
 TEST(Path, PathLengthCubic) {
-  // Degenerate cubic (collinear control points) — length equals chord.
+  // Degenerate cubic (collinear control points) - length equals chord.
   Path path = PathBuilder().moveTo({0, 0}).curveTo({3, 0}, {7, 0}, {10, 0}).build();
   EXPECT_NEAR(path.pathLength(), 10.0, 1e-3);
 }
@@ -1075,7 +1075,7 @@ int rayCastWinding(const Path& path, const Vector2d& query) {
 TEST(Path, StrokeToFillRoundCap) {
   // Horizontal line from (0,0) to (10,0) with stroke width 2 (halfWidth=1).
   // With round caps the filled region is a rect [0,10]×[-1,1] plus two unit
-  // semicircles centered at (0,0) and (10,0) — i.e., the set of points within
+  // semicircles centered at (0,0) and (10,0) - i.e., the set of points within
   // distance 1 of the segment.
   Path path = PathBuilder().moveTo({0, 0}).lineTo({10, 0}).build();
   StrokeStyle style;
@@ -1107,7 +1107,7 @@ TEST(Path, StrokeToFillRoundCap) {
   EXPECT_NE(rayCastWinding(filled, {5.0, 0.9}), 0) << "near top edge interior";
   EXPECT_NE(rayCastWinding(filled, {5.0, -0.9}), 0) << "near bottom edge interior";
 
-  // Inside each round cap — points within unit distance of the endpoint
+  // Inside each round cap - points within unit distance of the endpoint
   // but outside the [0,10] x range.
   EXPECT_NE(rayCastWinding(filled, {-0.5, 0.0}), 0) << "inside left round cap";
   EXPECT_NE(rayCastWinding(filled, {-0.8, 0.0}), 0) << "near far-left of left cap";
@@ -1156,7 +1156,7 @@ TEST(Path, StrokeToFillSquareCap) {
   // ---- Winding tests inside the expected rectangular region ----
   // Interior of the line body.
   EXPECT_NE(rayCastWinding(filled, {5.0, 0.0}), 0);
-  // Square cap corners — these should all be filled for square caps.
+  // Square cap corners - these should all be filled for square caps.
   EXPECT_NE(rayCastWinding(filled, {-0.9, 0.9}), 0)
       << "upper-left corner of left square cap should be filled";
   EXPECT_NE(rayCastWinding(filled, {-0.9, -0.9}), 0)
@@ -1268,16 +1268,16 @@ TEST(Path, StrokeToFillSquareCapDiagonal) {
   EXPECT_NE(rayCastWinding(filled, {10.5, 10.5}), 0) << "inside end square cap";
   // Corner of the square cap (perpendicular to the line at the extended endpoint).
   // At (-1,-1) extended corner, shift perpendicular by ~0.5: (-1.5, -0.5).
-  // Wait — the square cap is a square of side = strokeWidth, rotated with the
+  // Wait - the square cap is a square of side = strokeWidth, rotated with the
   // line. The corner points are at extended_endpoint ± halfWidth * perpendicular.
   // Keep it simple: check the interior of the line.
   EXPECT_NE(rayCastWinding(filled, {5.0, 5.0}), 0) << "interior of line";
-  // Past the cap — well outside.
+  // Past the cap - well outside.
   EXPECT_EQ(rayCastWinding(filled, {-3.0, -3.0}), 0);
   EXPECT_EQ(rayCastWinding(filled, {13.0, 13.0}), 0);
 }
 
-// (Duplicate `rayCastWinding` removed during the Phase 2C merge — the canonical
+// (Duplicate `rayCastWinding` removed during the Phase 2C merge - the canonical
 // definition lives at line ~860 and is shared by all tests below.)
 
 TEST(Path, StrokeToFillRoundJoin) {
@@ -1336,7 +1336,7 @@ TEST(Path, StrokeToFillBevelJoin) {
   EXPECT_TRUE(evenOdd({10, 5})) << "midpoint of vertical leg stroke";
 
   // Bevel chamfers the outside of the corner: the point (10.7, 0.7) is
-  // beyond the bevel chord (which runs from (11,0) to (10,-1)) — wait,
+  // beyond the bevel chord (which runs from (11,0) to (10,-1)) - wait,
   // we need to identify the outside relative to the path direction.
   // The path (0,0)->(10,0)->(10,10) turns right (CW in y-down). The
   // outside of the turn is the top-right: y <= 0 and x >= 10 with
@@ -1356,7 +1356,7 @@ TEST(Path, StrokeToFillBevelJoin) {
 
   // Concave side of the corner (inside of the turn, around (9, 1)):
   // the inner offset lines meet at (9,1). Points well inside the concave
-  // pocket — deep in the L's interior — should be outside the stroke.
+  // pocket - deep in the L's interior - should be outside the stroke.
   EXPECT_FALSE(evenOdd({5, 5})) << "deep inside L (concave region)";
 }
 
@@ -1377,15 +1377,15 @@ TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
   // Phase 2C: inverted V (M 0 100 L 50 0 L 100 100) with a SHARP inside
   // corner at the apex. Before the fix, `emitJoin`'s inside-turn branch
   // emitted a single line across the overlap, creating a self-intersecting
-  // polygon that neither NonZero nor EvenOdd could render cleanly — visible
+  // polygon that neither NonZero nor EvenOdd could render cleanly - visible
   // as gaps/extra triangles at the concave side of the apex in the
   // stroking_linejoin Geode golden.
   //
   // After the fix, the true intersection of the two inner offset lines
   // is emitted, producing a clean polygon. Verify via ray-cast winding
   // (matching Geode's Slug shader) that points inside the stroke ribbon
-  // are filled and points outside — especially in the V's concave pocket
-  // and far above the apex — are not.
+  // are filled and points outside - especially in the V's concave pocket
+  // and far above the apex - are not.
   Path path = PathBuilder().moveTo({0, 100}).lineTo({50, 0}).lineTo({100, 100}).build();
   StrokeStyle style;
   style.width = 20.0;  // halfWidth = 10
@@ -1402,7 +1402,7 @@ TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
   // direction.
   //
   // Midpoint of leg 1: (25, 50). Perturb by small amounts along the
-  // left/right normal — points within ±halfWidth must be filled.
+  // left/right normal - points within ±halfWidth must be filled.
   EXPECT_TRUE(evenOdd({25, 50})) << "midpoint of leg 1";
   EXPECT_TRUE(evenOdd({75, 50})) << "midpoint of leg 2";
 
@@ -1458,8 +1458,8 @@ TEST(Path, StrokeToFillClosedPath) {
 
   // Regression for 2D (donner_sfv #492 follow-up): the stroked rect should
   // render as a hollow square annulus from (-1,-1) to (11,11) with a
-  // (1,1)–(9,9) hole. Historically the inside-turn branch of emitJoin emitted
-  // `lineTo(curStart)` — the start of the next offset segment — which caused
+  // (1,1)-(9,9) hole. Historically the inside-turn branch of emitJoin emitted
+  // `lineTo(curStart)` - the start of the next offset segment - which caused
   // full-height/width lines across the interior, manifesting as diagonal
   // streaks in Geode's rotated-rect stroke golden.
   //
@@ -1469,7 +1469,7 @@ TEST(Path, StrokeToFillClosedPath) {
   // being sensitive to overshoot vertices that cancel in winding.
   auto evenOdd = [&](Vector2d p) { return (rayCastWinding(filled, p) & 1) != 0; };
 
-  // Hole interior: (5, 5), (3, 5), (7, 5) — all should be OUTSIDE.
+  // Hole interior: (5, 5), (3, 5), (7, 5) - all should be OUTSIDE.
   EXPECT_FALSE(evenOdd({5, 5})) << "center of hole";
   EXPECT_FALSE(evenOdd({3, 5})) << "left of center";
   EXPECT_FALSE(evenOdd({7, 5})) << "right of center";
@@ -1542,8 +1542,8 @@ TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
   //
   // For the path M115,165 Q215,40 315,165 stroked at width 2.5 (= path 5 *
   // scale 0.5), the stroke ring is a thin ribbon along the curve. Points
-  // INSIDE the lens — the empty area above the chord, between the curve's
-  // two halves — must NOT be inside the stroke polygon.
+  // INSIDE the lens - the empty area above the chord, between the curve's
+  // two halves - must NOT be inside the stroke polygon.
   Path path = PathBuilder().moveTo({115, 165}).quadTo({215, 40}, {315, 165}).build();
   StrokeStyle style;
   style.width = 2.5;
@@ -1553,7 +1553,7 @@ TEST(Path, StrokeToFillQuadbezierLensInteriorIsOutside) {
 
   // Per the Geode quadbezier1 golden, an artifact appears at screen-y=116
   // spanning screen-x [172, 257]. A pixel at (200, 116) is well inside the
-  // lens — it should be OUTSIDE the stroke polygon.
+  // lens - it should be OUTSIDE the stroke polygon.
   EXPECT_FALSE(evenOdd({200, 116})) << "lens interior at y=116";
   EXPECT_FALSE(evenOdd({215, 105})) << "near apex above curve";
   EXPECT_FALSE(evenOdd({200, 130})) << "lens interior at y=130";
@@ -1570,11 +1570,11 @@ TEST(Path, StrokeToFillCurves) {
 
 TEST(Path, StrokeToFillNearReversalJoinDoesNotSpike) {
   // A short line followed by a curve whose initial tangent nearly reverses
-  // the line's direction (~179° turn) — extracted from an image-traced
+  // the line's direction (~179° turn) - extracted from an image-traced
   // lightning shape in the Donner splash. The inside-turn miter intersection
   // for such a join is nearly parallel offset lines meeting far beyond both
   // segments' extents (halfWidth / cos(halfAngle) ≈ 100+ units). Emitting
-  // that point produced a long thin diagonal spike across the canvas — the
+  // that point produced a long thin diagonal spike across the canvas - the
   // editor's selection-outline "flare". The join must fall back to the naive
   // connector when the intersection lies beyond either adjacent segment.
   Path path = PathBuilder()
@@ -1955,7 +1955,7 @@ TEST(Path, VerticesClosedRect) {
 }
 
 // On a closed subpath, the start-marker orientation uses the first segment's
-// outgoing tangent (SVG 2 §11.6.2) — not the bisector with the closing segment.
+// outgoing tangent (SVG 2 §11.6.2) - not the bisector with the closing segment.
 // If the first "segment" is zero-length (a degenerate line-to that re-emits the
 // moveTo point), the tangent must walk forward to the next non-zero segment
 // instead of resolving to (0,0), which would produce a 0° marker angle.
@@ -1980,9 +1980,9 @@ TEST(Path, VerticesClosedPathDegenerateFirstSegment) {
 // at the start corner of a rounded rect (and circle), differing from resvg.
 TEST(Path, VerticesClosedCurveEmitsMidAtCoincidentStart) {
   // A rounded rect built from curves: the last curve lands on (35,20) = the subpath start,
-  // then a zero-length closePath. The (35,20) vertex must appear *twice* — once as the
+  // then a zero-length closePath. The (35,20) vertex must appear *twice* - once as the
   // marker-mid for the last segment's arrival, once as the marker-end at the subpath start
-  // — in addition to the marker-start emitted from the first segment.
+  // - in addition to the marker-start emitted from the first segment.
   Path path =
       PathBuilder().addRoundedRect(Box2d(Vector2d(20, 20), Vector2d(180, 180)), 15, 15).build();
   std::vector<Path::Vertex> verts = path.vertices();
@@ -2006,7 +2006,7 @@ TEST(Path, VerticesClosedCurveEmitsMidAtCoincidentStart) {
 }
 
 // A circle is a smooth all-curve loop (`M C C C C Z`) closed with a zero-length closePath.
-// Unlike the rounded rect, it must NOT gain an arrival marker-mid at the seam — resvg
+// Unlike the rounded rect, it must NOT gain an arrival marker-mid at the seam - resvg
 // stacks only start + end there. (If this regressed to 3, marker-on-circle over-stacks.)
 TEST(Path, VerticesClosedCircleStacksTwiceAtStart) {
   Path path = PathBuilder().addCircle(Vector2d(100, 100), 80).build();
@@ -2019,11 +2019,11 @@ TEST(Path, VerticesClosedCircleStacksTwiceAtStart) {
       ++atStart;
     }
   }
-  EXPECT_EQ(atStart, 2);  // start + end only — no arrival mid on a smooth loop.
+  EXPECT_EQ(atStart, 2);  // start + end only - no arrival mid on a smooth loop.
 }
 
 // A sharp rect closes with a non-zero-length line (bottom-left back to top-left), so the
-// arrival mid sits on the distinct bottom-left corner — start and end stack only twice at
+// arrival mid sits on the distinct bottom-left corner - start and end stack only twice at
 // the top-left. This is the control case that must NOT gain an extra vertex.
 TEST(Path, VerticesSharpRectStartStacksTwice) {
   Path path = PathBuilder().addRect(Box2d(Vector2d(20, 20), Vector2d(180, 180))).build();
@@ -2113,7 +2113,7 @@ TEST(PathBuilder, ArcToLargeArc) {
 }
 
 TEST(PathBuilder, ArcToImplicitMoveTo) {
-  // arcTo with no preceding moveTo should work — implicit moveTo at (0,0).
+  // arcTo with no preceding moveTo should work - implicit moveTo at (0,0).
   Path path = PathBuilder().arcTo({10, 10}, 0.0, false, false, {10, 10}).build();
   EXPECT_GT(path.verbCount(), 1u);
 }
@@ -2279,7 +2279,7 @@ TEST(Path, OstreamVertex) {
 // every interior vertex; the pre-restructure strokeSubpath pre-emitted
 // `prevEnd` before `emitJoin`, which caused the polygon to backtrack along
 // the previous offset line when emitJoin substituted a miter point for
-// an inside turn — producing a wildly self-intersecting ribbon. The
+// an inside turn - producing a wildly self-intersecting ribbon. The
 // invariant now is: `emitJoin` is responsible for emitting `prevEnd` on
 // outside turns (or a miter substitute on inside turns); the caller does
 // not pre-emit it. This test locks that invariant in place by verifying

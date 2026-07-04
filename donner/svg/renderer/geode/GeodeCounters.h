@@ -7,7 +7,7 @@
 /// the perf-optimization milestones: each later milestone tightens one
 /// or more of these ceilings, and `GeodePerf_tests.cc` asserts them.
 ///
-/// Counters are free of cost when disabled — hot-path sites check a
+/// Counters are free of cost when disabled - hot-path sites check a
 /// nullable pointer, so a renderer constructed without counters pays
 /// one null-pointer compare per increment site.
 
@@ -67,7 +67,7 @@ struct GeodeCounters {
   uint64_t pipelineSwitches = 0;
 
   /// Number of consecutive `drawPath` calls whose source entity
-  /// matches the immediately previous call's source entity — i.e.
+  /// matches the immediately previous call's source entity - i.e.
   /// the draw-call savings that would be unlocked by M6 Bullet 2
   /// (`<use>` instancing). A run of N consecutive same-source draws
   /// contributes `N - 1` here.

@@ -22,7 +22,7 @@
 /// 4. No reordering across commands targeting different entities.
 ///    Coalescing only collapses redundant writes.
 ///
-/// The queue is **single-threaded** — it must only be touched from the UI
+/// The queue is **single-threaded** - it must only be touched from the UI
 /// thread. The render thread reads document state via the snapshot hand-off
 /// in `AsyncSVGDocument`, never via the queue directly.
 

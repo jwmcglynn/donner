@@ -20,7 +20,7 @@ namespace donner::svg {
  * - SVG2 spec: https://www.w3.org/TR/SVG2/styling.html#StyleElement
  *
  * The `<style>` element is SVG's native way to embed a CSS stylesheet directly in the document
- * — the exact counterpart of HTML's `<style>` tag. Rules inside it use normal CSS selectors
+ * - the exact counterpart of HTML's `<style>` tag. Rules inside it use normal CSS selectors
  * (by element name, class, id, attribute, pseudo-class, and so on) and can set any SVG
  * presentation property: `fill`, `stroke`, `stroke-width`, `opacity`, `font-family`,
  * `transform`, and the rest. A single document may contain multiple `<style>` elements; the

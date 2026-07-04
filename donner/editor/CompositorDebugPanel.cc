@@ -632,7 +632,7 @@ void CompositorDebugPanel::render(
   ImGui::EndTable();
 
   ImGui::Separator();
-  ImGui::TextDisabled("Total raster inventory (layers + segments): %.1fms — bg/fg are composed",
+  ImGui::TextDisabled("Total raster inventory (layers + segments): %.1fms - bg/fg are composed",
                       totalRasterMs);
 
   evictAbsentTiles(tiles);

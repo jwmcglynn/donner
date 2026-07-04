@@ -333,7 +333,7 @@ TEST(OverlayRendererTest, OverlayRendersIntoStandaloneRendererFrame) {
   ASSERT_TRUE(rect.has_value());
   app.setSelection(*rect);
 
-  // Brand-new renderer — never had `draw(document)` called on it. This
+  // Brand-new renderer - never had `draw(document)` called on it. This
   // is the configuration `main.cc` uses for the dedicated overlay
   // renderer, and was the source of the click-crash bug.
   svg::Renderer overlayRenderer;
@@ -369,7 +369,7 @@ TEST(OverlayRendererTest, OverlayRendersIntoStandaloneRendererFrame) {
       break;
     }
   }
-  EXPECT_TRUE(foundOpaquePixel) << "Overlay bitmap is completely transparent — chrome was "
+  EXPECT_TRUE(foundOpaquePixel) << "Overlay bitmap is completely transparent - chrome was "
                                    "never drawn";
 }
 
@@ -515,19 +515,19 @@ TEST(OverlayRendererTest, RepeatedOverlayRendersWithChangingSelection) {
     EXPECT_EQ(bitmap.dimensions.y, 200);
   };
 
-  // Frame 1: nothing selected — overlay must still produce a (blank,
+  // Frame 1: nothing selected - overlay must still produce a (blank,
   // transparent) bitmap without crashing.
   runOverlayPass(std::nullopt);
 
-  // Frame 2: select r1 — overlay produces chrome.
+  // Frame 2: select r1 - overlay produces chrome.
   app.setSelection(*r1);
   runOverlayPass(app.selectedElement());
 
-  // Frame 3: clear the selection — overlay back to blank.
+  // Frame 3: clear the selection - overlay back to blank.
   app.setSelection(std::nullopt);
   runOverlayPass(app.selectedElement());
 
-  // Frame 4: re-select r1 — should match frame 2's behavior.
+  // Frame 4: re-select r1 - should match frame 2's behavior.
   app.setSelection(*r1);
   runOverlayPass(app.selectedElement());
 }
@@ -547,7 +547,7 @@ TEST(OverlayRendererTest, PathOutlineFollowsElementTransform) {
   // Document defines an 80×40 rect at (10, 20) with an extra
   // translate(60, 40), so its world-space top-left is (70, 60) and
   // bottom-right is (150, 100). The canvas is exactly the viewBox
-  // size so canvasFromDoc is identity — that lets us assert directly
+  // size so canvasFromDoc is identity - that lets us assert directly
   // on bitmap pixel coordinates without worrying about scale.
   constexpr std::string_view kTransformedSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -585,7 +585,7 @@ TEST(OverlayRendererTest, PathOutlineFollowsElementTransform) {
   // The chrome should hit pixels along the *world-space* rect outline:
   //   x ∈ {70, 150}, y ∈ [60, 100]      (vertical edges)
   //   y ∈ {60, 100}, x ∈ [70, 150]      (horizontal edges)
-  // Probe a handful of points along each edge — at least one must
+  // Probe a handful of points along each edge - at least one must
   // have non-zero alpha. We also assert that points far from the
   // *local* (untranslated) location at (10, 20)→(90, 60) are clean,
   // which catches the regression where the path stayed at local
@@ -600,7 +600,7 @@ TEST(OverlayRendererTest, PathOutlineFollowsElementTransform) {
     }
   }
   EXPECT_TRUE(foundOnTransformedEdge)
-      << "Path outline / AABB did not appear at the *transformed* element location — the "
+      << "Path outline / AABB did not appear at the *transformed* element location - the "
          "renderer is still treating the spline as world coordinates";
 
   // Sanity check that the *local* (un-translated) area is mostly
@@ -609,7 +609,7 @@ TEST(OverlayRendererTest, PathOutlineFollowsElementTransform) {
   // (which it doesn't for translate(60, 40)). Pick a spot that's
   // clearly outside the transformed AABB to confirm.
   EXPECT_EQ(alphaAt(20, 30), 0)
-      << "Pixel at the *un-transformed* rect interior is non-empty — looks like the "
+      << "Pixel at the *un-transformed* rect interior is non-empty - looks like the "
          "old local-space path is still being drawn";
 }
 
@@ -715,7 +715,7 @@ TEST(OverlayRendererTest, DisplayNonePathSelectionStillDrawsPathOutline) {
 // rect translated by (+60, +40) had its path outline drawn at
 // canvas (-60, -40). The `PathOutlineFollowsElementTransform` test
 // above didn't catch the sign flip because it uses a plain rect
-// whose AABB corners coincide with the outline corners — the AABB
+// whose AABB corners coincide with the outline corners - the AABB
 // stroke lit up the expected pixels even when the outline was in
 // the wrong place.
 //
@@ -723,13 +723,13 @@ TEST(OverlayRendererTest, DisplayNonePathSelectionStillDrawsPathOutline) {
 // 'X' across the rect (top-left → bottom-right, plus top-right →
 // bottom-left). The AABB is a rect (20..60 horizontal, 20..60
 // vertical), but the outline lives only on the two diagonals. We
-// assert that the outline's *midpoint* — which lies on neither
-// AABB edge — gets stroke pixels at the transformed location.
+// assert that the outline's *midpoint* - which lies on neither
+// AABB edge - gets stroke pixels at the transformed location.
 TEST(OverlayRendererTest, PathOutlineDrawnAtTransformedLocationNotInverted) {
   // 40x40 "X" path at (20, 20) with translate(40, 30), so its
   // world-space bounds are (60, 50) to (100, 90) and the center
   // (where the two diagonals cross) is at (80, 70). The AABB
-  // corners are (60, 50), (100, 50), (60, 90), (100, 90) — none of
+  // corners are (60, 50), (100, 50), (60, 90), (100, 90) - none of
   // them coincide with the diagonals' midpoint.
   constexpr std::string_view kDiagonalSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -765,7 +765,7 @@ TEST(OverlayRendererTest, PathOutlineDrawnAtTransformedLocationNotInverted) {
   };
 
   // The diagonals cross at world (80, 70). Check pixels in a tiny
-  // square around that point — at least one must be non-zero because
+  // square around that point - at least one must be non-zero because
   // both diagonal strokes pass through it.
   bool foundOnTransformedDiagonal = false;
   for (int y = 68; y <= 72 && !foundOnTransformedDiagonal; ++y) {
@@ -784,7 +784,7 @@ TEST(OverlayRendererTest, PathOutlineDrawnAtTransformedLocationNotInverted) {
   // draw the stroke) is local (40, 40) → world (0, 10) because
   // inverted translate(-40, -30). Assert nothing's there.
   EXPECT_EQ(alphaAt(0, 10), 0)
-      << "Pixel at the inverted-translate location is non-empty — overlay is drawing "
+      << "Pixel at the inverted-translate location is non-empty - overlay is drawing "
          "the path at the sign-flipped transform location.";
 }
 
@@ -869,7 +869,7 @@ TEST(OverlayRendererTest, MultiElementSpanDrawsPathOutlinesForEachSelectedElemen
   };
 
   // Both rects must contribute pixels. Probe the corners of each
-  // rect's outline — at least one corner pixel from each rect should
+  // rect's outline - at least one corner pixel from each rect should
   // be non-zero alpha after the overlay drew both path outlines.
   const auto anyNonZero = [&](int xMin, int yMin, int xMax, int yMax) {
     for (int y = yMin; y <= yMax; ++y) {
@@ -897,7 +897,7 @@ TEST(OverlayRendererTest, MultiElementSpanDrawsPathOutlinesForEachSelectedElemen
 //
 // Bounds are now computed inline by `OverlayRenderer::drawChrome*`
 // (same call `SnapshotSelectionWorldBounds` makes) so the combined
-// AABB matches the current DOM transform every frame — no more
+// AABB matches the current DOM transform every frame - no more
 // frame-lag shear against the path outlines.
 TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
   constexpr std::string_view kTwoRectsSvg =
@@ -935,7 +935,7 @@ TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
 
   // The combined AABB of (20..40, 20..40) ∪ (160..180, 160..180) is
   // (20..180, 20..180). Its corners at (180, 20) and (20, 180) are
-  // INSIDE the combined rect but OUTSIDE both per-element outlines —
+  // INSIDE the combined rect but OUTSIDE both per-element outlines -
   // so they only get pixels when the combined AABB is drawn. Under
   // the unified overlay, they MUST light up.
   const auto anyNonZeroNear = [&](int cx, int cy, int radius) {
@@ -958,7 +958,7 @@ TEST(OverlayRendererTest, MultiSelectDrawsCombinedAabbInSkiaOverlay) {
 // Marquee chrome also moved to the ImGui draw list. The path overlay
 // should stay transparent when there is no selected geometry.
 // Selecting a `<g filter="…">` elevates picker-wise to the group, but
-// the group itself isn't a geometry element — pre-fix, the overlay
+// the group itself isn't a geometry element - pre-fix, the overlay
 // drew nothing. Users expect selection chrome to show the outlines of
 // every visible shape inside the group (matches Figma / Illustrator /
 // Inkscape). The AABB must also envelope the full group, not come back
@@ -1024,7 +1024,7 @@ TEST(OverlayRendererTest, SelectingFilterGroupDrawsOutlinesOfAllGeometryDescenda
 // When a group has `<defs>` / `<clipPath>` / `<filter>` children, the
 // shapes inside those containers are paint-server or clip definitions,
 // not part of the visual tree. Selecting the group must NOT decorate
-// them — only the sibling geometry that actually paints.
+// them - only the sibling geometry that actually paints.
 TEST(OverlayRendererTest, SelectingGroupSkipsNonRenderedContainerChildren) {
   constexpr std::string_view kSvg =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -1066,7 +1066,7 @@ TEST(OverlayRendererTest, SelectingGroupSkipsNonRenderedContainerChildren) {
 
   // The clipPath's internal rect at (5,5)-(15,15) must NOT produce
   // chrome. The visible rect at (80,80)-(120,120) must. Probe well
-  // inside the hidden rect — if the recursion leaked into <defs> we'd
+  // inside the hidden rect - if the recursion leaked into <defs> we'd
   // find cyan stroke here.
   for (int y = 6; y <= 14; ++y) {
     for (int x = 6; x <= 14; ++x) {
@@ -1123,7 +1123,7 @@ TEST(OverlayRendererTest, EmptySelectionSpanWithIdentityTransformIsNoOp) {
   viewport.devicePixelRatio = 1.0;
   overlayRenderer.beginFrame(viewport);
 
-  // Both inputs empty — should do nothing without crashing.
+  // Both inputs empty - should do nothing without crashing.
   OverlayRenderer::drawChromeWithTransform(overlayRenderer, std::span<const svg::SVGElement>(),
                                            Transform2d());
   overlayRenderer.endFrame();
@@ -1147,7 +1147,7 @@ TEST(OverlayRendererTest, ToleratesStaleSelectionAfterReload) {
   ASSERT_TRUE(rect.has_value());
   app.setSelection(*rect);
 
-  // Reload the document — the previously-selected entity is now stale.
+  // Reload the document - the previously-selected entity is now stale.
   // EditorApp::loadFromString clears the selection, so this case is
   // handled by the public API; test it explicitly to lock in the
   // contract.
@@ -1162,7 +1162,7 @@ TEST(OverlayRendererTest, ToleratesStaleSelectionAfterReload) {
 
 // Design doc 0033 §M7: `captureChromeSnapshot` + `drawChromeFromSnapshot`
 // must produce byte-identical pixels to the live `drawChromeWithTransform`
-// path. Pins the invariant — any future divergence (e.g. a missed paint
+// path. Pins the invariant - any future divergence (e.g. a missed paint
 // or a stroke-width regression) trips this test before it ships.
 TEST(OverlayRendererTest, SnapshotProducesByteIdenticalPixelsAsLivePath) {
   EditorApp app;
@@ -1178,7 +1178,7 @@ TEST(OverlayRendererTest, SnapshotProducesByteIdenticalPixelsAsLivePath) {
   const Transform2d canvasFromDoc = app.document().document().canvasFromDocumentTransform();
   const std::vector<svg::SVGElement> selection = app.selectedElements();
 
-  // Live path — routes through capture+draw internally now.
+  // Live path - routes through capture+draw internally now.
   svg::Renderer liveRenderer;
   liveRenderer.beginFrame(viewport);
   OverlayRenderer::drawChromeWithTransform(liveRenderer,
@@ -1187,7 +1187,7 @@ TEST(OverlayRendererTest, SnapshotProducesByteIdenticalPixelsAsLivePath) {
   liveRenderer.endFrame();
   const auto liveBitmap = liveRenderer.takeSnapshot();
 
-  // Snapshot path — explicitly invoked.
+  // Snapshot path - explicitly invoked.
   const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(selection), /*marqueeRectDoc=*/std::nullopt, canvasFromDoc);
   svg::Renderer snapshotRenderer;
@@ -1206,7 +1206,7 @@ TEST(OverlayRendererTest, SnapshotProducesByteIdenticalPixelsAsLivePath) {
 // remain visually correct even if the registry mutates between capture
 // and draw. Without this guarantee, the worker mutating the document
 // mid-chrome-rasterize would produce garbage or a crash. Today this
-// holds because the snapshot holds path data by value — no registry
+// holds because the snapshot holds path data by value - no registry
 // pointers survive past `captureChromeSnapshot`.
 TEST(OverlayRendererTest, SnapshotSurvivesDocumentMutationBetweenCaptureAndDraw) {
   EditorApp app;
@@ -1250,7 +1250,7 @@ TEST(OverlayRendererTest, SnapshotSurvivesDocumentMutationBetweenCaptureAndDraw)
       << "Snapshot draw must be unaffected by post-capture registry mutations.";
 }
 
-// Without a locked-rejection flash the snapshot carries no flash payload — the
+// Without a locked-rejection flash the snapshot carries no flash payload - the
 // red outline must only appear when the user clicks a locked element.
 TEST(OverlayRendererTest, CaptureSnapshotHasNoLockedFlashByDefault) {
   EditorApp app;
@@ -1276,7 +1276,7 @@ TEST(OverlayRendererTest, CaptureSnapshotIncludesLockedFlashOutlineAndIntensity)
   auto rect = app.document().document().querySelector("#r1");
   ASSERT_TRUE(rect.has_value());
 
-  // No selection — the locked element is flashed, not selected.
+  // No selection - the locked element is flashed, not selected.
   const LockedRejectionFlashInput flashInput{.element = *rect, .intensity = 0.6f};
   const SelectionChromeSnapshot snapshot = OverlayRenderer::captureChromeSnapshot(
       std::span<const svg::SVGElement>(), std::nullopt, Transform2d(), std::nullopt,
@@ -1290,7 +1290,7 @@ TEST(OverlayRendererTest, CaptureSnapshotIncludesLockedFlashOutlineAndIntensity)
   EXPECT_FLOAT_EQ(snapshot.lockedFlash->intensity, 0.6f);
 }
 
-// A fully-faded flash (intensity 0) carries no payload — the outline must vanish
+// A fully-faded flash (intensity 0) carries no payload - the outline must vanish
 // at the end of the fade.
 TEST(OverlayRendererTest, CaptureSnapshotDropsFullyFadedLockedFlash) {
   EditorApp app;

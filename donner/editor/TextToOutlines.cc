@@ -42,8 +42,8 @@ ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
   }
 
   // Resolve placed glyph outlines via the renderer-facing text geometry. This
-  // routes through `TextEngine::computedGlyphPaths()` — the SAME positioned
-  // outlines the renderer fills — so the converted paths land exactly where the
+  // routes through `TextEngine::computedGlyphPaths()` - the SAME positioned
+  // outlines the renderer fills - so the converted paths land exactly where the
   // text rendered. `convertToPath()` is non-const, so operate on a copy of the
   // value-type element handle.
   svg::SVGTextElement text = textElement.cast<svg::SVGTextElement>();
@@ -87,7 +87,7 @@ ConvertTextToOutlinesResult convertTextToOutlines(svg::SVGDocument& document,
   }
 
   // Build one detached `<path>` per placed glyph, in paint order. Empty glyph
-  // paths (e.g. whitespace) are skipped — they contribute no geometry.
+  // paths (e.g. whitespace) are skipped - they contribute no geometry.
   int pathIndex = 0;
   for (const Path& path : glyphPaths) {
     if (path.empty()) {

@@ -272,7 +272,7 @@ private:
   void applyPendingDocumentSpaceReplayInputForTesting();
 
   // Shape clipboard. These run when the
-  // canvas selection — not the source pane — owns Cut/Copy/Paste. Each routes a
+  // canvas selection - not the source pane - owns Cut/Copy/Paste. Each routes a
   // single CutShapes/PasteShapes reparse so the operation is one undo step and
   // the source pane stays coherent.
   void copySelectedShapesToClipboard();
@@ -286,7 +286,7 @@ private:
   // selected `<text>` fails outline generation.
   void convertSelectedTextToOutlines();
   // True when the canvas selection is non-empty and every selected element is a
-  // `<text>` element — the precondition for "Convert Text to Outlines".
+  // `<text>` element - the precondition for "Convert Text to Outlines".
   [[nodiscard]] bool selectionIsAllText() const;
   void resetPresentationForLoadedDocument(std::string_view canonicalSource);
   void requestRevert();
@@ -437,7 +437,7 @@ private:
   LayersPanel layersPanel_;
   /// Element hovered in the Layers panel as of the last frame, fed into the
   /// source-hover preview so the canvas and source pane highlight the element
-  /// under the cursor — mirroring source-pane hover. Reset when no row is
+  /// under the cursor - mirroring source-pane hover. Reset when no row is
   /// hovered.
   std::optional<svg::SVGElement> layersPanelHoverElement_;
   CompositorDebugPanel compositorDebugPanel_;

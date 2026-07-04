@@ -951,7 +951,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       chunkBoundaries.push_back({runs.size(), 0, span.textAnchor});
     }
 
-    // For empty spans, span-start already applied positioning — just propagate.
+    // For empty spans, span-start already applied positioning - just propagate.
     if (spanText.empty()) {
       currentPenX = penX;
       currentPenY = penY;
@@ -997,7 +997,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
       const bool isRTLChunk =
           shaped.glyphs.size() > 1 && shaped.glyphs.front().cluster > shaped.glyphs.back().cluster;
       if (isRTLChunk && ci > 0) {
-        // The chunk started at chunk.byteStart — check if that byte's charIdx has absolute y.
+        // The chunk started at chunk.byteStart - check if that byte's charIdx has absolute y.
         const unsigned int firstCharIdx =
             chunk.byteStart < byteToCharIdx.size() ? byteToCharIdx[chunk.byteStart] : 0;
         if (firstCharIdx < yListLocal.size() && yListLocal[firstCharIdx].has_value()) {
@@ -1363,7 +1363,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
           lastVisibleMidpoint = sample.point;
           lastVisibleAdvance = g.xAdvance;
         } else {
-          // Past the end of the path — hide the glyph.
+          // Past the end of the path - hide the glyph.
           g.glyphIndex = 0;
         }
 

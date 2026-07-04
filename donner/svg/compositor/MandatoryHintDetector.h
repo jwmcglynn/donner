@@ -44,7 +44,7 @@ struct MandatoryHintDetectorStats {
  *   - `mask.has_value()` (SVG `mask`).
  *
  * Other fallback-inducing features (`clipPath`, markers, external paint
- * servers) intentionally do NOT force a mandatory promotion — that's the
+ * servers) intentionally do NOT force a mandatory promotion - that's the
  * narrower classification handled by `CompositorController::detectFallbackReasons`.
  *
  * The detector owns one `ScopedCompositorHint` per currently-qualifying entity.
@@ -87,7 +87,7 @@ public:
 
   /// Defuse every outstanding hint's registry pointer, then drop them.
   /// Used from `CompositorController::resetAllLayers` when the underlying
-  /// document has been replaced in place — the old Registry was destroyed
+  /// document has been replaced in place - the old Registry was destroyed
   /// and a new one constructed at the same storage address, so the hints'
   /// cached `Registry*` now points at a live object that knows nothing
   /// about the old entity IDs. Running `~ScopedCompositorHint` normally
@@ -105,7 +105,7 @@ public:
   /// Rebuild the hint set against a new entity space after a structurally-
   /// identical `setDocument`. The detector's hints are derived from
   /// `RenderingInstanceComponent` features (opacity < 1, filter, mask,
-  /// isolation…) — rather than surgical-remap the old hint set, we release
+  /// isolation…) - rather than surgical-remap the old hint set, we release
   /// the stale hints (they point into a destroyed entt sparse set) and
   /// run `reconcile()` against the new registry. The detector's `reconcile`
   /// is deterministic on the ECS state, so a structurally-identical

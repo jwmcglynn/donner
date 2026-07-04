@@ -52,7 +52,7 @@ namespace donner::svg {
  *
  * By default a radial gradient is symmetric: the colors radiate from the center `(cx, cy)` out
  * to the outer circle of radius `r`. Offsetting the focal point with `fx`/`fy` shifts the "inner
- * circle" of the gradient, which is how you get a lens-like or spotlight effect — the 0% color
+ * circle" of the gradient, which is how you get a lens-like or spotlight effect - the 0% color
  * appears at `(fx, fy)` instead of the geometric center, but the 100% color still lives on the
  * outer circle at `(cx, cy)` with radius `r`. `fr` lets the inner circle have its own radius
  * greater than 0, creating an annular (ring-shaped) gradient.

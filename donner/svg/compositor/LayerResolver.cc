@@ -54,7 +54,7 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers, const Resolv
     // Compute the effective total weight, honoring per-source gates. A hint
     // from a disabled source contributes 0; an entity whose only hints are
     // from disabled sources thus totals 0 and never gets a layer. Mandatory
-    // and Explicit are always honored — SVG semantics and the escape hatch.
+    // and Explicit are always honored - SVG semantics and the escape hatch.
     uint32_t effectiveWeight = 0;
     bool hasMandatory = false;
     for (const HintEntry& entry : hint.entries) {

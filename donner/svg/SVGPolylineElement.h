@@ -19,7 +19,7 @@ namespace donner::svg {
  * list of vertex coordinates. Unlike \ref xml_polygon, a polyline is not automatically closed,
  * so it typically renders as a chain of strokes rather than a filled region. (You can still set
  * a `fill`, but the result is the path filled as if it were implicitly closed, which is rarely
- * what you want — for closed shapes use `<polygon>`.)
+ * what you want - for closed shapes use `<polygon>`.)
  *
  * Use `<polyline>` for line charts, breadcrumb trails, zig-zag connectors, or any multi-segment
  * path that should remain open.

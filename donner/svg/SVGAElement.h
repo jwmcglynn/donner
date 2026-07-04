@@ -19,7 +19,7 @@ namespace donner::svg {
  * - SVG2 spec: https://www.w3.org/TR/SVG2/linking.html#AElement
  *
  * Unlike \ref xml_g, `<a>` is allowed both inside and outside of text content. When it appears
- * inside a \ref xml_text (or \ref xml_tspan) flow it behaves like a \ref xml_tspan — a text-content
+ * inside a \ref xml_text (or \ref xml_tspan) flow it behaves like a \ref xml_tspan - a text-content
  * group whose text children participate in the surrounding text layout, and which supports the
  * per-glyph positioning attributes `x`, `y`, `dx`, `dy`, and `rotate`. When it appears outside of
  * text it behaves like a \ref xml_g, grouping arbitrary graphics elements.

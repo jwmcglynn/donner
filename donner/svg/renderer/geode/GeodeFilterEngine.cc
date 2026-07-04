@@ -1524,7 +1524,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       }
     } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
       // Per SVG Filter Effects §15.4, a negative radius (on either axis) or an
-      // all-zero radius disables the primitive — the result is the input image
+      // all-zero radius disables the primitive - the result is the input image
       // (pass-through), matching RendererTinySkia's FilterGraph. Check the SIGNED
       // source radius here: `toPixelX/Y` take `std::abs`, which would otherwise
       // turn a negative radius into a positive pixel radius and erode the input.
@@ -1686,7 +1686,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       // whose explicit x/y/w/h lies entirely outside the filter region) must
       // produce transparent output. transformBox() normalizes (min/max) the
       // corners and would erase the inversion, so test emptiness on the
-      // user-space box first — matching the CPU path's `tileW > 0 && tileH > 0`
+      // user-space box first - matching the CPU path's `tileW > 0 && tileH > 0`
       // gate in tiny-skia FilterGraph.cpp. A degenerate (0,0,0,0) source hits
       // the tile shader's degenerate guard and writes transparent everywhere.
       if (tileSourceSubregion.width() <= 0.0 || tileSourceSubregion.height() <= 0.0) {
@@ -1702,7 +1702,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         outputTex = applyTile(arena, inputTex, srcX, srcY, srcW, srcH);
       }
     } else {
-      // Unsupported primitive — pass through unchanged.
+      // Unsupported primitive - pass through unchanged.
       if (verbose_ && !warnedUnsupported_) {
         std::cerr << "GeodeFilterEngine: unsupported filter primitive "
                      "(passthrough)\n";
@@ -1739,7 +1739,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       };
 
       if (hasExplicitSubregion) {
-        // Explicit subregion attributes — resolve and intersect with filter region.
+        // Explicit subregion attributes - resolve and intersect with filter region.
         const double ux = node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
                                                                         isOBB ? bboxX : 0.0, bboxW)
                                              : filterRegion.topLeft.x;
@@ -1815,7 +1815,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                        nodeSubregion.topLeft.y, nodeSubregion.bottomRight.x,
                                        nodeSubregion.bottomRight.y);
       } else {
-        // AABB clip in pixel space — project the user-space subregion
+        // AABB clip in pixel space - project the user-space subregion
         // through the full CTM and clip to the axis-aligned bounding box.
         // Round-out to integer pixel bounds to match the CPU path's
         // floor/ceil cropping in tiny-skia's per-primitive clip; without
@@ -2118,7 +2118,7 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "FloodParamsUniform");
 
-  // Flood has no input texture — only output + uniform.
+  // Flood has no input texture - only output + uniform.
   ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
 
   wgpu::BindGroupEntry bgEntries[2]{};
@@ -2520,7 +2520,7 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
     params.kernel[i] = static_cast<float>(primitive.kernelMatrix[i]);
   }
 
-  // Upload as a storage buffer (not uniform — array<f32,25> has 16-byte stride in uniform).
+  // Upload as a storage buffer (not uniform - array<f32,25> has 16-byte stride in uniform).
   wgpu::BufferDescriptor bufDesc{};
   bufDesc.label = wgpuLabel("ConvolveMatrixParamsStorage");
   bufDesc.size = sizeof(ConvolveParams);
@@ -3095,7 +3095,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
 
   // Empty / degenerate source: feed the shader a 1×1 transparent texture
   // with an out-of-bounds transform. The resulting output is transparent
-  // everywhere — which is also what the shader would emit for any real
+  // everywhere - which is also what the shader would emit for any real
   // image whose sample coordinates fall outside the source bounds.
   if (primitive.imageData.empty() || primitive.imageWidth <= 0 || primitive.imageHeight <= 0) {
     wgpu::TextureDescriptor imgDesc{};
@@ -3127,7 +3127,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   }
 
   // Upload the image's straight-alpha RGBA pixels as a premultiplied
-  // texture — Geode operates in premultiplied throughout the filter graph
+  // texture - Geode operates in premultiplied throughout the filter graph
   // (consistent with feFlood / feMerge).
   const int imgW = primitive.imageWidth;
   const int imgH = primitive.imageHeight;
@@ -3257,7 +3257,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   //
   // preserveAspectRatio: meet / slice scales isotropically; 'none'
   // scales independently as above. The simple non-preserveAR case covers
-  // the common resvg test cases — the preserveAspectRatio computation
+  // the common resvg test cases - the preserveAspectRatio computation
   // mirrors the CPU feImage path's convention (fit box to subregion).
   double scaleImgX = regionW > 0.0 ? static_cast<double>(imgW) / regionW : 1.0;
   double scaleImgY = regionH > 0.0 ? static_cast<double>(imgH) / regionH : 1.0;

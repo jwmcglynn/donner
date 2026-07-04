@@ -304,7 +304,7 @@ public:
     }
 
     // Attempt to grab a single-character substring from the provided sourceString.
-    // This won’t perform any new allocation; it’s just a slice.
+    // This won't perform any new allocation; it's just a slice.
     ChunkedString oneChar = sourceString.substr(index, 1);
 
     // Convert that substring to a string_view.
@@ -373,7 +373,7 @@ public:
    * Used by GetAttributeLocation to re-parse just the attributes of a single element
    * starting at `<element`.
    *
-   * Returns `std::nullopt` on any malformed input — historically this function
+   * Returns `std::nullopt` on any malformed input - historically this function
    * `UTILS_RELEASE_ASSERT`ed that the caller had previously parsed the same element
    * successfully, but the editor's structured-editing path needs to call this with
    * offsets derived from source text that may no longer be well-formed (the user is
@@ -1057,7 +1057,7 @@ private:
   /**
    * Parse DOCTYPE, e.g. `<!DOCTYPE root [ ... ]>`
    *
-   * We store the entire doctype text in the node’s value(), but also
+   * We store the entire doctype text in the node's value(), but also
    * detect `<!ENTITY>` declarations in the internal subset and record them.
    */
   ParseResult<std::optional<XMLNode>> parseDoctype(FileOffset startOffset) {
@@ -1389,7 +1389,7 @@ private:
     if (tryConsume(remaining_, ">")) {
       element.setOpeningTagLocation(
           SourceRange{startOffset, currentOffsetWithLineNumber(remaining_)});
-      // Enter the element — bump nesting depth before recursing, restore on exit.
+      // Enter the element - bump nesting depth before recursing, restore on exit.
       if (nestingDepth_ >= maxNestingDepth_) {
         return createParseError("Maximum element nesting depth exceeded", startOffset);
       }
@@ -1587,7 +1587,7 @@ private:
       const uint8_t ub = static_cast<uint8_t>(nextCh);
       // Quick check: is the next character a possible NameStartChar?
       // For ASCII, check directly. For multi-byte UTF-8 (>= 0x80), the lead byte starts a
-      // multi-byte sequence which could be a valid NameStartChar — let consumeQualifiedName handle
+      // multi-byte sequence which could be a valid NameStartChar - let consumeQualifiedName handle
       // full validation.
       if (ub < 0x80 && !IsAsciiNameStartCharNoColon(nextCh)) {
         // No more attributes to parse.

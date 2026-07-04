@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Donner SVG – Geode (WebGPU) WASM Renderer</title>
+<title>Donner SVG - Geode (WebGPU) WASM Renderer</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; display: flex; flex-direction: column; align-items: center; padding: 2rem; gap: 1.5rem; }
@@ -26,7 +26,7 @@
 </head>
 <body>
 
-<h1>Donner SVG – Geode (WebGPU) WASM<span class="tag">Proof of Life</span></h1>
+<h1>Donner SVG - Geode (WebGPU) WASM<span class="tag">Proof of Life</span></h1>
 <p id="status">Checking WebGPU support...</p>
 <p id="gpu-info"></p>
 
@@ -138,7 +138,7 @@
     // 3. Wrap exported C functions.
     //
     // `donner_geode_init` and `donner_geode_render_svg` internally call
-    // wgpu::createInstance() / requestAdapter() / requestDevice() / poll —
+    // wgpu::createInstance() / requestAdapter() / requestDevice() / poll -
     // all of which suspend the WASM call stack via ASYNCIFY so the JS
     // microtask queue can drive the browser's WebGPU Promise resolution.
     // From JS, the exported functions must be wrapped with `async: true`

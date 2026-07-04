@@ -126,7 +126,7 @@ bool graphHasSpatialShift(const components::FilterGraph& filterGraph) {
 // Transformed-blur path detection (ported faithfully from
 // RendererTinySkia.cc's `isEligibleForTransformedBlurPath` /
 // `graphHasAnisotropicBlur` / `shouldUseTransformedBlurPath` /
-// `computeBlurPadding`). Keep in lockstep with tiny-skia — these decide when a
+// `computeBlurPadding`). Keep in lockstep with tiny-skia - these decide when a
 // blur under a rotated/skewed CTM must be rasterized in filter-local space so
 // the (anisotropic) blur is oriented in the element's local axes rather than
 // device axes. tiny-skia is the parity reference for the result.
@@ -174,7 +174,7 @@ bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph
           return false;
         }
       } else {
-        return false;  // Named input — not eligible.
+        return false;  // Named input - not eligible.
       }
     }
   }
@@ -299,8 +299,8 @@ StrokeStyle toStrokeStyle(const StrokeParams& params) {
 /// equivalent and only touches this degenerate case.
 ///
 /// Collinearity (not signed area) is the right test: a self-intersecting but
-/// genuinely 2D closed polygon — e.g. the symmetric zigzag
-/// `40 40 80 160 120 40 160 160` in painting/marker/marker-on-polygon — has
+/// genuinely 2D closed polygon - e.g. the symmetric zigzag
+/// `40 40 80 160 120 40 160 160` in painting/marker/marker-on-polygon - has
 /// zero *signed* area yet is a real shape whose close must be preserved.
 Path deCloseZeroAreaSubpaths(const Path& geometry) {
   const std::span<const Path::Command> cmds = geometry.commands();
@@ -454,7 +454,7 @@ struct ResolvedGradientFrame {
 /// Resolve the gradient's coordinate frame and `gradientFromPath` transform.
 /// Returns nullopt for malformed or degenerate frames (degenerate
 /// objectBoundingBox bounds, singular gradientTransform). Shared by the
-/// linear and radial resolvers — they only differ in which start/end /
+/// linear and radial resolvers - they only differ in which start/end /
 /// center/radius fields they then read from the typed gradient component.
 std::optional<ResolvedGradientFrame> resolveGradientFrame(
     const EntityHandle handle, const components::ComputedGradientComponent& computedGradient,
@@ -548,7 +548,7 @@ size_t buildGradientStops(const components::ComputedGradientComponent& computedG
   // the largest previous stop's offset, the offset is clamped up to that
   // largest previous value. Missing offsets effectively default to the
   // previous stop's offset via the same rule. The shader's
-  // `sample_stops` assumes monotonic offsets — violating the invariant
+  // `sample_stops` assumes monotonic offsets - violating the invariant
   // produces wrong colors on the affected range (e-stop-003, e-stop-024).
   float minOffset = 0.0f;
   for (size_t i = 0; i < stopCount; ++i) {
@@ -613,7 +613,7 @@ std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
   }
   const auto* linear = handle.try_get<components::ComputedLinearGradientComponent>();
   if (linear == nullptr) {
-    // Not a linear gradient — caller will try the radial resolver next.
+    // Not a linear gradient - caller will try the radial resolver next.
     return std::nullopt;
   }
 
@@ -644,7 +644,7 @@ std::optional<geode::LinearGradientParams> resolveLinearGradientParams(
 }
 
 /// Result of resolving a radial gradient against a path. Either a fully
-/// specified radial gradient ready for the GPU, OR — per SVG2 — a degenerate
+/// specified radial gradient ready for the GPU, OR - per SVG2 - a degenerate
 /// radial gradient that should be painted as a solid color equal to the
 /// last stop. Returning nullopt means "not a radial gradient" (caller should
 /// fall through to the next resolver).
@@ -685,7 +685,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
       resolveGradientFrame(handle, *computedGradient, pathBounds, viewBox, ref.contextRemap);
   if (!frame.has_value()) {
     // Recognized as radial but frame is degenerate (singular transform, etc).
-    // Drop the draw — no meaningful output possible.
+    // Drop the draw - no meaningful output possible.
     return ResolvedRadialGradient{};
   }
 
@@ -697,7 +697,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
       resolveGradientCoord(radial->r, frame->coordBounds, frame->numbersArePercent);
   // SVG2: a radius of zero collapses the gradient to a single point. Match
   // the removed full-Skia backend's behavior of painting a solid color equal to the LAST
-  // stop in the gradient — this keeps elements visible for valid degenerate
+  // stop in the gradient - this keeps elements visible for valid degenerate
   // radial gradients (e.g., `r="0"` with a single visible color).
   if (radius <= 0.0) {
     ResolvedRadialGradient out;
@@ -716,7 +716,7 @@ std::optional<ResolvedRadialGradient> resolveRadialGradientParams(
   const Vector2d center =
       resolveGradientCoords(radial->cx, radial->cy, frame->coordBounds, frame->numbersArePercent);
   // SVG 2: if `fx` / `fy` aren't specified, they coincide with `cx` / `cy`.
-  // Resolved on the spot — keeps the geometry resolution local to the
+  // Resolved on the spot - keeps the geometry resolution local to the
   // shader's coordinate system.
   const Vector2d focalCenter =
       resolveGradientCoords(radial->fx.value_or(radial->cx), radial->fy.value_or(radial->cy),
@@ -764,7 +764,7 @@ struct RendererGeode::Impl {
   std::shared_ptr<geode::GeodeDevice> device;
   // Non-owning: the pipelines live on `device`. Shared across all
   // RendererGeode instances pointing at the same GeodeDevice (issue
-  // #575 — per-renderer pipeline construction leaked ~1.6 MB/renderer
+  // #575 - per-renderer pipeline construction leaked ~1.6 MB/renderer
   // through wgpu-native's internal cache; not released even after
   // `wgpuDevicePoll(wait=true)`).
   geode::GeodePipeline* pipeline = nullptr;
@@ -844,7 +844,7 @@ struct RendererGeode::Impl {
     retireFinishedEncoder(std::move(encoder));
   }
 
-  // Reusable scratch storage for gradient stop vectors — keeps the
+  // Reusable scratch storage for gradient stop vectors - keeps the
   // per-fillPath allocation counts down and lets the `std::span` in
   // `LinearGradientParams` remain stable across the call.
   std::vector<geode::LinearGradientParams::Stop> gradientStopScratch;
@@ -865,7 +865,7 @@ struct RendererGeode::Impl {
   //
   // The Slug fill shader supports pattern sampling directly (paintMode==1),
   // so the subsequent draw call samples the tile through the existing fill
-  // pipeline — no separate textured-quad pass is needed and the path's
+  // pipeline - no separate textured-quad pass is needed and the path's
   // Slug coverage test naturally handles arbitrary (non-rectangular) fills.
 
   // Forward declaration so `PatternStackFrame::savedClipStack` can name the
@@ -899,7 +899,7 @@ struct RendererGeode::Impl {
     // Outer clip stack (filter-region scissor, clip-path masks, etc.) saved at
     // `beginPatternTile`. The pattern tile rasterises into its OWN texture in a
     // private coordinate space, so the outer scissor/clip MUST NOT apply to it
-    // — otherwise the outer filter region's device-pixel scissor (e.g.
+    // - otherwise the outer filter region's device-pixel scissor (e.g.
     // (10,10)-(490,490)) clips the tile texture's top-left rows/columns,
     // shifting every tiled cell. Restored in `endPatternTile`.
     std::vector<ClipStackEntry> savedClipStack;
@@ -931,7 +931,7 @@ struct RendererGeode::Impl {
   // M4.2 transient-texture pool (design doc 0030 §M4.2).
   //
   // Every push/pop of isolated-layer / filter-layer / mask / clip-mask
-  // scratch allocates a resolve + MSAA-companion pair — prior to this
+  // scratch allocates a resolve + MSAA-companion pair - prior to this
   // pool those allocations fired on every frame even when the same
   // document was re-rendered at the same viewport. The pool holds
   // released textures keyed by `(width, height, format, sampleCount,
@@ -946,7 +946,7 @@ struct RendererGeode::Impl {
   // --------------------------------------------------------------------
 
   /// Key used for texture-pool bucket lookup. Two textures are
-  /// interchangeable iff every field matches — same size, same
+  /// interchangeable iff every field matches - same size, same
   /// format, same MSAA sample count, same usage flags.
   struct TextureKey {
     uint32_t width = 0;
@@ -1022,7 +1022,7 @@ struct RendererGeode::Impl {
     TextureBucket& bucket = texturePool[TextureKey::From(desc)];
     bucket.lastUsedFrame = currentFrameIndex;
     if (bucket.free.size() >= kMaxPoolEntriesPerKey) {
-      // Bucket full — let the released texture go out of scope instead
+      // Bucket full - let the released texture go out of scope instead
       // of unbounded growth.
       geode::ScopedWgpuHandle<wgpu::Texture> dropped(std::move(texture));
       return;
@@ -1108,7 +1108,7 @@ struct RendererGeode::Impl {
   std::vector<LayerStackFrame> layerStack;
 
   /// Phase 7: GPU filter-graph executor. Non-owning pointer into the
-  /// shared GeodeDevice — see pipeline field comment above for why.
+  /// shared GeodeDevice - see pipeline field comment above for why.
   geode::GeodeFilterEngine* filterEngine = nullptr;
 
   /// Phase 3c: state for an in-progress `<mask>` element. Two offscreen
@@ -1138,7 +1138,7 @@ struct RendererGeode::Impl {
     wgpu::TextureDescriptor contentMsaaDesc = {};
     /// Raw mask-bounds rectangle from the driver, in the coordinate
     /// space of `maskBoundsTransform` (userSpaceOnUse or the
-    /// objectBoundingBox-mapped user space — either way, NOT yet in
+    /// objectBoundingBox-mapped user space - either way, NOT yet in
     /// device pixels).
     std::optional<Box2d> maskBounds;
     /// `deviceFromLocalTransform` snapshotted at `pushMask` time so that
@@ -1156,17 +1156,17 @@ struct RendererGeode::Impl {
   /// scissor is the intersection of every entry's `pixelRect` on this
   /// stack.
   /// Entries with `valid == false` represent pushClip calls that had no
-  /// `clipRect` component (path- or mask-only clips) — they're tracked
+  /// `clipRect` component (path- or mask-only clips) - they're tracked
   /// so `popClip` stays balanced with `pushClip`.
   ///
   /// For non-axis-aligned ancestor transforms (e.g., a rotated `<svg>`
   /// or `<use>`), the scissor rect is the AABB of the transformed clip
-  /// rect — which over-reports coverage. In that case the entry also
+  /// rect - which over-reports coverage. In that case the entry also
   /// carries the 4 polygon corners of the clip in device-pixel space,
   /// and the fragment shader tests each sample against the polygon's
   /// half-planes on top of the scissor rect. We only honour the TOPMOST
   /// polygon-bearing entry (`setClipPolygon` has no in-shader
-  /// intersection with a previous polygon) — nested rotated clips are
+  /// intersection with a previous polygon) - nested rotated clips are
   /// rare enough that we accept the over-coverage fallback.
   struct ClipStackEntry {
     Box2d pixelRect;
@@ -1176,7 +1176,7 @@ struct RendererGeode::Impl {
     /// Phase 3b path-clip mask. When non-null, `maskResolveView`
     /// references a 1-sample R8Unorm texture sampled by the fill /
     /// gradient pipelines through their clip-mask bindings. The
-    /// texture is allocated per `pushClip` call — the Impl owns the
+    /// texture is allocated per `pushClip` call - the Impl owns the
     /// wgpu::Texture to keep the resolve alive until `popClip`.
     ///
     /// For nested `<clipPath>` references, the pushClip code builds
@@ -1252,7 +1252,7 @@ struct RendererGeode::Impl {
         polygonEntry = &entry;
       }
       if (entry.maskResolveView) {
-        // Same deal for the path-clip mask — we always bind the
+        // Same deal for the path-clip mask - we always bind the
         // topmost one, and nested path-clip intersections are a
         // TODO (would need multiple clip-mask bindings in the
         // fragment shader or a per-clip compositing pass).
@@ -1291,7 +1291,7 @@ struct RendererGeode::Impl {
     encoder->setScissorRect(x, y, w, h);
   }
 
-  // Stub-state latches — set on first warning in verbose mode so each
+  // Stub-state latches - set on first warning in verbose mode so each
   // unimplemented feature logs exactly once per renderer.
   bool warnedLayer = false;
   bool warnedGradient = false;
@@ -1333,7 +1333,7 @@ struct RendererGeode::Impl {
   /// in PATH space (pre-MVP, pre-`deviceFromLocalTransform`). The pattern fragment
   /// shader needs pattern-tile-space coordinates. The driver gave us
   /// `targetFromPattern` in USER space (i.e., the viewBox frame the outer
-  /// element was drawn in) — *not* device space — which is a semantic
+  /// element was drawn in) - *not* device space - which is a semantic
   /// mismatch with the renderer, where `deviceFromLocalTransform` goes all the way
   /// from path space to device pixels (i.e., it bakes in the
   /// viewBox→canvas scale on top of the entity's own transform).
@@ -1350,7 +1350,7 @@ struct RendererGeode::Impl {
   /// Expanding: the two `deviceFromLocalTransform`/`deviceFromPath_at_capture` matrices
   /// cancel (they're the same transform when the outer element is drawing
   /// its own fill immediately after the pattern subtree returns), leaving
-  /// `inverse(targetFromPattern) · path_pos` — which sits in the user-space
+  /// `inverse(targetFromPattern) · path_pos` - which sits in the user-space
   /// frame that `tileSize` is expressed in. That keeps the shader's
   /// `fract(patternPos / tileSize)` well-defined regardless of the
   /// viewBox→canvas scale.
@@ -1380,7 +1380,7 @@ struct RendererGeode::Impl {
   // Our entt `on_update<ComputedPathComponent>` / `on_destroy<ComputedPathComponent>`
   // listener is connected lazily at `draw()` entry. Presence is tracked
   // via a sentinel context component on the registry itself
-  // (`ListenerInstalled`) — pointer-identity on `&registry` would be
+  // (`ListenerInstalled`) - pointer-identity on `&registry` would be
   // unsafe across document lifetimes (a destroyed document's registry
   // memory can be reused, giving us the same pointer value for an
   // entirely different `entt::basic_registry` with no listener).
@@ -1388,7 +1388,7 @@ struct RendererGeode::Impl {
 
   /// Sentinel context component, emplaced on a registry the first
   /// time it's seen by `ensureCacheInvalidationWired`. Lifetime ties
-  /// to the registry — dies with it, so a re-allocated registry at
+  /// to the registry - dies with it, so a re-allocated registry at
   /// the same address doesn't carry the tag.
   struct ListenerInstalled {};
 
@@ -1397,7 +1397,7 @@ struct RendererGeode::Impl {
   /// `sameSourceDrawPairs` whenever it sees two consecutive
   /// entity-matched calls. Reset to `entt::null` at `beginFrame`.
   /// Value is the `PathShape::sourceEntity`'s entity (not its
-  /// registry-qualified handle — two drawPath calls from different
+  /// registry-qualified handle - two drawPath calls from different
   /// registries are never considered "consecutive same-source").
   Entity lastDrawSourceEntity = entt::null;
 
@@ -1408,7 +1408,7 @@ struct RendererGeode::Impl {
   /// is flushed by `flushPendingBatch()` whenever state changes in a
   /// way that invalidates the batch (paint-key mismatch on the next
   /// drawPath, any push/pop, end of frame, …). A flush of size >= 2
-  /// routes through `GeoEncoder::fillPathInstanced` — one GPU draw
+  /// routes through `GeoEncoder::fillPathInstanced` - one GPU draw
   /// with `instanceCount == N`. Size-1 flushes degrade to the regular
   /// single-draw path so we don't pay the per-instance-buffer cost for
   /// unbatched draws.
@@ -1417,7 +1417,7 @@ struct RendererGeode::Impl {
     css::RGBA color;
     FillRule rule = FillRule::NonZero;
     const geode::EncodedPath* encoded = nullptr;
-    /// Reference to the source Path. Caller guarantees lifetime —
+    /// Reference to the source Path. Caller guarantees lifetime -
     /// the Path is stored on `ComputedPathComponent` (pinned by
     /// `GeodePathCacheComponent`'s cache invariant for the frame's
     /// lifetime).
@@ -1442,7 +1442,7 @@ struct RendererGeode::Impl {
   /// Connected to entt's `on_update` / `on_destroy` signals.
   /// File-scope free function with this signature is the only shape
   /// entt's `.connect<&fn>()` accepts that doesn't couple lifetime to
-  /// `this` — see M2 notes in design doc 0030.
+  /// `this` - see M2 notes in design doc 0030.
   static void onComputedPathChanged(Registry& registry, Entity entity);
 
   /// Scratch buffer for the no-source-entity stroke path. `getStrokeDerived`
@@ -1454,12 +1454,12 @@ struct RendererGeode::Impl {
   /// Value returned by `getFillEncode` / `getStrokeDerived` describing
   /// which encode the caller should pass down to `GeoEncoder`.
   struct StrokeDerived {
-    /// Path to draw. Null means "no stroke geometry — skip the draw".
+    /// Path to draw. Null means "no stroke geometry - skip the draw".
     /// Points into the entity's cache slot on hit, or into
     /// `strokeScratchPath` on the no-entity fallback.
     const Path* strokedPath = nullptr;
     /// Precomputed encode pointer for `GeoEncoder`. Non-null only when
-    /// the stroke came from a cache slot — the no-entity fallback
+    /// the stroke came from a cache slot - the no-entity fallback
     /// leaves this null and lets `GeoEncoder` encode inline.
     const geode::EncodedPath* encoded = nullptr;
     /// Fill rule to use. For open-path strokes, `strokeToFill` emits one
@@ -1471,7 +1471,7 @@ struct RendererGeode::Impl {
   /// installs / reuses a `GeodePathCacheComponent::fillEncode` on it and
   /// returns a stable pointer into that component. If `source` is null
   /// (non-driver callers), returns null and `GeoEncoder` will encode
-  /// inline — the old pre-M2 code path.
+  /// inline - the old pre-M2 code path.
   const geode::EncodedPath* getFillEncode(EntityHandle source, const Path& path, FillRule rule) {
     if (!source) {
       return nullptr;
@@ -1486,7 +1486,7 @@ struct RendererGeode::Impl {
   }
 
   /// Pack a 2D affine into the 8-float wire format the shader expects
-  /// (two `vec4f` rows, `(a, c, e, 0)` / `(b, d, f, 0)` — see
+  /// (two `vec4f` rows, `(a, c, e, 0)` / `(b, d, f, 0)` - see
   /// `struct InstanceTransform` in `shaders/slug_fill.wgsl`).
   /// `Transform2d::data` is column-major `[a, b, c, d, e, f]`.
   static void packTransform(const Transform2d& xf, float out[8]) {
@@ -1510,7 +1510,7 @@ struct RendererGeode::Impl {
   /// caller's current value. Without the restore, a flush in the
   /// middle of `drawPath` (between fill and stroke, for example)
   /// would leave the transform stuck at the flushed batch's value
-  /// for the subsequent stroke emit — breaks any fixture that
+  /// for the subsequent stroke emit - breaks any fixture that
   /// mixes batchable fills with stroked siblings.
   void flushPendingBatch() {
     if (!pendingBatch.has_value() || pendingBatch->deviceFromLocalTransforms.empty()) {
@@ -1526,7 +1526,7 @@ struct RendererGeode::Impl {
     pendingBatch.reset();
 
     if (batch.deviceFromLocalTransforms.size() == 1) {
-      // Single draw — restore the captured transform + use the
+      // Single draw - restore the captured transform + use the
       // non-instanced path.
       deviceFromLocalTransform = batch.deviceFromLocalTransforms.front();
       syncTransform();
@@ -1561,7 +1561,7 @@ struct RendererGeode::Impl {
   /// currently pending batch, or does it start a new one? Returns
   /// true when the current `drawPath` call should NOT emit (because
   /// it's been absorbed into a batch). Always returns true on a
-  /// non-empty batch state — either appends or flushes + starts new.
+  /// non-empty batch state - either appends or flushes + starts new.
   /// The caller is expected to have already verified the draw is
   /// "batch-compatible" (solid paint, no stroke, has source entity,
   /// has cached fill encode, no in-flight pattern).
@@ -1573,7 +1573,7 @@ struct RendererGeode::Impl {
       pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
       return true;
     }
-    // Key doesn't match — flush whatever's pending, then start fresh.
+    // Key doesn't match - flush whatever's pending, then start fresh.
     flushPendingBatch();
     pendingBatch = PendingBatch{};
     pendingBatch->sourceEntity = sourceEntity;
@@ -1611,7 +1611,7 @@ struct RendererGeode::Impl {
       ensureCacheInvalidationWired(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
       if (!cache.strokeSlot || cache.strokeSlot->strokeKey != strokeStyle) {
-        // Miss (or stroke-params changed) — rebuild. De-close zero-area closed
+        // Miss (or stroke-params changed) - rebuild. De-close zero-area closed
         // subpaths first (see `deCloseZeroAreaSubpaths`) so a degenerate
         // `M L Z` line strokes into a clean rectangle the analytic shader
         // covers correctly, instead of overlapping triangles.
@@ -1758,14 +1758,14 @@ struct RendererGeode::Impl {
         // Recognized as radial but otherwise unusable (empty stops, focal
         // circle containing outer, singular transform, degenerate
         // objectBoundingBox frame). Fall through to the paint-server
-        // fallback below — per SVG2, a gradient paint server that can't
+        // fallback below - per SVG2, a gradient paint server that can't
         // be instantiated on a given element should use the reference's
         // fallback color (e.g., `stroke="url(#lg) green"` paints green on
         // a zero-height horizontal line where the objectBoundingBox
         // gradient can't be applied).
       }
 
-      // Neither linear nor radial — could be a pattern, a sweep gradient
+      // Neither linear nor radial - could be a pattern, a sweep gradient
       // (not yet supported by the donner SVG parser), a malformed gradient
       // with no stops, or a degenerate frame. Fall back to the reference's
       // solid fallback color if one was declared, otherwise drop the draw.
@@ -1776,7 +1776,7 @@ struct RendererGeode::Impl {
         return;
       }
 
-      // No fallback, no gradient support — issue a one-shot warning so
+      // No fallback, no gradient support - issue a one-shot warning so
       // verbose callers can see it.
       if (verbose && !warnedGradient) {
         std::cerr << "RendererGeode: paint server is neither linear nor radial gradient and "
@@ -1898,11 +1898,11 @@ struct RendererGeode::Impl {
 
   /// Wire up per-renderer state against the shared GeodeDevice. Before
   /// issue #575's fix each renderer constructed its own pipelines
-  /// here — that leaked ~1.6 MB/renderer through wgpu-native's internal
+  /// here - that leaked ~1.6 MB/renderer through wgpu-native's internal
   /// pipeline cache (see `GeodeDevice::pipeline()` header comment).
   /// Now we just point at the device's shared copies. The `verboseFlag`
   /// parameter is kept on the method signature for API continuity but
-  /// no longer toggles filter-engine logging — the shared filter engine
+  /// no longer toggles filter-engine logging - the shared filter engine
   /// is always constructed with `verbose=false`.
   void initPipelines(bool /*verboseFlag*/) {
     textureFormat = device->textureFormat();
@@ -1917,7 +1917,7 @@ struct RendererGeode::Impl {
 void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
   // Sentinel lives on the registry's context store, so its presence
   // implies "this registry has already had our listener connected".
-  // When the registry is destroyed the sentinel goes with it — a
+  // When the registry is destroyed the sentinel goes with it - a
   // later registry allocated at the same address will (correctly)
   // miss the sentinel and get its own listener. Pointer-identity on
   // `&registry` alone can't distinguish those cases.
@@ -1934,7 +1934,7 @@ void RendererGeode::Impl::ensureCacheInvalidationWired(Registry& registry) {
 }
 
 void RendererGeode::Impl::onComputedPathChanged(Registry& registry, Entity entity) {
-  // entt allows `remove` on a component the entity doesn't hold — it's a
+  // entt allows `remove` on a component the entity doesn't hold - it's a
   // cheap no-op in that case. We don't need an `all_of` guard.
   registry.remove<geode::GeodePathCacheComponent>(entity);
 }
@@ -1944,7 +1944,7 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
   impl_->device = geode::GeodeDevice::CreateHeadless();
   if (!impl_->device) {
     if (verbose) {
-      std::cerr << "RendererGeode: GeodeDevice::CreateHeadless() failed — entering no-op mode\n";
+      std::cerr << "RendererGeode: GeodeDevice::CreateHeadless() failed - entering no-op mode\n";
     }
     return;
   }
@@ -1957,7 +1957,7 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
   impl_->device = std::move(device);
   if (!impl_->device) {
     if (verbose) {
-      std::cerr << "RendererGeode: null GeodeDevice passed — entering no-op mode\n";
+      std::cerr << "RendererGeode: null GeodeDevice passed - entering no-op mode\n";
     }
     return;
   }
@@ -1994,7 +1994,7 @@ RendererGeode::~RendererGeode() {
   // `device->setCounters(&counters)`). If this renderer's counters are still the ones the
   // (shared) device refers to, clear the pointer before our Impl (and its `counters` member) is
   // freed. Otherwise the next `countBuffer`/`countTexture` call by any peer renderer sharing this
-  // device will dereference freed memory — which is exactly how chained feImage rendering
+  // device will dereference freed memory - which is exactly how chained feImage rendering
   // crashes: multiple offscreen renderers share one device, each one overrides `counters_` in
   // `initPipelines`, and the first one destroyed leaves `counters_` dangling for the others.
   if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
@@ -2068,7 +2068,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   }
 
   // Wire the counters onto the device for this frame. A shared GeodeDevice
-  // may have been handed to another renderer between frames — the last
+  // may have been handed to another renderer between frames - the last
   // caller wins, which is exactly the serial per-frame access pattern we
   // want. Must run AFTER the null-device guard above so headless systems
   // don't null-ptr-crash in draw()→beginFrame().
@@ -2157,7 +2157,7 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
     }
   }
 
-  // Single CommandEncoder for the entire frame — shared across the
+  // Single CommandEncoder for the entire frame - shared across the
   // base encoder and every push/pop layer/filter/mask helper. One
   // queue submit at `endFrame`. Design doc 0030 Milestone 3.
   wgpu::CommandEncoderDescriptor cedesc = {};
@@ -2183,7 +2183,7 @@ void RendererGeode::endFrame() {
   impl_->flushPendingBatch();
 
   if (impl_->encoder) {
-    // Ends the open render pass without submitting — shared-mode.
+    // Ends the open render pass without submitting - shared-mode.
     impl_->retireActiveEncoder();
   }
 
@@ -2256,7 +2256,7 @@ void RendererGeode::popTransform() {
 }
 
 void RendererGeode::pushClip(const ResolvedClip& clip) {
-  // M6-B step 3: flush batch before a state change — a subsequent
+  // M6-B step 3: flush batch before a state change - a subsequent
   // drawPath inside the new clip is no longer "batch-compatible"
   // with the pending run from the outer clip region.
   impl_->flushPendingBatch();
@@ -2266,7 +2266,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
   // (plus the Phase 3a polygon clip for non-axis-aligned ancestors).
   // Path-based clip-paths are implemented via the Phase 3b mask
   // pipeline below. `<mask>` alpha masks run through the Phase 3c mask
-  // blit pipeline via `pushMaskLayer` — by the time `pushClip` runs the
+  // blit pipeline via `pushMaskLayer` - by the time `pushClip` runs the
   // mask is already composed upstream, so there's nothing to do for
   // `clip.mask` here.
 
@@ -2279,7 +2279,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     entry.pixelRect = t.transformBox(*clip.clipRect);
     entry.valid = true;
 
-    // Detect a non-axis-aligned ancestor transform — rotation or shear
+    // Detect a non-axis-aligned ancestor transform - rotation or shear
     // means the true clip shape is a parallelogram, not a rectangle,
     // and a rectangular scissor can only describe its AABB. In that
     // case we carry the 4 transformed corners through to the encoder
@@ -2372,7 +2372,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
     // Partition `clip.clipPaths` into contiguous [begin, end) ranges,
     // one per layer, in the order they appear. Layers appear in
-    // traversal order — within a run the layer is constant, and
+    // traversal order - within a run the layer is constant, and
     // boundaries correspond to clipPath-reference crossings. For
     // each run we'll render one mask texture.
     struct LayerRun {
@@ -2398,7 +2398,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     // is rendered with the previously-rendered deeper mask bound as
     // the input clip so shapes get intersected with the deeper
     // union. Runs at the same layer don't intersect with each other
-    // — the Max blend on the R channel handles union within a run.
+    // - the Max blend on the R channel handles union within a run.
     const Transform2d savedDeviceFromLocalTransform = impl_->deviceFromLocalTransform;
 
     // If any clip stack entry already carries a path mask (e.g., an
@@ -2471,7 +2471,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       entry.maskResolveView = nestedMaskView;
     }
 
-    // Clear the encoder's internal clip-mask state — the next main
+    // Clear the encoder's internal clip-mask state - the next main
     // pass will rebind via `updateEncoderScissor`.
     impl_->encoder->clearClipMask();
     impl_->encoder->setTransform(savedDeviceFromLocalTransform);
@@ -2487,7 +2487,7 @@ void RendererGeode::popClip() {
   impl_->flushPendingBatch();
 
   if (!impl_->clipStack.empty()) {
-    // Defer release of the mask textures to endFrame — the main
+    // Defer release of the mask textures to endFrame - the main
     // encoder that was just drawing under this clip may have recorded
     // samples from `maskResolveTexture` into the frame encoder, and
     // recycling mid-frame could hand the texture to a later acquire
@@ -2514,7 +2514,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   // source-over composite path.
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       !impl_->encoder) {
-    // Headless or degenerate state — drop silently but still push a
+    // Headless or degenerate state - drop silently but still push a
     // placeholder frame so popIsolatedLayer stays balanced.
     impl_->layerStack.push_back({});
     return;
@@ -2560,7 +2560,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
 
   // Finish the outer encoder so its queued draws land on the saved target
   // before we redirect subsequent work into the offscreen layer. Same
-  // shape as `beginPatternTile` — two render-pass submissions ordered
+  // shape as `beginPatternTile` - two render-pass submissions ordered
   // serially on the queue.
   impl_->encoder->finish();
 
@@ -2583,7 +2583,7 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
   impl_->layerStack.push_back(std::move(frame));
-  // The layer inherits the outer clip stack — reapply it to the new
+  // The layer inherits the outer clip stack - reapply it to the new
   // encoder so scissors carry through.
   impl_->updateEncoderScissor();
 }
@@ -2616,7 +2616,7 @@ void RendererGeode::popIsolatedLayer() {
     // reading from the render pass's own color attachment. Snapshot
     // the parent's 1-sample resolve target into a separate texture
     // via a CopyTextureToTexture command, then open a fresh parent
-    // encoder with `LoadOp::Clear` (NOT Load — the blend shader
+    // encoder with `LoadOp::Clear` (NOT Load - the blend shader
     // outputs the final pixel directly, incorporating the snapshot
     // backdrop, so preserving the old contents would double-apply).
     wgpu::TextureDescriptor snapDesc = {};
@@ -2634,7 +2634,7 @@ void RendererGeode::popIsolatedLayer() {
       // Record the snapshot copy into the shared frame CommandEncoder
       // (design doc 0030 M3). `impl_->encoder->finish()` above already
       // ended the layer's render pass, so it's safe to record a
-      // CommandEncoder-level copyTextureToTexture here — no separate
+      // CommandEncoder-level copyTextureToTexture here - no separate
       // CommandEncoder + submit required.
       wgpu::TexelCopyTextureInfo src = {};
       src.texture = frame.savedTarget;
@@ -2645,13 +2645,13 @@ void RendererGeode::popIsolatedLayer() {
       impl_->frameCommandEncoder.get().copyTextureToTexture(src, dst, extent);
 
       // Open a fresh parent encoder that PRESERVES the target's existing
-      // contents (the backdrop pre-push — identical to `snapshot` at
+      // contents (the backdrop pre-push - identical to `snapshot` at
       // this point, since we just copied from `savedTarget` above).
       //
       // We must not CLEAR here: if an outer clip/scissor is active,
       // `updateEncoderScissor` will restrict the blend blit to the clip
       // rect, and any pixels outside that rect would remain at the
-      // clear color (transparent) — losing the backdrop outside the
+      // clear color (transparent) - losing the backdrop outside the
       // clip. With Load, out-of-scissor pixels are preserved from the
       // attachment, which already holds the backdrop.
       //
@@ -2675,7 +2675,7 @@ void RendererGeode::popIsolatedLayer() {
       impl_->releaseTextureAtFrameEnd(std::move(snapshot), snapDesc);
       return;
     }
-    // If snapshot allocation failed fall through to the Normal path —
+    // If snapshot allocation failed fall through to the Normal path -
     // at least the layer content shows up even if unblended.
   }
 
@@ -2702,7 +2702,7 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
   impl_->flushPendingBatch();  // M6-B step 3
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       !impl_->encoder || !impl_->filterEngine) {
-    // Headless or degenerate state — push a placeholder frame so
+    // Headless or degenerate state - push a placeholder frame so
     // popFilterLayer stays balanced.
     impl_->filterStack.push_back({});
     return;
@@ -2866,7 +2866,7 @@ void RendererGeode::popFilterLayer() {
 
   // ── Transformed-blur path ────────────────────────────────────────────────
   // An anisotropic blur under a rotated CTM (or any blur under skew) cannot be
-  // reproduced by Geode's device-axis separable blur — the blur would land in
+  // reproduced by Geode's device-axis separable blur - the blur would land in
   // device axes instead of the element's local axes. Mirror tiny-skia: rasterize
   // the captured device content into an axis-aligned filter-local raster, run the
   // (now axis-aligned) blur there, then composite the result back through the CTM
@@ -3067,7 +3067,7 @@ void RendererGeode::popFilterLayer() {
     // TODO(geode): Clip the composite to the filter region per SVG 2 §15.5.
     // `frame.filterRegion` is passed in from the driver in user-space
     // coordinates, not pixel-space; we'd need to transform by the current
-    // CTM snapshot before using it as a scissor. Skipping for this PR —
+    // CTM snapshot before using it as a scissor. Skipping for this PR -
     // all current feGaussianBlur resvg tests pass without the clip.
     impl_->encoder->blitFullTarget(filteredTexture, 1.0);
   }
@@ -3087,7 +3087,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   impl_->flushPendingBatch();  // M6-B step 3
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
-    // Headless / degenerate — push a placeholder so popMask stays balanced.
+    // Headless / degenerate - push a placeholder so popMask stays balanced.
     impl_->maskStack.push_back({});
     return;
   }
@@ -3193,7 +3193,7 @@ void RendererGeode::popMask() {
   impl_->maskStack.pop_back();
 
   if (!frame.savedEncoder) {
-    // Placeholder frame from the headless path — nothing to do.
+    // Placeholder frame from the headless path - nothing to do.
     return;
   }
 
@@ -3228,7 +3228,7 @@ void RendererGeode::popMask() {
   // Composite `content * luminance(mask)` onto the outer target.
   impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, pixelMaskBounds);
 
-  // Defer release to endFrame — `blitFullTargetMasked` recorded
+  // Defer release to endFrame - `blitFullTargetMasked` recorded
   // samples from both `contentTexture` and `maskTexture` into the
   // frame encoder. MSAA companions had no post-render samples but
   // are bucketed alongside their resolve for symmetry.
@@ -3290,7 +3290,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
     return;
   }
 
-  // 4× MSAA companion render target — shares the same encoder lifetime
+  // 4× MSAA companion render target - shares the same encoder lifetime
   // as the tile; resolved into `tileTexture` at pass end. Skipped on
   // the alpha-coverage path (sampleCount == 1).
   geode::ScopedWgpuHandle<wgpu::Texture> tileMsaaTexture;
@@ -3366,7 +3366,7 @@ void RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
 
   // Redirect all subsequent draw calls into the new tile texture. The new
   // encoder uses a coordinate system where path-space (0,0)..(tileRect.w,
-  // tileRect.h) maps to (0,0)..(tilePixelWidth, tilePixelHeight) — i.e.,
+  // tileRect.h) maps to (0,0)..(tilePixelWidth, tilePixelHeight) - i.e.,
   // the tile is rasterised at its native pixel resolution.
   //
   // The driver calls `setTransform` on the renderer before issuing draws
@@ -3433,7 +3433,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // finished in `beginPatternTile`; the new one loads the current contents
   // of the target (no clear), since we don't want to wipe previously-drawn
   // content. `GeoEncoder` defaults to clearing unless `hasExplicitClear` is
-  // false and no draws are issued — but its render pass *always* uses
+  // false and no draws are issued - but its render pass *always* uses
   // LoadOp::Clear with a transparent clearColor by default. That would
   // wipe the outer target on the next draw. Work around this by using the
   // saved encoder path: we can't directly reuse the saved encoder because
@@ -3443,7 +3443,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // Instead we issue a `CopyTextureToTexture` before the new encoder's
   // first draw to preserve the outer target's contents... actually an
   // even simpler fix is to have the new encoder skip its default clear by
-  // explicitly calling `clear()` — but clear() sets the clearColor which
+  // explicitly calling `clear()` - but clear() sets the clearColor which
   // still wipes the target.
   //
   // Simpler: run the pre-existing content through. We allocate a *scratch*
@@ -3472,7 +3472,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
     impl_->encoder = std::move(newEncoder);
     // Re-apply the active clip stack to the freshly-created encoder.
     // The scissor state lived on the OLD encoder (finished inside
-    // beginPatternTile) and doesn't carry over automatically — without
+    // beginPatternTile) and doesn't carry over automatically - without
     // this call, a pattern capture triggered from inside a viewport
     // or `<use>` clip would leak the subsequent pattern fill outside
     // that clip rect. Mirrors the scissor restore in push/
@@ -3484,7 +3484,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
 
   // Stash the completed tile as the current pattern paint slot. The tile
   // size is in *pattern-space* units (matching the vertex shader's
-  // input), not pixels — the shader scales `patternFromPath` positions
+  // input), not pixels - the shader scales `patternFromPath` positions
   // through the existing 4x4 matrix multiply and compares against the
   // tile's native dimensions.
   Impl::PatternPaintSlot slot;
@@ -3492,7 +3492,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
   slot.tileSize = frame.tileRect.size();
   slot.targetFromPattern = frame.targetFromPattern;
   // `frame.savedDeviceFromLocalTransform` is the path→device transform that was live at
-  // `beginPatternTile` time — i.e., the outer element's deviceFromLocalTransform
+  // `beginPatternTile` time - i.e., the outer element's deviceFromLocalTransform
   // including the viewBox→canvas scale. We stash it on the slot so
   // `buildPatternPaint` can cancel it out of the live `deviceFromLocalTransform`
   // at the upcoming fill draw, leaving the pattern sample in the pattern's
@@ -3517,8 +3517,8 @@ void RendererGeode::setPaint(const PaintParams& paint) {
 
 void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) {
   // M6-B detection (design doc 0030 §M6 Bullet 2): when a `<use>`
-  // draws a path that was also just drawn by the previous call —
-  // same source entity, same paint — this is exactly the case an
+  // draws a path that was also just drawn by the previous call -
+  // same source entity, same paint - this is exactly the case an
   // instancing pass would collapse into one GPU draw. Count it here
   // so the benefit of a future batcher is measurable before the
   // batcher ships. Null source (non-driver callers) never matches,
@@ -3601,7 +3601,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // inner contours as two *same-winding* closed subpaths (not opposite),
   // so NonZero would over-fill the interior and EvenOdd is required to
   // get a hollow ring. For open subpaths, `strokeToFill` emits one
-  // closed polygon — but with overlapping start/end caps (e.g. the
+  // closed polygon - but with overlapping start/end caps (e.g. the
   // resvg `stroke-linecap/open-path-with-*` tests where the 4-point path
   // `M 150 50 l 0 80 -100 -40 100 -40` ends at its start), the inside-
   // miter shortcut in `emitJoin` creates a self-intersecting polygon
@@ -3638,7 +3638,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // Otherwise dispatch through the shared painted-path routine so stroke
   // gradients get the same handling as fill gradients (including the
   // gradient-unit objectBoundingBox transform, which is relative to the
-  // *original* path bounds — we deliberately do NOT use
+  // *original* path bounds - we deliberately do NOT use
   // `strokedOutline.bounds()` here).
   const double effectiveOpacity = impl_->paint.strokeOpacity;
   auto strokeServer = impl_->paint.stroke;
@@ -3735,7 +3735,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
   // Text bounding box for `objectBoundingBox` gradient/pattern paint. A tspan
   // has no bbox, so span gradient/pattern paint maps through this element-level
-  // box — same computation as `RendererTinySkia::drawText` (shared helper). The
+  // box - same computation as `RendererTinySkia::drawText` (shared helper). The
   // bbox is passed to `drawPaintedPathAgainst` as the gradient *geometry* path
   // while the glyph outline is the *draw* path.
   const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,
@@ -3820,7 +3820,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
 
     // Effective per-run fill paint *server*: a span's own non-None fill overrides
     // the element-level fill. This carries gradient refs that the solid
-    // `resolveSpanFill` collapses (it returns the inherited default for a ref) —
+    // `resolveSpanFill` collapses (it returns the inherited default for a ref) -
     // `drawPaintedPathAgainst` resolves them against the text bbox below (mirrors
     // `RendererTinySkia::drawText`). Patterns are NOT routed here: the driver
     // stages a `patternFillPaint` slot for a pattern fill, so `hasPatternFill`
@@ -3838,7 +3838,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const components::ResolvedPaintServer& fillServer =
         spanOverridesFill ? text.spans[runIndex].resolvedFill : impl_->paint.fill;
     // The fill is a gradient when (a) the span overrode with its own gradient
-    // ref — wins even if the element has a pattern, or (b) the element-level fill
+    // ref - wins even if the element has a pattern, or (b) the element-level fill
     // is a gradient ref and no element pattern was staged.
     const bool fillIsGradient =
         !textBoundsPath.empty() &&
@@ -3893,7 +3893,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       }
     }
     // A stroke is a gradient when (a) the span overrode with its own gradient ref
-    // — wins even if the element has a pattern stroke, or (b) the element-level
+    // - wins even if the element has a pattern stroke, or (b) the element-level
     // stroke is a gradient ref and no element pattern stroke was staged. Pattern
     // stroke stages a `patternStrokePaint` slot (driver), distinguishing it from
     // a gradient stroke (both `PaintResolvedReference`). Mirrors the fill
@@ -3925,7 +3925,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       // Placed outline in document space, shared with RendererTinySkia via
       // PlacedTextGeometry so the two backends can't drift on placement (0038).
       // This encodes tiny-skia's order (stretch the raw outline, then
-      // `Rotate * Translate`) — geode previously composed
+      // `Rotate * Translate`) - geode previously composed
       // `Scale * Rotate * Translate`, which stretched in the post-rotation frame
       // (the D4 divergence). Empty for outline-less glyphs; bitmap-only fonts
       // were already skipped at the run level above.
@@ -4277,7 +4277,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   // pointer + two void*'s rather than a std::function. We stash the "done"
   // flag in `userdata1` so the callback can flip it and we can spin until it
   // flips. wgpu-native guarantees `wgpuDevicePoll(wait=true)` drains pending
-  // callbacks before returning — a single `poll(true, nullptr)` is enough to
+  // callbacks before returning - a single `poll(true, nullptr)` is enough to
   // wait for the map to complete.
   struct MapState {
     bool done = false;
@@ -4293,7 +4293,7 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   mapCb.userdata1 = &mapState;
   mapCb.userdata2 = nullptr;
   // Browser WebGPU fires `mapAsync` completion via the JS Promise
-  // microtask — there is no wgpu-native-style "poll" on the instance.
+  // microtask - there is no wgpu-native-style "poll" on the instance.
   // `AllowProcessEvents` would require an explicit `wgpuInstanceProcessEvents`
   // call, which we never make (our Emscripten `wgpuDevicePoll` stub only
   // yields via `emscripten_sleep`). Use `AllowSpontaneous` so the browser
@@ -4320,8 +4320,8 @@ RendererBitmap RendererGeode::takeSnapshot() const {
   // Strip row padding and unpremultiply alpha so the consumer gets a tightly
   // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies
   // paint RGB by alpha before upload to match the blend pipeline's
-  // premultiplied storage, but `RendererBitmap` — like Skia's and
-  // tiny-skia's `takeSnapshot()` outputs — is defined as straight RGBA.
+  // premultiplied storage, but `RendererBitmap` - like Skia's and
+  // tiny-skia's `takeSnapshot()` outputs - is defined as straight RGBA.
   // Returning raw texture bytes would darken semi-transparent content and
   // break cross-backend parity.
   bitmap.dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));

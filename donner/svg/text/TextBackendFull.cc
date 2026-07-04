@@ -34,26 +34,26 @@ FT_Library getFtLibrary() {
 /// should be suppressed (CSS Text §8.1: "cursive scripts ... must not use letter-spacing").
 /// This covers Arabic, Syriac, Thaana, N'Ko, Mandaic, and similar connecting scripts.
 bool isCursiveScript(uint32_t cp) {
-  // Arabic (0600–06FF), Arabic Supplement (0750–077F), Arabic Extended-A (08A0–08FF),
-  // Arabic Presentation Forms-A (FB50–FDFF), Arabic Presentation Forms-B (FE70–FEFF).
+  // Arabic (0600-06FF), Arabic Supplement (0750-077F), Arabic Extended-A (08A0-08FF),
+  // Arabic Presentation Forms-A (FB50-FDFF), Arabic Presentation Forms-B (FE70-FEFF).
   if ((cp >= 0x0600 && cp <= 0x06FF) || (cp >= 0x0750 && cp <= 0x077F) ||
       (cp >= 0x08A0 && cp <= 0x08FF) || (cp >= 0xFB50 && cp <= 0xFDFF) ||
       (cp >= 0xFE70 && cp <= 0xFEFF)) {
     return true;
   }
-  // Syriac (0700–074F), Syriac Supplement (0860–086F).
+  // Syriac (0700-074F), Syriac Supplement (0860-086F).
   if ((cp >= 0x0700 && cp <= 0x074F) || (cp >= 0x0860 && cp <= 0x086F)) {
     return true;
   }
-  // Thaana (0780–07BF).
+  // Thaana (0780-07BF).
   if (cp >= 0x0780 && cp <= 0x07BF) {
     return true;
   }
-  // N'Ko (07C0–07FF).
+  // N'Ko (07C0-07FF).
   if (cp >= 0x07C0 && cp <= 0x07FF) {
     return true;
   }
-  // Mandaic (0840–085F).
+  // Mandaic (0840-085F).
   if (cp >= 0x0840 && cp <= 0x085F) {
     return true;
   }
@@ -168,7 +168,7 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
 
   auto& entry = registry_.emplace<HbFontEntry>(handle.entity());
 
-  // FT_New_Memory_Face does NOT copy the data — it keeps a pointer. The font data is owned by
+  // FT_New_Memory_Face does NOT copy the data - it keeps a pointer. The font data is owned by
   // FontManager (via shared_ptr), so it outlives the FT_Face.
   FT_Error err = FT_New_Memory_Face(getFtLibrary(), data.data(), static_cast<FT_Long>(data.size()),
                                     0, &entry.ftFace);

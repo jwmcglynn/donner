@@ -610,7 +610,7 @@ TEST_F(DocumentSyncControllerTest, SetTextContentMirrorsIntoSourceText) {
   controller.applyPendingWritebacks(app, tool, textEditor);
 
   // The live DOM, the document source, and the source pane all reflect the
-  // edit — text content edits are structural DOM edits like any other, so
+  // edit - text content edits are structural DOM edits like any other, so
   // they must not be lost on save or on the next source reparse.
   EXPECT_EQ(text->cast<svg::SVGTextElement>().textContent(), "updated content");
   EXPECT_NE(std::string(app.document().document().source()).find("updated content"),
@@ -633,7 +633,7 @@ TEST_F(DocumentSyncControllerTest, UndoToBaselineClearsDirtyFlagWhenSourceHasTra
   // canonicalizes lines when text is round-tripped through it, dropping that
   // trailing newline. If the clean baseline is stored verbatim it never equals
   // the text editor's canonical form, so `syncDirtyFromSource` latches the
-  // dirty flag on forever — including after an undo that restores the source.
+  // dirty flag on forever - including after an undo that restores the source.
   EditorApp app;
   TextEditor textEditor;
   SelectTool tool;

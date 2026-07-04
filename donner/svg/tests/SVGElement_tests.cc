@@ -330,7 +330,7 @@ TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentat
   // must *replace* the prior `style=""` contribution (so declarations the
   // user removed from the source text don't linger in the ECS) while
   // preserving properties set by presentation attributes like `fill="red"`
-  // — which live in the same PropertyRegistry but are tagged with a
+  // - which live in the same PropertyRegistry but are tagged with a
   // distinct Specificity (FromABC(0,0,0) vs StyleAttribute()).
   auto element = create();
   auto& styleComponent = element.entityHandle().get_or_emplace<components::StyleComponent>();
@@ -352,7 +352,7 @@ TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentat
   // Now the editor-rewrite case: user deletes `opacity` from the
   // style attribute and retypes the rest. setStyle must clear the
   // prior style-origin properties (stroke AND opacity) and then
-  // re-parse the new value — but fill="red" must survive, because
+  // re-parse the new value - but fill="red" must survive, because
   // its specificity marks it as a presentation attribute, not
   // style-origin.
   styleComponent.setStyle("stroke: blue");
@@ -361,7 +361,7 @@ TEST_F(SVGElementTests, SetStyleReplacesStyleOriginPropertiesPreservingPresentat
       << "fill presentation attribute must survive setStyle rewrite";
   EXPECT_TRUE(styleComponent.properties.stroke.isSpecified());
   EXPECT_FALSE(styleComponent.properties.opacity.isSpecified())
-      << "opacity must be cleared — it was style-origin and no longer appears";
+      << "opacity must be cleared - it was style-origin and no longer appears";
 }
 
 TEST_F(SVGElementTests, UpdateStyleMarksStyleCascadeDirty) {
@@ -1240,7 +1240,7 @@ TEST_F(SVGElementTests, UpdateStyleMultipleSequentialUpdates) {
 
 TEST_F(SVGElementTests, UpdateStyleFromEmptyBase) {
   auto element = create();
-  // No setStyle — start with nothing.
+  // No setStyle - start with nothing.
   element.updateStyle("fill: red; stroke: blue");
 
   auto maybeStyle = element.getAttribute("style");
@@ -1257,7 +1257,7 @@ TEST_F(SVGElementTests, UpdateStyleFromEmptyBase) {
 }
 
 TEST_F(SVGElementTests, FindMatchingAttributes) {
-  // create() is an Unknown element, but that’s fine for testing generic XML attributes
+  // create() is an Unknown element, but that's fine for testing generic XML attributes
   auto element = create();
   element.setAttribute("foo", "valueFoo");
   element.setAttribute({"namespace", "bar"}, "valueBar");
@@ -1300,7 +1300,7 @@ TEST_F(SVGElementTests, GetComputedStyleBasic) {
   // This is a minimal test verifying getComputedStyle() after setting a property.
   // For more robust style tests, see your existing style test suite (ElementStyleTests).
 
-  // Let’s parse a rectangle with an inline style and a presentation attribute:
+  // Let's parse a rectangle with an inline style and a presentation attribute:
   auto doc = parseSVG(R"(
     <svg>
       <rect id="myRect" style="stroke: green" fill="red" />

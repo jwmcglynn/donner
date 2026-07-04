@@ -18,7 +18,7 @@ TEST(GeodeShaders, SlugFillCompiles) {
 
   // Note: Dawn's shader compilation is asynchronous in principle but for
   // WGSL it's typically synchronous. If this test passes the WGSL parsed
-  // and type-checked successfully — errors would have fired the device's
+  // and type-checked successfully - errors would have fired the device's
   // uncaptured error callback before we get here.
 }
 

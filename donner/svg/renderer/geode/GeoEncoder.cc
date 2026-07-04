@@ -62,13 +62,13 @@ struct alignas(16) Uniforms {
   uint32_t fillRule;          // 160 .. 164
   uint32_t paintMode;         // 164 .. 168
   float patternOpacity;       // 168 .. 172
-  uint32_t hasClipPolygon;    // 172 .. 176 — 0 = no clip, 1 = clipPolygon active
+  uint32_t hasClipPolygon;    // 172 .. 176 - 0 = no clip, 1 = clipPolygon active
   // Phase 3b path-clip mask flag. When nonzero, the shader samples the
   // clip mask texture at binding 5 (linear-filtered RGBA8Unorm) and folds
   // its averaged coverage into the fragment colour. A 1x1 dummy
   // texture is always bound so the `textureSample` is always legal.
   uint32_t hasClipMask;  // 176 .. 180
-  uint32_t _clipPad0;    // 180 .. 184 — std140 alignment for next vec4 array
+  uint32_t _clipPad0;    // 180 .. 184 - std140 alignment for next vec4 array
   uint32_t _clipPad1;    // 184 .. 188
   uint32_t _clipPad2;    // 188 .. 192
   // Band-grid parameters (0041 §8.1). Two vec4-aligned rows: the fragment
@@ -103,7 +103,7 @@ static_assert(sizeof(Uniforms) == 288, "Uniforms struct layout mismatch");
 
 /// Build a column-major 4x4 matrix from an affine `Transform2d` and write it
 /// into the first 16 floats of the output array. Used for the `mvp` and
-/// `patternFromPath` uniform fields — both expect mat4x4 layout even though
+/// `patternFromPath` uniform fields - both expect mat4x4 layout even though
 /// the 2D content only needs a 2x3 affine.
 void affineToMat4(const Transform2d& t, float* out16) {
   const double a = t.data[0];
@@ -177,7 +177,7 @@ struct alignas(16) GradientUniforms {
   float stopColors[16 * 4];  // 160 .. 416
   float stopOffsets[4 * 4];  // 416 .. 480
   // Phase 3a convex clip polygon + Phase 3b path-clip mask flag.
-  // Layout mirrors `slug_gradient.wgsl` — `hasClipPolygon` +
+  // Layout mirrors `slug_gradient.wgsl` - `hasClipPolygon` +
   // `hasClipMask` + 2 pad u32 to reach vec4 alignment, then the 4
   // half-plane rows.
   uint32_t hasClipPolygon;  // 480 .. 484
@@ -211,7 +211,7 @@ struct GeoEncoder::Impl {
 
   /// Per-encoder growable GPU buffer used as a bump-allocation arena
   /// for per-draw data (vertex / band / curve). Design doc 0030
-  /// Milestone 1 — replaces the per-fill `dev.createBuffer` pattern
+  /// Milestone 1 - replaces the per-fill `dev.createBuffer` pattern
   /// with a single long-lived buffer that each draw writes into at the
   /// current `offset`, then advances.
   ///
@@ -239,7 +239,7 @@ struct GeoEncoder::Impl {
   Arena curveArena;
   Arena uniformArena;
   /// Analytic dual-ray fill (0041 §8): vertical band/curve SSBOs and the dense
-  /// H/V band-grid lookup tables. Bound at bindings 8–11 of the fill pipeline.
+  /// H/V band-grid lookup tables. Bound at bindings 8-11 of the fill pipeline.
   Arena vBandArena;
   Arena vCurveArena;
   Arena hGridArena;
@@ -415,7 +415,7 @@ struct GeoEncoder::Impl {
   }
   // When sampleCount == 4: multisampled color attachment. All draws land
   // here and the hardware resolves into `target` at the end of each pass.
-  // When sampleCount == 1: unused (null) — draws go directly to `target`.
+  // When sampleCount == 1: unused (null) - draws go directly to `target`.
   wgpu::Texture msaaTarget;
   ScopedWgpuHandle<wgpu::TextureView> msaaTargetView;
   // 1-sample resolve / direct-render texture. External code (image blit,
@@ -430,7 +430,7 @@ struct GeoEncoder::Impl {
   uint32_t sampleCount = 4;
 
   // Dummy texture / sampler resources are now owned by `GeodeDevice`
-  // and shared across every GeoEncoder — see `GeodeDevice::dummyPatternTexture()`
+  // and shared across every GeoEncoder - see `GeodeDevice::dummyPatternTexture()`
   // and the M4.2 notes in design doc 0030. Access them via
   // `device->dummyPatternTextureView()`, etc. The bind-group layout
   // always includes the pattern + clip-mask slots so the pipeline can
@@ -445,13 +445,13 @@ struct GeoEncoder::Impl {
   // `activeClipMaskTexture` keeps the VIEW's parent texture alive for
   // as long as the encoder holds the view. Without this keepalive,
   // when the clip-stack entry that originated the view is destroyed
-  // (in `RendererGeode::popClip` — `clipStack.pop_back()` happens
+  // (in `RendererGeode::popClip` - `clipStack.pop_back()` happens
   // BEFORE the follow-up `updateEncoderScissor`), the underlying
   // Vulkan `VkImage` / `VkImageView` are freed while our C++ handle
   // still points at them. A subsequent `createBindGroup` then passes
   // a stale `VkImageView` handle to the Vulkan driver, tripping
   // lvp's `vk_object_base_assert_valid` on debug Mesa and corrupting
-  // the heap on release Mesa — see issue #551.
+  // the heap on release Mesa - see issue #551.
   wgpu::Texture activeClipMaskTexture;
   wgpu::TextureView activeClipMaskView;
 
@@ -459,13 +459,13 @@ struct GeoEncoder::Impl {
   // Built on demand via `GeodeDevice::maskPipeline()` the first time
   // `beginMaskPass` fires on any encoder in the process; encoders that
   // never open a mask pass pay nothing. Sharing matters because
-  // wgpu-native's internal pipeline cache never drains — constructing
+  // wgpu-native's internal pipeline cache never drains - constructing
   // `GeodeMaskPipeline` per-encoder used to leak alongside the main
   // render pipelines (issue #575).
   GeodeMaskPipeline* maskPipelineOwned = nullptr;
 
   // While a mask pass is open (`maskPassOpen == true`), the main
-  // render pass is closed — draw calls that hit the mask pipeline go
+  // render pass is closed - draw calls that hit the mask pipeline go
   // through `maskPass`. `beginMaskPass` saves the current `transform`
   // so main-pass draw code picks back up exactly where it left off
   // when the mask pass ends.
@@ -494,12 +494,12 @@ struct GeoEncoder::Impl {
   // submitted content is preserved. Set via `setLoadPreserve()`.
   bool loadPreserve = false;
 
-  // Current transform — applied to MVP for the next draw.
+  // Current transform - applied to MVP for the next draw.
   Transform2d transform = Transform2d();  // Identity.
 
   // Current scissor rectangle in target-pixel coords. An empty/unset
   // scissor means "no clipping" (full target extent). Applied to each
-  // render pass as it opens via `SetScissorRect` — subsequent pushClip /
+  // render pass as it opens via `SetScissorRect` - subsequent pushClip /
   // popClip updates also re-apply during the currently-active pass.
   //
   // `scissorActive == false` means the scissor has never been set OR was
@@ -541,7 +541,7 @@ struct GeoEncoder::Impl {
   }
 
   /// Apply the current scissor to the open render pass. No-op if the
-  /// pass isn't open yet — `ensurePassOpen` will call this on first
+  /// pass isn't open yet - `ensurePassOpen` will call this on first
   /// open. Safe to call whenever `scissorActive` / `scissor*` changes.
   void applyScissorIfPassOpen() {
     if (!passOpen) {
@@ -564,7 +564,7 @@ struct GeoEncoder::Impl {
   }
 
   /// Return the texture view that should be bound to the clip-mask
-  /// slot for the next draw — the active mask if set, or the device's
+  /// slot for the next draw - the active mask if set, or the device's
   /// shared identity-mask dummy otherwise (see
   /// `GeodeDevice::dummyClipMaskTextureView()`).
   const wgpu::TextureView& currentClipMaskView() {
@@ -585,14 +585,14 @@ struct GeoEncoder::Impl {
       // 4× MSAA color attachment with per-pass resolve. The MSAA view is
       // the draw target; WebGPU implicitly resolves into `targetView` at
       // pass end. `storeOp = Store` on the MSAA attachment preserves its
-      // state for a subsequent pass (see `setLoadPreserve()` — we may
+      // state for a subsequent pass (see `setLoadPreserve()` - we may
       // reopen a pass to continue drawing on top of the previous MSAA
       // contents, e.g., after a nested-layer composite).
       color.view = msaaTargetView.get();
       color.resolveTarget = targetView.get();
     } else {
       // 1-sample (alpha-coverage path): draw directly into the target
-      // texture — no MSAA intermediate, no hardware resolve.
+      // texture - no MSAA intermediate, no hardware resolve.
       color.view = targetView.get();
     }
     color.loadOp = loadPreserve ? wgpu::LoadOp::Load : wgpu::LoadOp::Clear;
@@ -609,7 +609,7 @@ struct GeoEncoder::Impl {
     desc.colorAttachments = &color;
     desc.label = wgpuLabel("GeoEncoderPass");
     pass.reset(commandEncoder.beginRenderPass(desc));
-    // Pipelines are set per-draw — `fillPath` / `fillPathLinearGradient` /
+    // Pipelines are set per-draw - `fillPath` / `fillPathLinearGradient` /
     // `drawImage` each rebind their own pipeline before issuing a draw call.
     // Re-binding only happens when the bound pipeline differs from the next
     // one (see bindSolidPipeline / bindGradientPipeline / bindImagePipeline).
@@ -627,7 +627,7 @@ struct GeoEncoder::Impl {
   /// only when it actually changes.
   enum class BoundPipeline { kNone, kSolid, kGradient, kImage };
   BoundPipeline currentPipeline = BoundPipeline::kNone;
-  // Kept for backward compat with the gradient binding flag — see
+  // Kept for backward compat with the gradient binding flag - see
   // bindGradientPipeline below.
   bool currentPipelineIsGradient = false;
   void bindSolidPipeline() {
@@ -729,7 +729,7 @@ void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
     impl.msaaTarget = msaaTarget;
     impl.msaaTargetView.reset(msaaTarget.createView());
   }
-  // When sampleCount == 1 the msaaTarget / msaaTargetView stay null —
+  // When sampleCount == 1 the msaaTarget / msaaTargetView stay null -
   // ensurePassOpen renders directly into targetView with no resolve.
 }
 
@@ -738,7 +738,7 @@ void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
 void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   // Dummy pattern / clip-mask textures + samplers are now owned by
   // `GeodeDevice` (see design doc 0030 §M4.2) and shared across
-  // encoders — no per-encoder create needed.
+  // encoders - no per-encoder create needed.
 
   // Configure per-draw arenas (bump-allocated GPU buffers, design
   // doc 0030 Milestone 1). They stay empty here; the first draw
@@ -804,7 +804,7 @@ GeoEncoder& GeoEncoder::operator=(GeoEncoder&&) noexcept = default;
 void GeoEncoder::clear(const css::RGBA& color) {
   // If the pass is already open, the clear has effectively been baked in;
   // recording a "clear" mid-pass is unsupported in this MVP. Document and
-  // ignore — the right approach for mid-pass clears is to draw a fullscreen
+  // ignore - the right approach for mid-pass clears is to draw a fullscreen
   // quad, which we can add later if needed.
   if (impl_->passOpen) {
     return;
@@ -926,7 +926,7 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
     impl_->loadPreserve = true;
   }
 
-  // Fetch the device's shared mask pipeline — lazily built on first
+  // Fetch the device's shared mask pipeline - lazily built on first
   // `maskPipeline()` call.
   if (!impl_->maskPipelineOwned) {
     impl_->maskPipelineOwned = &impl_->device->maskPipeline();
@@ -948,7 +948,7 @@ void GeoEncoder::beginMaskPass(const wgpu::Texture& msaaMask, const wgpu::Textur
   color.loadOp = wgpu::LoadOp::Clear;
   color.storeOp = wgpu::StoreOp::Store;
   color.clearValue = {0.0, 0.0, 0.0, 0.0};
-  // See ensurePassOpen above — Dawn requires UNDEFINED on non-3D views.
+  // See ensurePassOpen above - Dawn requires UNDEFINED on non-3D views.
   color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 
   wgpu::RenderPassDescriptor desc = {};
@@ -1005,7 +1005,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vBandGrid.data(),
                                                      encoded.vBandGrid.size() * sizeof(uint32_t));
 
-  // Mask uniforms — mvp, viewport, fillRule, hasClipMask, grid params. The
+  // Mask uniforms - mvp, viewport, fillRule, hasClipMask, grid params. The
   // `hasClipMask` field gates whether the fragment shader intersects with the
   // nested clip mask at binding 3 (nested `<clipPath>` references).
   struct alignas(16) MaskUniforms {
@@ -1095,7 +1095,7 @@ void GeoEncoder::endMaskPass() {
   impl_->maskPass.get().end();
   impl_->maskPass.reset();
   impl_->maskPassOpen = false;
-  // Rebind pipeline tracker — the main pass will need to re-select a
+  // Rebind pipeline tracker - the main pass will need to re-select a
   // pipeline on its next draw.
   impl_->currentPipeline = Impl::BoundPipeline::kNone;
   impl_->currentPipelineIsGradient = false;
@@ -1126,7 +1126,7 @@ void GeoEncoder::clearClipMask() {
 }
 
 void GeoEncoder::setLoadPreserve() {
-  // No-op if a pass is already open — loadOp is a pass-construction
+  // No-op if a pass is already open - loadOp is a pass-construction
   // parameter and can't be changed mid-pass. The RendererGeode caller
   // always invokes this right after constructing a fresh encoder, so the
   // pass isn't open yet in practice.
@@ -1205,7 +1205,7 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
   if (encoded.empty() || instanceTransforms.empty()) {
     return;
   }
-  // Caller packs 8 floats per instance — two vec4f rows of a row-major
+  // Caller packs 8 floats per instance - two vec4f rows of a row-major
   // affine. Malformed inputs drop silently rather than tripping a
   // validation error mid-frame.
   const size_t totalFloats = instanceTransforms.size();
@@ -1220,7 +1220,7 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
                                            itSize, kStorageOffsetAlignment);
 
   FillDrawArgs args = {};
-  // `args.path` stays null — with a precomputed encode the submit path
+  // `args.path` stays null - with a precomputed encode the submit path
   // never re-encodes, so the raw Path isn't needed. Gradient/pattern
   // variants aren't batchable in this PR; pure solid only.
   args.path = nullptr;
@@ -1286,13 +1286,13 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   // per-draw ensure call is needed.
   impl_->ensurePassOpen();
   // `bindSolidPipeline` is the single source of truth for the current
-  // pipeline — it issues `setPipeline` only when the tracker reports a
+  // pipeline - it issues `setPipeline` only when the tracker reports a
   // change (from image / gradient / None). Calling `setPipeline`
   // unconditionally here used to defeat the tracker on every solid
   // draw; see design doc 0030, Tier 4.
   impl_->bindSolidPipeline();
 
-  // 1. CPU encode the path into Slug band data — unless the caller
+  // 1. CPU encode the path into Slug band data - unless the caller
   // already supplied a precomputed encode via the M2 cache
   // (`GeodePathCacheComponent`). Cache hits skip both the encode
   // work and the `pathEncodes` counter bump.
@@ -1331,7 +1331,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vBandGrid.data(),
                                                      encoded.vBandGrid.size() * sizeof(uint32_t));
 
-  // Uniform buffer — still per-draw today; Milestone 1.f lifts it into
+  // Uniform buffer - still per-draw today; Milestone 1.f lifts it into
   // a ring buffer with dynamic offsets.
   Uniforms u = {};
   impl_->buildMvp(u.mvp);
@@ -1359,7 +1359,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
 
-  // 3. Bind group — twelve entries: uniforms, H bands SSBO, H curves SSBO,
+  // 3. Bind group - twelve entries: uniforms, H bands SSBO, H curves SSBO,
   // pattern texture, pattern sampler, clip-mask texture, clip-mask sampler,
   // per-instance transforms SSBO, V bands SSBO, V curves SSBO, H band grid,
   // V band grid.
@@ -1422,7 +1422,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args) {
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
 
-  // 4. Record the draw call — one quad (6 vertices) per path.
+  // 4. Record the draw call - one quad (6 vertices) per path.
   impl_->pass.get().setVertexBuffer(0, *vbAlloc.buffer, vbAlloc.offset, vbAlloc.size);
   impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.get().draw(static_cast<uint32_t>(encoded.quadVertices.size()), args.instanceCount, 0,
@@ -1461,7 +1461,7 @@ void populateSharedGradientUniforms(GradientUniforms& u, const Transform2d& grad
   // `sample_stops` linearly interpolates between these values and then the
   // fragment stage premultiplies at output before the premultiplied-alpha
   // blend pipeline composites onto the framebuffer. This matches tiny-skia /
-  // Skia gradient behavior — e.g. `a-stop-opacity-001` transitions from
+  // Skia gradient behavior - e.g. `a-stop-opacity-001` transitions from
   // white to black@0.2 and expects straight-space interpolation, not
   // premultiplied-space mix. Clamp the stop count to the shader's hard cap;
   // overflow was warned about at the caller.
@@ -1493,7 +1493,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   impl_->ensurePassOpen();
   impl_->bindGradientPipeline();
 
-  // 1. CPU encode the path into Slug band data (same as fillPath) —
+  // 1. CPU encode the path into Slug band data (same as fillPath) -
   // unless the M2 cache already has a precomputed encode.
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
@@ -1531,7 +1531,7 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   if (params.stops.empty()) {
     return;
   }
-  // Degenerate radius: nothing to draw meaningfully — match tiny-skia's
+  // Degenerate radius: nothing to draw meaningfully - match tiny-skia's
   // early return. A radius of zero collapses the quadratic, and the caller
   // should have dropped the draw anyway.
   if (params.radius <= 0.0) {
@@ -1788,7 +1788,7 @@ void GeoEncoder::finish() {
     impl_->pass.reset();
     impl_->passOpen = false;
   } else if (impl_->hasExplicitClear) {
-    // No draws but a clear was requested — open and immediately close a pass
+    // No draws but a clear was requested - open and immediately close a pass
     // so the clear actually happens.
     impl_->ensurePassOpen();
     impl_->pass.get().end();

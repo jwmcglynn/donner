@@ -258,7 +258,7 @@ TEST(SVGSymbolElementViewportTests, UseProvidesSize_AutoSymbolSize) {
 
 /**
  * @test width/height **on the symbol** (6×6) - \ref xml_use omits size so the instance keeps the
- * symbol’s own viewport.
+ * symbol's own viewport.
  */
 TEST(SVGSymbolElementViewportTests, SymbolSizeNoUseSize) {
   SVGDocument doc = instantiateSubtree(R"-(

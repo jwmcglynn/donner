@@ -198,7 +198,7 @@ int main(int argc, char* argv[]) {
   embedConfig.textureFormat = surfaceFormat;
 
   // `shared_ptr` so the constructed renderer can share ownership. The wrapper
-  // itself does NOT own the underlying wgpu handles — the locals above retain
+  // itself does NOT own the underlying wgpu handles - the locals above retain
   // that responsibility.
   std::shared_ptr<donner::geode::GeodeDevice> geodeDevice =
       donner::geode::GeodeDevice::CreateFromExternal(embedConfig);

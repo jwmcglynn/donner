@@ -23,7 +23,7 @@ TEST(ToolKeybinding, MapsEachToolToItsStandardKey) {
   EXPECT_EQ(KeybindingForTool(ToolId::Text).key, 'T');
 }
 
-// The toolbar exposes Select, Pen, and Text — in that order — so the Text tool
+// The toolbar exposes Select, Pen, and Text - in that order - so the Text tool
 // has a dedicated button rather than being keyboard-only.
 TEST(ToolKeybinding, ToolbarIncludesTextToolInOrder) {
   EXPECT_THAT(kToolbarTools, ElementsAre(ToolId::Select, ToolId::Pen, ToolId::Text));

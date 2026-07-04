@@ -36,7 +36,7 @@ namespace {
 // GitHub-hosted macOS, whose NSGL path reports "Failed to find a suitable pixel
 // format"). Every other failure is a real error and still FAILs. Linux CI runs
 // these same tests on Mesa llvmpipe, so a genuine GL-path regression is caught
-// there — this only skips where GL is truly unavailable.
+// there - this only skips where GL is truly unavailable.
 #define ASSERT_GL_REPLAY_OR_SKIP(optionsExpr, resultVar, errorVar)                                 \
   do {                                                                                             \
     if (!repro::RunGlRnrReplay((optionsExpr), &(resultVar), &(errorVar))) {                        \
@@ -712,7 +712,7 @@ std::optional<std::filesystem::path> WritePenHoverReplay(const std::filesystem::
 // Pen click-drag that shapes a Bezier segment with a large downward bulge:
 // first anchor at (10, 40), second anchor mouse-down at (70, 40), then the
 // held drag to (70, 0) mirrors the in-handle to (70, 80) so the fill bulges
-// down to y≈58 — a region no earlier geometry version touches.
+// down to y≈58 - a region no earlier geometry version touches.
 std::optional<std::filesystem::path> WritePenCurveDragReplay(const std::filesystem::path& outputDir,
                                                              std::string_view name,
                                                              std::uint64_t trailingHoldFrames) {
@@ -1753,8 +1753,8 @@ TEST(GlRnrReplayTest, PenDragUsesCyanOverlayWithoutLegacyBluePath) {
   EXPECT_EQ(CountLegacyBluePenPixels(*dragCapture), 0)
       << "The document-canvas capture should contain no legacy blue PenTool path pixels.";
 
-  // The moving-drag frame (7) defers its crisp render — the live preview
-  // presents that geometry — so the raster catches up one hold frame after
+  // The moving-drag frame (7) defers its crisp render - the live preview
+  // presents that geometry - so the raster catches up one hold frame after
   // the pointer pauses: frame 8 issues the request, frame 9 presents it.
   const repro::GlRnrReplayFrameDiagnostics* presentedFrame = FindFrameDiagnostics(result, 9);
   ASSERT_NE(presentedFrame, nullptr);
@@ -1845,7 +1845,7 @@ TEST(GlRnrReplayTest, PenEscapeCommitsOpenPathInsteadOfDiscarding) {
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
   // Escape ends the pen session by committing the placed anchors as an open
-  // path — the placed segment must survive as a normal selected <path>, not
+  // path - the placed segment must survive as a normal selected <path>, not
   // be discarded. (Only a segmentless single-anchor draft is discarded.)
   const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 10);
   ASSERT_NE(finalFrame, nullptr);
@@ -1916,7 +1916,7 @@ TEST(GlRnrReplayTest, PenBackspaceRemovesLastAnchorNotWholeDraft) {
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  // Backspace while drafting removes only the LAST placed anchor — the draft
+  // Backspace while drafting removes only the LAST placed anchor - the draft
   // path (which is the selection) must survive with its remaining anchor, not
   // fall through to delete-selection and vanish wholesale.
   const repro::GlRnrReplayFrameDiagnostics* finalFrame = FindFrameDiagnostics(result, 10);
@@ -1956,7 +1956,7 @@ TEST(GlRnrReplayTest, PenAnchorHandleDragPresentsLiveGeometryInLockstep) {
 
   // Frame 7 is the drag frame: the DOM has flushed the dragged curve while the
   // async raster of that geometry has not landed yet. The presented frame must
-  // still show the live curve — the path pixels and the overlay chrome are
+  // still show the live curve - the path pixels and the overlay chrome are
   // captured from the same post-flush DOM, never from a stale raster.
   const repro::GlRnrReplayFrameDiagnostics* dragFrame = FindFrameDiagnostics(result, 7);
   ASSERT_NE(dragFrame, nullptr);

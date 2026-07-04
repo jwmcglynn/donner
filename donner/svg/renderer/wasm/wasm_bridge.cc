@@ -81,7 +81,7 @@ uint8_t* donner_render_svg(const char* svgText, int width, int height) {
     gLastError = "Rendering produced an empty bitmap";
     return nullptr;
   }
-  // NOLINTNEXTLINE: malloc is required for Emscripten interop — JS frees via donner_free_pixels.
+  // NOLINTNEXTLINE: malloc is required for Emscripten interop - JS frees via donner_free_pixels.
   auto* pixels = static_cast<uint8_t*>(std::malloc(expectedBytes));
   if (pixels == nullptr) {
     gLastError = "Failed to allocate pixel buffer";

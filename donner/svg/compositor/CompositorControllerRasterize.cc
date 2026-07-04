@@ -38,7 +38,7 @@ uint64_t SegmentTileId(Entity left, Entity right) {
   };
   const uint64_t l = normalize(left);
   const uint64_t r = normalize(right);
-  return (l << 32) | r;  // bit 63 stays 0 — doesn't collide with layer ids.
+  return (l << 32) | r;  // bit 63 stays 0 - doesn't collide with layer ids.
 }
 
 }  // namespace
@@ -102,7 +102,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
   // mutation is a pure translation (reuse bitmap via `canvasFromBitmap_`
   // delta) or a shape-changing transform (force re-rasterize). A missing
   // `RenderingInstanceComponent` means the entity was promoted before
-  // the tree was prepared — treat it as transform identity, which makes
+  // the tree was prepared - treat it as transform identity, which makes
   // the subsequent fast-path delta equal to the new transform, which is
   // correct for the "bitmap was drawn at origin" case.
   Transform2d surfaceFromEntity;
@@ -164,7 +164,7 @@ void CompositorController::rasterizeLayer(CompositorLayer& layer, const RenderVi
     immediatePlan.demotedDynamicImmediate = true;
   }
   layer.setImmediatePlan(immediatePlan);
-  // Don't reset `canvasFromBitmap_` here — a caller may have set it
+  // Don't reset `canvasFromBitmap_` here - a caller may have set it
   // explicitly (tests, editor drag hand-off paths) and expect that
   // additional offset to apply on top of the freshly-rasterized bitmap.
   // The fast path in `renderFrame` is what updates `canvasFromBitmap_`
@@ -212,10 +212,10 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
   }
 
   // Find each promoted layer's [first, last] indices in paint order.
-  // Linear scan is fine — layerCount ≤ kMaxCompositorLayers (32) and
+  // Linear scan is fine - layerCount ≤ kMaxCompositorLayers (32) and
   // paintOrder is typically ~100 elements. Layers may have their root
   // entity at `firstEntity` and a subtree extending to `lastEntity`
-  // elsewhere in the paint order — `computeEntityRange` stashed the
+  // elsewhere in the paint order - `computeEntityRange` stashed the
   // subtree's tail on the layer at `reconcileLayers` time.
   struct LayerPaintRange {
     size_t firstIdx = 0;
@@ -255,7 +255,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     // no-op re-rasterize below. `Immediate`-mode segments are marked
     // dirty every frame (they're cheap enough to redraw rather than
     // cache), but redrawing byte-identical pixels must NOT advance the
-    // generation — the generation is the editor's GL-texture-cache
+    // generation - the generation is the editor's GL-texture-cache
     // invalidation key, and bumping it on unchanged content forces a
     // pointless re-upload and breaks the
     // SelectionToActiveDragDoesNotAdvanceUnchangedTileGenerations
@@ -312,7 +312,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       //
       // `computeEntityRangeBounds` returns `nullopt` for entity
       // ranges it can't precisely bound (text, markers, masks,
-      // patterns, sub-documents — see its own contract in
+      // patterns, sub-documents - see its own contract in
       // `RendererDriver.h`). Callers treat `nullopt` as "fall back
       // to full-canvas"; never as "empty segment". See design doc
       // 0027-tight_bounded_segments.md for which cases are pending
@@ -325,7 +325,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
             registry, paintOrder[startIdx], paintOrder[endIdx], viewport, surfaceFromCanvas);
       }
       // The bounds-compute overhead per segment is ~O(entities) with
-      // no pixel work — negligible vs any render. But tight-bound
+      // no pixel work - negligible vs any render. But tight-bound
       // also adds the crop-into-smaller-bitmap overhead at compose
       // time; if the tight rect covers most of the canvas anyway,
       // the allocation savings don't justify it. Fall back to
@@ -337,7 +337,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       Box2d tightBoundsSnapped;
       if (tightBoundsCanvas.has_value() && canvasArea > 0.0) {
         // Snap to integer pixels + 1px padding so AA edges aren't
-        // clipped by the crop box — `computeEntityRangeBounds`
+        // clipped by the crop box - `computeEntityRangeBounds`
         // returns mathematical bounds, not pixel-aligned bounds.
         constexpr double kEdgePaddingPx = 1.0;
         const Vector2d padding(kEdgePaddingPx, kEdgePaddingPx);
@@ -515,7 +515,7 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
     newBoundaries[i] = {left, right};
   }
 
-  // Canvas resized — bitmap caches are sized to the old canvas and can't
+  // Canvas resized - bitmap caches are sized to the old canvas and can't
   // be reused at a different resolution (would be scaled or leave
   // transparent gaps). Full invalidation.
   const bool canvasChanged = staticSegmentsCanvas_ != currentCanvasSize;
@@ -547,11 +547,11 @@ bool CompositorController::resyncSegmentsToLayerSet(const Vector2i& currentCanva
           newDirty[i] = wasDirty || (newSegments[i].empty() && newTextures[i] == nullptr);
           if (j < staticSegmentGeneration_.size()) {
             // Preserve the old slot's generation so the editor's GL
-            // texture cache reuses the existing binding — no upload.
+            // texture cache reuses the existing binding - no upload.
             newGeneration[i] = staticSegmentGeneration_[j];
           }
           if (j < staticSegmentOffsets_.size()) {
-            // Preserve the tight-bound offset alongside the bitmap —
+            // Preserve the tight-bound offset alongside the bitmap -
             // the two together describe where the segment lives on
             // the canvas. A preserved bitmap with its offset dropped
             // would blit at (0,0) and wreck the compose.
@@ -610,7 +610,7 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
   // vector in order.
   //
   // Segment tile ids encode the boundary pair (left-layer entity, right
-  // -layer entity) so they're STABLE ACROSS INDEX SHIFTS — when a drag
+  // -layer entity) so they're STABLE ACROSS INDEX SHIFTS - when a drag
   // target splits segment K into two, the segments at positions K-1
   // and K+1 in the new set (which are preserved content from old K-1
   // and K+1) keep the same tileId. The editor's GL texture cache keyed
@@ -618,7 +618,7 @@ std::vector<CompositorTile> CompositorController::snapshotTilesForUpload(
   // though the index position of the texture in the new interleaved
   // list shifted by one.
   //
-  // Layer tile ids are `(1ull << 63) | entityId` — bit 63 is the
+  // Layer tile ids are `(1ull << 63) | entityId` - bit 63 is the
   // segment-vs-layer discriminator.
   std::vector<CompositorTile> tiles;
   tiles.reserve(layers_.size() + staticSegments_.size());
@@ -743,7 +743,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
 
   // Split path: bg/fg already composite segments + non-drag promoted
   // layers internally (see `recomposeSplitBitmaps` / `N=1` fast path), so
-  // the main-renderer compose collapses to 3 `drawImage` calls — one for
+  // the main-renderer compose collapses to 3 `drawImage` calls - one for
   // bg, one for the drag layer at its current compose offset, and one
   // for fg. With a 5-layer splash that's 3 `drawImage` + 3 `Unpremultiply
   // Pixels` passes per frame instead of the 2N+1 = 11 the naive
@@ -774,7 +774,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
   // only prewarm renders (e.g., mouse-hovering a selected element before
   // any drag) must still produce a fresh full-canvas snapshot. Check
   // `activeHints_` for a kind-ActiveDrag entry, not just "split layers
-  // present" — a Selection-only promote produces split layers too.
+  // present" - a Selection-only promote produces split layers too.
   const bool hasActiveDrag = [this]() {
     for (const auto& [entity, hint] : activeHints_) {
       if (hint.interactionKind() == InteractionHint::ActiveDrag) {
@@ -837,7 +837,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     // previous draw left behind. When the prior compose step direct-renders an
     // immediate layer whose range ends inside an opacity group (e.g. the
     // splash `#Clouds_with_gradients` group, opacity 0.75), that group opacity
-    // leaks into this blit and dims the (already fully-composited) tile —
+    // leaks into this blit and dims the (already fully-composited) tile -
     // the #633 cached-segment drag divergence (the same tile drawn immediate
     // sets its own paint, which is why caching it exposed the leak).
     renderer().setPaint(PaintParams{});
@@ -862,7 +862,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
       // drawBitmap consumes the premultiplied raster directly. Routing this
       // through the unpremultiplied ImageResource contract cost two full
       // pixel-buffer conversions plus three allocations per layer/segment per
-      // composed frame — the dominant compose cost on drag-heavy replays.
+      // composed frame - the dominant compose cost on drag-heavy replays.
       renderer().drawBitmap(bitmap, params);
     }
   };
@@ -925,7 +925,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
 
   renderer().endFrame();
   // Record that the main renderer's framebuffer now holds a full
-  // compose — future drag frames can safely skip `composeLayers` and
+  // compose - future drag frames can safely skip `composeLayers` and
   // `takeSnapshot` will still return a valid full-canvas snapshot.
   mainRendererHasCachedFrame_ = true;
 }

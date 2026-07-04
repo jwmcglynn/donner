@@ -204,7 +204,7 @@ INSTANTIATE_TEST_SUITE_P(
                     // remaining Geode diff is a ~1px positional band per convolved
                     // feature, traced to the opacity-0.75 pattern *input* edge coverage
                     // (slug_fill 4-sample vs tiny-skia analytic), which the kernel
-                    // spreads above threshold — the same root cause as the structure/svg
+                    // spreads above threshold - the same root cause as the structure/svg
                     // and feImage/svg parity gaps. Not the color-space round-trip.
                     {"edgeMode=wrap-with-matrix-larger-than-target.svg",
                      Params::RenderOnly("UB: wrap with oversized kernel")},
@@ -425,7 +425,7 @@ INSTANTIATE_TEST_SUITE_P(
                                                                "Minor shading differences")},
                 // Geode draws a spurious ~58px vertical blue stroke straight up
                 // from the (65,135) path vertex, where the path has no vertical
-                // edge — a solid 1px-wide, 146px-tall hard diff (148px vs 100
+                // edge - a solid 1px-wide, 146px-tall hard diff (148px vs 100
                 // budget). TinySkia renders it at 1px, so this is a real Geode
                 // path-encoder / stroke-join defect, not AA or cross-arch
                 // rounding. CPU backends still compare; disable Geode only.
@@ -782,7 +782,7 @@ INSTANTIATE_TEST_SUITE_P(
             {
                 // `Te<tspan paint-order="stroke fill">xt</tspan>`. NOT a positioning bug:
                 // the glyph positions are correct (identical to the unsplit on-text.svg, which
-                // passes — cross-tspan kerning keeps "xt" at the same x as "Text"). The ~1968px
+                // passes - cross-tspan kerning keeps "xt" at the same x as "Text"). The ~1968px
                 // residual is a paint-order *layering* difference across the two runs with
                 // different paint-orders: Donner draws run "Te" (default order: fill then
                 // stroke-on-top) fully, then run "xt" (stroke then fill) fully on top, so at the
@@ -791,7 +791,7 @@ INSTANTIATE_TEST_SUITE_P(
                 // whole <text> rather than per-run. Fixing this needs the renderer's text
                 // paint-order passes to span runs, not the text layout. See #624.
                 {"on-tspan.svg",
-                 Params::Skip("paint-order layering across tspan runs (not positioning) — #624")},
+                 Params::Skip("paint-order layering across tspan runs (not positioning) - #624")},
                 // paint-order rendering is implemented on the CPU backend only; Geode does not
                 // honor the fill/stroke/marker reordering yet. Compare CPU, disable Geode.
                 {"fill-markers-stroke.svg", GeodeDisabled("Geode paint-order rendering gap")},
@@ -846,7 +846,7 @@ INSTANTIATE_TEST_SUITE_P(
                     // (doc (40,40), the outer top-left stroke quadrant). Root-caused (#623): the
                     // `<rect>` is a *closed* contour, so tiny-skia (faithful Rust port) seam-joins
                     // the first and last `40`-unit dash across the start vertex into one continuous
-                    // dash — making that corner an interior MITER (filled quadrant). resvg's golden
+                    // dash - making that corner an interior MITER (filled quadrant). resvg's golden
                     // butt-caps it (notched) because usvg flattens the rect to a *non-closed* path
                     // before dashing. Donner's mitered closed-contour seam is the spec-conformant
                     // behavior (matches Skia/Chrome/Firefox); the residual is a resvg-pipeline

@@ -19,7 +19,7 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
-#include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep — provides UnpremultiplyRgba
+#include "donner/svg/renderer/PixelFormatUtils.h"  // IWYU pragma: keep - provides UnpremultiplyRgba
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/RendererUtils.h"
@@ -86,7 +86,7 @@ std::array<uint8_t, 4> pixelAt(const RendererBitmap& bitmap, int x, int y) {
 // A failing pixel assertion should print the full expected-vs-actual RGBA, not a
 // bare boolean for one channel. These matchers operate on the `std::array<uint8_t, 4>`
 // returned by `pixelAt` and always describe the *whole* pixel on failure (ToTT:
-// "Testing on the Toilet" — a failure message must localize the bug without a rerun).
+// "Testing on the Toilet" - a failure message must localize the bug without a rerun).
 
 /// Render an RGBA pixel as "RGBA(r, g, b, a)" for matcher messages.
 std::string FormatRgba(const std::array<uint8_t, 4>& px) {
@@ -653,7 +653,7 @@ TEST_F(RendererGeodeTest, DrawEllipseBlueFill) {
 }
 
 /// Transform stack should compose like the other backends. Apply a translate
-/// via push, draw, pop, draw — verify both shapes land where expected.
+/// via push, draw, pop, draw - verify both shapes land where expected.
 TEST_F(RendererGeodeTest, PushPopTransform) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
@@ -708,7 +708,7 @@ TEST_F(RendererGeodeTest, StrokeRectOutline) {
   EXPECT_EQ(top[1], 0u) << "Top edge G";
   EXPECT_EQ(top[2], 0u) << "Top edge B";
 
-  // The interior of the rect (center) should be transparent — fill=none.
+  // The interior of the rect (center) should be transparent - fill=none.
   auto center = pixelAt(snap, 32, 32);
   EXPECT_EQ(center[3], 0u) << "Interior should be transparent (fill=none)";
 
@@ -757,7 +757,7 @@ TEST_F(RendererGeodeTest, FillAndStrokeRect) {
 /// comment P2: `GeoEncoder::fillPath` premultiplies the paint color by
 /// alpha before upload (because the pipeline blend state is
 /// premultiplied-source-over), so `takeSnapshot` must unpremultiply when
-/// building the straight-alpha `RendererBitmap` — otherwise semi-transparent
+/// building the straight-alpha `RendererBitmap` - otherwise semi-transparent
 /// content comes out darkened and cross-backend parity breaks.
 TEST_F(RendererGeodeTest, SnapshotReturnsStraightAlpha) {
   RendererGeode renderer = createRenderer();
@@ -765,7 +765,7 @@ TEST_F(RendererGeodeTest, SnapshotReturnsStraightAlpha) {
 
   // 50% red: R=255, A=128. A straight-alpha round-trip should preserve
   // R~=255 and A~=128. A broken read-back would return the premultiplied
-  // RGB (~128,0,0,128) instead — exactly the regression we're guarding.
+  // RGB (~128,0,0,128) instead - exactly the regression we're guarding.
   renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 128)));
   renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
   renderer.endFrame();
@@ -786,7 +786,7 @@ TEST_F(RendererGeodeTest, SnapshotReturnsStraightAlpha) {
 /// segfault; after the fix, it returns cleanly.
 TEST_F(RendererGeodeTest, StrokeBeforeBeginFrameIsNoOp) {
   RendererGeode renderer = createRenderer();
-  // Intentionally skip beginFrame — encoder remains null.
+  // Intentionally skip beginFrame - encoder remains null.
   renderer.setPaint(solidStroke(css::RGBA(255, 0, 0, 255)));
   StrokeParams stroke;
   stroke.strokeWidth = 4.0;
@@ -796,7 +796,7 @@ TEST_F(RendererGeodeTest, StrokeBeforeBeginFrameIsNoOp) {
   shape.fillRule = FillRule::NonZero;
   // Before the fix, this call crashes with a null pointer dereference.
   renderer.drawPath(shape, stroke);
-  // No explicit assertion — reaching this line means we didn't crash.
+  // No explicit assertion - reaching this line means we didn't crash.
 }
 
 /// Stroke with stroke-width 0 should no-op (neither stroke nor warning).
@@ -854,22 +854,22 @@ TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
   RendererBitmap snap = renderer.takeSnapshot();
   ASSERT_FALSE(snap.empty());
 
-  // Top-left quadrant (pixel at ~24, 24) — red.
+  // Top-left quadrant (pixel at ~24, 24) - red.
   auto tl = pixelAt(snap, 24, 24);
   EXPECT_EQ(tl[0], 255u) << "TL R";
   EXPECT_EQ(tl[1], 0u) << "TL G";
   EXPECT_EQ(tl[3], 255u) << "TL A";
 
-  // Top-right quadrant (~40, 24) — green.
+  // Top-right quadrant (~40, 24) - green.
   auto tr = pixelAt(snap, 40, 24);
   EXPECT_EQ(tr[0], 0u) << "TR R";
   EXPECT_EQ(tr[1], 255u) << "TR G";
 
-  // Bottom-left (~24, 40) — blue.
+  // Bottom-left (~24, 40) - blue.
   auto bl = pixelAt(snap, 24, 40);
   EXPECT_EQ(bl[2], 255u) << "BL B";
 
-  // Bottom-right (~40, 40) — yellow.
+  // Bottom-right (~40, 40) - yellow.
   auto br = pixelAt(snap, 40, 40);
   EXPECT_EQ(br[0], 255u) << "BR R";
   EXPECT_EQ(br[1], 255u) << "BR G";
@@ -981,7 +981,7 @@ TEST_F(RendererGeodeTest, DrawImageEmptyIsNoOp) {
 /// Popping an isolated layer with a non-Normal blend mode while an outer
 /// clip is active must NOT clobber backdrop pixels outside the clip rect.
 /// This is the Phase 3d regression guarded by loading (not clearing) the
-/// parent attachment on the blend-pop pass — a clear would wipe
+/// parent attachment on the blend-pop pass - a clear would wipe
 /// out-of-scissor pixels to transparent since the blend blit runs only
 /// inside the scissor.
 TEST_F(RendererGeodeTest, BlendedLayerPopPreservesBackdropOutsideClip) {
@@ -1402,7 +1402,7 @@ TEST_F(RendererGeodeTest, FilterSourceAlphaInputExtractsAlphaChannel) {
 
 // Per SVG spec, feSpecularLighting `specularExponent` must be in [1, 128]; a value
 // < 1 produces transparent-black output (the same rule tiny-skia applies in its
-// filter pipeline — see FilterGraph.cpp's `specularExponent >= 1.0` guard).
+// filter pipeline - see FilterGraph.cpp's `specularExponent >= 1.0` guard).
 // GeodeFilterEngine clamps/short-circuits to match; this pins the spec behavior.
 TEST_F(RendererGeodeTest, FilterSpecularLightingExponentBelowOneIsTransparent) {
   components::FilterGraph graph;
@@ -1727,7 +1727,7 @@ TEST_F(RendererGeodeTest, FilterCompositeOverDefault) {
   //   in2 = red opaque linear-premul (1.0,0,0,1.0).
   //   over = in1 + in2*(1 - in1.a) = (0.498, 0, 0.502, 1.0) linear.
   //   linear→sRGB: 0.498 → ~0.735 → 187, 0.502 → ~0.738 → 188.
-  // (Running this `over` in sRGB instead would give the wrong (127,0,128) — the
+  // (Running this `over` in sRGB instead would give the wrong (127,0,128) - the
   // pre-linearRGB-fix behavior. See GeodeFilterEngine::execute feComposite wrap.)
   auto center = pixelAt(snap, 32, 32);
   // `over` in linearRGB → R≈187, G=0, B≈188, A≈255 (sRGB would give the wrong 127,0,128).
@@ -2003,7 +2003,7 @@ TEST_F(RendererGeodeTest, FilterComponentTransferIdentityPasses) {
   components::FilterGraph graph;
   components::FilterNode ctNode;
   components::filter_primitive::ComponentTransfer ct;
-  // All 4 channels default to Identity — no explicit setup needed.
+  // All 4 channels default to Identity - no explicit setup needed.
   ctNode.primitive = ct;
   ctNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
   graph.nodes.push_back(ctNode);
@@ -2207,7 +2207,7 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   // from the right edge. The blur kernel (stdDev=3) at this x-coordinate
   // straddles the boundary heavily. Per §15.5, the SourceGraphic is the
   // UNCLIPPED full-viewport blue rect so the blur is uniform blue and this
-  // pixel — being inside the clip — must remain near-opaque blue. The buggy
+  // pixel - being inside the clip - must remain near-opaque blue. The buggy
   // path captures only the left-half blue and the blur averages with
   // transparent-black, so the alpha drops to ~50% (~177) here.
   auto nearEdgeInside = pixelAt(snap, 30, 32);
@@ -2224,7 +2224,7 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   // alpha around 50.
   auto justOutside = pixelAt(snap, 34, 32);
   EXPECT_EQ(justOutside[3], 0u)
-      << "Just-outside-clip alpha must be 0 — clip-path is applied to the "
+      << "Just-outside-clip alpha must be 0 - clip-path is applied to the "
          "filtered result. Got "
       << static_cast<int>(justOutside[3]);
 
@@ -2238,7 +2238,7 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   // (48, 32): well outside the clip rect, far from the boundary. The clip is
   // applied AFTER the filter, so this pixel must be fully transparent.
   auto outside = pixelAt(snap, 48, 32);
-  EXPECT_EQ(outside[3], 0u) << "Outside the clip must be transparent — the "
+  EXPECT_EQ(outside[3], 0u) << "Outside the clip must be transparent - the "
                                "filter result is clipped on composite";
 }
 

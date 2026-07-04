@@ -99,7 +99,7 @@ TEST_F(ComplexityBucketerTest, FlatChildrenWithinBudgetAllBucketed) {
 
 TEST_F(ComplexityBucketerTest, BudgetCapClipsLowerRanked) {
   // 5 equal-cost children, but budget is only 3. The 3 earliest (by entity id
-  // — ties broken ascending) win.
+  // - ties broken ascending) win.
   const Entity root = makeInstance();
   const Entity c1 = makeInstance();
   const Entity c2 = makeInstance();
@@ -262,14 +262,14 @@ TEST_F(ComplexityBucketerTest, ReservedSlotsReduceBudget) {
 // clip-path / mask / filter / isolation group across buckets. v1 sidesteps
 // the problem by limiting candidates to top-level root children (whose
 // subtrees are atomic by construction). The tests below verify this holds
-// even when the subtree *internally* contains compositing features — the
+// even when the subtree *internally* contains compositing features - the
 // whole subtree still goes in one bucket.
 // ============================================================================
 
 TEST_F(ComplexityBucketerTest, SubtreeWithInternalFilterStaysIntactInOneBucket) {
   // root with a child that has an internal filter. Since v1 only considers
   // top-level root children as candidates, the child with a filter is the
-  // subtree root — it becomes one bucket, filter and all. The filter
+  // subtree root - it becomes one bucket, filter and all. The filter
   // doesn't split the subtree.
   const Entity root = makeInstance();
   const Entity child = makeInstance();
@@ -284,7 +284,7 @@ TEST_F(ComplexityBucketerTest, SubtreeWithInternalFilterStaysIntactInOneBucket) 
 
   EXPECT_EQ(bucketer.stats().bucketsPublished, 1u);
   EXPECT_EQ(countHints(child, HintSource::ComplexityBucket), 1u)
-      << "subtree with internal filter is bucketed atomically — filter stays with its subtree";
+      << "subtree with internal filter is bucketed atomically - filter stays with its subtree";
 }
 
 TEST_F(ComplexityBucketerTest, SubtreeWithInternalMaskStaysIntactInOneBucket) {

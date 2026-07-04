@@ -94,7 +94,7 @@ TEST_F(RenderSessionTest, FetchErrorKeepsPreviousBitmap) {
   EXPECT_TRUE(bad.bitmap.pixels.empty());
   EXPECT_FALSE(bad.message.empty());
 
-  // But lastGoodBitmap still holds the previous successful frame — this
+  // But lastGoodBitmap still holds the previous successful frame - this
   // is the "keep previous document on screen" contract from the design doc.
   EXPECT_EQ(app.lastGoodBitmap().pixels, goodBytes);
 }
@@ -113,7 +113,7 @@ TEST_F(RenderSessionTest, ResizeReRendersAtNewViewport) {
   RenderSession app(Options());
   app.navigate("red.svg");
 
-  // kSimpleSvg is 64x48 (4:3) — request a 128x96 canvas to match the
+  // kSimpleSvg is 64x48 (4:3) - request a 128x96 canvas to match the
   // source aspect ratio so Donner's preserveAspectRatio doesn't letterbox
   // the result into an unexpected height.
   const auto& resized = app.resize(128, 96);
@@ -204,7 +204,7 @@ TEST_F(RenderSessionTest, PollForChangesDetectsFileModification) {
   const auto firstPixels = app.lastGoodBitmap().pixels;
   ASSERT_FALSE(firstPixels.empty());
 
-  // No change yet — poll should return false.
+  // No change yet - poll should return false.
   EXPECT_FALSE(app.pollForChanges());
 
   // Overwrite the file with different content.
@@ -217,7 +217,7 @@ TEST_F(RenderSessionTest, PollForChangesDetectsFileModification) {
     out.write(kUpdated.data(), static_cast<std::streamsize>(kUpdated.size()));
   }
 
-  // Touch the file to ensure the mtime differs — some filesystems have
+  // Touch the file to ensure the mtime differs - some filesystems have
   // coarse timestamps (1s resolution).
   std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now());
 

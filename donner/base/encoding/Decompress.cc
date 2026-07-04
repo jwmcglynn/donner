@@ -26,7 +26,7 @@ ParseResult<std::vector<uint8_t>> Inflate(std::string_view compressedData, int w
   stream.zfree = Z_NULL;
   stream.opaque = Z_NULL;
 
-  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): zlib API requires a non‑const pointer
+  // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast): zlib API requires a non-const pointer
   stream.next_in = const_cast<Bytef*>(reinterpret_cast<const Bytef*>(compressedData.data()));
   stream.avail_in = static_cast<uInt>(compressedData.size());
 

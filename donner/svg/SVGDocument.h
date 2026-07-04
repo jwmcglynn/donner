@@ -322,7 +322,7 @@ public:
    * viewBox and the current canvas size.
    *
    * Naming: per the `destFromSource` convention, applying this transform to
-   * a viewBox-space point yields a canvas-space point — i.e. it is
+   * a viewBox-space point yields a canvas-space point - i.e. it is
    * `canvasFromDocument`, despite an earlier misnomer. Callers that need the
    * opposite direction (canvas pixel → document viewBox coordinate, e.g.
    * click math in editors/viewers) should invert it.

@@ -92,7 +92,7 @@ EditorRasterViewport RasterViewportForTest(bool viewportBounded) {
 std::filesystem::path StableOutputDir() {
   // A fixed, easy-to-open location for the diagnostic screenshots. Prefer the
   // per-test scratch dir (TestTempDir): a fixed directory name in the shared
-  // system temp collides across users on remote-execution workers — a
+  // system temp collides across users on remote-execution workers - a
   // directory created by one worker user is unwritable for the next. The
   // canonical CI artifacts still land in $TEST_UNDECLARED_OUTPUTS_DIR below.
   return TestTempDir() / "donner-display-none-ui-repro";

@@ -316,7 +316,7 @@ Transform2d LayoutSystem::getEntityFromParentTransform(EntityHandle entity) {
   // Apply the transform-origin pivot: translate the origin to (0,0), apply the element transform,
   // then translate back. Donner's `operator*` is left-first (`A * B` applies A, then B), so the
   // pivot-out translation `Translate(-origin)` must come first in the product and the pivot-back
-  // `Translate(origin)` last — equivalent to the column-matrix product T(origin)·M·T(-origin).
+  // `Translate(origin)` last - equivalent to the column-matrix product T(origin)·M·T(-origin).
   return Transform2d::Translate(-computedTransform.transformOrigin) *
          computedTransform.parentFromEntity *
          Transform2d::Translate(computedTransform.transformOrigin);
@@ -466,7 +466,7 @@ const ComputedAbsoluteTransformComponent& LayoutSystem::getAbsoluteTransformComp
 
     // Elements whose rendering behavior disables self-transform (e.g. `<symbol>` under
     // SVG 1.1, where a `transform` attribute is ignored) do not contribute their own
-    // `transform` to the cascade — only their viewport/content mapping. The light entity
+    // `transform` to the cascade - only their viewport/content mapping. The light entity
     // carries the RenderingBehaviorComponent for shadow instances.
     Entity behaviorEntity = currentHandle.entity();
     while (const auto* shadowEntity = registry.try_get<ShadowEntityComponent>(behaviorEntity)) {
@@ -499,7 +499,7 @@ void LayoutSystem::invalidate(EntityHandle entity) {
   entity.remove<components::ComputedShadowSizedElementComponent>();
   entity.remove<components::ComputedViewBoxComponent>();
 
-  // `ComputedAbsoluteTransformComponent` is a cascaded value — parent
+  // `ComputedAbsoluteTransformComponent` is a cascaded value - parent
   // transform × local transform. When this entity's local transform
   // changes, every descendant's cached absolute is stale. Walk the DOM
   // subtree and clear them too.
@@ -528,8 +528,8 @@ void LayoutSystem::invalidate(EntityHandle entity) {
     // Sized-element / viewBox caches can also cascade through a viewport-
     // bearing ancestor, but those rarely change mid-drag and the RIC
     // rebuild path already recomputes them via `ensureComputedComponents`.
-    // Keep this cascade narrow to the transform cache — the known
-    // drag-frame offender — to avoid inflating the invalidation surface.
+    // Keep this cascade narrow to the transform cache - the known
+    // drag-frame offender - to avoid inflating the invalidation surface.
     if (const auto* childTree = handle.try_get<donner::components::TreeComponent>()) {
       for (Entity grandchild = childTree->firstChild(); grandchild != entt::null;
            grandchild = registry.get<donner::components::TreeComponent>(grandchild).nextSibling()) {
@@ -887,7 +887,7 @@ Vector2d LayoutSystem::calculateRawDocumentSize(Registry& registry) const {
   // Scale the original viewBox to fit the canvas (a "contain" constraint, per the default sizing
   // algorithm). The concrete object size is the *extent* of the scaled viewBox, so we transform the
   // viewBox size as a vector. Using transformPosition here would fold in the aspect-ratio letterbox
-  // translation (the centering offset for a non-square viewBox), inflating the reported size — e.g.
+  // translation (the centering offset for a non-square viewBox), inflating the reported size - e.g.
   // a 200x100 viewBox in a 500x500 canvas would report 500x375 instead of the correct 500x250.
   const Transform2d contentFromViewBox = preserveAspectRatio.elementContentFromViewBoxTransform(
       Box2d(Vector2d(), canvasSize), viewBox.viewBox);

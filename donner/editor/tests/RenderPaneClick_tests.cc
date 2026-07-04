@@ -51,7 +51,7 @@ TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyZoom) {
       const Vector2d r1Center(40.0, 40.0);    // 20 + 40/2
       const Vector2d r2Center(160.0, 160.0);  // 140 + 40/2
 
-      // Map to screen, then back through the same viewport — the
+      // Map to screen, then back through the same viewport - the
       // round-trip should land on the same element.
       const Vector2d r1Screen = v.documentToScreen(r1Center);
       const auto hitR1 = app.hitTest(v.screenToDocument(r1Screen));
@@ -67,7 +67,7 @@ TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyZoom) {
   }
 }
 
-// DPR 2x and 3x must not move click positions on the screen — DPR
+// DPR 2x and 3x must not move click positions on the screen - DPR
 // only affects rasterization fidelity, not coordinate math, since
 // every screen pixel value is in *logical* pixels.
 TEST(RenderPaneClickTest, ClickAtElementCenterHitsElementAtAnyDpr) {
@@ -100,14 +100,14 @@ TEST(RenderPaneClickTest, DesiredCanvasSizeIsViewBoxScaledByZoomAndDpr) {
 }
 
 // Changing DPR from 1× to 2× must NOT change the on-screen layout
-// rectangle or click math — DPR only affects how many device pixels
+// rectangle or click math - DPR only affects how many device pixels
 // the rasterizer produces per logical pixel. The key invariant: the
 // `imageScreenRect()` is the same at any DPR for the same zoom and
 // pane size, and the same logical-pixel click maps to the same
 // document point.
 //
 // This is the regression test for "Retina users see clicks land on
-// the wrong element" — the bug class where DPR sneaks into the
+// the wrong element" - the bug class where DPR sneaks into the
 // screen-coordinate path and offsets click positions by the device-
 // pixel ratio.
 TEST(RenderPaneClickTest, DprChangeDoesNotMoveOnScreenRectOrClicks) {
@@ -140,7 +140,7 @@ TEST(RenderPaneClickTest, DprChangeDoesNotMoveOnScreenRectOrClicks) {
 }
 
 // At 2× DPR the canvas should be exactly twice the pixel dimensions
-// of the 1× version for the same logical viewport state — the
+// of the 1× version for the same logical viewport state - the
 // visible image is the same size on screen, the underlying bitmap
 // just has 4× the pixels.
 TEST(RenderPaneClickTest, DprDoublesCanvasPixelsButNotScreenRect) {
@@ -268,7 +268,7 @@ TEST(RenderPaneClickTest, BufferedClickDispatchesWhenWorkerIdle) {
   pendingClick = PendingClick{v.screenToDocument(r1Screen), MouseModifiers{}};
 
   SelectTool tool;
-  // Don't dispatch yet — worker is busy.
+  // Don't dispatch yet - worker is busy.
   if (pendingClick.has_value() && !workerBusy) {
     tool.onMouseDown(app, pendingClick->documentPoint, pendingClick->modifiers);
     pendingClick.reset();
@@ -359,7 +359,7 @@ TEST(RenderPaneClickTest, MarqueeDragUpwardSelectsIntersectingElements) {
   tool.onMouseDown(app, v.screenToDocument(screenStart), MouseModifiers{});
   ASSERT_TRUE(tool.isMarqueeing());
 
-  // Drag step-by-step *up and to the left* — same direction the
+  // Drag step-by-step *up and to the left* - same direction the
   // user reported broken in the editor.
   for (int step = 1; step <= 5; ++step) {
     const double t = static_cast<double>(step) / 5.0;

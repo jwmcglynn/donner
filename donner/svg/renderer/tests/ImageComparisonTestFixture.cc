@@ -375,8 +375,8 @@ std::string escapeFilename(std::string filename) {
   });
   // macOS (and most common filesystems) cap filename components at 255
   // bytes. The test runfiles paths we escape into single names can blow
-  // past that — `resvg_test_suite_geode_text` sandbox runfiles reach
-  // ~290 chars — which makes the resulting `/tmp/<escaped>.png` impossible
+  // past that - `resvg_test_suite_geode_text` sandbox runfiles reach
+  // ~290 chars - which makes the resulting `/tmp/<escaped>.png` impossible
   // to open for debugging. Truncate overlong names, preserving the tail
   // (where the distinguishing test filename lives) and keeping a short
   // hash prefix so collisions between long names stay detectable.
@@ -564,7 +564,7 @@ const std::vector<ComparisonMode>& ActiveComparisonModes() {
     // of per-backend golden comparison: with Geode's analytic dual-ray Slug
     // coverage, the analytic result legitimately differs
     // from tiny-skia's finite-sample scan-converter, so a pixel-vs-tiny gate
-    // can only be satisfied by degrading Geode to tiny's quantization — the
+    // can only be satisfied by degrading Geode to tiny's quantization - the
     // opposite of aligning with Slug. Both backends already gate against the
     // same reference, so geode-vs-tiny adds no correctness signal the goldens
     // don't.
@@ -623,7 +623,7 @@ void ExpectBitmapsIdentical(const RendererBitmap& actual, const RendererBitmap& 
   std::vector<uint8_t> diffImage(strideInPixels * static_cast<size_t>(height) * 4u);
   pixelmatch::Options options;
   options.threshold = 0.0f;
-  options.includeAA = true;  // strict identity — count every differing pixel
+  options.includeAA = true;  // strict identity - count every differing pixel
   const int mismatched = pixelmatch::pixelmatch(expected.pixels, actual.pixels, diffImage, width,
                                                 height, strideInPixels, options);
   if (mismatched == 0) {

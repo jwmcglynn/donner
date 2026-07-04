@@ -127,7 +127,7 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
   int trailingWhitespace = 0;
   // Offset of the last non-whitespace token we consumed into the declaration. This is
   // used to populate `declaration.sourceRange.end` as a best-effort hint for editors
-  // that want to splice into the declaration span — see Declaration.h for the exact
+  // that want to splice into the declaration span - see Declaration.h for the exact
   // contract. Starts at the name's offset so a declaration with no values at all has
   // a zero-length range pinned at its name.
   FileOffset lastConsumedNonWhitespaceOffset = offset;

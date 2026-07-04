@@ -136,7 +136,7 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
       registry_.emplace<LoadedImageComponent>(entity);
     } else if (std::holds_alternative<SvgImageContent>(imageResult)) {
       if (!svgParseCallback_) {
-        // No SVG parser available — skip.
+        // No SVG parser available - skip.
         ParseDiagnostic err;
         err.reason = "SVG image references require an SVG parse callback";
         warningSink.add(std::move(err));
@@ -159,7 +159,7 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
       if (subDoc) {
         registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*subDoc));
       } else {
-        // Parse failed — create an empty LoadedImageComponent to prevent retrying.
+        // Parse failed - create an empty LoadedImageComponent to prevent retrying.
         registry_.emplace<LoadedImageComponent>(entity);
       }
     } else {
