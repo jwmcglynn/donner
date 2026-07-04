@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -57,6 +58,70 @@ struct NoTokenSink {
 };
 
 static_assert(sizeof(NoTokenSink) == 1);
+
+std::string ToString(XMLTokenType type) {
+  std::ostringstream os;
+  os << type;
+  return os.str();
+}
+
+// =============================================================================
+// Token helpers
+// =============================================================================
+
+TEST(XMLTokenType, OstreamOutput) {
+  struct Case {
+    XMLTokenType type;
+    std::string_view output;
+  };
+
+  constexpr std::array<Case, 15> kCases = {{
+      {T::TagOpen, "TagOpen"},
+      {T::TagName, "TagName"},
+      {T::TagClose, "TagClose"},
+      {T::TagSelfClose, "TagSelfClose"},
+      {T::AttributeName, "AttributeName"},
+      {T::AttributeValue, "AttributeValue"},
+      {T::Comment, "Comment"},
+      {T::CData, "CData"},
+      {T::TextContent, "TextContent"},
+      {T::XmlDeclaration, "XmlDeclaration"},
+      {T::Doctype, "Doctype"},
+      {T::EntityRef, "EntityRef"},
+      {T::ProcessingInstruction, "ProcessingInstruction"},
+      {T::Whitespace, "Whitespace"},
+      {T::ErrorRecovery, "ErrorRecovery"},
+  }};
+
+  for (const Case& testCase : kCases) {
+    EXPECT_EQ(ToString(testCase.type), testCase.output);
+  }
+
+  EXPECT_EQ(ToString(static_cast<XMLTokenType>(255)), "Unknown");
+}
+
+TEST(XMLToken, TextReturnsEmptyForInvalidRanges) {
+  constexpr std::string_view kSource = "abc";
+
+  EXPECT_EQ(
+      (XMLToken{T::TextContent, {FileOffset::Offset(1), FileOffset::Offset(3)}}).text(kSource),
+      "bc");
+  EXPECT_THAT(
+      (XMLToken{T::TextContent, {FileOffset::EndOfString(), FileOffset::Offset(1)}}).text(kSource),
+      IsEmpty());
+  EXPECT_THAT(
+      (XMLToken{T::TextContent, {FileOffset::Offset(1), FileOffset::EndOfString()}}).text(kSource),
+      IsEmpty());
+  EXPECT_THAT(
+      (XMLToken{T::TextContent, {FileOffset::Offset(3), FileOffset::Offset(3)}}).text(kSource),
+      IsEmpty());
+  EXPECT_THAT(
+      (XMLToken{T::TextContent, {FileOffset::Offset(1), FileOffset::Offset(4)}}).text(kSource),
+      IsEmpty());
+  EXPECT_THAT(
+      (XMLToken{T::TextContent, {FileOffset::Offset(2), FileOffset::Offset(1)}}).text(kSource),
+      IsEmpty());
+}
 
 // =============================================================================
 // Basic element tokenization

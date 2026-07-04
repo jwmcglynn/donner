@@ -74,6 +74,24 @@ TEST(ShapeClipboardPayload, HeaderedRoundTrip) {
   EXPECT_DOUBLE_EQ(parsed->documentBounds->bottomRight.y, 4.0);
 }
 
+TEST(ShapeClipboardPayload, EscapedIdsAndGroupSelectionRoundTrip) {
+  ShapeClipboardPayload payload;
+  payload.svgFragment = R"(<g id="group"><rect id="a,b"/><circle id="c\d"/></g>)";
+  payload.sourceElementIds = {"a,b", R"(c\d)", ""};
+  payload.wasGroupSelection = true;
+
+  const std::string text = payload.toClipboardText();
+  EXPECT_THAT(text, HasSubstr(R"(ids: a\,b,c\\d,)"));
+  EXPECT_THAT(text, HasSubstr("group-selection: 1"));
+
+  std::optional<ShapeClipboardPayload> parsed = ShapeClipboardPayload::parse(text);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->svgFragment, payload.svgFragment);
+  EXPECT_EQ(parsed->sourceElementIds, payload.sourceElementIds);
+  EXPECT_TRUE(parsed->wasGroupSelection);
+  EXPECT_FALSE(parsed->documentBounds.has_value());
+}
+
 TEST(ShapeClipboardPayload, HeaderlessTextIsBestEffortFragment) {
   const std::string raw = R"(<rect id="z" x="0" y="0" width="5" height="5"/>)";
   std::optional<ShapeClipboardPayload> parsed = ShapeClipboardPayload::parse(raw);
@@ -86,6 +104,77 @@ TEST(ShapeClipboardPayload, HeaderlessTextIsBestEffortFragment) {
 TEST(ShapeClipboardPayload, EmptyTextRejected) {
   EXPECT_FALSE(ShapeClipboardPayload::parse("").has_value());
   EXPECT_FALSE(ShapeClipboardPayload::parse("   \n\t ").has_value());
+}
+
+TEST(ShapeClipboardPayload, HeaderedTextWithoutFragmentRejected) {
+  EXPECT_FALSE(ShapeClipboardPayload::parse(ShapeClipboardPayload::kHeader).has_value());
+  EXPECT_FALSE(
+      ShapeClipboardPayload::parse(std::string(ShapeClipboardPayload::kHeader) + "\nids: a")
+          .has_value());
+  EXPECT_FALSE(ShapeClipboardPayload::parse(std::string(ShapeClipboardPayload::kHeader) + "\n\n")
+                   .has_value());
+}
+
+TEST(ShapeClipboardPayload, MalformedMetadataIgnoredButFragmentSurvives) {
+  const std::string text = std::string(ShapeClipboardPayload::kHeader) +
+                           R"(
+metadata without colon
+unknown: ignored
+ids:
+bounds: 1 2 3 nope
+group-selection: true
+
+<rect id="z" width="5" height="5"/>)";
+
+  std::optional<ShapeClipboardPayload> parsed = ShapeClipboardPayload::parse(text);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->svgFragment, R"(<rect id="z" width="5" height="5"/>)");
+  EXPECT_TRUE(parsed->sourceElementIds.empty());
+  EXPECT_TRUE(parsed->wasGroupSelection);
+  EXPECT_FALSE(parsed->documentBounds.has_value());
+}
+
+TEST(ShapeClipboardPayload, IncompleteBoundsMetadataIgnored) {
+  const std::string text = std::string(ShapeClipboardPayload::kHeader) +
+                           R"(
+bounds: 1 2 3
+
+<rect id="z" width="5" height="5"/>)";
+
+  std::optional<ShapeClipboardPayload> parsed = ShapeClipboardPayload::parse(text);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->svgFragment, R"(<rect id="z" width="5" height="5"/>)");
+  EXPECT_FALSE(parsed->documentBounds.has_value());
+}
+
+TEST(ShapeClipboardPayload, RejectsInvalidBoundsNumbersByPosition) {
+  for (const std::string& bounds : {"bad 2 3 4", "1 bad 3 4", "1 2 bad 4", "1 2 3 4px"}) {
+    const std::string text = std::string(ShapeClipboardPayload::kHeader) + "\nbounds: " + bounds +
+                             "\n\n<rect id=\"z\" width=\"5\" height=\"5\"/>";
+
+    std::optional<ShapeClipboardPayload> parsed = ShapeClipboardPayload::parse(text);
+    ASSERT_TRUE(parsed.has_value()) << bounds;
+    EXPECT_EQ(parsed->svgFragment, R"(<rect id="z" width="5" height="5"/>)") << bounds;
+    EXPECT_FALSE(parsed->documentBounds.has_value()) << bounds;
+  }
+}
+
+TEST(ShapeClipboardPayload, WhitespaceOnlyTerminatorWithoutNewlineRejected) {
+  EXPECT_FALSE(
+      ShapeClipboardPayload::parse(std::string(ShapeClipboardPayload::kHeader) + "\nids: a\n   ")
+          .has_value());
+}
+
+TEST(ShapeClipboardPayload, TrailingEscapedIdDropsDanglingEscape) {
+  const std::string text = std::string(ShapeClipboardPayload::kHeader) +
+                           R"(
+ids: first\
+
+<rect id="z" width="5" height="5"/>)";
+
+  std::optional<ShapeClipboardPayload> parsed = ShapeClipboardPayload::parse(text);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->sourceElementIds, std::vector<std::string>{"first"});
 }
 
 TEST(ShapeClipboardCommands, CopySerializesStableFragment) {

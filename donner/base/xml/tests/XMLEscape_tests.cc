@@ -47,6 +47,10 @@ TEST(XMLEscape, QuoteCharEscapedBasedOnDelimiter) {
   EXPECT_THAT(EscapeAttributeValue("\"", '\''), Optional(RcString("\"")));
 }
 
+TEST(XMLEscape, InvalidQuoteCharFallsBackToDoubleQuoteDelimiter) {
+  EXPECT_THAT(EscapeAttributeValue("\"'", 'x'), Optional(RcString("&quot;'")));
+}
+
 TEST(XMLEscape, WhitespaceIsEscapedToNumericEntities) {
   // `\t`, `\n`, `\r` round-trip through a numeric character reference so
   // the XML attribute-value normalization does not collapse them to a
@@ -80,8 +84,17 @@ TEST(XMLEscape, InvalidUtf8Rejected) {
   EXPECT_THAT(EscapeAttributeValue("\x80"), Eq(std::nullopt));
   // Lead byte without continuation.
   EXPECT_THAT(EscapeAttributeValue("\xC2"), Eq(std::nullopt));
+  // Lead byte followed by a non-continuation byte.
+  EXPECT_THAT(EscapeAttributeValue("\xC2"
+                                   "A"),
+              Eq(std::nullopt));
   // Overlong encoding of U+0041 as a 2-byte sequence (the shortest form is 1 byte).
   EXPECT_THAT(EscapeAttributeValue("\xC1\x81"), Eq(std::nullopt));
+  // Overlong encodings of U+0041 using longer sequence lengths.
+  EXPECT_THAT(EscapeAttributeValue("\xE0\x81\x81"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeAttributeValue("\xF0\x80\x81\x81"), Eq(std::nullopt));
+  // The maximum Unicode scalar value is U+10FFFF.
+  EXPECT_THAT(EscapeAttributeValue("\xF4\x90\x80\x80"), Eq(std::nullopt));
   // 5-byte sequence is never legal UTF-8.
   EXPECT_THAT(EscapeAttributeValue("\xF8\x80\x80\x80\x80"), Eq(std::nullopt));
   // Invalid bytes 0xFE / 0xFF.
@@ -186,6 +199,41 @@ TEST(XMLEscape, RoundTripWithSingleQuoteDelimiter) {
     ASSERT_TRUE(attrValue.has_value());
     EXPECT_EQ(std::string_view(*attrValue), original);
   }
+}
+
+// -----------------------------------------------------------------------------
+// Text content escaping
+// -----------------------------------------------------------------------------
+
+TEST(XMLEscape, TextContentEscapesOnlyMarkupCharacters) {
+  EXPECT_THAT(EscapeTextContent("a<b>c&d\"e'f"), Optional(RcString("a&lt;b&gt;c&amp;d\"e'f")));
+  EXPECT_THAT(EscapeTextContent("\t\n\r"), Optional(RcString("\t\n\r")));
+}
+
+TEST(XMLEscape, TextContentRejectsInvalidAsciiCodepoints) {
+  EXPECT_THAT(EscapeTextContent(std::string_view("a\0b", 3)), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent(std::string(1, '\x01')), Eq(std::nullopt));
+}
+
+TEST(XMLEscape, TextContentRejectsInvalidUtf8) {
+  EXPECT_THAT(EscapeTextContent("\x80"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xC2"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xC2"
+                                "A"),
+              Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xC1\x81"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xE0\x81\x81"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xF0\x80\x81\x81"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xF4\x90\x80\x80"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xF8\x80\x80\x80\x80"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xED\xA0\x80"), Eq(std::nullopt));
+  EXPECT_THAT(EscapeTextContent("\xEF\xBF\xBE"), Eq(std::nullopt));
+}
+
+TEST(XMLEscape, TextContentValidUtf8PassesThrough) {
+  EXPECT_THAT(EscapeTextContent("caf\xC3\xA9"), Optional(RcString("caf\xC3\xA9")));
+  EXPECT_THAT(EscapeTextContent("\xE4\xBD\xA0"), Optional(RcString("\xE4\xBD\xA0")));
+  EXPECT_THAT(EscapeTextContent("\xF0\x9F\x98\x80"), Optional(RcString("\xF0\x9F\x98\x80")));
 }
 
 }  // namespace donner::xml

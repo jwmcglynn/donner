@@ -110,5 +110,29 @@ TEST(RotateCursorSetTest, RotatedCornersProduceDifferentBitmaps) {
   EXPECT_NE(topLeft->rgba, topRight->rgba);
 }
 
+TEST(RotateCursorSetTest, UninitializedCursorSetRejectsCursorChanges) {
+  RotateCursorSet cursorSet;
+
+  EXPECT_FALSE(cursorSet.valid());
+  EXPECT_FALSE(cursorSet.setRotateCursor(SelectionTransformCorner::TopLeft));
+  EXPECT_FALSE(cursorSet.setRotateCursor(SelectionTransformCorner::BottomRight));
+  EXPECT_FALSE(cursorSet.setPanCursor(PanCursorKind::OpenHand));
+  EXPECT_FALSE(cursorSet.setPanCursor(PanCursorKind::ClosedHand));
+  EXPECT_FALSE(cursorSet.setPenCursor());
+
+  cursorSet.clearIfActive();
+  EXPECT_FALSE(cursorSet.valid());
+}
+
+TEST(RotateCursorSetTest, InitializeWithNullWindowFailsAndLeavesSetInvalid) {
+  RotateCursorSet cursorSet;
+
+  EXPECT_FALSE(cursorSet.initialize(nullptr, nullptr));
+  EXPECT_FALSE(cursorSet.valid());
+  EXPECT_FALSE(cursorSet.setRotateCursor(SelectionTransformCorner::TopRight));
+  EXPECT_FALSE(cursorSet.setPanCursor(PanCursorKind::ClosedHand));
+  EXPECT_FALSE(cursorSet.setPenCursor());
+}
+
 }  // namespace
 }  // namespace donner::editor

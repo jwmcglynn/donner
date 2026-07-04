@@ -46,6 +46,43 @@ constexpr std::string_view kSvg =
   <circle id="leaf" cx="50" cy="50" r="5" fill="purple"/>
 </svg>)";
 
+constexpr std::string_view kRenderableLeavesSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <rect id="rect" x="0" y="0" width="10" height="10"/>
+  <circle id="circle" cx="20" cy="20" r="5"/>
+  <ellipse id="ellipse" cx="40" cy="20" rx="5" ry="3"/>
+  <line id="line" x1="0" y1="40" x2="20" y2="40"/>
+  <polyline id="polyline" points="0,60 10,70"/>
+  <polygon id="polygon" points="30,60 40,70 20,70"/>
+  <path id="path" d="M0 80 L10 80"/>
+  <text id="text" x="0" y="100">Label</text>
+  <image id="image" href="image.png" width="10" height="10"/>
+  <use id="use" href="#rect"/>
+</svg>)";
+
+constexpr std::string_view kExcludedResourcesSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <defs id="defs"/>
+  <linearGradient id="linearGradient"/>
+  <radialGradient id="radialGradient"/>
+  <pattern id="pattern"/>
+  <filter id="filter"/>
+  <clipPath id="clipPath"/>
+  <mask id="mask"/>
+  <marker id="marker"/>
+  <symbol id="symbol"/>
+  <style id="style">rect { fill: red; }</style>
+  <stop id="stop"/>
+  <rect id="visible" x="0" y="0" width="10" height="10"/>
+</svg>)";
+
+constexpr std::string_view kVisibilitySvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
+  <rect id="displayNone" display="none" x="0" y="0" width="10" height="10"/>
+  <rect id="visibilityHidden" visibility="hidden" x="20" y="0" width="10" height="10"/>
+  <rect id="visible" x="40" y="0" width="10" height="10"/>
+</svg>)";
+
 // Find the row whose display name equals `name`, or null.
 const LayerTreeRow* FindRow(const LayerTreeModel& model, std::string_view name) {
   for (const LayerTreeRow& row : model.rows()) {
@@ -107,6 +144,22 @@ std::uint64_t StableIdOf(EditorApp& app, std::string_view name) {
   return LayerTreeModel::StableIdFor(*FindElement(app, name));
 }
 
+TEST(LayerTreeModelTest, RefreshWithoutDocumentClearsRowsAndExpansionCanToggle) {
+  EditorApp app;
+  LayerTreeModel model;
+
+  model.toggleExpanded(42);
+  EXPECT_TRUE(model.isExpanded(42));
+  model.toggleExpanded(42);
+  EXPECT_FALSE(model.isExpanded(42));
+
+  model.setExpanded(7, true);
+  EXPECT_TRUE(model.isExpanded(7));
+  model.refresh(app);
+  EXPECT_TRUE(model.rows().empty());
+  EXPECT_TRUE(model.isExpanded(7)) << "refresh without a document should not clear expansion state";
+}
+
 TEST(LayerTreeModelTest, ExcludesNonRenderedResourcesAndKeepsRenderableRows) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kSvg));
@@ -122,6 +175,35 @@ TEST(LayerTreeModelTest, ExcludesNonRenderedResourcesAndKeepsRenderableRows) {
   EXPECT_THAT(RowNames(model), testing::Not(testing::Contains("grad")));
   EXPECT_THAT(RowNames(model), testing::Not(testing::Contains(HasSubstr("linearGradient"))));
   EXPECT_THAT(RowNames(model), testing::Not(testing::Contains(HasSubstr("defs"))));
+}
+
+TEST(LayerTreeModelTest, ExcludesAllResourceRowTypes) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kExcludedResourcesSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  EXPECT_THAT(RowNames(model), testing::Contains("visible"));
+  for (std::string_view name : {"defs", "linearGradient", "radialGradient", "pattern", "filter",
+                                "clipPath", "mask", "marker", "symbol", "style", "stop"}) {
+    EXPECT_THAT(RowNames(model), testing::Not(testing::Contains(std::string(name))));
+  }
+}
+
+TEST(LayerTreeModelTest, IncludesAllRenderableLeafTypesAsShapes) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kRenderableLeavesSvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  for (std::string_view name : {"rect", "circle", "ellipse", "line", "polyline", "polygon", "path",
+                                "text", "image", "use"}) {
+    const LayerTreeRow* row = FindRow(model, name);
+    ASSERT_NE(row, nullptr) << name;
+    EXPECT_EQ(row->kind, LayerRowKind::Shape) << name;
+  }
 }
 
 TEST(LayerTreeModelTest, ClassifiesRowKinds) {
@@ -199,6 +281,26 @@ TEST(LayerTreeModelTest, StackOrderListsBackToFrontInDocumentOrder) {
   ASSERT_GE(leafIdx, 0);
   EXPECT_LT(groupAIdx, compIdx) << "groupA (document-first/back) should list above comp";
   EXPECT_LT(compIdx, leafIdx) << "comp should list above leaf (document-last/front)";
+}
+
+TEST(LayerTreeModelTest, VisibilityFlagsReflectDisplayAndVisibilityProperties) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kVisibilitySvg));
+
+  LayerTreeModel model;
+  model.refresh(app);
+
+  const LayerTreeRow* displayNone = FindRow(model, "displayNone");
+  ASSERT_NE(displayNone, nullptr);
+  EXPECT_FALSE(displayNone->isVisible);
+
+  const LayerTreeRow* visibilityHidden = FindRow(model, "visibilityHidden");
+  ASSERT_NE(visibilityHidden, nullptr);
+  EXPECT_FALSE(visibilityHidden->isVisible);
+
+  const LayerTreeRow* visible = FindRow(model, "visible");
+  ASSERT_NE(visible, nullptr);
+  EXPECT_TRUE(visible->isVisible);
 }
 
 TEST(LayerTreeModelTest, ExpansionAndSelectionPersistAcrossRefresh) {

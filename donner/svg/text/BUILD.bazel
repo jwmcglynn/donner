@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "text_types",
@@ -100,5 +100,14 @@ donner_cc_library(
         "//donner/svg/resources:font_manager",
         "//third_party:freetype",
         "@harfbuzz",
+    ],
+)
+
+donner_cc_test(
+    name = "font_data_utils_tests",
+    srcs = ["tests/FontDataUtils_tests.cc"],
+    deps = [
+        ":text_backend",
+        "@com_google_gtest//:gtest_main",
     ],
 )

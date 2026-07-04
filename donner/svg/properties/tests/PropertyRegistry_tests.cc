@@ -147,6 +147,114 @@ TEST(PropertyRegistry, PropertyNamesExposeCssRegistryKeys) {
   EXPECT_FALSE(PropertyRegistry::isPresentationAttributeName("marker"));
 }
 
+TEST(Property, GetStoredValueOnlyReturnsExplicitConcreteValue) {
+  Property<int> property("integer", []() -> std::optional<int> { return 5; });
+  EXPECT_EQ(property.get(), 5);
+  EXPECT_EQ(property.getStoredValue(), nullptr);
+
+  property.set(7, Specificity::FromABC(0, 1, 0));
+  ASSERT_NE(property.getStoredValue(), nullptr);
+  EXPECT_EQ(*property.getStoredValue(), 7);
+
+  property.set(std::optional<int>(), Specificity::FromABC(0, 1, 0));
+  EXPECT_EQ(property.get(), std::nullopt);
+  EXPECT_EQ(property.getStoredValue(), nullptr);
+
+  property.set(PropertyState::Inherit, Specificity::FromABC(0, 1, 0));
+  EXPECT_EQ(property.getStoredValue(), nullptr);
+}
+
+TEST(Property, InheritFromCoversStateAndSpecificityBranches) {
+  using InheritingProperty = Property<int, PropertyCascade::Inherit>;
+
+  InheritingProperty parent("integer");
+  parent.set(10, Specificity::FromABC(0, 2, 0));
+
+  {
+    InheritingProperty child("integer");
+    const InheritingProperty inherited = child.inheritFrom(parent);
+    EXPECT_EQ(inherited.get(), 10);
+    EXPECT_EQ(inherited.state, PropertyState::Set);
+  }
+
+  {
+    InheritingProperty child("integer");
+    child.set(PropertyState::Inherit, Specificity::FromABC(0, 0, 1));
+    const InheritingProperty inherited = child.inheritFrom(parent);
+    EXPECT_EQ(inherited.get(), 10);
+    EXPECT_EQ(inherited.specificity, Specificity::FromABC(0, 0, 1));
+  }
+
+  {
+    InheritingProperty child("integer");
+    child.set(PropertyState::ExplicitUnset, Specificity::FromABC(0, 0, 1));
+    const InheritingProperty inherited = child.inheritFrom(parent);
+    EXPECT_EQ(inherited.get(), 10);
+  }
+
+  {
+    InheritingProperty child("integer");
+    child.set(1, Specificity::FromABC(0, 1, 0));
+    const InheritingProperty inherited = child.inheritFrom(parent);
+    EXPECT_EQ(inherited.get(), 10);
+    EXPECT_EQ(inherited.specificity, Specificity::FromABC(0, 2, 0));
+  }
+
+  {
+    InheritingProperty child("integer");
+    child.set(1, Specificity::FromABC(0, 3, 0));
+    const InheritingProperty inherited = child.inheritFrom(parent);
+    EXPECT_EQ(inherited.get(), 1);
+    EXPECT_EQ(inherited.specificity, Specificity::FromABC(0, 3, 0));
+  }
+
+  {
+    InheritingProperty unspecifiedParent("integer");
+    InheritingProperty child("integer");
+    const InheritingProperty inherited = child.inheritFrom(unspecifiedParent);
+    EXPECT_EQ(inherited.get(), std::nullopt);
+  }
+
+  {
+    InheritingProperty child("integer");
+    const InheritingProperty inherited = child.inheritFrom(parent, PropertyInheritOptions::NoPaint);
+    EXPECT_EQ(inherited.get(), 10);
+  }
+}
+
+TEST(Property, NonInheritingPropertyOnlyInheritsExplicitInheritState) {
+  Property<int> parent("integer");
+  parent.set(10, Specificity::FromABC(0, 2, 0));
+
+  Property<int> child("integer");
+  EXPECT_EQ(child.inheritFrom(parent).get(), std::nullopt);
+
+  child.set(PropertyState::Inherit, Specificity::FromABC(0, 1, 0));
+  const Property<int> inherited = child.inheritFrom(parent);
+  EXPECT_EQ(inherited.get(), 10);
+  EXPECT_EQ(inherited.specificity, Specificity::FromABC(0, 1, 0));
+}
+
+TEST(Property, OstreamOutputCoversAllStates) {
+  Property<int> property("integer");
+  EXPECT_THAT(property, ToStringIs("integer: (not set)"));
+
+  property.set(7, Specificity::FromABC(0, 1, 0));
+  EXPECT_THAT(property, ToStringIs("integer: 7 (set) @ Specificity(0, 1, 0)"));
+
+  property.set(std::optional<int>(), Specificity::FromABC(0, 1, 0));
+  EXPECT_THAT(property, ToStringIs("integer: nullopt (set) @ Specificity(0, 1, 0)"));
+
+  property.set(PropertyState::Inherit, Specificity::FromABC(0, 1, 0));
+  EXPECT_THAT(property, ToStringIs("integer: (inherit) @ Specificity(0, 1, 0)"));
+
+  property.set(PropertyState::ExplicitInitial, Specificity::FromABC(0, 1, 0));
+  EXPECT_THAT(property, ToStringIs("integer: (explicit initial) @ Specificity(0, 1, 0)"));
+
+  property.set(PropertyState::ExplicitUnset, Specificity::FromABC(0, 1, 0));
+  EXPECT_THAT(property, ToStringIs("integer: (explicit unset) @ Specificity(0, 1, 0)"));
+}
+
 TEST(PropertyRegistry, ParseDeclaration) {
   css::Declaration declaration("color", {ComponentValue(Token(Token::Ident("lime"), 0))});
 

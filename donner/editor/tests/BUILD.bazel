@@ -916,6 +916,8 @@ donner_cc_test(
     srcs = ["ClipboardInterface_tests.cc"],
     deps = [
         "//donner/editor:clipboard_interface",
+        "//donner/editor:imgui_clipboard",
+        "//donner/editor:imgui_headers",
         "@com_google_gtest//:gtest_main",
     ],
 )

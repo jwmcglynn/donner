@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <fstream>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -168,6 +169,133 @@ std::optional<LayerTreeRow> FindRow(const LayersPanel& panel, std::string_view n
 using svg::tests::CountRenderingInstances;
 using svg::tests::CountRenderingInstancesForDataEntity;
 
+TEST(LayersPanelTest, MissingRowPreviewQueriesReturnEmpty) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  const std::uint64_t missingStableId = std::numeric_limits<std::uint64_t>::max();
+  EXPECT_FALSE(panel.hasThumbnailOrSwatch(missingStableId));
+  EXPECT_FALSE(panel.rowFallbackSwatch(missingStableId).has_value());
+  EXPECT_EQ(panel.rowThumbnail(missingStableId), nullptr);
+}
+
+TEST(LayersPanelTest, BeginRenameFindsVisibleRowsAndIgnoresMissingRows) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  constexpr std::uint64_t kMissingStableId = std::numeric_limits<std::uint64_t>::max();
+  panel.beginRename(kMissingStableId);
+  EXPECT_EQ(panel.renamingStableId(), std::nullopt);
+
+  const std::optional<LayerTreeRow> leaf = FindRow(panel, "leaf");
+  ASSERT_TRUE(leaf.has_value());
+  panel.beginRename(leaf->stableId);
+  EXPECT_EQ(panel.renamingStableId(), std::optional(leaf->stableId));
+
+  panel.beginRename(kMissingStableId);
+  EXPECT_EQ(panel.renamingStableId(), std::optional(leaf->stableId))
+      << "beginRename should leave the current edit alone when the target row is gone";
+}
+
+TEST(LayersPanelTest, HoveredRowTracksValidRowsAndClearsInvalidRows) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  const int leafIdx = RowIndex(panel, "leaf");
+  ASSERT_GE(leafIdx, 0);
+  const svg::SVGElement leafElement = panel.rows()[static_cast<std::size_t>(leafIdx)].element;
+
+  panel.noteRowHovered(static_cast<std::size_t>(leafIdx));
+  ASSERT_TRUE(panel.hoveredElement().has_value());
+  EXPECT_EQ(*panel.hoveredElement(), leafElement);
+
+  panel.noteRowHovered(panel.rows().size());
+  EXPECT_EQ(panel.hoveredElement(), std::nullopt);
+
+  panel.noteRowHovered(static_cast<std::size_t>(leafIdx));
+  ASSERT_TRUE(panel.hoveredElement().has_value());
+  panel.noteRowHovered(std::nullopt);
+  EXPECT_EQ(panel.hoveredElement(), std::nullopt);
+}
+
+TEST(LayersPanelTest, LockedFlashIgnoresElementsNotInVisibleRows) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+  EditorApp otherApp;
+  LoadDocument(otherApp, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="foreign" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  const std::optional<svg::SVGElement> foreignElement =
+      otherApp.document().document().querySelector("#foreign");
+  ASSERT_TRUE(foreignElement.has_value());
+
+  panel.setLockedRejectionFlash(
+      LayersLockedRejectionFlash{.element = *foreignElement, .intensity = 0.75f});
+  EXPECT_EQ(panel.flashedRowIndex(), std::nullopt);
+  EXPECT_FLOAT_EQ(panel.lockedRejectionFlashIntensity(), 0.75f);
+}
+
+TEST(LayersPanelTest, RefreshSnapshotDropsStaleRowStateAndThumbnailsAfterReload) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">
+    <rect id="a" x="0" y="0" width="10" height="10" fill="red"/>
+    <rect id="b" x="10" y="0" width="10" height="10" fill="green"/>
+    <rect id="c" x="20" y="0" width="10" height="10" fill="blue"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int cIndex = RowIndex(panel, "c");
+  ASSERT_GE(cIndex, 0);
+  const std::uint64_t staleStableId = panel.rows()[static_cast<std::size_t>(cIndex)].stableId;
+  ASSERT_NE(panel.rowThumbnail(staleStableId), nullptr);
+
+  panel.handleRowClick(app, static_cast<std::size_t>(cIndex), LayersPanel::ClickModifiers{});
+
+  ASSERT_TRUE(app.loadFromString(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)"));
+  panel.refreshSnapshot(app);
+
+  EXPECT_EQ(panel.visibleRowCount(), 0u);
+  EXPECT_FALSE(panel.hasThumbnailOrSwatch(staleStableId));
+  EXPECT_FALSE(panel.rowFallbackSwatch(staleStableId).has_value());
+  EXPECT_EQ(panel.rowThumbnail(staleStableId), nullptr);
+}
+
+TEST(LayersPanelTest, RowClickOutOfRangeIsNoOpAndShiftWithoutAnchorSelectsClickedRow) {
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(kSvg));
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+
+  panel.handleRowClick(app, panel.rows().size(), LayersPanel::ClickModifiers{});
+  EXPECT_TRUE(app.selectedElements().empty());
+  EXPECT_FALSE(panel.consumeSelectionChanged());
+
+  const int leafIdx = RowIndex(panel, "leaf");
+  ASSERT_GE(leafIdx, 0);
+  const svg::SVGElement leafElement = panel.rows()[static_cast<std::size_t>(leafIdx)].element;
+  panel.handleRowClick(app, static_cast<std::size_t>(leafIdx),
+                       LayersPanel::ClickModifiers{.shift = true});
+
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front(), leafElement);
+  EXPECT_TRUE(panel.consumeSelectionChanged());
+}
+
 // ---------------------------------------------------------------------------
 // Inline rename + drag-to-reorder (wires the DOM-level rename/reorder engines)
 // ---------------------------------------------------------------------------
@@ -236,6 +364,24 @@ TEST(LayersPanelTest, RowRenameRejectsDuplicateId) {
   EXPECT_FALSE(app.document().flushFrame());
 }
 
+TEST(LayersPanelTest, RejectedRowRenamePreservesAlreadyQueuedMutationSignal) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" x="0" y="0" width="10" height="10"/>
+    <rect id="b" x="0" y="20" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  ASSERT_GE(aIndex, 0);
+
+  panel.handleEyeClick(app, static_cast<std::size_t>(aIndex));
+  EXPECT_FALSE(panel.handleRowRename(app, static_cast<std::size_t>(aIndex), "b"));
+  EXPECT_TRUE(panel.consumeQueuedMutation())
+      << "a failed rename must not clear an earlier queued show/hide mutation";
+}
+
 TEST(LayersPanelTest, RowRenameOutOfRangeIsNoOp) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
@@ -275,6 +421,32 @@ TEST(LayersPanelTest, RowReorderMovesElementAmongSiblings) {
   EXPECT_FALSE(a.nextSibling().has_value()) << "a should now be the last child of g";
 }
 
+TEST(LayersPanelTest, RowReorderMovesElementUpwardAmongSiblings) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <g id="g">
+      <rect id="a" x="0" y="0" width="10" height="10"/>
+      <rect id="b" x="0" y="20" width="10" height="10"/>
+    </g>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int aIndex = RowIndex(panel, "a");
+  const int bIndex = RowIndex(panel, "b");
+  ASSERT_GE(aIndex, 0);
+  ASSERT_GE(bIndex, 0);
+  const svg::SVGElement b = panel.rows()[static_cast<std::size_t>(bIndex)].element;
+
+  EXPECT_TRUE(panel.handleRowReorder(app, static_cast<std::size_t>(bIndex),
+                                     static_cast<std::size_t>(aIndex)));
+  EXPECT_TRUE(app.document().flushFrame());
+
+  panel.refreshSnapshot(app);
+  EXPECT_LT(RowIndex(panel, "b"), RowIndex(panel, "a"));
+  EXPECT_FALSE(b.previousSibling().has_value()) << "b should now be the first child of g";
+}
+
 TEST(LayersPanelTest, RowReorderRejectsCrossParent) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
@@ -295,6 +467,20 @@ TEST(LayersPanelTest, RowReorderRejectsCrossParent) {
   EXPECT_FALSE(app.document().flushFrame());
 }
 
+TEST(LayersPanelTest, RowReorderOutOfRangeIsNoOp) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="a" x="0" y="0" width="10" height="10"/>
+    <rect id="b" x="0" y="20" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  EXPECT_FALSE(panel.handleRowReorder(app, panel.rows().size(), 0u));
+  EXPECT_FALSE(panel.handleRowReorder(app, 0u, panel.rows().size()));
+  EXPECT_FALSE(app.document().flushFrame());
+}
+
 TEST(LayersPanelTest, RowReorderSameIndexIsNoOp) {
   EditorApp app;
   LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
@@ -309,6 +495,32 @@ TEST(LayersPanelTest, RowReorderSameIndexIsNoOp) {
   EXPECT_FALSE(panel.handleRowReorder(app, static_cast<std::size_t>(aIndex),
                                       static_cast<std::size_t>(aIndex)));
   EXPECT_FALSE(app.document().flushFrame());
+}
+
+TEST(LayersPanelTest, RowZOrderRejectsAlreadyFrontElementAndPreservesQueuedMutationSignal) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="only" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  const int index = RowIndex(panel, "only");
+  ASSERT_GE(index, 0);
+
+  EXPECT_FALSE(
+      panel.handleRowZOrder(app, static_cast<std::size_t>(index), EditorApp::ZOrder::BringToFront));
+  ASSERT_EQ(app.selectedElements().size(), 1u);
+  EXPECT_EQ(app.selectedElements().front().id(), RcString("only"));
+  EXPECT_TRUE(panel.consumeSelectionChanged());
+  EXPECT_FALSE(panel.consumeQueuedMutation());
+  EXPECT_FALSE(app.document().flushFrame());
+
+  panel.handleLockClick(app, static_cast<std::size_t>(index));
+  EXPECT_FALSE(
+      panel.handleRowZOrder(app, static_cast<std::size_t>(index), EditorApp::ZOrder::BringToFront));
+  EXPECT_TRUE(panel.consumeQueuedMutation())
+      << "a rejected z-order command must not clear an earlier queued mutation";
 }
 
 TEST(LayersPanelTest, RowZOrderBringsElementForward) {
@@ -347,6 +559,19 @@ TEST(LayersPanelTest, RowZOrderOutOfRangeIsNoOp) {
   EXPECT_FALSE(
       panel.handleRowZOrder(app, panel.rows().size() + 5u, EditorApp::ZOrder::BringForward));
   EXPECT_FALSE(app.document().flushFrame());
+}
+
+TEST(LayersPanelTest, LockClickOutOfRangeIsNoOp) {
+  EditorApp app;
+  LoadDocument(app, R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <rect id="rect1" x="0" y="0" width="10" height="10"/>
+  </svg>)");
+
+  LayersPanel panel;
+  panel.refreshSnapshot(app);
+  panel.handleLockClick(app, panel.rows().size() + 5u);
+  EXPECT_FALSE(app.document().flushFrame());
+  EXPECT_FALSE(panel.consumeQueuedMutation());
 }
 
 // ---------------------------------------------------------------------------

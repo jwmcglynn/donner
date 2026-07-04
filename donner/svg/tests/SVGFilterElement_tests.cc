@@ -7,6 +7,8 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/SVGFEColorMatrixElement.h"
 #include "donner/svg/SVGFEComponentTransferElement.h"
 #include "donner/svg/SVGFEFuncAElement.h"
 #include "donner/svg/SVGFEFuncBElement.h"
@@ -580,6 +582,82 @@ TEST(SVGFEGaussianBlurElement, SetStdDeviation) {
       "<feGaussianBlur stdDeviation=\"3\" />", options);
   EXPECT_EQ(blur->stdDeviationX(), 3.0);
   EXPECT_EQ(blur->stdDeviationY(), 3.0);
+}
+
+TEST(SVGFEColorMatrixElement, PresentationAttributeTypeVariants) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  auto matrix = instantiateSubtreeElementAs<SVGFEColorMatrixElement>("<feColorMatrix />", options);
+  auto& component = matrix->entityHandle().get<components::FEColorMatrixComponent>();
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("type", "matrix"), ParseResultIs(true));
+  EXPECT_EQ(component.type, components::FEColorMatrixComponent::Type::Matrix);
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("type", "saturate"), ParseResultIs(true));
+  EXPECT_EQ(component.type, components::FEColorMatrixComponent::Type::Saturate);
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("type", "hueRotate"), ParseResultIs(true));
+  EXPECT_EQ(component.type, components::FEColorMatrixComponent::Type::HueRotate);
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("type", "luminanceToAlpha"), ParseResultIs(true));
+  EXPECT_EQ(component.type, components::FEColorMatrixComponent::Type::LuminanceToAlpha);
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("type", "initial"), ParseResultIs(true));
+  EXPECT_EQ(component.type, components::FEColorMatrixComponent::Type::Matrix);
+}
+
+TEST(SVGFEColorMatrixElement, PresentationAttributeValuesParseSeparatorsAndReset) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  auto matrix = instantiateSubtreeElementAs<SVGFEColorMatrixElement>("<feColorMatrix />", options);
+  auto& component = matrix->entityHandle().get<components::FEColorMatrixComponent>();
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("values", " 1, 2\t\n3\r "), ParseResultIs(true));
+  EXPECT_THAT(component.values, testing::ElementsAre(1.0, 2.0, 3.0));
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("values", "initial"), ParseResultIs(true));
+  EXPECT_TRUE(component.values.empty());
+}
+
+TEST(SVGFEColorMatrixElement, PresentationAttributeRejectsInvalidValues) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  auto matrix = instantiateSubtreeElementAs<SVGFEColorMatrixElement>("<feColorMatrix />", options);
+  auto& component = matrix->entityHandle().get<components::FEColorMatrixComponent>();
+  component.type = components::FEColorMatrixComponent::Type::Saturate;
+  component.values = {9.0};
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("type", "invalid"),
+              ParseErrorIs(testing::HasSubstr("Invalid type value 'invalid'")));
+  EXPECT_EQ(component.type, components::FEColorMatrixComponent::Type::Saturate);
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("values", "1 nope"),
+              ParseErrorIs(testing::HasSubstr("Invalid values value '1 nope'")));
+  EXPECT_THAT(component.values, testing::ElementsAre(9.0));
+
+  EXPECT_THAT(matrix->trySetPresentationAttribute("kernelMatrix", "1 2 3 4"), ParseResultIs(false));
+}
+
+TEST(SVGFEGaussianBlurElement, PresentationAttributeStdDeviationParsesResetsAndRejects) {
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  auto blur = instantiateSubtreeElementAs<SVGFEGaussianBlurElement>("<feGaussianBlur />", options);
+
+  EXPECT_THAT(blur->trySetPresentationAttribute("stdDeviation", "3 4"), ParseResultIs(true));
+  EXPECT_EQ(blur->stdDeviationX(), 3.0);
+  EXPECT_EQ(blur->stdDeviationY(), 4.0);
+
+  EXPECT_THAT(blur->trySetPresentationAttribute("stdDeviation", "initial"), ParseResultIs(true));
+  EXPECT_EQ(blur->stdDeviationX(), 0.0);
+  EXPECT_EQ(blur->stdDeviationY(), 0.0);
+
+  blur->setStdDeviation(5.0, 6.0);
+  EXPECT_THAT(blur->trySetPresentationAttribute("stdDeviation", "7 trailing"),
+              ParseErrorIs(testing::HasSubstr("Invalid stdDeviation value '7 trailing'")));
+  EXPECT_EQ(blur->stdDeviationX(), 5.0);
+  EXPECT_EQ(blur->stdDeviationY(), 6.0);
+
+  EXPECT_THAT(blur->trySetPresentationAttribute("edgeMode", "wrap"), ParseResultIs(false));
 }
 
 }  // namespace donner::svg

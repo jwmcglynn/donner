@@ -19,6 +19,7 @@ TEST(LayerInspectorDiagnosticsTest, ClassifiesCurrentCanvas) {
 
   EXPECT_EQ(ClassifyCanvasFreshness(canvas, canvas, canvas), CanvasFreshness::Current);
   EXPECT_EQ(CanvasFreshnessStatusSuffix(CanvasFreshness::Current), "");
+  EXPECT_EQ(CanvasFreshnessStatusSuffix(static_cast<CanvasFreshness>(255)), "");
 }
 
 TEST(LayerInspectorDiagnosticsTest, CommitStallTakesPrecedence) {
@@ -188,6 +189,35 @@ TEST(LayerInspectorDiagnosticsTest, SerializesTileKindsReasonsSignalsAndNonFinit
   EXPECT_NE(json.find("\"reason\":\"not_visible\""), std::string::npos);
   EXPECT_NE(json.find("\"signal\":\"cached_fast_candidate\""), std::string::npos);
   EXPECT_NE(json.find("\"last_ms\":null"), std::string::npos);
+}
+
+TEST(LayerInspectorDiagnosticsTest, EscapesJsonStringsAndSerializesUnknownTileKind) {
+  CompositeTileSnapshot unknown;
+  unknown.kind = static_cast<CompositeTileSnapshot::Kind>(255);
+  unknown.id = "quote\"slash\\\b\f\n\r\t";
+  unknown.id.push_back(static_cast<char>(0x01));
+  unknown.label = "label\nwith\tcontrols";
+  unknown.spanRangeLabel = "span\\range\"quoted";
+  unknown.immediateBudgetMs = 1.0;
+  unknown.lastRasterizeMs = 2.0;
+  unknown.visible = true;
+  unknown.estimatedDrawOps = 3;
+
+  CompositorHeuristicTelemetryContext context;
+  context.state.canvasSize = Vector2i(64, 64);
+
+  const std::vector<CompositeTileSnapshot> tiles = {unknown};
+  const std::string json = BuildCompositorHeuristicTelemetryJson(tiles, context);
+
+  EXPECT_NE(json.find(R"("id":"quote\"slash\\\b\f\n\r\t\u0001")"), std::string::npos);
+  EXPECT_NE(json.find(R"("kind":"unknown")"), std::string::npos);
+  EXPECT_NE(json.find(R"("label":"label\nwith\tcontrols")"), std::string::npos);
+  EXPECT_NE(json.find(R"("span":"span\\range\"quoted")"), std::string::npos);
+  EXPECT_NE(json.find(R"("mode":"cached")"), std::string::npos);
+  EXPECT_NE(json.find(R"("reason":"cached")"), std::string::npos);
+  EXPECT_NE(json.find(R"("signal":"normal")"), std::string::npos);
+  EXPECT_NE(json.find(R"("over_budget":true)"), std::string::npos);
+  EXPECT_NE(json.find(R"("over_budget_cached":0)"), std::string::npos);
 }
 
 TEST(LayerInspectorDiagnosticsTest, AppendsHeuristicTelemetryJsonLine) {
