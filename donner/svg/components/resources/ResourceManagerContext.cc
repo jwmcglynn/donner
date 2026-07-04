@@ -1,5 +1,8 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
+#include <cstdint>
+#include <span>
+
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
@@ -14,6 +17,31 @@
 
 namespace donner::svg::components {
 namespace {
+
+constexpr uint32_t kWoffMagic = 0x774F4646;          // "wOFF"
+constexpr uint32_t kSfntTrueTypeMagic = 0x00010000;  // TrueType sfnt
+constexpr uint32_t kSfntCffMagic = 0x4F54544F;       // "OTTO"
+constexpr uint32_t kSfntAppleMagic = 0x74727565;     // "true"
+constexpr uint32_t kSfntType1Magic = 0x74797031;     // "typ1"
+
+uint32_t ReadBigEndianU32(std::span<const uint8_t> data) {
+  return (static_cast<uint32_t>(data[0]) << 24u) | (static_cast<uint32_t>(data[1]) << 16u) |
+         (static_cast<uint32_t>(data[2]) << 8u) | static_cast<uint32_t>(data[3]);
+}
+
+bool IsRawSfntFont(std::span<const uint8_t> data) {
+  if (data.size() < 4u) {
+    return false;
+  }
+
+  const uint32_t magic = ReadBigEndianU32(data);
+  return magic == kSfntTrueTypeMagic || magic == kSfntCffMagic || magic == kSfntAppleMagic ||
+         magic == kSfntType1Magic;
+}
+
+bool IsWoffFont(std::span<const uint8_t> data) {
+  return data.size() >= 4u && ReadBigEndianU32(data) == kWoffMagic;
+}
 
 void AssertNoDocumentWriteAccessForUserCallback(Registry& registry, const char* callbackName) {
   const auto* context = registry.ctx().find<SVGDocumentContext>();
@@ -74,7 +102,9 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   // would need one. `data:` URLs are decoded inline in `UrlLoader::fromUri`
   // without touching the resource loader, so their presence alone doesn't
   // justify the warning.
-  const auto needsExternalLoader = [](std::string_view uri) { return !uri.starts_with("data:"); };
+  const auto needsExternalLoader = [](std::string_view uri) {
+    return !uri.empty() && !uri.starts_with("data:");
+  };
 
   const bool hasExternalImage = [&] {
     for (auto entity : imageView) {
@@ -115,6 +145,9 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
     }
 
     auto [image] = view.get(entity);
+    if (image.href.empty()) {
+      continue;
+    }
 
     ImageLoader imageLoader(loader);
 
@@ -175,6 +208,16 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
         }
       } else if (source.kind == css::FontFaceSource::Kind::Data) {
         const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
+        if (!dataPtr || IsRawSfntFont(*dataPtr)) {
+          continue;
+        }
+        if (!IsWoffFont(*dataPtr)) {
+          ParseDiagnostic err;
+          err.reason = std::string(ToString(UrlLoaderError::DataCorrupt));
+          warningSink.add(std::move(err));
+          continue;
+        }
+
         auto maybeFontData = fontLoader.fromData(*dataPtr);
 
         if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {

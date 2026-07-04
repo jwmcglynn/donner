@@ -108,13 +108,6 @@ donner_cc_library(
 
 donner_cc_test(
     name = "font_manager_tests",
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
-    variants = [
-        "tiny",
-        "text_full",
-        "geode",
-    ],
     srcs = ["tests/FontManager_tests.cc"],
     data = [
         "//donner/base/fonts:testdata/valid-001.woff",
@@ -124,6 +117,13 @@ donner_cc_test(
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_WOFF2_ENABLED"],
         "//conditions:default": [],
     }),
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
+    ],
     deps = [
         ":font_manager",
         "//third_party/public-sans",
@@ -134,15 +134,15 @@ donner_cc_test(
 
 donner_cc_test(
     name = "url_loader_tests",
+    srcs = [
+        "tests/UrlLoader_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
         "geode",
-    ],
-    srcs = [
-        "tests/UrlLoader_tests.cc",
     ],
     deps = [
         ":url_loader",
@@ -152,7 +152,10 @@ donner_cc_test(
 )
 
 donner_cc_test(
-    name = "resource_loader_tests",
+    name = "image_loader_tests",
+    srcs = [
+        "tests/ImageLoader_tests.cc",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -160,9 +163,25 @@ donner_cc_test(
         "text_full",
         "geode",
     ],
+    deps = [
+        ":image_loader",
+        ":resource_loader_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "resource_loader_tests",
     srcs = [
         "tests/NullResourceLoader_tests.cc",
         "tests/SandboxedFileResourceLoader_tests.cc",
+    ],
+    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
+    # wrappers run automatically under `bazel test //...`.
+    variants = [
+        "tiny",
+        "text_full",
+        "geode",
     ],
     deps = [
         ":resource_loader_interface",
