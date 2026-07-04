@@ -2,6 +2,8 @@
 
 #include "donner/editor/repro/GlRnrReplay.h"
 
+#include <gmock/gmock.h>
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -10,6 +12,7 @@
 #include <cstring>
 #include <filesystem>
 #include <optional>
+#include <ostream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -28,7 +31,20 @@
 #include "gtest/gtest.h"
 
 namespace donner::editor {
+
+namespace repro {
+
+void PrintTo(const GlRnrReplayCapture& capture, std::ostream* os) {
+  *os << "GlRnrReplayCapture{frameIndex=" << capture.frameIndex << ", reason=" << capture.reason
+      << ", path=" << capture.path.string() << "}";
+}
+
+}  // namespace repro
+
 namespace {
+
+using ::testing::ElementsAre;
+using ::testing::Field;
 
 // Runs a GL replay and, on failure, either GTEST_SKIP()s or FAIL()s. The skip
 // path fires only when the host genuinely cannot provide a GL context (a
@@ -1649,8 +1665,8 @@ TEST(GlRnrReplayTest, DocumentSpaceInputDrivesCanvasSelectionThroughEditorShell)
 
   ASSERT_TRUE(result.finalSelectedElementLabel.has_value());
   EXPECT_EQ(*result.finalSelectedElementLabel, "<rect> #target");
-  ASSERT_EQ(result.captures.size(), 1u);
-  EXPECT_EQ(result.captures.front().frameIndex, 2u);
+  EXPECT_THAT(result.captures,
+              ElementsAre(Field("frameIndex", &repro::GlRnrReplayCapture::frameIndex, 2u)));
 
   std::error_code ec;
   std::filesystem::remove_all(outputDir, ec);

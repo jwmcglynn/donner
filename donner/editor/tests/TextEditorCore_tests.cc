@@ -1206,9 +1206,7 @@ TEST_F(TextEditorCoreTests, ErrorMarkersShiftDownWhenLineInserted) {
   editor_.enterCharacter('\n', false);  // inserts a line before the marker
 
   const ErrorMarkers& markers = editor_.getErrorMarkers();
-  ASSERT_EQ(markers.size(), 1u);
-  EXPECT_EQ(markers.begin()->first, 3);
-  EXPECT_EQ(markers.begin()->second, "msg-on-line-2");
+  EXPECT_THAT(markers, ElementsAre(testing::Pair(3, "msg-on-line-2")));
 }
 
 TEST_F(TextEditorCoreTests, ErrorMarkersAccessibleViaMutableRef) {

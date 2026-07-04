@@ -17,6 +17,7 @@ using ::testing::DoubleNear;
 using ::testing::Field;
 using ::testing::Gt;
 using ::testing::Lt;
+using ::testing::SizeIs;
 
 constexpr std::string_view kTrivialSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
@@ -104,7 +105,7 @@ TEST(AsyncSVGDocumentTest, MultipleSetTransformsCoalesceAtFlush) {
       EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(2.0, 0.0))));
   doc.applyMutation(
       EditorCommand::SetTransformCommand(*rect, Transform2d::Translate(Vector2d(3.0, 0.0))));
-  EXPECT_EQ(doc.queue().size(), 3u);
+  EXPECT_THAT(doc.queue(), SizeIs(3u));
 
   EXPECT_TRUE(doc.flushFrame());
 
