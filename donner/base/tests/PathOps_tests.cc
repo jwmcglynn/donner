@@ -17,6 +17,9 @@
 namespace donner {
 namespace {
 
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+
 Path RectPath(double x, double y, double width, double height) {
   return PathBuilder().addRect(Box2d::FromXYWH(x, y, width, height)).build();
 }
@@ -498,14 +501,11 @@ TEST(PathOpsTest, DifferenceCreatesCurvedHoleForNestedContour) {
               {Input(CirclePath({50, 50}, 40)), Input(CirclePath({50, 50}, 15))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_EQ(result.paths.size(), 1u);
-  const Path& path = result.paths.front();
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 2u));
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 2u));
-  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
-  EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
-  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
-  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
+  EXPECT_THAT(result.paths,
+              ElementsAre(AllOf(CommandCountIs(Path::Verb::MoveTo, 2u),
+                                CommandCountIs(Path::Verb::ClosePath, 2u),
+                                HasCommandVerb(Path::Verb::CurveTo), IsInside(Vector2d(50, 25)),
+                                IsOutside(Vector2d(50, 50)), IsOutside(Vector2d(5, 50)))));
 }
 
 TEST(PathOpsTest, IntersectOfNestedCirclesKeepsInnerCircle) {
@@ -513,13 +513,10 @@ TEST(PathOpsTest, IntersectOfNestedCirclesKeepsInnerCircle) {
       PathBooleanOp::Intersect, {Input(CirclePath({50, 50}, 40)), Input(CirclePath({50, 50}, 15))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_EQ(result.paths.size(), 1u);
-  const Path& path = result.paths.front();
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
-  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
-  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
-  EXPECT_THAT(path, IsOutside(Vector2d(50, 25)));
-  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
+  EXPECT_THAT(result.paths,
+              ElementsAre(AllOf(CommandCountIs(Path::Verb::MoveTo, 1u),
+                                HasCommandVerb(Path::Verb::CurveTo), IsInside(Vector2d(50, 50)),
+                                IsOutside(Vector2d(50, 25)), IsOutside(Vector2d(5, 50)))));
 }
 
 TEST(PathOpsTest, UnionOfNestedCirclesKeepsOuterCircle) {
@@ -527,13 +524,10 @@ TEST(PathOpsTest, UnionOfNestedCirclesKeepsOuterCircle) {
       PathBooleanOp::Union, {Input(CirclePath({50, 50}, 40)), Input(CirclePath({50, 50}, 15))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_EQ(result.paths.size(), 1u);
-  const Path& path = result.paths.front();
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
-  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
-  EXPECT_THAT(path, IsInside(Vector2d(50, 50)));
-  EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
-  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
+  EXPECT_THAT(result.paths,
+              ElementsAre(AllOf(CommandCountIs(Path::Verb::MoveTo, 1u),
+                                HasCommandVerb(Path::Verb::CurveTo), IsInside(Vector2d(50, 50)),
+                                IsInside(Vector2d(50, 25)), IsOutside(Vector2d(5, 50)))));
 }
 
 TEST(PathOpsTest, LowIntersectionCapAllowsNestedCircleContainment) {
@@ -546,16 +540,14 @@ TEST(PathOpsTest, LowIntersectionCapAllowsNestedCircleContainment) {
 
   const PathBooleanResult unionResult = ApplyPathBoolean(PathBooleanOp::Union, inputs, options);
   ASSERT_EQ(unionResult.status, PathBooleanStatus::Ok) << Diagnostics(unionResult);
-  ASSERT_EQ(unionResult.paths.size(), 1u);
-  EXPECT_THAT(unionResult.paths.front(), IsInside(Vector2d(50, 50)));
-  EXPECT_THAT(unionResult.paths.front(), IsOutside(Vector2d(5, 50)));
+  EXPECT_THAT(unionResult.paths,
+              ElementsAre(AllOf(IsInside(Vector2d(50, 50)), IsOutside(Vector2d(5, 50)))));
 
   const PathBooleanResult intersectResult =
       ApplyPathBoolean(PathBooleanOp::Intersect, inputs, options);
   ASSERT_EQ(intersectResult.status, PathBooleanStatus::Ok) << Diagnostics(intersectResult);
-  ASSERT_EQ(intersectResult.paths.size(), 1u);
-  EXPECT_THAT(intersectResult.paths.front(), IsInside(Vector2d(50, 50)));
-  EXPECT_THAT(intersectResult.paths.front(), IsOutside(Vector2d(50, 25)));
+  EXPECT_THAT(intersectResult.paths,
+              ElementsAre(AllOf(IsInside(Vector2d(50, 50)), IsOutside(Vector2d(50, 25)))));
 }
 
 TEST(PathOpsTest, XorOfNestedCirclesCreatesCurvedRing) {
@@ -563,14 +555,11 @@ TEST(PathOpsTest, XorOfNestedCirclesCreatesCurvedRing) {
       PathBooleanOp::Xor, {Input(CirclePath({50, 50}, 40)), Input(CirclePath({50, 50}, 15))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_EQ(result.paths.size(), 1u);
-  const Path& path = result.paths.front();
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 2u));
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 2u));
-  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
-  EXPECT_THAT(path, IsOutside(Vector2d(50, 50)));
-  EXPECT_THAT(path, IsInside(Vector2d(50, 25)));
-  EXPECT_THAT(path, IsOutside(Vector2d(5, 50)));
+  EXPECT_THAT(result.paths,
+              ElementsAre(AllOf(CommandCountIs(Path::Verb::MoveTo, 2u),
+                                CommandCountIs(Path::Verb::ClosePath, 2u),
+                                HasCommandVerb(Path::Verb::CurveTo), IsOutside(Vector2d(50, 50)),
+                                IsInside(Vector2d(50, 25)), IsOutside(Vector2d(5, 50)))));
 }
 
 TEST(PathOpsTest, DifferenceOfCircleCoveredByLargerCircleIsEmpty) {
@@ -673,13 +662,10 @@ TEST(PathOpsTest, SharedEdgeUnionProducesSingleExteriorContour) {
       PathBooleanOp::Union, {Input(RectPath(0, 0, 10, 10)), Input(RectPath(10, 0, 10, 10))});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok);
-  ASSERT_EQ(result.paths.size(), 1u);
-  const Path& path = result.paths.front();
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 1u));
-  EXPECT_THAT(path, IsInside(Vector2d(5, 5)));
-  EXPECT_THAT(path, IsInside(Vector2d(15, 5)));
-  EXPECT_THAT(path, IsOutside(Vector2d(25, 5)));
+  EXPECT_THAT(result.paths,
+              ElementsAre(AllOf(CommandCountIs(Path::Verb::MoveTo, 1u),
+                                CommandCountIs(Path::Verb::ClosePath, 1u), IsInside(Vector2d(5, 5)),
+                                IsInside(Vector2d(15, 5)), IsOutside(Vector2d(25, 5)))));
 }
 
 TEST(PathOpsTest, IntersectOfLineAndStraightQuadraticSharedBoundaryIsEmpty) {
@@ -934,13 +920,11 @@ TEST(PathOpsTest, UnionOfDuplicateCurvedContoursKeepsSingleContour) {
   const PathBooleanResult result = Boolean(PathBooleanOp::Union, {Input(circle), Input(circle)});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_EQ(result.paths.size(), 1u);
-  const Path& path = result.paths.front();
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 1u));
-  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
-  EXPECT_THAT(path, IsInside(Vector2d(20, 20)));
-  EXPECT_THAT(path, IsOutside(Vector2d(40, 20)));
+  EXPECT_THAT(result.paths,
+              ElementsAre(AllOf(CommandCountIs(Path::Verb::MoveTo, 1u),
+                                CommandCountIs(Path::Verb::ClosePath, 1u),
+                                HasCommandVerb(Path::Verb::CurveTo), IsInside(Vector2d(20, 20)),
+                                IsOutside(Vector2d(40, 20)))));
 }
 
 TEST(PathOpsTest, IntersectOfDuplicateCurvedContoursKeepsOriginalRegion) {
@@ -949,13 +933,11 @@ TEST(PathOpsTest, IntersectOfDuplicateCurvedContoursKeepsOriginalRegion) {
       Boolean(PathBooleanOp::Intersect, {Input(circle), Input(circle)});
 
   ASSERT_EQ(result.status, PathBooleanStatus::Ok) << Diagnostics(result);
-  ASSERT_EQ(result.paths.size(), 1u);
-  const Path& path = result.paths.front();
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::MoveTo, 1u));
-  EXPECT_THAT(path, CommandCountIs(Path::Verb::ClosePath, 1u));
-  EXPECT_THAT(path, HasCommandVerb(Path::Verb::CurveTo));
-  EXPECT_THAT(path, IsInside(Vector2d(20, 20)));
-  EXPECT_THAT(path, IsOutside(Vector2d(40, 20)));
+  EXPECT_THAT(result.paths,
+              ElementsAre(AllOf(CommandCountIs(Path::Verb::MoveTo, 1u),
+                                CommandCountIs(Path::Verb::ClosePath, 1u),
+                                HasCommandVerb(Path::Verb::CurveTo), IsInside(Vector2d(20, 20)),
+                                IsOutside(Vector2d(40, 20)))));
 }
 
 TEST(PathOpsTest, DifferenceOfDuplicateCurvedContoursIsEmpty) {
