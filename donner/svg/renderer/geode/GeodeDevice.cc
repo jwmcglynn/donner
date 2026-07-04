@@ -111,11 +111,22 @@ void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) 
 
   wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
   callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+  // emdawnwebgpu's WGPUQueueWorkDoneCallback carries an extra WGPUStringView
+  // message parameter that wgpu-native's doesn't; match whichever the active
+  // header declares.
+#if defined(__EMSCRIPTEN__)
+  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, WGPUStringView /*message*/,
+                             void* userdata1, void* /*userdata2*/) {
+    WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
+    state->done = true;
+  };
+#else
   callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
                              void* /*userdata2*/) {
     WorkDoneState* state = static_cast<WorkDoneState*>(userdata1);
     state->done = true;
   };
+#endif
   callbackInfo.userdata1 = &state;
   callbackInfo.userdata2 = nullptr;
 
