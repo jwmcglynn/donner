@@ -899,6 +899,15 @@ Entity RenderCoordinator::selectedCompositedEntity(EditorApp& app) const {
   return selected->unsafeEntityHandle().entity();
 }
 
+Entity RenderCoordinator::selectedCompositedEntityForDiagnostics(EditorApp& app) const {
+  if (!app.hasDocument() || !app.selectedElement().has_value()) {
+    return entt::null;
+  }
+
+  return app.document().document().withReadAccess(
+      [this, &app](svg::DocumentReadAccess&) { return selectedCompositedEntity(app); });
+}
+
 std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp& app,
                                                                        Entity primaryEntity) const {
   std::vector<Entity> extras;

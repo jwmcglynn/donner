@@ -38,11 +38,10 @@ donner_cc_library(
     ],
     deps = [
         ":components",
-        ":font_resource",
         "//donner/css:core",
         "//donner/svg:svg_document_handle",
-        "//donner/svg/resources:font_loader",
         "//donner/svg/resources:image_loader",
         "//donner/svg/resources:resource_loader_interface",
+        "//donner/svg/resources:url_loader",
     ],
 )

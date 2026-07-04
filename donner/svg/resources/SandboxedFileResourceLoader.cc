@@ -1,6 +1,8 @@
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 
+#include <cstdint>
 #include <fstream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -45,7 +47,7 @@ SandboxedFileResourceLoader::fetchExternalResource(std::string_view url) {
 
   // Validated, now read the file.
   std::ifstream file(path, std::ios::binary);
-  if (!file.is_open()) {
+  if (!file.is_open() || !std::filesystem::is_regular_file(path)) {
     return ResourceLoaderError::NotFound;
   }
 
@@ -54,11 +56,17 @@ SandboxedFileResourceLoader::fetchExternalResource(std::string_view url) {
 
   std::vector<uint8_t> data;
   const std::streamsize fileSize = file.tellg();
+  if (fileSize < 0 ||
+      static_cast<uint64_t>(fileSize) > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+    return ResourceLoaderError::NotFound;
+  }
 
-  data.resize(fileSize);
+  data.resize(static_cast<size_t>(fileSize));
   file.seekg(0, std::ios::beg);
   file.read(reinterpret_cast<char*>(data.data()), fileSize);  // NOLINT, allow reinterpret_cast.
-  file.close();
+  if (file.bad() || file.gcount() != fileSize) {
+    return ResourceLoaderError::NotFound;
+  }
 
   return data;
 }

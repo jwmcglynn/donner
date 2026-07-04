@@ -10,7 +10,6 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/FontFace.h"
-#include "donner/svg/components/resources/FontResource.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/core/ProcessingMode.h"
@@ -90,11 +89,6 @@ public:
   void addFontFaces(std::span<const css::FontFace> fontFaces);
 
   /**
-   * Get loaded font faces, valid after `loadResources()` is called.
-   */
-  const std::vector<FontResource>& loadedFonts() const { return loadedFonts_; }
-
-  /**
    * Get all registered `@font-face` declarations.
    */
   const std::vector<css::FontFace>& fontFaces() const { return fontFaces_; }
@@ -119,11 +113,8 @@ private:
   /// All registered `@font-face` declarations (persistent, for FontRegistry resolution).
   std::vector<css::FontFace> fontFaces_;
 
-  /// A list of all font faces that need to be loaded.
-  std::vector<css::FontFace> fontFacesToLoad_;
-
-  /// A list of all successfully loaded fonts.
-  std::vector<FontResource> loadedFonts_;
+  /// Indexes into \ref fontFaces_ for font faces with URL sources that need hydration.
+  std::vector<size_t> fontFaceIndexesToLoad_;
 
   /// Processing mode for this document.
   ProcessingMode processingMode_ = ProcessingMode::DynamicInteractive;

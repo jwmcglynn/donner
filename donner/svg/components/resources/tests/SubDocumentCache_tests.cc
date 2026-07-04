@@ -547,7 +547,7 @@ TEST_F(ResourceManagerContextTest, LoadResourcesSvgParseFailureCreatesEmptyLoade
   EXPECT_TRUE(warnings.hasWarnings());
 }
 
-TEST_F(ResourceManagerContextTest, AddFontFacesLoadsUrlAndDataFonts) {
+TEST_F(ResourceManagerContextTest, AddFontFacesHydratesUrlFontSources) {
   setResourceLoader(std::make_unique<TestResourceLoader>());
   auto maybeFontBytes = donner::DecodeBase64Data(kValidWoffBase64);
   ASSERT_TRUE(maybeFontBytes.hasResult());
@@ -574,30 +574,23 @@ TEST_F(ResourceManagerContextTest, AddFontFacesLoadsUrlAndDataFonts) {
   ParseWarningSink warnings;
   resourceManager_->loadResources(warnings);
 
-  EXPECT_EQ(resourceManager_->fontFaces().size(), 2u);
-  EXPECT_EQ(resourceManager_->loadedFonts().size(), 2u);
+  const auto& faces = resourceManager_->fontFaces();
+  ASSERT_EQ(faces.size(), 2u);
+  ASSERT_EQ(faces[0].sources.size(), 1u);
+  EXPECT_EQ(faces[0].sources[0].kind, css::FontFaceSource::Kind::Data);
+
+  const auto* hydratedData =
+      std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&faces[0].sources[0].payload);
+  ASSERT_NE(hydratedData, nullptr);
+  ASSERT_NE(*hydratedData, nullptr);
+  EXPECT_EQ(**hydratedData, fontBytes);
+
+  ASSERT_EQ(faces[1].sources.size(), 1u);
+  EXPECT_EQ(faces[1].sources[0].kind, css::FontFaceSource::Kind::Data);
   EXPECT_FALSE(warnings.hasWarnings());
 }
 
-TEST_F(ResourceManagerContextTest, LoadResourcesLeavesRawSfntDataFontsForFontManager) {
-  css::FontFace dataFace;
-  dataFace.familyName = "RawSfnt";
-  css::FontFaceSource dataSource;
-  dataSource.kind = css::FontFaceSource::Kind::Data;
-  dataSource.payload =
-      std::make_shared<const std::vector<uint8_t>>(std::vector<uint8_t>{0x00, 0x01, 0x00, 0x00});
-  dataFace.sources.push_back(dataSource);
-
-  resourceManager_->addFontFaces(std::array<css::FontFace, 1>{dataFace});
-
-  ParseWarningSink warnings;
-  resourceManager_->loadResources(warnings);
-
-  EXPECT_FALSE(warnings.hasWarnings());
-  EXPECT_TRUE(resourceManager_->loadedFonts().empty());
-}
-
-TEST_F(ResourceManagerContextTest, LoadResourcesWarnsForInvalidAndUnsupportedFonts) {
+TEST_F(ResourceManagerContextTest, LoadResourcesWarnsForUnsupportedAndMissingFontSources) {
   auto loader = std::make_unique<TestResourceLoader>();
   setResourceLoader(std::move(loader));
 
@@ -630,7 +623,13 @@ TEST_F(ResourceManagerContextTest, LoadResourcesWarnsForInvalidAndUnsupportedFon
   resourceManager_->loadResources(warnings);
 
   EXPECT_TRUE(warnings.hasWarnings());
-  EXPECT_TRUE(resourceManager_->loadedFonts().empty());
+  ASSERT_EQ(warnings.warnings().size(), 2u);
+  EXPECT_NE(
+      std::string_view(warnings.warnings()[0].reason).find("Unsupported font face source kind"),
+      std::string_view::npos);
+  EXPECT_NE(
+      std::string_view(warnings.warnings()[1].reason).find("Could not load font missing.woff"),
+      std::string_view::npos);
 }
 
 TEST_F(ResourceManagerContextTest, GetLoadedImageComponentReturnsExistingLoadedImage) {

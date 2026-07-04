@@ -359,9 +359,16 @@ TEST_F(RendererGeodeGoldenTests, RadialGradientUserSpace) {
 
 /// Off-center focal point inside the outer circle. Brightest pixel should
 /// land at (fx, fy), exercising the general two-circle quadratic.
+///
+/// Like `RadialGradientBasic`, x86_64 lavapipe rounds the radial-`t`
+/// quadratic a few LSB differently than the arm64-captured golden. The diff is
+/// sparse interior band movement, not a coverage or stop-resolution change, so
+/// keep a small absolute budget instead of strict identity.
 TEST_F(RendererGeodeGoldenTests, RadialGradientFocal) {
-  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_focal.svg",
-                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_focal.png");
+  compareWithGeodeGolden(
+      "donner/svg/renderer/testdata/radial_gradient_focal.svg",
+      "donner/svg/renderer/testdata/golden/geode/radial_gradient_focal.png",
+      ImageComparisonParams::WithThreshold(0.02f, 32).includeAntiAliasingDifferences());
 }
 
 /// Pad / reflect / repeat spread modes for a radial gradient covering only
@@ -378,9 +385,15 @@ TEST_F(RendererGeodeGoldenTests, RadialGradientSpread) {
 
 /// Stroke outline filled with a radial gradient — same dispatch as the
 /// linear stroke test but routed through `fillPathRadialGradient`.
+///
+/// The stroked shape hits the same x86_64 lavapipe radial math variance as
+/// `RadialGradientFocal`, limited to a handful of pixels along the gradient
+/// ramp inside the stroke.
 TEST_F(RendererGeodeGoldenTests, RadialGradientStroke) {
-  compareWithGeodeGolden("donner/svg/renderer/testdata/radial_gradient_stroke.svg",
-                         "donner/svg/renderer/testdata/golden/geode/radial_gradient_stroke.png");
+  compareWithGeodeGolden(
+      "donner/svg/renderer/testdata/radial_gradient_stroke.svg",
+      "donner/svg/renderer/testdata/golden/geode/radial_gradient_stroke.png",
+      ImageComparisonParams::WithThreshold(0.02f, 32).includeAntiAliasingDifferences());
 }
 
 // ----------------------------------------------------------------------------

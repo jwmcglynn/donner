@@ -265,9 +265,7 @@ public:
     return displayedDocVersion_;
   }
   /// Selected entity eligible for composited presentation for replay diagnostics.
-  [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const {
-    return selectedCompositedEntity(app);
-  }
+  [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const;
 
 private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
