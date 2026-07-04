@@ -9,6 +9,21 @@ load(
 )
 
 donner_cc_library(
+    name = "rgba_test_matchers",
+    testonly = 1,
+    hdrs = [
+        "RgbaTestMatchers.h",
+    ],
+    visibility = [
+        "//donner/editor/tests:__pkg__",
+        "//donner/svg:__subpackages__",
+    ],
+    deps = [
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_library(
     name = "renderer_image_test_utils",
     testonly = 1,
     srcs = [
@@ -409,6 +424,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:image_resource",
         "@tiny-skia-cpp//src:tiny_skia_lib_native",
         "@tiny-skia-cpp//src/tiny_skia/filter",

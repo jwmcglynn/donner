@@ -1,7 +1,9 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cstdint>
 #include <string_view>
 
@@ -9,8 +11,11 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 
 namespace donner::geode {
+
+using svg::test::RgbaEq;
 
 /// Smoke test: can we instantiate a headless Dawn device at all?
 /// If this fails, the entire Geode backend is non-functional.
@@ -153,10 +158,8 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   ASSERT_NE(pixels, nullptr);
 
   // First pixel should be red (255, 0, 0, 255).
-  EXPECT_EQ(pixels[0], 255u) << "Red channel";
-  EXPECT_EQ(pixels[1], 0u) << "Green channel";
-  EXPECT_EQ(pixels[2], 0u) << "Blue channel";
-  EXPECT_EQ(pixels[3], 255u) << "Alpha channel";
+  const std::array<uint8_t, 4> firstPixel = {pixels[0], pixels[1], pixels[2], pixels[3]};
+  EXPECT_THAT(firstPixel, RgbaEq(255, 0, 0, 255));
 
   readback.unmap();
 }

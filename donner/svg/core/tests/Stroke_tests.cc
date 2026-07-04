@@ -5,11 +5,34 @@
 
 #include "donner/svg/core/Stroke.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
+
+#include <vector>
 
 #include "donner/base/tests/BaseTestUtils.h"
 
 namespace donner::svg {
+namespace {
+
+using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+
+MATCHER_P(StrokeDasharrayValues, valuesMatcher, "") {
+  const std::vector<Lengthd> values(arg.begin(), arg.end());
+  return testing::ExplainMatchResult(valuesMatcher, values, result_listener);
+}
+
+template <typename... Matchers>
+auto StrokeDasharrayElementsAre(Matchers... matchers) {
+  return StrokeDasharrayValues(ElementsAre(matchers...));
+}
+
+auto StrokeDasharrayIsEmpty() {
+  return StrokeDasharrayValues(IsEmpty());
+}
+
+}  // namespace
 
 /// @test Ostream output \c operator<< for all \ref StrokeLinecap values.
 TEST(StrokeLinecapTest, OstreamOutput) {
@@ -30,16 +53,14 @@ TEST(StrokeLinejoinTest, OstreamOutput) {
 /// @test Default construction yields an empty StrokeDasharray.
 TEST(StrokeDasharrayTest, DefaultConstructor) {
   StrokeDasharray dash;
-  EXPECT_TRUE(dash.empty());
-  EXPECT_EQ(dash.size(), 0);
+  EXPECT_THAT(dash, StrokeDasharrayIsEmpty());
 }
 
 /// @test Construction from an initializer list initializes elements correctly.
 TEST(StrokeDasharrayTest, InitializerListConstructor) {
   StrokeDasharray dash{Lengthd(5.0, Lengthd::Unit::Px), Lengthd(10.0, Lengthd::Unit::Px)};
-  EXPECT_EQ(dash.size(), 2);
-  EXPECT_EQ(dash[0], Lengthd(5.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash[1], Lengthd(10.0, Lengthd::Unit::Px));
+  EXPECT_THAT(dash, StrokeDasharrayElementsAre(Lengthd(5.0, Lengthd::Unit::Px),
+                                               Lengthd(10.0, Lengthd::Unit::Px)));
 }
 
 /// @test Accessor method \c at returns the correct element and throws on out-of-range.
@@ -74,7 +95,7 @@ TEST(StrokeDasharrayTest, CapacityAndReserve) {
   StrokeDasharray dash;
   dash.reserve(20);
   EXPECT_GE(dash.capacity(), 20);
-  EXPECT_EQ(dash.size(), 0);
+  EXPECT_THAT(dash, StrokeDasharrayIsEmpty());
 
   dash.push_back(Lengthd(1.0, Lengthd::Unit::Px));
   dash.push_back(Lengthd(2.0, Lengthd::Unit::Px));
@@ -86,9 +107,8 @@ TEST(StrokeDasharrayTest, PushBackAndEmplaceBack) {
   StrokeDasharray dash;
   dash.push_back(Lengthd(1.0, Lengthd::Unit::Px));
   dash.emplace_back(Lengthd(2.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash.size(), 2);
-  EXPECT_EQ(dash[0], Lengthd(1.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash[1], Lengthd(2.0, Lengthd::Unit::Px));
+  EXPECT_THAT(dash, StrokeDasharrayElementsAre(Lengthd(1.0, Lengthd::Unit::Px),
+                                               Lengthd(2.0, Lengthd::Unit::Px)));
 }
 
 /// @test \c insert places an element at the specified position.
@@ -97,10 +117,9 @@ TEST(StrokeDasharrayTest, InsertMethod) {
   // Insert an element with value 2.0 Px at position 1.
   auto it = dash.insert(dash.begin() + 1, Lengthd(2.0, Lengthd::Unit::Px));
   EXPECT_EQ(*it, Lengthd(2.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash.size(), 3);
-  EXPECT_EQ(dash[0], Lengthd(1.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash[1], Lengthd(2.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash[2], Lengthd(3.0, Lengthd::Unit::Px));
+  EXPECT_THAT(dash, StrokeDasharrayElementsAre(Lengthd(1.0, Lengthd::Unit::Px),
+                                               Lengthd(2.0, Lengthd::Unit::Px),
+                                               Lengthd(3.0, Lengthd::Unit::Px)));
 }
 
 /// @test \c erase removes the specified element.
@@ -110,9 +129,8 @@ TEST(StrokeDasharrayTest, EraseMethod) {
   // Erase the middle element.
   auto it = dash.erase(dash.begin() + 1);
   EXPECT_EQ(*it, Lengthd(3.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash.size(), 2);
-  EXPECT_EQ(dash[0], Lengthd(1.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash[1], Lengthd(3.0, Lengthd::Unit::Px));
+  EXPECT_THAT(dash, StrokeDasharrayElementsAre(Lengthd(1.0, Lengthd::Unit::Px),
+                                               Lengthd(3.0, Lengthd::Unit::Px)));
 }
 
 /// @test \c clear removes all elements.
@@ -120,8 +138,7 @@ TEST(StrokeDasharrayTest, ClearMethod) {
   StrokeDasharray dash{Lengthd(1.0, Lengthd::Unit::Px), Lengthd(2.0, Lengthd::Unit::Px)};
   EXPECT_FALSE(dash.empty());
   dash.clear();
-  EXPECT_TRUE(dash.empty());
-  EXPECT_EQ(dash.size(), 0);
+  EXPECT_THAT(dash, StrokeDasharrayIsEmpty());
 }
 
 /// @test \c resize modifies the size of the StrokeDasharray and correctly fills new elements.
@@ -129,17 +146,15 @@ TEST(StrokeDasharrayTest, ResizeMethod) {
   StrokeDasharray dash;
   // Resize to a larger size with a default fill value.
   dash.resize(3, Lengthd(0.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash.size(), 3);
-  for (size_t i = 0; i < 3; ++i) {
-    EXPECT_EQ(dash[i], Lengthd(0.0, Lengthd::Unit::Px));
-  }
+  EXPECT_THAT(dash, StrokeDasharrayElementsAre(Lengthd(0.0, Lengthd::Unit::Px),
+                                               Lengthd(0.0, Lengthd::Unit::Px),
+                                               Lengthd(0.0, Lengthd::Unit::Px)));
   // Modify one element.
   dash[1] = Lengthd(5.0, Lengthd::Unit::Px);
   // Resize to a smaller size.
   dash.resize(2);
-  EXPECT_EQ(dash.size(), 2);
-  EXPECT_EQ(dash[0], Lengthd(0.0, Lengthd::Unit::Px));
-  EXPECT_EQ(dash[1], Lengthd(5.0, Lengthd::Unit::Px));
+  EXPECT_THAT(dash, StrokeDasharrayElementsAre(Lengthd(0.0, Lengthd::Unit::Px),
+                                               Lengthd(5.0, Lengthd::Unit::Px)));
 }
 
 /// @test Iterator methods: using begin, end, cbegin, and cend.

@@ -1,15 +1,36 @@
 #include "donner/svg/renderer/FilterGraphExecutor.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <utility>
 
 namespace donner::svg {
 namespace {
 
+using ::testing::_;
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Ge;
+using ::testing::Gt;
+using ::testing::Le;
+using ::testing::Lt;
+
 using Pixel = std::array<std::uint8_t, 4>;
+
+MATCHER_P4(Rgba, rMatcher, gMatcher, bMatcher, aMatcher, "has RGBA channels") {
+  const std::array<int, 4> channels = {static_cast<int>(arg[0]), static_cast<int>(arg[1]),
+                                       static_cast<int>(arg[2]), static_cast<int>(arg[3])};
+  return testing::ExplainMatchResult(ElementsAre(rMatcher, gMatcher, bMatcher, aMatcher), channels,
+                                     result_listener);
+}
+
+auto ChannelNear(int expected, int tolerance) {
+  return AllOf(Ge(expected - tolerance), Le(expected + tolerance));
+}
 
 void SetPixel(tiny_skia::Pixmap& pixmap, int x, int y, Pixel pixel) {
   auto data = pixmap.data();
@@ -63,8 +84,8 @@ TEST(FilterGraphExecutorTest, AppliesOffsetsUsingCapturedFilterTransform) {
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d::Scale(2.0), std::nullopt);
 
-  EXPECT_EQ(GetPixel(pixmap, 1, 1), Pixel({0, 0, 0, 0}));
-  EXPECT_EQ(GetPixel(pixmap, 3, 1), Pixel({255, 0, 0, 255}));
+  EXPECT_THAT(GetPixel(pixmap, 1, 1), Rgba(0, 0, 0, 0));
+  EXPECT_THAT(GetPixel(pixmap, 3, 1), Rgba(255, 0, 0, 255));
 }
 
 TEST(FilterGraphExecutorTest, RoundsFractionalOffsetsToNearestPixel) {
@@ -84,8 +105,8 @@ TEST(FilterGraphExecutorTest, RoundsFractionalOffsetsToNearestPixel) {
 
   // dx=5.0 with Scale(2.5) → pixel offset = lround(12.5) = 13.
   // Pixel at (1,1) moves to (14,1).
-  EXPECT_EQ(GetPixel(pixmap, 14, 1), Pixel({255, 0, 0, 255}));
-  EXPECT_EQ(GetPixel(pixmap, 13, 1), Pixel({0, 0, 0, 0}));
+  EXPECT_THAT(GetPixel(pixmap, 14, 1), Rgba(255, 0, 0, 255));
+  EXPECT_THAT(GetPixel(pixmap, 13, 1), Rgba(0, 0, 0, 0));
 }
 
 TEST(FilterGraphExecutorTest, ClipsFilterOutputUsingCapturedFilterTransform) {
@@ -101,10 +122,10 @@ TEST(FilterGraphExecutorTest, ClipsFilterOutputUsingCapturedFilterTransform) {
 
   ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(1.0, 1.0, 2.0, 2.0), Transform2d::Scale(2.0));
 
-  EXPECT_EQ(GetPixel(pixmap, 1, 1), Pixel({0, 0, 0, 0}));
-  EXPECT_EQ(GetPixel(pixmap, 2, 2), Pixel({255, 255, 255, 255}));
-  EXPECT_EQ(GetPixel(pixmap, 5, 5), Pixel({255, 255, 255, 255}));
-  EXPECT_EQ(GetPixel(pixmap, 6, 6), Pixel({0, 0, 0, 0}));
+  EXPECT_THAT(GetPixel(pixmap, 1, 1), Rgba(0, 0, 0, 0));
+  EXPECT_THAT(GetPixel(pixmap, 2, 2), Rgba(255, 255, 255, 255));
+  EXPECT_THAT(GetPixel(pixmap, 5, 5), Rgba(255, 255, 255, 255));
+  EXPECT_THAT(GetPixel(pixmap, 6, 6), Rgba(0, 0, 0, 0));
 }
 
 TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenFilterRegion) {
@@ -122,7 +143,7 @@ TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenFilterRegion) {
 
   for (int y = 0; y < 8; ++y) {
     for (int x = 0; x < 8; ++x) {
-      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0}));
+      EXPECT_THAT(GetPixel(pixmap, x, y), Rgba(0, 0, 0, 0));
     }
   }
 }
@@ -150,7 +171,7 @@ TEST(FilterGraphExecutorTest, ClipsRegionWithOriginPastPixmapWidth) {
 
   for (int y = 0; y < 10; ++y) {
     for (int x = 0; x < 10; ++x) {
-      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0})) << "at " << x << "," << y;
+      EXPECT_THAT(GetPixel(pixmap, x, y), Rgba(0, 0, 0, 0)) << "at " << x << "," << y;
     }
   }
 }
@@ -175,7 +196,7 @@ TEST(FilterGraphExecutorTest, ClipsRegionWithOriginPastPixmapHeight) {
 
   for (int y = 0; y < 10; ++y) {
     for (int x = 0; x < 10; ++x) {
-      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0})) << "at " << x << "," << y;
+      EXPECT_THAT(GetPixel(pixmap, x, y), Rgba(0, 0, 0, 0)) << "at " << x << "," << y;
     }
   }
 }
@@ -200,7 +221,7 @@ TEST(FilterGraphExecutorTest, ClipsRegionPartlyPastPixmapKeepsInBounds) {
   for (int y = 0; y < 10; ++y) {
     for (int x = 0; x < 10; ++x) {
       const bool inside = (x >= 4 && y >= 4);
-      EXPECT_EQ(GetPixel(pixmap, x, y), inside ? Pixel({255, 255, 255, 255}) : Pixel({0, 0, 0, 0}))
+      EXPECT_THAT(GetPixel(pixmap, x, y), inside ? Rgba(255, 255, 255, 255) : Rgba(0, 0, 0, 0))
           << "at " << x << "," << y;
     }
   }
@@ -234,7 +255,7 @@ TEST(FilterGraphExecutorTest, SubregionClipWithOriginPastPixmapDoesNotOverflow) 
 
   for (int y = 0; y < 10; ++y) {
     for (int x = 0; x < 10; ++x) {
-      EXPECT_EQ(GetPixel(pixmap, x, y), Pixel({0, 0, 0, 0})) << "at " << x << "," << y;
+      EXPECT_THAT(GetPixel(pixmap, x, y), Rgba(0, 0, 0, 0)) << "at " << x << "," << y;
     }
   }
 }
@@ -269,10 +290,10 @@ TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseUserSpaceAndFilter
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(4.0, 4.0, 16.0, 16.0));
 
-  EXPECT_EQ(GetPixel(pixmap, 7, 7), Pixel({0, 0, 0, 0}));
-  EXPECT_EQ(GetPixel(pixmap, 8, 8), Pixel({255, 0, 0, 255}));
-  EXPECT_EQ(GetPixel(pixmap, 19, 19), Pixel({255, 0, 0, 255}));
-  EXPECT_EQ(GetPixel(pixmap, 20, 20), Pixel({0, 0, 0, 0}));
+  EXPECT_THAT(GetPixel(pixmap, 7, 7), Rgba(0, 0, 0, 0));
+  EXPECT_THAT(GetPixel(pixmap, 8, 8), Rgba(255, 0, 0, 255));
+  EXPECT_THAT(GetPixel(pixmap, 19, 19), Rgba(255, 0, 0, 255));
+  EXPECT_THAT(GetPixel(pixmap, 20, 20), Rgba(0, 0, 0, 0));
 }
 
 TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseElementBoundsInObjectBoundingBox) {
@@ -296,10 +317,10 @@ TEST(FilterGraphExecutorTest, PrimitiveSubregionPercentagesUseElementBoundsInObj
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
-  EXPECT_EQ(GetPixel(pixmap, 9, 9), Pixel({0, 0, 0, 0}));
-  EXPECT_EQ(GetPixel(pixmap, 10, 10), Pixel({0, 255, 0, 255}));
-  EXPECT_EQ(GetPixel(pixmap, 19, 19), Pixel({0, 255, 0, 255}));
-  EXPECT_EQ(GetPixel(pixmap, 20, 20), Pixel({0, 0, 0, 0}));
+  EXPECT_THAT(GetPixel(pixmap, 9, 9), Rgba(0, 0, 0, 0));
+  EXPECT_THAT(GetPixel(pixmap, 10, 10), Rgba(0, 255, 0, 255));
+  EXPECT_THAT(GetPixel(pixmap, 19, 19), Rgba(0, 255, 0, 255));
+  EXPECT_THAT(GetPixel(pixmap, 20, 20), Rgba(0, 0, 0, 0));
 }
 
 TEST(FilterGraphExecutorTest, GaussianBlurExpandsDefaultPrimitiveSubregion) {
@@ -333,9 +354,9 @@ TEST(FilterGraphExecutorTest, GaussianBlurExpandsDefaultPrimitiveSubregion) {
 
   // Flood at (16,16) size 1x1, blur σ=2 → subregion expands by ceil(2*3)=6.
   // Expanded subregion: x=[10,23], y=[10,23]. Pixel (9,16) is outside.
-  EXPECT_EQ(GetPixel(pixmap, 9, 16), Pixel({0, 0, 0, 0}));
-  EXPECT_GT(GetPixel(pixmap, 15, 16)[3], 0);
-  EXPECT_GT(GetPixel(pixmap, 16, 15)[3], 0);
+  EXPECT_THAT(GetPixel(pixmap, 9, 16), Rgba(0, 0, 0, 0));
+  EXPECT_THAT(GetPixel(pixmap, 15, 16), Rgba(_, _, _, Gt(0)));
+  EXPECT_THAT(GetPixel(pixmap, 16, 15), Rgba(_, _, _, Gt(0)));
 }
 
 TEST(FilterGraphExecutorTest, FilterRegionClipsInitialSourceGraphic) {
@@ -360,9 +381,8 @@ TEST(FilterGraphExecutorTest, FilterRegionClipsInitialSourceGraphic) {
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), true);
 
-  EXPECT_GT(GetPixel(pixmap, 7, 4)[3], 0);
-  EXPECT_LT(GetPixel(pixmap, 7, 4)[3], 255);
-  EXPECT_EQ(GetPixel(pixmap, 12, 4), Pixel({0, 0, 0, 0}));
+  EXPECT_THAT(GetPixel(pixmap, 7, 4), Rgba(_, _, _, AllOf(Gt(0), Lt(255))));
+  EXPECT_THAT(GetPixel(pixmap, 12, 4), Rgba(0, 0, 0, 0));
 }
 
 TEST(FilterGraphExecutorTest, UsesFillPaintInputWhenRequested) {
@@ -384,8 +404,8 @@ TEST(FilterGraphExecutorTest, UsesFillPaintInputWhenRequested) {
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt, false, &fillPaintPixmap);
 
-  EXPECT_EQ(GetPixel(pixmap, 1, 1), Pixel({0, 0, 0, 0}));
-  EXPECT_EQ(GetPixel(pixmap, 2, 2), Pixel({0, 255, 0, 255}));
+  EXPECT_THAT(GetPixel(pixmap, 1, 1), Rgba(0, 0, 0, 0));
+  EXPECT_THAT(GetPixel(pixmap, 2, 2), Rgba(0, 255, 0, 255));
 }
 
 TEST(FilterGraphExecutorTest, MissingStrokePaintInputDefaultsToTransparent) {
@@ -403,7 +423,7 @@ TEST(FilterGraphExecutorTest, MissingStrokePaintInputDefaultsToTransparent) {
 
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
-  EXPECT_EQ(GetPixel(pixmap, 1, 1), Pixel({0, 0, 0, 0}));
+  EXPECT_THAT(GetPixel(pixmap, 1, 1), Rgba(0, 0, 0, 0));
 }
 
 // ---------------------------------------------------------------------------
@@ -446,12 +466,11 @@ TEST(FilterGraphExecutorTest, ThreeNodeChainBlurOffsetFlood) {
 
   // After offset by 4, columns 0-3 should be transparent. Column 0 should remain zero even after
   // the small blur because sigma=1 doesn't spread 4 pixels.
-  EXPECT_EQ(GetPixel(pixmap, 0, 16), Pixel({0, 0, 0, 0}));
+  EXPECT_THAT(GetPixel(pixmap, 0, 16), Rgba(0, 0, 0, 0));
   // Deep inside the offset region, the pixel should still be red (possibly slightly blurred at
   // edges, but center stays opaque).
   const Pixel center = GetPixel(pixmap, 20, 16);
-  EXPECT_EQ(center[0], 255);
-  EXPECT_EQ(center[3], 255);
+  EXPECT_THAT(center, Rgba(255, _, _, 255));
 }
 
 TEST(FilterGraphExecutorTest, FourNodeChainFloodOffsetBlurMerge) {
@@ -496,14 +515,12 @@ TEST(FilterGraphExecutorTest, FourNodeChainFloodOffsetBlurMerge) {
 
   // The green source pixel at (8,8) should still be present.
   const Pixel greenPixel = GetPixel(pixmap, 8, 8);
-  EXPECT_GT(greenPixel[1], 0);
-  EXPECT_EQ(greenPixel[3], 255);
+  EXPECT_THAT(greenPixel, Rgba(_, Gt(0), _, 255));
 
   // The flood was at (4,4)-(8,8) and was offset by (2,2), so the blue region is at (6,6)-(10,10).
   // Check a pixel inside the flood region that isn't (8,8).
   const Pixel bluePixel = GetPixel(pixmap, 7, 7);
-  EXPECT_GT(bluePixel[2], 0);
-  EXPECT_EQ(bluePixel[3], 255);
+  EXPECT_THAT(bluePixel, Rgba(_, _, Gt(0), 255));
 }
 
 // ---------------------------------------------------------------------------
@@ -553,7 +570,7 @@ TEST(FilterGraphExecutorTest, NamedResultRoutesCorrectBuffer) {
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // The final output should be the red flood (from the named buffer), not the green one.
-  EXPECT_EQ(GetPixel(pixmap, 4, 4), Pixel({255, 0, 0, 255}));
+  EXPECT_THAT(GetPixel(pixmap, 4, 4), Rgba(255, 0, 0, 255));
 }
 
 TEST(FilterGraphExecutorTest, NamedResultCanBeReusedMultipleTimes) {
@@ -585,7 +602,7 @@ TEST(FilterGraphExecutorTest, NamedResultCanBeReusedMultipleTimes) {
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // Output should be blue (merged blue over blue = blue).
-  EXPECT_EQ(GetPixel(pixmap, 8, 8), Pixel({0, 0, 255, 255}));
+  EXPECT_THAT(GetPixel(pixmap, 8, 8), Rgba(0, 0, 255, 255));
 }
 
 // ---------------------------------------------------------------------------
@@ -617,12 +634,11 @@ TEST(FilterGraphExecutorTest, DropShadowProducesOffsetAndBlurredCopy) {
 
   // The original white dot should still be present.
   const Pixel orig = GetPixel(pixmap, 16, 16);
-  EXPECT_EQ(orig[0], 255);
-  EXPECT_EQ(orig[3], 255);
+  EXPECT_THAT(orig, Rgba(255, _, _, 255));
 
   // The shadow center should be near (20, 20), with non-zero alpha (black shadow).
   const Pixel shadow = GetPixel(pixmap, 20, 20);
-  EXPECT_GT(shadow[3], 0);
+  EXPECT_THAT(shadow, Rgba(_, _, _, Gt(0)));
 }
 
 // ---------------------------------------------------------------------------
@@ -642,7 +658,7 @@ TEST(FilterGraphExecutorTest, EmptyFilterGraphLeavesPixmapUnchanged) {
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // The pixel should remain unchanged.
-  EXPECT_EQ(GetPixel(pixmap, 3, 3), Pixel({42, 100, 200, 255}));
+  EXPECT_THAT(GetPixel(pixmap, 3, 3), Rgba(42, 100, 200, 255));
 }
 
 TEST(FilterGraphExecutorTest, FilterWithNoSourceGraphicContent) {
@@ -664,7 +680,7 @@ TEST(FilterGraphExecutorTest, FilterWithNoSourceGraphicContent) {
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
 
   // Even though SourceGraphic was transparent, the flood should fill the pixmap.
-  EXPECT_EQ(GetPixel(pixmap, 4, 4), Pixel({128, 64, 32, 255}));
+  EXPECT_THAT(GetPixel(pixmap, 4, 4), Rgba(128, 64, 32, 255));
 }
 
 TEST(FilterGraphExecutorTest, SourceAlphaInputExtractsAlphaChannel) {
@@ -686,10 +702,7 @@ TEST(FilterGraphExecutorTest, SourceAlphaInputExtractsAlphaChannel) {
 
   const Pixel result = GetPixel(pixmap, 4, 4);
   // SourceAlpha produces (0, 0, 0, alpha).
-  EXPECT_EQ(result[0], 0);
-  EXPECT_EQ(result[1], 0);
-  EXPECT_EQ(result[2], 0);
-  EXPECT_EQ(result[3], 255);
+  EXPECT_THAT(result, Rgba(0, 0, 0, 255));
 }
 
 // ---------------------------------------------------------------------------
@@ -777,10 +790,7 @@ TEST(FilterGraphExecutorTest, PerNodeColorInterpolationOverridesGraphDefault) {
 
   // Center pixel should still be mid-gray (blur of uniform input is identity).
   const Pixel center = GetPixel(pixmap, 4, 4);
-  EXPECT_NEAR(center[0], 128, 2);
-  EXPECT_NEAR(center[1], 128, 2);
-  EXPECT_NEAR(center[2], 128, 2);
-  EXPECT_EQ(center[3], 255);
+  EXPECT_THAT(center, Rgba(ChannelNear(128, 2), ChannelNear(128, 2), ChannelNear(128, 2), 255));
 }
 
 // ---------------------------------------------------------------------------
@@ -827,9 +837,9 @@ TEST(FilterGraphExecutorTest, CompositeInOperatorKeepsOverlapOnly) {
   ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0));
 
   // (2,2) is outside the green region → should be transparent.
-  EXPECT_EQ(GetPixel(pixmap, 2, 2), Pixel({0, 0, 0, 0}));
+  EXPECT_THAT(GetPixel(pixmap, 2, 2), Rgba(0, 0, 0, 0));
   // (4,4) is inside the green region → should keep the red pixel.
-  EXPECT_EQ(GetPixel(pixmap, 4, 4), Pixel({255, 0, 0, 255}));
+  EXPECT_THAT(GetPixel(pixmap, 4, 4), Rgba(255, 0, 0, 255));
 }
 
 // ---------------------------------------------------------------------------
@@ -877,10 +887,7 @@ TEST(FilterGraphExecutorTest, BlendMultiplyDarkensColors) {
 
   const Pixel result = GetPixel(pixmap, 4, 4);
   // Multiply: white * 128/255 ≈ 128. Allow tolerance for rounding.
-  EXPECT_NEAR(result[0], 128, 2);
-  EXPECT_NEAR(result[1], 128, 2);
-  EXPECT_NEAR(result[2], 128, 2);
-  EXPECT_EQ(result[3], 255);
+  EXPECT_THAT(result, Rgba(ChannelNear(128, 2), ChannelNear(128, 2), ChannelNear(128, 2), 255));
 }
 
 }  // namespace

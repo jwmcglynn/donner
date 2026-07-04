@@ -1,8 +1,11 @@
 #include "donner/svg/text/TextBackend.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <fstream>
+#include <tuple>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
@@ -12,6 +15,21 @@
 namespace donner::svg {
 
 namespace {
+
+using ::testing::AllOf;
+using ::testing::DoubleEq;
+using ::testing::DoubleNear;
+using ::testing::Each;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::FloatEq;
+using ::testing::Ge;
+using ::testing::Gt;
+using ::testing::IsEmpty;
+using ::testing::Lt;
+using ::testing::Not;
+using ::testing::Pointwise;
+using ::testing::SizeIs;
 
 FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilename,
                          const std::string& familyName) {
@@ -40,6 +58,96 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
 
   fontManager.addFontFace(face);
   return fontManager.findFont(RcString(familyName));
+}
+
+auto GlyphIndexIs(auto matcher) {
+  return Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, matcher);
+}
+
+auto GlyphXAdvanceIs(auto matcher) {
+  return Field("xAdvance", &TextBackend::ShapedGlyph::xAdvance, matcher);
+}
+
+auto GlyphYAdvanceIs(auto matcher) {
+  return Field("yAdvance", &TextBackend::ShapedGlyph::yAdvance, matcher);
+}
+
+auto GlyphYOffsetIs(auto matcher) {
+  return Field("yOffset", &TextBackend::ShapedGlyph::yOffset, matcher);
+}
+
+auto GlyphClusterIs(auto matcher) {
+  return Field("cluster", &TextBackend::ShapedGlyph::cluster, matcher);
+}
+
+auto GlyphFontSizeScaleIs(auto matcher) {
+  return Field("fontSizeScale", &TextBackend::ShapedGlyph::fontSizeScale, matcher);
+}
+
+MATCHER_P(AdvanceNear, tolerance, "") {
+  const auto& actual = std::get<0>(arg);
+  const auto& expected = std::get<1>(arg);
+  return testing::ExplainMatchResult(DoubleNear(expected.xAdvance, tolerance), actual.xAdvance,
+                                     result_listener);
+}
+
+MATCHER_P(GlyphPairHasSameIndexAndAdvanceNear, tolerance,
+          "has two glyphs with equal glyph index and near-equal xAdvance") {
+  if (arg.size() != 2) {
+    *result_listener << "has " << arg.size() << " glyphs";
+    return false;
+  }
+
+  const auto& first = arg[0];
+  const auto& second = arg[1];
+  bool matches = true;
+
+  if (first.glyphIndex != second.glyphIndex) {
+    *result_listener << "glyph indices are " << first.glyphIndex << " and " << second.glyphIndex;
+    matches = false;
+  }
+
+  const double advanceDifference = std::abs(first.xAdvance - second.xAdvance);
+  if (advanceDifference > tolerance) {
+    if (!matches) {
+      *result_listener << "; ";
+    }
+
+    *result_listener << "xAdvance values are " << first.xAdvance << " and " << second.xAdvance
+                     << ", difference " << advanceDifference << " exceeds " << tolerance;
+    matches = false;
+  }
+
+  return matches;
+}
+
+MATCHER(HasNondecreasingClusters, "has nondecreasing glyph clusters") {
+  if (arg.empty()) {
+    return true;
+  }
+
+  uint32_t previousCluster = arg[0].cluster;
+  for (size_t index = 1; index < arg.size(); ++index) {
+    const uint32_t cluster = arg[index].cluster;
+    if (cluster < previousCluster) {
+      *result_listener << "glyph " << index << " has cluster " << cluster
+                       << " after previous cluster " << previousCluster;
+      return false;
+    }
+
+    previousCluster = cluster;
+  }
+
+  return true;
+}
+
+MATCHER(HasPositiveAdvanceInEitherAxis, "has positive xAdvance + yAdvance") {
+  if (arg.xAdvance + arg.yAdvance > 0.0) {
+    return true;
+  }
+
+  *result_listener << "xAdvance=" << arg.xAdvance << ", yAdvance=" << arg.yAdvance;
+  return false;
 }
 
 // ── Backend selection ───────────────────────────────────────────────────────
@@ -145,18 +253,18 @@ TEST_P(TextBackendTest, GlyphOutlineProducesNonEmptyPath) {
   ASSERT_TRUE(static_cast<bool>(font));
 
   const auto shaped = backend().shapeRun(font, 16.0f, "A", 0, 1, false, FontVariant::Normal, false);
-  ASSERT_EQ(shaped.glyphs.size(), 1u);
-  ASSERT_GT(shaped.glyphs[0].glyphIndex, 0);
+  ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(Gt(0))));
 
   const float scale = backend().scaleForEmToPixels(font, 16.0f);
   const Path path = backend().glyphOutline(font, shaped.glyphs[0].glyphIndex, scale);
   EXPECT_FALSE(path.empty());
-  EXPECT_GT(path.commands().size(), 0u);
+  EXPECT_THAT(path.commands(), Not(IsEmpty()));
 }
 
 TEST_P(TextBackendTest, GlyphOutlineEmptyForInvalidFont) {
   const Path path = backend().glyphOutline(FontHandle{}, 1, 1.0f);
-  EXPECT_TRUE(path.empty());
+  EXPECT_THAT(path.commands(), IsEmpty());
+  EXPECT_THAT(path.points(), IsEmpty());
 }
 
 TEST_P(TextBackendTest, IsBitmapOnlyFalseForOutlineFont) {
@@ -174,18 +282,9 @@ TEST_P(TextBackendTest, ShapeRunProducesGlyphsForLatinText) {
 
   const auto shaped =
       backend().shapeRun(font, 16.0f, "Hello", 0, 5, false, FontVariant::Normal, false);
-  ASSERT_EQ(shaped.glyphs.size(), 5u);
-
-  uint32_t previousCluster = 0;
-  for (size_t i = 0; i < shaped.glyphs.size(); ++i) {
-    EXPECT_GT(shaped.glyphs[i].glyphIndex, 0);
-    EXPECT_GT(shaped.glyphs[i].xAdvance, 0.0);
-    EXPECT_FLOAT_EQ(shaped.glyphs[i].fontSizeScale, 1.0f);
-    if (i > 0) {
-      EXPECT_GE(shaped.glyphs[i].cluster, previousCluster);
-    }
-    previousCluster = shaped.glyphs[i].cluster;
-  }
+  EXPECT_THAT(shaped.glyphs, AllOf(SizeIs(5), HasNondecreasingClusters(),
+                                   Each(AllOf(GlyphIndexIs(Gt(0)), GlyphXAdvanceIs(Gt(0.0)),
+                                              GlyphFontSizeScaleIs(FloatEq(1.0f))))));
 }
 
 TEST_P(TextBackendTest, ShapeRunHandlesSubstring) {
@@ -195,18 +294,14 @@ TEST_P(TextBackendTest, ShapeRunHandlesSubstring) {
   // Shape only "ll" from "Hello" (bytes 2-4).
   const auto shaped =
       backend().shapeRun(font, 16.0f, "Hello", 2, 2, false, FontVariant::Normal, false);
-  ASSERT_EQ(shaped.glyphs.size(), 2u);
-
-  // Both glyphs are 'l' — same glyph index.
-  EXPECT_EQ(shaped.glyphs[0].glyphIndex, shaped.glyphs[1].glyphIndex);
-  // HarfBuzz GPOS may adjust advances slightly per context, so check near-equality.
-  EXPECT_NEAR(shaped.glyphs[0].xAdvance, shaped.glyphs[1].xAdvance, 1.0);
+  // Both glyphs are 'l' with near-equal advances; HarfBuzz GPOS may adjust slightly per context.
+  EXPECT_THAT(shaped.glyphs, GlyphPairHasSameIndexAndAdvanceNear(1.0));
 }
 
 TEST_P(TextBackendTest, ShapeRunEmptyForInvalidFont) {
   const auto shaped =
       backend().shapeRun(FontHandle{}, 16.0f, "Hello", 0, 5, false, FontVariant::Normal, false);
-  EXPECT_TRUE(shaped.glyphs.empty());
+  EXPECT_THAT(shaped.glyphs, IsEmpty());
 }
 
 TEST_P(TextBackendTest, ShapeRunClustersMatchByteOffsets) {
@@ -215,11 +310,8 @@ TEST_P(TextBackendTest, ShapeRunClustersMatchByteOffsets) {
 
   const auto shaped =
       backend().shapeRun(font, 16.0f, "ABC", 0, 3, false, FontVariant::Normal, false);
-  ASSERT_EQ(shaped.glyphs.size(), 3u);
-
-  EXPECT_EQ(shaped.glyphs[0].cluster, 0u);
-  EXPECT_EQ(shaped.glyphs[1].cluster, 1u);
-  EXPECT_EQ(shaped.glyphs[2].cluster, 2u);
+  EXPECT_THAT(shaped.glyphs,
+              ElementsAre(GlyphClusterIs(0u), GlyphClusterIs(1u), GlyphClusterIs(2u)));
 }
 
 TEST_P(TextBackendTest, ShapeRunVerticalLatinUsesSidewaysAdvances) {
@@ -228,15 +320,9 @@ TEST_P(TextBackendTest, ShapeRunVerticalLatinUsesSidewaysAdvances) {
 
   const auto shaped =
       backend().shapeRun(font, 64.0f, "Text", 0, 4, true, FontVariant::Normal, false);
-  ASSERT_EQ(shaped.glyphs.size(), 4u);
-
-  for (const auto& glyph : shaped.glyphs) {
-    EXPECT_GT(glyph.glyphIndex, 0);
-    // Both backends report sideways Latin with xAdvance>0.
-    // Simple sets yAdvance = xAdvance and xAdvance = 0; Full keeps xAdvance > 0 with yAdvance = 0.
-    // The common contract: at least one of x/yAdvance is positive.
-    EXPECT_GT(glyph.xAdvance + glyph.yAdvance, 0.0);
-  }
+  // Both backends report sideways Latin with a positive advance in at least one axis.
+  EXPECT_THAT(shaped.glyphs,
+              AllOf(SizeIs(4), Each(AllOf(GlyphIndexIs(Gt(0)), HasPositiveAdvanceInEitherAxis()))));
 }
 
 TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
@@ -245,24 +331,17 @@ TEST_P(TextBackendTest, ShapeRunVerticalCjk) {
 
   const char* text = "\xE6\x97\xA5\xE6\x9C\xAC";  // 日本
   const auto shaped = backend().shapeRun(font, 64.0f, text, 0, 6, true, FontVariant::Normal, false);
-  ASSERT_EQ(shaped.glyphs.size(), 2u);
+  ASSERT_THAT(shaped.glyphs, SizeIs(2));
 
-  for (const auto& glyph : shaped.glyphs) {
-    EXPECT_GT(glyph.glyphIndex, 0);
-    EXPECT_GT(glyph.yAdvance, 0.0);
-  }
+  EXPECT_THAT(shaped.glyphs, Each(AllOf(GlyphIndexIs(Gt(0)), GlyphYAdvanceIs(Gt(0.0)))));
 
   if (isSimple()) {
     // Simple backend: CJK vertical advance = font size (em height fallback).
-    for (const auto& glyph : shaped.glyphs) {
-      EXPECT_DOUBLE_EQ(glyph.xAdvance, 0.0);
-      EXPECT_DOUBLE_EQ(glyph.yAdvance, 64.0);
-    }
+    EXPECT_THAT(shaped.glyphs,
+                Each(AllOf(GlyphXAdvanceIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleEq(64.0)))));
   } else {
     // Full backend: CJK vertical advance from font's vmtx/vhea tables, with y offsets.
-    for (const auto& glyph : shaped.glyphs) {
-      EXPECT_GT(glyph.yOffset, 0.0);
-    }
+    EXPECT_THAT(shaped.glyphs, Each(GlyphYOffsetIs(Gt(0.0))));
   }
 }
 
@@ -274,10 +353,8 @@ TEST_P(TextBackendTest, SmallCapsSynthesizesScaleForFontWithoutSmcp) {
 
   const auto shaped =
       backend().shapeRun(font, 32.0f, "aB", 0, 2, false, FontVariant::SmallCaps, false);
-  ASSERT_EQ(shaped.glyphs.size(), 2u);
-
-  EXPECT_LT(shaped.glyphs[0].fontSizeScale, 1.0f);
-  EXPECT_FLOAT_EQ(shaped.glyphs[1].fontSizeScale, 1.0f);
+  EXPECT_THAT(shaped.glyphs,
+              ElementsAre(GlyphFontSizeScaleIs(Lt(1.0f)), GlyphFontSizeScaleIs(FloatEq(1.0f))));
 }
 
 // ── Cross-span kerning ──────────────────────────────────────────────────────
@@ -304,7 +381,7 @@ TEST_P(TextBackendTest, GlyphOutlineForNotdefDoesNotCrash) {
   const float scale = backend().scaleForEmToPixels(font, 16.0f);
   // Glyph index 0 is .notdef — may or may not have an outline. Just verify no crash.
   const Path path = backend().glyphOutline(font, 0, scale);
-  EXPECT_GE(path.commands().size(), 0u);
+  (void)path;
 }
 
 INSTANTIATE_TEST_SUITE_P(Backends, TextBackendTest,
@@ -373,7 +450,7 @@ TEST(TextBackendFullCapabilities, TinyFontAdvancesStayInScale) {
   const auto fullShaped =
       fullBackend.shapeRun(font, 0.24f, kText, 0, kText.size(), false, FontVariant::Normal, false);
 
-  ASSERT_EQ(simpleShaped.glyphs.size(), fullShaped.glyphs.size());
+  ASSERT_THAT(fullShaped.glyphs, Pointwise(AdvanceNear(0.5), simpleShaped.glyphs));
 
   double simpleAdvance = 0.0;
   for (const auto& glyph : simpleShaped.glyphs) {
@@ -413,15 +490,14 @@ TEST(TextBackendFullCapabilities, BitmapGlyphReturnsEmojiBitmap) {
 
   const auto shaped =
       backend.shapeRun(font, 32.0f, "\xF0\x9F\x98\x81", 0, 4, false, FontVariant::Normal, false);
-  ASSERT_EQ(shaped.glyphs.size(), 1u);
-  ASSERT_GT(shaped.glyphs[0].glyphIndex, 0);
+  ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(Gt(0))));
 
   const float scale = backend.scaleForEmToPixels(font, 32.0f);
   const auto bitmap = backend.bitmapGlyph(font, shaped.glyphs[0].glyphIndex, scale);
   ASSERT_TRUE(bitmap.has_value());
   EXPECT_GT(bitmap->width, 0);
   EXPECT_GT(bitmap->height, 0);
-  EXPECT_EQ(bitmap->rgbaPixels.size(), static_cast<size_t>(bitmap->width * bitmap->height * 4));
+  EXPECT_THAT(bitmap->rgbaPixels, SizeIs(static_cast<size_t>(bitmap->width * bitmap->height * 4)));
   EXPECT_GT(bitmap->scale, 0.0);
 }
 

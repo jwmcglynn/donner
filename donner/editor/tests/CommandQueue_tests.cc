@@ -1,11 +1,40 @@
 #include "donner/editor/CommandQueue.h"
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
+
+#include <ostream>
+#include <string>
+
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
-#include "gtest/gtest.h"
 
 namespace donner::editor {
+
+void PrintTo(EditorCommand::Kind kind, std::ostream* os) {
+  switch (kind) {
+    case EditorCommand::Kind::SetTransform: *os << "SetTransform"; return;
+    case EditorCommand::Kind::ReplaceDocument: *os << "ReplaceDocument"; return;
+    case EditorCommand::Kind::SetAttribute: *os << "SetAttribute"; return;
+    case EditorCommand::Kind::RemoveAttribute: *os << "RemoveAttribute"; return;
+    case EditorCommand::Kind::InsertElement: *os << "InsertElement"; return;
+    case EditorCommand::Kind::DeleteElement: *os << "DeleteElement"; return;
+    case EditorCommand::Kind::CutShapes: *os << "CutShapes"; return;
+    case EditorCommand::Kind::PasteShapes: *os << "PasteShapes"; return;
+    case EditorCommand::Kind::InsertText: *os << "InsertText"; return;
+    case EditorCommand::Kind::SetTextContent: *os << "SetTextContent"; return;
+  }
+
+  *os << "EditorCommand::Kind(" << static_cast<int>(kind) << ")";
+}
+
 namespace {
+
+using ::testing::AllOf;
+using ::testing::DoubleEq;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::IsEmpty;
 
 // CommandQueue carries `svg::SVGElement` payloads in SetTransform /
 // DeleteElement commands. Elements can only be produced via public donner
@@ -20,6 +49,46 @@ constexpr std::string_view kThreeRectsSvg =
          <rect id="b" x="100" y="0" width="50" height="50"/>
          <rect id="c" x="200" y="0" width="50" height="50"/>
        </svg>)";
+
+MATCHER_P(OptionalElementIdIs, expectedId, "has element id " + testing::PrintToString(expectedId)) {
+  if (!arg.has_value()) {
+    *result_listener << "is nullopt";
+    return false;
+  }
+
+  const std::string actualId(arg->id());
+  if (actualId == expectedId) {
+    return true;
+  }
+
+  *result_listener << "id is " << testing::PrintToString(actualId);
+  return false;
+}
+
+auto CommandKindIs(EditorCommand::Kind kind) {
+  return Field("kind", &EditorCommand::kind, kind);
+}
+
+auto CommandElementIdIs(std::string_view id) {
+  return Field("element", &EditorCommand::element, OptionalElementIdIs(std::string(id)));
+}
+
+auto CommandParentElementIdIs(std::string_view id) {
+  return Field("parentElement", &EditorCommand::parentElement,
+               OptionalElementIdIs(std::string(id)));
+}
+
+MATCHER_P(TranslateXIs, matcher, "has translate x " + testing::DescribeMatcher<double>(matcher)) {
+  return testing::ExplainMatchResult(matcher, arg.data[4], result_listener);
+}
+
+auto CommandTransformXIs(auto matcher) {
+  return Field("transform", &EditorCommand::transform, TranslateXIs(matcher));
+}
+
+auto CommandBytesIs(std::string_view bytes) {
+  return Field("bytes", &EditorCommand::bytes, std::string(bytes));
+}
 
 class CommandQueueTest : public ::testing::Test {
 protected:
@@ -53,7 +122,7 @@ TEST_F(CommandQueueTest, EmptyFlushReturnsNothing) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  EXPECT_TRUE(effective.empty());
+  EXPECT_THAT(effective, IsEmpty());
   EXPECT_FALSE(flushResult.hadReplaceDocument);
   EXPECT_FALSE(flushResult.preserveUndoOnReparse);
   EXPECT_TRUE(queue.empty());
@@ -67,10 +136,8 @@ TEST_F(CommandQueueTest, SetTransformsForDifferentEntitiesPreserveOrder) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 3u);
-  EXPECT_TRUE(effective[0].element == a);
-  EXPECT_TRUE(effective[1].element == b);
-  EXPECT_TRUE(effective[2].element == c);
+  EXPECT_THAT(effective, ElementsAre(CommandElementIdIs("a"), CommandElementIdIs("b"),
+                                     CommandElementIdIs("c")));
   EXPECT_TRUE(queue.empty());
 }
 
@@ -82,10 +149,9 @@ TEST_F(CommandQueueTest, MultipleSetTransformsForSameEntityCollapse) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 1u);
-  EXPECT_TRUE(effective[0].element == a);
   // The most recent transform (translation by 3.0) wins.
-  EXPECT_DOUBLE_EQ(effective[0].transform.data[4], 3.0);
+  EXPECT_THAT(effective,
+              ElementsAre(AllOf(CommandElementIdIs("a"), CommandTransformXIs(DoubleEq(3.0)))));
 }
 
 TEST_F(CommandQueueTest, CoalescingPreservesPerEntityOrderForDistinctEntities) {
@@ -99,11 +165,9 @@ TEST_F(CommandQueueTest, CoalescingPreservesPerEntityOrderForDistinctEntities) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 2u);
-  EXPECT_TRUE(effective[0].element == a);
-  EXPECT_DOUBLE_EQ(effective[0].transform.data[4], 3.0);
-  EXPECT_TRUE(effective[1].element == b);
-  EXPECT_DOUBLE_EQ(effective[1].transform.data[4], 4.0);
+  EXPECT_THAT(effective,
+              ElementsAre(AllOf(CommandElementIdIs("a"), CommandTransformXIs(DoubleEq(3.0))),
+                          AllOf(CommandElementIdIs("b"), CommandTransformXIs(DoubleEq(4.0)))));
 }
 
 TEST_F(CommandQueueTest, ReplaceDocumentDropsAllPriorCommands) {
@@ -114,9 +178,8 @@ TEST_F(CommandQueueTest, ReplaceDocumentDropsAllPriorCommands) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 1u);
-  EXPECT_EQ(effective[0].kind, EditorCommand::Kind::ReplaceDocument);
-  EXPECT_EQ(effective[0].bytes, "<svg/>");
+  EXPECT_THAT(effective, ElementsAre(AllOf(CommandKindIs(EditorCommand::Kind::ReplaceDocument),
+                                           CommandBytesIs("<svg/>"))));
   EXPECT_TRUE(flushResult.hadReplaceDocument);
   EXPECT_FALSE(flushResult.preserveUndoOnReparse);
 }
@@ -129,10 +192,9 @@ TEST_F(CommandQueueTest, CommandsAfterReplaceDocumentSurvive) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 2u);
-  EXPECT_EQ(effective[0].kind, EditorCommand::Kind::ReplaceDocument);
-  EXPECT_EQ(effective[1].kind, EditorCommand::Kind::SetTransform);
-  EXPECT_TRUE(effective[1].element == b);
+  EXPECT_THAT(effective, ElementsAre(CommandKindIs(EditorCommand::Kind::ReplaceDocument),
+                                     AllOf(CommandKindIs(EditorCommand::Kind::SetTransform),
+                                           CommandElementIdIs("b"))));
 }
 
 TEST_F(CommandQueueTest, MultipleReplaceDocumentKeepsOnlyLatestAndCommandsAfter) {
@@ -145,11 +207,11 @@ TEST_F(CommandQueueTest, MultipleReplaceDocumentKeepsOnlyLatestAndCommandsAfter)
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 2u);
-  EXPECT_EQ(effective[0].kind, EditorCommand::Kind::ReplaceDocument);
-  EXPECT_EQ(effective[0].bytes, "second");
-  EXPECT_EQ(effective[1].kind, EditorCommand::Kind::SetTransform);
-  EXPECT_TRUE(effective[1].element == c);
+  EXPECT_THAT(
+      effective,
+      ElementsAre(
+          AllOf(CommandKindIs(EditorCommand::Kind::ReplaceDocument), CommandBytesIs("second")),
+          AllOf(CommandKindIs(EditorCommand::Kind::SetTransform), CommandElementIdIs("c"))));
   EXPECT_TRUE(flushResult.hadReplaceDocument);
   EXPECT_FALSE(flushResult.preserveUndoOnReparse);
 }
@@ -160,10 +222,12 @@ TEST_F(CommandQueueTest, PreserveUndoReparseSurvivesSingleReplaceDocumentBatch) 
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 1u);
+  EXPECT_THAT(effective,
+              ElementsAre(AllOf(
+                  CommandKindIs(EditorCommand::Kind::ReplaceDocument), CommandBytesIs("writeback"),
+                  Field("preserveUndoOnReparse", &EditorCommand::preserveUndoOnReparse, true))));
   EXPECT_TRUE(flushResult.hadReplaceDocument);
   EXPECT_TRUE(flushResult.preserveUndoOnReparse);
-  EXPECT_TRUE(effective.front().preserveUndoOnReparse);
 }
 
 TEST_F(CommandQueueTest, UserReplaceInMixedBatchClearsPreserveUndoMetadata) {
@@ -173,8 +237,8 @@ TEST_F(CommandQueueTest, UserReplaceInMixedBatchClearsPreserveUndoMetadata) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 1u);
-  EXPECT_EQ(effective.front().bytes, "user-edit");
+  EXPECT_THAT(effective, ElementsAre(AllOf(CommandKindIs(EditorCommand::Kind::ReplaceDocument),
+                                           CommandBytesIs("user-edit"))));
   EXPECT_TRUE(flushResult.hadReplaceDocument);
   EXPECT_FALSE(flushResult.preserveUndoOnReparse);
 }
@@ -190,7 +254,7 @@ TEST_F(CommandQueueTest, ClearDropsPendingWithoutFlushing) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  EXPECT_TRUE(effective.empty());
+  EXPECT_THAT(effective, IsEmpty());
 }
 
 TEST_F(CommandQueueTest, DeleteElementCommandNotCoalesced) {
@@ -201,10 +265,9 @@ TEST_F(CommandQueueTest, DeleteElementCommandNotCoalesced) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 3u);
-  EXPECT_EQ(effective[0].kind, EditorCommand::Kind::SetTransform);
-  EXPECT_EQ(effective[1].kind, EditorCommand::Kind::DeleteElement);
-  EXPECT_EQ(effective[2].kind, EditorCommand::Kind::DeleteElement);
+  EXPECT_THAT(effective, ElementsAre(CommandKindIs(EditorCommand::Kind::SetTransform),
+                                     CommandKindIs(EditorCommand::Kind::DeleteElement),
+                                     CommandKindIs(EditorCommand::Kind::DeleteElement)));
 }
 
 TEST_F(CommandQueueTest, InsertElementCommandNotCoalesced) {
@@ -214,13 +277,11 @@ TEST_F(CommandQueueTest, InsertElementCommandNotCoalesced) {
 
   const auto flushResult = queue.flush();
   const auto& effective = flushResult.effectiveCommands;
-  ASSERT_EQ(effective.size(), 2u);
-  EXPECT_EQ(effective[0].kind, EditorCommand::Kind::InsertElement);
-  EXPECT_EQ(effective[1].kind, EditorCommand::Kind::InsertElement);
-  EXPECT_TRUE(effective[0].parentElement == a);
-  EXPECT_TRUE(effective[0].element == b);
-  EXPECT_TRUE(effective[1].parentElement == a);
-  EXPECT_TRUE(effective[1].element == c);
+  EXPECT_THAT(effective,
+              ElementsAre(AllOf(CommandKindIs(EditorCommand::Kind::InsertElement),
+                                CommandParentElementIdIs("a"), CommandElementIdIs("b")),
+                          AllOf(CommandKindIs(EditorCommand::Kind::InsertElement),
+                                CommandParentElementIdIs("a"), CommandElementIdIs("c"))));
 }
 
 }  // namespace

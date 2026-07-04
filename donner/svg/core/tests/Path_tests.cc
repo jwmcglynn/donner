@@ -741,20 +741,15 @@ TEST(Path, PointAtTriangle) {
                     .closePath()
                     .build();
 
-  ASSERT_THAT(spline.commands(), SizeIs(4));
-
-  EXPECT_EQ(spline.commands()[0].verb, CommandType::MoveTo);
+  EXPECT_THAT(spline.commands(), CommandVerbsAre(CommandType::MoveTo, CommandType::LineTo,
+                                                 CommandType::LineTo, CommandType::ClosePath));
   EXPECT_EQ(spline.pointAt(0, 0.0), Vector2(0.0, 0.0));
   EXPECT_EQ(spline.pointAt(0, 1.0), Vector2(0.0, 0.0));
 
-  EXPECT_EQ(spline.commands()[1].verb, CommandType::LineTo);
   EXPECT_EQ(spline.pointAt(1, 0.0), Vector2(0.0, 0.0));
   EXPECT_EQ(spline.pointAt(1, 0.5), Vector2(0.5, 1.0));
   EXPECT_EQ(spline.pointAt(1, 1.0), Vector2(1.0, 2.0));
 
-  EXPECT_EQ(spline.commands()[2].verb, CommandType::LineTo);
-
-  EXPECT_EQ(spline.commands()[3].verb, CommandType::ClosePath);
   EXPECT_EQ(spline.pointAt(3, 0.0), Vector2(2.0, 0.0));
   EXPECT_EQ(spline.pointAt(3, 0.5), Vector2(1.0, 0.0));
   EXPECT_EQ(spline.pointAt(3, 1.0), Vector2(0.0, 0.0));
@@ -768,22 +763,18 @@ TEST(Path, PointAtMultipleSegments) {
                     .lineTo(Vector2(1.0, 3.0))
                     .build();
 
-  ASSERT_THAT(spline.commands(), SizeIs(4));
-
-  EXPECT_EQ(spline.commands()[0].verb, CommandType::MoveTo);
+  EXPECT_THAT(spline.commands(), CommandVerbsAre(CommandType::MoveTo, CommandType::LineTo,
+                                                 CommandType::MoveTo, CommandType::LineTo));
   EXPECT_EQ(spline.pointAt(0, 0.0), Vector2(0.0, 0.0));
   EXPECT_EQ(spline.pointAt(0, 1.0), Vector2(0.0, 0.0));
 
-  EXPECT_EQ(spline.commands()[1].verb, CommandType::LineTo);
   EXPECT_EQ(spline.pointAt(1, 0.0), Vector2(0.0, 0.0));
   EXPECT_EQ(spline.pointAt(1, 0.5), Vector2(1.0, 0.0));
   EXPECT_EQ(spline.pointAt(1, 1.0), Vector2(2.0, 0.0));
 
-  EXPECT_EQ(spline.commands()[2].verb, CommandType::MoveTo);
   EXPECT_EQ(spline.pointAt(2, 0.0), Vector2(1.0, 1.0));
   EXPECT_EQ(spline.pointAt(2, 1.0), Vector2(1.0, 1.0));
 
-  EXPECT_EQ(spline.commands()[3].verb, CommandType::LineTo);
   EXPECT_EQ(spline.pointAt(3, 0.0), Vector2(1.0, 1.0));
   EXPECT_EQ(spline.pointAt(3, 0.5), Vector2(1.0, 2.0));
   EXPECT_EQ(spline.pointAt(3, 1.0), Vector2(1.0, 3.0));
@@ -798,55 +789,48 @@ TEST(Path, TangentAt) {
   builder.addCircle(Vector2d(4.0, 1.0), 1.0);
   Path spline = builder.build();
 
-  ASSERT_THAT(spline.commands(), SizeIs(10));
-
-  EXPECT_EQ(spline.commands()[0].verb, CommandType::MoveTo);
+  EXPECT_THAT(spline.commands(),
+              CommandVerbsAre(CommandType::MoveTo, CommandType::LineTo, CommandType::LineTo,
+                              CommandType::ClosePath, CommandType::MoveTo, CommandType::CurveTo,
+                              CommandType::CurveTo, CommandType::CurveTo, CommandType::CurveTo,
+                              CommandType::ClosePath));
   EXPECT_EQ(spline.tangentAt(0, 0.0), Vector2(1.0, 2.0));
   EXPECT_EQ(spline.tangentAt(0, 1.0), Vector2(1.0, 2.0));
 
-  EXPECT_EQ(spline.commands()[1].verb, CommandType::LineTo);
   EXPECT_EQ(spline.tangentAt(1, 0.0), Vector2(1.0, 2.0));
   EXPECT_EQ(spline.tangentAt(1, 0.5), Vector2(1.0, 2.0));
   EXPECT_EQ(spline.tangentAt(1, 1.0), Vector2(1.0, 2.0));
 
-  EXPECT_EQ(spline.commands()[2].verb, CommandType::LineTo);
   EXPECT_EQ(spline.tangentAt(2, 0.0), Vector2(1.0, -2.0));
   EXPECT_EQ(spline.tangentAt(2, 1.0), Vector2(1.0, -2.0));
 
-  EXPECT_EQ(spline.commands()[3].verb, CommandType::ClosePath);
   EXPECT_EQ(spline.tangentAt(3, 0.0), Vector2(-2.0, 0.0));
   EXPECT_EQ(spline.tangentAt(3, 1.0), Vector2(-2.0, 0.0));
 
-  EXPECT_EQ(spline.commands()[4].verb, CommandType::MoveTo);
   EXPECT_EQ(spline.pointAt(4, 0.0), Vector2(5.0, 1.0));
   EXPECT_THAT(spline.tangentAt(4, 0.0), Vector2Eq(0.0, Gt(0.0)));
   EXPECT_THAT(spline.tangentAt(4, 1.0), Vector2Eq(0.0, Gt(0.0)));
 
-  EXPECT_EQ(spline.commands()[5].verb, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(5, 0.0), Vector2(5.0, 1.0));
   EXPECT_THAT(spline.tangentAt(5, 0.0), Vector2Eq(0.0, Gt(0.0)));
   EXPECT_THAT(spline.tangentAt(5, 0.5), NormalizedEq(Vector2(-1.0, 1.0)));
   EXPECT_THAT(spline.tangentAt(5, 1.0), Vector2Eq(Lt(0.0), 0.0));
 
-  EXPECT_EQ(spline.commands()[6].verb, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(6, 0.0), Vector2(4.0, 2.0));
   EXPECT_THAT(spline.tangentAt(6, 0.0), Vector2Eq(Lt(0.0), 0.0));
   EXPECT_THAT(spline.tangentAt(6, 0.5), NormalizedEq(Vector2(-1.0, -1.0)));
   EXPECT_THAT(spline.tangentAt(6, 1.0), Vector2Eq(0.0, Lt(0.0)));
 
-  EXPECT_EQ(spline.commands()[7].verb, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(7, 0.0), Vector2(3.0, 1.0));
   EXPECT_THAT(spline.tangentAt(7, 0.0), Vector2Eq(0.0, Lt(0.0)));
   EXPECT_THAT(spline.tangentAt(7, 0.5), NormalizedEq(Vector2(1.0, -1.0)));
   EXPECT_THAT(spline.tangentAt(7, 1.0), Vector2Eq(Gt(0.0), 0.0));
 
-  EXPECT_EQ(spline.commands()[8].verb, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(8, 0.0), Vector2(4.0, 0.0));
   EXPECT_THAT(spline.tangentAt(8, 0.0), Vector2Eq(Gt(0.0), 0.0));
   EXPECT_THAT(spline.tangentAt(8, 0.5), NormalizedEq(Vector2(1.0, 1.0)));
   EXPECT_THAT(spline.tangentAt(8, 1.0), Vector2Eq(0.0, Gt(0.0)));
 
-  EXPECT_EQ(spline.commands()[9].verb, CommandType::ClosePath);
   EXPECT_EQ(spline.tangentAt(9, 0.0), Vector2(0.0, 0.0));
   EXPECT_EQ(spline.tangentAt(9, 1.0), Vector2(0.0, 0.0));
 }
@@ -878,55 +862,48 @@ TEST(Path, NormalAt) {
   builder.addCircle(Vector2d(4.0, 1.0), 1.0);
   Path spline = builder.build();
 
-  ASSERT_THAT(spline.commands(), SizeIs(10));
-
-  EXPECT_EQ(spline.commands()[0].verb, CommandType::MoveTo);
+  EXPECT_THAT(spline.commands(),
+              CommandVerbsAre(CommandType::MoveTo, CommandType::LineTo, CommandType::LineTo,
+                              CommandType::ClosePath, CommandType::MoveTo, CommandType::CurveTo,
+                              CommandType::CurveTo, CommandType::CurveTo, CommandType::CurveTo,
+                              CommandType::ClosePath));
   EXPECT_EQ(spline.normalAt(0, 0.0), Vector2(-2.0, 1.0));
   EXPECT_EQ(spline.normalAt(0, 1.0), Vector2(-2.0, 1.0));
 
-  EXPECT_EQ(spline.commands()[1].verb, CommandType::LineTo);
   EXPECT_EQ(spline.normalAt(1, 0.0), Vector2(-2.0, 1.0));
   EXPECT_EQ(spline.normalAt(1, 0.5), Vector2(-2.0, 1.0));
   EXPECT_EQ(spline.normalAt(1, 1.0), Vector2(-2.0, 1.0));
 
-  EXPECT_EQ(spline.commands()[2].verb, CommandType::LineTo);
   EXPECT_EQ(spline.normalAt(2, 0.0), Vector2(2.0, 1.0));
   EXPECT_EQ(spline.normalAt(2, 1.0), Vector2(2.0, 1.0));
 
-  EXPECT_EQ(spline.commands()[3].verb, CommandType::ClosePath);
   EXPECT_EQ(spline.normalAt(3, 0.0), Vector2(0.0, -2.0));
   EXPECT_EQ(spline.normalAt(3, 1.0), Vector2(0.0, -2.0));
 
-  EXPECT_EQ(spline.commands()[4].verb, CommandType::MoveTo);
   EXPECT_EQ(spline.pointAt(4, 0.0), Vector2(5.0, 1.0));
   EXPECT_THAT(spline.normalAt(4, 0.0), Vector2Eq(Lt(0.0), 0.0));
   EXPECT_THAT(spline.normalAt(4, 1.0), Vector2Eq(Lt(0.0), 0.0));
 
-  EXPECT_EQ(spline.commands()[5].verb, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(5, 0.0), Vector2(5.0, 1.0));
   EXPECT_THAT(spline.normalAt(5, 0.0), Vector2Eq(Lt(0.0), 0.0));
   EXPECT_THAT(spline.normalAt(5, 0.5), NormalizedEq(Vector2(-1.0, -1.0)));
   EXPECT_THAT(spline.normalAt(5, 1.0), Vector2Eq(0.0, Lt(0.0)));
 
-  EXPECT_EQ(spline.commands()[6].verb, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(6, 0.0), Vector2(4.0, 2.0));
   EXPECT_THAT(spline.normalAt(6, 0.0), Vector2Eq(0.0, Lt(0.0)));
   EXPECT_THAT(spline.normalAt(6, 0.5), NormalizedEq(Vector2(1.0, -1.0)));
   EXPECT_THAT(spline.normalAt(6, 1.0), Vector2Eq(Gt(0.0), 0.0));
 
-  EXPECT_EQ(spline.commands()[7].verb, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(7, 0.0), Vector2(3.0, 1.0));
   EXPECT_THAT(spline.normalAt(7, 0.0), Vector2Eq(Gt(0.0), 0.0));
   EXPECT_THAT(spline.normalAt(7, 0.5), NormalizedEq(Vector2(1.0, 1.0)));
   EXPECT_THAT(spline.normalAt(7, 1.0), Vector2Eq(0.0, Gt(0.0)));
 
-  EXPECT_EQ(spline.commands()[8].verb, CommandType::CurveTo);
   EXPECT_EQ(spline.pointAt(8, 0.0), Vector2(4.0, 0.0));
   EXPECT_THAT(spline.normalAt(8, 0.0), Vector2Eq(0.0, Gt(0.0)));
   EXPECT_THAT(spline.normalAt(8, 0.5), NormalizedEq(Vector2(-1.0, 1.0)));
   EXPECT_THAT(spline.normalAt(8, 1.0), Vector2Eq(Lt(0.0), 0.0));
 
-  EXPECT_EQ(spline.commands()[9].verb, CommandType::ClosePath);
   EXPECT_EQ(spline.normalAt(9, 0.0), Vector2(0.0, 0.0));
   EXPECT_EQ(spline.normalAt(9, 1.0), Vector2(0.0, 0.0));
 }

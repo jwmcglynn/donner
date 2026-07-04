@@ -112,6 +112,7 @@ donner_cc_test(
             "//donner/svg/renderer:renderer_geode",
             "//donner/svg/renderer:renderer_image_io",
             "//donner/svg/renderer/tests:renderer_image_test_utils",
+            "//donner/svg/renderer/tests:rgba_test_matchers",
             "@imgui//:imgui_wgpu_backend",
         ],
         "//conditions:default": [],
@@ -180,6 +181,7 @@ donner_cc_test(
     name = "selection_aabb_tests",
     srcs = ["SelectionAabb_tests.cc"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",
         "//donner/editor:selection_aabb",
@@ -633,6 +635,7 @@ donner_cc_test(
     name = "select_tool_tests",
     srcs = ["SelectTool_tests.cc"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:select_tool",
         "//donner/svg",
@@ -666,6 +669,7 @@ donner_cc_test(
         "//donner/editor:text_editor",
         "//donner/svg",
         "//donner/svg/renderer",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -1073,6 +1077,7 @@ donner_cc_test(
         "//donner/editor:lock_state",
         "//donner/svg",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/tests:render_tree_test_utils",
         "@com_google_gtest//:gtest_main",
         "@imgui",

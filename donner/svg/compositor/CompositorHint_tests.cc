@@ -1,3 +1,4 @@
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <limits>
@@ -17,6 +18,11 @@ protected:
   Registry registry_;
 };
 
+auto HintEntryIs(HintSource source, uint16_t weight) {
+  return testing::AllOf(testing::Field("source", &HintEntry::source, source),
+                        testing::Field("weight", &HintEntry::weight, weight));
+}
+
 }  // namespace
 
 TEST_F(CompositorHintTest, ConstructingScopedHintAttachesComponent) {
@@ -26,9 +32,7 @@ TEST_F(CompositorHintTest, ConstructingScopedHintAttachesComponent) {
     ASSERT_TRUE(registry_.all_of<CompositorHintComponent>(entity))
         << "component should appear once a scoped hint is constructed";
     const auto& component = registry_.get<CompositorHintComponent>(entity);
-    ASSERT_EQ(component.entries.size(), 1u) << "exactly one entry expected";
-    EXPECT_EQ(component.entries[0].source, HintSource::Explicit);
-    EXPECT_EQ(component.entries[0].weight, 0x2000);
+    EXPECT_THAT(component.entries, testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x2000)));
   }
   EXPECT_FALSE(registry_.all_of<CompositorHintComponent>(entity))
       << "destructor should remove the component when the last entry drops";
@@ -38,9 +42,7 @@ TEST_F(CompositorHintTest, MandatoryFactoryUsesInfiniteSentinelWeight) {
   const Entity entity = registry_.create();
   ScopedCompositorHint hint = ScopedCompositorHint::Mandatory(registry_, entity);
   const auto& component = registry_.get<CompositorHintComponent>(entity);
-  ASSERT_EQ(component.entries.size(), 1u);
-  EXPECT_EQ(component.entries[0].source, HintSource::Mandatory);
-  EXPECT_EQ(component.entries[0].weight, 0xFFFF);
+  EXPECT_THAT(component.entries, testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)));
   EXPECT_EQ(component.totalWeight(), std::numeric_limits<uint32_t>::max())
       << "Mandatory hint must short-circuit totalWeight to UINT32_MAX";
 }
@@ -50,9 +52,7 @@ TEST_F(CompositorHintTest, InteractionFactoryDefaultsToMediumWeight) {
   ScopedCompositorHint hint =
       ScopedCompositorHint::Interaction(registry_, entity, InteractionHint::Selection);
   const auto& component = registry_.get<CompositorHintComponent>(entity);
-  ASSERT_EQ(component.entries.size(), 1u);
-  EXPECT_EQ(component.entries[0].source, HintSource::Interaction);
-  EXPECT_EQ(component.entries[0].weight, 0x8000)
+  EXPECT_THAT(component.entries, testing::ElementsAre(HintEntryIs(HintSource::Interaction, 0x8000)))
       << "Interaction default weight matches the design-doc Medium slot";
   ASSERT_TRUE(hint.interactionKind().has_value());
   EXPECT_EQ(*hint.interactionKind(), InteractionHint::Selection);
@@ -82,9 +82,7 @@ TEST_F(CompositorHintTest, AnimationFactoryDefaultsToHighWeight) {
   const Entity entity = registry_.create();
   ScopedCompositorHint hint = ScopedCompositorHint::Animation(registry_, entity);
   const auto& component = registry_.get<CompositorHintComponent>(entity);
-  ASSERT_EQ(component.entries.size(), 1u);
-  EXPECT_EQ(component.entries[0].source, HintSource::Animation);
-  EXPECT_EQ(component.entries[0].weight, 0xC000)
+  EXPECT_THAT(component.entries, testing::ElementsAre(HintEntryIs(HintSource::Animation, 0xC000)))
       << "Animation default weight matches the design-doc High slot (above Interaction)";
 }
 
@@ -106,7 +104,10 @@ TEST_F(CompositorHintTest, MultipleScopedHintsAccumulate) {
   ScopedCompositorHint c = ScopedCompositorHint::Mandatory(registry_, entity);
 
   const auto& component = registry_.get<CompositorHintComponent>(entity);
-  EXPECT_EQ(component.entries.size(), 3u) << "all three entries should coexist";
+  EXPECT_THAT(component.entries, testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x1000),
+                                                      HintEntryIs(HintSource::Explicit, 0x2000),
+                                                      HintEntryIs(HintSource::Mandatory, 0xFFFF)))
+      << "all three entries should coexist";
   EXPECT_EQ(component.totalWeight(), std::numeric_limits<uint32_t>::max())
       << "mandatory among entries should still short-circuit to UINT32_MAX";
 }
@@ -116,14 +117,16 @@ TEST_F(CompositorHintTest, ScopedHintsRemoveIndependently) {
   std::optional<ScopedCompositorHint> a(ScopedCompositorHint::Explicit(registry_, entity, 0x1000));
   std::optional<ScopedCompositorHint> b(ScopedCompositorHint::Explicit(registry_, entity, 0x2000));
 
-  ASSERT_EQ(registry_.get<CompositorHintComponent>(entity).entries.size(), 2u);
+  EXPECT_THAT(registry_.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x1000),
+                                   HintEntryIs(HintSource::Explicit, 0x2000)));
 
   a.reset();
   ASSERT_TRUE(registry_.all_of<CompositorHintComponent>(entity))
       << "one live hint should keep the component attached";
   const auto& after = registry_.get<CompositorHintComponent>(entity);
-  ASSERT_EQ(after.entries.size(), 1u);
-  EXPECT_EQ(after.entries[0].weight, 0x2000) << "the 0x1000 hint should be the one removed";
+  EXPECT_THAT(after.entries, testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x2000)))
+      << "the 0x1000 hint should be the one removed";
 
   b.reset();
   EXPECT_FALSE(registry_.all_of<CompositorHintComponent>(entity))
@@ -134,7 +137,8 @@ TEST_F(CompositorHintTest, MoveConstructTransfersOwnership) {
   const Entity entity = registry_.create();
   std::optional<ScopedCompositorHint> src(
       ScopedCompositorHint::Explicit(registry_, entity, 0x4000));
-  ASSERT_EQ(registry_.get<CompositorHintComponent>(entity).entries.size(), 1u);
+  EXPECT_THAT(registry_.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x4000)));
 
   ScopedCompositorHint dst = std::move(*src);
   EXPECT_FALSE(src->active()) << "moved-from handle must be inert";
@@ -142,7 +146,8 @@ TEST_F(CompositorHintTest, MoveConstructTransfersOwnership) {
   src.reset();
   EXPECT_TRUE(registry_.all_of<CompositorHintComponent>(entity))
       << "destroying moved-from handle should NOT remove the hint entry";
-  EXPECT_EQ(registry_.get<CompositorHintComponent>(entity).entries.size(), 1u);
+  EXPECT_THAT(registry_.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x4000)));
 
   {
     ScopedCompositorHint local = std::move(dst);
@@ -169,7 +174,8 @@ TEST_F(CompositorHintTest, MoveAssignmentReleasesPriorEntry) {
       << "move-assign should release the pre-existing entry on the destination";
   ASSERT_TRUE(registry_.all_of<CompositorHintComponent>(second))
       << "the moved-in entry should remain on the new target";
-  EXPECT_EQ(registry_.get<CompositorHintComponent>(second).entries.size(), 1u);
+  EXPECT_THAT(registry_.get<CompositorHintComponent>(second).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x2000)));
 }
 
 TEST_F(CompositorHintTest, RemoveFirstMatchingRemovesExactlyOneDuplicate) {
@@ -179,11 +185,14 @@ TEST_F(CompositorHintTest, RemoveFirstMatchingRemovesExactlyOneDuplicate) {
   component.addHint(HintSource::Explicit, 0x4000);
 
   EXPECT_TRUE(component.removeFirstMatching(HintSource::Explicit, 0x4000));
-  EXPECT_EQ(component.entries.size(), 2u) << "only one duplicate should be removed";
+  EXPECT_THAT(component.entries, testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x4000),
+                                                      HintEntryIs(HintSource::Explicit, 0x4000)))
+      << "only one duplicate should be removed";
 
   EXPECT_FALSE(component.removeFirstMatching(HintSource::Explicit, 0x9999))
       << "unmatched remove returns false and does not alter storage";
-  EXPECT_EQ(component.entries.size(), 2u);
+  EXPECT_THAT(component.entries, testing::ElementsAre(HintEntryIs(HintSource::Explicit, 0x4000),
+                                                      HintEntryIs(HintSource::Explicit, 0x4000)));
 }
 
 TEST_F(CompositorHintTest, TotalWeightSumsNonMandatoryEntries) {

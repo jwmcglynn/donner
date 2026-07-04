@@ -6,6 +6,7 @@
 
 - \subpage SystemArchitecture
 - \subpage CodingStyle
+- \subpage TestDiagnosability
 - \subpage EcsArchitecture
   - List of \subpage ecs_systems APIs
 - \subpage BuildingDonner

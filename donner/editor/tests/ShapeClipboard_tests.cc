@@ -20,6 +20,7 @@ namespace donner::editor {
 
 namespace {
 
+using ::testing::ElementsAre;
 using ::testing::HasSubstr;
 using ::testing::Not;
 
@@ -97,8 +98,7 @@ TEST(ShapeClipboardCommands, CopySerializesStableFragment) {
   // verbatim.
   EXPECT_THAT(payload->svgFragment, HasSubstr("id=\"a\""));
   EXPECT_THAT(payload->svgFragment, HasSubstr("width=\"10\""));
-  ASSERT_EQ(payload->sourceElementIds.size(), 1u);
-  EXPECT_EQ(payload->sourceElementIds[0], "a");
+  EXPECT_THAT(payload->sourceElementIds, ElementsAre("a"));
 
   // Copy is deterministic: copying the same selection twice yields identical
   // fragment bytes.
@@ -155,8 +155,7 @@ TEST(ShapeClipboardCommands, PasteInsertsInsideRootAndOffsets) {
 
   // Colliding id "a" is renamed deterministically.
   EXPECT_THAT(result.mergedSource, HasSubstr("id=\"a_pasted\""));
-  ASSERT_EQ(result.pastedElementIds.size(), 1u);
-  EXPECT_EQ(result.pastedElementIds[0], "a_pasted");
+  EXPECT_THAT(result.pastedElementIds, ElementsAre("a_pasted"));
 
   // The merged source still parses.
   svg::SVGDocument pasted = Parse(result.mergedSource);
@@ -190,7 +189,7 @@ TEST(ShapeClipboardCommands, PasteRegeneratesIdsDeterministically) {
   // Same inputs → identical id assignment and merged output.
   EXPECT_EQ(first.pastedElementIds, second.pastedElementIds);
   EXPECT_EQ(first.mergedSource, second.mergedSource);
-  EXPECT_THAT(first.pastedElementIds, ::testing::ElementsAre("a_pasted", "b_pasted"));
+  EXPECT_THAT(first.pastedElementIds, ElementsAre("a_pasted", "b_pasted"));
 }
 
 TEST(ShapeClipboardCommands, PasteUniqueIdsKeepsFragmentIdsAndIgnoresIdSubstrings) {

@@ -20,6 +20,7 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -1031,7 +1032,7 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnNewPathUpdatesRenderedPixels) {
   const svg::RendererBitmap beforeFill = RenderDocument();
   ASSERT_FALSE(beforeFill.empty());
   const std::array<std::uint8_t, 4> beforePixel = PixelAt(beforeFill, 24, 24);
-  ASSERT_LT(beforePixel[3], 16u)
+  ASSERT_THAT(beforePixel, svg::test::Alpha(::testing::Lt(16)))
       << "The repro starts with an unfilled, unstroked Pen-created triangle; pixel was "
       << testing::PrintToString(beforePixel);
 
@@ -1046,10 +1047,8 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnNewPathUpdatesRenderedPixels) {
   const svg::RendererBitmap afterFill = RenderDocument();
   ASSERT_FALSE(afterFill.empty());
   const std::array<std::uint8_t, 4> afterPixel = PixelAt(afterFill, 24, 24);
-  EXPECT_GT(afterPixel[0], 200u);
-  EXPECT_LT(afterPixel[1], 40u);
-  EXPECT_LT(afterPixel[2], 40u);
-  EXPECT_GT(afterPixel[3], 200u)
+  EXPECT_THAT(afterPixel, svg::test::Rgba(::testing::Gt(200), ::testing::Lt(40), ::testing::Lt(40),
+                                          ::testing::Gt(200)))
       << "Changing fill on a freshly-created Pen path must update rendered pixels, not only "
          "source text. Pixel was "
       << testing::PrintToString(afterPixel) << "\nsource:\n"
@@ -1079,7 +1078,7 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnClosedNewPathUpdatesRenderedPixels) {
   const svg::RendererBitmap beforeFill = RenderDocument();
   ASSERT_FALSE(beforeFill.empty());
   const std::array<std::uint8_t, 4> beforePixel = PixelAt(beforeFill, 24, 24);
-  ASSERT_LT(beforePixel[3], 16u)
+  ASSERT_THAT(beforePixel, svg::test::Alpha(::testing::Lt(16)))
       << "The repro starts with an unfilled, unstroked closed Pen path; pixel was "
       << testing::PrintToString(beforePixel);
 
@@ -1102,10 +1101,8 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnClosedNewPathUpdatesRenderedPixels) {
   const svg::RendererBitmap afterFill = RenderDocument();
   ASSERT_FALSE(afterFill.empty());
   const std::array<std::uint8_t, 4> afterPixel = PixelAt(afterFill, 24, 24);
-  EXPECT_GT(afterPixel[0], 200u);
-  EXPECT_LT(afterPixel[1], 40u);
-  EXPECT_LT(afterPixel[2], 40u);
-  EXPECT_GT(afterPixel[3], 200u)
+  EXPECT_THAT(afterPixel, svg::test::Rgba(::testing::Gt(200), ::testing::Lt(40), ::testing::Lt(40),
+                                          ::testing::Gt(200)))
       << "Changing fill on a closed Pen-created path must update rendered pixels, not only source "
          "text. Pixel was "
       << testing::PrintToString(afterPixel) << "\nsource:\n"
@@ -1129,7 +1126,7 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnDraftPathUpdatesRenderedPixels) {
   const svg::RendererBitmap beforeFill = RenderDocument();
   ASSERT_FALSE(beforeFill.empty());
   const std::array<std::uint8_t, 4> beforePixel = PixelAt(beforeFill, 24, 24);
-  ASSERT_LT(beforePixel[3], 16u)
+  ASSERT_THAT(beforePixel, svg::test::Alpha(::testing::Lt(16)))
       << "The repro starts with an unfilled, unstroked Pen draft; pixel was "
       << testing::PrintToString(beforePixel);
 
@@ -1144,10 +1141,8 @@ TEST_F(PenToolLiveSyncTest, FillChangeOnDraftPathUpdatesRenderedPixels) {
   const svg::RendererBitmap afterFill = RenderDocument();
   ASSERT_FALSE(afterFill.empty());
   const std::array<std::uint8_t, 4> afterPixel = PixelAt(afterFill, 24, 24);
-  EXPECT_GT(afterPixel[0], 200u);
-  EXPECT_LT(afterPixel[1], 40u);
-  EXPECT_LT(afterPixel[2], 40u);
-  EXPECT_GT(afterPixel[3], 200u)
+  EXPECT_THAT(afterPixel, svg::test::Rgba(::testing::Gt(200), ::testing::Lt(40), ::testing::Lt(40),
+                                          ::testing::Gt(200)))
       << "Changing fill on a still-drafting Pen path must update rendered pixels, not only source "
          "text. Pixel was "
       << testing::PrintToString(afterPixel) << "\nsource:\n"

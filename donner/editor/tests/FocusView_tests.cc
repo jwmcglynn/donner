@@ -1,8 +1,10 @@
 #include "donner/editor/FocusView.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,7 +16,44 @@
 #include "donner/svg/SVGUnknownElement.h"
 
 namespace donner::editor {
+
+void PrintTo(const LineRange& range, std::ostream* os) {
+  *os << "LineRange{startLine=" << range.startLine << ", endLine=" << range.endLine << "}";
+}
+
+void PrintTo(const SourcePoint& point, std::ostream* os) {
+  *os << "SourcePoint{line=" << point.line << ", column=" << point.column << "}";
+}
+
+void PrintTo(const FocusReferenceLink& link, std::ostream* os) {
+  *os << "FocusReferenceLink{from=";
+  PrintTo(link.from, os);
+  *os << ", to=";
+  PrintTo(link.to, os);
+  *os << "}";
+}
+
 namespace {
+
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Field;
+using ::testing::IsEmpty;
+
+auto LineRangeIs(int startLine, int endLine) {
+  return AllOf(Field("startLine", &LineRange::startLine, startLine),
+               Field("endLine", &LineRange::endLine, endLine));
+}
+
+auto SourcePointIs(const SourcePoint& expected) {
+  return AllOf(Field("line", &SourcePoint::line, expected.line),
+               Field("column", &SourcePoint::column, expected.column));
+}
+
+auto ReferenceLinkIs(const SourcePoint& from, const SourcePoint& to) {
+  return AllOf(Field("from", &FocusReferenceLink::from, SourcePointIs(from)),
+               Field("to", &FocusReferenceLink::to, SourcePointIs(to)));
+}
 
 constexpr std::string_view kNestedSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg">
@@ -320,12 +359,9 @@ TEST(FocusViewTest, ShowsSelectedElementAndAncestorTagsOnly) {
 
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
 
-  EXPECT_EQ(partition.fullColor, (std::vector<LineRange>{{.startLine = 3, .endLine = 4}}));
-  EXPECT_EQ(partition.dimmed, (std::vector<LineRange>{
-                                  {.startLine = 0, .endLine = 3},
-                                  {.startLine = 5, .endLine = 8},
-                              }));
-  EXPECT_EQ(partition.hidden, (std::vector<LineRange>{{.startLine = 4, .endLine = 5}}));
+  EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(3, 4)));
+  EXPECT_THAT(partition.dimmed, ElementsAre(LineRangeIs(0, 3), LineRangeIs(5, 8)));
+  EXPECT_THAT(partition.hidden, ElementsAre(LineRangeIs(4, 5)));
 }
 
 TEST(FocusViewTest, EmptySelectionsAndNoSourceDocumentsReturnEmptyResults) {
@@ -374,33 +410,22 @@ TEST(FocusViewTest, IncludesReferencedPaintAndCompositingElements) {
 
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
 
-  EXPECT_EQ(partition.fullColor, (std::vector<LineRange>{{.startLine = 11, .endLine = 14}}));
-  EXPECT_EQ(partition.referenceColor, (std::vector<LineRange>{{.startLine = 2, .endLine = 10}}));
-  EXPECT_EQ(partition.dimmed, (std::vector<LineRange>{
-                                  {.startLine = 0, .endLine = 2},
-                                  {.startLine = 10, .endLine = 11},
-                                  {.startLine = 15, .endLine = 16},
-                              }));
-  EXPECT_EQ(partition.hidden, (std::vector<LineRange>{{.startLine = 14, .endLine = 15}}));
-  EXPECT_EQ(SortLinks(partition.referenceLinks),
-            SortLinks(std::vector<FocusReferenceLink>{
-                {
-                    .from = PointForNeedle(kReferencedSvg, "#paint"),
-                    .to = PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="paint")"),
-                },
-                {
-                    .from = PointForNeedle(kReferencedSvg, "#clip"),
-                    .to = PointForOpeningTagEnd(kReferencedSvg, R"(<clipPath id="clip")"),
-                },
-                {
-                    .from = PointForNeedle(kReferencedSvg, "#shadow"),
-                    .to = PointForOpeningTagEnd(kReferencedSvg, R"(<filter id="shadow")"),
-                },
-                {
-                    .from = PointForNeedle(kReferencedSvg, "#base"),
-                    .to = PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="base")"),
-                },
-            }));
+  EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(11, 14)));
+  EXPECT_THAT(partition.referenceColor, ElementsAre(LineRangeIs(2, 10)));
+  EXPECT_THAT(partition.dimmed,
+              ElementsAre(LineRangeIs(0, 2), LineRangeIs(10, 11), LineRangeIs(15, 16)));
+  EXPECT_THAT(partition.hidden, ElementsAre(LineRangeIs(14, 15)));
+  EXPECT_THAT(
+      SortLinks(partition.referenceLinks),
+      ElementsAre(
+          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#base"),
+                          PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="base")")),
+          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#paint"),
+                          PointForOpeningTagEnd(kReferencedSvg, R"(<linearGradient id="paint")")),
+          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#clip"),
+                          PointForOpeningTagEnd(kReferencedSvg, R"(<clipPath id="clip")")),
+          ReferenceLinkIs(PointForNeedle(kReferencedSvg, "#shadow"),
+                          PointForOpeningTagEnd(kReferencedSvg, R"(<filter id="shadow")"))));
 }
 
 TEST(FocusViewTest, ParsesQuotedUrlReferencesAndWhitespaceTrimmedHref) {
@@ -511,16 +536,13 @@ TEST(FocusViewTest, GroupSelectionDrawsOnlyOwnReferenceArrows) {
 
   const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
 
-  EXPECT_EQ(partition.fullColor, (std::vector<LineRange>{{.startLine = 5, .endLine = 8}}));
-  EXPECT_EQ(partition.referenceColor, (std::vector<LineRange>{{.startLine = 2, .endLine = 4}}));
-  EXPECT_EQ(partition.hidden, (std::vector<LineRange>{}));
-  EXPECT_EQ(SortLinks(partition.referenceLinks),
-            SortLinks(std::vector<FocusReferenceLink>{
-                {
-                    .from = PointForNeedle(kSubtreeReferencedSvg, "#arrow"),
-                    .to = PointForOpeningTagEnd(kSubtreeReferencedSvg, R"(<marker id="arrow")"),
-                },
-            }));
+  EXPECT_THAT(partition.fullColor, ElementsAre(LineRangeIs(5, 8)));
+  EXPECT_THAT(partition.referenceColor, ElementsAre(LineRangeIs(2, 4)));
+  EXPECT_THAT(partition.hidden, IsEmpty());
+  EXPECT_THAT(SortLinks(partition.referenceLinks),
+              ElementsAre(ReferenceLinkIs(
+                  PointForNeedle(kSubtreeReferencedSvg, "#arrow"),
+                  PointForOpeningTagEnd(kSubtreeReferencedSvg, R"(<marker id="arrow")"))));
 }
 
 TEST(FocusViewTest, IncludesMatchedCssRulesAndCssDeclarationReferences) {
@@ -749,7 +771,7 @@ TEST(FocusViewTest, SelectingGroupShowsDescendantCssRulesWithoutDescendantLinks)
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kGroupedCssChildrenSvg, R"(<path id="sibling")").line));
 
-  EXPECT_TRUE(partition.referenceLinks.empty());
+  EXPECT_THAT(partition.referenceLinks, IsEmpty());
 }
 
 TEST(FocusViewTest, SelectingGroupStillDrawsOwnCssRuleLink) {
@@ -764,13 +786,10 @@ TEST(FocusViewTest, SelectingGroupStillDrawsOwnCssRuleLink) {
                            PointForNeedle(kGroupOwnAndChildCssSvg, ".outer").line));
   EXPECT_TRUE(ContainsLine(partition.referenceColor,
                            PointForNeedle(kGroupOwnAndChildCssSvg, ".inner").line));
-  EXPECT_EQ(SortLinks(partition.referenceLinks),
-            SortLinks(std::vector<FocusReferenceLink>{
-                {
-                    .from = PointForOpeningTagEnd(kGroupOwnAndChildCssSvg, R"(<g id="group")"),
-                    .to = PointForNeedle(kGroupOwnAndChildCssSvg, ".outer"),
-                },
-            }));
+  EXPECT_THAT(SortLinks(partition.referenceLinks),
+              ElementsAre(ReferenceLinkIs(
+                  PointForOpeningTagEnd(kGroupOwnAndChildCssSvg, R"(<g id="group")"),
+                  PointForNeedle(kGroupOwnAndChildCssSvg, ".outer"))));
 }
 
 TEST(FocusViewTest, SelectingMultipleElementsIncludesCssRuleLinksForEachSelection) {
@@ -941,7 +960,7 @@ TEST(FocusViewTest, SuppressesReverseReferenceExpansionAfterFiveRefs) {
                             PointForNeedle(kDenseResourceReferrersSvg, R"(<rect id="r6")").line));
   EXPECT_TRUE(ContainsLine(partition.hidden,
                            PointForNeedle(kDenseResourceReferrersSvg, R"(<rect id="r1")").line));
-  EXPECT_TRUE(partition.referenceLinks.empty());
+  EXPECT_THAT(partition.referenceLinks, IsEmpty());
 }
 
 TEST(FocusViewTest, StyleFocusSuppressesUniversalSelectorExpansionAfterFiveRefs) {
@@ -960,7 +979,7 @@ TEST(FocusViewTest, StyleFocusSuppressesUniversalSelectorExpansionAfterFiveRefs)
                             PointForNeedle(kDenseUniversalStyleSvg, R"(<rect id="r1")").line));
   EXPECT_FALSE(ContainsLine(focus->partition.referenceColor,
                             PointForNeedle(kDenseUniversalStyleSvg, R"(<rect id="r6")").line));
-  EXPECT_TRUE(focus->partition.referenceLinks.empty());
+  EXPECT_THAT(focus->partition.referenceLinks, IsEmpty());
 }
 
 TEST(FocusViewTest, ForwardFilterDependencyDoesNotReverseExpandOtherFilterReferrers) {

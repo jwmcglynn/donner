@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <ostream>
 #include <string_view>
 #include <thread>
 
@@ -23,9 +24,57 @@ using ::testing::NiceMock;
 
 namespace donner::svg::compositor {
 
+void PrintTo(StaticSpanMode mode, std::ostream* os) {
+  switch (mode) {
+    case StaticSpanMode::CachedTile: *os << "CachedTile"; return;
+    case StaticSpanMode::Immediate: *os << "Immediate"; return;
+  }
+  *os << "StaticSpanMode(" << static_cast<int>(mode) << ")";
+}
+
+void PrintTo(const CompositorController::StaticSpanPlan& plan, std::ostream* os) {
+  *os << "StaticSpanPlan{slotIndex=" << plan.slotIndex
+      << ", mode=" << testing::PrintToString(plan.mode) << ", visible=" << plan.visible
+      << ", expensive=" << plan.hasExpensiveEffect << ", drawOps=" << plan.estimatedDrawOps
+      << ", pathVerbs=" << plan.estimatedPathVerbs
+      << ", retainedBytes=" << plan.estimatedRetainedBytes
+      << ", estimatedRasterizeMs=" << plan.estimatedRasterizeMs
+      << ", measuredRasterizeMs=" << plan.measuredRasterizeMs
+      << ", immediateBudgetMs=" << plan.immediateBudgetMs
+      << ", staticImmediate=" << plan.staticHeuristicImmediate
+      << ", dynamicImmediate=" << plan.dynamicHeuristicImmediate
+      << ", demotedDynamicImmediate=" << plan.demotedDynamicImmediate
+      << ", label=" << testing::PrintToString(plan.spanRangeLabel) << "}";
+}
+
 namespace {
 
 using MockRendererInterface = tests::MockRendererInterface;
+using StaticSpanPlan = CompositorController::StaticSpanPlan;
+
+MATCHER(EstimatedRedrawCostNoMoreThanCacheOverhead, "") {
+  *result_listener << "estimatedRedrawCost=" << arg.estimatedRedrawCost
+                   << ", estimatedCacheOverheadCost=" << arg.estimatedCacheOverheadCost;
+  return arg.estimatedRedrawCost <= arg.estimatedCacheOverheadCost;
+}
+
+MATCHER(EstimatedRasterizeWithinImmediateBudget, "") {
+  *result_listener << "estimatedRasterizeMs=" << arg.estimatedRasterizeMs
+                   << ", immediateBudgetMs=" << arg.immediateBudgetMs;
+  return arg.estimatedRasterizeMs <= arg.immediateBudgetMs;
+}
+
+MATCHER(MeasuredRasterizeExceedsImmediateBudget, "") {
+  *result_listener << "measuredRasterizeMs=" << arg.measuredRasterizeMs
+                   << ", immediateBudgetMs=" << arg.immediateBudgetMs;
+  return arg.measuredRasterizeMs > arg.immediateBudgetMs;
+}
+
+template <typename... Matchers>
+auto StaticSpanPlanAtSlot(size_t slotIndex, Matchers... matchers) {
+  return ::testing::AllOf(::testing::Field("slotIndex", &StaticSpanPlan::slotIndex, slotIndex),
+                          matchers...);
+}
 
 class FakeTextureSnapshot : public RendererTextureSnapshot {
 public:
@@ -1200,8 +1249,12 @@ TEST_F(CompositorControllerTest, SnapshotSegmentInspectorRowsEmitsOneRowPerSlot)
   const auto rows = compositor.snapshotSegmentInspectorRows();
   // One promoted layer → two segment slots (pre-layer + post-layer).
   ASSERT_EQ(rows.size(), 2u);
-  EXPECT_EQ(rows[0].slotIndex, 0u);
-  EXPECT_EQ(rows[1].slotIndex, 1u);
+  EXPECT_THAT(
+      rows,
+      ::testing::ElementsAre(
+          ::testing::Field("slotIndex", &CompositorController::SegmentInspectorRow::slotIndex, 0u),
+          ::testing::Field("slotIndex", &CompositorController::SegmentInspectorRow::slotIndex,
+                           1u)));
   for (const auto& row : rows) {
     if (row.hasValidBitmap) {
       EXPECT_NE(row.bitmapSize, Vector2i::Zero());
@@ -1225,17 +1278,25 @@ TEST_F(CompositorControllerTest, CheapStaticSpanPlanChoosesImmediate) {
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto plans = compositor.snapshotStaticSpanPlansForTesting();
-  ASSERT_EQ(plans.size(), 2u);
-  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
-  EXPECT_TRUE(plans[1].visible);
-  EXPECT_FALSE(plans[1].hasExpensiveEffect);
-  EXPECT_EQ(plans[1].estimatedDrawOps, 1);
-  EXPECT_GT(plans[1].estimatedPathVerbs, 0);
-  EXPECT_GT(plans[1].estimatedRetainedBytes, 0u);
-  EXPECT_LE(plans[1].estimatedRedrawCost, plans[1].estimatedCacheOverheadCost);
-  EXPECT_TRUE(plans[1].staticHeuristicImmediate);
-  EXPECT_FALSE(plans[1].dynamicHeuristicImmediate);
-  EXPECT_THAT(plans[1].spanRangeLabel, HasSubstr("rect#cheap"));
+  EXPECT_THAT(
+      plans,
+      ::testing::ElementsAre(
+          _, StaticSpanPlanAtSlot(
+                 1u, ::testing::Field("mode", &StaticSpanPlan::mode, StaticSpanMode::Immediate),
+                 ::testing::Field("visible", &StaticSpanPlan::visible, true),
+                 ::testing::Field("hasExpensiveEffect", &StaticSpanPlan::hasExpensiveEffect, false),
+                 ::testing::Field("estimatedDrawOps", &StaticSpanPlan::estimatedDrawOps, 1),
+                 ::testing::Field("estimatedPathVerbs", &StaticSpanPlan::estimatedPathVerbs,
+                                  ::testing::Gt(0)),
+                 ::testing::Field("estimatedRetainedBytes", &StaticSpanPlan::estimatedRetainedBytes,
+                                  ::testing::Gt(0u)),
+                 EstimatedRedrawCostNoMoreThanCacheOverhead(),
+                 ::testing::Field("staticHeuristicImmediate",
+                                  &StaticSpanPlan::staticHeuristicImmediate, true),
+                 ::testing::Field("dynamicHeuristicImmediate",
+                                  &StaticSpanPlan::dynamicHeuristicImmediate, false),
+                 ::testing::Field("spanRangeLabel", &StaticSpanPlan::spanRangeLabel,
+                                  HasSubstr("rect#cheap")))));
 
   const auto immediateTiles =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
@@ -1276,8 +1337,9 @@ TEST_F(CompositorControllerTest, ImmediateStaticSpanComposesDirectlyIntoCurrentF
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto plans = compositor.snapshotStaticSpanPlansForTesting();
-  ASSERT_EQ(plans.size(), 2u);
-  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  EXPECT_THAT(plans, ::testing::ElementsAre(
+                         _, StaticSpanPlanAtSlot(1u, ::testing::Field("mode", &StaticSpanPlan::mode,
+                                                                      StaticSpanMode::Immediate))));
 }
 
 TEST_F(CompositorControllerTest, SmallGradientStaticSpanPlanCanChooseImmediate) {
@@ -1301,21 +1363,31 @@ TEST_F(CompositorControllerTest, SmallGradientStaticSpanPlanCanChooseImmediate) 
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto plans = compositor.snapshotStaticSpanPlansForTesting();
-  ASSERT_EQ(plans.size(), 2u);
   // A gradient fill is not hard-blocked from immediate: its per-pixel cost is
   // folded into the rasterize estimate as an area term. This 8x8 gradient covers
   // a tiny area, so the estimate stays well under budget and it goes immediate —
   // a large gradient (e.g. a full-width cloud band) would estimate over budget
   // and stay cached instead.
-  EXPECT_TRUE(plans[1].visible);
-  EXPECT_FALSE(plans[1].hasExpensiveEffect) << "Gradient fills are direct path paints; the "
-                                               "area-aware estimate decides immediate vs cached.";
-  EXPECT_TRUE(plans[1].estimatedUsesAreaCostlyPaint);
-  EXPECT_EQ(plans[1].estimatedDrawOps, 1);
-  EXPECT_LE(plans[1].estimatedRasterizeMs, plans[1].immediateBudgetMs);
-  EXPECT_TRUE(plans[1].staticHeuristicImmediate || plans[1].dynamicHeuristicImmediate);
-  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
-  EXPECT_THAT(plans[1].spanRangeLabel, HasSubstr("rect#gradient"));
+  EXPECT_THAT(
+      plans,
+      ::testing::ElementsAre(
+          _,
+          StaticSpanPlanAtSlot(
+              1u, ::testing::Field("visible", &StaticSpanPlan::visible, true),
+              ::testing::Field("hasExpensiveEffect", &StaticSpanPlan::hasExpensiveEffect, false),
+              ::testing::Field("estimatedUsesAreaCostlyPaint",
+                               &StaticSpanPlan::estimatedUsesAreaCostlyPaint, true),
+              ::testing::Field("estimatedDrawOps", &StaticSpanPlan::estimatedDrawOps, 1),
+              EstimatedRasterizeWithinImmediateBudget(),
+              ::testing::AnyOf(::testing::Field("staticHeuristicImmediate",
+                                                &StaticSpanPlan::staticHeuristicImmediate, true),
+                               ::testing::Field("dynamicHeuristicImmediate",
+                                                &StaticSpanPlan::dynamicHeuristicImmediate, true)),
+              ::testing::Field("mode", &StaticSpanPlan::mode, StaticSpanMode::Immediate),
+              ::testing::Field("spanRangeLabel", &StaticSpanPlan::spanRangeLabel,
+                               HasSubstr("rect#gradient")))))
+      << "Gradient fills are direct path paints; the area-aware estimate decides immediate vs "
+         "cached.";
 }
 
 TEST_F(CompositorControllerTest, StaticImmediateHeuristicDoesNotDemoteAfterSlowMeasurement) {
@@ -1334,10 +1406,15 @@ TEST_F(CompositorControllerTest, StaticImmediateHeuristicDoesNotDemoteAfterSlowM
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto plans = compositor.snapshotStaticSpanPlansForTesting();
-  ASSERT_EQ(plans.size(), 2u);
-  EXPECT_TRUE(plans[1].staticHeuristicImmediate);
-  EXPECT_GT(plans[1].measuredRasterizeMs, plans[1].immediateBudgetMs);
-  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate)
+  EXPECT_THAT(
+      plans,
+      ::testing::ElementsAre(
+          _, StaticSpanPlanAtSlot(
+                 1u,
+                 ::testing::Field("staticHeuristicImmediate",
+                                  &StaticSpanPlan::staticHeuristicImmediate, true),
+                 MeasuredRasterizeExceedsImmediateBudget(),
+                 ::testing::Field("mode", &StaticSpanPlan::mode, StaticSpanMode::Immediate))))
       << "Slow measured timing must not demote the static cheapness heuristic.";
 }
 
@@ -1359,14 +1436,20 @@ TEST_F(CompositorControllerTest, CheapStaticSpanExpandsToImmediateByEstimate) {
   compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
 
   const auto plans = compositor.snapshotStaticSpanPlansForTesting();
-  ASSERT_EQ(plans.size(), 2u);
   // The medium solid rect is too large for the cache-vs-redraw `staticHeuristic`,
   // but its geometry (one draw, a handful of verbs) estimates well under the
   // immediate budget, so the deterministic estimate expands it to immediate.
-  EXPECT_FALSE(plans[1].staticHeuristicImmediate);
-  EXPECT_LE(plans[1].estimatedRasterizeMs, plans[1].immediateBudgetMs);
-  EXPECT_TRUE(plans[1].dynamicHeuristicImmediate);
-  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  EXPECT_THAT(
+      plans,
+      ::testing::ElementsAre(
+          _, StaticSpanPlanAtSlot(
+                 1u,
+                 ::testing::Field("staticHeuristicImmediate",
+                                  &StaticSpanPlan::staticHeuristicImmediate, false),
+                 EstimatedRasterizeWithinImmediateBudget(),
+                 ::testing::Field("dynamicHeuristicImmediate",
+                                  &StaticSpanPlan::dynamicHeuristicImmediate, true),
+                 ::testing::Field("mode", &StaticSpanPlan::mode, StaticSpanMode::Immediate))));
 
   const auto stats = compositor.lastRenderFrameStats();
   EXPECT_GE(stats.immediateTileCount, 1);
@@ -1392,10 +1475,16 @@ TEST_F(CompositorControllerTest, DynamicImmediateSpanStaysImmediateDespiteSlowMe
 
   {
     const auto plans = compositor.snapshotStaticSpanPlansForTesting();
-    ASSERT_EQ(plans.size(), 2u);
-    ASSERT_FALSE(plans[1].staticHeuristicImmediate);
-    ASSERT_TRUE(plans[1].dynamicHeuristicImmediate);
-    ASSERT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+    ASSERT_THAT(
+        plans,
+        ::testing::ElementsAre(
+            _, StaticSpanPlanAtSlot(
+                   1u,
+                   ::testing::Field("staticHeuristicImmediate",
+                                    &StaticSpanPlan::staticHeuristicImmediate, false),
+                   ::testing::Field("dynamicHeuristicImmediate",
+                                    &StaticSpanPlan::dynamicHeuristicImmediate, true),
+                   ::testing::Field("mode", &StaticSpanPlan::mode, StaticSpanMode::Immediate))));
   }
 
   // A later frame whose *measured* render is far over budget must NOT demote the
@@ -1408,15 +1497,22 @@ TEST_F(CompositorControllerTest, DynamicImmediateSpanStaysImmediateDespiteSlowMe
   compositor.renderFrame(RenderViewport{Vector2i(512, 512)});
 
   const auto plans = compositor.snapshotStaticSpanPlansForTesting();
-  ASSERT_EQ(plans.size(), 2u);
-  EXPECT_FALSE(plans[1].staticHeuristicImmediate);
-  EXPECT_TRUE(plans[1].dynamicHeuristicImmediate);
-  EXPECT_FALSE(plans[1].demotedDynamicImmediate);
-  EXPECT_GT(plans[1].measuredRasterizeMs, plans[1].immediateBudgetMs)
-      << "The mock injected a slow (over-budget) render...";
-  EXPECT_LE(plans[1].estimatedRasterizeMs, plans[1].immediateBudgetMs)
-      << "...but the geometry estimate stays under budget, so the decision is unchanged.";
-  EXPECT_EQ(plans[1].mode, StaticSpanMode::Immediate);
+  EXPECT_THAT(
+      plans,
+      ::testing::ElementsAre(
+          _,
+          StaticSpanPlanAtSlot(
+              1u,
+              ::testing::Field("staticHeuristicImmediate",
+                               &StaticSpanPlan::staticHeuristicImmediate, false),
+              ::testing::Field("dynamicHeuristicImmediate",
+                               &StaticSpanPlan::dynamicHeuristicImmediate, true),
+              ::testing::Field("demotedDynamicImmediate", &StaticSpanPlan::demotedDynamicImmediate,
+                               false),
+              MeasuredRasterizeExceedsImmediateBudget(), EstimatedRasterizeWithinImmediateBudget(),
+              ::testing::Field("mode", &StaticSpanPlan::mode, StaticSpanMode::Immediate))))
+      << "The mock injected a slow render, but the geometry estimate stays under budget so the "
+         "decision is unchanged.";
 
   const auto stats = compositor.lastRenderFrameStats();
   EXPECT_GE(stats.immediateTileCount, 1);
@@ -1454,10 +1550,14 @@ TEST_F(CompositorControllerTest, PaintResourceStaticSpanPlanChoosesCachedTile) {
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto plans = compositor.snapshotStaticSpanPlansForTesting();
-  ASSERT_EQ(plans.size(), 2u);
-  EXPECT_EQ(plans[1].mode, StaticSpanMode::CachedTile);
-  EXPECT_TRUE(plans[1].hasExpensiveEffect);
-  EXPECT_GE(plans[1].estimatedDrawOps, 1);
+  EXPECT_THAT(
+      plans,
+      ::testing::ElementsAre(
+          _, StaticSpanPlanAtSlot(
+                 1u, ::testing::Field("mode", &StaticSpanPlan::mode, StaticSpanMode::CachedTile),
+                 ::testing::Field("hasExpensiveEffect", &StaticSpanPlan::hasExpensiveEffect, true),
+                 ::testing::Field("estimatedDrawOps", &StaticSpanPlan::estimatedDrawOps,
+                                  ::testing::Ge(1)))));
 
   const auto immediateTiles =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);

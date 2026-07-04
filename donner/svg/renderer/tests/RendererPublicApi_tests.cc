@@ -16,6 +16,10 @@ namespace donner::svg {
 namespace {
 
 using ::testing::_;
+using ::testing::AllOf;
+using ::testing::ElementsAre;
+using ::testing::Gt;
+using ::testing::Lt;
 
 SVGDocument ParseDocument(std::string_view svgSource) {
   ParseWarningSink warningSink;
@@ -50,6 +54,13 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
 std::array<uint8_t, 4> PixelAt(const RendererBitmap& snap, int x, int y) {
   const size_t idx = static_cast<size_t>(y) * snap.rowBytes + static_cast<size_t>(x) * 4u;
   return {snap.pixels[idx], snap.pixels[idx + 1], snap.pixels[idx + 2], snap.pixels[idx + 3]};
+}
+
+MATCHER_P4(Rgba, rMatcher, gMatcher, bMatcher, aMatcher, "has RGBA channels") {
+  const std::array<int, 4> channels = {static_cast<int>(arg[0]), static_cast<int>(arg[1]),
+                                       static_cast<int>(arg[2]), static_cast<int>(arg[3])};
+  return testing::ExplainMatchResult(ElementsAre(rMatcher, gMatcher, bMatcher, aMatcher), channels,
+                                     result_listener);
 }
 
 MATCHER(IsOpaque, "pixel is opaque (alpha >= 200)") {
@@ -176,8 +187,8 @@ TEST(RendererPublicApiTest, TextUsesDocumentTransformForGlyphPlacement) {
 
   // The glyph should be placed after the viewBox-to-canvas scale, not at the unscaled SVG-space
   // coordinates near the top-left corner.
-  EXPECT_EQ(pixelAt(80, 20)[3], 0);
-  EXPECT_GT(pixelAt(120, 150)[3], 0);
+  EXPECT_THAT(pixelAt(80, 20), IsTransparent());
+  EXPECT_THAT(pixelAt(120, 150), Rgba(_, _, _, Gt(0)));
 }
 
 // --- Dirty flag fast path tests ---
@@ -254,10 +265,10 @@ TEST(RendererPublicApiTest, DrawBitmapHonorsPaddedRows) {
   const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
   ASSERT_FALSE(snapshot.empty());
   ASSERT_EQ(snapshot.dimensions, Vector2i(2, 2));
-  EXPECT_EQ(PixelAt(snapshot, 0, 0), (std::array<std::uint8_t, 4>{255, 0, 0, 255}));
-  EXPECT_EQ(PixelAt(snapshot, 1, 0), (std::array<std::uint8_t, 4>{0, 255, 0, 255}));
-  EXPECT_EQ(PixelAt(snapshot, 0, 1), (std::array<std::uint8_t, 4>{0, 0, 255, 255}));
-  EXPECT_EQ(PixelAt(snapshot, 1, 1), (std::array<std::uint8_t, 4>{255, 255, 0, 255}));
+  EXPECT_THAT(PixelAt(snapshot, 0, 0), Rgba(255, 0, 0, 255));
+  EXPECT_THAT(PixelAt(snapshot, 1, 0), Rgba(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(snapshot, 0, 1), Rgba(0, 0, 255, 255));
+  EXPECT_THAT(PixelAt(snapshot, 1, 1), Rgba(255, 255, 0, 255));
 }
 
 TEST(RendererPublicApiTest, TripleDrawWithoutMutationStaysStable) {
@@ -603,9 +614,7 @@ TEST(RendererPublicApiTest, ShapeOpacity) {
 
   // The pixel should be semi-transparent red (~128 alpha).
   auto px = PixelAt(snapshot, 10, 10);
-  EXPECT_GT(px[0], 100);  // Red present
-  EXPECT_LT(px[3], 200);  // Not fully opaque
-  EXPECT_GT(px[3], 50);   // Not fully transparent
+  EXPECT_THAT(px, Rgba(Gt(100), _, _, AllOf(Gt(50), Lt(200))));
 }
 
 // 4. Fill-opacity + stroke-opacity
@@ -625,8 +634,7 @@ TEST(RendererPublicApiTest, FillOpacityAndStrokeOpacity) {
 
   // Interior should have semi-transparent green fill.
   auto interior = PixelAt(snapshot, 20, 20);
-  EXPECT_GT(interior[1], 30);   // Some green
-  EXPECT_LT(interior[3], 130);  // Low alpha from fill-opacity 0.3
+  EXPECT_THAT(interior, Rgba(_, Gt(30), _, Lt(130)));
 
   // Stroke edge should have higher alpha from stroke-opacity 0.8.
   auto strokeEdge = PixelAt(snapshot, 5, 20);
@@ -660,8 +668,7 @@ TEST(RendererPublicApiTest, MarkerRendering) {
   // giving a marker diameter of 6px centered at each vertex. Sample y=17 which is
   // 3px above the stroke center — within the marker circle but outside the 2px stroke.
   auto markerPixel = PixelAt(snapshot, 10, 17);
-  EXPECT_GT(markerPixel[0], 150);  // Red channel from marker fill
-  EXPECT_GT(markerPixel[3], 0);    // Not transparent — marker drawn here
+  EXPECT_THAT(markerPixel, Rgba(Gt(150), _, _, Gt(0)));
 }
 
 TEST(RendererPublicApiTest, RecursiveMarkerStopsAtOneLevel) {
@@ -789,9 +796,7 @@ TEST(RendererPublicApiTest, SymbolWithUse) {
 
   // The symbol should be rendered at (5,5) with 20x20 size, containing magenta.
   auto inside = PixelAt(snapshot, 15, 15);
-  EXPECT_GT(inside[0], 200);  // Red channel of magenta
-  EXPECT_GT(inside[2], 200);  // Blue channel of magenta
-  EXPECT_GT(inside[3], 200);  // Opaque
+  EXPECT_THAT(inside, Rgba(Gt(200), _, Gt(200), Gt(200)));
 
   // Outside the use area should be transparent.
   auto outside = PixelAt(snapshot, 2, 2);
@@ -832,8 +837,7 @@ TEST(RendererPublicApiTest, InlineStyleOverridesAttribute) {
   // Style should override the fill attribute — result should be red, not blue.
   auto px = PixelAt(snapshot, 10, 10);
   EXPECT_THAT(px, IsRedish());
-
-  EXPECT_GT(px[3], 200);
+  EXPECT_THAT(px, IsOpaque());
 }
 
 // 12. Multiple gradients — two shapes with different linear gradient fills
@@ -862,13 +866,11 @@ TEST(RendererPublicApiTest, MultipleLinearGradients) {
 
   // Left rect's left edge should be reddish.
   auto leftEdge = PixelAt(snapshot, 1, 10);
-  EXPECT_GT(leftEdge[0], 200);  // Red
-  EXPECT_GT(leftEdge[3], 200);
+  EXPECT_THAT(leftEdge, Rgba(Gt(200), _, _, Gt(200)));
 
   // Right rect's left edge should be greenish.
   auto rightEdge = PixelAt(snapshot, 21, 10);
-  EXPECT_GT(rightEdge[1], 100);  // Green
-  EXPECT_GT(rightEdge[3], 200);
+  EXPECT_THAT(rightEdge, Rgba(_, Gt(100), _, Gt(200)));
 }
 
 // 13. Radial gradient
@@ -892,10 +894,7 @@ TEST(RendererPublicApiTest, RadialGradient) {
 
   // Center should be white (near 255 in all channels).
   auto center = PixelAt(snapshot, 20, 20);
-  EXPECT_THAT(center, IsOpaque());
-  EXPECT_GT(center[0], 200);
-  EXPECT_GT(center[1], 200);
-  EXPECT_GT(center[2], 200);
+  EXPECT_THAT(center, Rgba(Gt(200), Gt(200), Gt(200), Gt(200)));
 
   // Corner should be darker.
   auto corner = PixelAt(snapshot, 0, 0);
@@ -946,7 +945,7 @@ TEST(RendererPublicApiTest, EmptyDocumentProducesValidOutput) {
 
   // All pixels should be transparent.
   auto px = PixelAt(NormalizeSnapshot(renderer.takeSnapshot()), 15, 15);
-  EXPECT_EQ(px[3], 0);
+  EXPECT_THAT(px, IsTransparent());
 }
 
 // 16. Circle element exercises drawEllipse path
@@ -968,7 +967,7 @@ TEST(RendererPublicApiTest, CircleElement) {
 
   // Corner should be transparent (outside circle).
   auto corner = PixelAt(snapshot, 0, 0);
-  EXPECT_EQ(corner[3], 0);
+  EXPECT_THAT(corner, IsTransparent());
 }
 
 // 17. Ellipse element exercises drawEllipse code path with separate rx/ry
@@ -986,7 +985,7 @@ TEST(RendererPublicApiTest, EllipseElement) {
 
   // Center should be blue.
   auto center = PixelAt(snapshot, 30, 15);
-  EXPECT_GT(center[2], 200);
+  EXPECT_THAT(center, Rgba(_, _, Gt(200), _));
 }
 
 // 18. Pattern fill
@@ -1010,11 +1009,11 @@ TEST(RendererPublicApiTest, PatternFill) {
 
   // The pattern should produce non-transparent content.
   auto px = PixelAt(snapshot, 2, 2);
-  EXPECT_GT(px[3], 0);  // Pattern tile drawn
+  EXPECT_THAT(px, Rgba(_, _, _, Gt(0)));
 
   // Different tile positions should potentially have different colors (red vs blue).
   auto px2 = PixelAt(snapshot, 7, 7);
-  EXPECT_GT(px2[3], 0);
+  EXPECT_THAT(px2, Rgba(_, _, _, Gt(0)));
 }
 
 // 19. ClipPath
@@ -1065,8 +1064,7 @@ TEST(RendererPublicApiTest, MaskElement) {
 
   // Outside the black hole (corner) — mask is white, so green should show.
   auto corner = PixelAt(snapshot, 2, 2);
-  EXPECT_GT(corner[1], 100);  // Green
-  EXPECT_GT(corner[3], 100);
+  EXPECT_THAT(corner, Rgba(_, Gt(100), _, Gt(100)));
 
   // Inside the black hole (center) — mask is black, so content should be masked.
   auto center = PixelAt(snapshot, 20, 20);
@@ -1092,9 +1090,7 @@ TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
 
   // multiply(#ffff00, #00ffff) = #00ff00 (green)
   auto px = PixelAt(snapshot, 15, 15);
-  EXPECT_LT(px[0], 30);   // Red channel ~0 (not cyan's 0 or yellow's 255)
-  EXPECT_GT(px[1], 200);  // Green channel ~255
-  EXPECT_LT(px[2], 30);   // Blue channel ~0
+  EXPECT_THAT(px, Rgba(Lt(30), Gt(200), Lt(30), _));
 }
 
 // 22. Visibility hidden — element should not appear
@@ -1112,7 +1108,7 @@ TEST(RendererPublicApiTest, VisibilityHidden) {
 
   // Hidden element should not render — pixel should be transparent.
   auto px = PixelAt(snapshot, 10, 10);
-  EXPECT_EQ(px[3], 0);
+  EXPECT_THAT(px, IsTransparent());
 }
 
 // 23. Display none — element and children should not appear
@@ -1131,7 +1127,7 @@ TEST(RendererPublicApiTest, DisplayNone) {
   ASSERT_FALSE(snapshot.empty());
 
   auto px = PixelAt(snapshot, 10, 10);
-  EXPECT_EQ(px[3], 0);
+  EXPECT_THAT(px, IsTransparent());
 }
 
 // 24. Gradient with gradient-transform exercises resolveGradientTransform
@@ -1177,8 +1173,7 @@ TEST(RendererPublicApiTest, PathElement) {
 
   // Inside the path should be orange.
   auto inside = PixelAt(snapshot, 20, 20);
-  EXPECT_GT(inside[0], 200);  // Red component of orange
-  EXPECT_GT(inside[1], 100);  // Green component of orange
+  EXPECT_THAT(inside, Rgba(Gt(200), Gt(100), _, _));
 }
 
 // 26. Gradient userSpaceOnUse exercises non-objectBoundingBox branch
@@ -1203,14 +1198,11 @@ TEST(RendererPublicApiTest, GradientUserSpaceOnUse) {
 
   // Left edge should be cyan (R=0, G=255, B=255).
   auto left = PixelAt(snapshot, 1, 20);
-  EXPECT_LT(left[0], 50);   // Low red (cyan)
-  EXPECT_GT(left[1], 200);  // High green
-  EXPECT_GT(left[2], 200);  // High blue
+  EXPECT_THAT(left, Rgba(Lt(50), Gt(200), Gt(200), _));
 
   // Right edge should be magenta (R=255, G=0, B=255).
   auto right = PixelAt(snapshot, 38, 20);
-  EXPECT_GT(right[0], 200);  // High red (magenta)
-  EXPECT_GT(right[2], 200);  // High blue
+  EXPECT_THAT(right, Rgba(Gt(200), _, Gt(200), _));
 }
 
 // 27. Stroke with path (exercises stroke on drawPath, not drawRect)
@@ -1229,12 +1221,11 @@ TEST(RendererPublicApiTest, StrokeOnPath) {
 
   // On the line at y=25 should be red.
   auto onLine = PixelAt(snapshot, 25, 25);
-  EXPECT_GT(onLine[0], 200);
-  EXPECT_GT(onLine[3], 200);
+  EXPECT_THAT(onLine, Rgba(Gt(200), _, _, Gt(200)));
 
   // Far from the line should be transparent.
   auto farAway = PixelAt(snapshot, 25, 5);
-  EXPECT_EQ(farAway[3], 0);
+  EXPECT_THAT(farAway, IsTransparent());
 }
 
 }  // namespace

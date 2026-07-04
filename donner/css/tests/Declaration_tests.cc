@@ -7,11 +7,31 @@
 
 namespace donner::css {
 
+using testing::AllOf;
+using testing::ElementsAre;
 using testing::Eq;
+using testing::Field;
+using testing::ResultOf;
 
 // Helper: parse a style string and return declarations.
 static std::vector<Declaration> parse(std::string_view str) {
   return CSS::ParseStyleAttribute(str);
+}
+
+auto DeclarationCssTextIs(std::string_view cssText) {
+  return ResultOf(
+      "toCssText", [](const Declaration& declaration) { return declaration.toCssText(); },
+      Eq(std::string(cssText)));
+}
+
+auto DeclarationNameIs(const RcString& name) {
+  return Field("name", &Declaration::name, Eq(name));
+}
+
+auto DeclarationValueCountIs(std::size_t valueCount) {
+  return ResultOf(
+      "values.size", [](const Declaration& declaration) { return declaration.values.size(); },
+      Eq(valueCount));
 }
 
 // ===========================================================================
@@ -228,63 +248,53 @@ TEST(ComponentValueToCssText, EmptySimpleBlock) {
 
 TEST(DeclarationToCssText, BasicDeclaration) {
   auto decls = parse("fill: red");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "fill: red");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("fill: red")));
 }
 
 TEST(DeclarationToCssText, DeclarationWithImportant) {
   auto decls = parse("fill: red !important");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "fill: red !important");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("fill: red !important")));
 }
 
 TEST(DeclarationToCssText, NumericValue) {
   auto decls = parse("opacity: 0.8");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "opacity: 0.8");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("opacity: 0.8")));
 }
 
 TEST(DeclarationToCssText, DimensionValue) {
   auto decls = parse("stroke-width: 2px");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "stroke-width: 2px");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("stroke-width: 2px")));
 }
 
 TEST(DeclarationToCssText, ColorHash) {
   auto decls = parse("fill: #ff0000");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "fill: #ff0000");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("fill: #ff0000")));
 }
 
 TEST(DeclarationToCssText, FunctionValue) {
   auto decls = parse("fill: rgb(255, 0, 0)");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "fill: rgb(255, 0, 0)");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("fill: rgb(255, 0, 0)")));
 }
 
 TEST(DeclarationToCssText, UrlValue) {
   auto decls = parse("fill: url(#gradient)");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "fill: url(#gradient)");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("fill: url(#gradient)")));
 }
 
 TEST(DeclarationToCssText, MultipleValues) {
   auto decls = parse("font-family: Arial, sans-serif");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "font-family: Arial, sans-serif");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("font-family: Arial, sans-serif")));
 }
 
 TEST(DeclarationToCssText, MultipleDeclarations) {
   auto decls = parse("fill: red; stroke: blue");
-  ASSERT_EQ(decls.size(), 2);
-  EXPECT_EQ(decls[0].toCssText(), "fill: red");
-  EXPECT_EQ(decls[1].toCssText(), "stroke: blue");
+  EXPECT_THAT(decls,
+              ElementsAre(DeclarationCssTextIs("fill: red"), DeclarationCssTextIs("stroke: blue")));
 }
 
 TEST(DeclarationToCssText, PercentageValue) {
   auto decls = parse("opacity: 50%");
-  ASSERT_EQ(decls.size(), 1);
-  EXPECT_EQ(decls[0].toCssText(), "opacity: 50%");
+  EXPECT_THAT(decls, ElementsAre(DeclarationCssTextIs("opacity: 50%")));
 }
 
 // ===========================================================================
@@ -298,14 +308,14 @@ TEST(DeclarationRoundTrip, SimpleProperties) {
 
   for (const auto& input : inputs) {
     auto decls = parse(input);
-    ASSERT_EQ(decls.size(), 1) << "Failed to parse: " << input;
-    const std::string serialized = decls[0].toCssText();
+    ASSERT_THAT(decls, ElementsAre(DeclarationCssTextIs(input))) << "Failed to parse: " << input;
+    const Declaration& original = decls.front();
+    const std::string serialized = original.toCssText();
 
     auto reparsed = parse(serialized);
-    ASSERT_EQ(reparsed.size(), 1) << "Failed to reparse: " << serialized;
-    EXPECT_EQ(reparsed[0].name, decls[0].name) << "Name mismatch for: " << input;
-    EXPECT_EQ(reparsed[0].values.size(), decls[0].values.size())
-        << "Value count mismatch for: " << input;
+    EXPECT_THAT(reparsed, ElementsAre(AllOf(DeclarationNameIs(original.name),
+                                            DeclarationValueCountIs(original.values.size()))))
+        << "Failed to reparse: " << serialized;
   }
 }
 
@@ -317,19 +327,22 @@ TEST(DeclarationRoundTrip, ComplexValues) {
 
   for (const auto& input : inputs) {
     auto decls = parse(input);
-    ASSERT_EQ(decls.size(), 1) << "Failed to parse: " << input;
-    const std::string serialized = decls[0].toCssText();
+    ASSERT_THAT(decls, ElementsAre(DeclarationCssTextIs(input))) << "Failed to parse: " << input;
+    const Declaration& original = decls.front();
+    const std::string serialized = original.toCssText();
 
     auto reparsed = parse(serialized);
-    ASSERT_EQ(reparsed.size(), 1) << "Failed to reparse serialized: " << serialized;
-    EXPECT_EQ(reparsed[0].name, decls[0].name) << "Name mismatch for: " << input;
+    EXPECT_THAT(reparsed, ElementsAre(DeclarationNameIs(original.name)))
+        << "Failed to reparse serialized: " << serialized;
   }
 }
 
 TEST(DeclarationRoundTrip, MultiDeclarationStyle) {
   const std::string_view input = "fill: red; stroke: blue; opacity: 0.5";
   auto decls = parse(input);
-  ASSERT_EQ(decls.size(), 3);
+  ASSERT_THAT(decls,
+              ElementsAre(DeclarationCssTextIs("fill: red"), DeclarationCssTextIs("stroke: blue"),
+                          DeclarationCssTextIs("opacity: 0.5")));
 
   // Reconstruct as a merged style and reparse.
   std::string serialized;
@@ -341,10 +354,9 @@ TEST(DeclarationRoundTrip, MultiDeclarationStyle) {
   }
 
   auto reparsed = parse(serialized);
-  ASSERT_EQ(reparsed.size(), 3);
-  for (size_t i = 0; i < decls.size(); ++i) {
-    EXPECT_EQ(reparsed[i].name, decls[i].name) << "Name mismatch at index " << i;
-  }
+  EXPECT_THAT(reparsed,
+              ElementsAre(DeclarationNameIs(decls[0].name), DeclarationNameIs(decls[1].name),
+                          DeclarationNameIs(decls[2].name)));
 }
 
 // ===========================================================================

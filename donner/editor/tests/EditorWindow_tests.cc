@@ -43,12 +43,16 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/tests/RendererImageTestUtils.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #endif
 
 namespace donner::editor::gui {
 namespace {
 
 #if defined(DONNER_EDITOR_WGPU)
+using svg::test::Near;
+using svg::test::Rgba;
+
 std::array<std::uint8_t, 4> PixelAt(const svg::RendererBitmap& bitmap, int x, int y) {
   const std::size_t offset =
       static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
@@ -569,17 +573,11 @@ TEST(EditorWindowTest, WgpuDirectRenderCallbackAppendsToFramebuffer) {
   const Vector2d readbackFromLogical = ReadbackScale(actual, 96, 96);
 
   const std::array<std::uint8_t, 4> outside = PixelAtLogical(actual, readbackFromLogical, 16, 16);
-  EXPECT_LE(outside[0], 3);
-  EXPECT_LE(outside[1], 3);
-  EXPECT_NEAR(static_cast<int>(outside[2]), 255, 3)
+  EXPECT_THAT(outside, Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)))
       << "The direct Geode pass must preserve earlier ImGui framebuffer pixels.";
-  EXPECT_EQ(outside[3], 255);
 
   const std::array<std::uint8_t, 4> inside = PixelAtLogical(actual, readbackFromLogical, 48, 48);
-  EXPECT_NEAR(static_cast<int>(inside[0]), 255, 3);
-  EXPECT_LE(inside[1], 3);
-  EXPECT_LE(inside[2], 3);
-  EXPECT_EQ(inside[3], 255);
+  EXPECT_THAT(inside, Rgba(Near(255, 3), testing::Le(3), testing::Le(3), testing::Eq(255)));
 }
 
 TEST(EditorWindowTest, WgpuUnderlayDirectRenderCallbackDrawsBelowImGui) {
@@ -631,19 +629,14 @@ TEST(EditorWindowTest, WgpuUnderlayDirectRenderCallbackDrawsBelowImGui) {
 
   const std::array<std::uint8_t, 4> underlayOnly =
       PixelAtLogical(actual, readbackFromLogical, 16, 16);
-  EXPECT_NEAR(static_cast<int>(underlayOnly[0]), 128, 3)
+  EXPECT_THAT(underlayOnly, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "The underlay direct pass must survive ImGui rendering.";
-  EXPECT_LE(underlayOnly[1], 3);
-  EXPECT_LE(underlayOnly[2], 3);
-  EXPECT_EQ(underlayOnly[3], 255);
 
   const std::array<std::uint8_t, 4> imguiOverUnderlay =
       PixelAtLogical(actual, readbackFromLogical, 48, 48);
-  EXPECT_LE(imguiOverUnderlay[0], 3)
+  EXPECT_THAT(imguiOverUnderlay,
+              Rgba(testing::Le(3), testing::Le(3), Near(255, 3), testing::Eq(255)))
       << "ImGui widgets must render above the direct document underlay.";
-  EXPECT_LE(imguiOverUnderlay[1], 3);
-  EXPECT_NEAR(static_cast<int>(imguiOverUnderlay[2]), 255, 3);
-  EXPECT_EQ(imguiOverUnderlay[3], 255);
 }
 
 TEST(EditorWindowTest, WgpuPresentsFilledPromotedLayerAfterStyleMutation) {
@@ -1223,12 +1216,9 @@ TEST(EditorWindowTest, WgpuPresentsGeodePremultipliedTextureWithoutDarkening) {
 
   ASSERT_FALSE(actual.empty());
   const std::array<std::uint8_t, 4> center = PixelAt(actual, 48, 48);
-  EXPECT_NEAR(static_cast<int>(center[0]), 128, 3)
+  EXPECT_THAT(center, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "A premultiplied red texture should not be multiplied by alpha again during ImGui "
          "presentation.";
-  EXPECT_LE(center[1], 3);
-  EXPECT_LE(center[2], 3);
-  EXPECT_EQ(center[3], 255);
   ImGui_ImplWGPU_RemoveTexturePremultipliedAlphaRef(textureId);
   ImGui_ImplWGPU_RemoveTexture(textureId);
 }
@@ -1282,12 +1272,9 @@ TEST(EditorWindowTest, WgpuPresentsUploadedStraightAlphaBitmapWithStraightBlend)
 
   ASSERT_FALSE(actual.empty());
   const std::array<std::uint8_t, 4> center = PixelAt(actual, 32, 32);
-  EXPECT_NEAR(static_cast<int>(center[0]), 128, 3)
+  EXPECT_THAT(center, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "CPU bitmap uploads are straight-alpha RGBA; registering them as premultiplied makes "
          "the WGPU presentation path skip the required source-alpha multiply.";
-  EXPECT_LE(center[1], 3);
-  EXPECT_LE(center[2], 3);
-  EXPECT_EQ(center[3], 255);
 }
 
 TEST(EditorWindowTest, WgpuLayerThumbnailUploadHonorsPayloadUv) {
@@ -1340,12 +1327,9 @@ TEST(EditorWindowTest, WgpuLayerThumbnailUploadHonorsPayloadUv) {
 
   ASSERT_FALSE(actual.empty());
   const std::array<std::uint8_t, 4> center = PixelAt(actual, 37, 28);
-  EXPECT_LE(center[0], 8);
-  EXPECT_GE(center[1], 245)
+  EXPECT_THAT(center, Rgba(testing::Le(8), testing::Ge(245), testing::Le(8), testing::Eq(255)))
       << "The middle band should stay green; sampling the full power-of-two texture instead of "
          "the payload UV shifts the blue edge padding into the center.";
-  EXPECT_LE(center[2], 8);
-  EXPECT_EQ(center[3], 255);
 }
 
 TEST(EditorWindowTest, WgpuLayersPanelPresentsBackgroundStickerThumbnailLikeGolden) {
@@ -1518,12 +1502,9 @@ TEST(EditorWindowTest, WgpuPremultipliedTextureSurvivesOnePresentationOwnerRetir
   const Vector2d readbackFromLogical = ReadbackScale(actual, 128, 96);
   const std::array<std::uint8_t, 4> center =
       PixelAtLogical(actual, readbackFromLogical, 32.0, 32.0);
-  EXPECT_NEAR(static_cast<int>(center[0]), 128, 3)
+  EXPECT_THAT(center, Rgba(Near(128, 3), testing::Le(3), testing::Le(3), testing::Eq(255)))
       << "One presentation owner retiring a shared Geode texture must not clear the "
          "premultiplied-alpha registration while another owner still draws it.";
-  EXPECT_LE(center[1], 3);
-  EXPECT_LE(center[2], 3);
-  EXPECT_EQ(center[3], 255);
 }
 
 TEST(EditorWindowTest, WgpuPresentsZoomedBlurredPremultipliedTextureWithoutDarkening) {

@@ -5,8 +5,10 @@
  * degenerate geometry, and RendererImageIO edge cases.
  */
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <filesystem>
 
 #include "donner/base/ParseWarningSink.h"
@@ -16,6 +18,23 @@
 
 namespace donner::svg {
 namespace {
+
+MATCHER(PngSignaturePrefix, "") {
+  constexpr std::array<uint8_t, 8> kPngSignature = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+  if (arg.size() < kPngSignature.size()) {
+    *result_listener << "whose size is " << arg.size();
+    return false;
+  }
+
+  for (std::size_t index = 0; index < kPngSignature.size(); ++index) {
+    if (arg[index] != kPngSignature[index]) {
+      *result_listener << "whose byte " << index << " is " << static_cast<int>(arg[index]);
+      return false;
+    }
+  }
+
+  return true;
+}
 
 SVGDocument ParseDocument(std::string_view svgSource) {
   parser::SVGParser::Options options;
@@ -67,12 +86,7 @@ TEST(RendererImageIOTest, WritePngToMemory) {
   std::vector<uint8_t> pixels(2 * 2 * 4, 255);  // 2x2 white RGBA
   std::vector<uint8_t> encoded = RendererImageIO::writeRgbaPixelsToPngMemory(pixels, 2, 2, 0);
   EXPECT_FALSE(encoded.empty());
-  // PNG magic bytes.
-  ASSERT_GE(encoded.size(), 8u);
-  EXPECT_EQ(encoded[0], 0x89);
-  EXPECT_EQ(encoded[1], 'P');
-  EXPECT_EQ(encoded[2], 'N');
-  EXPECT_EQ(encoded[3], 'G');
+  EXPECT_THAT(encoded, PngSignaturePrefix());
 }
 
 TEST(RendererImageIOTest, WritePngToFileAndVerify) {

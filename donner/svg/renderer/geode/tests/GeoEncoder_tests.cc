@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -14,6 +15,7 @@
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
 
 namespace donner::geode {
@@ -23,6 +25,11 @@ namespace {
 constexpr uint32_t kSize = 64;
 constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 constexpr uint32_t kBytesPerRow = 256;  // Padded from kSize*4 = 256.
+
+using svg::test::FormatRgba;
+using svg::test::Near;
+using svg::test::Rgba;
+using svg::test::RgbaEq;
 
 /// Test fixture: shares a process-wide device and creates per-test render
 /// targets + readback buffer.
@@ -178,10 +185,7 @@ TEST_F(GeoEncoderTest, ClearOnly) {
 
   auto pixels = readback();
   auto pixel = pixelAt(pixels, 32, 32);
-  EXPECT_EQ(pixel[0], 0u);
-  EXPECT_EQ(pixel[1], 128u);
-  EXPECT_EQ(pixel[2], 255u);
-  EXPECT_EQ(pixel[3], 255u);
+  EXPECT_THAT(pixel, RgbaEq(0, 128, 255, 255));
 }
 
 /// Fill an axis-aligned rectangle and verify a center pixel is the fill color.
@@ -198,17 +202,11 @@ TEST_F(GeoEncoderTest, FillRect) {
 
   // Center should be red.
   auto center = pixelAt(pixels, 32, 32);
-  EXPECT_EQ(center[0], 255u) << "Center R";
-  EXPECT_EQ(center[1], 0u) << "Center G";
-  EXPECT_EQ(center[2], 0u) << "Center B";
-  EXPECT_EQ(center[3], 255u) << "Center A";
+  EXPECT_THAT(center, RgbaEq(255, 0, 0, 255)) << "Center should be red";
 
   // Top-left corner should be black (outside the rect).
   auto corner = pixelAt(pixels, 4, 4);
-  EXPECT_EQ(corner[0], 0u) << "Corner R";
-  EXPECT_EQ(corner[1], 0u) << "Corner G";
-  EXPECT_EQ(corner[2], 0u) << "Corner B";
-  EXPECT_EQ(corner[3], 255u) << "Corner A";
+  EXPECT_THAT(corner, RgbaEq(0, 0, 0, 255)) << "Corner should be clear black";
 }
 
 /// Fill a triangle. Verify center inside, far corners outside.
@@ -230,13 +228,16 @@ TEST_F(GeoEncoderTest, FillTriangle) {
 
   // Center of triangle (32, 40) should be green.
   auto inside = pixelAt(pixels, 32, 40);
-  EXPECT_EQ(inside[1], 255u) << "Triangle center G";
+  EXPECT_THAT(inside, Rgba(testing::_, testing::Eq(255), testing::_, testing::_))
+      << "Triangle center should be green";
 
   // Top-left and top-right corners are outside the triangle.
   auto topLeft = pixelAt(pixels, 4, 4);
-  EXPECT_EQ(topLeft[1], 0u) << "Top-left G";
+  EXPECT_THAT(topLeft, Rgba(testing::_, testing::Eq(0), testing::_, testing::_))
+      << "Top-left corner should stay outside the green triangle";
   auto topRight = pixelAt(pixels, 60, 4);
-  EXPECT_EQ(topRight[1], 0u) << "Top-right G";
+  EXPECT_THAT(topRight, Rgba(testing::_, testing::Eq(0), testing::_, testing::_))
+      << "Top-right corner should stay outside the green triangle";
 }
 
 /// Fill a rectangle with a horizontal red→blue linear gradient in user space.
@@ -276,18 +277,18 @@ TEST_F(GeoEncoderTest, FillLinearGradientUserSpace) {
 
   // Left edge: almost all red.
   auto left = pixelAt(pixels, 1, 32);
-  EXPECT_GT(left[0], 240u) << "Left edge R";
-  EXPECT_LT(left[2], 16u) << "Left edge B";
+  EXPECT_THAT(left, Rgba(testing::Gt(240), testing::_, testing::Lt(16), testing::_))
+      << "Left edge should be mostly red";
 
   // Right edge: almost all blue.
   auto right = pixelAt(pixels, 62, 32);
-  EXPECT_LT(right[0], 16u) << "Right edge R";
-  EXPECT_GT(right[2], 240u) << "Right edge B";
+  EXPECT_THAT(right, Rgba(testing::Lt(16), testing::_, testing::Gt(240), testing::_))
+      << "Right edge should be mostly blue";
 
   // Midpoint: ~50/50 red/blue.
   auto mid = pixelAt(pixels, 32, 32);
-  EXPECT_NEAR(mid[0], 128u, 20u) << "Mid R";
-  EXPECT_NEAR(mid[2], 128u, 20u) << "Mid B";
+  EXPECT_THAT(mid, Rgba(Near(128, 20), testing::_, Near(128, 20), testing::_))
+      << "Midpoint should mix red and blue";
 }
 
 /// Gradient `spreadMode=repeat`: start=(16, 0) end=(32, 0) sampled across a
@@ -322,8 +323,8 @@ TEST_F(GeoEncoderTest, FillLinearGradientRepeat) {
   // x=17 and x=33 should both sit at t ≈ (1/16) in their respective periods.
   auto a = pixelAt(pixels, 17, 32);
   auto b = pixelAt(pixels, 33, 32);
-  EXPECT_NEAR(a[0], b[0], 8u) << "Repeat period mismatch R";
-  EXPECT_NEAR(a[2], b[2], 8u) << "Repeat period mismatch B";
+  EXPECT_THAT(a, Rgba(Near(b[0], 8), testing::_, Near(b[2], 8), testing::_))
+      << "Repeat period mismatch; comparison sample b=" << FormatRgba(b);
 }
 
 /// Concentric radial gradient (white center → black rim) over a 64x64 rect.
@@ -364,16 +365,14 @@ TEST_F(GeoEncoderTest, FillRadialGradientConcentric) {
 
   // Center pixel (32, 32) sits exactly at the focal point → t == 0 → white.
   auto center = pixelAt(pixels, 32, 32);
-  EXPECT_GT(center[0], 240u) << "Center R";
-  EXPECT_GT(center[1], 240u) << "Center G";
-  EXPECT_GT(center[2], 240u) << "Center B";
+  EXPECT_THAT(center, Rgba(testing::Gt(240), testing::Gt(240), testing::Gt(240), testing::_))
+      << "Center should be nearly white";
 
   // A point one pixel inside the rim (left edge) sits very close to t == 1
   // along the +x ray from the center → essentially black.
   auto leftRim = pixelAt(pixels, 1, 32);
-  EXPECT_LT(leftRim[0], 32u) << "Left rim R";
-  EXPECT_LT(leftRim[1], 32u) << "Left rim G";
-  EXPECT_LT(leftRim[2], 32u) << "Left rim B";
+  EXPECT_THAT(leftRim, Rgba(testing::Lt(32), testing::Lt(32), testing::Lt(32), testing::_))
+      << "Left rim should be nearly black";
 }
 
 /// Off-center focal point: brightest pixel should be at the focal point,
@@ -414,9 +413,9 @@ TEST_F(GeoEncoderTest, FillRadialGradientFocal) {
   // geometric center of the outer circle should be noticeably darker.
   auto focal = pixelAt(pixels, 48, 32);
   auto geomCenter = pixelAt(pixels, 32, 32);
-  EXPECT_GT(focal[0], geomCenter[0] + 32u) << "Focal lighter than center R";
-  EXPECT_GT(focal[1], geomCenter[1] + 32u) << "Focal lighter than center G";
-  EXPECT_GT(focal[2], geomCenter[2] + 32u) << "Focal lighter than center B";
+  EXPECT_THAT(focal, Rgba(testing::Gt(geomCenter[0] + 32), testing::Gt(geomCenter[1] + 32),
+                          testing::Gt(geomCenter[2] + 32), testing::_))
+      << "Focal point should be lighter than geometric center " << FormatRgba(geomCenter);
 }
 
 /// Fill a circle. Verify center inside, far corners outside.
@@ -433,11 +432,13 @@ TEST_F(GeoEncoderTest, FillCircle) {
 
   // Center should be blue.
   auto center = pixelAt(pixels, 32, 32);
-  EXPECT_EQ(center[2], 255u) << "Center B";
+  EXPECT_THAT(center, Rgba(testing::_, testing::_, testing::Eq(255), testing::_))
+      << "Center should be blue";
 
   // Far corner should be black (outside the circle).
   auto corner = pixelAt(pixels, 2, 2);
-  EXPECT_EQ(corner[2], 0u) << "Corner B";
+  EXPECT_THAT(corner, Rgba(testing::_, testing::_, testing::Eq(0), testing::_))
+      << "Corner should stay outside the blue circle";
 }
 
 /// Build a 2x2 solid-magenta straight-alpha RGBA8 image resource.
@@ -467,16 +468,12 @@ TEST_F(GeoEncoderTest, DrawImageFillsDestRect) {
 
   auto pixels = readback();
   auto center = pixelAt(pixels, 32, 32);
-  EXPECT_EQ(center[0], 255u) << "Center R";
-  EXPECT_EQ(center[1], 0u) << "Center G";
-  EXPECT_EQ(center[2], 255u) << "Center B";
-  EXPECT_EQ(center[3], 255u) << "Center A";
+  EXPECT_THAT(center, RgbaEq(255, 0, 255, 255)) << "Center should be magenta";
 
   // Outside the destRect is still the clear color (black).
   auto outside = pixelAt(pixels, 4, 4);
-  EXPECT_EQ(outside[0], 0u) << "Outside R";
-  EXPECT_EQ(outside[1], 0u) << "Outside G";
-  EXPECT_EQ(outside[2], 0u) << "Outside B";
+  EXPECT_THAT(outside, Rgba(testing::Eq(0), testing::Eq(0), testing::Eq(0), testing::_))
+      << "Outside destination should stay clear black";
 }
 
 /// `opacity` should blend the image with whatever the pass already
@@ -500,10 +497,8 @@ TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
   auto pixels = readback();
   auto center = pixelAt(pixels, 32, 32);
   // 0.5 alpha source over opaque black → R ≈ 128, A = 255.
-  EXPECT_NEAR(center[0], 128u, 2u) << "Blended R";
-  EXPECT_EQ(center[1], 0u) << "G";
-  EXPECT_EQ(center[2], 0u) << "B";
-  EXPECT_EQ(center[3], 255u) << "A";
+  EXPECT_THAT(center, Rgba(Near(128, 2), testing::Eq(0), testing::Eq(0), testing::Eq(255)))
+      << "Image opacity should blend red over opaque black";
 }
 
 /// Mixing a fillPath and a drawImage in the same pass must work — after
@@ -532,18 +527,18 @@ TEST_F(GeoEncoderTest, FillThenImageThenFill) {
 
   // Top half: red.
   auto top = pixelAt(pixels, 8, 8);
-  EXPECT_EQ(top[0], 255u) << "Top R";
-  EXPECT_EQ(top[1], 0u) << "Top G";
+  EXPECT_THAT(top, Rgba(testing::Eq(255), testing::Eq(0), testing::_, testing::_))
+      << "Top half should be red";
 
   // Center (image): magenta.
   auto mid = pixelAt(pixels, 32, 32);
-  EXPECT_EQ(mid[0], 255u) << "Mid R";
-  EXPECT_EQ(mid[2], 255u) << "Mid B";
+  EXPECT_THAT(mid, Rgba(testing::Eq(255), testing::_, testing::Eq(255), testing::_))
+      << "Center image should be magenta";
 
   // Bottom strip: green.
   auto bottom = pixelAt(pixels, 8, 56);
-  EXPECT_EQ(bottom[0], 0u) << "Bottom R";
-  EXPECT_EQ(bottom[1], 255u) << "Bottom G";
+  EXPECT_THAT(bottom, Rgba(testing::Eq(0), testing::Eq(255), testing::_, testing::_))
+      << "Bottom strip should be green";
 }
 
 /// Fill a rectangle sampling a 4x4 solid-red pattern tile. Verifies the
@@ -596,15 +591,12 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
 
   auto pixels = readback();
   auto center = pixelAt(pixels, 32, 32);
-  EXPECT_EQ(center[0], 255u) << "Center R (pattern sampled)";
-  EXPECT_EQ(center[1], 0u) << "Center G";
-  EXPECT_EQ(center[2], 0u) << "Center B";
-  EXPECT_EQ(center[3], 255u) << "Center A";
+  EXPECT_THAT(center, RgbaEq(255, 0, 0, 255)) << "Center should sample red pattern";
 
   // Outside the rect should stay at the clear color (black).
   auto corner = pixelAt(pixels, 4, 4);
-  EXPECT_EQ(corner[0], 0u) << "Corner R";
-  EXPECT_EQ(corner[3], 255u) << "Corner A (opaque clear)";
+  EXPECT_THAT(corner, Rgba(testing::Eq(0), testing::_, testing::_, testing::Eq(255)))
+      << "Corner should stay at the opaque clear color";
 }
 
 }  // namespace

@@ -174,6 +174,7 @@ donner_cc_test(
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
     ],
 )
 
@@ -526,6 +527,7 @@ donner_cc_test(
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/css",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:image_resource",
     ],
 )
@@ -577,6 +579,7 @@ donner_cc_test(
         "//donner/base:gtest_timeout_main",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:rgba_test_matchers",
     ],
 )
 

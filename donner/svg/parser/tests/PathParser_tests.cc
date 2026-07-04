@@ -3,13 +3,18 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <tuple>
+
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/core/tests/PathTestUtils.h"
 
 using testing::AllOf;
 using testing::ElementsAre;
+using testing::ElementsAreArray;
 using testing::HasSubstr;
+using testing::IsEmpty;
+using testing::Pointwise;
 
 namespace donner::svg::parser {
 
@@ -18,10 +23,10 @@ using CommandType = Path::Verb;
 
 TEST(PathParser, Empty) {
   ParseResult<Path> result = PathParser::Parse("");
-  EXPECT_TRUE(result.hasResult());
-  EXPECT_FALSE(result.hasError());
+  ASSERT_THAT(result, NoParseError());
 
-  EXPECT_TRUE(result.result().empty());
+  EXPECT_THAT(result.result().points(), IsEmpty());
+  EXPECT_THAT(result.result().commands(), IsEmpty());
 }
 
 TEST(PathParser, InvalidInitialCommand) {
@@ -748,6 +753,15 @@ TEST(PathParser, RangeTrailingComma) {
 
 namespace {
 
+MATCHER_P(Vector2PairNear, tolerance, "") {
+  const Vector2d& actual = std::get<0>(arg);
+  const Vector2d& expected = std::get<1>(arg);
+  return testing::ExplainMatchResult(testing::DoubleNear(expected.x, tolerance), actual.x,
+                                     result_listener) &&
+         testing::ExplainMatchResult(testing::DoubleNear(expected.y, tolerance), actual.y,
+                                     result_listener);
+}
+
 /// Parse a path string, serialize it back, then re-parse and compare.
 /// Both the original and the round-tripped result must have no error, and the
 /// re-parsed points/commands must match the original exactly.
@@ -762,21 +776,10 @@ void ExpectRoundTrip(std::string_view d) {
   ASSERT_THAT(second, NoParseError()) << "Re-parse failed for serialized: " << serialized;
 
   const Path& roundTripped = second.result();
-  ASSERT_EQ(roundTripped.verbCount(), path.verbCount())
-      << "verbCount mismatch. serialized: " << serialized;
-  ASSERT_EQ(roundTripped.points().size(), path.points().size())
-      << "points size mismatch. serialized: " << serialized;
-
-  for (size_t i = 0; i < path.verbCount(); ++i) {
-    EXPECT_EQ(roundTripped.commands()[i].verb, path.commands()[i].verb)
-        << "Command " << i << " verb mismatch. serialized: " << serialized;
-  }
-  for (size_t i = 0; i < path.points().size(); ++i) {
-    EXPECT_NEAR(roundTripped.points()[i].x, path.points()[i].x, 1e-9)
-        << "Point " << i << " x mismatch. serialized: " << serialized;
-    EXPECT_NEAR(roundTripped.points()[i].y, path.points()[i].y, 1e-9)
-        << "Point " << i << " y mismatch. serialized: " << serialized;
-  }
+  EXPECT_THAT(roundTripped.commands(), ElementsAreArray(path.commands()))
+      << "serialized: " << serialized;
+  EXPECT_THAT(roundTripped.points(), Pointwise(Vector2PairNear(1e-9), path.points()))
+      << "serialized: " << serialized;
 }
 
 }  // namespace
