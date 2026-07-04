@@ -19,8 +19,12 @@
 
 using ::testing::_;
 using ::testing::AtLeast;
+using ::testing::Contains;
+using ::testing::Each;
+using ::testing::Field;
 using ::testing::HasSubstr;
 using ::testing::NiceMock;
+using ::testing::SizeIs;
 
 namespace donner::svg::compositor {
 
@@ -50,7 +54,9 @@ void PrintTo(const CompositorController::StaticSpanPlan& plan, std::ostream* os)
 namespace {
 
 using MockRendererInterface = tests::MockRendererInterface;
+using CompositeTileSnapshot = CompositorController::CompositeTileSnapshot;
 using LayerInspectorRow = CompositorController::LayerInspectorRow;
+using SegmentInspectorRow = CompositorController::SegmentInspectorRow;
 using StaticSpanPlan = CompositorController::StaticSpanPlan;
 
 MATCHER(EstimatedRedrawCostNoMoreThanCacheOverhead, "") {
@@ -103,6 +109,125 @@ auto LayerThumbnailDimsIs(auto matcher) {
 
 auto LayerThumbnailPixelsAre(auto matcher) {
   return ::testing::Field("thumbnailPixels", &LayerInspectorRow::thumbnailPixels, matcher);
+}
+
+MATCHER_P(ValidSegmentRowWithBitmapSize, bitmapSize,
+          std::string("a valid segment row with bitmap size ") +
+              testing::PrintToString(bitmapSize)) {
+  if (arg.hasValidBitmap && arg.bitmapSize == bitmapSize) {
+    return true;
+  }
+
+  *result_listener << "slotIndex=" << arg.slotIndex << ", hasValidBitmap=" << arg.hasValidBitmap
+                   << ", bitmapSize=" << testing::PrintToString(arg.bitmapSize);
+  return false;
+}
+
+MATCHER_P2(TextureBackedCompositeTileWithDims, kind, bitmapDims,
+           std::string("a texture-backed composite tile with kind ") +
+               testing::PrintToString(static_cast<int>(kind)) + " and bitmap dims " +
+               testing::PrintToString(bitmapDims)) {
+  std::vector<std::string> failures;
+  if (arg.kind != kind) {
+    failures.push_back("kind=" + testing::PrintToString(static_cast<int>(arg.kind)));
+  }
+  if (!arg.hasValidBitmap) {
+    failures.push_back("hasValidBitmap=false");
+  }
+  if (arg.bitmapDims != bitmapDims) {
+    failures.push_back("bitmapDims=" + testing::PrintToString(arg.bitmapDims));
+  }
+  if (arg.textureSnapshot == nullptr) {
+    failures.push_back("textureSnapshot=null");
+  }
+  if (!arg.thumbnailPixels.empty()) {
+    failures.push_back("thumbnailPixels=" + testing::PrintToString(arg.thumbnailPixels.size()));
+  }
+
+  if (failures.empty()) {
+    return true;
+  }
+
+  *result_listener << "id=" << testing::PrintToString(arg.id)
+                   << ", label=" << testing::PrintToString(arg.label)
+                   << ", failures=" << testing::PrintToString(failures);
+  return false;
+}
+
+MATCHER_P(TextureBackedUploadSegmentWithDims, bitmapDims,
+          std::string("a texture-backed upload segment with bitmap dims ") +
+              testing::PrintToString(bitmapDims)) {
+  if (arg.layerEntity == entt::null && arg.textureSnapshot != nullptr && arg.bitmap.empty() &&
+      arg.bitmapDims == bitmapDims) {
+    return true;
+  }
+
+  *result_listener << "tileId=" << arg.tileId
+                   << ", layerEntity=" << testing::PrintToString(arg.layerEntity)
+                   << ", textureSnapshot=" << (arg.textureSnapshot != nullptr)
+                   << ", bitmapEmpty=" << arg.bitmap.empty()
+                   << ", bitmapDims=" << testing::PrintToString(arg.bitmapDims);
+  return false;
+}
+
+MATCHER_P(MetadataOnlyUploadSegmentWithDims, bitmapDims,
+          std::string("a metadata-only upload segment with bitmap dims ") +
+              testing::PrintToString(bitmapDims)) {
+  if (arg.layerEntity == entt::null && arg.textureSnapshot == nullptr && arg.bitmap.empty() &&
+      arg.bitmapDims == bitmapDims) {
+    return true;
+  }
+
+  *result_listener << "tileId=" << arg.tileId
+                   << ", layerEntity=" << testing::PrintToString(arg.layerEntity)
+                   << ", textureSnapshot=" << (arg.textureSnapshot != nullptr)
+                   << ", bitmapEmpty=" << arg.bitmap.empty()
+                   << ", bitmapDims=" << testing::PrintToString(arg.bitmapDims);
+  return false;
+}
+
+MATCHER_P2(DragTargetUploadTileHasBitmap, entity, hasBitmap,
+           std::string("a drag-target upload tile for entity ") + testing::PrintToString(entity) +
+               (hasBitmap ? " with bitmap payload" : " without bitmap payload")) {
+  const bool bitmapPresent = !arg.bitmap.empty();
+  if (arg.layerEntity == entity && arg.isDragTarget && bitmapPresent == hasBitmap) {
+    return true;
+  }
+
+  *result_listener << "tileId=" << arg.tileId
+                   << ", layerEntity=" << testing::PrintToString(arg.layerEntity)
+                   << ", isDragTarget=" << arg.isDragTarget << ", bitmapPresent=" << bitmapPresent
+                   << ", bitmapDims=" << testing::PrintToString(arg.bitmapDims);
+  return false;
+}
+
+MATCHER_P(CachedSegmentUploadTileHasBitmap, hasBitmap,
+          std::string("a cached segment upload tile ") +
+              (hasBitmap ? "with bitmap payload" : "without bitmap payload")) {
+  const bool bitmapPresent = !arg.bitmap.empty();
+  if (arg.layerEntity == entt::null && !arg.immediate && arg.bitmapDims != Vector2i::Zero() &&
+      bitmapPresent == hasBitmap) {
+    return true;
+  }
+
+  *result_listener << "tileId=" << arg.tileId
+                   << ", layerEntity=" << testing::PrintToString(arg.layerEntity)
+                   << ", immediate=" << arg.immediate << ", bitmapPresent=" << bitmapPresent
+                   << ", bitmapDims=" << testing::PrintToString(arg.bitmapDims);
+  return false;
+}
+
+MATCHER(UploadTileWithoutBitmapOrTexture, "an upload tile without bitmap or texture payload") {
+  if (arg.bitmap.empty() && arg.textureSnapshot == nullptr) {
+    return true;
+  }
+
+  *result_listener << "tileId=" << arg.tileId
+                   << ", layerEntity=" << testing::PrintToString(arg.layerEntity)
+                   << ", bitmapEmpty=" << arg.bitmap.empty()
+                   << ", textureSnapshot=" << (arg.textureSnapshot != nullptr)
+                   << ", bitmapDims=" << testing::PrintToString(arg.bitmapDims);
+  return false;
 }
 
 class FakeTextureSnapshot : public RendererTextureSnapshot {
@@ -1066,17 +1191,10 @@ TEST_F(CompositorControllerTest, TextureOnlyDragReusesPayloadWithoutRasterize) {
   const uint32_t rasterizeCountAfterFirst = rowsAfterFirst.front().rasterizeCount;
 
   const auto inspectorTiles = compositor.snapshotCompositeTiles();
-  auto layerTile = std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
-    return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Layer;
-  });
-  ASSERT_NE(layerTile, inspectorTiles.end());
-  EXPECT_TRUE(layerTile->hasValidBitmap);
-  EXPECT_EQ(layerTile->bitmapDims, Vector2i(32, 32));
-  EXPECT_NE(layerTile->textureSnapshot, nullptr)
+  EXPECT_THAT(inspectorTiles, Contains(TextureBackedCompositeTileWithDims(
+                                  CompositeTileSnapshot::Kind::Layer, Vector2i(32, 32))))
       << "Geode layer diagnostics should keep the GPU texture snapshot so the layer panel can "
-         "render a thumbnail without CPU readback.";
-  EXPECT_TRUE(layerTile->thumbnailPixels.empty())
-      << "Texture-backed diagnostics should not synthesize a CPU thumbnail.";
+         "render a thumbnail without CPU readback, and should not synthesize a CPU thumbnail.";
 
   const auto countersBeforeDrag = compositor.fastPathCountersForTesting();
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(5.0, 0.0));
@@ -1114,39 +1232,18 @@ TEST_F(CompositorControllerTest, TextureBackedStaticSegmentsExposeDimensionsWith
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto segmentRows = compositor.snapshotSegmentInspectorRows();
-  const auto segmentRowIt = std::find_if(segmentRows.begin(), segmentRows.end(),
-                                         [](const auto& row) { return row.hasValidBitmap; });
-  ASSERT_NE(segmentRowIt, segmentRows.end());
-  EXPECT_EQ(segmentRowIt->bitmapSize, Vector2i(32, 32));
+  EXPECT_THAT(segmentRows, Contains(ValidSegmentRowWithBitmapSize(Vector2i(32, 32))));
 
   const auto allTiles = compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::All);
-  const auto segmentTileIt = std::find_if(allTiles.begin(), allTiles.end(), [](const auto& tile) {
-    return tile.layerEntity == entt::null && tile.textureSnapshot != nullptr;
-  });
-  ASSERT_NE(segmentTileIt, allTiles.end());
-  EXPECT_TRUE(segmentTileIt->bitmap.empty());
-  EXPECT_EQ(segmentTileIt->bitmapDims, Vector2i(32, 32));
+  EXPECT_THAT(allTiles, Contains(TextureBackedUploadSegmentWithDims(Vector2i(32, 32))));
 
   const auto metadataOnly =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
-  const auto metadataSegmentIt =
-      std::find_if(metadataOnly.begin(), metadataOnly.end(), [](const auto& tile) {
-        return tile.layerEntity == entt::null && tile.bitmapDims == Vector2i(32, 32);
-      });
-  ASSERT_NE(metadataSegmentIt, metadataOnly.end());
-  EXPECT_TRUE(metadataSegmentIt->bitmap.empty());
-  EXPECT_EQ(metadataSegmentIt->textureSnapshot, nullptr);
+  EXPECT_THAT(metadataOnly, Contains(MetadataOnlyUploadSegmentWithDims(Vector2i(32, 32))));
 
   const auto inspectorTiles = compositor.snapshotCompositeTiles();
-  const auto inspectorSegmentIt =
-      std::find_if(inspectorTiles.begin(), inspectorTiles.end(), [](const auto& tile) {
-        return tile.kind == CompositorController::CompositeTileSnapshot::Kind::Segment &&
-               tile.textureSnapshot != nullptr;
-      });
-  ASSERT_NE(inspectorSegmentIt, inspectorTiles.end());
-  EXPECT_TRUE(inspectorSegmentIt->hasValidBitmap);
-  EXPECT_TRUE(inspectorSegmentIt->thumbnailPixels.empty());
-  EXPECT_EQ(inspectorSegmentIt->bitmapDims, Vector2i(32, 32));
+  EXPECT_THAT(inspectorTiles, Contains(TextureBackedCompositeTileWithDims(
+                                  CompositeTileSnapshot::Kind::Segment, Vector2i(32, 32))));
 }
 
 TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextureFastPath) {
@@ -1586,8 +1683,7 @@ TEST_F(CompositorControllerTest, PaintResourceStaticSpanPlanChoosesCachedTile) {
 
   const auto immediateTiles =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
-  EXPECT_TRUE(std::none_of(immediateTiles.begin(), immediateTiles.end(),
-                           [](const CompositorTile& tile) { return tile.immediate; }));
+  EXPECT_THAT(immediateTiles, Each(Field("immediate", &CompositorTile::immediate, false)));
 }
 
 TEST_F(CompositorControllerTest, SnapshotTilesForUploadAppliesPayloadPolicies) {
@@ -1611,59 +1707,27 @@ TEST_F(CompositorControllerTest, SnapshotTilesForUploadAppliesPayloadPolicies) {
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto allTiles = compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::All);
-  const auto findTargetTile = [entity](const std::vector<CompositorTile>& tiles) {
-    return std::find_if(tiles.begin(), tiles.end(), [entity](const CompositorTile& tile) {
-      return tile.layerEntity == entity;
-    });
-  };
-  const auto findCachedSegmentTile = [](const std::vector<CompositorTile>& tiles) {
-    return std::find_if(tiles.begin(), tiles.end(), [](const CompositorTile& tile) {
-      return tile.layerEntity == entt::null && !tile.immediate &&
-             tile.bitmapDims != Vector2i::Zero();
-    });
-  };
-
-  const auto allTarget = findTargetTile(allTiles);
-  const auto allCachedSegment = findCachedSegmentTile(allTiles);
-  ASSERT_NE(allTarget, allTiles.end());
-  ASSERT_NE(allCachedSegment, allTiles.end());
-  ASSERT_TRUE(allTarget->isDragTarget);
-  ASSERT_FALSE(allTarget->bitmap.empty());
-  ASSERT_FALSE(allCachedSegment->bitmap.empty());
+  EXPECT_THAT(allTiles, Contains(DragTargetUploadTileHasBitmap(entity, true)));
+  EXPECT_THAT(allTiles, Contains(CachedSegmentUploadTileHasBitmap(true)));
 
   const auto dragOnly =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::DragTargetOnly);
-  const auto dragOnlyTarget = findTargetTile(dragOnly);
-  const auto dragOnlyCachedSegment = findCachedSegmentTile(dragOnly);
-  ASSERT_NE(dragOnlyTarget, dragOnly.end());
-  ASSERT_NE(dragOnlyCachedSegment, dragOnly.end());
-  EXPECT_FALSE(dragOnlyTarget->bitmap.empty());
-  EXPECT_TRUE(dragOnlyCachedSegment->bitmap.empty());
-  EXPECT_NE(dragOnlyCachedSegment->bitmapDims, Vector2i::Zero());
+  EXPECT_THAT(dragOnly, Contains(DragTargetUploadTileHasBitmap(entity, true)));
+  EXPECT_THAT(dragOnly, Contains(CachedSegmentUploadTileHasBitmap(false)));
 
   const auto immediateOnly =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateOnly);
-  const auto immediateOnlyCachedSegment = findCachedSegmentTile(immediateOnly);
-  ASSERT_NE(immediateOnlyCachedSegment, immediateOnly.end());
-  EXPECT_TRUE(immediateOnlyCachedSegment->bitmap.empty());
-  EXPECT_NE(immediateOnlyCachedSegment->bitmapDims, Vector2i::Zero());
+  EXPECT_THAT(immediateOnly, Contains(CachedSegmentUploadTileHasBitmap(false)));
 
   const auto immediateAndDrag =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::ImmediateAndDragTargetOnly);
-  const auto immediateAndDragTarget = findTargetTile(immediateAndDrag);
-  const auto immediateAndDragCachedSegment = findCachedSegmentTile(immediateAndDrag);
-  ASSERT_NE(immediateAndDragTarget, immediateAndDrag.end());
-  ASSERT_NE(immediateAndDragCachedSegment, immediateAndDrag.end());
-  EXPECT_FALSE(immediateAndDragTarget->bitmap.empty());
-  EXPECT_TRUE(immediateAndDragCachedSegment->bitmap.empty());
+  EXPECT_THAT(immediateAndDrag, Contains(DragTargetUploadTileHasBitmap(entity, true)));
+  EXPECT_THAT(immediateAndDrag, Contains(CachedSegmentUploadTileHasBitmap(false)));
 
   const auto metadataOnly =
       compositor.snapshotTilesForUpload(CompositorTileBitmapPayload::MetadataOnly);
-  ASSERT_EQ(metadataOnly.size(), allTiles.size());
-  for (const CompositorTile& tile : metadataOnly) {
-    EXPECT_TRUE(tile.bitmap.empty());
-    EXPECT_EQ(tile.textureSnapshot, nullptr);
-  }
+  ASSERT_THAT(metadataOnly, SizeIs(allTiles.size()));
+  EXPECT_THAT(metadataOnly, Each(UploadTileWithoutBitmapOrTexture()));
 }
 
 TEST_F(CompositorControllerTest, SnapshotLayerInspectorRowsCanOmitThumbnails) {
